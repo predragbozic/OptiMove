@@ -68,8 +68,8 @@ function bindEvents() {
   });
 
   els.content.addEventListener("click", handleContentClick);
-  els.content.addEventListener("touchstart", handleDetailTouchStart, { passive: true });
-  els.content.addEventListener("touchend", handleDetailTouchEnd, { passive: true });
+  els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
+  els.content.addEventListener("touchend", handleSwipeEnd, { passive: true });
   document.addEventListener("click", handleGlobalClick);
   document.addEventListener("error", handleImageError, true);
   document.addEventListener("keydown", (event) => {
@@ -145,21 +145,61 @@ function handleGlobalClick(event) {
   if (action.dataset.action === "close-media") closeMedia();
 }
 
-function handleDetailTouchStart(event) {
-  if (!event.target.closest(".exercise-detail")) return;
+function handleSwipeStart(event) {
+  if (!isSwipeContext(event.target)) return;
   const touch = event.changedTouches?.[0];
   if (!touch) return;
   state.touch = { startX: touch.clientX, startY: touch.clientY };
 }
 
-function handleDetailTouchEnd(event) {
-  if (!event.target.closest(".exercise-detail")) return;
+function handleSwipeEnd(event) {
+  if (!isSwipeContext(event.target)) return;
   const touch = event.changedTouches?.[0];
   if (!touch) return;
   const deltaX = touch.clientX - state.touch.startX;
   const deltaY = touch.clientY - state.touch.startY;
   if (Math.abs(deltaX) < 50 || Math.abs(deltaX) < Math.abs(deltaY) * 1.4) return;
-  moveExerciseDetail(deltaX < 0 ? 1 : -1);
+  handleHorizontalSwipe(deltaX < 0 ? 1 : -1);
+}
+
+function isSwipeContext(target) {
+  if (!els.mediaModal?.hidden) return false;
+  if (target.closest(".week-selector, .program-day-grid, .exercise-list")) return false;
+  return Boolean(target.closest(".exercise-detail, .panel, .calendar-grid, .node-grid"));
+}
+
+function handleHorizontalSwipe(direction) {
+  if (els.content.querySelector(".exercise-detail")) {
+    const ids = state.exerciseDetail.ids || [];
+    const currentIndex = ids.indexOf(state.exerciseDetail.currentId);
+    if (direction < 0 && currentIndex <= 0) {
+      returnToNodeParent();
+      return;
+    }
+    moveExerciseDetail(direction);
+    return;
+  }
+
+  if (state.navStack.length) {
+    const siblingState = nodeSiblingState();
+    if (direction > 0 && siblingState.canGoNext) {
+      moveNodeSibling(1);
+      return;
+    }
+    if (direction < 0 && siblingState.canGoPrevious) {
+      moveNodeSibling(-1);
+      return;
+    }
+    if (direction < 0) {
+      state.navStack.pop();
+      renderCurrentNode();
+    }
+    return;
+  }
+
+  if (state.activeTab === "weekly") {
+    moveWeek(direction);
+  }
 }
 
 async function loadAthletes() {
@@ -291,11 +331,8 @@ function handleContentClick(event) {
     return;
   }
   if (type === "week-prev" || type === "week-next") {
-    const weeks = state.lastWeeklyData?.weeks || [];
     const delta = type === "week-prev" ? -1 : 1;
-    state.selectedWeekIndex = Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex + delta));
-    state.navStack = [];
-    renderWeeklyRoot(state.lastWeeklyData);
+    moveWeek(delta);
     return;
   }
   if (type === "week-toggle") {
@@ -335,6 +372,16 @@ function renderCurrentNode() {
   }
   if (state.activeTab === "templates") return loadTemplates();
   if (state.activeTab === "exercises") return renderExercises(state.lastExerciseResults);
+}
+
+function moveWeek(delta) {
+  const weeks = state.lastWeeklyData?.weeks || [];
+  if (!weeks.length) return;
+  const nextIndex = Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex + delta));
+  if (nextIndex === state.selectedWeekIndex) return;
+  state.selectedWeekIndex = nextIndex;
+  state.navStack = [];
+  renderWeeklyRoot(state.lastWeeklyData);
 }
 
 function renderTabs() {
