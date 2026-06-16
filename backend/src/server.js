@@ -31,6 +31,30 @@ app.get("/api/health", async (_req, res, next) => {
   }
 });
 
+app.get("/api/db-config-check", (_req, res) => {
+  const value = process.env.DATABASE_URL || "";
+  let parsed = null;
+
+  try {
+    const url = new URL(value);
+    parsed = {
+      protocol: url.protocol,
+      username: decodeURIComponent(url.username || ""),
+      host: url.hostname,
+      port: url.port,
+      database: url.pathname.replace(/^\//, ""),
+      hasPassword: Boolean(url.password),
+    };
+  } catch (error) {
+    parsed = { error: error.message };
+  }
+
+  res.json({
+    hasDatabaseUrl: Boolean(value),
+    parsed,
+  });
+});
+
 app.use("/api/athletes", athletesRouter);
 app.use("/api/admin/athletes", athletesRouter);
 app.use("/api/plans", plansRouter);
