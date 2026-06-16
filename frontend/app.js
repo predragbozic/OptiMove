@@ -9,6 +9,7 @@ const state = {
   selectedTemplateId: null,
   selectedWeekIndex: 0,
   weekSelectorOpen: false,
+  pendingScrollDate: "",
   lastWeeklyData: null,
   lastProgramBundle: null,
   lastTemplates: [],
@@ -305,6 +306,7 @@ function handleContentClick(event) {
   if (type === "week-today") {
     const weeks = state.lastWeeklyData?.weeks || [];
     state.selectedWeekIndex = todayWeekIndex(weeks);
+    state.pendingScrollDate = localDateIso();
     state.navStack = [];
     renderWeeklyRoot(state.lastWeeklyData);
     return;
@@ -441,7 +443,7 @@ function renderWeeklyRoot(data) {
           <strong>${escapeHtml(weekRange)}</strong>
           <span>${weekTotal(activeWeek)} items · ${state.weekSelectorOpen ? "Hide weeks" : "Show weeks"}</span>
         </button>
-        <button class="plain-button" data-action="week-today" ${state.selectedWeekIndex === todayIndex ? "disabled" : ""}>Today</button>
+        <button class="plain-button" data-action="week-today">Today</button>
         <button class="plain-button" data-action="week-next" ${state.selectedWeekIndex >= weeks.length - 1 ? "disabled" : ""}>Next</button>
       </section>
       ${state.weekSelectorOpen ? `
@@ -460,13 +462,18 @@ function renderWeeklyRoot(data) {
       </section>
     </div>
   `;
+  if (state.pendingScrollDate) {
+    const date = state.pendingScrollDate;
+    state.pendingScrollDate = "";
+    requestAnimationFrame(() => scrollCalendarToDate(date));
+  }
 }
 
 function renderDayEntry(day) {
   const items = allSlotItems(day.slots);
   const isToday = day.date === localDateIso();
   return `
-    <article class="calendar-day ${isToday ? "is-today" : ""}">
+    <article class="calendar-day ${isToday ? "is-today" : ""}" data-date="${escapeAttr(day.date)}">
       <div class="calendar-day-head">
         <span class="calendar-weekday">${escapeHtml(formatWeekday(day.date))}</span>
         <span class="calendar-date">${escapeHtml(formatDayMonth(day.date))}${isToday ? " · Today" : ""}</span>
@@ -481,6 +488,17 @@ function renderDayEntry(day) {
 
 function renderCalendarHierarchy(items) {
   return sessionNodes(items).map(renderCalendarSession).join("");
+}
+
+function scrollCalendarToDate(date) {
+  const grid = els.content.querySelector(".calendar-grid");
+  if (!grid) return;
+  const day = grid.querySelector(`[data-date="${date}"]`);
+  if (!day) {
+    grid.scrollTo({ left: 0, behavior: "smooth" });
+    return;
+  }
+  grid.scrollTo({ left: day.offsetLeft, behavior: "smooth" });
 }
 
 function renderCalendarSession(node) {
@@ -814,7 +832,6 @@ function renderExercises(exercises) {
           ${exercise.image_url ? `
             <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" data-image="${escapeAttr(exercise.image_url)}" data-video="${escapeAttr(exercise.video_url || "")}">
               ${renderMediaThumb(exercise.image_url)}
-              ${exercise.video_url ? `<span class="media-play">Play video</span>` : ""}
             </button>
           ` : ""}
           <button class="exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
@@ -847,7 +864,6 @@ function renderItem(item, itemId) {
       ${image || video ? `
         <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
           ${image ? renderMediaThumb(image, "") : ""}
-          ${video ? `<span class="media-play">Play video</span>` : ""}
         </button>
       ` : `<div class="exercise-media exercise-media-placeholder"></div>`}
       <button class="exercise-open plan-exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
@@ -929,7 +945,6 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
           ${image
             ? `<button class="exercise-media detail-media" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
                 ${renderMediaThumb(image)}
-                ${video ? `<span class="media-play">Play video</span>` : ""}
               </button>`
             : `<div class="detail-media-empty">No image</div>`}
           ${video ? `<button class="plain-button detail-video-button" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">Play video</button>` : ""}
@@ -1195,21 +1210,23 @@ function initialsFor(name) {
 
 function openMedia(title, imageUrl, videoUrl) {
   if (!els.mediaModal || !els.mediaBody || !els.mediaTitle) return;
-  const previewUrl = toDrivePreviewUrl(videoUrl);
   const imagePreviewUrl = toDrivePreviewUrl(imageUrl);
   const hasImage = imageSources(imageUrl).length > 0;
+  const cleanVideoUrl = String(videoUrl || "").trim();
   els.mediaTitle.textContent = title || "Exercise media";
-  els.mediaBody.innerHTML = previewUrl
-    ? `<iframe class="media-frame" src="${escapeAttr(previewUrl)}" allow="autoplay; fullscreen" allowfullscreen></iframe>
-       <div class="media-links">
-         <a href="${escapeAttr(previewUrl)}" target="_blank" rel="noreferrer">Open video in new tab</a>
-       </div>
-       ${hasImage ? renderImage(imageUrl, "media-image-secondary", "", imagePreviewUrl) : ""}`
-    : hasImage
+  els.mediaBody.innerHTML = `
+    ${hasImage
       ? renderImage(imageUrl, "media-image-full", "", imagePreviewUrl)
       : imagePreviewUrl
         ? `<iframe class="media-frame" src="${escapeAttr(imagePreviewUrl)}" allowfullscreen></iframe>`
-      : `<div class="empty">No media available.</div>`;
+        : ""}
+    ${cleanVideoUrl ? `
+      <div class="media-links media-links-primary">
+        <a href="${escapeAttr(cleanVideoUrl)}" target="_blank" rel="noreferrer">Open video</a>
+      </div>
+    ` : ""}
+    ${!hasImage && !imagePreviewUrl && !cleanVideoUrl ? `<div class="empty">No media available.</div>` : ""}
+  `;
   els.mediaModal.hidden = false;
 }
 
