@@ -1495,12 +1495,7 @@ input:focus {
   }
 
   .calendar-grid {
-    grid-template-columns: repeat(7, calc(100% / 3));
-    scroll-snap-type: x mandatory;
-  }
-
-  .calendar-day {
-    min-width: 0;
+    grid-template-columns: repeat(7, 180px);
   }
 
   .program-day-grid {
