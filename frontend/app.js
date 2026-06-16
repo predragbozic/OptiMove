@@ -545,7 +545,9 @@ function scrollCalendarToDate(date) {
     grid.scrollTo({ left: 0, behavior: "smooth" });
     return;
   }
-  grid.scrollTo({ left: day.offsetLeft, behavior: "smooth" });
+  const trailingSpace = Math.max(0, grid.clientWidth - day.offsetWidth);
+  grid.style.paddingRight = `${trailingSpace}px`;
+  grid.scrollTo({ left: Math.max(0, day.offsetLeft - grid.offsetLeft), behavior: "smooth" });
 }
 
 function renderCalendarSession(node) {
