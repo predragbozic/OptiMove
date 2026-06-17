@@ -944,10 +944,20 @@ input:focus {
 }
 
 .drill-actions {
+  display: grid;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.drill-main-actions,
+.drill-sibling-actions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  justify-content: flex-end;
+}
+
+.drill-sibling-actions {
   justify-content: flex-end;
 }
 
@@ -1064,6 +1074,13 @@ input:focus {
   padding: 2px 2px 10px;
   scroll-snap-type: x proximity;
   scrollbar-gutter: stable;
+}
+
+.exercise-list.is-single {
+  grid-auto-flow: row;
+  grid-auto-columns: unset;
+  grid-template-columns: minmax(220px, 320px);
+  overflow-x: visible;
 }
 
 .exercise-list .exercise-item {
@@ -1518,11 +1535,23 @@ input:focus {
   .drill-actions {
     width: 100%;
     display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .drill-main-actions,
+  .drill-sibling-actions {
+    display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     justify-content: stretch;
   }
 
-  .drill-actions .plain-button,
+  .drill-sibling-actions {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+
+  .drill-main-actions .plain-button,
+  .drill-sibling-actions .plain-button,
   .drill-actions .exercise-position {
     width: 100%;
   }
@@ -1541,6 +1570,10 @@ input:focus {
 
   .exercise-list {
     grid-auto-columns: clamp(132px, 31vw, 170px);
+  }
+
+  .exercise-list.is-single {
+    grid-template-columns: minmax(0, 100%);
   }
 
   .exercise-item {

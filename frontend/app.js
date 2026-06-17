@@ -728,11 +728,17 @@ function renderNode(node) {
           <div class="breadcrumb">${crumbs.map(escapeHtml).join(" / ")}</div>
         </div>
         <div class="drill-actions">
-          ${siblingState.hasSiblings ? `<button class="plain-button" data-action="node-prev" ${siblingState.canGoPrevious ? "" : "disabled"}>Previous</button>` : ""}
-          ${siblingState.hasSiblings ? `<span class="exercise-position">${siblingState.index + 1} / ${siblingState.total}</span>` : ""}
-          ${siblingState.hasSiblings ? `<button class="plain-button" data-action="node-next" ${siblingState.canGoNext ? "" : "disabled"}>Next</button>` : ""}
-          <button class="plain-button" data-action="back">Back</button>
-          <button class="plain-button" data-action="home">Home</button>
+          <div class="drill-main-actions">
+            <button class="plain-button" data-action="back">Back</button>
+            <button class="plain-button" data-action="home">Home</button>
+          </div>
+          ${siblingState.hasSiblings ? `
+            <div class="drill-sibling-actions">
+              <button class="plain-button" data-action="node-prev" ${siblingState.canGoPrevious ? "" : "disabled"}>Previous</button>
+              <span class="exercise-position">${siblingState.index + 1} / ${siblingState.total}</span>
+              <button class="plain-button" data-action="node-next" ${siblingState.canGoNext ? "" : "disabled"}>Next</button>
+            </div>
+          ` : ""}
         </div>
       </div>
       ${node.note ? `<p class="node-note">${escapeHtml(node.note)}</p>` : ""}
@@ -937,7 +943,7 @@ function renderExercises(exercises) {
 function renderExerciseList(items) {
   const itemIds = registerItems(items);
   state.exerciseDetail = { ids: itemIds, currentId: null };
-  return `<div class="exercise-list">${items.map((item, index) => renderItem(item, itemIds[index])).join("")}</div>`;
+  return `<div class="exercise-list ${items.length === 1 ? "is-single" : ""}">${items.map((item, index) => renderItem(item, itemIds[index])).join("")}</div>`;
 }
 
 function renderItem(item, itemId) {
