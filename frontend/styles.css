@@ -1472,12 +1472,16 @@ input:focus {
 }
 
 .media-modal.is-video {
-  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
 }
 
 .media-modal.is-video .media-dialog {
-  width: min(980px, 96vw);
-  max-height: 96dvh;
+  width: 100%;
+  max-width: 1100px;
+  max-height: none;
   background: #000;
 }
 
@@ -1746,18 +1750,4 @@ input:focus {
     grid-template-columns: 1fr;
   }
 
-  .media-modal.is-video {
-    align-items: start;
-    padding: 10px;
-    padding-top: min(34dvh, 300px);
-  }
-
-  .media-modal.is-video .media-dialog {
-    width: min(96vw, 980px);
-  }
-
-  .media-frame-video {
-    aspect-ratio: 16 / 9;
-    max-height: 54dvh;
-  }
 }
