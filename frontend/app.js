@@ -1367,15 +1367,15 @@ function openMedia(title, imageUrl, videoUrl) {
   const hasImage = imageSources(imageUrl).length > 0;
   const videoPreviewUrl = toDrivePreviewUrl(videoUrl);
   els.mediaTitle.textContent = title || "Exercise media";
+  els.mediaModal.classList.toggle("is-video", Boolean(videoPreviewUrl));
   els.mediaBody.innerHTML = `
     ${videoPreviewUrl
-      ? `<iframe class="media-frame" src="${escapeAttr(videoPreviewUrl)}" allow="autoplay; fullscreen" allowfullscreen></iframe>`
+      ? `<iframe class="media-frame media-frame-video" src="${escapeAttr(videoPreviewUrl)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`
       : hasImage
         ? renderImage(imageUrl, "media-image-full", "", imagePreviewUrl)
         : imagePreviewUrl
           ? `<iframe class="media-frame" src="${escapeAttr(imagePreviewUrl)}" allowfullscreen></iframe>`
           : ""}
-    ${videoPreviewUrl && hasImage ? renderImage(imageUrl, "media-image-secondary", "", imagePreviewUrl) : ""}
     ${!videoPreviewUrl && !hasImage && !imagePreviewUrl ? `<div class="empty">No media available.</div>` : ""}
   `;
   els.mediaModal.hidden = false;
@@ -1384,6 +1384,7 @@ function openMedia(title, imageUrl, videoUrl) {
 function closeMedia() {
   if (!els.mediaModal || !els.mediaBody) return;
   els.mediaModal.hidden = true;
+  els.mediaModal.classList.remove("is-video");
   els.mediaBody.innerHTML = "";
 }
 

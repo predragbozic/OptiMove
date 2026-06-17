@@ -1471,6 +1471,25 @@ input:focus {
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
 }
 
+.media-modal.is-video {
+  padding: 10px;
+}
+
+.media-modal.is-video .media-dialog {
+  width: min(980px, 96vw);
+  max-height: 96dvh;
+  background: #000;
+}
+
+.media-modal.is-video .media-header {
+  background: var(--surface);
+}
+
+.media-modal.is-video .media-body {
+  padding: 0;
+  background: #000;
+}
+
 .media-header {
   position: relative;
   z-index: 2;
@@ -1498,6 +1517,13 @@ input:focus {
   border: 0;
   border-radius: var(--radius);
   background: #111827;
+}
+
+.media-frame-video {
+  height: auto;
+  aspect-ratio: 16 / 9;
+  display: block;
+  border-radius: 0;
 }
 
 .media-image-full {
