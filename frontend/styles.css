@@ -1108,7 +1108,6 @@ input:focus {
   height: auto;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto;
   align-items: start;
 }
 
@@ -1120,11 +1119,21 @@ input:focus {
   display: grid;
   grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
   gap: 10px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .exercise-item-vertical.no-media .exercise-item-top {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.exercise-media-stack {
+  display: grid;
+  gap: 7px;
+}
+
+.exercise-title-open {
+  width: 100%;
+  padding: 0;
 }
 
 .exercise-item-summary {
@@ -1134,19 +1143,23 @@ input:focus {
 
 .exercise-item-vertical .dose-mini-grid {
   grid-template-columns: repeat(3, minmax(64px, 1fr));
-  margin-top: 10px;
-}
-
-.exercise-item-description {
-  width: 100%;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
-}
-
-.exercise-item-description .item-description {
   margin-top: 0;
+}
+
+.exercise-item-vertical .item-description {
+  margin-top: 8px;
   max-height: 92px;
+}
+
+.organization-item {
+  display: grid;
+  min-height: 92px;
+  align-content: start;
+}
+
+.organization-item .item-title {
+  display: block;
+  -webkit-line-clamp: unset;
 }
 
 .exercise-list.is-single {
@@ -1365,6 +1378,10 @@ input:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.detail-badges:empty {
+  display: none;
 }
 
 .detail-grid {
@@ -1643,7 +1660,7 @@ input:focus {
   }
 
   .exercise-item-top {
-    grid-template-columns: minmax(112px, 38%) minmax(0, 1fr);
+    grid-template-columns: minmax(118px, 40%) minmax(0, 1fr);
   }
 
   .exercise-item-vertical.no-media .exercise-item-top {

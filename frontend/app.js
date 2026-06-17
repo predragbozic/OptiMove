@@ -935,7 +935,6 @@ function renderExercises(exercises) {
           <button class="exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
             <span class="exercise-head">
               <span class="exercise-title">${escapeHtml(exercise.name || "")}</span>
-              <span class="item-badge">${escapeHtml(exercise.exercise_code || "")}</span>
             </span>
             <span class="muted">${escapeHtml(exercise.aim || "")}</span>
             <span class="item-description">${escapeHtml(exercise.execution_notes || exercise.instruction || "")}</span>
@@ -947,15 +946,18 @@ function renderExercises(exercises) {
 }
 
 function renderExerciseList(items) {
-  const itemIds = registerItems(items);
-  state.exerciseDetail = { ids: itemIds, currentId: null };
+  const itemIds = items.map((item) => (isExerciseItem(item) ? registerItem(item) : ""));
+  const exerciseIds = itemIds.filter(Boolean);
+  state.exerciseDetail = { ids: exerciseIds, currentId: null };
   const layout = state.exerciseLayout === "vertical" ? "vertical" : "horizontal";
   return `
-    <div class="exercise-layout-toolbar" aria-label="Exercise layout">
-      <span class="muted">Layout</span>
-      <button class="chip ${layout === "horizontal" ? "is-active" : ""}" data-action="exercise-layout" data-layout="horizontal">Horizontal</button>
-      <button class="chip ${layout === "vertical" ? "is-active" : ""}" data-action="exercise-layout" data-layout="vertical">Vertical</button>
-    </div>
+    ${exerciseIds.length ? `
+      <div class="exercise-layout-toolbar" aria-label="Exercise layout">
+        <span class="muted">Layout</span>
+        <button class="chip ${layout === "horizontal" ? "is-active" : ""}" data-action="exercise-layout" data-layout="horizontal">Horizontal</button>
+        <button class="chip ${layout === "vertical" ? "is-active" : ""}" data-action="exercise-layout" data-layout="vertical">Vertical</button>
+      </div>
+    ` : ""}
     <div class="exercise-list is-${layout} ${items.length === 1 ? "is-single" : ""}">
       ${items.map((item, index) => renderItem(item, itemIds[index])).join("")}
     </div>
@@ -969,28 +971,26 @@ function renderItem(item, itemId) {
   const doseRows = exerciseDoseRows(item);
   const hasMedia = Boolean(image || video);
   const isVertical = state.exerciseLayout === "vertical";
+  if (!isExerciseItem(item)) return renderOrganizationItem(item, color);
   if (isVertical) {
     return `
       <article class="plan-item exercise-item exercise-item-vertical ${hasMedia ? "" : "no-media"}" style="border-left-color:${escapeAttr(color)}">
         <div class="exercise-item-top">
-          ${hasMedia ? `
-            <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
-              ${image ? renderMediaThumb(image, "") : `<span class="media-fallback">Video</span>`}
-            </button>
-          ` : ""}
-          <button class="exercise-open plan-exercise-open exercise-item-summary" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
-            <span class="item-head">
+          <div class="exercise-media-stack">
+            <button class="exercise-open exercise-title-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
               <span class="item-title">${escapeHtml(item.title || "Untitled")}</span>
-              <span class="item-badge">${escapeHtml(item.exercise_code || item.item_type || "")}</span>
-            </span>
+            </button>
+            ${hasMedia ? `
+              <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
+                ${image ? renderMediaThumb(image, "") : `<span class="media-fallback">Video</span>`}
+              </button>
+            ` : ""}
+          </div>
+          <button class="exercise-open plan-exercise-open exercise-item-summary" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
             ${doseRows.length ? renderDoseMini(doseRows) : ""}
+            ${item.description ? `<span class="item-description">${escapeHtml(item.description)}</span>` : ""}
           </button>
         </div>
-        ${item.description ? `
-          <button class="exercise-open exercise-item-description" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
-            <span class="item-description">${escapeHtml(item.description)}</span>
-          </button>
-        ` : ""}
       </article>
     `;
   }
@@ -1004,13 +1004,34 @@ function renderItem(item, itemId) {
       <button class="exercise-open plan-exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
         <span class="item-head">
           <span class="item-title">${escapeHtml(item.title || "Untitled")}</span>
-          <span class="item-badge">${escapeHtml(item.exercise_code || item.item_type || "")}</span>
         </span>
         ${doseRows.length ? renderDoseMini(doseRows) : ""}
         ${item.description ? `<span class="item-description">${escapeHtml(item.description)}</span>` : ""}
       </button>
     </article>
   `;
+}
+
+function renderOrganizationItem(item, color) {
+  const title = item.title || item.category || item.section || item.domain || "Entry";
+  return `
+    <article class="plan-item exercise-item organization-item no-media" style="border-left-color:${escapeAttr(color)}">
+      <div class="item-head">
+        <span class="item-title">${escapeHtml(title)}</span>
+      </div>
+      ${item.description ? `<span class="item-description">${escapeHtml(item.description)}</span>` : ""}
+    </article>
+  `;
+}
+
+function isExerciseItem(item) {
+  const type = clean(item.item_type).toLowerCase();
+  if (["category", "section", "domain"].includes(type)) return false;
+  if (type === "exercise") return true;
+  if (item.exercise_id || item.exercise_code) return true;
+  if (item.image || item.image_url || item.video || item.video_url) return true;
+  if (exerciseDoseRows(item).length) return true;
+  return !type;
 }
 
 function exerciseDoseRows(item) {
@@ -1042,7 +1063,6 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
   const canGoPrevious = hasSequence && currentIndex > 0;
   const canGoNext = hasSequence;
   const title = clean(item.title || item.name || "Exercise");
-  const code = item.exercise_code || item.item_type || "";
   const image = item.image || item.image_url || "";
   const video = item.video || item.video_url || "";
   const hierarchy = [item.domain, item.category, item.section].filter(Boolean).join(" / ");
@@ -1086,7 +1106,6 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
 
         <div class="exercise-detail-main">
           <div class="detail-badges">
-            ${code ? `<span class="item-badge">${escapeHtml(code)}</span>` : ""}
             ${item.amPm ? `<span class="item-badge">${escapeHtml(item.amPm)}</span>` : ""}
             ${item.bta ? `<span class="item-badge">${escapeHtml(item.bta)}</span>` : ""}
           </div>
