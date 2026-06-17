@@ -1419,7 +1419,7 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
   const driveId = getDriveId(raw);
   const poster = toImageUrl(imageUrl);
   if (driveId) {
-    return renderVideoFrame(toDrivePreviewUrl(raw));
+    return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: true }));
   }
   if (/\.(mp4|webm|mov)(\?|#|$)/i.test(raw)) {
     return `
@@ -1428,7 +1428,7 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
       </video>
     `;
   }
-  return renderVideoFrame(toDrivePreviewUrl(raw));
+  return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: true }));
 }
 
 function renderVideoFrame(src) {
@@ -1446,7 +1446,7 @@ function wireVideoFallback(videoUrl) {
   const showFallback = () => {
     if (settled || !fallbackSrc || !els.mediaBody || els.mediaModal.hidden) return;
     settled = true;
-    els.mediaBody.innerHTML = `<iframe class="media-frame media-frame-video" src="${escapeAttr(fallbackSrc)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
+    els.mediaBody.innerHTML = renderVideoFrame(withAutoplayParam(fallbackSrc));
   };
   video.addEventListener("loadedmetadata", () => {
     settled = true;
@@ -1478,12 +1478,18 @@ function closeMedia() {
   els.mediaBody.innerHTML = "";
 }
 
-function toDrivePreviewUrl(url) {
+function toDrivePreviewUrl(url, options = {}) {
   const raw = String(url || "").trim();
   if (!raw) return "";
   const driveId = getDriveId(raw);
-  if (driveId) return `https://drive.google.com/file/d/${driveId}/preview`;
-  return raw;
+  const previewUrl = driveId ? `https://drive.google.com/file/d/${driveId}/preview` : raw;
+  return options.autoplay ? withAutoplayParam(previewUrl) : previewUrl;
+}
+
+function withAutoplayParam(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  return raw.includes("?") ? `${raw}&autoplay=1` : `${raw}?autoplay=1`;
 }
 
 function toImageUrl(url) {
