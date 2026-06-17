@@ -1479,9 +1479,10 @@ input:focus {
 }
 
 .media-modal.is-video .media-dialog {
-  width: 100%;
+  width: min(96vw, 1100px);
+  height: min(78dvh, 720px);
   max-width: 1100px;
-  max-height: none;
+  max-height: calc(100dvh - 24px);
   background: #000;
 }
 
@@ -1516,6 +1517,7 @@ input:focus {
 }
 
 .media-modal.is-video .media-body {
+  height: 100%;
   padding: 0;
   background: #000;
 }
@@ -1550,16 +1552,16 @@ input:focus {
 }
 
 .media-frame-video {
-  height: auto;
-  aspect-ratio: 16 / 9;
+  height: 100%;
+  aspect-ratio: auto;
   display: block;
   border-radius: 0;
 }
 
 .media-video {
   width: 100%;
-  aspect-ratio: 16 / 9;
-  max-height: min(78dvh, 720px);
+  height: 100%;
+  max-height: none;
   display: block;
   background: #000;
   object-fit: contain;
