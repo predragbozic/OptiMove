@@ -950,8 +950,10 @@ input:focus {
 }
 
 .drill-actions {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   justify-content: flex-end;
 }
 
@@ -959,19 +961,30 @@ input:focus {
 .drill-sibling-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   justify-content: flex-end;
 }
 
 .drill-sibling-actions {
+  min-height: 38px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
   justify-content: flex-end;
 }
 
+.drill-actions .plain-button {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
 .exercise-position {
-  min-height: 40px;
+  min-height: 30px;
   display: inline-grid;
   place-items: center;
-  padding: 0 8px;
+  padding: 0 6px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 900;
@@ -1160,6 +1173,37 @@ input:focus {
 .organization-item .item-title {
   display: block;
   -webkit-line-clamp: unset;
+}
+
+.organization-summary {
+  --node-color: var(--accent);
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--node-color);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.organization-summary .node-card-head {
+  align-items: flex-start;
+}
+
+.organization-summary h4 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.organization-summary p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.organization-summary .dose-mini-grid {
+  max-width: 360px;
+  margin-top: 12px;
 }
 
 .exercise-list.is-single {
@@ -1663,7 +1707,22 @@ input:focus {
   }
 
   .week-nav-panel {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .week-title-button {
+    order: 1;
+    flex: 1 0 100%;
+  }
+
+  .week-nav-panel > .plain-button {
+    order: 2;
+    flex: 1 1 0;
+    min-height: 38px;
+    padding: 0 10px;
+    font-size: 13px;
   }
 
   .tabs {
@@ -1697,26 +1756,26 @@ input:focus {
 
   .drill-actions {
     width: 100%;
-    display: grid;
-    grid-template-columns: 1fr;
-    justify-content: stretch;
+    justify-content: flex-start;
   }
 
   .drill-main-actions,
   .drill-sibling-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    justify-content: stretch;
+    width: 100%;
   }
 
   .drill-sibling-actions {
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    justify-content: space-between;
   }
 
   .drill-main-actions .plain-button,
-  .drill-sibling-actions .plain-button,
+  .drill-sibling-actions .plain-button {
+    flex: 1 1 0;
+  }
+
   .drill-actions .exercise-position {
-    width: 100%;
+    flex: 0 0 auto;
+    min-width: 52px;
   }
 
   .summary-grid {

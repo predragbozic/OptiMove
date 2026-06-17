@@ -754,9 +754,14 @@ function renderNode(node) {
       ${node.note ? `<p class="node-note">${escapeHtml(node.note)}</p>` : ""}
       ${next.length
         ? `<div class="node-grid">${next.map(renderNodeButton).join("")}</div>`
-        : renderExerciseList(node.items)}
+        : renderTerminalNode(node)}
     </section>
   `;
+}
+
+function renderTerminalNode(node) {
+  if (!(node.items || []).some(isExerciseItem)) return renderOrganizationSummary(node);
+  return renderExerciseList(node.items);
 }
 
 function nextNodes(node) {
@@ -1024,6 +1029,26 @@ function renderOrganizationItem(item, color) {
         <span class="item-title">${escapeHtml(title)}</span>
       </div>
       ${item.description ? `<span class="item-description">${escapeHtml(item.description)}</span>` : ""}
+    </article>
+  `;
+}
+
+function renderOrganizationSummary(node) {
+  const meta = (node.items || []).find(Boolean) || {};
+  const icon = node.icon || meta[`${node.type}_icon_url`] || meta.category_icon_url || meta.section_icon_url || meta.domain_icon_url || "";
+  const color = node.color || meta[`${node.type}_color`] || meta.category_color || meta.section_color || meta.domain_color || "#1f6f68";
+  const note = node.note || meta.description || meta[`${node.type}_note`] || meta[`${node.type}_short_note`] || "";
+  const doseRows = exerciseDoseRows(meta);
+  return `
+    <article class="organization-summary" style="--node-color:${escapeAttr(color)}">
+      <div class="node-card-head">
+        ${icon ? `${renderImage(icon, "node-icon")}<span class="node-dot node-dot-fallback"></span>` : `<span class="node-dot"></span>`}
+        <div>
+          <h4>${escapeHtml(node.label)}</h4>
+          ${note ? `<p>${escapeHtml(note)}</p>` : ""}
+        </div>
+      </div>
+      ${doseRows.length ? renderDoseMini(doseRows) : ""}
     </article>
   `;
 }
