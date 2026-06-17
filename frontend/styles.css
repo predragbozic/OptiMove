@@ -1556,6 +1556,14 @@ input:focus {
   border-radius: 0;
 }
 
+.media-video {
+  width: 100%;
+  max-height: min(78dvh, 720px);
+  display: block;
+  background: #000;
+  object-fit: contain;
+}
+
 .media-image-full {
   width: 100%;
   max-height: 76vh;

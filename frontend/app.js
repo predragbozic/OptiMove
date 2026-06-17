@@ -1365,12 +1365,13 @@ function openMedia(title, imageUrl, videoUrl) {
   if (!els.mediaModal || !els.mediaBody || !els.mediaTitle) return;
   const imagePreviewUrl = toDrivePreviewUrl(imageUrl);
   const hasImage = imageSources(imageUrl).length > 0;
-  const videoPreviewUrl = toDrivePreviewUrl(videoUrl);
+  const cleanVideoUrl = String(videoUrl || "").trim();
+  const videoEmbed = videoEmbedMarkup(cleanVideoUrl, imageUrl);
   els.mediaTitle.textContent = title || "Exercise media";
-  els.mediaModal.classList.toggle("is-video", Boolean(videoPreviewUrl));
+  els.mediaModal.classList.toggle("is-video", Boolean(videoEmbed));
   els.mediaBody.innerHTML = `
-    ${videoPreviewUrl
-      ? `<iframe class="media-frame media-frame-video" src="${escapeAttr(videoPreviewUrl)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`
+    ${videoEmbed
+      ? videoEmbed
       : hasImage
         ? renderImage(imageUrl, "media-image-full", "", imagePreviewUrl)
         : imagePreviewUrl
@@ -1379,6 +1380,28 @@ function openMedia(title, imageUrl, videoUrl) {
     ${!videoPreviewUrl && !hasImage && !imagePreviewUrl ? `<div class="empty">No media available.</div>` : ""}
   `;
   els.mediaModal.hidden = false;
+}
+
+function videoEmbedMarkup(videoUrl, imageUrl = "") {
+  const raw = String(videoUrl || "").trim();
+  if (!raw) return "";
+  const driveId = getDriveId(raw);
+  const poster = toImageUrl(imageUrl);
+  if (driveId) {
+    return `
+      <video class="media-video" controls playsinline preload="metadata"${poster ? ` poster="${escapeAttr(poster)}"` : ""}>
+        <source src="${escapeAttr(`https://drive.google.com/uc?export=download&id=${driveId}`)}" type="video/mp4">
+      </video>
+    `;
+  }
+  if (/\.(mp4|webm|mov)(\?|#|$)/i.test(raw)) {
+    return `
+      <video class="media-video" controls playsinline preload="metadata"${poster ? ` poster="${escapeAttr(poster)}"` : ""}>
+        <source src="${escapeAttr(raw)}">
+      </video>
+    `;
+  }
+  return `<iframe class="media-frame media-frame-video" src="${escapeAttr(toDrivePreviewUrl(raw))}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
 }
 
 function closeMedia() {
