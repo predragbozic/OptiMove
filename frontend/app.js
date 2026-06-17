@@ -16,7 +16,8 @@ const state = {
   lastExerciseResults: [],
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
-  touch: { startX: 0, startY: 0 },
+  touch: { startX: 0, startY: 0, startTime: 0 },
+  appHistoryDepth: 0,
 };
 
 const els = {
@@ -75,6 +76,7 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeMedia();
   });
+  window.addEventListener("popstate", handleBrowserBack);
 }
 
 function toggleAthletesList() {
@@ -149,7 +151,7 @@ function handleSwipeStart(event) {
   if (!isSwipeContext(event.target)) return;
   const touch = event.changedTouches?.[0];
   if (!touch) return;
-  state.touch = { startX: touch.clientX, startY: touch.clientY };
+  state.touch = { startX: touch.clientX, startY: touch.clientY, startTime: Date.now() };
 }
 
 function handleSwipeEnd(event) {
@@ -158,14 +160,16 @@ function handleSwipeEnd(event) {
   if (!touch) return;
   const deltaX = touch.clientX - state.touch.startX;
   const deltaY = touch.clientY - state.touch.startY;
-  if (Math.abs(deltaX) < 50 || Math.abs(deltaX) < Math.abs(deltaY) * 1.4) return;
+  const elapsed = Math.max(1, Date.now() - state.touch.startTime);
+  const velocity = Math.abs(deltaX) / elapsed;
+  if (Math.abs(deltaX) < 86 || velocity < 0.28 || Math.abs(deltaX) < Math.abs(deltaY) * 1.8) return;
   handleHorizontalSwipe(deltaX < 0 ? 1 : -1);
 }
 
 function isSwipeContext(target) {
   if (!els.mediaModal?.hidden) return false;
-  if (target.closest(".week-selector, .program-day-grid, .exercise-list")) return false;
-  return Boolean(target.closest(".exercise-detail, .panel, .calendar-grid, .node-grid"));
+  if (target.closest(".calendar-grid, .week-selector, .program-day-grid, .exercise-list")) return false;
+  return Boolean(target.closest(".exercise-detail, .panel, .node-grid"));
 }
 
 function handleHorizontalSwipe(direction) {
@@ -200,6 +204,36 @@ function handleHorizontalSwipe(direction) {
   if (state.activeTab === "weekly") {
     moveWeek(direction);
   }
+}
+
+function pushAppHistory() {
+  window.history.pushState({ optimove: true }, "", window.location.href);
+  state.appHistoryDepth += 1;
+}
+
+function handleBrowserBack() {
+  if (state.appHistoryDepth > 0) state.appHistoryDepth -= 1;
+  handleAppBack();
+}
+
+function handleAppBack() {
+  if (!els.mediaModal?.hidden) {
+    closeMedia();
+    return true;
+  }
+
+  if (els.content.querySelector(".exercise-detail")) {
+    returnToNodeParent();
+    return true;
+  }
+
+  if (state.navStack.length) {
+    state.navStack.pop();
+    renderCurrentNode();
+    return true;
+  }
+
+  return false;
 }
 
 async function loadAthletes() {
@@ -292,8 +326,8 @@ function handleContentClick(event) {
 
   const type = action.dataset.action;
   if (type === "back") {
-    state.navStack.pop();
-    renderCurrentNode();
+    if (state.appHistoryDepth > 0) window.history.back();
+    else handleAppBack();
     return;
   }
   if (type === "home") {
@@ -302,12 +336,14 @@ function handleContentClick(event) {
     return;
   }
   if (type === "exercise-back") {
-    renderCurrentNode();
+    if (state.appHistoryDepth > 0) window.history.back();
+    else handleAppBack();
     return;
   }
   if (type === "node") {
     const node = getNodeById(action.dataset.nodeId);
     if (!node) return;
+    pushAppHistory();
     state.navStack.push(node);
     renderCurrentNode();
     return;
@@ -319,6 +355,7 @@ function handleContentClick(event) {
   if (type === "open-exercise") {
     const item = getItemById(action.dataset.itemId);
     if (!item) return;
+    pushAppHistory();
     renderExerciseDetail(item, action.dataset.itemId);
     return;
   }

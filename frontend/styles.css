@@ -996,6 +996,10 @@ input:focus {
   gap: 10px;
 }
 
+.node-card-head > span:last-child {
+  min-width: 0;
+}
+
 .node-dot,
 .node-icon {
   flex: 0 0 auto;
@@ -1024,6 +1028,7 @@ input:focus {
   font-size: 15px;
   font-weight: 900;
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .node-sub {
@@ -1488,6 +1493,38 @@ input:focus {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .drill-header {
+    display: grid;
+    align-items: start;
+    gap: 10px;
+  }
+
+  .drill-header > div:first-child {
+    min-width: 0;
+  }
+
+  .drill-header h3 {
+    margin-bottom: 6px;
+    overflow-wrap: anywhere;
+  }
+
+  .breadcrumb {
+    max-height: 2.9em;
+    overflow: hidden;
+  }
+
+  .drill-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .drill-actions .plain-button,
+  .drill-actions .exercise-position {
+    width: 100%;
   }
 
   .summary-grid {
