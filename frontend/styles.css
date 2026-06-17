@@ -1106,14 +1106,47 @@ input:focus {
 
 .exercise-list.is-vertical .exercise-item {
   height: auto;
-  min-height: 190px;
-  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
-  grid-template-rows: none;
-  align-items: stretch;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto;
+  align-items: start;
 }
 
 .exercise-list.is-vertical .exercise-item.no-media {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.exercise-item-top {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.exercise-item-vertical.no-media .exercise-item-top {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.exercise-item-summary {
+  min-height: 100%;
+  padding: 4px 0;
+}
+
+.exercise-item-vertical .dose-mini-grid {
+  grid-template-columns: repeat(3, minmax(64px, 1fr));
+  margin-top: 10px;
+}
+
+.exercise-item-description {
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.exercise-item-description .item-description {
+  margin-top: 0;
+  max-height: 92px;
 }
 
 .exercise-list.is-single {
@@ -1606,8 +1639,19 @@ input:focus {
   }
 
   .exercise-list.is-vertical .exercise-item {
-    grid-template-columns: 1fr;
     min-height: 0;
+  }
+
+  .exercise-item-top {
+    grid-template-columns: minmax(112px, 38%) minmax(0, 1fr);
+  }
+
+  .exercise-item-vertical.no-media .exercise-item-top {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .exercise-item-vertical .dose-mini-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .exercise-item {

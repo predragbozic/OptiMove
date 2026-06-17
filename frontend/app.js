@@ -968,6 +968,32 @@ function renderItem(item, itemId) {
   const video = item.video || item.video_url || "";
   const doseRows = exerciseDoseRows(item);
   const hasMedia = Boolean(image || video);
+  const isVertical = state.exerciseLayout === "vertical";
+  if (isVertical) {
+    return `
+      <article class="plan-item exercise-item exercise-item-vertical ${hasMedia ? "" : "no-media"}" style="border-left-color:${escapeAttr(color)}">
+        <div class="exercise-item-top">
+          ${hasMedia ? `
+            <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
+              ${image ? renderMediaThumb(image, "") : `<span class="media-fallback">Video</span>`}
+            </button>
+          ` : ""}
+          <button class="exercise-open plan-exercise-open exercise-item-summary" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
+            <span class="item-head">
+              <span class="item-title">${escapeHtml(item.title || "Untitled")}</span>
+              <span class="item-badge">${escapeHtml(item.exercise_code || item.item_type || "")}</span>
+            </span>
+            ${doseRows.length ? renderDoseMini(doseRows) : ""}
+          </button>
+        </div>
+        ${item.description ? `
+          <button class="exercise-open exercise-item-description" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
+            <span class="item-description">${escapeHtml(item.description)}</span>
+          </button>
+        ` : ""}
+      </article>
+    `;
+  }
   return `
     <article class="plan-item exercise-item ${hasMedia ? "" : "no-media"}" style="border-left-color:${escapeAttr(color)}">
       ${hasMedia ? `
