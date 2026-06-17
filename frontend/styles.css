@@ -1482,7 +1482,33 @@ input:focus {
 }
 
 .media-modal.is-video .media-header {
-  background: var(--surface);
+  position: absolute;
+  inset: 0 0 auto auto;
+  z-index: 3;
+  padding: 8px;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.media-modal.is-video .media-header h3 {
+  display: none;
+}
+
+.media-modal.is-video .media-header .plain-button {
+  width: 42px;
+  min-height: 42px;
+  padding: 0;
+  border-color: rgba(255, 255, 255, 0.26);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.54);
+  color: #fff;
+  font-size: 0;
+}
+
+.media-modal.is-video .media-header .plain-button::before {
+  content: "X";
+  font-size: 16px;
+  font-weight: 900;
 }
 
 .media-modal.is-video .media-body {
