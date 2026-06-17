@@ -1752,11 +1752,11 @@ input:focus {
   }
 
   .media-modal.is-video .media-dialog {
-    width: min(94vw, 430px);
+    width: min(94vw, 620px);
   }
 
   .media-frame-video {
-    aspect-ratio: 9 / 16;
-    max-height: 82dvh;
+    aspect-ratio: 4 / 3;
+    max-height: 74dvh;
   }
 }
