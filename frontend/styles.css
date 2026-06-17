@@ -1558,6 +1558,7 @@ input:focus {
 
 .media-video {
   width: 100%;
+  aspect-ratio: 16 / 9;
   max-height: min(78dvh, 720px);
   display: block;
   background: #000;

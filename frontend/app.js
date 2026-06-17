@@ -1377,9 +1377,10 @@ function openMedia(title, imageUrl, videoUrl) {
         : imagePreviewUrl
           ? `<iframe class="media-frame" src="${escapeAttr(imagePreviewUrl)}" allowfullscreen></iframe>`
           : ""}
-    ${!videoPreviewUrl && !hasImage && !imagePreviewUrl ? `<div class="empty">No media available.</div>` : ""}
+    ${!videoEmbed && !hasImage && !imagePreviewUrl ? `<div class="empty">No media available.</div>` : ""}
   `;
   els.mediaModal.hidden = false;
+  wireVideoFallback(cleanVideoUrl);
 }
 
 function videoEmbedMarkup(videoUrl, imageUrl = "") {
@@ -1388,8 +1389,9 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
   const driveId = getDriveId(raw);
   const poster = toImageUrl(imageUrl);
   if (driveId) {
+    const fallbackUrl = toDrivePreviewUrl(raw);
     return `
-      <video class="media-video" controls playsinline preload="metadata"${poster ? ` poster="${escapeAttr(poster)}"` : ""}>
+      <video class="media-video" controls playsinline preload="metadata" data-fallback-src="${escapeAttr(fallbackUrl)}"${poster ? ` poster="${escapeAttr(poster)}"` : ""}>
         <source src="${escapeAttr(`https://drive.google.com/uc?export=download&id=${driveId}`)}" type="video/mp4">
       </video>
     `;
@@ -1402,6 +1404,23 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
     `;
   }
   return `<iframe class="media-frame media-frame-video" src="${escapeAttr(toDrivePreviewUrl(raw))}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
+}
+
+function wireVideoFallback(videoUrl) {
+  const video = els.mediaBody?.querySelector(".media-video");
+  if (!video) return;
+  let settled = false;
+  const fallbackSrc = video.dataset.fallbackSrc || toDrivePreviewUrl(videoUrl);
+  const showFallback = () => {
+    if (settled || !fallbackSrc || !els.mediaBody || els.mediaModal.hidden) return;
+    settled = true;
+    els.mediaBody.innerHTML = `<iframe class="media-frame media-frame-video" src="${escapeAttr(fallbackSrc)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
+  };
+  video.addEventListener("loadedmetadata", () => {
+    settled = true;
+  }, { once: true });
+  video.addEventListener("error", showFallback, { once: true });
+  setTimeout(showFallback, 2200);
 }
 
 function closeMedia() {
