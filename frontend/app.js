@@ -401,6 +401,10 @@ function handleContentClick(event) {
     openMedia(action.dataset.title || "Exercise media", action.dataset.image || "", action.dataset.video || "");
     return;
   }
+  if (type === "enter-fullscreen") {
+    enterMediaFullscreen();
+    return;
+  }
   if (type === "close-media") {
     closeMedia();
   }
@@ -1381,6 +1385,7 @@ function openMedia(title, imageUrl, videoUrl) {
   `;
   els.mediaModal.hidden = false;
   wireVideoFallback(cleanVideoUrl);
+  if (videoEmbed && isMobileViewport()) enterMediaFullscreen(true);
 }
 
 function videoEmbedMarkup(videoUrl, imageUrl = "") {
@@ -1389,12 +1394,7 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
   const driveId = getDriveId(raw);
   const poster = toImageUrl(imageUrl);
   if (driveId) {
-    const fallbackUrl = toDrivePreviewUrl(raw);
-    return `
-      <video class="media-video" controls playsinline preload="metadata" data-fallback-src="${escapeAttr(fallbackUrl)}"${poster ? ` poster="${escapeAttr(poster)}"` : ""}>
-        <source src="${escapeAttr(`https://drive.google.com/uc?export=download&id=${driveId}`)}" type="video/mp4">
-      </video>
-    `;
+    return renderVideoFrame(toDrivePreviewUrl(raw));
   }
   if (/\.(mp4|webm|mov)(\?|#|$)/i.test(raw)) {
     return `
@@ -1403,7 +1403,14 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
       </video>
     `;
   }
-  return `<iframe class="media-frame media-frame-video" src="${escapeAttr(toDrivePreviewUrl(raw))}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
+  return renderVideoFrame(toDrivePreviewUrl(raw));
+}
+
+function renderVideoFrame(src) {
+  return `
+    <iframe class="media-frame media-frame-video" src="${escapeAttr(src)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
+    <button class="media-fullscreen-button" data-action="enter-fullscreen" type="button" aria-label="Full screen"></button>
+  `;
 }
 
 function wireVideoFallback(videoUrl) {
@@ -1421,6 +1428,22 @@ function wireVideoFallback(videoUrl) {
   }, { once: true });
   video.addEventListener("error", showFallback, { once: true });
   setTimeout(showFallback, 2200);
+}
+
+function enterMediaFullscreen(silent = false) {
+  const target = els.mediaBody?.querySelector(".media-frame-video, .media-video") || els.mediaModal?.querySelector(".media-dialog");
+  const request = target?.requestFullscreen || target?.webkitRequestFullscreen || target?.msRequestFullscreen;
+  if (!target || !request) return;
+  try {
+    const result = request.call(target);
+    if (result?.catch && silent) result.catch(() => {});
+  } catch (error) {
+    if (!silent) console.warn(error);
+  }
+}
+
+function isMobileViewport() {
+  return window.matchMedia?.("(max-width: 760px)").matches || window.innerWidth <= 760;
 }
 
 function closeMedia() {
