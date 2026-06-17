@@ -866,6 +866,12 @@ input:focus {
   height: 360px;
 }
 
+.exercise-item.no-media {
+  height: auto;
+  min-height: 150px;
+  grid-template-rows: 1fr;
+}
+
 .plan-exercise-open {
   align-content: start;
   min-width: 0;
@@ -1063,6 +1069,19 @@ input:focus {
   margin-top: 10px;
 }
 
+.exercise-layout-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: -2px 0 10px;
+}
+
+.exercise-layout-toolbar .chip {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
 .exercise-list {
   display: grid;
   grid-auto-flow: column;
@@ -1076,10 +1095,31 @@ input:focus {
   scrollbar-gutter: stable;
 }
 
+.exercise-list.is-vertical {
+  grid-auto-flow: row;
+  grid-auto-columns: unset;
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: visible;
+  overflow-y: visible;
+  scroll-snap-type: none;
+}
+
+.exercise-list.is-vertical .exercise-item {
+  height: auto;
+  min-height: 190px;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
+  grid-template-rows: none;
+  align-items: stretch;
+}
+
+.exercise-list.is-vertical .exercise-item.no-media {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .exercise-list.is-single {
   grid-auto-flow: row;
   grid-auto-columns: unset;
-  grid-template-columns: minmax(220px, 320px);
+  grid-template-columns: minmax(0, 100%);
   overflow-x: visible;
 }
 
@@ -1131,10 +1171,9 @@ input:focus {
 
 .item-description {
   margin-top: 6px;
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  display: block;
+  max-height: 86px;
+  overflow: auto;
 }
 
 .dose-mini-grid {
@@ -1331,6 +1370,8 @@ input:focus {
 }
 
 .detail-notes p:last-child {
+  max-height: 230px;
+  overflow: auto;
   margin-bottom: 0;
   color: var(--text);
   font-size: 14px;
@@ -1426,28 +1467,6 @@ input:focus {
   border: 1px solid var(--line);
 }
 
-.media-links {
-  margin-top: 10px;
-}
-
-.media-links a {
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 900;
-}
-
-.media-links-primary a {
-  min-height: 42px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 14px;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: #fff;
-  text-decoration: none;
-}
-
 @media (max-width: 960px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -1485,8 +1504,12 @@ input:focus {
     height: 315px;
   }
 
+  .exercise-item.no-media {
+    height: auto;
+  }
+
   .item-description {
-    -webkit-line-clamp: 1;
+    max-height: 72px;
   }
 }
 
@@ -1572,13 +1595,29 @@ input:focus {
     grid-auto-columns: clamp(132px, 31vw, 170px);
   }
 
+  .exercise-layout-toolbar {
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
   .exercise-list.is-single {
     grid-template-columns: minmax(0, 100%);
+  }
+
+  .exercise-list.is-vertical .exercise-item {
+    grid-template-columns: 1fr;
+    min-height: 0;
   }
 
   .exercise-item {
     height: 292px;
     padding: 8px;
+  }
+
+  .exercise-item.no-media {
+    height: auto;
+    min-height: 130px;
   }
 
   .dose-mini-grid {

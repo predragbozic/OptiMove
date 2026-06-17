@@ -16,6 +16,7 @@ const state = {
   lastExerciseResults: [],
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
+  exerciseLayout: "horizontal",
   touch: { startX: 0, startY: 0, startTime: 0 },
   appHistoryDepth: 0,
 };
@@ -350,6 +351,11 @@ function handleContentClick(event) {
   }
   if (type === "node-prev" || type === "node-next") {
     moveNodeSibling(type === "node-next" ? 1 : -1);
+    return;
+  }
+  if (type === "exercise-layout") {
+    state.exerciseLayout = action.dataset.layout === "vertical" ? "vertical" : "horizontal";
+    renderCurrentNode();
     return;
   }
   if (type === "open-exercise") {
@@ -943,7 +949,17 @@ function renderExercises(exercises) {
 function renderExerciseList(items) {
   const itemIds = registerItems(items);
   state.exerciseDetail = { ids: itemIds, currentId: null };
-  return `<div class="exercise-list ${items.length === 1 ? "is-single" : ""}">${items.map((item, index) => renderItem(item, itemIds[index])).join("")}</div>`;
+  const layout = state.exerciseLayout === "vertical" ? "vertical" : "horizontal";
+  return `
+    <div class="exercise-layout-toolbar" aria-label="Exercise layout">
+      <span class="muted">Layout</span>
+      <button class="chip ${layout === "horizontal" ? "is-active" : ""}" data-action="exercise-layout" data-layout="horizontal">Horizontal</button>
+      <button class="chip ${layout === "vertical" ? "is-active" : ""}" data-action="exercise-layout" data-layout="vertical">Vertical</button>
+    </div>
+    <div class="exercise-list is-${layout} ${items.length === 1 ? "is-single" : ""}">
+      ${items.map((item, index) => renderItem(item, itemIds[index])).join("")}
+    </div>
+  `;
 }
 
 function renderItem(item, itemId) {
@@ -951,13 +967,14 @@ function renderItem(item, itemId) {
   const image = item.image || item.image_url || "";
   const video = item.video || item.video_url || "";
   const doseRows = exerciseDoseRows(item);
+  const hasMedia = Boolean(image || video);
   return `
-    <article class="plan-item exercise-item" style="border-left-color:${escapeAttr(color)}">
-      ${image || video ? `
+    <article class="plan-item exercise-item ${hasMedia ? "" : "no-media"}" style="border-left-color:${escapeAttr(color)}">
+      ${hasMedia ? `
         <button class="exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
-          ${image ? renderMediaThumb(image, "") : ""}
+          ${image ? renderMediaThumb(image, "") : `<span class="media-fallback">Video</span>`}
         </button>
-      ` : `<div class="exercise-media exercise-media-placeholder"></div>`}
+      ` : ""}
       <button class="exercise-open plan-exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
         <span class="item-head">
           <span class="item-title">${escapeHtml(item.title || "Untitled")}</span>
@@ -1034,12 +1051,11 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
 
       <div class="exercise-detail-layout">
         <div class="exercise-detail-media">
-          ${image
+          ${image || video
             ? `<button class="exercise-media detail-media" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
-                ${renderMediaThumb(image)}
+                ${image ? renderMediaThumb(image) : `<span class="media-fallback">Video</span>`}
               </button>`
             : `<div class="detail-media-empty">No image</div>`}
-          ${video ? `<button class="plain-button detail-video-button" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">Play video</button>` : ""}
         </div>
 
         <div class="exercise-detail-main">
@@ -1304,20 +1320,18 @@ function openMedia(title, imageUrl, videoUrl) {
   if (!els.mediaModal || !els.mediaBody || !els.mediaTitle) return;
   const imagePreviewUrl = toDrivePreviewUrl(imageUrl);
   const hasImage = imageSources(imageUrl).length > 0;
-  const cleanVideoUrl = String(videoUrl || "").trim();
+  const videoPreviewUrl = toDrivePreviewUrl(videoUrl);
   els.mediaTitle.textContent = title || "Exercise media";
   els.mediaBody.innerHTML = `
-    ${hasImage
-      ? renderImage(imageUrl, "media-image-full", "", imagePreviewUrl)
-      : imagePreviewUrl
-        ? `<iframe class="media-frame" src="${escapeAttr(imagePreviewUrl)}" allowfullscreen></iframe>`
-        : ""}
-    ${cleanVideoUrl ? `
-      <div class="media-links media-links-primary">
-        <a href="${escapeAttr(cleanVideoUrl)}" target="_blank" rel="noreferrer">Open video</a>
-      </div>
-    ` : ""}
-    ${!hasImage && !imagePreviewUrl && !cleanVideoUrl ? `<div class="empty">No media available.</div>` : ""}
+    ${videoPreviewUrl
+      ? `<iframe class="media-frame" src="${escapeAttr(videoPreviewUrl)}" allow="autoplay; fullscreen" allowfullscreen></iframe>`
+      : hasImage
+        ? renderImage(imageUrl, "media-image-full", "", imagePreviewUrl)
+        : imagePreviewUrl
+          ? `<iframe class="media-frame" src="${escapeAttr(imagePreviewUrl)}" allowfullscreen></iframe>`
+          : ""}
+    ${videoPreviewUrl && hasImage ? renderImage(imageUrl, "media-image-secondary", "", imagePreviewUrl) : ""}
+    ${!videoPreviewUrl && !hasImage && !imagePreviewUrl ? `<div class="empty">No media available.</div>` : ""}
   `;
   els.mediaModal.hidden = false;
 }
