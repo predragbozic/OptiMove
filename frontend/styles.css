@@ -1831,12 +1831,25 @@ input:focus {
   }
 
   .dose-mini-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;
   }
 
   .dose-mini-cell {
     min-height: 34px;
-    padding: 5px;
+    min-width: 0;
+    padding: 5px 4px;
+    overflow: hidden;
+  }
+
+  .dose-mini-cell span {
+    font-size: 8px;
+    white-space: nowrap;
+  }
+
+  .dose-mini-cell strong {
+    font-size: 11px;
+    overflow-wrap: anywhere;
   }
 
   .exercise-detail-layout {
