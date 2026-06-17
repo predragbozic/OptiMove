@@ -1745,4 +1745,18 @@ input:focus {
   .exercise-detail-layout {
     grid-template-columns: 1fr;
   }
+
+  .media-modal.is-video {
+    align-items: center;
+    padding: 10px;
+  }
+
+  .media-modal.is-video .media-dialog {
+    width: min(94vw, 430px);
+  }
+
+  .media-frame-video {
+    aspect-ratio: 9 / 16;
+    max-height: 82dvh;
+  }
 }
