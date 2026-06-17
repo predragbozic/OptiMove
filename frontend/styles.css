@@ -1747,16 +1747,17 @@ input:focus {
   }
 
   .media-modal.is-video {
-    align-items: center;
+    align-items: start;
     padding: 10px;
+    padding-top: min(34dvh, 300px);
   }
 
   .media-modal.is-video .media-dialog {
-    width: min(94vw, 620px);
+    width: min(96vw, 980px);
   }
 
   .media-frame-video {
-    aspect-ratio: 4 / 3;
-    max-height: 74dvh;
+    aspect-ratio: 16 / 9;
+    max-height: 54dvh;
   }
 }
