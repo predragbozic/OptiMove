@@ -14,6 +14,7 @@ const state = {
   lastProgramBundle: null,
   lastTemplates: [],
   lastExerciseResults: [],
+  exerciseSearch: { term: "", limit: 30, hasMore: false },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
@@ -312,14 +313,19 @@ async function loadExercises() {
     </label>
   `;
   const input = document.querySelector("#exerciseSearch");
-  input.addEventListener("input", debounce(() => searchExercises(input.value), 250));
+  input.addEventListener("input", debounce(() => {
+    state.exerciseSearch.limit = 30;
+    searchExercises(input.value);
+  }, 250));
   await searchExercises(input.value);
 }
 
 async function searchExercises(term) {
   const query = term.trim();
-  setLoading("Searching exercises...");
-  const data = await api(`/api/exercises?search=${encodeURIComponent(query)}&limit=30`);
+  state.exerciseSearch.term = query;
+  setLoading(query ? "Searching exercises..." : "Loading exercises...");
+  const data = await api(`/api/exercises?search=${encodeURIComponent(query)}&limit=${state.exerciseSearch.limit}`);
+  state.exerciseSearch.hasMore = Boolean(data.hasMore);
   renderExercises(data.exercises || []);
 }
 
@@ -373,6 +379,11 @@ function handleContentClick(event) {
   }
   if (type === "exercise-next") {
     moveExerciseDetail(1);
+    return;
+  }
+  if (type === "exercise-load-more") {
+    state.exerciseSearch.limit += 30;
+    searchExercises(state.exerciseSearch.term);
     return;
   }
   if (type === "week-prev" || type === "week-next") {
@@ -931,26 +942,37 @@ function renderExercises(exercises) {
   const itemIds = registerItems(exercises);
   state.exerciseDetail = { ids: itemIds, currentId: null };
   els.content.innerHTML = `
-    <div class="exercise-grid">
-      ${exercises.map((exercise, index) => {
-        const itemId = itemIds[index];
-        return `
-        <article class="exercise-card">
-          ${exercise.image_url ? `
-            <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" data-image="${escapeAttr(exercise.image_url)}" data-video="${escapeAttr(exercise.video_url || "")}">
-              ${renderMediaThumb(exercise.image_url)}
-            </button>
-          ` : ""}
-          <button class="exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
-            <span class="exercise-head">
-              <span class="exercise-title">${escapeHtml(exercise.name || "")}</span>
-            </span>
-            <span class="muted">${escapeHtml(exercise.aim || "")}</span>
-            <span class="item-description">${escapeHtml(exercise.execution_notes || exercise.instruction || "")}</span>
-          </button>
-        </article>
-      `;}).join("")}
+    <div class="library-results-head">
+      <span class="muted">${exercises.length} exercises shown</span>
+      ${state.exerciseSearch.term ? `<span class="item-badge">${escapeHtml(state.exerciseSearch.term)}</span>` : ""}
     </div>
+    <div class="exercise-grid">
+      ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index])).join("")}
+    </div>
+    ${state.exerciseSearch.hasMore ? `
+      <div class="load-more-row">
+        <button class="plain-button" data-action="exercise-load-more">Load more</button>
+      </div>
+    ` : ""}
+  `;
+}
+
+function renderExerciseLibraryCard(exercise, itemId) {
+  return `
+    <article class="exercise-card">
+      ${exercise.image_url ? `
+        <button class="exercise-media library-media" data-action="open-media" data-title="${escapeAttr(exercise.name || "Exercise media")}" data-image="${escapeAttr(exercise.image_url)}" data-video="${escapeAttr(exercise.video_url || "")}">
+          ${renderMediaThumb(exercise.image_url)}
+        </button>
+      ` : ""}
+      <button class="exercise-open" data-action="open-exercise" data-item-id="${escapeAttr(itemId)}">
+        <span class="exercise-head">
+          <span class="exercise-title">${escapeHtml(exercise.name || "")}</span>
+        </span>
+        <span class="muted">${escapeHtml(exercise.aim || "")}</span>
+        <span class="item-description">${escapeHtml(exercise.execution_notes || exercise.instruction || "")}</span>
+      </button>
+    </article>
   `;
 }
 

@@ -1410,6 +1410,28 @@ input:focus {
   gap: 10px;
 }
 
+.library-results-head,
+.load-more-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.library-results-head {
+  justify-content: space-between;
+}
+
+.load-more-row {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
+.load-more-row .plain-button {
+  min-width: 180px;
+}
+
 .template-button,
 .exercise-card {
   min-height: 112px;
@@ -2015,19 +2037,58 @@ input:focus {
   .exercise-detail {
     width: min(100%, 420px);
     max-width: calc(100vw - 48px);
-    max-height: 78dvh;
+    max-height: 74dvh;
     margin-inline: auto;
     border-color: rgba(201, 209, 220, 0.74);
-    padding: 12px;
+    padding: 10px;
     background: rgba(255, 255, 255, 0.88);
   }
 
   .exercise-detail .drill-header {
-    margin-bottom: 10px;
+    margin-bottom: 8px;
+    gap: 8px;
+  }
+
+  .exercise-detail .eyebrow {
+    font-size: 10px;
+    margin-bottom: 3px;
+  }
+
+  .exercise-detail h3 {
+    display: -webkit-box;
+    margin-bottom: 4px;
+    overflow: hidden;
+    font-size: 21px;
+    line-height: 1.12;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .exercise-detail .breadcrumb {
+    max-height: none;
+    overflow: hidden;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .exercise-detail .drill-actions {
+    gap: 5px;
+  }
+
+  .exercise-detail .drill-main-actions,
+  .exercise-detail .drill-sibling-actions {
+    min-height: 34px;
+    padding: 2px;
+  }
+
+  .exercise-detail .drill-actions .plain-button {
+    min-height: 32px;
+    font-size: 11px;
   }
 
   .exercise-detail-media {
-    max-width: 190px;
+    max-width: 160px;
   }
 
   .exercise-detail-media .exercise-media {
@@ -2040,8 +2101,8 @@ input:focus {
   }
 
   .detail-cell {
-    min-height: 48px;
-    padding: 7px 6px;
+    min-height: 42px;
+    padding: 6px;
   }
 
   .detail-cell span {
@@ -2052,6 +2113,20 @@ input:focus {
   .detail-cell strong {
     font-size: 12px;
     overflow-wrap: anywhere;
+  }
+
+  .detail-notes {
+    gap: 8px;
+  }
+
+  .detail-notes section {
+    padding: 9px;
+  }
+
+  .detail-notes p:last-child {
+    max-height: 140px;
+    font-size: 13px;
+    line-height: 1.45;
   }
 
   .media-modal.is-video .media-dialog {

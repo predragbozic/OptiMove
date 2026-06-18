@@ -7,6 +7,7 @@ router.get("/", async (req, res, next) => {
   try {
     const search = String(req.query.search || "").trim();
     const limit = Math.min(Number(req.query.limit || 100), 500);
+    const queryLimit = limit + 1;
     const params = [];
     let where = "where e.is_active = true";
 
@@ -15,7 +16,7 @@ router.get("/", async (req, res, next) => {
       where += ` and (e.name ilike $${params.length} or e.exercise_code ilike $${params.length})`;
     }
 
-    params.push(limit);
+    params.push(queryLimit);
     const result = await query(
       `
       select
@@ -38,7 +39,10 @@ router.get("/", async (req, res, next) => {
       `,
       params,
     );
-    res.json({ exercises: result.rows });
+    res.json({
+      exercises: result.rows.slice(0, limit),
+      hasMore: result.rows.length > limit,
+    });
   } catch (error) {
     next(error);
   }
