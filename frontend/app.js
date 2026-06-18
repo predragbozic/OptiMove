@@ -1694,7 +1694,11 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
   const driveId = getDriveId(raw);
   const poster = toImageUrl(imageUrl);
   if (driveId) {
-    return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: true }));
+    return `
+      <video class="media-video" controls playsinline preload="metadata"${poster ? ` poster="${escapeAttr(poster)}"` : ""} data-fallback-src="${escapeAttr(toDrivePreviewUrl(raw, { autoplay: true }))}">
+        <source src="${escapeAttr(toDriveDownloadUrl(driveId))}" type="video/mp4">
+      </video>
+    `;
   }
   if (/\.(mp4|webm|mov)(\?|#|$)/i.test(raw)) {
     return `
@@ -1768,6 +1772,10 @@ function toDrivePreviewUrl(url, options = {}) {
   const driveId = getDriveId(raw);
   const previewUrl = driveId ? `https://drive.google.com/file/d/${driveId}/preview` : raw;
   return options.autoplay ? withAutoplayParam(previewUrl) : previewUrl;
+}
+
+function toDriveDownloadUrl(fileId) {
+  return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
 }
 
 function withAutoplayParam(url) {
