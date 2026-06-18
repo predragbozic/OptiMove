@@ -508,8 +508,8 @@ function renderAthleteList() {
 
 function renderAthleteHeader(data) {
   const athlete = state.athletes.find((entry) => entry.athlete_id === state.selectedAthleteId);
-  els.context.textContent = "Program view";
-  els.title.textContent = "Plans";
+  els.context.textContent = athlete ? "Selected athlete" : "Program view";
+  els.title.textContent = athlete?.athlete || "Plans";
   els.toolbar.innerHTML = "";
 
   if (!athlete) return;
@@ -536,7 +536,6 @@ function renderWeeklyRoot(data) {
   const weeks = data?.weeks || [];
   if (!weeks.length) return renderEmpty("This athlete has no weekly plans.");
   const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
-  const todayIndex = todayWeekIndex(weeks);
   const weekRange = `${formatDate(activeWeek.weekStart)} - ${formatDate(activeWeek.weekEnd)}`;
 
   els.content.innerHTML = `
@@ -553,11 +552,7 @@ function renderWeeklyRoot(data) {
       </section>
       ${state.weekSelectorOpen ? `
         <div class="week-selector">
-          ${weeks.map((week, index) => `
-            <button class="week-chip ${index === state.selectedWeekIndex ? "is-active" : ""}" data-action="week-select" data-week-index="${index}">
-              ${formatDate(week.weekStart)}
-            </button>
-          `).join("")}
+          ${weeks.map((week, index) => renderWeekSelectorCard(week, index)).join("")}
         </div>
       ` : ""}
       <section class="panel">
@@ -572,6 +567,21 @@ function renderWeeklyRoot(data) {
     state.pendingScrollDate = "";
     requestAnimationFrame(() => scrollCalendarToDate(date));
   }
+}
+
+function renderWeekSelectorCard(week, index) {
+  const isActive = index === state.selectedWeekIndex;
+  const isCurrent = weekContainsDate(week, localDateIso());
+  return `
+    <button class="week-card ${isActive ? "is-active" : ""}" data-action="week-select" data-week-index="${index}">
+      <span class="week-card-top">
+        <span>Week ${index + 1}</span>
+        ${isCurrent ? `<span class="week-card-today">Today</span>` : ""}
+      </span>
+      <strong>${escapeHtml(formatDate(week.weekStart))} - ${escapeHtml(formatDate(week.weekEnd))}</strong>
+      <span>${weekTotal(week)} items</span>
+    </button>
+  `;
 }
 
 function renderDayEntry(day) {
@@ -886,11 +896,13 @@ function renderNodeButton(node) {
 function renderTemplateToolbar(templates) {
   els.context.textContent = "Program library";
   els.title.textContent = "Templates";
+  const duplicateNames = duplicateTemplateNames(templates);
   els.toolbar.innerHTML = `
     <div class="chip-row template-toolbar">
       ${templates.map((template) => `
         <button class="chip ${template.plan_id === state.selectedTemplateId ? "is-active" : ""}" data-template-id="${escapeAttr(template.plan_id)}">
-          ${escapeHtml(template.plan_name)}
+          <span class="chip-main">${escapeHtml(template.plan_name)}</span>
+          ${templateSecondaryLabel(template, duplicateNames) ? `<span class="chip-sub">${escapeHtml(templateSecondaryLabel(template, duplicateNames))}</span>` : ""}
         </button>
       `).join("")}
     </div>
@@ -902,6 +914,22 @@ function renderTemplateToolbar(templates) {
       await loadTemplates();
     });
   });
+}
+
+function duplicateTemplateNames(templates) {
+  const counts = new Map();
+  templates.forEach((template) => {
+    const name = clean(template.plan_name);
+    if (!name) return;
+    counts.set(name, (counts.get(name) || 0) + 1);
+  });
+  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+}
+
+function templateSecondaryLabel(template, duplicateNames) {
+  const source = clean(template.source_external_id);
+  if (duplicateNames.has(clean(template.plan_name))) return source || "Duplicate name";
+  return source && source !== clean(template.plan_name) ? source : "";
 }
 
 function renderTemplateList(templates, selected, detail) {
@@ -1359,6 +1387,10 @@ function flattenDayGroups(dayGroups = []) {
 
 function weekTotal(week) {
   return (week.days || []).reduce((sum, day) => sum + allSlotItems(day.slots).length, 0);
+}
+
+function weekContainsDate(week, date) {
+  return (week.days || []).some((day) => day.date === date);
 }
 
 function defaultWeekIndex(weeks) {

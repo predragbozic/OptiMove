@@ -488,14 +488,36 @@ input:focus {
 
 .template-toolbar .chip {
   flex: 0 0 auto;
-  max-width: 240px;
+  max-width: 260px;
+  min-height: 46px;
+  display: grid;
+  align-content: center;
+  overflow: hidden;
+  text-align: left;
+}
+
+.chip-main,
+.chip-sub {
+  min-width: 0;
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.chip-sub {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.chip.is-active .chip-sub {
+  color: rgba(255, 255, 255, 0.78);
+}
+
 .chip,
-.week-chip {
+.week-card {
   padding: 0 12px;
 }
 
@@ -562,28 +584,65 @@ input:focus {
 }
 
 .week-selector {
-  flex-wrap: nowrap;
-  justify-content: flex-start;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(180px, 220px);
+  justify-content: start;
   overflow-x: auto;
   margin-bottom: 12px;
   padding-bottom: 4px;
   scrollbar-gutter: stable;
 }
 
-.week-chip {
-  min-height: 34px;
+.week-card {
+  min-height: 78px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-soft);
   color: var(--text);
   font-size: 12px;
   font-weight: 800;
+  text-align: left;
 }
 
-.week-chip.is-active {
+.week-card:hover,
+.week-card.is-active {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.week-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.week-card strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.week-card > span:last-child {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.week-card-today {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
 }
 
 .plain-button:disabled {
