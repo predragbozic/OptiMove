@@ -374,6 +374,21 @@ input:focus {
   box-shadow: 0 0 0 3px rgba(31, 111, 104, 0.18);
 }
 
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.button-icon {
+  min-width: 16px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
 .toolbar {
   gap: 10px;
   margin-bottom: 14px;
@@ -1095,6 +1110,35 @@ input:focus {
   padding: 0 12px;
 }
 
+.layout-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.layout-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  gap: 3px;
+}
+
+.layout-icon::before,
+.layout-icon::after {
+  content: "";
+  display: block;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.layout-icon-horizontal {
+  grid-template-rows: repeat(2, 1fr);
+}
+
+.layout-icon-vertical {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 .exercise-list {
   display: grid;
   grid-auto-flow: column;
@@ -1376,8 +1420,16 @@ input:focus {
 
 .exercise-detail-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 340px) minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.exercise-detail {
+  max-width: 980px;
+  margin-inline: auto;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 18px 44px rgba(22, 34, 45, 0.12);
 }
 
 .exercise-detail-media {
@@ -1435,8 +1487,8 @@ input:focus {
 }
 
 .detail-cell {
-  min-height: 72px;
-  padding: 12px;
+  min-height: 58px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-soft);
@@ -1452,8 +1504,8 @@ input:focus {
 
 .detail-cell strong {
   display: block;
-  margin-top: 7px;
-  font-size: 16px;
+  margin-top: 5px;
+  font-size: 15px;
 }
 
 .detail-notes section {
@@ -1587,6 +1639,17 @@ input:focus {
   border-left-color: transparent;
   border-bottom-color: transparent;
   transform: rotate(45deg);
+}
+
+.media-fullscreen-note {
+  position: absolute;
+  left: 18px;
+  bottom: 24px;
+  z-index: 4;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .media-header {
@@ -1854,6 +1917,78 @@ input:focus {
 
   .exercise-detail-layout {
     grid-template-columns: 1fr;
+  }
+
+  .exercise-detail {
+    max-width: calc(100vw - 32px);
+    margin-inline: auto;
+  }
+
+  .exercise-detail .drill-header {
+    margin-bottom: 10px;
+  }
+
+  .exercise-detail-media {
+    max-width: 240px;
+  }
+
+  .exercise-detail-media .exercise-media {
+    aspect-ratio: 5 / 4;
+  }
+
+  .detail-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .detail-cell {
+    min-height: 48px;
+    padding: 7px 6px;
+  }
+
+  .detail-cell span {
+    font-size: 9px;
+    white-space: nowrap;
+  }
+
+  .detail-cell strong {
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .media-modal.is-video .media-dialog {
+    width: min(82vw, 320px);
+    height: 140px;
+    max-height: 140px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+
+  .media-modal.is-video .media-frame-video {
+    position: absolute;
+    inset: 0;
+  }
+
+  .media-modal.is-video .media-body::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    background: #000;
+  }
+
+  .media-modal.is-video .media-fullscreen-button {
+    right: 50%;
+    bottom: 48px;
+    transform: translateX(50%);
+    width: 58px;
+    height: 58px;
+  }
+
+  .media-modal.is-video .media-fullscreen-note {
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    text-align: center;
   }
 
 }

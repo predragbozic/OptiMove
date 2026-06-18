@@ -77,6 +77,8 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeMedia();
   });
+  document.addEventListener("fullscreenchange", handleFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
   window.addEventListener("popstate", handleBrowserBack);
 }
 
@@ -739,14 +741,14 @@ function renderNode(node) {
         </div>
         <div class="drill-actions">
           <div class="drill-main-actions">
-            <button class="plain-button" data-action="back">Back</button>
-            <button class="plain-button" data-action="home">Home</button>
+            <button class="plain-button icon-button" data-action="back"><span class="button-icon">←</span><span>Back</span></button>
+            <button class="plain-button icon-button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
           </div>
           ${siblingState.hasSiblings ? `
             <div class="drill-sibling-actions">
-              <button class="plain-button" data-action="node-prev" ${siblingState.canGoPrevious ? "" : "disabled"}>Previous</button>
+              <button class="plain-button icon-button" data-action="node-prev" ${siblingState.canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>
               <span class="exercise-position">${siblingState.index + 1} / ${siblingState.total}</span>
-              <button class="plain-button" data-action="node-next" ${siblingState.canGoNext ? "" : "disabled"}>Next</button>
+              <button class="plain-button icon-button" data-action="node-next" ${siblingState.canGoNext ? "" : "disabled"}><span>Next</span><span class="button-icon">›</span></button>
             </div>
           ` : ""}
         </div>
@@ -963,8 +965,12 @@ function renderExerciseList(items) {
     ${exerciseIds.length ? `
       <div class="exercise-layout-toolbar" aria-label="Exercise layout">
         <span class="muted">Layout</span>
-        <button class="chip ${layout === "horizontal" ? "is-active" : ""}" data-action="exercise-layout" data-layout="horizontal">Horizontal</button>
-        <button class="chip ${layout === "vertical" ? "is-active" : ""}" data-action="exercise-layout" data-layout="vertical">Vertical</button>
+        <button class="chip layout-chip ${layout === "horizontal" ? "is-active" : ""}" data-action="exercise-layout" data-layout="horizontal">
+          <span class="layout-icon layout-icon-horizontal"></span><span>Horizontal</span>
+        </button>
+        <button class="chip layout-chip ${layout === "vertical" ? "is-active" : ""}" data-action="exercise-layout" data-layout="vertical">
+          <span class="layout-icon layout-icon-vertical"></span><span>Vertical</span>
+        </button>
       </div>
     ` : ""}
     <div class="exercise-list is-${layout} ${items.length === 1 ? "is-single" : ""}">
@@ -1116,11 +1122,11 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
           ${hierarchy ? `<div class="breadcrumb">${escapeHtml(hierarchy)}</div>` : ""}
         </div>
         <div class="drill-actions">
-          ${hasSequence ? `<button class="plain-button" data-action="exercise-prev" ${canGoPrevious ? "" : "disabled"}>Previous</button>` : ""}
+          ${hasSequence ? `<button class="plain-button icon-button" data-action="exercise-prev" ${canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>` : ""}
           ${hasSequence ? `<span class="exercise-position">${currentIndex + 1} / ${ids.length}</span>` : ""}
-          ${hasSequence ? `<button class="plain-button" data-action="exercise-next" ${canGoNext ? "" : "disabled"}>Next</button>` : ""}
-          <button class="plain-button" data-action="exercise-back">Back</button>
-          <button class="plain-button" data-action="home">Home</button>
+          ${hasSequence ? `<button class="plain-button icon-button" data-action="exercise-next" ${canGoNext ? "" : "disabled"}><span>Next</span><span class="button-icon">›</span></button>` : ""}
+          <button class="plain-button icon-button" data-action="exercise-back"><span class="button-icon">←</span><span>Back</span></button>
+          <button class="plain-button icon-button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
         </div>
       </div>
 
@@ -1434,6 +1440,7 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
 function renderVideoFrame(src) {
   return `
     <iframe class="media-frame media-frame-video" src="${escapeAttr(src)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
+    <p class="media-fullscreen-note">Opening video in full screen</p>
     <button class="media-fullscreen-button" data-action="enter-fullscreen" type="button" aria-label="Full screen"></button>
   `;
 }
@@ -1464,6 +1471,13 @@ function enterMediaFullscreen(silent = false) {
     if (result?.catch && silent) result.catch(() => {});
   } catch (error) {
     if (!silent) console.warn(error);
+  }
+}
+
+function handleFullscreenChange() {
+  const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!fullscreenElement && els.mediaModal?.classList.contains("is-video") && !els.mediaModal.hidden) {
+    closeMedia();
   }
 }
 
