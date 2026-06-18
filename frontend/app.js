@@ -777,7 +777,7 @@ function nextNodes(node) {
 
 function btaNodes(items) {
   const order = ["B", "T", "A", ""];
-  const labels = { B: "B - Before training", T: "T - Training", A: "A - After training", "": "Session" };
+  const labels = { B: "Before training", T: "Training", A: "After training", "": "Session" };
   return order
     .map((keyValue) => {
       const filtered = items.filter((item) => (item.bta || "") === keyValue);
@@ -1194,7 +1194,7 @@ function makeNode(type, label, items, options = {}) {
 
 const typeLabels = {
   amPm: "AM/PM",
-  bta: "B/T/A",
+  bta: "Session",
   domain: "Domain",
   category: "Category",
   section: "Section",
