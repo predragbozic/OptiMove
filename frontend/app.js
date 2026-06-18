@@ -1,6 +1,7 @@
 const API_BASE = "";
 
 const state = {
+  currentUser: null,
   athletes: [],
   selectedAthleteId: null,
   athletesExpanded: false,
@@ -42,6 +43,11 @@ init();
 
 async function init() {
   bindEvents();
+  await loadSession();
+  if (!state.currentUser) {
+    renderLogin();
+    return;
+  }
   await loadAthletes();
 }
 
@@ -71,6 +77,7 @@ function bindEvents() {
   });
 
   els.content.addEventListener("click", handleContentClick);
+  els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
   els.content.addEventListener("touchend", handleSwipeEnd, { passive: true });
   document.addEventListener("click", handleGlobalClick);
@@ -81,6 +88,64 @@ function bindEvents() {
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
   window.addEventListener("popstate", handleBrowserBack);
+}
+
+async function loadSession() {
+  const data = await api("/api/auth/me");
+  state.currentUser = data.user || null;
+}
+
+async function handleContentSubmit(event) {
+  const form = event.target.closest("#loginForm");
+  if (!form) return;
+  event.preventDefault();
+  const formData = new FormData(form);
+  const error = form.querySelector(".login-error");
+  if (error) error.textContent = "";
+  const button = form.querySelector("button[type='submit']");
+  if (button) button.disabled = true;
+  try {
+    const data = await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        email: formData.get("email"),
+        password: formData.get("password"),
+      }),
+    });
+    state.currentUser = data.user;
+    await loadAthletes();
+  } catch (loginError) {
+    if (error) error.textContent = loginError.message || "Login failed.";
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function renderLogin() {
+  setStatus("Sign in");
+  els.context.textContent = "OptiMove";
+  els.title.textContent = "Sign in";
+  els.toolbar.innerHTML = "";
+  els.content.innerHTML = `
+    <section class="login-panel">
+      <form class="login-form" id="loginForm">
+        <div>
+          <p class="eyebrow">Account</p>
+          <h3>Sign in to OptiMove</h3>
+        </div>
+        <label class="search-field">
+          <span>Email</span>
+          <input name="email" type="email" autocomplete="username" required>
+        </label>
+        <label class="search-field">
+          <span>Password</span>
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <p class="login-error" aria-live="polite"></p>
+        <button class="plain-button" type="submit">Sign in</button>
+      </form>
+    </section>
+  `;
 }
 
 function toggleAthletesList() {
@@ -1634,9 +1699,20 @@ function getDriveId(url) {
   return "";
 }
 
-async function api(path) {
-  const response = await fetch(`${API_BASE}${path}`);
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+async function api(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "same-origin",
+    headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers,
+    ...options,
+  });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const errorData = await response.json();
+      message = errorData.error || errorData.message || message;
+    } catch {}
+    throw new Error(message);
+  }
   return response.json();
 }
 

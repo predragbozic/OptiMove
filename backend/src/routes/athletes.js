@@ -4,8 +4,9 @@ import { buildPrograms, buildWeeks } from "../utils/grouping.js";
 
 const router = Router();
 
-router.get("/", async (_req, res, next) => {
+router.get("/", async (req, res, next) => {
   try {
+    const filter = athleteAccessFilter(req.user);
     const result = await query(`
       select
         athlete_uuid,
@@ -17,10 +18,11 @@ router.get("/", async (_req, res, next) => {
         count(*) filter (where plan_type = 'program' and is_template = false) as program_count
       from plans.v_plan_summary
       where athlete_uuid is not null
+        ${filter.sql}
       group by athlete_uuid, athlete_id, athlete_source_external_id, athlete_name, athlete_image_url
       order by nullif(regexp_replace(coalesce(athlete_source_external_id, athlete_id), '\\D', '', 'g'), '')::int nulls last,
                athlete_name
-    `);
+    `, filter.params);
     res.json({
       mode: "admin",
       adminRows: result.rows.map((row) => ({
@@ -41,6 +43,7 @@ router.get("/", async (_req, res, next) => {
 router.get("/:athleteId/plans", async (req, res, next) => {
   try {
     const athleteId = req.params.athleteId;
+    if (!(await canAccessAthlete(req.user, athleteId))) return res.status(403).json({ error: "Forbidden" });
     const result = await query(
       `
       select *
@@ -59,6 +62,7 @@ router.get("/:athleteId/plans", async (req, res, next) => {
 router.get("/:athleteId/program-data", async (req, res, next) => {
   try {
     const athleteId = req.params.athleteId;
+    if (!(await canAccessAthlete(req.user, athleteId))) return res.status(403).json({ error: "Forbidden" });
     const requestedProgram = String(req.query.program || "");
 
     const weeklyPlans = await query(
@@ -84,7 +88,7 @@ router.get("/:athleteId/program-data", async (req, res, next) => {
       [athleteId],
     );
 
-    const adminRows = await getAdminRows();
+    const adminRows = await getAdminRows(req.user);
     const hasWeekly = weeklyPlans.rows.length > 0;
 
     if (requestedProgram === "__all_programs__") {
@@ -170,7 +174,12 @@ async function loadPrograms(programPlans) {
   return buildPrograms(programPlans, rowsByPlanId);
 }
 
-async function getAdminRows() {
+async function getAdminRows(user = null) {
+  return getAthleteRows(user);
+}
+
+async function getAthleteRows(user = null) {
+  const filter = athleteAccessFilter(user);
   const result = await query(`
     select
       athlete_uuid,
@@ -180,15 +189,41 @@ async function getAdminRows() {
       athlete_image_url
     from plans.v_plan_summary
     where athlete_uuid is not null
+      ${filter.sql}
     group by athlete_uuid, athlete_id, athlete_source_external_id, athlete_name, athlete_image_url
     order by nullif(regexp_replace(coalesce(athlete_source_external_id, athlete_id), '\\D', '', 'g'), '')::int nulls last,
              athlete_name
-  `);
+  `, filter.params);
   return result.rows.map((row) => ({
     athlete_id: row.athlete_source_external_id || row.athlete_id,
     athlete: row.athlete_name,
     athlete_image_url: row.athlete_image_url || "",
   }));
+}
+
+function athleteAccessFilter(user) {
+  if (!user || user.role_hint !== "athlete") return { sql: "", params: [] };
+  return {
+    sql: "and athlete_uuid in (select a.id from public.athletes a left join public.user_athletes ua on ua.athlete_id = a.id and ua.is_active = true where a.user_id = $1 or ua.user_id = $1)",
+    params: [user.id],
+  };
+}
+
+async function canAccessAthlete(user, athleteId) {
+  if (!user) return false;
+  if (user.role_hint !== "athlete") return true;
+  const result = await query(
+    `
+    select 1
+    from public.athletes a
+    left join public.user_athletes ua on ua.athlete_id = a.id and ua.is_active = true
+    where (a.athlete_id = $1 or a.source_external_id = $1)
+      and (a.user_id = $2 or ua.user_id = $2)
+    limit 1
+    `,
+    [athleteId, user.id],
+  );
+  return result.rowCount > 0;
 }
 
 export default router;
