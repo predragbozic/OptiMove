@@ -2025,8 +2025,9 @@ input:focus {
   }
 
   .exercise-detail-layout {
-    grid-template-columns: 1fr;
-    gap: 10px;
+    grid-template-columns: minmax(116px, 42%) minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
   }
 
   .exercise-detail-overlay {
@@ -2088,21 +2089,26 @@ input:focus {
   }
 
   .exercise-detail-media {
-    max-width: 160px;
+    max-width: none;
   }
 
   .exercise-detail-media .exercise-media {
     aspect-ratio: 5 / 4;
   }
 
+  .exercise-detail-main {
+    display: contents;
+  }
+
   .detail-grid {
+    grid-column: 2;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
+    gap: 4px;
   }
 
   .detail-cell {
-    min-height: 42px;
-    padding: 6px;
+    min-height: 38px;
+    padding: 5px 4px;
   }
 
   .detail-cell span {
@@ -2111,11 +2117,12 @@ input:focus {
   }
 
   .detail-cell strong {
-    font-size: 12px;
+    font-size: 11px;
     overflow-wrap: anywhere;
   }
 
   .detail-notes {
+    grid-column: 1 / -1;
     gap: 8px;
   }
 
