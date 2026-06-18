@@ -1111,64 +1111,69 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
     ["Instruction", item.instruction],
   ].filter(([, value]) => clean(value));
 
-  els.content.innerHTML = `
-    <section class="panel exercise-detail">
-      <div class="drill-header">
-        <div>
-          <p class="eyebrow">Exercise</p>
-          <h3>${escapeHtml(title)}</h3>
-          ${hierarchy ? `<div class="breadcrumb">${escapeHtml(hierarchy)}</div>` : ""}
-        </div>
-        <div class="drill-actions">
-          <div class="drill-main-actions">
-            <button class="plain-button icon-button" data-action="exercise-back"><span class="button-icon">←</span><span>Back</span></button>
-            <button class="plain-button icon-button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
+  const markup = `
+    <div class="exercise-detail-overlay">
+      <div class="exercise-detail-backdrop" data-action="exercise-back"></div>
+      <section class="panel exercise-detail">
+        <div class="drill-header">
+          <div>
+            <p class="eyebrow">Exercise</p>
+            <h3>${escapeHtml(title)}</h3>
+            ${hierarchy ? `<div class="breadcrumb">${escapeHtml(hierarchy)}</div>` : ""}
           </div>
-          ${hasSequence ? `
-            <div class="drill-sibling-actions">
-              <button class="plain-button icon-button" data-action="exercise-prev" ${canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>
-              <span class="exercise-position">${currentIndex + 1} / ${ids.length}</span>
-              <button class="plain-button icon-button" data-action="exercise-next" ${canGoNext ? "" : "disabled"}><span>Next</span><span class="button-icon">›</span></button>
+          <div class="drill-actions">
+            <div class="drill-main-actions">
+              <button class="plain-button icon-button" data-action="exercise-back"><span class="button-icon">←</span><span>Back</span></button>
+              <button class="plain-button icon-button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
             </div>
-          ` : ""}
-        </div>
-      </div>
-
-      <div class="exercise-detail-layout">
-        <div class="exercise-detail-media">
-          ${image || video
-            ? `<button class="exercise-media detail-media" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
-                ${image ? renderMediaThumb(image) : `<span class="media-fallback">Video</span>`}
-              </button>`
-            : `<div class="detail-media-empty">No image</div>`}
+            ${hasSequence ? `
+              <div class="drill-sibling-actions">
+                <button class="plain-button icon-button" data-action="exercise-prev" ${canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>
+                <span class="exercise-position">${currentIndex + 1} / ${ids.length}</span>
+                <button class="plain-button icon-button" data-action="exercise-next" ${canGoNext ? "" : "disabled"}><span>Next</span><span class="button-icon">›</span></button>
+              </div>
+            ` : ""}
+          </div>
         </div>
 
-        <div class="exercise-detail-main">
-          ${doseRows.length ? `
-            <div class="detail-grid">
-              ${doseRows.map(([label, value]) => `
-                <div class="detail-cell">
-                  <span>${escapeHtml(label)}</span>
-                  <strong>${escapeHtml(value)}</strong>
-                </div>
-              `).join("")}
-            </div>
-          ` : ""}
+        <div class="exercise-detail-layout">
+          <div class="exercise-detail-media">
+            ${image || video
+              ? `<button class="exercise-media detail-media" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}">
+                  ${image ? renderMediaThumb(image) : `<span class="media-fallback">Video</span>`}
+                </button>`
+              : `<div class="detail-media-empty">No image</div>`}
+          </div>
 
-          ${noteRows.length ? `
-            <div class="detail-notes">
-              ${noteRows.map(([label, value]) => `
-                <section>
-                  <p class="eyebrow">${escapeHtml(label)}</p>
-                  <p>${escapeHtml(value)}</p>
-                </section>
-              `).join("")}
-            </div>
-          ` : `<div class="empty">No additional exercise notes.</div>`}
+          <div class="exercise-detail-main">
+            ${doseRows.length ? `
+              <div class="detail-grid">
+                ${doseRows.map(([label, value]) => `
+                  <div class="detail-cell">
+                    <span>${escapeHtml(label)}</span>
+                    <strong>${escapeHtml(value)}</strong>
+                  </div>
+                `).join("")}
+              </div>
+            ` : ""}
+
+            ${noteRows.length ? `
+              <div class="detail-notes">
+                ${noteRows.map(([label, value]) => `
+                  <section>
+                    <p class="eyebrow">${escapeHtml(label)}</p>
+                    <p>${escapeHtml(value)}</p>
+                  </section>
+                `).join("")}
+              </div>
+            ` : `<div class="empty">No additional exercise notes.</div>`}
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </div>
   `;
+  els.content.querySelector(".exercise-detail-overlay")?.remove();
+  els.content.insertAdjacentHTML("beforeend", markup);
 }
 
 function makeNode(type, label, items, options = {}) {
@@ -1242,6 +1247,11 @@ function moveExerciseDetail(delta) {
 }
 
 function returnToNodeParent() {
+  const overlay = els.content.querySelector(".exercise-detail-overlay");
+  if (overlay) {
+    overlay.remove();
+    return;
+  }
   if (state.navStack.length > 1) {
     state.navStack.pop();
     renderCurrentNode();
