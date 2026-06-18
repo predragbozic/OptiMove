@@ -1474,6 +1474,7 @@ function wireVideoFallback(videoUrl) {
   if (!video) return;
   let settled = false;
   const fallbackSrc = video.dataset.fallbackSrc || toDrivePreviewUrl(videoUrl);
+  video.addEventListener("ended", closeMedia, { once: true });
   const showFallback = () => {
     if (settled || !fallbackSrc || !els.mediaBody || els.mediaModal.hidden) return;
     settled = true;
