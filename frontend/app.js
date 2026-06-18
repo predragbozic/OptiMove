@@ -308,7 +308,7 @@ async function loadExercises() {
   els.toolbar.innerHTML = `
     <label class="search-field">
       <span>Exercise search</span>
-      <input id="exerciseSearch" type="search" placeholder="Name or code" value="V-sit">
+      <input id="exerciseSearch" type="search" placeholder="Name or code" value="">
     </label>
   `;
   const input = document.querySelector("#exerciseSearch");
@@ -1174,6 +1174,7 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
   `;
   els.content.querySelector(".exercise-detail-overlay")?.remove();
   els.content.insertAdjacentHTML("beforeend", markup);
+  setExerciseOverlayBackgroundInert(true);
 }
 
 function makeNode(type, label, items, options = {}) {
@@ -1250,6 +1251,7 @@ function returnToNodeParent() {
   const overlay = els.content.querySelector(".exercise-detail-overlay");
   if (overlay) {
     overlay.remove();
+    setExerciseOverlayBackgroundInert(false);
     return;
   }
   if (state.navStack.length > 1) {
@@ -1258,6 +1260,19 @@ function returnToNodeParent() {
     return;
   }
   renderCurrentNode();
+}
+
+function setExerciseOverlayBackgroundInert(isInert) {
+  [...els.content.children].forEach((child) => {
+    if (child.classList.contains("exercise-detail-overlay")) return;
+    if (isInert) {
+      child.setAttribute("inert", "");
+      child.setAttribute("aria-hidden", "true");
+      return;
+    }
+    child.removeAttribute("inert");
+    child.removeAttribute("aria-hidden");
+  });
 }
 
 function nodeSiblingState() {

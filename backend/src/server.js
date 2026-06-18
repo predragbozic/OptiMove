@@ -12,6 +12,7 @@ import { pool } from "./db.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
+const isProduction = process.env.NODE_ENV === "production";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const frontendDir = path.resolve(__dirname, "../../frontend");
 const corsOrigins = (process.env.CORS_ORIGIN || "")
@@ -29,30 +30,6 @@ app.get("/api/health", async (_req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
-
-app.get("/api/db-config-check", (_req, res) => {
-  const value = process.env.DATABASE_URL || "";
-  let parsed = null;
-
-  try {
-    const url = new URL(value);
-    parsed = {
-      protocol: url.protocol,
-      username: decodeURIComponent(url.username || ""),
-      host: url.hostname,
-      port: url.port,
-      database: url.pathname.replace(/^\//, ""),
-      hasPassword: Boolean(url.password),
-    };
-  } catch (error) {
-    parsed = { error: error.message };
-  }
-
-  res.json({
-    hasDatabaseUrl: Boolean(value),
-    parsed,
-  });
 });
 
 app.use("/api/athletes", athletesRouter);
@@ -75,7 +52,10 @@ app.use((req, res) => {
 
 app.use((error, _req, res, _next) => {
   console.error(error);
-  res.status(500).json({ error: "Internal server error", message: error.message });
+  res.status(500).json({
+    error: "Internal server error",
+    message: isProduction ? "Something went wrong." : error.message,
+  });
 });
 
 app.listen(port, () => {
