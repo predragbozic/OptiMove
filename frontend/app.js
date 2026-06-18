@@ -237,7 +237,7 @@ function handleSwipeEnd(event) {
 
 function isSwipeContext(target) {
   if (!els.mediaModal?.hidden) return false;
-  if (target.closest(".calendar-grid, .week-selector, .program-day-grid, .exercise-list")) return false;
+  if (target.closest(".calendar-grid, .week-selector, .week-calendar-picker, .program-day-grid, .exercise-list")) return false;
   return Boolean(target.closest(".exercise-detail, .panel, .node-grid"));
 }
 
@@ -475,6 +475,18 @@ function handleContentClick(event) {
     renderWeeklyRoot(state.lastWeeklyData);
     return;
   }
+  if (type === "week-day-select") {
+    const date = action.dataset.date || "";
+    const weeks = state.lastWeeklyData?.weeks || [];
+    const weekIndex = weekIndexForDate(weeks, date);
+    if (weekIndex < 0) return;
+    state.selectedWeekIndex = weekIndex;
+    state.pendingScrollDate = date;
+    state.weekSelectorOpen = false;
+    state.navStack = [];
+    renderWeeklyRoot(state.lastWeeklyData);
+    return;
+  }
   if (type === "open-media") {
     openMedia(action.dataset.title || "Exercise media", action.dataset.image || "", action.dataset.video || "");
     return;
@@ -602,6 +614,7 @@ function renderWeeklyRoot(data) {
   if (!weeks.length) return renderEmpty("This athlete has no weekly plans.");
   const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
   const weekRange = `${formatDate(activeWeek.weekStart)} - ${formatDate(activeWeek.weekEnd)}`;
+  const weekSelectorMarkup = state.weekSelectorOpen ? renderWeekCalendarPicker(weeks, activeWeek) : "";
 
   els.content.innerHTML = `
     <div class="content-section">
@@ -610,16 +623,12 @@ function renderWeeklyRoot(data) {
         <button class="week-title-button" data-action="week-toggle" aria-expanded="${state.weekSelectorOpen}">
           <span class="eyebrow">Weekly plans</span>
           <strong>${escapeHtml(weekRange)}</strong>
-          <span>${weekTotal(activeWeek)} items · ${state.weekSelectorOpen ? "Hide weeks" : "Show weeks"}</span>
+          <span>${weekTotal(activeWeek)} items - ${state.weekSelectorOpen ? "Hide calendar" : "Open calendar"}</span>
         </button>
         <button class="plain-button" data-action="week-today">Today</button>
         <button class="plain-button" data-action="week-next" ${state.selectedWeekIndex >= weeks.length - 1 ? "disabled" : ""}>Next</button>
       </section>
-      ${state.weekSelectorOpen ? `
-        <div class="week-selector">
-          ${weeks.map((week, index) => renderWeekSelectorCard(week, index)).join("")}
-        </div>
-      ` : ""}
+      ${weekSelectorMarkup}
       <section class="panel">
         <div class="calendar-grid">
           ${(activeWeek.days || []).map(renderDayEntry).join("")}
@@ -634,17 +643,44 @@ function renderWeeklyRoot(data) {
   }
 }
 
-function renderWeekSelectorCard(week, index) {
-  const isActive = index === state.selectedWeekIndex;
-  const isCurrent = weekContainsDate(week, localDateIso());
+function renderWeekCalendarPicker(weeks, activeWeek) {
+  const months = buildWeeklyCalendarMonths(weeks);
+  if (!months.length) return "";
   return `
-    <button class="week-card ${isActive ? "is-active" : ""}" data-action="week-select" data-week-index="${index}">
-      <span class="week-card-top">
-        <span>Week ${index + 1}</span>
-        ${isCurrent ? `<span class="week-card-today">Today</span>` : ""}
-      </span>
-      <strong>${escapeHtml(formatDate(week.weekStart))} - ${escapeHtml(formatDate(week.weekEnd))}</strong>
-      <span>${weekTotal(week)} items</span>
+    <section class="week-calendar-picker" aria-label="Weekly plan calendar">
+      ${months.map((month) => `
+        <article class="week-calendar-month">
+          <h4>${escapeHtml(month.label)}</h4>
+          <div class="week-calendar-weekdays">
+            ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => `<span>${day}</span>`).join("")}
+          </div>
+          <div class="week-calendar-days">
+            ${month.days.map((day) => renderWeekCalendarDay(day, activeWeek)).join("")}
+          </div>
+        </article>
+      `).join("")}
+    </section>
+  `;
+}
+
+function renderWeekCalendarDay(day, activeWeek) {
+  const classes = [
+    "week-calendar-day",
+    day.isOutside ? "is-outside" : "",
+    day.hasItems ? "has-items" : "",
+    day.date === localDateIso() ? "is-today" : "",
+    weekContainsDate(activeWeek, day.date) ? "is-active-week" : "",
+  ].filter(Boolean).join(" ");
+  const content = `
+    <span class="week-calendar-day-number">${escapeHtml(String(day.dayNumber))}</span>
+    ${day.hasItems ? `<span class="week-calendar-dot"></span><span class="week-calendar-count">${day.itemCount}</span>` : ""}
+  `;
+  if (!day.hasItems) {
+    return `<span class="${classes}" aria-label="${escapeAttr(day.date)}">${content}</span>`;
+  }
+  return `
+    <button class="${classes}" data-action="week-day-select" data-date="${escapeAttr(day.date)}" aria-label="${escapeAttr(`${formatDate(day.date)}, ${day.itemCount} items`)}">
+      ${content}
     </button>
   `;
 }
@@ -1458,6 +1494,65 @@ function weekContainsDate(week, date) {
   return (week.days || []).some((day) => day.date === date);
 }
 
+function weekIndexForDate(weeks, date) {
+  if (!date) return -1;
+  return weeks.findIndex((week) => weekContainsDate(week, date));
+}
+
+function buildWeeklyCalendarMonths(weeks) {
+  const dayMap = new Map();
+  weeks.forEach((week, weekIndex) => {
+    (week.days || []).forEach((day) => {
+      const itemCount = allSlotItems(day.slots).length;
+      dayMap.set(day.date, {
+        weekIndex,
+        itemCount,
+        hasItems: itemCount > 0,
+      });
+    });
+  });
+
+  const datesWithItems = [...dayMap.entries()]
+    .filter(([, meta]) => meta.hasItems)
+    .map(([date]) => date)
+    .sort();
+  if (!datesWithItems.length) return [];
+
+  const firstMonth = monthStartIso(datesWithItems[0]);
+  const lastMonth = monthStartIso(datesWithItems[datesWithItems.length - 1]);
+  const months = [];
+  let cursor = firstMonth;
+  while (cursor <= lastMonth) {
+    months.push(buildWeeklyCalendarMonth(cursor, dayMap));
+    cursor = addMonthsIso(cursor, 1);
+  }
+  return months;
+}
+
+function buildWeeklyCalendarMonth(monthStart, dayMap) {
+  const monthEnd = addDaysIso(addMonthsIso(monthStart, 1), -1);
+  const gridStart = startOfWeekIso(monthStart);
+  const gridEnd = endOfWeekIso(monthEnd);
+  const days = [];
+  let cursor = gridStart;
+  while (cursor <= gridEnd) {
+    const meta = dayMap.get(cursor) || {};
+    days.push({
+      date: cursor,
+      dayNumber: Number(cursor.slice(8, 10)),
+      isOutside: cursor.slice(0, 7) !== monthStart.slice(0, 7),
+      itemCount: meta.itemCount || 0,
+      hasItems: Boolean(meta.hasItems),
+      weekIndex: meta.weekIndex,
+    });
+    cursor = addDaysIso(cursor, 1);
+  }
+  return {
+    label: monthLabel(monthStart),
+    days,
+  };
+}
+
 function defaultWeekIndex(weeks) {
   return todayWeekIndex(weeks);
 }
@@ -1485,6 +1580,37 @@ function localDateIso(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function monthStartIso(value) {
+  return `${String(value).slice(0, 7)}-01`;
+}
+
+function addMonthsIso(value, amount) {
+  const date = new Date(`${value}T12:00:00`);
+  date.setMonth(date.getMonth() + amount, 1);
+  return localDateIso(date);
+}
+
+function addDaysIso(value, amount) {
+  const date = new Date(`${value}T12:00:00`);
+  date.setDate(date.getDate() + amount);
+  return localDateIso(date);
+}
+
+function startOfWeekIso(value) {
+  const date = new Date(`${value}T12:00:00`);
+  const day = date.getDay() || 7;
+  date.setDate(date.getDate() - day + 1);
+  return localDateIso(date);
+}
+
+function endOfWeekIso(value) {
+  return addDaysIso(startOfWeekIso(value), 6);
+}
+
+function monthLabel(value) {
+  return new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${value}T12:00:00`));
 }
 
 function dateValue(value) {
