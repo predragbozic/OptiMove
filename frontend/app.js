@@ -21,7 +21,7 @@ const state = {
   exerciseLayout: "horizontal",
   touch: { startX: 0, startY: 0, startTime: 0 },
   appHistoryDepth: 0,
-  suppressNextFullscreenClose: false,
+  weekCalendarMonth: "",
 };
 
 const els = {
@@ -114,6 +114,7 @@ async function handleContentSubmit(event) {
       }),
     });
     state.currentUser = data.user;
+    document.body.classList.remove("login-mode");
     await loadAthletes();
   } catch (loginError) {
     if (error) error.textContent = loginError.message || "Login failed.";
@@ -123,9 +124,12 @@ async function handleContentSubmit(event) {
 }
 
 function renderLogin() {
+  document.body.classList.add("login-mode");
   setStatus("Sign in");
   els.context.textContent = "OptiMove";
   els.title.textContent = "Sign in";
+  els.athleteList.innerHTML = "";
+  els.athleteSearch.value = "";
   els.toolbar.innerHTML = "";
   els.content.innerHTML = `
     <section class="login-panel">
@@ -152,6 +156,9 @@ function renderLogin() {
 function toggleAthletesList() {
   state.athletesExpanded = !state.athletesExpanded;
   renderAthleteList();
+  if (state.athletesExpanded) {
+    requestAnimationFrame(() => els.athleteList.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }
 }
 
 function handleImageError(event) {
@@ -307,6 +314,7 @@ function handleAppBack() {
 }
 
 async function loadAthletes() {
+  document.body.classList.remove("login-mode");
   setStatus("Loading");
   try {
     const data = await api("/api/admin/athletes");
@@ -459,12 +467,24 @@ function handleContentClick(event) {
   }
   if (type === "week-toggle") {
     state.weekSelectorOpen = !state.weekSelectorOpen;
+    if (state.weekSelectorOpen) {
+      const weeks = state.lastWeeklyData?.weeks || [];
+      const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
+      state.weekCalendarMonth = monthStartIso(activeWeek?.weekStart || localDateIso());
+    }
+    renderWeeklyRoot(state.lastWeeklyData);
+    return;
+  }
+  if (type === "week-calendar-prev" || type === "week-calendar-next") {
+    const delta = type === "week-calendar-prev" ? -1 : 1;
+    state.weekCalendarMonth = addMonthsIso(state.weekCalendarMonth || localDateIso(), delta);
     renderWeeklyRoot(state.lastWeeklyData);
     return;
   }
   if (type === "week-today") {
     const weeks = state.lastWeeklyData?.weeks || [];
     state.selectedWeekIndex = todayWeekIndex(weeks);
+    state.weekCalendarMonth = monthStartIso(localDateIso());
     state.pendingScrollDate = localDateIso();
     state.navStack = [];
     renderWeeklyRoot(state.lastWeeklyData);
@@ -484,6 +504,7 @@ function handleContentClick(event) {
     state.selectedWeekIndex = weekIndex;
     state.pendingScrollDate = date;
     state.weekSelectorOpen = false;
+    state.weekCalendarMonth = monthStartIso(date);
     state.navStack = [];
     renderWeeklyRoot(state.lastWeeklyData);
     return;
@@ -645,21 +666,28 @@ function renderWeeklyRoot(data) {
 }
 
 function renderWeekCalendarPicker(weeks, activeWeek) {
-  const months = buildWeeklyCalendarMonths(weeks);
-  if (!months.length) return "";
+  const availableMonths = weeklyCalendarMonthRange(weeks);
+  if (!availableMonths.length) return "";
+  const firstMonth = availableMonths[0];
+  const lastMonth = availableMonths[availableMonths.length - 1];
+  const selectedMonth = clampMonth(state.weekCalendarMonth || monthStartIso(activeWeek.weekStart), firstMonth, lastMonth);
+  state.weekCalendarMonth = selectedMonth;
+  const month = buildWeeklyCalendarMonth(selectedMonth, weeklyCalendarDayMap(weeks));
   return `
     <section class="week-calendar-picker" aria-label="Weekly plan calendar">
-      ${months.map((month) => `
-        <article class="week-calendar-month">
+      <article class="week-calendar-month">
+        <div class="week-calendar-head">
+          <button class="plain-button icon-button" data-action="week-calendar-prev" ${selectedMonth <= firstMonth ? "disabled" : ""} aria-label="Previous month"><span class="button-icon">‹</span></button>
           <h4>${escapeHtml(month.label)}</h4>
-          <div class="week-calendar-weekdays">
-            ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => `<span>${day}</span>`).join("")}
-          </div>
-          <div class="week-calendar-days">
-            ${month.days.map((day) => renderWeekCalendarDay(day, activeWeek)).join("")}
-          </div>
-        </article>
-      `).join("")}
+          <button class="plain-button icon-button" data-action="week-calendar-next" ${selectedMonth >= lastMonth ? "disabled" : ""} aria-label="Next month"><span class="button-icon">›</span></button>
+        </div>
+        <div class="week-calendar-weekdays">
+          ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => `<span>${day}</span>`).join("")}
+        </div>
+        <div class="week-calendar-days">
+          ${month.days.map((day) => renderWeekCalendarDay(day, activeWeek)).join("")}
+        </div>
+      </article>
     </section>
   `;
 }
@@ -1501,6 +1529,12 @@ function weekIndexForDate(weeks, date) {
 }
 
 function buildWeeklyCalendarMonths(weeks) {
+  const dayMap = weeklyCalendarDayMap(weeks);
+  const months = weeklyCalendarMonthRange(weeks);
+  return months.map((month) => buildWeeklyCalendarMonth(month, dayMap));
+}
+
+function weeklyCalendarDayMap(weeks) {
   const dayMap = new Map();
   weeks.forEach((week, weekIndex) => {
     (week.days || []).forEach((day) => {
@@ -1512,7 +1546,11 @@ function buildWeeklyCalendarMonths(weeks) {
       });
     });
   });
+  return dayMap;
+}
 
+function weeklyCalendarMonthRange(weeks) {
+  const dayMap = weeklyCalendarDayMap(weeks);
   const datesWithItems = [...dayMap.entries()]
     .filter(([, meta]) => meta.hasItems)
     .map(([date]) => date)
@@ -1524,10 +1562,17 @@ function buildWeeklyCalendarMonths(weeks) {
   const months = [];
   let cursor = firstMonth;
   while (cursor <= lastMonth) {
-    months.push(buildWeeklyCalendarMonth(cursor, dayMap));
+    months.push(cursor);
     cursor = addMonthsIso(cursor, 1);
   }
   return months;
+}
+
+function clampMonth(month, firstMonth, lastMonth) {
+  const value = monthStartIso(month || firstMonth);
+  if (value < firstMonth) return firstMonth;
+  if (value > lastMonth) return lastMonth;
+  return value;
 }
 
 function buildWeeklyCalendarMonth(monthStart, dayMap) {
@@ -1686,7 +1731,7 @@ function openMedia(title, imageUrl, videoUrl) {
   `;
   els.mediaModal.hidden = false;
   wireVideoFallback(cleanVideoUrl);
-  if (videoEmbed && isMobileViewport() && !els.mediaBody.querySelector(".media-video[data-fallback-src]")) enterMediaFullscreen(true);
+  if (videoEmbed && isMobileViewport()) enterMediaFullscreen(true);
 }
 
 function videoEmbedMarkup(videoUrl, imageUrl = "") {
@@ -1695,11 +1740,7 @@ function videoEmbedMarkup(videoUrl, imageUrl = "") {
   const driveId = getDriveId(raw);
   const poster = toImageUrl(imageUrl);
   if (driveId) {
-    return `
-      <video class="media-video" controls playsinline preload="metadata"${poster ? ` poster="${escapeAttr(poster)}"` : ""} data-fallback-src="${escapeAttr(toDrivePreviewUrl(raw, { autoplay: true }))}">
-        <source src="${escapeAttr(toDriveDownloadUrl(driveId))}" type="video/mp4">
-      </video>
-    `;
+    return renderVideoFrame(toDrivePreviewUrl(raw, { autoplay: true }));
   }
   if (/\.(mp4|webm|mov)(\?|#|$)/i.test(raw)) {
     return `
@@ -1728,13 +1769,10 @@ function wireVideoFallback(videoUrl) {
   const showFallback = () => {
     if (settled || !fallbackSrc || !els.mediaBody || els.mediaModal.hidden) return;
     settled = true;
-    state.suppressNextFullscreenClose = true;
     els.mediaBody.innerHTML = renderVideoFrame(withAutoplayParam(fallbackSrc));
-    if (isMobileViewport()) requestAnimationFrame(() => enterMediaFullscreen(true));
   };
   video.addEventListener("loadedmetadata", () => {
     settled = true;
-    if (isMobileViewport()) requestAnimationFrame(() => enterMediaFullscreen(true));
   }, { once: true });
   video.addEventListener("error", showFallback, { once: true });
   setTimeout(showFallback, 2200);
@@ -1754,10 +1792,6 @@ function enterMediaFullscreen(silent = false) {
 
 function handleFullscreenChange() {
   const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-  if (!fullscreenElement && state.suppressNextFullscreenClose) {
-    state.suppressNextFullscreenClose = false;
-    return;
-  }
   if (!fullscreenElement && els.mediaModal?.classList.contains("is-video") && !els.mediaModal.hidden) {
     closeMedia();
   }
@@ -1771,7 +1805,6 @@ function closeMedia() {
   if (!els.mediaModal || !els.mediaBody) return;
   els.mediaModal.hidden = true;
   els.mediaModal.classList.remove("is-video");
-  state.suppressNextFullscreenClose = false;
   els.mediaBody.innerHTML = "";
 }
 
@@ -1781,10 +1814,6 @@ function toDrivePreviewUrl(url, options = {}) {
   const driveId = getDriveId(raw);
   const previewUrl = driveId ? `https://drive.google.com/file/d/${driveId}/preview` : raw;
   return options.autoplay ? withAutoplayParam(previewUrl) : previewUrl;
-}
-
-function toDriveDownloadUrl(fileId) {
-  return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
 }
 
 function withAutoplayParam(url) {
