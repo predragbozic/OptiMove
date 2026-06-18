@@ -560,6 +560,7 @@ function renderLibraryNav() {
 function renderAthleteListState() {
   els.athleteList.classList.toggle("is-expanded", state.athletesExpanded);
   els.athletesToggle.setAttribute("aria-expanded", String(state.athletesExpanded));
+  document.body.classList.toggle("athletes-drawer-open", state.athletesExpanded);
 }
 
 function renderAthleteList() {

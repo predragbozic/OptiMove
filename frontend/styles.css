@@ -2072,6 +2072,206 @@ input:focus {
   }
 }
 
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) {
+    overflow-x: hidden;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    background: rgba(15, 23, 42, 0.24);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .app-shell {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    min-height: 100vh;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    width: 58px;
+    height: 100vh;
+    max-height: none;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    align-content: start;
+    gap: 12px;
+    overflow: visible;
+    padding: 10px 7px;
+    border-right: 0;
+    border-bottom: 0;
+    background: #111820;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 0;
+    justify-items: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand > div:last-child {
+    display: contents;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand .eyebrow {
+    display: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand-mark {
+    width: 42px;
+    height: 42px;
+    background: var(--surface);
+    color: #111820;
+    font-size: 13px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand-title,
+  body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button {
+    width: 44px;
+    min-height: 44px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 0;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand-title::before {
+    content: "☰";
+    font-size: 23px;
+    line-height: 1;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand-title[aria-expanded="true"],
+  body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button.is-active {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field,
+  body:not(.athlete-mode):not(.login-mode) .athlete-list {
+    position: fixed;
+    left: 66px;
+    right: 12px;
+    z-index: 60;
+    display: none;
+    width: auto;
+    max-height: none;
+    padding: 0;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .sidebar > .search-field,
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .athlete-list {
+    display: block;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field {
+    top: 12px;
+    margin: 0;
+    padding: 14px 14px 8px;
+    border: 1px solid var(--line);
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+    background: var(--surface);
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field::before {
+    content: "Select athlete";
+    display: block;
+    margin-bottom: 10px;
+    color: var(--text);
+    font-size: 17px;
+    font-weight: 900;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-list {
+    top: 114px;
+    bottom: 12px;
+    overflow: auto;
+    padding: 10px 14px 14px;
+    border: 1px solid var(--line);
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
+    background: var(--surface);
+    box-shadow: 0 24px 50px rgba(15, 23, 42, 0.18);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar-section {
+    display: grid;
+    gap: 8px;
+    margin-top: 0;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar-label {
+    display: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button[data-library-tab="templates"]::before {
+    content: "T";
+    font-size: 16px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button[data-library-tab="exercises"]::before {
+    content: "E";
+    font-size: 16px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .workspace {
+    min-width: 0;
+    padding: 12px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) h2 {
+    font-size: 20px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .status-pill {
+    min-width: 78px;
+    padding: 7px 9px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-toolbar-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-hero {
+    grid-template-columns: 54px minmax(0, 1fr);
+    padding: 8px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-hero-image,
+  body:not(.athlete-mode):not(.login-mode) .athlete-hero-fallback {
+    width: 54px;
+    height: 54px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-hero h3 {
+    margin-bottom: 0;
+    font-size: 17px;
+  }
+}
+
 @media (max-width: 640px) {
   .athlete-toolbar-row {
     grid-template-columns: 1fr;
