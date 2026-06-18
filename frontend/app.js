@@ -497,7 +497,8 @@ function renderAthleteList() {
 
 function renderAthleteHeader(data) {
   const athlete = state.athletes.find((entry) => entry.athlete_id === state.selectedAthleteId);
-  els.context.textContent = athlete ? `Athlete ID ${athlete.athlete_id}` : "Coach dashboard";
+  const isAthleteMode = document.body.classList.contains("athlete-mode");
+  els.context.textContent = athlete && !isAthleteMode ? `Athlete ID ${athlete.athlete_id}` : "Athlete program";
   els.title.textContent = athlete?.athlete || "Athletes and programs";
   els.toolbar.innerHTML = "";
 
@@ -509,9 +510,9 @@ function renderAthleteHeader(data) {
           ? renderImage(athlete.athlete_image_url, "athlete-hero-image", initialsFor(athlete.athlete))
           : `<div class="athlete-hero-fallback">${escapeHtml(initialsFor(athlete.athlete))}</div>`}
         <div>
-          <p class="eyebrow">Selected athlete</p>
+          ${isAthleteMode ? "" : `<p class="eyebrow">Selected athlete</p>`}
           <h3>${escapeHtml(athlete.athlete || "")}</h3>
-          <p class="muted">ID ${escapeHtml(athlete.athlete_id || "")}</p>
+          ${isAthleteMode ? "" : `<p class="muted">ID ${escapeHtml(athlete.athlete_id || "")}</p>`}
         </div>
       </section>
       <nav class="tabs athlete-tabs" aria-label="Athlete views">

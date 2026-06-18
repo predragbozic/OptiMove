@@ -54,7 +54,11 @@ button {
 }
 
 .athlete-mode .athlete-topbar {
-  margin-bottom: 12px;
+  display: none;
+}
+
+.athlete-mode .workspace {
+  padding-top: 14px;
 }
 
 .sidebar {
@@ -410,6 +414,25 @@ input:focus {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+.athlete-mode .athlete-toolbar-row {
+  grid-template-columns: minmax(150px, 0.46fr) minmax(220px, 0.54fr);
+}
+
+.athlete-mode .athlete-hero {
+  grid-template-columns: 64px minmax(0, 1fr);
+  min-height: 82px;
+}
+
+.athlete-mode .athlete-hero h3 {
+  margin-bottom: 0;
+}
+
+.athlete-mode .athlete-hero-image,
+.athlete-mode .athlete-hero-fallback {
+  width: 64px;
+  height: 64px;
 }
 
 .athlete-hero h3 {
@@ -993,6 +1016,14 @@ input:focus {
   min-height: 36px;
   padding: 0 12px;
   font-size: 12px;
+}
+
+.drill-main-actions .plain-button {
+  background: var(--surface-soft);
+}
+
+.drill-actions .plain-button:hover {
+  border-color: var(--line-strong);
 }
 
 .exercise-position {
@@ -1765,6 +1796,27 @@ input:focus {
     grid-template-columns: 1fr;
   }
 
+  .athlete-mode .athlete-toolbar-row {
+    grid-template-columns: 0.78fr 1.22fr;
+    align-items: stretch;
+  }
+
+  .athlete-mode .athlete-hero {
+    grid-template-columns: 52px minmax(0, 1fr);
+    padding: 8px;
+  }
+
+  .athlete-mode .athlete-hero-image,
+  .athlete-mode .athlete-hero-fallback {
+    width: 52px;
+    height: 52px;
+  }
+
+  .athlete-mode .athlete-hero h3 {
+    font-size: 15px;
+    line-height: 1.15;
+  }
+
   .athlete-tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1920,8 +1972,9 @@ input:focus {
   }
 
   .exercise-detail {
-    max-width: calc(100vw - 32px);
+    max-width: calc(100vw - 42px);
     margin-inline: auto;
+    border-color: rgba(201, 209, 220, 0.74);
   }
 
   .exercise-detail .drill-header {
@@ -1929,7 +1982,7 @@ input:focus {
   }
 
   .exercise-detail-media {
-    max-width: 240px;
+    max-width: 210px;
   }
 
   .exercise-detail-media .exercise-media {
