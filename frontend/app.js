@@ -21,6 +21,7 @@ const state = {
   exerciseLayout: "horizontal",
   touch: { startX: 0, startY: 0, startTime: 0 },
   appHistoryDepth: 0,
+  suppressNextFullscreenClose: false,
 };
 
 const els = {
@@ -1685,7 +1686,7 @@ function openMedia(title, imageUrl, videoUrl) {
   `;
   els.mediaModal.hidden = false;
   wireVideoFallback(cleanVideoUrl);
-  if (videoEmbed && isMobileViewport()) enterMediaFullscreen(true);
+  if (videoEmbed && isMobileViewport() && !els.mediaBody.querySelector(".media-video[data-fallback-src]")) enterMediaFullscreen(true);
 }
 
 function videoEmbedMarkup(videoUrl, imageUrl = "") {
@@ -1727,10 +1728,13 @@ function wireVideoFallback(videoUrl) {
   const showFallback = () => {
     if (settled || !fallbackSrc || !els.mediaBody || els.mediaModal.hidden) return;
     settled = true;
+    state.suppressNextFullscreenClose = true;
     els.mediaBody.innerHTML = renderVideoFrame(withAutoplayParam(fallbackSrc));
+    if (isMobileViewport()) requestAnimationFrame(() => enterMediaFullscreen(true));
   };
   video.addEventListener("loadedmetadata", () => {
     settled = true;
+    if (isMobileViewport()) requestAnimationFrame(() => enterMediaFullscreen(true));
   }, { once: true });
   video.addEventListener("error", showFallback, { once: true });
   setTimeout(showFallback, 2200);
@@ -1750,6 +1754,10 @@ function enterMediaFullscreen(silent = false) {
 
 function handleFullscreenChange() {
   const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!fullscreenElement && state.suppressNextFullscreenClose) {
+    state.suppressNextFullscreenClose = false;
+    return;
+  }
   if (!fullscreenElement && els.mediaModal?.classList.contains("is-video") && !els.mediaModal.hidden) {
     closeMedia();
   }
@@ -1763,6 +1771,7 @@ function closeMedia() {
   if (!els.mediaModal || !els.mediaBody) return;
   els.mediaModal.hidden = true;
   els.mediaModal.classList.remove("is-video");
+  state.suppressNextFullscreenClose = false;
   els.mediaBody.innerHTML = "";
 }
 
