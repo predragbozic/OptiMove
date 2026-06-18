@@ -497,9 +497,8 @@ function renderAthleteList() {
 
 function renderAthleteHeader(data) {
   const athlete = state.athletes.find((entry) => entry.athlete_id === state.selectedAthleteId);
-  const isAthleteMode = document.body.classList.contains("athlete-mode");
-  els.context.textContent = athlete && !isAthleteMode ? `Athlete ID ${athlete.athlete_id}` : "Athlete program";
-  els.title.textContent = athlete?.athlete || "Athletes and programs";
+  els.context.textContent = "Program view";
+  els.title.textContent = "Plans";
   els.toolbar.innerHTML = "";
 
   if (!athlete) return;
@@ -510,9 +509,7 @@ function renderAthleteHeader(data) {
           ? renderImage(athlete.athlete_image_url, "athlete-hero-image", initialsFor(athlete.athlete))
           : `<div class="athlete-hero-fallback">${escapeHtml(initialsFor(athlete.athlete))}</div>`}
         <div>
-          ${isAthleteMode ? "" : `<p class="eyebrow">Selected athlete</p>`}
           <h3>${escapeHtml(athlete.athlete || "")}</h3>
-          ${isAthleteMode ? "" : `<p class="muted">ID ${escapeHtml(athlete.athlete_id || "")}</p>`}
         </div>
       </section>
       <nav class="tabs athlete-tabs" aria-label="Athlete views">
@@ -1123,11 +1120,17 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
           ${hierarchy ? `<div class="breadcrumb">${escapeHtml(hierarchy)}</div>` : ""}
         </div>
         <div class="drill-actions">
-          ${hasSequence ? `<button class="plain-button icon-button" data-action="exercise-prev" ${canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>` : ""}
-          ${hasSequence ? `<span class="exercise-position">${currentIndex + 1} / ${ids.length}</span>` : ""}
-          ${hasSequence ? `<button class="plain-button icon-button" data-action="exercise-next" ${canGoNext ? "" : "disabled"}><span>Next</span><span class="button-icon">›</span></button>` : ""}
-          <button class="plain-button icon-button" data-action="exercise-back"><span class="button-icon">←</span><span>Back</span></button>
-          <button class="plain-button icon-button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
+          <div class="drill-main-actions">
+            <button class="plain-button icon-button" data-action="exercise-back"><span class="button-icon">←</span><span>Back</span></button>
+            <button class="plain-button icon-button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
+          </div>
+          ${hasSequence ? `
+            <div class="drill-sibling-actions">
+              <button class="plain-button icon-button" data-action="exercise-prev" ${canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>
+              <span class="exercise-position">${currentIndex + 1} / ${ids.length}</span>
+              <button class="plain-button icon-button" data-action="exercise-next" ${canGoNext ? "" : "disabled"}><span>Next</span><span class="button-icon">›</span></button>
+            </div>
+          ` : ""}
         </div>
       </div>
 
@@ -1141,11 +1144,6 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
         </div>
 
         <div class="exercise-detail-main">
-          <div class="detail-badges">
-            ${item.amPm ? `<span class="item-badge">${escapeHtml(item.amPm)}</span>` : ""}
-            ${item.bta ? `<span class="item-badge">${escapeHtml(item.bta)}</span>` : ""}
-          </div>
-
           ${doseRows.length ? `
             <div class="detail-grid">
               ${doseRows.map(([label, value]) => `

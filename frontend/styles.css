@@ -991,7 +991,7 @@ input:focus {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   justify-content: flex-end;
 }
 
@@ -1012,6 +1012,14 @@ input:focus {
   justify-content: flex-end;
 }
 
+.drill-main-actions {
+  min-height: 38px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(247, 248, 250, 0.82);
+}
+
 .drill-actions .plain-button {
   min-height: 36px;
   padding: 0 12px;
@@ -1019,7 +1027,8 @@ input:focus {
 }
 
 .drill-main-actions .plain-button {
-  background: var(--surface-soft);
+  border-color: transparent;
+  background: transparent;
 }
 
 .drill-actions .plain-button:hover {
@@ -1451,16 +1460,17 @@ input:focus {
 
 .exercise-detail-layout {
   display: grid;
-  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: 16px;
 }
 
 .exercise-detail {
-  max-width: 980px;
+  max-width: 860px;
   margin-inline: auto;
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(8px);
-  box-shadow: 0 18px 44px rgba(22, 34, 45, 0.12);
+  border-color: rgba(201, 209, 220, 0.72);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 54px rgba(22, 34, 45, 0.16);
 }
 
 .exercise-detail-media {
@@ -1478,7 +1488,7 @@ input:focus {
 }
 
 .detail-media-empty {
-  min-height: 260px;
+  min-height: 180px;
   display: grid;
   place-items: center;
   border: 1px dashed var(--line-strong);
@@ -1877,6 +1887,7 @@ input:focus {
   .drill-main-actions,
   .drill-sibling-actions {
     width: 100%;
+    gap: 4px;
   }
 
   .drill-sibling-actions {
@@ -1886,6 +1897,8 @@ input:focus {
   .drill-main-actions .plain-button,
   .drill-sibling-actions .plain-button {
     flex: 1 1 0;
+    min-width: 0;
+    padding: 0 8px;
   }
 
   .drill-actions .exercise-position {
@@ -1969,12 +1982,15 @@ input:focus {
 
   .exercise-detail-layout {
     grid-template-columns: 1fr;
+    gap: 10px;
   }
 
   .exercise-detail {
-    max-width: calc(100vw - 42px);
+    max-width: calc(100vw - 64px);
     margin-inline: auto;
     border-color: rgba(201, 209, 220, 0.74);
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.86);
   }
 
   .exercise-detail .drill-header {
@@ -1982,7 +1998,7 @@ input:focus {
   }
 
   .exercise-detail-media {
-    max-width: 210px;
+    max-width: 190px;
   }
 
   .exercise-detail-media .exercise-media {
