@@ -154,11 +154,19 @@ function renderLogin() {
 }
 
 function toggleAthletesList() {
-  state.athletesExpanded = !state.athletesExpanded;
+  state.athletesExpanded = isMobileCoachNav() ? !state.athletesExpanded : true;
   renderAthleteList();
   if (state.athletesExpanded) {
-    requestAnimationFrame(() => els.athleteList.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+    requestAnimationFrame(() => {
+      els.athleteList.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      if (!isMobileCoachNav()) els.athleteSearch.focus();
+    });
   }
+}
+
+function isMobileCoachNav() {
+  return !document.body.classList.contains("athlete-mode")
+    && window.matchMedia?.("(max-width: 760px)").matches;
 }
 
 function handleImageError(event) {
