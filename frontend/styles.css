@@ -110,6 +110,10 @@ button {
   margin-bottom: 24px;
 }
 
+.brand > div:last-child {
+  min-width: 0;
+}
+
 .brand-mark {
   width: 42px;
   height: 42px;
@@ -153,6 +157,18 @@ h1 {
   font-weight: 800;
   line-height: 1.1;
   text-align: left;
+}
+
+.brand-title.rail-button,
+.sidebar-nav-button.rail-button {
+  display: inline-grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+}
+
+.brand-title.rail-button {
+  width: 100%;
 }
 
 .brand-title:hover,
@@ -250,6 +266,16 @@ input:focus {
 .sidebar-nav-button.is-active {
   border-color: var(--line-strong);
   background: var(--surface);
+}
+
+.rail-icon {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .athlete-button {
@@ -2195,10 +2221,35 @@ input:focus {
 
   body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .brand-title::before,
   body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .sidebar-nav-button::before {
-    display: grid;
-    place-items: center;
+    display: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand-title::before,
+  body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button::before {
+    display: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .rail-button span {
+    display: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .rail-icon {
+    width: 23px;
+    height: 23px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .rail-button span {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .rail-icon {
     width: 28px;
     height: 28px;
+    padding: 4px;
     border-radius: 7px;
     background: rgba(255, 255, 255, 0.09);
   }

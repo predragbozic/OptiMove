@@ -13,7 +13,15 @@
           <div class="brand-mark">OM</div>
           <div>
             <p class="eyebrow">OptiMove</p>
-            <button class="brand-title" id="athletesToggle" type="button" aria-expanded="false">Athletes</button>
+            <button class="brand-title rail-button" id="athletesToggle" type="button" aria-expanded="false">
+              <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M16 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 17.5V19"></path>
+                <circle cx="10" cy="7" r="3"></circle>
+                <path d="M20 19v-1.2a3 3 0 0 0-2.2-2.9"></path>
+                <path d="M17 4.3a3 3 0 0 1 0 5.4"></path>
+              </svg>
+              <span>Athletes</span>
+            </button>
           </div>
         </div>
 
@@ -26,8 +34,26 @@
 
         <div class="sidebar-section">
           <p class="sidebar-label">Library</p>
-          <button class="sidebar-nav-button" data-library-tab="templates">Templates</button>
-          <button class="sidebar-nav-button" data-library-tab="exercises">Exercises</button>
+          <button class="sidebar-nav-button rail-button" data-library-tab="templates">
+            <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+              <path d="M8 8h8"></path>
+              <path d="M8 12h8"></path>
+              <path d="M8 16h5"></path>
+            </svg>
+            <span>Templates</span>
+          </button>
+          <button class="sidebar-nav-button rail-button" data-library-tab="exercises">
+            <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 7h12"></path>
+              <path d="M6 17h12"></path>
+              <path d="M8 7v10"></path>
+              <path d="M16 7v10"></path>
+              <path d="M4 9v6"></path>
+              <path d="M20 9v6"></path>
+            </svg>
+            <span>Exercises</span>
+          </button>
         </div>
       </aside>
 
