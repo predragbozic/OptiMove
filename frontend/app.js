@@ -78,7 +78,12 @@ function bindEvents() {
     button.addEventListener("click", () => {
       state.activeTab = button.dataset.libraryTab;
       state.selectedProgramId = null;
+      state.selectedTemplateId = null;
       state.navStack = [];
+      state.athletesExpanded = false;
+      state.weekSelectorOpen = false;
+      state.openWeekCalendarOnLoad = false;
+      renderAthleteListState();
       renderTabs();
       renderLibraryNav();
       loadActiveTab();
@@ -163,7 +168,9 @@ function renderLogin() {
 
 function toggleAthletesList() {
   state.athletesExpanded = !state.athletesExpanded;
+  if (state.athletesExpanded) state.weekSelectorOpen = false;
   renderAthleteList();
+  renderLibraryNav();
   if (state.athletesExpanded) {
     requestAnimationFrame(() => {
       els.athleteList.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -614,7 +621,7 @@ function renderLibraryNav() {
   els.libraryTabs.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.libraryTab === state.activeTab);
   });
-  els.athletesToggle?.classList.toggle("is-active", state.activeTab === "weekly" || state.activeTab === "programs");
+  els.athletesToggle?.classList.toggle("is-active", state.athletesExpanded);
   els.calendarToggle?.classList.toggle("is-active", state.activeTab === "weekly" && state.weekSelectorOpen);
 }
 
