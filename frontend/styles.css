@@ -3468,8 +3468,11 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 }
 
 .builder-create-form { max-width: 620px; }
+.builder-error { min-height: 0; margin: 0; color: var(--danger, #a23b3b); font-size: 13px; font-weight: 700; }
+.builder-page-error { margin: 0 0 12px; }
 .builder-check { display: flex; gap: 8px; align-items: center; font-weight: 700; }
 .builder-inline-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+.builder-inline-form .builder-error { grid-column: 1 / -1; }
 .builder-outline, .builder-picker { min-height: 420px; }
 .builder-block { border-top: 1px solid var(--line, #dfe4e8); padding: 14px 0; }
 .builder-block:first-of-type { border-top: 0; padding-top: 0; }
@@ -3485,6 +3488,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-session span:last-child, .builder-node-button small { color: var(--muted, #667085); font-size: 12px; font-weight: 600; }
 .builder-session.is-active, .builder-node-button.is-active { border-color: #287e77; background: #e7f5f2; }
 .builder-session-form { display: grid; grid-template-columns: 1fr 1.4fr 38px; gap: 8px; }
+.builder-session-form .builder-error { grid-column: 1 / -1; }
 .builder-session-form select, .builder-node-form select, .builder-node-form input, .builder-dose-inputs input { min-width: 0; border: 1px solid var(--line, #dfe4e8); border-radius: 5px; padding: 8px; font: inherit; }
 .builder-node { margin: 6px 0 0 14px; padding-left: 10px; border-left: 1px solid #dce4e6; }
 .builder-node-button { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-radius: 5px; }
@@ -3493,6 +3497,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-node-section > .builder-node-button { border-left: 3px solid #e7a049; }
 .builder-node-form { grid-template-columns: 110px minmax(0, 1fr) auto; align-items: end; margin-bottom: 16px; }
 .builder-node-form-head { grid-column: 1 / -1; font-size: 13px; color: var(--muted, #667085); }
+.builder-node-form .builder-error { grid-column: 1 / -1; }
 .builder-dose-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .builder-dose-inputs label { display: grid; gap: 4px; font-size: 12px; color: var(--muted, #667085); font-weight: 700; }
 .builder-exercise-results { display: grid; gap: 7px; max-height: 315px; overflow: auto; }

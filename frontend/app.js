@@ -142,7 +142,18 @@ async function handleContentSubmit(event) {
   const builderForm = event.target.closest("[data-builder-form]");
   if (!builderForm) return;
   event.preventDefault();
-  await submitBuilderForm(builderForm);
+  const submitButton = builderForm.querySelector("button[type='submit']");
+  const error = builderForm.querySelector(".builder-error");
+  if (error) error.textContent = "";
+  if (submitButton) submitButton.disabled = true;
+  try {
+    await submitBuilderForm(builderForm);
+  } catch (builderError) {
+    if (error) error.textContent = builderError.message || "Could not save this change.";
+    else renderBuilderError(builderError);
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
 }
 
 function handleContentInput(event) {
@@ -1234,6 +1245,7 @@ function renderBuilder() {
             </label>
             <label class="search-field"><span>Program note</span><textarea name="note" rows="3" placeholder="Optional coaching note"></textarea></label>
             <label class="builder-check"><input type="checkbox" name="isTemplate"> <span>Create as a reusable template</span></label>
+            <p class="builder-error" aria-live="polite"></p>
             <button class="plain-button" type="submit">Create draft</button>
           </form>
         </section>
@@ -1257,6 +1269,7 @@ function renderBuilder() {
         </div>
         <form class="builder-inline-form" data-builder-form="add-block">
           <label class="search-field"><span>New day or block</span><input name="name" placeholder="e.g. Day 1, MD-2, Block 1"></label>
+          <p class="builder-error" aria-live="polite"></p>
           <button class="plain-button" type="submit">Add block</button>
         </form>
       </section>
@@ -1289,6 +1302,7 @@ function renderBuilderBlock(block, selectedSessionId, selectedNodeId) {
       <form class="builder-session-form" data-builder-form="add-session" data-block-id="${escapeAttr(block.id)}">
         <select name="amPm"><option value="">No AM/PM</option><option>AM</option><option>PM</option></select>
         <select name="bta"><option value="">No phase</option><option value="B">Before training</option><option value="T">Training</option><option value="A">After training</option></select>
+        <p class="builder-error" aria-live="polite"></p>
         <button type="submit" class="icon-action" aria-label="Add session">+</button>
       </form>
     </article>
@@ -1315,6 +1329,7 @@ function renderBuilderPicker(session, selectedNode) {
       <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
       <select name="nodeType">${nodeTypeOptions(selectedNode?.type)}</select>
       <input name="name" placeholder="Domain, category or section name" required>
+      <p class="builder-error" aria-live="polite"></p>
       <button class="plain-button" type="submit">Add</button>
     </form>
     ${selectedNode ? `
@@ -1334,6 +1349,7 @@ function renderBuilderPicker(session, selectedNode) {
           </button>
         `).join("") || `<div class="empty">No matching exercises.</div>`}
       </div>
+      <p class="builder-error" aria-live="polite"></p>
       <button class="plain-button" type="submit">Add selected exercise</button>
     </form>
     ${renderBuilderItems(selectedNode)}
@@ -1358,6 +1374,7 @@ function renderBuilderItems(node) {
       </div>
       <label class="search-field"><span>Section</span><input name="sectionName" value="${escapeAttr(item.sectionName || "")}"></label>
       <label class="search-field"><span>Instruction</span><textarea name="description" rows="2">${escapeHtml(item.description || "")}</textarea></label>
+      <p class="builder-error" aria-live="polite"></p>
       <button class="text-action" type="submit">Save exercise</button>
     </form>
   `).join("")}</div>`;
@@ -1467,6 +1484,11 @@ async function refreshBuilderDraft() {
   if (!state.builder.draft) return;
   state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(state.builder.draft.plan.id)}`);
   renderBuilder();
+}
+
+function renderBuilderError(error) {
+  const message = error?.message || "Could not save this change.";
+  els.content.insertAdjacentHTML("afterbegin", `<p class="builder-error builder-page-error" role="alert">${escapeHtml(message)}</p>`);
 }
 
 function renderExercises(exercises) {
