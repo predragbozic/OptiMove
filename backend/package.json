@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "node src/server.js",
+    "start": "node src/migrate.js && node src/server.js",
+    "migrate": "node src/migrate.js",
     "import:plans:preview": "python ../tools/plan_import.py preview",
     "import:plans:apply": "python ../tools/plan_import.py apply"
   },
