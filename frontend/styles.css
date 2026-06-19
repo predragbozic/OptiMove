@@ -677,11 +677,11 @@ input:focus {
 .week-calendar-month {
   width: min(420px, 100%);
   min-width: 0;
-  padding: 12px;
+  padding: 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: 0 8px 20px rgba(22, 34, 45, 0.08);
 }
 
 .week-calendar-head {
@@ -728,7 +728,7 @@ input:focus {
   place-items: center;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 999px;
   background: transparent;
   color: var(--text);
   font-size: 12px;
@@ -740,19 +740,21 @@ input:focus {
 }
 
 .week-calendar-day.has-items {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
-  background: var(--accent-soft);
+  border-color: transparent;
+  background: transparent;
   color: var(--accent);
 }
 
 .week-calendar-day.has-items:hover,
 .week-calendar-day.is-active-week {
   border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent);
+  color: #fff;
+  box-shadow: none;
 }
 
 .week-calendar-day.is-today {
-  border-color: var(--text);
+  border-color: var(--accent);
 }
 
 .week-calendar-day-number {
@@ -761,22 +763,17 @@ input:focus {
 
 .week-calendar-dot {
   position: absolute;
-  right: 6px;
-  bottom: 6px;
-  width: 5px;
-  height: 5px;
+  right: 50%;
+  bottom: 4px;
+  width: 4px;
+  height: 4px;
   border-radius: 999px;
   background: currentColor;
+  transform: translateX(50%);
 }
 
 .week-calendar-count {
-  position: absolute;
-  left: 5px;
-  bottom: 3px;
-  color: var(--muted);
-  font-size: 8px;
-  font-weight: 900;
-  line-height: 1;
+  display: none;
 }
 
 .plain-button:disabled {
@@ -807,8 +804,15 @@ input:focus {
 .calendar-day.is-today {
   position: relative;
   z-index: 1;
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  background: #f7fffd;
+}
+
+.calendar-day.is-today .calendar-day-head {
+  border-bottom-color: #18cdb4;
+}
+
+.calendar-day.is-today .calendar-date {
+  color: var(--accent);
 }
 
 .metric {
@@ -833,18 +837,18 @@ input:focus {
   min-width: 0;
   overflow-x: auto;
   scroll-snap-type: x proximity;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
 }
 
 .calendar-day {
   min-width: 150px;
-  min-height: 320px;
+  min-height: 300px;
   display: grid;
   grid-template-rows: auto auto 1fr;
-  border-right: 1px solid var(--line);
-  background: var(--surface-soft);
+  border-right: 1px solid #e8edf2;
+  background: #fbfcfd;
   scroll-snap-align: start;
 }
 
@@ -853,25 +857,25 @@ input:focus {
 }
 
 .calendar-day-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  display: grid;
+  gap: 2px;
   padding: 10px 10px 8px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 3px solid #b9c0c9;
   background: var(--surface);
 }
 
 .calendar-weekday {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
   text-transform: uppercase;
 }
 
 .calendar-date {
-  font-size: 18px;
+  color: #aeb5bf;
+  font-size: 34px;
   font-weight: 900;
+  line-height: 0.95;
 }
 
 .calendar-note {
@@ -887,8 +891,8 @@ input:focus {
 .calendar-events {
   display: grid;
   align-content: start;
-  gap: 10px;
-  padding: 10px;
+  gap: 7px;
+  padding: 10px 8px;
 }
 
 .calendar-session,
@@ -932,13 +936,13 @@ input:focus {
 
 .calendar-event {
   --node-color: var(--accent);
-  min-height: 48px;
+  min-height: 38px;
   min-width: 0;
-  padding: 8px;
+  padding: 7px 8px;
   border: 1px solid color-mix(in srgb, var(--node-color) 34%, var(--line));
-  border-left: 5px solid var(--node-color);
-  border-radius: 7px;
-  background: var(--surface);
+  border-left: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--node-color) 12%, white 88%);
   color: var(--text);
   text-align: left;
 }
@@ -985,7 +989,7 @@ input:focus {
 .calendar-event-title {
   min-width: 0;
   overflow: hidden;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 900;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -1004,9 +1008,9 @@ input:focus {
 }
 
 .calendar-event-count {
-  margin-top: 4px;
+  margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
 }
 
@@ -2089,6 +2093,11 @@ input:focus {
     display: grid;
     grid-template-columns: 58px minmax(0, 1fr);
     min-height: 100vh;
+    transition: grid-template-columns 180ms ease;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .app-shell {
+    grid-template-columns: clamp(150px, 40vw, 190px) minmax(0, 1fr);
   }
 
   body:not(.athlete-mode):not(.login-mode) .sidebar {
@@ -2107,6 +2116,12 @@ input:focus {
     border-right: 0;
     border-bottom: 0;
     background: #111820;
+    transition: width 180ms ease, padding 180ms ease;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .sidebar {
+    width: clamp(150px, 40vw, 190px);
+    padding-inline: 10px;
   }
 
   body:not(.athlete-mode):not(.login-mode) .brand {
@@ -2158,6 +2173,36 @@ input:focus {
     color: #fff;
   }
 
+  body:not(.athlete-mode):not(.login-mode) .brand-title::before {
+    content: "A";
+    font-size: 16px;
+    font-weight: 900;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .brand-title,
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .sidebar-nav-button {
+    width: 100%;
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 8px;
+    justify-content: start;
+    justify-items: start;
+    align-items: center;
+    padding: 0 10px 0 6px;
+    font-size: 14px;
+    font-weight: 800;
+    text-align: left;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .brand-title::before,
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .sidebar-nav-button::before {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.09);
+  }
+
   body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field,
   body:not(.athlete-mode):not(.login-mode) .athlete-list {
     position: fixed;
@@ -2168,6 +2213,11 @@ input:focus {
     width: auto;
     max-height: none;
     padding: 0;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .sidebar > .search-field,
+  body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .athlete-list {
+    left: calc(clamp(150px, 40vw, 190px) + 8px);
   }
 
   body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .sidebar > .search-field,
@@ -2220,13 +2270,15 @@ input:focus {
   }
 
   body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button[data-library-tab="templates"]::before {
-    content: "T";
+    content: "P";
     font-size: 16px;
+    font-weight: 900;
   }
 
   body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button[data-library-tab="exercises"]::before {
     content: "E";
     font-size: 16px;
+    font-weight: 900;
   }
 
   body:not(.athlete-mode):not(.login-mode) .workspace {
