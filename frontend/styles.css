@@ -13,6 +13,362 @@
   --shadow: 0 18px 40px rgba(22, 34, 45, 0.08);
 }
 
+body:not(.athlete-mode):not(.login-mode) {
+  --rail-width: 72px;
+  --athlete-drawer-left: calc(var(--rail-width) + 12px);
+}
+
+body:not(.athlete-mode):not(.login-mode).rail-expanded {
+  --rail-width: 220px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .app-shell {
+  display: grid;
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  min-height: 100vh;
+  transition: grid-template-columns 180ms ease;
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  width: var(--rail-width);
+  height: 100vh;
+  max-height: none;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  align-content: start;
+  gap: 10px;
+  overflow: visible;
+  padding: 12px 10px;
+  border-right: 0;
+  border-bottom: 0;
+  background: #101820;
+  transition: width 180ms ease;
+}
+
+body:not(.athlete-mode):not(.login-mode) .brand {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 40px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .brand-mark {
+  width: 44px;
+  height: 44px;
+  background: #fff;
+  color: #101820;
+  font-size: 13px;
+}
+
+.brand-name {
+  margin: 0;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-name {
+  display: none;
+}
+
+.rail-toggle {
+  width: 40px;
+  min-height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .rail-toggle {
+  grid-column: 1;
+  width: 44px;
+}
+
+body:not(.athlete-mode):not(.login-mode).rail-expanded .rail-toggle svg {
+  transform: rotate(180deg);
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar-primary,
+body:not(.athlete-mode):not(.login-mode) .sidebar-section {
+  display: grid;
+  gap: 8px;
+  margin-top: 0;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar-primary {
+  border-top: 0;
+  padding-top: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode) .brand-title,
+body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button {
+  width: 52px;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  justify-content: start;
+  justify-items: center;
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1;
+  text-align: left;
+}
+
+body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-title,
+body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .sidebar-nav-button {
+  grid-template-columns: 1fr;
+  place-items: center;
+  padding: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode).rail-expanded .brand-title,
+body:not(.athlete-mode):not(.login-mode).rail-expanded .sidebar-nav-button {
+  width: 100%;
+}
+
+body:not(.athlete-mode):not(.login-mode) .brand-title::before,
+body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button::before {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .rail-button span {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode).rail-expanded .rail-button span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body:not(.athlete-mode):not(.login-mode) .brand-title:hover,
+body:not(.athlete-mode):not(.login-mode) .brand-title.is-active,
+body:not(.athlete-mode):not(.login-mode) .brand-title[aria-expanded="true"],
+body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button:hover,
+body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button.is-active {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+}
+
+body:not(.athlete-mode):not(.login-mode) .rail-icon {
+  width: 23px;
+  height: 23px;
+  flex: 0 0 auto;
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar-label {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field,
+body:not(.athlete-mode):not(.login-mode) .athlete-list {
+  position: fixed;
+  left: var(--athlete-drawer-left);
+  z-index: 60;
+  display: none;
+  width: min(340px, calc(100vw - var(--rail-width) - 24px));
+  max-height: none;
+  padding: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode).athletes-drawer-open::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: rgba(15, 23, 42, 0.22);
+}
+
+body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .sidebar > .search-field,
+body:not(.athlete-mode):not(.login-mode).athletes-drawer-open .athlete-list {
+  display: block;
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field {
+  top: 14px;
+  margin: 0;
+  padding: 14px 14px 8px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--surface);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field::before {
+  content: "Select athlete";
+  display: block;
+  margin-bottom: 10px;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 900;
+}
+
+body:not(.athlete-mode):not(.login-mode) .athlete-list {
+  top: 116px;
+  bottom: 14px;
+  overflow: auto;
+  padding: 10px 14px 14px;
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: var(--surface);
+  box-shadow: 0 24px 50px rgba(15, 23, 42, 0.18);
+}
+
+.athlete-hero-compact {
+  grid-template-columns: 78px;
+  justify-content: center;
+  width: max-content;
+  min-width: 104px;
+}
+
+.tab-with-icon {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.week-nav-panel {
+  grid-template-columns: 46px minmax(0, 1fr) auto 46px;
+  align-items: center;
+  padding: 10px;
+}
+
+.week-title-button {
+  min-height: 46px;
+  display: grid;
+  place-items: center;
+  padding: 8px 14px;
+  pointer-events: none;
+}
+
+.week-title-button:hover {
+  border-color: var(--line);
+  background: var(--surface-soft);
+}
+
+.week-arrow-button {
+  min-width: 46px;
+  min-height: 46px;
+  padding: 0;
+  font-size: 30px;
+  line-height: 1;
+}
+
+.week-today-button {
+  min-height: 46px;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) {
+    --rail-width: 58px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).rail-expanded {
+    --rail-width: clamp(150px, 40vw, 190px);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar {
+    padding: 10px 7px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand {
+    grid-template-columns: 44px minmax(0, 1fr) 36px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand-title,
+  body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button {
+    width: 44px;
+    min-height: 44px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).rail-expanded .brand-title,
+  body:not(.athlete-mode):not(.login-mode).rail-expanded .sidebar-nav-button {
+    width: 100%;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .rail-toggle {
+    width: 36px;
+    min-height: 40px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .rail-icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  .athlete-hero-compact {
+    min-width: 70px;
+  }
+
+  .week-nav-panel {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) 70px 42px;
+    gap: 6px;
+  }
+
+  .week-title-button {
+    order: initial;
+    min-height: 42px;
+    padding: 6px 8px;
+  }
+
+  .week-title-button strong {
+    font-size: 14px;
+  }
+
+  .week-nav-panel > .plain-button {
+    order: initial;
+    flex: initial;
+    min-height: 42px;
+    padding: 0 8px;
+  }
+
+  .week-arrow-button {
+    min-width: 42px;
+    font-size: 26px;
+  }
+
+  .week-today-button {
+    font-size: 12px;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -2711,4 +3067,109 @@ input:focus {
     text-align: center;
   }
 
+}
+
+body:not(.athlete-mode):not(.login-mode) .app-shell {
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+}
+
+body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand {
+  grid-template-columns: 44px;
+  justify-content: center;
+}
+
+body:not(.athlete-mode):not(.login-mode).rail-expanded .brand {
+  grid-template-columns: 44px minmax(0, 1fr) 40px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar {
+  width: var(--rail-width);
+}
+
+body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-title,
+body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .sidebar-nav-button {
+  width: 52px;
+  grid-template-columns: 1fr;
+  place-items: center;
+  padding: 0;
+}
+
+body:not(.athlete-mode):not(.login-mode).rail-expanded .brand-title,
+body:not(.athlete-mode):not(.login-mode).rail-expanded .sidebar-nav-button {
+  width: 100%;
+  grid-template-columns: 30px minmax(0, 1fr);
+}
+
+body:not(.athlete-mode):not(.login-mode) .brand-title::before,
+body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button::before {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode) .rail-button span {
+  display: none;
+}
+
+body:not(.athlete-mode):not(.login-mode).rail-expanded .rail-button span {
+  display: block;
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field,
+body:not(.athlete-mode):not(.login-mode) .athlete-list {
+  left: var(--athlete-drawer-left);
+}
+
+body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact {
+  grid-template-columns: 78px;
+  min-width: 104px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-image,
+body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fallback {
+  width: 78px;
+  height: 78px;
+}
+
+.week-nav-panel {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto 46px;
+}
+
+.week-title-button {
+  order: initial;
+  pointer-events: none;
+}
+
+.week-nav-panel > .plain-button {
+  order: initial;
+  flex: initial;
+}
+
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) {
+    --rail-width: 58px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).rail-expanded {
+    --rail-width: clamp(150px, 40vw, 190px);
+  }
+
+  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-title,
+  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .sidebar-nav-button {
+    width: 44px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact {
+    min-width: 70px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-image,
+  body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fallback {
+    width: 54px;
+    height: 54px;
+  }
+
+  .week-nav-panel {
+    grid-template-columns: 42px minmax(0, 1fr) 70px 42px;
+    gap: 6px;
+  }
 }

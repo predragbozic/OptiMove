@@ -5,6 +5,7 @@ const state = {
   athletes: [],
   selectedAthleteId: null,
   athletesExpanded: false,
+  railExpanded: false,
   activeTab: "weekly",
   selectedProgramId: null,
   selectedTemplateId: null,
@@ -22,6 +23,7 @@ const state = {
   touch: { startX: 0, startY: 0, startTime: 0 },
   appHistoryDepth: 0,
   weekCalendarMonth: "",
+  openWeekCalendarOnLoad: false,
 };
 
 const els = {
@@ -31,6 +33,8 @@ const els = {
   athleteList: document.querySelector("#athleteList"),
   athleteSearch: document.querySelector("#athleteSearch"),
   athletesToggle: document.querySelector("#athletesToggle"),
+  railToggle: document.querySelector("#railToggle"),
+  calendarToggle: document.querySelector("#calendarToggle"),
   tabs: document.querySelectorAll(".tab"),
   libraryTabs: document.querySelectorAll("[data-library-tab]"),
   toolbar: document.querySelector("#viewToolbar"),
@@ -44,6 +48,7 @@ init();
 
 async function init() {
   bindEvents();
+  renderRailState();
   await loadSession();
   if (!state.currentUser) {
     renderLogin();
@@ -55,12 +60,15 @@ async function init() {
 function bindEvents() {
   els.athleteSearch.addEventListener("input", renderAthleteList);
   els.athletesToggle.addEventListener("click", toggleAthletesList);
+  els.railToggle?.addEventListener("click", toggleRail);
+  els.calendarToggle?.addEventListener("click", openWeeklyCalendarFromRail);
   els.tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       state.activeTab = tab.dataset.tab;
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
       state.navStack = [];
+      if (state.activeTab === "weekly") state.openWeekCalendarOnLoad = true;
       renderTabs();
       renderLibraryNav();
       loadActiveTab();
@@ -154,19 +162,45 @@ function renderLogin() {
 }
 
 function toggleAthletesList() {
-  state.athletesExpanded = isMobileCoachNav() ? !state.athletesExpanded : true;
+  state.athletesExpanded = !state.athletesExpanded;
   renderAthleteList();
   if (state.athletesExpanded) {
     requestAnimationFrame(() => {
       els.athleteList.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      if (!isMobileCoachNav()) els.athleteSearch.focus();
     });
   }
 }
 
-function isMobileCoachNav() {
-  return !document.body.classList.contains("athlete-mode")
-    && window.matchMedia?.("(max-width: 760px)").matches;
+function toggleRail() {
+  state.railExpanded = !state.railExpanded;
+  renderRailState();
+}
+
+function renderRailState() {
+  document.body.classList.toggle("rail-expanded", state.railExpanded);
+  els.railToggle?.setAttribute("aria-expanded", String(state.railExpanded));
+  els.railToggle?.setAttribute("aria-label", state.railExpanded ? "Collapse navigation" : "Expand navigation");
+}
+
+function openWeeklyCalendarFromRail() {
+  state.activeTab = "weekly";
+  state.selectedProgramId = null;
+  state.selectedTemplateId = null;
+  state.navStack = [];
+  state.athletesExpanded = false;
+  state.openWeekCalendarOnLoad = true;
+  renderAthleteListState();
+  renderTabs();
+  renderLibraryNav();
+  if (state.lastWeeklyData && state.selectedAthleteId) {
+    state.weekSelectorOpen = true;
+    const weeks = state.lastWeeklyData.weeks || [];
+    const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
+    state.weekCalendarMonth = monthStartIso(activeWeek?.weekStart || localDateIso());
+    renderWeeklyRoot(state.lastWeeklyData);
+    return;
+  }
+  loadActiveTab();
 }
 
 function handleImageError(event) {
@@ -221,6 +255,7 @@ function handleGlobalClick(event) {
     state.selectedProgramId = null;
     state.selectedTemplateId = null;
     state.navStack = [];
+    if (state.activeTab === "weekly") state.openWeekCalendarOnLoad = tab.dataset.openCalendar === "true";
     renderTabs();
     renderLibraryNav();
     loadActiveTab();
@@ -355,7 +390,12 @@ async function loadWeekly() {
   const data = await api(`/api/athletes/${encodeURIComponent(state.selectedAthleteId)}/program-data?program=__weekly__`);
   state.lastWeeklyData = data;
   state.selectedWeekIndex = defaultWeekIndex(data.weeks || []);
-  state.weekSelectorOpen = false;
+  state.weekSelectorOpen = Boolean(state.openWeekCalendarOnLoad);
+  state.openWeekCalendarOnLoad = false;
+  if (state.weekSelectorOpen) {
+    const activeWeek = data.weeks?.[state.selectedWeekIndex] || data.weeks?.[0];
+    state.weekCalendarMonth = monthStartIso(activeWeek?.weekStart || localDateIso());
+  }
   renderAthleteHeader(data);
   renderWeeklyRoot(data);
 }
@@ -563,6 +603,8 @@ function renderLibraryNav() {
   els.libraryTabs.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.libraryTab === state.activeTab);
   });
+  els.athletesToggle?.classList.toggle("is-active", state.activeTab === "weekly" || state.activeTab === "programs");
+  els.calendarToggle?.classList.toggle("is-active", state.activeTab === "weekly" && state.weekSelectorOpen);
 }
 
 function renderAthleteListState() {
@@ -606,6 +648,7 @@ function renderAthleteList() {
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
       state.navStack = [];
+      state.openWeekCalendarOnLoad = false;
       renderAthleteList();
       renderTabs();
       renderLibraryNav();
@@ -623,16 +666,21 @@ function renderAthleteHeader(data) {
   if (!athlete) return;
   els.toolbar.innerHTML = `
     <div class="athlete-toolbar-row">
-      <section class="athlete-hero">
+      <section class="athlete-hero athlete-hero-compact" aria-label="Selected athlete image">
         ${athlete.athlete_image_url
           ? renderImage(athlete.athlete_image_url, "athlete-hero-image", initialsFor(athlete.athlete))
           : `<div class="athlete-hero-fallback">${escapeHtml(initialsFor(athlete.athlete))}</div>`}
-        <div>
-          <h3>${escapeHtml(athlete.athlete || "")}</h3>
-        </div>
       </section>
       <nav class="tabs athlete-tabs" aria-label="Athlete views">
-        <button class="tab" data-tab="weekly">Weekly plans</button>
+        <button class="tab tab-with-icon" data-tab="weekly" data-open-calendar="true">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="4" y="5" width="16" height="15" rx="2"></rect>
+            <path d="M8 3v4"></path>
+            <path d="M16 3v4"></path>
+            <path d="M4 10h16"></path>
+          </svg>
+          <span>Weekly plans</span>
+        </button>
         <button class="tab" data-tab="programs">Specific programs</button>
       </nav>
     </div>
@@ -641,6 +689,7 @@ function renderAthleteHeader(data) {
 }
 
 function renderWeeklyRoot(data) {
+  renderLibraryNav();
   const weeks = data?.weeks || [];
   if (!weeks.length) return renderEmpty("This athlete has no weekly plans.");
   const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
@@ -650,14 +699,12 @@ function renderWeeklyRoot(data) {
   els.content.innerHTML = `
     <div class="content-section">
       <section class="week-nav-panel">
-        <button class="plain-button" data-action="week-prev" ${state.selectedWeekIndex <= 0 ? "disabled" : ""}>Previous</button>
-        <button class="week-title-button" data-action="week-toggle" aria-expanded="${state.weekSelectorOpen}">
-          <span class="eyebrow">Weekly plans</span>
+        <button class="plain-button week-arrow-button" data-action="week-prev" ${state.selectedWeekIndex <= 0 ? "disabled" : ""} aria-label="Previous week">‹</button>
+        <div class="week-title-button" aria-live="polite">
           <strong>${escapeHtml(weekRange)}</strong>
-          <span>${weekTotal(activeWeek)} items - ${state.weekSelectorOpen ? "Hide calendar" : "Open calendar"}</span>
-        </button>
-        <button class="plain-button" data-action="week-today">Today</button>
-        <button class="plain-button" data-action="week-next" ${state.selectedWeekIndex >= weeks.length - 1 ? "disabled" : ""}>Next</button>
+        </div>
+        <button class="plain-button week-today-button" data-action="week-today">Today</button>
+        <button class="plain-button week-arrow-button" data-action="week-next" ${state.selectedWeekIndex >= weeks.length - 1 ? "disabled" : ""} aria-label="Next week">›</button>
       </section>
       ${weekSelectorMarkup}
       <section class="panel">
@@ -1609,7 +1656,8 @@ function buildWeeklyCalendarMonth(monthStart, dayMap) {
 }
 
 function defaultWeekIndex(weeks) {
-  return todayWeekIndex(weeks);
+  if (!weeks.length) return 0;
+  return weeks.length - 1;
 }
 
 function todayWeekIndex(weeks) {
