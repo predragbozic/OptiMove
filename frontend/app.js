@@ -183,17 +183,18 @@ function renderRailState() {
 }
 
 function openWeeklyCalendarFromRail() {
+  const shouldToggleLoadedWeekly = state.activeTab === "weekly" && state.lastWeeklyData && state.selectedAthleteId;
   state.activeTab = "weekly";
   state.selectedProgramId = null;
   state.selectedTemplateId = null;
   state.navStack = [];
   state.athletesExpanded = false;
-  state.openWeekCalendarOnLoad = true;
+  state.openWeekCalendarOnLoad = !shouldToggleLoadedWeekly;
   renderAthleteListState();
   renderTabs();
   renderLibraryNav();
-  if (state.lastWeeklyData && state.selectedAthleteId) {
-    state.weekSelectorOpen = true;
+  if (shouldToggleLoadedWeekly) {
+    state.weekSelectorOpen = !state.weekSelectorOpen;
     const weeks = state.lastWeeklyData.weeks || [];
     const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
     state.weekCalendarMonth = monthStartIso(activeWeek?.weekStart || localDateIso());
@@ -251,7 +252,12 @@ function handleImageError(event) {
 function handleGlobalClick(event) {
   const tab = event.target.closest("[data-tab]");
   if (tab) {
-    state.activeTab = tab.dataset.tab;
+    const nextTab = tab.dataset.tab;
+    if (nextTab === "weekly" && state.activeTab === "weekly" && state.lastWeeklyData) {
+      openWeeklyCalendarFromRail();
+      return;
+    }
+    state.activeTab = nextTab;
     state.selectedProgramId = null;
     state.selectedTemplateId = null;
     state.navStack = [];
@@ -523,6 +529,11 @@ function handleContentClick(event) {
     renderWeeklyRoot(state.lastWeeklyData);
     return;
   }
+  if (type === "week-calendar-close") {
+    state.weekSelectorOpen = false;
+    renderWeeklyRoot(state.lastWeeklyData);
+    return;
+  }
   if (type === "week-calendar-prev" || type === "week-calendar-next") {
     const delta = type === "week-calendar-prev" ? -1 : 1;
     state.weekCalendarMonth = addMonthsIso(state.weekCalendarMonth || localDateIso(), delta);
@@ -737,6 +748,7 @@ function renderWeekCalendarPicker(weeks, activeWeek) {
           <h4>${escapeHtml(month.label)}</h4>
           <button class="plain-button icon-button" data-action="week-calendar-next" ${selectedMonth >= lastMonth ? "disabled" : ""} aria-label="Next month"><span class="button-icon">›</span></button>
         </div>
+        <button class="plain-button week-calendar-close" data-action="week-calendar-close">Close calendar</button>
         <div class="week-calendar-weekdays">
           ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => `<span>${day}</span>`).join("")}
         </div>
