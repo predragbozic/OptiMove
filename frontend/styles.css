@@ -300,7 +300,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
   }
 
   body:not(.athlete-mode):not(.login-mode).rail-expanded {
-    --rail-width: clamp(150px, 40vw, 190px);
+    --rail-width: 116px;
   }
 
   body:not(.athlete-mode):not(.login-mode) .sidebar {
@@ -3201,6 +3201,94 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .week-nav-panel {
     grid-template-columns: 42px minmax(0, 1fr) 70px 42px;
     gap: 6px;
+  }
+}
+
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode).rail-expanded {
+    --athlete-drawer-left: calc(var(--rail-width) + 8px);
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand {
+    grid-template-columns: 44px;
+    justify-content: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .brand-name {
+    display: none;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .rail-toggle {
+    width: 44px;
+    min-height: 44px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).rail-expanded .rail-toggle {
+    width: 44px;
+    justify-self: center;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).rail-expanded .brand-title,
+  body:not(.athlete-mode):not(.login-mode).rail-expanded .sidebar-nav-button {
+    width: 92px;
+    height: 52px;
+    min-height: 52px;
+    flex-basis: 52px;
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 6px;
+    justify-self: center;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).rail-expanded .rail-button span {
+    display: block;
+    max-width: 48px;
+    line-height: 1.05;
+    white-space: normal;
+  }
+
+  body:not(.athlete-mode):not(.login-mode).rail-expanded .rail-icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field,
+  body:not(.athlete-mode):not(.login-mode) .athlete-list {
+    left: var(--athlete-drawer-left);
+    right: 8px;
+    width: auto;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field {
+    top: 10px;
+    padding: 12px 12px 8px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-list {
+    top: 106px;
+    bottom: 10px;
+    padding: 8px 12px 12px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .sidebar > .search-field::before {
+    font-size: 16px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-button {
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 9px;
+    padding: 9px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .athlete-meta span {
+    flex: 0 1 auto;
   }
 }
 
