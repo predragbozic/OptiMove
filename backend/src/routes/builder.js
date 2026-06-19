@@ -48,8 +48,8 @@ router.post("/plans/:planId/blocks", async (req, res, next) => {
     const next = await nextOrder("plans.plan_days", "plan_id", plan.id, "block_order");
     await query(
       `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
-       values ($1, $2, $2, $3, $4, $5)`,
-      [plan.id, next, text(req.body?.name) || `Block ${next}`, text(req.body?.type) || "session", nullableText(req.body?.note)],
+       values ($1, $2, $3, $4, $5, $6)`,
+      [plan.id, next, next, text(req.body?.name) || `Block ${next}`, text(req.body?.type) || "session", nullableText(req.body?.note)],
     );
     res.status(201).json(await buildDraft(plan));
   } catch (error) { next(error); }
