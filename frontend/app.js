@@ -665,10 +665,7 @@ function renderAthleteList() {
     const haystack = `${athlete.athlete_id} ${athlete.athlete}`.toLowerCase();
     return haystack.includes(search);
   });
-  const selectedAthlete = filteredAthletes.find((athlete) => athlete.athlete_id === state.selectedAthleteId);
-  const athletes = state.athletesExpanded || search
-    ? filteredAthletes
-    : (selectedAthlete ? [selectedAthlete] : filteredAthletes.slice(0, 1));
+  const athletes = filteredAthletes;
 
   els.athleteList.innerHTML = athletes.map((athlete) => `
     <button class="athlete-button ${athlete.athlete_id === state.selectedAthleteId ? "is-active" : ""}" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
@@ -1256,7 +1253,7 @@ function renderBuilder() {
             <h3>${escapeHtml(draft.plan.name)}</h3>
             <p class="muted">${escapeHtml(draft.plan.athleteName || "Reusable template")}</p>
           </div>
-          <span class="item-badge">Draft</span>
+          <div class="builder-summary-actions"><span class="item-badge">Draft</span><button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete draft</button></div>
         </div>
         <form class="builder-inline-form" data-builder-form="add-block">
           <label class="search-field"><span>New day or block</span><input name="name" placeholder="e.g. Day 1, MD-2, Block 1"></label>
@@ -1280,12 +1277,12 @@ function renderBuilder() {
 function renderBuilderBlock(block, selectedSessionId, selectedNodeId) {
   return `
     <article class="builder-block">
-      <div class="builder-block-head"><div><strong>${escapeHtml(block.name || `Block ${block.index}`)}</strong>${block.note ? `<span>${escapeHtml(block.note)}</span>` : ""}</div></div>
+      <div class="builder-block-head"><div><strong>${escapeHtml(block.name || `Block ${block.index}`)}</strong>${block.note ? `<span>${escapeHtml(block.note)}</span>` : ""}</div><button class="text-action danger-action" type="button" data-action="builder-delete-block" data-block-id="${escapeAttr(block.id)}">Delete</button></div>
       <div class="builder-sessions">
         ${block.sessions.length ? block.sessions.map((session) => `
-          <button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
+          <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             <span>${escapeHtml(sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span>
-          </button>
+          </button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div>
           ${renderBuilderNodeTree(session, "", selectedNodeId)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}
       </div>
@@ -1314,7 +1311,7 @@ function renderBuilderPicker(session, selectedNode) {
   const query = state.builder.exerciseQuery;
   return `
     <form class="builder-node-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
-      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong></div>
+      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button>` : ""}</div>
       <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
       <select name="nodeType">${nodeTypeOptions(selectedNode?.type)}</select>
       <input name="name" placeholder="Domain, category or section name" required>
@@ -1400,8 +1397,30 @@ async function handleBuilderAction(action) {
     return;
   }
   if (type === "builder-delete-item") {
+    if (!window.confirm("Remove this exercise from the program?")) return;
     await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`, { method: "DELETE" });
     await refreshBuilderDraft();
+    return;
+  }
+  const deleteTargets = {
+    "builder-delete-plan": ["draft program", `/api/builder/plans/${encodeURIComponent(state.builder.draft?.plan.id || "")}`],
+    "builder-delete-block": ["block and its contents", `/api/builder/blocks/${encodeURIComponent(action.dataset.blockId || "")}`],
+    "builder-delete-session": ["session and its contents", `/api/builder/sessions/${encodeURIComponent(action.dataset.sessionId || "")}`],
+    "builder-delete-node": ["selected node and its contents", `/api/builder/nodes/${encodeURIComponent(action.dataset.nodeId || "")}`],
+  };
+  if (deleteTargets[type]) {
+    const [label, url] = deleteTargets[type];
+    if (!window.confirm(`Delete this ${label}? This cannot be undone.`)) return;
+    await api(url, { method: "DELETE" });
+    if (type === "builder-delete-plan") {
+      state.builder = { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [] };
+    } else {
+      state.builder.selectedNodeId = "";
+      state.builder.selectedSessionId = "";
+      await refreshBuilderDraft();
+      return;
+    }
+    renderBuilder();
   }
 }
 

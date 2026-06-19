@@ -30,6 +30,17 @@ router.post("/plans", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.delete("/plans/:planId", async (req, res, next) => {
+  try {
+    const plan = await requirePlan(req.user, req.params.planId, res);
+    if (!plan) return;
+    const blocks = await query("select id from plans.plan_days where plan_id = $1", [plan.id]);
+    for (const block of blocks.rows) await deleteBlockTree(block.id);
+    await query("delete from plans.plans where id = $1", [plan.id]);
+    res.json({ deleted: true, planId: plan.id });
+  } catch (error) { next(error); }
+});
+
 router.post("/plans/:planId/blocks", async (req, res, next) => {
   try {
     const plan = await requirePlan(req.user, req.params.planId, res);
@@ -44,6 +55,15 @@ router.post("/plans/:planId/blocks", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.delete("/blocks/:blockId", async (req, res, next) => {
+  try {
+    const block = await getEditableBlock(req.user, req.params.blockId);
+    if (!block) return res.status(404).json({ error: "Program block not found" });
+    await deleteBlockTree(block.id);
+    res.json(await buildDraft(block.plan));
+  } catch (error) { next(error); }
+});
+
 router.post("/blocks/:blockId/sessions", async (req, res, next) => {
   try {
     const block = await getEditableBlock(req.user, req.params.blockId);
@@ -54,6 +74,15 @@ router.post("/blocks/:blockId/sessions", async (req, res, next) => {
       [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), phaseValue(req.body?.bta, ["B", "T", "A"]), order],
     );
     res.status(201).json(await buildDraft(block.plan));
+  } catch (error) { next(error); }
+});
+
+router.delete("/sessions/:sessionId", async (req, res, next) => {
+  try {
+    const session = await getEditableSession(req.user, req.params.sessionId);
+    if (!session) return res.status(404).json({ error: "Program session not found" });
+    await deleteSessionTree(session.id);
+    res.json(await buildDraft(session.plan));
   } catch (error) { next(error); }
 });
 
@@ -73,6 +102,15 @@ router.post("/sessions/:sessionId/nodes", async (req, res, next) => {
       [session.id, parentId, nodeType, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl), nullableText(req.body?.shortNote), nullableText(req.body?.note), order],
     );
     res.status(201).json(await buildDraft(session.plan));
+  } catch (error) { next(error); }
+});
+
+router.delete("/nodes/:nodeId", async (req, res, next) => {
+  try {
+    const node = await getEditableNode(req.user, req.params.nodeId);
+    if (!node) return res.status(404).json({ error: "Program node not found" });
+    await deleteNodeTree(node.id);
+    res.json(await buildDraft(node.plan));
   } catch (error) { next(error); }
 });
 
@@ -187,6 +225,29 @@ async function copyNodeTree(sourceId, targetSessionId, targetParentId) {
   }
   const children = await query("select id from plans.plan_nodes where parent_id = $1 order by node_order", [sourceId]);
   for (const child of children.rows) await copyNodeTree(child.id, targetSessionId, newNodeId);
+}
+
+async function deleteBlockTree(blockId) {
+  const sessions = await query("select id from plans.plan_sessions where plan_day_id = $1", [blockId]);
+  for (const session of sessions.rows) await deleteSessionTree(session.id);
+  await query("delete from plans.plan_days where id = $1", [blockId]);
+}
+
+async function deleteSessionTree(sessionId) {
+  await query("delete from plans.plan_items where plan_session_id = $1", [sessionId]);
+  await query("delete from plans.plan_nodes where plan_session_id = $1", [sessionId]);
+  await query("delete from plans.plan_sessions where id = $1", [sessionId]);
+}
+
+async function deleteNodeTree(nodeId) {
+  await query(
+    `with recursive node_tree as (
+       select id from plans.plan_nodes where id = $1
+       union all
+       select child.id from plans.plan_nodes child join node_tree parent on child.parent_id = parent.id
+     ) delete from plans.plan_items where plan_node_id in (select id from node_tree)`, [nodeId],
+  );
+  await query("delete from plans.plan_nodes where id = $1", [nodeId]);
 }
 
 async function getEditablePlan(user, planId) {
