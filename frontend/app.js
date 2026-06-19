@@ -16,6 +16,7 @@ const state = {
   lastProgramBundle: null,
   lastTemplates: [],
   lastExerciseResults: [],
+  builder: { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [] },
   exerciseSearch: { term: "", limit: 30, hasMore: false },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
@@ -92,6 +93,7 @@ function bindEvents() {
 
   els.content.addEventListener("click", handleContentClick);
   els.content.addEventListener("submit", handleContentSubmit);
+  els.content.addEventListener("input", handleContentInput);
   els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
   els.content.addEventListener("touchend", handleSwipeEnd, { passive: true });
   document.addEventListener("click", handleGlobalClick);
@@ -111,29 +113,49 @@ async function loadSession() {
 
 async function handleContentSubmit(event) {
   const form = event.target.closest("#loginForm");
-  if (!form) return;
-  event.preventDefault();
-  const formData = new FormData(form);
-  const error = form.querySelector(".login-error");
-  if (error) error.textContent = "";
-  const button = form.querySelector("button[type='submit']");
-  if (button) button.disabled = true;
-  try {
-    const data = await api("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({
-        email: formData.get("email"),
-        password: formData.get("password"),
-      }),
-    });
-    state.currentUser = data.user;
-    document.body.classList.remove("login-mode");
-    await loadAthletes();
-  } catch (loginError) {
-    if (error) error.textContent = loginError.message || "Login failed.";
-  } finally {
-    if (button) button.disabled = false;
+  if (form) {
+    event.preventDefault();
+    const formData = new FormData(form);
+    const error = form.querySelector(".login-error");
+    if (error) error.textContent = "";
+    const button = form.querySelector("button[type='submit']");
+    if (button) button.disabled = true;
+    try {
+      const data = await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email: formData.get("email"),
+          password: formData.get("password"),
+        }),
+      });
+      state.currentUser = data.user;
+      document.body.classList.remove("login-mode");
+      await loadAthletes();
+    } catch (loginError) {
+      if (error) error.textContent = loginError.message || "Login failed.";
+    } finally {
+      if (button) button.disabled = false;
+    }
+    return;
   }
+
+  const builderForm = event.target.closest("[data-builder-form]");
+  if (!builderForm) return;
+  event.preventDefault();
+  await submitBuilderForm(builderForm);
+}
+
+function handleContentInput(event) {
+  const input = event.target.closest("[data-builder-exercise-search]");
+  if (!input) return;
+  state.builder.exerciseQuery = input.value;
+  debounceBuilderSearch();
+}
+
+let builderSearchTimer = null;
+function debounceBuilderSearch() {
+  clearTimeout(builderSearchTimer);
+  builderSearchTimer = setTimeout(loadBuilderExercises, 250);
 }
 
 function renderLogin() {
@@ -393,6 +415,7 @@ async function loadActiveTab() {
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
   if (state.activeTab === "templates") return loadTemplates();
+  if (state.activeTab === "builder") return loadBuilder();
   return loadExercises();
 }
 
@@ -469,6 +492,10 @@ function handleContentClick(event) {
   if (!action) return;
 
   const type = action.dataset.action;
+  if (type.startsWith("builder-")) {
+    handleBuilderAction(action);
+    return;
+  }
   if (type === "back") {
     if (state.appHistoryDepth > 0) window.history.back();
     else handleAppBack();
@@ -596,6 +623,7 @@ function renderCurrentNode() {
     return renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
   }
   if (state.activeTab === "templates") return loadTemplates();
+  if (state.activeTab === "builder") return renderBuilder();
   if (state.activeTab === "exercises") return renderExercises(state.lastExerciseResults);
 }
 
@@ -610,7 +638,7 @@ function moveWeek(delta) {
 }
 
 function renderTabs() {
-  const isLibraryTab = state.activeTab === "templates" || state.activeTab === "exercises";
+  const isLibraryTab = ["templates", "exercises", "builder"].includes(state.activeTab);
   const tabs = document.querySelectorAll(".tab");
   const tabsContainer = tabs[0]?.closest(".tabs");
   if (tabsContainer) tabsContainer.hidden = isLibraryTab;
@@ -1165,6 +1193,261 @@ function renderTemplateList(templates, selected, detail) {
       </section>
     </section>
   `;
+}
+
+async function loadBuilder() {
+  state.navStack = [];
+  els.context.textContent = "Program builder";
+  els.title.textContent = "Build a program";
+  els.toolbar.innerHTML = "";
+  if (!state.builder.draft) {
+    renderBuilder();
+    return;
+  }
+  setLoading("Loading draft program...");
+  const data = await api(`/api/builder/plans/${encodeURIComponent(state.builder.draft.plan.id)}`);
+  state.builder.draft = data;
+  await loadBuilderExercises();
+}
+
+async function loadBuilderExercises() {
+  if (state.activeTab !== "builder") return;
+  const query = state.builder.exerciseQuery.trim();
+  const data = await api(`/api/exercises?search=${encodeURIComponent(query)}&limit=12`);
+  state.builder.exercises = data.exercises || [];
+  renderBuilder();
+}
+
+function renderBuilder() {
+  const draft = state.builder.draft;
+  els.context.textContent = "Program builder";
+  els.title.textContent = draft ? draft.plan.name : "New program";
+  els.toolbar.innerHTML = "";
+  if (!draft) {
+    els.content.innerHTML = `
+      <section class="content-section builder-start">
+        <section class="panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">Program builder</p><h3>Start with a draft</h3><p class="muted">Create an athlete-specific program or a reusable template.</p></div>
+          </div>
+          <form class="builder-form builder-create-form" data-builder-form="create">
+            <label class="search-field"><span>Program name</span><input name="name" required placeholder="e.g. Preseason strength block"></label>
+            <label class="search-field"><span>Athlete</span>
+              <select name="athleteId"><option value="">Choose athlete</option>${state.athletes.map((athlete) => `<option value="${escapeAttr(athlete.athlete_id)}">${escapeHtml(athlete.athlete)} (ID ${escapeHtml(athlete.athlete_id)})</option>`).join("")}</select>
+            </label>
+            <label class="search-field"><span>Program note</span><textarea name="note" rows="3" placeholder="Optional coaching note"></textarea></label>
+            <label class="builder-check"><input type="checkbox" name="isTemplate"> <span>Create as a reusable template</span></label>
+            <button class="plain-button" type="submit">Create draft</button>
+          </form>
+        </section>
+      </section>
+    `;
+    return;
+  }
+
+  const selectedSession = findBuilderSession(draft, state.builder.selectedSessionId);
+  const selectedNode = findBuilderNode(draft, state.builder.selectedNodeId);
+  els.content.innerHTML = `
+    <section class="content-section builder-workspace">
+      <section class="panel builder-summary">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">${draft.plan.isTemplate ? "Template draft" : "Athlete program draft"}</p>
+            <h3>${escapeHtml(draft.plan.name)}</h3>
+            <p class="muted">${escapeHtml(draft.plan.athleteName || "Reusable template")}</p>
+          </div>
+          <span class="item-badge">Draft</span>
+        </div>
+        <form class="builder-inline-form" data-builder-form="add-block">
+          <label class="search-field"><span>New day or block</span><input name="name" placeholder="e.g. Day 1, MD-2, Block 1"></label>
+          <button class="plain-button" type="submit">Add block</button>
+        </form>
+      </section>
+      <div class="builder-layout">
+        <section class="panel builder-outline">
+          <div class="section-heading"><div><p class="eyebrow">Structure</p><h3>Blocks and sessions</h3></div></div>
+          ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id)).join("") : `<div class="empty">Add the first day or block to start structuring the program.</div>`}
+        </section>
+        <section class="panel builder-picker">
+          <div class="section-heading"><div><p class="eyebrow">Exercise library</p><h3>${selectedNode ? `Add to ${selectedNode.name}` : "Select a section"}</h3></div></div>
+          ${selectedSession ? renderBuilderPicker(selectedSession, selectedNode) : `<div class="empty">Choose a session from the structure to start.</div>`}
+        </section>
+      </div>
+    </section>
+  `;
+}
+
+function renderBuilderBlock(block, selectedSessionId, selectedNodeId) {
+  return `
+    <article class="builder-block">
+      <div class="builder-block-head"><div><strong>${escapeHtml(block.name || `Block ${block.index}`)}</strong>${block.note ? `<span>${escapeHtml(block.note)}</span>` : ""}</div></div>
+      <div class="builder-sessions">
+        ${block.sessions.length ? block.sessions.map((session) => `
+          <button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
+            <span>${escapeHtml(sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span>
+          </button>
+          ${renderBuilderNodeTree(session, "", selectedNodeId)}
+        `).join("") : `<p class="muted">No sessions yet.</p>`}
+      </div>
+      <form class="builder-session-form" data-builder-form="add-session" data-block-id="${escapeAttr(block.id)}">
+        <select name="amPm"><option value="">No AM/PM</option><option>AM</option><option>PM</option></select>
+        <select name="bta"><option value="">No phase</option><option value="B">Before training</option><option value="T">Training</option><option value="A">After training</option></select>
+        <button type="submit" class="icon-action" aria-label="Add session">+</button>
+      </form>
+    </article>
+  `;
+}
+
+function renderBuilderNodeTree(session, parentId, selectedNodeId) {
+  const nodes = session.nodes.filter((node) => node.parentId === parentId);
+  return nodes.map((node) => `
+    <div class="builder-node builder-node-${escapeAttr(node.type)}">
+      <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}">
+        <span>${escapeHtml(node.name)}</span><small>${escapeHtml(node.type)}</small>
+      </button>
+      ${renderBuilderNodeTree(session, node.id, selectedNodeId)}
+    </div>
+  `).join("");
+}
+
+function renderBuilderPicker(session, selectedNode) {
+  const query = state.builder.exerciseQuery;
+  return `
+    <form class="builder-node-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
+      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong></div>
+      <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
+      <select name="nodeType">${nodeTypeOptions(selectedNode?.type)}</select>
+      <input name="name" placeholder="Domain, category or section name" required>
+      <button class="plain-button" type="submit">Add</button>
+    </form>
+    ${selectedNode ? `
+    <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
+    <form class="builder-dose-form" data-builder-form="add-exercise" data-node-id="${escapeAttr(selectedNode.id)}">
+      <div class="builder-dose-inputs">
+        <label><span>Sets</span><input name="sets" placeholder="3"></label>
+        <label><span>Reps</span><input name="reps" placeholder="8"></label>
+        <label><span>Load</span><input name="load" placeholder="40 kg"></label>
+      </div>
+      <input type="hidden" name="exerciseId" value="">
+      <div class="builder-exercise-results">
+        ${state.builder.exercises.map((exercise) => `
+          <button type="button" class="builder-exercise-result" data-action="builder-pick-exercise" data-exercise-id="${escapeAttr(exercise.id)}">
+            ${exercise.image_url ? renderImage(exercise.image_url, "builder-exercise-thumb") : `<span class="node-dot"></span>`}
+            <span><strong>${escapeHtml(exercise.name)}</strong><small>${escapeHtml(exercise.exercise_code || "")}</small></span>
+          </button>
+        `).join("") || `<div class="empty">No matching exercises.</div>`}
+      </div>
+      <button class="plain-button" type="submit">Add selected exercise</button>
+    </form>
+    ${renderBuilderItems(selectedNode)}
+    ` : `<div class="empty">Create or select a domain, category or section before adding exercises.</div>`}
+  `;
+}
+
+function nodeTypeOptions(parentType = "") {
+  const allowed = parentType === "domain" ? ["category"] : parentType === "category" ? ["section"] : parentType === "section" ? [] : ["domain", "category", "section"];
+  return allowed.map((type) => `<option value="${type}">${type[0].toUpperCase()}${type.slice(1)}</option>`).join("") || `<option value="section">Section</option>`;
+}
+
+function renderBuilderItems(node) {
+  if (!node.items.length) return "";
+  return `<div class="builder-items">${node.items.map((item) => `
+    <form class="builder-item" data-builder-form="update-item" data-item-id="${escapeAttr(item.id)}">
+      <div><strong>${escapeHtml(item.title || "Exercise")}</strong><button class="text-action" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}">Remove</button></div>
+      <div class="builder-dose-inputs">
+        <label><span>Sets</span><input name="sets" value="${escapeAttr(item.sets || "")}"></label>
+        <label><span>Reps</span><input name="reps" value="${escapeAttr(item.reps || "")}"></label>
+        <label><span>Load</span><input name="load" value="${escapeAttr(item.load || "")}"></label>
+      </div>
+      <label class="search-field"><span>Section</span><input name="sectionName" value="${escapeAttr(item.sectionName || "")}"></label>
+      <label class="search-field"><span>Instruction</span><textarea name="description" rows="2">${escapeHtml(item.description || "")}</textarea></label>
+      <button class="text-action" type="submit">Save exercise</button>
+    </form>
+  `).join("")}</div>`;
+}
+
+function findBuilderSession(draft, id) {
+  return (draft?.blocks || []).flatMap((block) => block.sessions).find((session) => session.id === id) || null;
+}
+
+function findBuilderNode(draft, id) {
+  return (draft?.blocks || []).flatMap((block) => block.sessions).flatMap((session) => session.nodes).find((node) => node.id === id) || null;
+}
+
+function sessionLabel(session) {
+  return [session.amPm, { B: "Before training", T: "Training", A: "After training" }[session.bta] || ""].filter(Boolean).join(" · ") || "Session";
+}
+
+async function handleBuilderAction(action) {
+  const type = action.dataset.action;
+  if (type === "builder-select-session") {
+    state.builder.selectedSessionId = action.dataset.sessionId || "";
+    state.builder.selectedNodeId = "";
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-select-node") {
+    state.builder.selectedSessionId = action.dataset.sessionId || "";
+    state.builder.selectedNodeId = action.dataset.nodeId || "";
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-pick-exercise") {
+    const form = action.closest("form");
+    const field = form?.querySelector("[name='exerciseId']");
+    if (field) field.value = action.dataset.exerciseId || "";
+    form?.querySelectorAll(".builder-exercise-result").forEach((button) => button.classList.toggle("is-selected", button === action));
+    return;
+  }
+  if (type === "builder-delete-item") {
+    await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`, { method: "DELETE" });
+    await refreshBuilderDraft();
+  }
+}
+
+async function submitBuilderForm(form) {
+  const mode = form.dataset.builderForm;
+  const data = Object.fromEntries(new FormData(form));
+  const draft = state.builder.draft;
+  if (mode === "create") {
+    const created = await api("/api/builder/plans", { method: "POST", body: JSON.stringify({ ...data, isTemplate: form.elements.isTemplate.checked }) });
+    state.builder.draft = created;
+    state.builder.selectedSessionId = "";
+    state.builder.selectedNodeId = "";
+    await loadBuilderExercises();
+    return;
+  }
+  if (!draft) return;
+  if (mode === "add-block") {
+    state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}/blocks`, { method: "POST", body: JSON.stringify(data) });
+  }
+  if (mode === "add-session") {
+    state.builder.draft = await api(`/api/builder/blocks/${encodeURIComponent(form.dataset.blockId)}/sessions`, { method: "POST", body: JSON.stringify(data) });
+    const lastBlock = state.builder.draft.blocks.find((block) => block.id === form.dataset.blockId);
+    state.builder.selectedSessionId = lastBlock?.sessions.at(-1)?.id || state.builder.selectedSessionId;
+    state.builder.selectedNodeId = "";
+  }
+  if (mode === "add-node") {
+    state.builder.draft = await api(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}/nodes`, { method: "POST", body: JSON.stringify(data) });
+    const session = findBuilderSession(state.builder.draft, form.dataset.sessionId);
+    const added = session?.nodes.at(-1);
+    state.builder.selectedSessionId = form.dataset.sessionId;
+    state.builder.selectedNodeId = added?.id || "";
+  }
+  if (mode === "add-exercise") {
+    if (!data.exerciseId) return;
+    state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/exercises`, { method: "POST", body: JSON.stringify(data) });
+  }
+  if (mode === "update-item") {
+    state.builder.draft = await api(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(data) });
+  }
+  renderBuilder();
+}
+
+async function refreshBuilderDraft() {
+  if (!state.builder.draft) return;
+  state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(state.builder.draft.plan.id)}`);
+  renderBuilder();
 }
 
 function renderExercises(exercises) {

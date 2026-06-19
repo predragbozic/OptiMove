@@ -9,6 +9,7 @@ import authRouter from "./routes/auth.js";
 import plansRouter from "./routes/plans.js";
 import templatesRouter from "./routes/templates.js";
 import exercisesRouter from "./routes/exercises.js";
+import builderRouter from "./routes/builder.js";
 import { authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 
@@ -41,6 +42,7 @@ app.use("/api/admin/athletes", requireAuth, athletesRouter);
 app.use("/api/plans", requireAuth, plansRouter);
 app.use("/api/templates", requireAuth, requireCoach, templatesRouter);
 app.use("/api/exercises", requireAuth, requireCoach, exercisesRouter);
+app.use("/api/builder", requireAuth, requireCoach, builderRouter);
 
 app.use(express.static(frontendDir));
 app.get(["/", "/app"], (_req, res) => {
