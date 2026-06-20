@@ -436,7 +436,20 @@ button {
 }
 
 .athlete-mode .athlete-topbar {
+  display: flex;
+  min-height: auto;
+  justify-content: flex-end;
+  padding: 0 18px 8px;
+  background: transparent;
+  border: 0;
+}
+
+.athlete-mode .athlete-topbar > div:first-child {
   display: none;
+}
+
+.athlete-mode .topbar-actions {
+  width: 100%;
 }
 
 .athlete-mode .workspace {
