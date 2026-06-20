@@ -72,6 +72,10 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   line-height: 1;
 }
 
+.topbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.user-role { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+.sign-out-button { min-height: 34px; padding: 6px 10px; font-size: 13px; }
+
 body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-name {
   display: none;
 }

@@ -43,6 +43,8 @@ const els = {
   mediaModal: document.querySelector("#mediaModal"),
   mediaTitle: document.querySelector("#mediaTitle"),
   mediaBody: document.querySelector("#mediaBody"),
+  signOut: document.querySelector("#signOutButton"),
+  userRole: document.querySelector("#userRole"),
 };
 
 init();
@@ -55,6 +57,11 @@ async function init() {
     renderLogin();
     return;
   }
+  renderUserControls();
+  if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
+    window.location.replace("/athlete");
+    return;
+  }
   await loadAthletes();
 }
 
@@ -62,6 +69,7 @@ function bindEvents() {
   els.athleteSearch.addEventListener("input", renderAthleteList);
   els.athletesToggle.addEventListener("click", toggleAthletesList);
   els.railToggle?.addEventListener("click", toggleRail);
+  els.signOut?.addEventListener("click", signOut);
   els.calendarToggle?.addEventListener("click", openWeeklyCalendarFromRail);
   els.tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -130,6 +138,11 @@ async function handleContentSubmit(event) {
       });
       state.currentUser = data.user;
       document.body.classList.remove("login-mode");
+      renderUserControls();
+      if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
+        window.location.replace("/athlete");
+        return;
+      }
       await loadAthletes();
     } catch (loginError) {
       if (error) error.textContent = loginError.message || "Login failed.";
@@ -177,6 +190,7 @@ function renderLogin() {
   els.athleteList.innerHTML = "";
   els.athleteSearch.value = "";
   els.toolbar.innerHTML = "";
+  renderUserControls();
   els.content.innerHTML = `
     <section class="login-panel">
       <form class="login-form" id="loginForm">
@@ -197,6 +211,24 @@ function renderLogin() {
       </form>
     </section>
   `;
+}
+
+function renderUserControls() {
+  const authenticated = Boolean(state.currentUser);
+  if (els.signOut) els.signOut.hidden = !authenticated;
+  if (els.userRole) {
+    els.userRole.hidden = !authenticated;
+    els.userRole.textContent = authenticated ? (state.currentUser.role === "athlete" ? "Athlete" : "Coach") : "";
+  }
+}
+
+async function signOut() {
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } finally {
+    state.currentUser = null;
+    window.location.replace("/");
+  }
 }
 
 function toggleAthletesList() {
