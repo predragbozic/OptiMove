@@ -31,6 +31,15 @@ router.post("/plans", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.post("/plans/:planId/submit", async (req, res, next) => {
+  try {
+    const plan = await requirePlan(req.user, req.params.planId, res);
+    if (!plan) return;
+    await query("update plans.plans set status = 'published', updated_at = now() where id = $1", [plan.id]);
+    res.json(await buildDraft(await getEditablePlan(req.user, plan.id)));
+  } catch (error) { next(error); }
+});
+
 router.delete("/plans/:planId", async (req, res, next) => {
   try {
     const plan = await requirePlan(req.user, req.params.planId, res);

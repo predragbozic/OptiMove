@@ -16,7 +16,7 @@ const state = {
   lastProgramBundle: null,
   lastTemplates: [],
   lastExerciseResults: [],
-  builder: { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", showNote: false },
+  builder: { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", showNote: false, addNodeOpen: false },
   exerciseSearch: { term: "", limit: 30, hasMore: false },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
@@ -1286,7 +1286,7 @@ function renderBuilder() {
             <label class="search-field"><span>Program name</span><input name="name" required placeholder="e.g. Preseason strength block"></label>
             <input type="hidden" name="athleteId" value="${escapeAttr(state.builder.createAthleteId)}">
             <button class="builder-athlete-trigger" type="button" data-action="builder-open-athlete-picker">
-              ${assignedAthlete?.image_url ? renderImage(assignedAthlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${assignedAthlete ? escapeHtml(initialsFor(assignedAthlete.athlete)) : "+"}</span>`}<span><strong>${escapeHtml(assignedAthlete?.athlete || "Assign athlete")}</strong><small>${assignedAthlete ? `ID ${escapeHtml(assignedAthlete.athlete_id)} - athlete program` : "No athlete selected - reusable template"}</small></span><span class="button-icon">></span>
+              ${assignedAthlete?.athlete_image_url || assignedAthlete?.image_url ? renderImage(assignedAthlete.athlete_image_url || assignedAthlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${assignedAthlete ? escapeHtml(initialsFor(assignedAthlete.athlete)) : "+"}</span>`}<span><strong>${escapeHtml(assignedAthlete?.athlete || "Assign athlete")}</strong><small>${assignedAthlete ? `ID ${escapeHtml(assignedAthlete.athlete_id)} - athlete program` : "No athlete selected - reusable template"}</small></span><span class="button-icon">></span>
             </button>
             <div class="builder-metadata-grid builder-setup-controls">
               <label class="search-field"><span>Color</span><input name="color" type="color" value="#287e77"></label>
@@ -1310,7 +1310,7 @@ function renderBuilder() {
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
         <div><p class="eyebrow">${draft.plan.isTemplate ? "Reusable template" : "Athlete program"}</p><h3>${escapeHtml(draft.plan.name)}</h3><p class="muted">${escapeHtml(draft.plan.athleteName || "Private coach template")}</p></div>
-        <div class="builder-program-actions"><span class="item-badge">Draft</span><button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button></div>
+        <div class="builder-program-actions"><span class="item-badge">${escapeHtml(draft.plan.status || "draft")}</span>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">Save and finish</button>` : `<span class="builder-finished-label">Saved</span>`}<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button></div>
       </header>
       <section class="builder-block-creator">
         <div><p class="eyebrow">Program structure</p><strong>Add a day or block</strong></div>
@@ -1326,10 +1326,11 @@ function renderBuilder() {
           ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id)).join("") : `<div class="empty">Add the first day or block to start structuring the program.</div>`}
         </section>
         <section class="panel builder-picker builder-workbench">
-          ${selectedNode?.type === "section" ? renderBuilderSectionPanel(selectedNode) : `
+          ${selectedNode?.type === "section" ? renderBuilderSectionPanel(selectedNode) : state.builder.addNodeOpen && selectedSession ? `
             <div class="section-heading"><div><p class="eyebrow">Structure editor</p><h3>${selectedNode ? `Add below ${selectedNode.name}` : "Select a level"}</h3></div></div>
-            ${selectedSession ? renderBuilderStructureEditor(selectedSession, selectedNode) : `<div class="empty">Choose a session from the structure to start.</div>`}
-          `}
+            ${renderBuilderStructureEditor(selectedSession, selectedNode)}
+          ` : selectedSession ? `<div class="builder-empty-workbench"><p class="eyebrow">Session selected</p><h3>Build the structure</h3><p class="muted">Use Add in the selected session, or choose an existing domain, category, or section.</p></div>` : `<div class="empty">Choose a session from the structure to start.</div>`
+          }
         </section>
       </div>
     </section>
@@ -1348,7 +1349,7 @@ function renderBuilderAthletePicker() {
         <div class="builder-athlete-options">
           ${state.athletes.map((athlete) => `
             <button class="builder-athlete-option ${String(athlete.athlete_id) === String(state.builder.createAthleteId) ? "is-selected" : ""}" type="button" data-action="builder-select-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
-              ${athlete.image_url ? renderImage(athlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${escapeHtml(initialsFor(athlete.athlete))}</span>`}
+              ${athlete.athlete_image_url || athlete.image_url ? renderImage(athlete.athlete_image_url || athlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${escapeHtml(initialsFor(athlete.athlete))}</span>`}
               <span><strong>${escapeHtml(athlete.athlete)}</strong><small>ID ${escapeHtml(athlete.athlete_id)}</small></span>
             </button>
           `).join("")}
@@ -1380,7 +1381,7 @@ function renderBuilderBlock(block, selectedSessionId, selectedNodeId) {
         ${block.sessions.length ? block.sessions.map((session) => `
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             <span>${escapeHtml(sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span>
-          </button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div>
+          </button><div class="builder-session-actions"><button class="text-action" type="button" data-action="builder-add-structure" data-session-id="${escapeAttr(session.id)}">Add</button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
           ${renderBuilderNodeTree(session, "", selectedNodeId)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}
       </div>
@@ -1506,8 +1507,11 @@ function renderBuilderItems(node) {
   if (!node.items.length) return "";
   return `<div class="builder-items">${node.items.map((item) => `
     <form class="builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}">
-      <div><strong>${escapeHtml(item.title || "Exercise")}</strong><button class="text-action" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}">Remove</button></div>
-      <div class="builder-dose-inputs">
+      <div class="builder-item-head">
+        ${item.imageUrl ? renderImage(item.imageUrl, "builder-added-exercise-image") : `<span class="builder-added-exercise-fallback">Exercise</span>`}
+        <div><strong>${escapeHtml(item.title || "Exercise")}</strong><button class="text-action" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}">Remove</button></div>
+      </div>
+      <div class="builder-dose-inputs builder-item-dose">
         <label><span>Sets</span><input name="sets" value="${escapeAttr(item.sets || "")}"></label>
         <label><span>Reps</span><input name="reps" value="${escapeAttr(item.reps || "")}"></label>
         <label><span>Load</span><input name="load" value="${escapeAttr(item.load || "")}"></label>
@@ -1563,10 +1567,30 @@ async function handleBuilderAction(action) {
     renderBuilder();
     return;
   }
+  if (type === "builder-add-structure") {
+    state.builder.selectedSessionId = action.dataset.sessionId || "";
+    state.builder.selectedNodeId = "";
+    state.builder.addNodeOpen = true;
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-submit-plan") {
+    const draft = state.builder.draft;
+    if (!draft) return;
+    action.disabled = true;
+    try {
+      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}/submit`, { method: "POST" });
+      renderBuilder();
+    } catch (error) {
+      renderBuilderError(error);
+    }
+    return;
+  }
   if (type === "builder-select-session") {
     state.builder.selectedSessionId = action.dataset.sessionId || "";
     state.builder.selectedNodeId = "";
     state.builder.sectionPickerOpen = false;
+    state.builder.addNodeOpen = false;
     renderBuilder();
     return;
   }
@@ -1574,6 +1598,7 @@ async function handleBuilderAction(action) {
     state.builder.selectedSessionId = action.dataset.sessionId || "";
     state.builder.selectedNodeId = action.dataset.nodeId || "";
     state.builder.sectionPickerOpen = findBuilderNode(state.builder.draft, state.builder.selectedNodeId)?.type === "section";
+    state.builder.addNodeOpen = true;
     renderBuilder();
     return;
   }
@@ -1638,6 +1663,7 @@ async function submitBuilderForm(form) {
     state.builder.athletePickerOpen = false;
     state.builder.sectionPickerOpen = false;
     state.builder.createAthleteId = "";
+    state.builder.addNodeOpen = false;
     await loadBuilderExercises();
     return;
   }

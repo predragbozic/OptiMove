@@ -3503,6 +3503,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 }
 .builder-session { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 6px; font-weight: 700; }
 .builder-session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.builder-session-actions { display: flex; align-items: center; gap: 8px; }
 .builder-session span:last-child, .builder-node-button small { color: var(--muted, #667085); font-size: 12px; font-weight: 600; }
 .builder-session.is-active, .builder-node-button.is-active { border-color: #287e77; background: #e7f5f2; }
 .builder-session-form { display: grid; grid-template-columns: 1fr 1.4fr 38px; gap: 8px; }
@@ -3571,7 +3572,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-program-bar h3 { margin: 2px 0 4px; font-size: 22px; }
 .builder-program-bar .muted { margin: 0; }
 .builder-program-actions { display: flex; align-items: center; gap: 12px; padding-top: 8px; }
-.builder-block-creator { display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 14px 16px; border: 1px solid var(--line, #dfe4e8); border-radius: 7px; background: #fff; }
+.builder-finish-button { min-height: 36px; padding: 7px 12px; }
+.builder-finished-label { color: #287e77; font-size: 13px; font-weight: 800; }
+.builder-block-creator { width: min(540px, 100%); display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 12px 14px; border: 1px solid var(--line, #dfe4e8); border-radius: 7px; background: #fff; }
 .builder-block-creator .eyebrow { margin: 0 0 2px; }
 .builder-block-creator strong { font-size: 14px; }
 .builder-block-creator .builder-add-block { width: min(460px, 100%); }
@@ -3590,7 +3593,16 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-exercise-result { min-height: 62px; }
 .builder-items { margin-top: 0; }
 .builder-item { gap: 8px; background: #fbfcfd; }
+.builder-item-head { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 10px; align-items: center; }
+.builder-item-head strong { display: block; font-size: 14px; }
+.builder-item-head .text-action { margin-top: 4px; font-size: 12px; }
+.builder-added-exercise-image, .builder-added-exercise-fallback { width: 68px; height: 52px; border-radius: 5px; object-fit: cover; background: #eef2f4; }
+.builder-added-exercise-fallback { display: grid; place-items: center; color: var(--muted, #667085); font-size: 10px; font-weight: 700; }
 .builder-item .search-field { margin: 0; }
+.builder-item-dose { margin-left: 78px; }
+.builder-empty-workbench { display: grid; min-height: 240px; align-content: center; justify-items: start; }
+.builder-empty-workbench h3 { margin: 2px 0 6px; }
+.builder-empty-workbench .muted { max-width: 360px; }
 .builder-autosave-hint { color: var(--muted, #667085); font-size: 11px; }
 
 @media (max-width: 900px) {
@@ -3610,4 +3622,5 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-section-grid { grid-template-columns: 1fr; }
   .builder-section-added { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--line, #dfe4e8); }
   .builder-exercise-results { max-height: 300px; }
+  .builder-item-dose { margin-left: 0; }
 }
