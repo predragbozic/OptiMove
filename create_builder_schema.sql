@@ -1,6 +1,13 @@
 -- OptiMove program builder hierarchy.
 -- Imported records keep their legacy domain/category/section snapshot fields on plan_items.
 
+-- Builder-created plans have their own presentation and sharing defaults. Public
+-- publishing is intentionally not enabled yet; every new draft starts private.
+alter table plans.plans
+  add column if not exists color varchar(32),
+  add column if not exists visibility varchar(32) not null default 'private'
+    check (visibility in ('private', 'team', 'club', 'public'));
+
 create table if not exists plans.plan_nodes (
   id uuid primary key default gen_random_uuid(),
   plan_session_id uuid not null references plans.plan_sessions(id) on delete cascade,

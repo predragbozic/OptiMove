@@ -16,15 +16,16 @@ router.post("/plans", async (req, res, next) => {
   try {
     const name = text(req.body?.name);
     const athleteExternalId = text(req.body?.athleteId);
-    const isTemplate = Boolean(req.body?.isTemplate);
+    // An unassigned draft is the reusable-template workflow. An assigned draft
+    // belongs to the selected athlete and cannot silently become a template.
+    const isTemplate = !athleteExternalId;
     if (!name) return res.status(400).json({ error: "Program name is required." });
-    if (!isTemplate && !athleteExternalId) return res.status(400).json({ error: "Choose an athlete or create a template." });
     const athlete = athleteExternalId ? await findAthlete(athleteExternalId) : null;
     if (athleteExternalId && !athlete) return res.status(404).json({ error: "Athlete not found." });
     const created = await query(
-      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, is_template, status, source_type)
-       values ('program', $1, $2, $3, $4, $5, 'draft', 'builder') returning id`,
-      [req.user.id, athlete?.id || null, name, nullableText(req.body?.note), isTemplate],
+      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type)
+       values ('program', $1, $2, $3, $4, $5, $6, 'private', $7, 'draft', 'builder') returning id`,
+      [req.user.id, athlete?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), isTemplate],
     );
     res.status(201).json(await buildDraft(await getEditablePlan(req.user, created.rows[0].id)));
   } catch (error) { next(error); }
@@ -95,6 +96,9 @@ router.post("/sessions/:sessionId/nodes", async (req, res, next) => {
     const parentId = nullableText(req.body?.parentId);
     if (!NODE_TYPES.has(nodeType) || !name) return res.status(400).json({ error: "Node type and name are required." });
     if (parentId && !(await isNodeInSession(parentId, session.id))) return res.status(400).json({ error: "Parent node is outside this session." });
+    if (!(await isAllowedNodePlacement(session.id, parentId, nodeType))) {
+      return res.status(400).json({ error: "Use Domain → Category → Section. A Section may also sit directly under a Domain or session." });
+    }
     const order = await nextNodeOrder(session.id, parentId);
     await query(
       `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
@@ -118,6 +122,7 @@ router.post("/nodes/:nodeId/exercises", async (req, res, next) => {
   try {
     const node = await getEditableNode(req.user, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
+    if (node.node_type !== "section") return res.status(400).json({ error: "Exercises can only be added to a section." });
     const exerciseResult = await query(
       `select id, name, aim, execution_notes, instruction, image_url, video_url
        from library.exercises where id = $1 and is_active = true`, [text(req.body?.exerciseId)],
@@ -200,7 +205,7 @@ async function buildDraft(plan) {
     }
     if (row.item_id) node.items.push({ id: row.item_id, exerciseId: row.exercise_id, title: row.title, description: row.description || "", imageUrl: row.image_url || "", videoUrl: row.video_url || "", sets: row.sets || "", reps: row.reps || "", load: row.load || "", itemOrder: Number(row.item_order || 0) });
   });
-  return { plan: { id: plan.id, name: plan.name, note: plan.note || "", isTemplate: plan.is_template, athleteId: plan.athlete_source_external_id || plan.athlete_id || "", athleteName: plan.athlete_name || "", status: plan.status }, blocks: [...blocks.values()] };
+  return { plan: { id: plan.id, name: plan.name, note: plan.note || "", iconUrl: plan.icon_url || "", color: plan.color || "", visibility: plan.visibility || "private", isTemplate: plan.is_template, athleteId: plan.athlete_source_external_id || plan.athlete_id || "", athleteName: plan.athlete_name || "", status: plan.status }, blocks: [...blocks.values()] };
 }
 
 async function copyNodeTree(sourceId, targetSessionId, targetParentId) {
@@ -252,7 +257,7 @@ async function deleteNodeTree(nodeId) {
 
 async function getEditablePlan(user, planId) {
   const result = await query(
-    `select p.id, p.name, p.note, p.is_template, p.status, a.athlete_id, a.source_external_id as athlete_source_external_id,
+    `select p.id, p.name, p.note, p.icon_url, p.color, p.visibility, p.is_template, p.status, a.athlete_id, a.source_external_id as athlete_source_external_id,
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
      where p.id = $1 and p.plan_type = 'program' and p.created_by_user_id = $2`, [planId, user.id],
@@ -298,6 +303,15 @@ async function findAthlete(externalId) {
 async function isNodeInSession(nodeId, sessionId) {
   const result = await query("select 1 from plans.plan_nodes where id = $1 and plan_session_id = $2", [nodeId, sessionId]);
   return result.rowCount > 0;
+}
+
+async function isAllowedNodePlacement(sessionId, parentId, nodeType) {
+  if (!parentId) return true;
+  const result = await query("select node_type from plans.plan_nodes where id = $1 and plan_session_id = $2", [parentId, sessionId]);
+  const parentType = result.rows[0]?.node_type;
+  if (parentType === "domain") return nodeType === "category" || nodeType === "section";
+  if (parentType === "category") return nodeType === "section";
+  return false;
 }
 
 async function nextOrder(table, field, value, orderColumn) {
