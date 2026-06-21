@@ -1323,15 +1323,15 @@ function renderBuilder() {
           <button class="plain-button" type="submit">Add block</button>
         </form>
       </section>
-      <div class="builder-layout ${selectedNode?.type === "section" ? "has-section-workspace" : ""}">
+      <div class="builder-layout">
         <section class="panel builder-outline">
           <div class="section-heading"><div><p class="eyebrow">Day and session structure</p><h3>Blocks and sessions</h3></div><button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session structure example"><span class="button-icon">i</span></button></div>
           ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id)).join("") : `<div class="empty">Add the first day or block to start structuring the program.</div>`}
         </section>
-        ${selectedNode?.type === "section" ? `<section class="panel builder-picker builder-workbench">${renderBuilderSectionPanel(selectedNode)}</section>` : ""}
       </div>
       ${state.builder.sessionModalBlockId ? renderBuilderSessionModal(state.builder.sessionModalBlockId) : ""}
       ${state.builder.structureModalOpen && selectedSession ? renderBuilderStructureModal(selectedSession, selectedNode) : ""}
+      ${selectedNode?.type === "section" ? renderBuilderSectionOverlay(selectedNode) : ""}
       ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}
     </section>
   `;
@@ -1504,6 +1504,17 @@ function renderBuilderSectionPanelLegacy(selectedNode) {
       <button class="plain-button" type="submit">Add selected exercise</button>
     </form>
     ${renderBuilderItems(selectedNode)}
+      </section>
+    </div>
+  `;
+}
+
+function renderBuilderSectionOverlay(selectedNode) {
+  return `
+    <div class="builder-section-overlay">
+      <button class="builder-section-backdrop" type="button" data-action="builder-finish-section" aria-label="Close Exercise section editor"></button>
+      <section class="panel builder-section-modal" role="dialog" aria-modal="true" aria-label="Exercise section editor">
+        ${renderBuilderSectionPanel(selectedNode)}
       </section>
     </div>
   `;

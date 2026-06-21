@@ -3587,10 +3587,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-info-button { width: 32px; min-width: 32px; height: 32px; min-height: 32px; margin-left: auto; }
 .builder-add-session { width: 100%; margin-top: 10px; }
 .builder-layout { grid-template-columns: minmax(310px, .78fr) minmax(480px, 1.22fr); gap: 14px; }
-.builder-layout:not(.has-section-workspace) { grid-template-columns: minmax(0, 720px); }
+.builder-layout { grid-template-columns: minmax(0, 720px); }
 .builder-outline, .builder-workbench { min-height: 540px; }
 .builder-workbench { padding: 18px; }
 .builder-section-panel { width: auto; max-height: none; overflow: visible; box-shadow: none; }
+.builder-section-modal { position: relative; z-index: 1; width: min(1060px, 96vw); max-height: min(820px, 90dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
+.builder-section-modal .builder-section-panel { padding: 2px; }
 .builder-section-panel-head { padding-bottom: 14px; border-bottom: 1px solid var(--line, #dfe4e8); }
 .builder-section-editor-actions { display: flex; align-items: center; gap: 12px; }
 .builder-section-grid { display: grid; grid-template-columns: minmax(240px, .82fr) minmax(290px, 1.18fr); gap: 16px; }
@@ -3616,7 +3618,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-empty-workbench h3 { margin: 2px 0 6px; }
 .builder-empty-workbench .muted { max-width: 360px; }
 .builder-autosave-hint { color: var(--muted, #667085); font-size: 11px; }
-.builder-custom-exercise-button { margin: -4px 0 12px; font-size: 13px; }
+.builder-custom-exercise-button { margin: -4px 0 12px; padding: 9px 12px; border: 1px solid #287e77; border-radius: 6px; background: #e7f5f2; color: #1f6f68; font-size: 13px; }
+.builder-section-editor-actions .plain-button, .builder-custom-exercise-button { transition: transform 120ms ease, background 120ms ease; }
+.builder-section-editor-actions .plain-button:active, .builder-custom-exercise-button:active, .builder-exercise-result:active { transform: translateY(1px); }
 .builder-custom-exercise-form { display: grid; gap: 12px; }
 .builder-custom-exercise-form .search-field { margin: 0; }
 .builder-upload-note { margin: 0; color: var(--muted, #667085); font-size: 12px; line-height: 1.4; }
@@ -3666,5 +3670,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-item-dose { margin-left: 0; }
   .builder-modal-overlay { padding: 12px; align-items: end; }
   .builder-compact-modal, .builder-structure-modal, .builder-info-modal { width: 100%; max-height: 88dvh; }
+  .builder-section-overlay { padding: 12px; align-items: end; }
+  .builder-section-modal { width: 100%; max-height: 90dvh; }
   .builder-session-modal-form, .builder-schema-tree { grid-template-columns: 1fr; }
 }
