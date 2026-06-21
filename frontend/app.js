@@ -547,7 +547,7 @@ function handleContentClick(event) {
 
   const type = action.dataset.action;
   if (type.startsWith("builder-")) {
-    handleBuilderAction(action);
+    void handleBuilderAction(action).catch(renderBuilderError);
     return;
   }
   if (type === "back") {
@@ -1749,11 +1749,22 @@ async function handleBuilderAction(action) {
     return;
   }
   if (type === "builder-move-item") {
-    state.builder.draft = await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}/move`, {
-      method: "POST",
-      body: JSON.stringify({ direction: action.dataset.direction }),
-    });
+    const node = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
+    const currentIndex = node?.items.findIndex((item) => item.id === action.dataset.itemId) ?? -1;
+    const targetIndex = currentIndex + (action.dataset.direction === "up" ? -1 : 1);
+    if (!node || currentIndex < 0 || targetIndex < 0 || targetIndex >= node.items.length) return;
+    [node.items[currentIndex], node.items[targetIndex]] = [node.items[targetIndex], node.items[currentIndex]];
     renderBuilder();
+    try {
+      state.builder.draft = await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}/move`, {
+        method: "POST",
+        body: JSON.stringify({ direction: action.dataset.direction }),
+      });
+      renderBuilder();
+    } catch (error) {
+      await refreshBuilderDraft();
+      throw error;
+    }
     return;
   }
   if (type === "builder-delete-item") {
