@@ -3541,7 +3541,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-athlete-trigger strong, .builder-athlete-trigger small, .builder-athlete-option strong, .builder-athlete-option small { display: block; }
 .builder-athlete-trigger small, .builder-athlete-option small { margin-top: 3px; color: var(--muted, #667085); font-size: 12px; }
 .builder-athlete-trigger-icon, .builder-athlete-avatar { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; object-position: center top; background: #e7f5f2; display: grid; place-items: center; color: #287e77; font-weight: 800; }
-.builder-athlete-overlay, .builder-section-overlay { position: fixed; inset: 0; z-index: 35; display: grid; place-items: center; padding: 24px; }
+.builder-athlete-overlay, .builder-section-overlay { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; }
 .builder-athlete-backdrop, .builder-section-backdrop { position: absolute; inset: 0; border: 0; background: rgba(13, 27, 36, .46); cursor: default; }
 .builder-athlete-picker, .builder-section-panel { position: relative; z-index: 1; width: min(620px, 96vw); max-height: min(760px, 88dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
 .builder-athlete-options { display: grid; gap: 8px; max-height: 430px; overflow: auto; margin-top: 10px; padding-right: 2px; }
@@ -3666,31 +3666,30 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-session span:last-child { flex: 0 0 auto; white-space: nowrap; }
   .builder-session-actions { justify-content: flex-end; flex-wrap: wrap; padding: 0 4px 3px; }
   .builder-session-actions .text-action { min-height: 32px; padding: 6px 4px; }
-  .builder-athlete-overlay, .builder-section-overlay { padding: 12px; align-items: end; }
+  .builder-athlete-overlay { padding: 12px; align-items: end; }
   .builder-athlete-picker, .builder-section-panel { width: 100%; max-height: 88dvh; }
   .builder-start { padding-top: 0; }
   .builder-details-row { grid-template-columns: 1fr; }
   .builder-program-bar, .builder-block-creator { display: grid; grid-template-columns: 1fr; }
   .builder-program-actions { padding-top: 0; }
   .builder-block-creator .builder-add-block { width: 100%; }
-  .builder-section-overlay { padding: 0; align-items: stretch; }
-  .builder-section-modal { width: 100vw; min-height: 100dvh; max-height: 100dvh; padding: 16px 14px 24px; border-radius: 0; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; }
+  .builder-section-overlay { z-index: 950; padding: 8px; align-items: end; }
+  .builder-section-modal { width: min(560px, 100%); min-height: 0; max-height: 92dvh; padding: 14px; border-radius: 8px; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; }
   .builder-section-modal .builder-section-panel { min-width: 0; }
-  .builder-section-modal .builder-section-panel-head { position: sticky; top: -16px; z-index: 2; margin: -16px -14px 16px; padding: 16px 14px 12px; background: #fff; }
+  .builder-section-modal .builder-section-panel-head { position: sticky; top: -14px; z-index: 2; margin: -14px -14px 14px; padding: 14px 14px 11px; background: #fff; }
   .builder-section-editor-actions { flex: 0 0 auto; }
   .builder-section-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .builder-section-added { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--line, #dfe4e8); }
-  .builder-exercise-results { max-height: min(42dvh, 340px); overflow-x: hidden; }
+  .builder-exercise-results { max-height: min(27dvh, 220px); overflow-x: hidden; }
   .builder-exercise-result { min-width: 0; align-items: flex-start; }
   .builder-exercise-result > * { min-width: 0; }
   .builder-exercise-result strong, .builder-exercise-result small { overflow-wrap: anywhere; }
+  .builder-exercise-thumb { flex: 0 0 52px; object-position: center top; }
   .builder-item-head { grid-template-columns: 60px minmax(0, 1fr); }
   .builder-added-exercise-media { width: 60px; height: 48px; }
   .builder-added-exercise-image, .builder-added-exercise-fallback { width: 60px; height: 48px; }
   .builder-item-dose { margin-left: 0; }
   .builder-modal-overlay { padding: 12px; align-items: end; }
   .builder-compact-modal, .builder-structure-modal, .builder-info-modal { width: 100%; max-height: 88dvh; }
-  .builder-section-overlay { padding: 12px; align-items: end; }
-  .builder-section-modal { width: 100%; max-height: 90dvh; }
   .builder-session-modal-form, .builder-schema-tree { grid-template-columns: 1fr; }
 }
