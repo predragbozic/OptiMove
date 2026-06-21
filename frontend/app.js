@@ -1292,7 +1292,7 @@ function renderBuilder() {
           <form class="builder-form builder-create-form" data-builder-form="create">
             <div class="builder-plan-type-control" role="group" aria-label="Plan type"><button class="${isWeekly ? "" : "is-active"}" type="button" data-action="builder-set-plan-type" data-plan-type="program">Program or template</button><button class="${isWeekly ? "is-active" : ""}" type="button" data-action="builder-set-plan-type" data-plan-type="weekly">Weekly plan</button></div>
             <div class="builder-details-row">
-              <label class="search-field"><span>${isWeekly ? "Weekly plan name" : "Program name"}</span><input name="name" required placeholder="${isWeekly ? "e.g. Match week" : "e.g. Preseason strength block"}"></label>
+              <label class="search-field"><span>${isWeekly ? "Weekly plan name (optional)" : "Program name"}</span><input name="name" ${isWeekly ? "" : "required"} placeholder="${isWeekly ? "e.g. Match week" : "e.g. Preseason strength block"}"></label>
               <div class="builder-metadata-grid builder-setup-controls">
                 <label class="search-field"><span>Color</span><input name="color" type="color" value="#287e77"></label>
                 <label class="search-field"><span>Icon</span><select name="iconUrl">${builderIconOptions()}</select></label>

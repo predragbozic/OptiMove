@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { query } from "../db.js";
+import { pool, query } from "../db.js";
 
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
@@ -14,34 +14,59 @@ router.get("/plans/:planId", async (req, res, next) => {
 });
 
 router.post("/plans", async (req, res, next) => {
+  let client;
   try {
-    const name = text(req.body?.name);
+    const requestedName = text(req.body?.name);
     const athleteExternalId = text(req.body?.athleteId);
     const planType = text(req.body?.planType) === "weekly" ? "weekly" : "program";
     const weekStart = planType === "weekly" ? normalizedWeekStart(req.body?.weekStart) : null;
     // An unassigned program draft is the reusable-template workflow. Weekly
     // plans are always assigned to one athlete and one calendar week.
     const isTemplate = planType === "program" && !athleteExternalId;
-    if (!name) return res.status(400).json({ error: "Program name is required." });
+    if (planType === "program" && !requestedName) return res.status(400).json({ error: "Program name is required." });
     if (planType === "weekly" && !athleteExternalId) return res.status(400).json({ error: "Choose an athlete for a weekly plan." });
     if (planType === "weekly" && !weekStart) return res.status(400).json({ error: "Choose a valid date for the weekly plan." });
+    const name = requestedName || `Weekly plan ${weekStart}`;
     const athlete = athleteExternalId ? await findAthlete(athleteExternalId) : null;
     if (athleteExternalId && !athlete) return res.status(404).json({ error: "Athlete not found." });
+    client = await pool.connect();
+    await client.query("begin");
     if (planType === "weekly") {
-      const existing = await query(
-        "select 1 from plans.plans where plan_type = 'weekly' and athlete_id = $1 and week_start = $2 limit 1",
+      const existing = await client.query(
+        `select p.id, p.created_by_user_id, p.source_type, p.status, count(pd.id)::int as day_count
+         from plans.plans p left join plans.plan_days pd on pd.plan_id = p.id
+         where p.plan_type = 'weekly' and p.athlete_id = $1 and p.week_start = $2
+         group by p.id, p.created_by_user_id, p.source_type, p.status
+         limit 1`,
         [athlete.id, weekStart],
       );
-      if (existing.rowCount) return res.status(409).json({ error: "This athlete already has a weekly plan for that week." });
+      const existingPlan = existing.rows[0];
+      if (existingPlan?.day_count === 0 && existingPlan.source_type === "builder" && existingPlan.status === "draft" && String(existingPlan.created_by_user_id) === String(req.user.id)) {
+        await client.query("delete from plans.plans where id = $1", [existingPlan.id]);
+      } else if (existingPlan) {
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return res.status(409).json({ error: "This athlete already has a weekly plan for that week." });
+      }
     }
-    const created = await query(
+    const created = await client.query(
       `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, week_start)
        values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, 'draft', 'builder', $9) returning id`,
       [planType, req.user.id, athlete?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), isTemplate, weekStart],
     );
-    if (planType === "weekly") await createWeeklyDays(created.rows[0].id, weekStart);
+    if (planType === "weekly") await createWeeklyDays(client, created.rows[0].id, weekStart);
+    await client.query("commit");
+    client.release();
+    client = null;
     res.status(201).json(await buildDraft(await getEditablePlan(req.user, created.rows[0].id)));
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+      client.release();
+    }
+    next(error);
+  }
 });
 
 router.post("/plans/:planId/submit", async (req, res, next) => {
@@ -395,11 +420,11 @@ async function nextNodeOrder(sessionId, parentId) {
   return Number(result.rows[0].next_value);
 }
 
-async function createWeeklyDays(planId, weekStart) {
+async function createWeeklyDays(client, planId, weekStart) {
   for (let index = 0; index < WEEKLY_DAY_NAMES.length; index += 1) {
-    await query(
+    await client.query(
       `insert into plans.plan_days (plan_id, date, day_order, block_index, block_order, block_name, block_type)
-       values ($1, $2::date + $3, $4, $4, $4, $5, 'session')`,
+       values ($1, $2::date + $3::integer, $4::numeric, $4::integer, $4::numeric, $5, 'session')`,
       [planId, weekStart, index, index + 1, WEEKLY_DAY_NAMES[index]],
     );
   }
