@@ -3611,6 +3611,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-item-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .builder-item-actions button[disabled] { color: #aab4bc; cursor: default; }
 .builder-added-exercise-image, .builder-added-exercise-fallback { width: 68px; height: 52px; border-radius: 5px; object-fit: cover; background: #eef2f4; }
+.builder-added-exercise-media { width: 68px; height: 52px; padding: 0; border: 0; border-radius: 5px; background: #eef2f4; cursor: pointer; overflow: hidden; }
+.builder-added-exercise-media .builder-added-exercise-image { display: block; }
+.builder-added-exercise-media:hover { outline: 2px solid #287e77; outline-offset: 1px; }
 .builder-added-exercise-fallback { display: grid; place-items: center; color: var(--muted, #667085); font-size: 10px; font-weight: 700; }
 .builder-item .search-field { margin: 0; }
 .builder-item-dose { margin-left: 78px; }

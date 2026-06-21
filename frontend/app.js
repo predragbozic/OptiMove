@@ -1443,7 +1443,7 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId) {
   return nodes.map((node) => `
     <div class="builder-node builder-node-${escapeAttr(node.type)}">
       <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
-        <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${escapeHtml(exerciseNodeLabel(node.type))}</small>
+        <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${escapeHtml(exerciseNodeLabel(node.type))}${node.type === "section" ? ` - ${node.items.length} exercise${node.items.length === 1 ? "" : "s"}` : ""}</small>
       </button>
       ${renderBuilderNodeTree(session, node.id, selectedNodeId)}
     </div>
@@ -1589,7 +1589,7 @@ function renderBuilderItems(node) {
   return `<div class="builder-items">${node.items.map((item, index) => `
     <form class="builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}">
       <div class="builder-item-head">
-        ${item.imageUrl ? renderImage(item.imageUrl, "builder-added-exercise-image") : `<span class="builder-added-exercise-fallback">Exercise</span>`}
+        ${item.imageUrl || item.videoUrl ? `<button type="button" class="builder-added-exercise-media" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}">${item.imageUrl ? renderMediaThumb(item.imageUrl, "builder-added-exercise-image") : `<span class="builder-added-exercise-fallback">Video</span>`}</button>` : `<span class="builder-added-exercise-fallback">Exercise</span>`}
         <div><strong>${escapeHtml(item.title || "Exercise")}</strong><div class="builder-item-actions"><button class="text-action" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" ${index === 0 ? "disabled" : ""}>Move up</button><button class="text-action" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" ${index === node.items.length - 1 ? "disabled" : ""}>Move down</button><button class="text-action danger-action" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}">Remove</button></div></div>
       </div>
       <div class="builder-dose-inputs builder-item-dose">
