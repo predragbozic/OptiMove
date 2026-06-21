@@ -8,8 +8,8 @@ router.get("/", async (req, res, next) => {
     const search = String(req.query.search || "").trim();
     const limit = Math.min(Number(req.query.limit || 100), 500);
     const queryLimit = limit + 1;
-    const params = [];
-    let where = "where e.is_active = true";
+    const params = [req.user.id];
+    let where = "where e.is_active = true and (e.owner_scope = 'system' or e.owner_user_id = $1)";
 
     if (search) {
       params.push(`%${search}%`);

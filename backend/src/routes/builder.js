@@ -153,6 +153,31 @@ router.post("/nodes/:nodeId/exercises", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.post("/nodes/:nodeId/custom-exercise", async (req, res, next) => {
+  try {
+    const node = await getEditableNode(req.user, req.params.nodeId);
+    if (!node) return res.status(404).json({ error: "Program node not found" });
+    if (node.node_type !== "section") return res.status(400).json({ error: "Exercises can only be added to an exercise section." });
+    const name = text(req.body?.name);
+    if (!name) return res.status(400).json({ error: "Custom exercise name is required." });
+    const created = await query(
+      `insert into library.exercises (owner_scope, owner_user_id, created_by_user_id, exercise_code, slug, name, instruction, image_url, video_url, is_active)
+       values ('user', $1, $1, concat('CUSTOM-', substring(gen_random_uuid()::text from 1 for 8)), concat('custom-', gen_random_uuid()), $2, $3, $4, $5, true)
+       returning id, name, instruction, image_url, video_url`,
+      [req.user.id, name, nullableText(req.body?.instruction), nullableText(req.body?.imageUrl), nullableText(req.body?.videoUrl)],
+    );
+    const exercise = created.rows[0];
+    const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order");
+    await query(
+      `insert into plans.plan_items (plan_session_id, plan_node_id, item_type, exercise_id, title, description, image_url, video_url, sets, reps, load, item_order, exercise_order, section_name, section_order)
+       values ($1, $2, 'exercise', $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13)`,
+      [node.plan_session_id, node.id, exercise.id, exercise.name, exercise.instruction, exercise.image_url, exercise.video_url,
+        nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order, node.name, node.node_order],
+    );
+    res.status(201).json(await buildDraft(node.plan));
+  } catch (error) { next(error); }
+});
+
 router.post("/nodes/:nodeId/copy", async (req, res, next) => {
   try {
     const source = await getEditableNode(req.user, req.params.nodeId);
@@ -172,6 +197,28 @@ router.patch("/items/:itemId", async (req, res, next) => {
     await query(
       `update plans.plan_items set sets = $2, reps = $3, load = $4, description = $5, updated_at = now() where id = $1`,
       [item.id, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), nullableText(req.body?.description)],
+    );
+    res.json(await buildDraft(item.plan));
+  } catch (error) { next(error); }
+});
+
+router.post("/items/:itemId/move", async (req, res, next) => {
+  try {
+    const item = await getEditableItem(req.user, req.params.itemId);
+    if (!item) return res.status(404).json({ error: "Program item not found" });
+    const direction = text(req.body?.direction);
+    if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: "Move direction is required." });
+    const comparator = direction === 'up' ? '<' : '>';
+    const sort = direction === 'up' ? 'desc' : 'asc';
+    const neighborResult = await query(
+      `select id, item_order from plans.plan_items where plan_node_id = $1 and item_order ${comparator} $2 order by item_order ${sort} limit 1`,
+      [item.plan_node_id, item.item_order],
+    );
+    const neighbor = neighborResult.rows[0];
+    if (!neighbor) return res.json(await buildDraft(item.plan));
+    await query(
+      `update plans.plan_items set item_order = case when id = $1 then $2 when id = $3 then $4 end, updated_at = now() where id in ($1, $3)`,
+      [item.id, neighbor.item_order, neighbor.id, item.item_order],
     );
     res.json(await buildDraft(item.plan));
   } catch (error) { next(error); }
@@ -299,9 +346,9 @@ async function getEditableNode(user, nodeId) {
 }
 
 async function getEditableItem(user, itemId) {
-  const result = await query("select pi.id, p.id as plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id join plans.plans p on p.id = pd.plan_id where pi.id = $1 and p.created_by_user_id = $2", [itemId, user.id]);
+  const result = await query("select pi.id, pi.plan_node_id, pi.item_order, p.id as plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id join plans.plans p on p.id = pd.plan_id where pi.id = $1 and p.created_by_user_id = $2", [itemId, user.id]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(user, row.plan_id); return plan ? { id: row.id, plan } : null;
+  const plan = await getEditablePlan(user, row.plan_id); return plan ? { id: row.id, plan_node_id: row.plan_node_id, item_order: row.item_order, plan } : null;
 }
 
 async function findAthlete(externalId) {

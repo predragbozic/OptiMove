@@ -16,7 +16,7 @@ const state = {
   lastProgramBundle: null,
   lastTemplates: [],
   lastExerciseResults: [],
-  builder: { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "" },
+  builder: { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
   exerciseSearch: { term: "", limit: 30, hasMore: false },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
@@ -1323,14 +1323,12 @@ function renderBuilder() {
           <button class="plain-button" type="submit">Add block</button>
         </form>
       </section>
-      <div class="builder-layout">
+      <div class="builder-layout ${selectedNode?.type === "section" ? "has-section-workspace" : ""}">
         <section class="panel builder-outline">
           <div class="section-heading"><div><p class="eyebrow">Day and session structure</p><h3>Blocks and sessions</h3></div><button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session structure example"><span class="button-icon">i</span></button></div>
           ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id)).join("") : `<div class="empty">Add the first day or block to start structuring the program.</div>`}
         </section>
-        <section class="panel builder-picker builder-workbench">
-          ${selectedNode?.type === "section" ? renderBuilderSectionPanel(selectedNode) : `<div class="builder-empty-workbench"><p class="eyebrow">Section workspace</p><h3>Select a section</h3><p class="muted">Click a section to search the library and add exercises. Use Add session parts to create Domain, Category, or Section.</p></div>`}
-        </section>
+        ${selectedNode?.type === "section" ? `<section class="panel builder-picker builder-workbench">${renderBuilderSectionPanel(selectedNode)}</section>` : ""}
       </div>
       ${state.builder.sessionModalBlockId ? renderBuilderSessionModal(state.builder.sessionModalBlockId) : ""}
       ${state.builder.structureModalOpen && selectedSession ? renderBuilderStructureModal(selectedSession, selectedNode) : ""}
@@ -1397,7 +1395,7 @@ function renderBuilderStructureModal(session, selectedNode) {
     <div class="builder-modal-overlay">
       <button class="builder-modal-backdrop" type="button" data-action="builder-close-structure-modal" aria-label="Close session parts"></button>
       <section class="panel builder-structure-modal" role="dialog" aria-modal="true" aria-label="Add session parts">
-        <div class="builder-modal-head"><div><p class="eyebrow">${escapeHtml(sessionLabel(session))}</p><h3>Add session parts</h3><p class="muted">Build a path with Domain, Category, and Section. A Section can also be added directly.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-structure-modal" aria-label="Close"><span class="button-icon">x</span></button></div>
+        <div class="builder-modal-head"><div><p class="eyebrow">${escapeHtml(sessionLabel(session))}</p><h3>Add session parts</h3><p class="muted">Build a path with Exercise domain, Exercise category, and Exercise section. An Exercise section can also be added directly.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-structure-modal" aria-label="Close"><span class="button-icon">x</span></button></div>
         ${renderBuilderStructureEditor(session, selectedNode)}
       </section>
     </div>
@@ -1415,8 +1413,8 @@ function renderBuilderInfoModal(kind) {
           <div class="builder-schema"><div class="schema-level schema-program">Program</div><div class="schema-line"></div><div class="schema-level schema-block">MD-4 day block</div><div class="schema-line"></div><div class="schema-split"><span>Before training session</span><span>After training session</span></div></div>
           <p class="muted">A program can have one or many blocks. A block can represent a calendar day, a microcycle day, or any named unit.</p>
         ` : `
-          <div class="builder-schema-tree"><div><strong>Before training</strong><span>Domain: Power and potentiation</span><span>Category: Warm up or Power</span><span>Section: Mobility, Stability, Activation</span><span>Exercises: selected movements</span></div><div><strong>After training</strong><span>Category: Strength</span><span>Section: Warm up for strength, Strength legs and core</span><span>Category: Sauna or Compressive leggings</span></div></div>
-          <p class="muted">Not every path needs all levels. You can add a Section directly to a session, directly below a Domain, or below a Category. Only Sections contain exercises.</p>
+          <div class="builder-schema-tree"><div class="schema-before"><strong>Before training session</strong><span>Exercise domain: Power and potentiation</span><span>Exercise category: Warm up or Power</span><span>Exercise section: Mobility, Stability, Activation</span><span>Exercises: selected movements</span></div><div class="schema-after"><strong>After training session</strong><span>Exercise category: Strength</span><span>Exercise section: Warm up for strength, Strength legs and core</span><span>Exercise category: Sauna or Compressive leggings</span></div></div>
+          <p class="muted">Not every path needs all levels. You can add an Exercise section directly to a session, directly below an Exercise domain, or below an Exercise category. Only Exercise sections contain exercises.</p>
         `}
       </section>
     </div>
@@ -1445,7 +1443,7 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId) {
   return nodes.map((node) => `
     <div class="builder-node builder-node-${escapeAttr(node.type)}">
       <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
-        <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${escapeHtml(node.type)}</small>
+        <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${escapeHtml(exerciseNodeLabel(node.type))}</small>
       </button>
       ${renderBuilderNodeTree(session, node.id, selectedNodeId)}
     </div>
@@ -1515,11 +1513,12 @@ function renderBuilderSectionPanel(selectedNode) {
   const query = state.builder.exerciseQuery;
   return `
     <div class="builder-section-panel" aria-label="Section exercise editor">
-      <div class="builder-section-panel-head"><div><p class="eyebrow">Section editor</p><h3>${escapeHtml(selectedNode.name)}</h3><p class="muted">Search the library and add exercises to this section.</p></div><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete section</button></div>
+      <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p><h3>${escapeHtml(selectedNode.name)}</h3><p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions"><button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete</button></div></div>
       <div class="builder-section-grid">
         <section class="builder-section-library">
           <div class="builder-panel-label">Exercise library</div>
           <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
+          <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
           <div class="builder-dose-inputs builder-quick-dose">
             <label><span>Sets</span><input data-builder-new-dose name="sets" placeholder="3"></label>
             <label><span>Reps</span><input data-builder-new-dose name="reps" placeholder="8"></label>
@@ -1539,22 +1538,48 @@ function renderBuilderSectionPanel(selectedNode) {
           ${renderBuilderItems(selectedNode) || `<div class="empty">Choose exercises from the library to build this section.</div>`}
         </section>
       </div>
+      ${state.builder.customExerciseOpen ? renderCustomExerciseModal(selectedNode) : ""}
     </div>
   `;
 }
 
 function nodeTypeOptions(parentType = "") {
   const allowed = parentType === "domain" ? ["category", "section"] : parentType === "category" ? ["section"] : parentType === "section" ? [] : ["domain", "category", "section"];
-  return allowed.map((type) => `<option value="${type}">${type[0].toUpperCase()}${type.slice(1)}</option>`).join("") || `<option value="section">Section</option>`;
+  return allowed.map((type) => `<option value="${type}">${exerciseNodeLabel(type)}</option>`).join("") || `<option value="section">Exercise section</option>`;
+}
+
+function renderCustomExerciseModal(section) {
+  return `
+    <div class="builder-modal-overlay">
+      <button class="builder-modal-backdrop" type="button" data-action="builder-close-custom-exercise" aria-label="Close custom exercise"></button>
+      <section class="panel builder-compact-modal builder-custom-exercise-modal" role="dialog" aria-modal="true" aria-label="Add custom exercise">
+        <div class="builder-modal-head"><div><p class="eyebrow">${escapeHtml(section.name)}</p><h3>Add custom exercise</h3><p class="muted">This creates a private exercise in your library and adds it to this Exercise section.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-custom-exercise" aria-label="Close"><span class="button-icon">x</span></button></div>
+        <form class="builder-custom-exercise-form" data-builder-form="add-custom-exercise" data-node-id="${escapeAttr(section.id)}">
+          <label class="search-field"><span>Exercise name</span><input name="name" required placeholder="e.g. Tempo running - custom"></label>
+          <label class="search-field"><span>Instruction</span><textarea name="instruction" rows="3" placeholder="Coaching instruction"></textarea></label>
+          <div class="builder-dose-inputs"><label><span>Sets</span><input name="sets" placeholder="3"></label><label><span>Reps</span><input name="reps" placeholder="8"></label><label><span>Load</span><input name="load" placeholder="Optional"></label></div>
+          <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" placeholder="https://..."></label>
+          <label class="search-field"><span>Video URL</span><input name="videoUrl" type="url" placeholder="https://..."></label>
+          <p class="builder-upload-note">File upload will be added when Supabase Storage is connected.</p>
+          <p class="builder-error" aria-live="polite"></p>
+          <button class="plain-button" type="submit">Add custom exercise</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function exerciseNodeLabel(type) {
+  return ({ domain: "Exercise domain", category: "Exercise category", section: "Exercise section" })[type] || type;
 }
 
 function renderBuilderItems(node) {
   if (!node.items.length) return "";
-  return `<div class="builder-items">${node.items.map((item) => `
+  return `<div class="builder-items">${node.items.map((item, index) => `
     <form class="builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}">
       <div class="builder-item-head">
         ${item.imageUrl ? renderImage(item.imageUrl, "builder-added-exercise-image") : `<span class="builder-added-exercise-fallback">Exercise</span>`}
-        <div><strong>${escapeHtml(item.title || "Exercise")}</strong><button class="text-action" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}">Remove</button></div>
+        <div><strong>${escapeHtml(item.title || "Exercise")}</strong><div class="builder-item-actions"><button class="text-action" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" ${index === 0 ? "disabled" : ""}>Move up</button><button class="text-action" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" ${index === node.items.length - 1 ? "disabled" : ""}>Move down</button><button class="text-action danger-action" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}">Remove</button></div></div>
       </div>
       <div class="builder-dose-inputs builder-item-dose">
         <label><span>Sets</span><input name="sets" value="${escapeAttr(item.sets || "")}"></label>
@@ -1603,6 +1628,22 @@ async function handleBuilderAction(action) {
   }
   if (type === "builder-close-structure-modal") {
     state.builder.structureModalOpen = false;
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-open-custom-exercise") {
+    state.builder.customExerciseOpen = true;
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-close-custom-exercise") {
+    state.builder.customExerciseOpen = false;
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-finish-section") {
+    state.builder.selectedNodeId = "";
+    state.builder.customExerciseOpen = false;
     renderBuilder();
     return;
   }
@@ -1696,6 +1737,14 @@ async function handleBuilderAction(action) {
     }
     return;
   }
+  if (type === "builder-move-item") {
+    state.builder.draft = await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}/move`, {
+      method: "POST",
+      body: JSON.stringify({ direction: action.dataset.direction }),
+    });
+    renderBuilder();
+    return;
+  }
   if (type === "builder-delete-item") {
     if (!window.confirm("Remove this exercise from the program?")) return;
     await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`, { method: "DELETE" });
@@ -1762,6 +1811,10 @@ async function submitBuilderForm(form) {
   if (mode === "add-exercise") {
     if (!data.exerciseId) return;
     state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/exercises`, { method: "POST", body: JSON.stringify(data) });
+  }
+  if (mode === "add-custom-exercise") {
+    state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/custom-exercise`, { method: "POST", body: JSON.stringify(data) });
+    state.builder.customExerciseOpen = false;
   }
   if (mode === "update-item") {
     state.builder.draft = await api(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(data) });
