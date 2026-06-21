@@ -16,7 +16,7 @@ const state = {
   lastProgramBundle: null,
   lastTemplates: [],
   lastExerciseResults: [],
-  builder: { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
+  builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
   exerciseSearch: { term: "", limit: 30, hasMore: false },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
@@ -171,6 +171,11 @@ async function handleContentSubmit(event) {
 }
 
 function handleContentInput(event) {
+  const weekStartInput = event.target.closest("[data-builder-week-start]");
+  if (weekStartInput) {
+    state.builder.weekStart = weekStartInput.value;
+    return;
+  }
   const input = event.target.closest("[data-builder-exercise-search]");
   if (!input) return;
   state.builder.exerciseQuery = input.value;
@@ -1276,28 +1281,33 @@ function renderBuilder() {
   els.toolbar.innerHTML = "";
   if (!draft) {
     const assignedAthlete = state.athletes.find((athlete) => String(athlete.athlete_id) === String(state.builder.createAthleteId));
+    const isWeekly = state.builder.planType === "weekly";
+    const weekStart = state.builder.weekStart || weekMondayIso(localDateIso());
     els.content.innerHTML = `
       <section class="content-section builder-start">
         <section class="panel builder-setup-card">
           <div class="section-heading">
-            <div><p class="eyebrow">Program builder</p><h3>Create program</h3><p class="muted">Assign an athlete, or leave it reusable as a template.</p></div>
+            <div><p class="eyebrow">Program builder</p><h3>${isWeekly ? "Create weekly plan" : "Create program"}</h3><p class="muted">${isWeekly ? "Choose an athlete and the week to plan." : "Assign an athlete, or leave it reusable as a template."}</p></div>
           </div>
           <form class="builder-form builder-create-form" data-builder-form="create">
+            <div class="builder-plan-type-control" role="group" aria-label="Plan type"><button class="${isWeekly ? "" : "is-active"}" type="button" data-action="builder-set-plan-type" data-plan-type="program">Program or template</button><button class="${isWeekly ? "is-active" : ""}" type="button" data-action="builder-set-plan-type" data-plan-type="weekly">Weekly plan</button></div>
             <div class="builder-details-row">
-              <label class="search-field"><span>Program name</span><input name="name" required placeholder="e.g. Preseason strength block"></label>
+              <label class="search-field"><span>${isWeekly ? "Weekly plan name" : "Program name"}</span><input name="name" required placeholder="${isWeekly ? "e.g. Match week" : "e.g. Preseason strength block"}"></label>
               <div class="builder-metadata-grid builder-setup-controls">
                 <label class="search-field"><span>Color</span><input name="color" type="color" value="#287e77"></label>
                 <label class="search-field"><span>Icon</span><select name="iconUrl">${builderIconOptions()}</select></label>
               </div>
             </div>
+            <input type="hidden" name="planType" value="${isWeekly ? "weekly" : "program"}">
             <input type="hidden" name="athleteId" value="${escapeAttr(state.builder.createAthleteId)}">
+            ${isWeekly ? `<label class="search-field builder-week-start"><span>Any date in the planned week</span><input name="weekStart" data-builder-week-start type="date" value="${escapeAttr(weekStart)}" required><small>The weekly plan will begin on Monday ${escapeHtml(formatDate(weekStart))}.</small></label>` : ""}
             <div class="builder-assignment-row"><span class="builder-field-label">Athlete</span><button class="builder-athlete-trigger" type="button" data-action="builder-open-athlete-picker">
-              ${assignedAthlete?.athlete_image_url || assignedAthlete?.image_url ? renderImage(assignedAthlete.athlete_image_url || assignedAthlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${assignedAthlete ? escapeHtml(initialsFor(assignedAthlete.athlete)) : "+"}</span>`}<span><strong>${escapeHtml(assignedAthlete?.athlete || "Choose athlete or template")}</strong>${assignedAthlete ? `<small>ID ${escapeHtml(assignedAthlete.athlete_id)}</small>` : ""}</span><span class="button-icon">></span>
+              ${assignedAthlete?.athlete_image_url || assignedAthlete?.image_url ? renderImage(assignedAthlete.athlete_image_url || assignedAthlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${assignedAthlete ? escapeHtml(initialsFor(assignedAthlete.athlete)) : "+"}</span>`}<span><strong>${escapeHtml(assignedAthlete?.athlete || (isWeekly ? "Choose athlete" : "Choose athlete or template"))}</strong>${assignedAthlete ? `<small>ID ${escapeHtml(assignedAthlete.athlete_id)}</small>` : ""}</span><span class="button-icon">></span>
             </button></div>
             ${state.builder.showNote ? `<label class="search-field"><span>Program note</span><textarea name="note" rows="2" placeholder="Optional coaching note"></textarea></label>` : `<button class="text-action builder-note-toggle" type="button" data-action="builder-toggle-note">Add note</button>`}
-            <p class="builder-private-note">Private to your coach account until sharing and publishing are configured.</p>
+            <p class="builder-private-note">${isWeekly ? "Weekly plans are always assigned to the selected athlete." : "Private to your coach account until sharing and publishing are configured."}</p>
             <p class="builder-error" aria-live="polite"></p>
-            <button class="plain-button builder-create-button" type="submit">Create draft</button>
+            <button class="plain-button builder-create-button" type="submit">${isWeekly ? "Create weekly plan" : "Create draft"}</button>
           </form>
         </section>
         ${state.builder.athletePickerOpen ? renderBuilderAthletePicker() : ""}
@@ -1308,13 +1318,14 @@ function renderBuilder() {
 
   const selectedSession = findBuilderSession(draft, state.builder.selectedSessionId);
   const selectedNode = findBuilderNode(draft, state.builder.selectedNodeId);
+  const isWeekly = draft.plan.planType === "weekly";
   els.content.innerHTML = `
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
-        <div><p class="eyebrow">${draft.plan.isTemplate ? "Reusable template" : "Athlete program"}</p><h3>${escapeHtml(draft.plan.name)}</h3><p class="muted">${escapeHtml(draft.plan.athleteName || "Private coach template")}</p></div>
+        <div><p class="eyebrow">${isWeekly ? `Weekly plan · ${formatDate(draft.plan.weekStart)}` : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><h3>${escapeHtml(draft.plan.name)}</h3><p class="muted">${escapeHtml(draft.plan.athleteName || "Private coach template")}</p></div>
         <div class="builder-program-actions"><span class="item-badge">${escapeHtml(draft.plan.status || "draft")}</span>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">Save and finish</button>` : `<span class="builder-finished-label">Saved</span>`}<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button></div>
       </header>
-      <section class="builder-block-creator">
+      ${isWeekly ? "" : `<section class="builder-block-creator">
         <div><p class="eyebrow">Program structure</p><strong>Add a day or block</strong></div>
         <button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program structure example"><span class="button-icon">i</span></button>
         <form class="builder-inline-form builder-add-block" data-builder-form="add-block">
@@ -1322,11 +1333,11 @@ function renderBuilder() {
           <p class="builder-error" aria-live="polite"></p>
           <button class="plain-button" type="submit">Add block</button>
         </form>
-      </section>
+      </section>`}
       <div class="builder-layout">
         <section class="panel builder-outline">
-          <div class="section-heading"><div><p class="eyebrow">Day and session structure</p><h3>Blocks and sessions</h3></div><button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session structure example"><span class="button-icon">i</span></button></div>
-          ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id)).join("") : `<div class="empty">Add the first day or block to start structuring the program.</div>`}
+          <div class="section-heading"><div><p class="eyebrow">Day and session structure</p><h3>${isWeekly ? "Seven-day plan" : "Blocks and sessions"}</h3></div><button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session structure example"><span class="button-icon">i</span></button></div>
+          ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id, isWeekly)).join("") : `<div class="empty">Add the first day or block to start structuring the program.</div>`}
         </section>
       </div>
       ${state.builder.sessionModalBlockId ? renderBuilderSessionModal(state.builder.sessionModalBlockId) : ""}
@@ -1343,9 +1354,9 @@ function renderBuilderAthletePicker() {
       <button class="builder-athlete-backdrop" type="button" data-action="builder-close-athlete-picker" aria-label="Close athlete picker"></button>
       <section class="panel builder-athlete-picker" role="dialog" aria-modal="true" aria-label="Assign athlete">
         <div class="builder-section-panel-head"><div><p class="eyebrow">Draft assignment</p><h3>Assign an athlete</h3><p class="muted">Choose an athlete or keep this draft reusable.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-athlete-picker" aria-label="Close athlete picker"><span class="button-icon">×</span></button></div>
-        <button class="builder-athlete-option ${state.builder.createAthleteId ? "" : "is-selected"}" type="button" data-action="builder-select-athlete" data-athlete-id="">
+        ${state.builder.planType === "weekly" ? "" : `<button class="builder-athlete-option ${state.builder.createAthleteId ? "" : "is-selected"}" type="button" data-action="builder-select-athlete" data-athlete-id="">
           <span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Not assigned to an athlete</small></span>
-        </button>
+        </button>`}
         <div class="builder-athlete-options">
           ${state.athletes.map((athlete) => `
             <button class="builder-athlete-option ${String(athlete.athlete_id) === String(state.builder.createAthleteId) ? "is-selected" : ""}" type="button" data-action="builder-select-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
@@ -1421,10 +1432,10 @@ function renderBuilderInfoModal(kind) {
   `;
 }
 
-function renderBuilderBlock(block, selectedSessionId, selectedNodeId) {
+function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly = false) {
   return `
     <article class="builder-block">
-      <div class="builder-block-head"><div><strong>${escapeHtml(block.name || `Block ${block.index}`)}</strong>${block.note ? `<span>${escapeHtml(block.note)}</span>` : ""}</div><button class="text-action danger-action" type="button" data-action="builder-delete-block" data-block-id="${escapeAttr(block.id)}">Delete</button></div>
+      <div class="builder-block-head"><div><strong>${escapeHtml(block.name || `Block ${block.index}`)}</strong>${block.date ? `<span>${escapeHtml(formatDate(block.date))}</span>` : block.note ? `<span>${escapeHtml(block.note)}</span>` : ""}</div>${isWeekly ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-block" data-block-id="${escapeAttr(block.id)}">Delete</button>`}</div>
       <div class="builder-sessions">
         ${block.sessions.length ? block.sessions.map((session) => `
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
@@ -1617,6 +1628,13 @@ function sessionLabel(session) {
 
 async function handleBuilderAction(action) {
   const type = action.dataset.action;
+  if (type === "builder-set-plan-type") {
+    state.builder.planType = action.dataset.planType === "weekly" ? "weekly" : "program";
+    state.builder.weekStart ||= weekMondayIso(localDateIso());
+    state.builder.athletePickerOpen = false;
+    renderBuilder();
+    return;
+  }
   if (type === "builder-open-info") {
     state.builder.infoOpen = action.dataset.info || "session";
     renderBuilder();
@@ -1807,6 +1825,8 @@ async function submitBuilderForm(form) {
     state.builder.athletePickerOpen = false;
     state.builder.sectionPickerOpen = false;
     state.builder.createAthleteId = "";
+    state.builder.planType = "program";
+    state.builder.weekStart = "";
     state.builder.addNodeOpen = false;
     await loadBuilderExercises();
     return;
@@ -2390,6 +2410,13 @@ function localDateIso(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function weekMondayIso(value) {
+  const date = new Date(`${String(value).slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return localDateIso();
+  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+  return localDateIso(date);
 }
 
 function monthStartIso(value) {

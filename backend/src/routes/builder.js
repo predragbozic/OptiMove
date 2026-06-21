@@ -3,6 +3,7 @@ import { query } from "../db.js";
 
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
+const WEEKLY_DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 router.get("/plans/:planId", async (req, res, next) => {
   try {
@@ -16,17 +17,29 @@ router.post("/plans", async (req, res, next) => {
   try {
     const name = text(req.body?.name);
     const athleteExternalId = text(req.body?.athleteId);
-    // An unassigned draft is the reusable-template workflow. An assigned draft
-    // belongs to the selected athlete and cannot silently become a template.
-    const isTemplate = !athleteExternalId;
+    const planType = text(req.body?.planType) === "weekly" ? "weekly" : "program";
+    const weekStart = planType === "weekly" ? normalizedWeekStart(req.body?.weekStart) : null;
+    // An unassigned program draft is the reusable-template workflow. Weekly
+    // plans are always assigned to one athlete and one calendar week.
+    const isTemplate = planType === "program" && !athleteExternalId;
     if (!name) return res.status(400).json({ error: "Program name is required." });
+    if (planType === "weekly" && !athleteExternalId) return res.status(400).json({ error: "Choose an athlete for a weekly plan." });
+    if (planType === "weekly" && !weekStart) return res.status(400).json({ error: "Choose a valid date for the weekly plan." });
     const athlete = athleteExternalId ? await findAthlete(athleteExternalId) : null;
     if (athleteExternalId && !athlete) return res.status(404).json({ error: "Athlete not found." });
+    if (planType === "weekly") {
+      const existing = await query(
+        "select 1 from plans.plans where plan_type = 'weekly' and athlete_id = $1 and week_start = $2 limit 1",
+        [athlete.id, weekStart],
+      );
+      if (existing.rowCount) return res.status(409).json({ error: "This athlete already has a weekly plan for that week." });
+    }
     const created = await query(
-      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type)
-       values ('program', $1, $2, $3, $4, $5, $6, 'private', $7, 'draft', 'builder') returning id`,
-      [req.user.id, athlete?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), isTemplate],
+      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, week_start)
+       values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, 'draft', 'builder', $9) returning id`,
+      [planType, req.user.id, athlete?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), isTemplate, weekStart],
     );
+    if (planType === "weekly") await createWeeklyDays(created.rows[0].id, weekStart);
     res.status(201).json(await buildDraft(await getEditablePlan(req.user, created.rows[0].id)));
   } catch (error) { next(error); }
 });
@@ -55,6 +68,7 @@ router.post("/plans/:planId/blocks", async (req, res, next) => {
   try {
     const plan = await requirePlan(req.user, req.params.planId, res);
     if (!plan) return;
+    if (plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
     const next = await nextOrder("plans.plan_days", "plan_id", plan.id, "block_order");
     await query(
       `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
@@ -69,6 +83,7 @@ router.delete("/blocks/:blockId", async (req, res, next) => {
   try {
     const block = await getEditableBlock(req.user, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
+    if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plan days cannot be deleted." });
     await deleteBlockTree(block.id);
     res.json(await buildDraft(block.plan));
   } catch (error) { next(error); }
@@ -235,7 +250,7 @@ router.delete("/items/:itemId", async (req, res, next) => {
 
 async function buildDraft(plan) {
   const result = await query(
-    `select pd.id as block_id, pd.block_index, pd.block_name, pd.block_type, pd.day_note,
+    `select pd.id as block_id, pd.block_index, pd.block_name, pd.block_type, pd.date, pd.day_order, pd.day_note,
             ps.id as session_id, ps.am_pm, ps.bta, ps.session_order,
             pn.id as node_id, pn.parent_id, pn.node_type, pn.name as node_name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order,
             pi.id as item_id, pi.exercise_id, pi.title, pi.description, pi.image_url, pi.video_url, pi.sets, pi.reps, pi.load, pi.item_order
@@ -248,7 +263,7 @@ async function buildDraft(plan) {
   );
   const blocks = new Map();
   result.rows.forEach((row) => {
-    if (!blocks.has(row.block_id)) blocks.set(row.block_id, { id: row.block_id, index: row.block_index, name: row.block_name, type: row.block_type, note: row.day_note, sessions: [] });
+    if (!blocks.has(row.block_id)) blocks.set(row.block_id, { id: row.block_id, index: row.block_index, name: row.block_name, type: row.block_type, date: row.date || "", dayOrder: Number(row.day_order || 0), note: row.day_note, sessions: [] });
     const block = blocks.get(row.block_id);
     if (!row.session_id) return;
     let session = block.sessions.find((value) => value.id === row.session_id);
@@ -261,7 +276,7 @@ async function buildDraft(plan) {
     }
     if (row.item_id) node.items.push({ id: row.item_id, exerciseId: row.exercise_id, title: row.title, description: row.description || "", imageUrl: row.image_url || "", videoUrl: row.video_url || "", sets: row.sets || "", reps: row.reps || "", load: row.load || "", itemOrder: Number(row.item_order || 0) });
   });
-  return { plan: { id: plan.id, name: plan.name, note: plan.note || "", iconUrl: plan.icon_url || "", color: plan.color || "", visibility: plan.visibility || "private", isTemplate: plan.is_template, athleteId: plan.athlete_source_external_id || plan.athlete_id || "", athleteName: plan.athlete_name || "", status: plan.status }, blocks: [...blocks.values()] };
+  return { plan: { id: plan.id, planType: plan.plan_type, weekStart: plan.week_start || "", name: plan.name, note: plan.note || "", iconUrl: plan.icon_url || "", color: plan.color || "", visibility: plan.visibility || "private", isTemplate: plan.is_template, athleteId: plan.athlete_source_external_id || plan.athlete_id || "", athleteName: plan.athlete_name || "", status: plan.status }, blocks: [...blocks.values()] };
 }
 
 async function copyNodeTree(sourceId, targetSessionId, targetParentId) {
@@ -313,10 +328,10 @@ async function deleteNodeTree(nodeId) {
 
 async function getEditablePlan(user, planId) {
   const result = await query(
-    `select p.id, p.name, p.note, p.icon_url, p.color, p.visibility, p.is_template, p.status, a.athlete_id, a.source_external_id as athlete_source_external_id,
+    `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.visibility, p.is_template, p.status, a.athlete_id, a.source_external_id as athlete_source_external_id,
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
-     where p.id = $1 and p.plan_type = 'program' and p.created_by_user_id = $2`, [planId, user.id],
+     where p.id = $1 and p.plan_type in ('program', 'weekly') and p.created_by_user_id = $2`, [planId, user.id],
   );
   return result.rows[0] || null;
 }
@@ -378,6 +393,25 @@ async function nextOrder(table, field, value, orderColumn) {
 async function nextNodeOrder(sessionId, parentId) {
   const result = await query("select coalesce(max(node_order), 0) + 1 as next_value from plans.plan_nodes where plan_session_id = $1 and parent_id is not distinct from $2", [sessionId, parentId]);
   return Number(result.rows[0].next_value);
+}
+
+async function createWeeklyDays(planId, weekStart) {
+  for (let index = 0; index < WEEKLY_DAY_NAMES.length; index += 1) {
+    await query(
+      `insert into plans.plan_days (plan_id, date, day_order, block_index, block_order, block_name, block_type)
+       values ($1, $2::date + $3, $4, $4, $4, $5, 'session')`,
+      [planId, weekStart, index, index + 1, WEEKLY_DAY_NAMES[index]],
+    );
+  }
+}
+
+function normalizedWeekStart(value) {
+  const raw = text(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const date = new Date(`${raw}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  return date.toISOString().slice(0, 10);
 }
 
 function text(value) { return String(value || "").trim(); }
