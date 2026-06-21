@@ -3540,7 +3540,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-athlete-trigger:hover, .builder-athlete-option:hover, .builder-athlete-option.is-selected { border-color: #287e77; background: #eef8f6; }
 .builder-athlete-trigger strong, .builder-athlete-trigger small, .builder-athlete-option strong, .builder-athlete-option small { display: block; }
 .builder-athlete-trigger small, .builder-athlete-option small { margin-top: 3px; color: var(--muted, #667085); font-size: 12px; }
-.builder-athlete-trigger-icon, .builder-athlete-avatar { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; background: #e7f5f2; display: grid; place-items: center; color: #287e77; font-weight: 800; }
+.builder-athlete-trigger-icon, .builder-athlete-avatar { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; object-position: center top; background: #e7f5f2; display: grid; place-items: center; color: #287e77; font-weight: 800; }
 .builder-athlete-overlay, .builder-section-overlay { position: fixed; inset: 0; z-index: 35; display: grid; place-items: center; padding: 24px; }
 .builder-athlete-backdrop, .builder-section-backdrop { position: absolute; inset: 0; border: 0; background: rgba(13, 27, 36, .46); cursor: default; }
 .builder-athlete-picker, .builder-section-panel { position: relative; z-index: 1; width: min(620px, 96vw); max-height: min(760px, 88dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
