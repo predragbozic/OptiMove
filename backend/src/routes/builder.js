@@ -77,6 +77,33 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.post("/plans/:planId/duplicate", async (req, res, next) => {
+  let client;
+  try {
+    const source = await getCopySource(req.params.planId);
+    if (!source) return res.status(404).json({ error: "Program or template not found." });
+    client = await pool.connect();
+    await client.query("begin");
+    const created = await client.query(
+      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days)
+       values ('program', $1, $2, $3, $4, $5, $6, 'private', $7, 'draft', 'builder', $8, $9)
+       returning id`,
+      [req.user.id, source.is_template ? null : source.athlete_id, `${source.name || "Program"} copy`, source.note, source.icon_url, source.color, source.is_template, source.start_date, source.duration_days],
+    );
+    await copyProgramTree(client, source.id, created.rows[0].id);
+    await client.query("commit");
+    client.release();
+    client = null;
+    res.status(201).json(await buildDraft(await getEditablePlan(req.user, created.rows[0].id)));
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+      client.release();
+    }
+    next(error);
+  }
+});
+
 router.delete("/plans/:planId", async (req, res, next) => {
   try {
     const plan = await requirePlan(req.user, req.params.planId, res);
@@ -315,6 +342,109 @@ async function buildDraft(plan) {
   return { plan: { id: plan.id, planType: plan.plan_type, weekStart: plan.week_start || "", name: plan.name, note: plan.note || "", iconUrl: plan.icon_url || "", color: plan.color || "", visibility: plan.visibility || "private", isTemplate: plan.is_template, athleteId: plan.athlete_source_external_id || plan.athlete_id || "", athleteName: plan.athlete_name || "", status: plan.status }, blocks: [...blocks.values()] };
 }
 
+async function copyProgramTree(client, sourcePlanId, targetPlanId) {
+  const days = await client.query("select * from plans.plan_days where plan_id = $1 order by block_order nulls last, block_index", [sourcePlanId]);
+  for (const day of days.rows) {
+    const createdDay = await client.query(
+      `insert into plans.plan_days (plan_id, date, day_note, day_order, block_index, block_name, block_type, block_order)
+       values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
+      [targetPlanId, day.date, day.day_note, day.day_order, day.block_index, day.block_name, day.block_type, day.block_order],
+    );
+    const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [day.id]);
+    for (const session of sessions.rows) {
+      const createdSession = await client.query(
+        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, $2, $3, $4) returning id",
+        [createdDay.rows[0].id, session.am_pm, session.bta, session.session_order],
+      );
+      const nodes = await client.query("select * from plans.plan_nodes where plan_session_id = $1 order by node_order", [session.id]);
+      if (nodes.rowCount) {
+        for (const root of nodes.rows.filter((node) => !node.parent_id)) {
+          await copyNodeTreeWithClient(client, root.id, createdSession.rows[0].id, null);
+        }
+      } else {
+        await copyLegacySession(client, session.id, createdSession.rows[0].id);
+      }
+    }
+  }
+}
+
+async function copyLegacySession(client, sourceSessionId, targetSessionId) {
+  const items = await client.query("select * from plans.plan_items where plan_session_id = $1 order by item_order", [sourceSessionId]);
+  const nodes = new Map();
+  for (const item of items.rows) {
+    let parentId = null;
+    if (item.domain_name) {
+      parentId = await ensureLegacyNode(client, nodes, targetSessionId, null, "domain", item.domain_name, item.domain_color, item.domain_icon_url, item.domain_short_note, item.domain_note);
+    }
+    if (item.category_name) {
+      parentId = await ensureLegacyNode(client, nodes, targetSessionId, parentId, "category", item.category_name, item.category_color, item.category_icon_url, item.category_short_note, item.category_note);
+    }
+    const sectionName = item.section_name || item.category_name || item.domain_name || "General";
+    const sectionColor = item.section_name ? item.section_color : item.category_name ? item.category_color : item.domain_color;
+    const sectionIcon = item.section_name ? item.section_icon_url : item.category_name ? item.category_icon_url : item.domain_icon_url;
+    const sectionShortNote = item.section_name ? item.section_short_note : item.category_name ? item.category_short_note : item.domain_short_note;
+    const sectionNote = item.section_name ? item.section_note : item.category_name ? item.category_note : item.domain_note;
+    const sectionId = await ensureLegacyNode(client, nodes, targetSessionId, parentId, "section", sectionName, sectionColor, sectionIcon, sectionShortNote, sectionNote);
+    await copyPlanItem(client, item, targetSessionId, sectionId);
+  }
+}
+
+async function ensureLegacyNode(client, nodes, sessionId, parentId, type, name, color, iconUrl, shortNote, note) {
+  const key = `${parentId || "root"}:${type}:${name}`;
+  if (nodes.has(key)) return nodes.get(key);
+  const order = await nextNodeOrderWithClient(client, sessionId, parentId);
+  const created = await client.query(
+    `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
+    [sessionId, parentId, type, name, color, iconUrl, shortNote, note, order],
+  );
+  const id = created.rows[0].id;
+  nodes.set(key, id);
+  return id;
+}
+
+async function copyNodeTreeWithClient(client, sourceId, targetSessionId, targetParentId) {
+  const nodeResult = await client.query("select * from plans.plan_nodes where id = $1", [sourceId]);
+  const source = nodeResult.rows[0];
+  if (!source) return;
+  const order = await nextNodeOrderWithClient(client, targetSessionId, targetParentId);
+  const created = await client.query(
+    `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
+    [targetSessionId, targetParentId, source.node_type, source.name, source.color, source.icon_url, source.short_note, source.note, order],
+  );
+  const targetNodeId = created.rows[0].id;
+  const items = await client.query("select * from plans.plan_items where plan_node_id = $1 order by item_order", [sourceId]);
+  for (const item of items.rows) await copyPlanItem(client, item, targetSessionId, targetNodeId);
+  const children = await client.query("select id from plans.plan_nodes where parent_id = $1 order by node_order", [sourceId]);
+  for (const child of children.rows) await copyNodeTreeWithClient(client, child.id, targetSessionId, targetNodeId);
+}
+
+async function copyPlanItem(client, item, targetSessionId, targetNodeId) {
+  await client.query(
+    `insert into plans.plan_items (
+      plan_session_id, plan_node_id, item_type, exercise_id, title, description, short_note, note, image_url, video_url,
+      sets, reps, load, item_order, exercise_order, source_row_ref,
+      domain_name, category_name, section_name, domain_color, category_color, section_color,
+      domain_icon_url, category_icon_url, section_icon_url, domain_short_note, category_short_note, section_short_note,
+      domain_note, category_note, section_note, domain_order, category_order, section_order
+    ) values (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+      $11, $12, $13, $14, $15, $16,
+      $17, $18, $19, $20, $21, $22,
+      $23, $24, $25, $26, $27, $28,
+      $29, $30, $31, $32, $33, $34
+    )`,
+    [
+      targetSessionId, targetNodeId, item.item_type, item.exercise_id, item.title, item.description, item.short_note, item.note, item.image_url, item.video_url,
+      item.sets, item.reps, item.load, item.item_order, item.exercise_order, item.source_row_ref,
+      item.domain_name, item.category_name, item.section_name, item.domain_color, item.category_color, item.section_color,
+      item.domain_icon_url, item.category_icon_url, item.section_icon_url, item.domain_short_note, item.category_short_note, item.section_short_note,
+      item.domain_note, item.category_note, item.section_note, item.domain_order, item.category_order, item.section_order,
+    ],
+  );
+}
+
 async function copyNodeTree(sourceId, targetSessionId, targetParentId) {
   const nodeResult = await query("select * from plans.plan_nodes where id = $1", [sourceId]);
   const source = nodeResult.rows[0];
@@ -368,6 +498,16 @@ async function getEditablePlan(user, planId) {
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
      where p.id = $1 and p.plan_type in ('program', 'weekly') and p.created_by_user_id = $2`, [planId, user.id],
+  );
+  return result.rows[0] || null;
+}
+
+async function getCopySource(planId) {
+  const result = await query(
+    `select id, athlete_id, name, note, icon_url, color, is_template, start_date, duration_days
+     from plans.plans
+     where id = $1 and plan_type = 'program' and is_active = true`,
+    [planId],
   );
   return result.rows[0] || null;
 }
@@ -428,6 +568,11 @@ async function nextOrder(table, field, value, orderColumn) {
 
 async function nextNodeOrder(sessionId, parentId) {
   const result = await query("select coalesce(max(node_order), 0) + 1 as next_value from plans.plan_nodes where plan_session_id = $1 and parent_id is not distinct from $2", [sessionId, parentId]);
+  return Number(result.rows[0].next_value);
+}
+
+async function nextNodeOrderWithClient(client, sessionId, parentId) {
+  const result = await client.query("select coalesce(max(node_order), 0) + 1 as next_value from plans.plan_nodes where plan_session_id = $1 and parent_id is not distinct from $2", [sessionId, parentId]);
   return Number(result.rows[0].next_value);
 }
 

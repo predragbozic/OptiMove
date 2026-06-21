@@ -1003,7 +1003,7 @@ function renderProgramRoot(program) {
           <p class="eyebrow">Specific program</p>
           <h3>${escapeHtml(program.name)}</h3>
         </div>
-        <span class="item-badge">${data.rows?.length || 0} items</span>
+        <div class="builder-source-actions"><span class="item-badge">${data.rows?.length || 0} items</span><button class="plain-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(program.id)}">Edit copy</button></div>
       </div>
       ${isMicrocycle
         ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -1241,7 +1241,7 @@ function renderTemplateList(templates, selected, detail) {
             <h3>${escapeHtml(selected.plan_name)}</h3>
             <p class="muted">${escapeHtml(selected.source_external_id || "Program template")}</p>
           </div>
-          <span class="item-badge">${detail.rows?.length || 0} items</span>
+          <div class="builder-source-actions"><span class="item-badge">${detail.rows?.length || 0} items</span><button class="plain-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(selected.plan_id)}">Edit copy</button></div>
         </div>
         ${isMicrocycle
           ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -1631,6 +1631,24 @@ function sessionLabel(session) {
 
 async function handleBuilderAction(action) {
   const type = action.dataset.action;
+  if (type === "builder-duplicate-plan") {
+    action.disabled = true;
+    try {
+      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(action.dataset.planId || "")}/duplicate`, { method: "POST" });
+      state.builder.selectedSessionId = "";
+      state.builder.selectedNodeId = "";
+      state.builder.exerciseQuery = "";
+      state.activeTab = "builder";
+      state.navStack = [];
+      renderTabs();
+      renderLibraryNav();
+      await loadBuilderExercises();
+    } catch (error) {
+      action.disabled = false;
+      throw error;
+    }
+    return;
+  }
   if (type === "builder-set-plan-type") {
     state.builder.planType = action.dataset.planType === "weekly" ? "weekly" : "program";
     state.builder.weekStart ||= weekMondayIso(localDateIso());

@@ -3586,6 +3586,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-program-bar h3 { margin: 2px 0 4px; font-size: 22px; }
 .builder-program-bar .muted { margin: 0; }
 .builder-program-actions { display: flex; align-items: center; gap: 12px; padding-top: 8px; }
+.builder-source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.builder-source-actions .plain-button { min-height: 34px; padding: 6px 10px; font-size: 13px; }
 .builder-finish-button { min-height: 36px; padding: 7px 12px; }
 .builder-finished-label { color: #287e77; font-size: 13px; font-weight: 800; }
 .builder-block-creator { width: min(540px, 100%); display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 12px 14px; border: 1px solid var(--line, #dfe4e8); border-radius: 7px; background: #fff; }
@@ -3680,6 +3682,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-details-row { grid-template-columns: 1fr; }
   .builder-program-bar, .builder-block-creator { display: grid; grid-template-columns: 1fr; }
   .builder-program-actions { padding-top: 0; }
+  .builder-source-actions { align-items: flex-end; flex-direction: column; gap: 6px; }
   .builder-block-creator .builder-add-block { width: 100%; }
   .builder-section-overlay { z-index: 950; padding: 8px; align-items: end; }
   .builder-section-modal { width: min(560px, 100%); min-height: 0; max-height: 92dvh; padding: 14px; border-radius: 8px; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; }
