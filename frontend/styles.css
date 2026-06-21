@@ -3497,6 +3497,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-block-head strong { display: block; }
 .builder-block-head, .builder-summary-actions, .builder-session-row, .builder-node-form-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .builder-block-head span { color: var(--muted, #667085); font-size: 13px; }
+.builder-day-label-form { width: min(280px, 100%); margin: 8px 0 10px; }
+.builder-day-label-form .search-field { margin: 0; }
+.builder-day-label-form small { display: block; margin-top: 4px; color: var(--muted, #667085); font-size: 11px; line-height: 1.35; }
 .builder-sessions { display: grid; gap: 7px; margin: 12px 0; }
 .builder-session, .builder-node-button, .builder-exercise-result {
   width: 100%; border: 1px solid var(--line, #dfe4e8); background: #fff; color: inherit; text-align: left; cursor: pointer;

@@ -1433,9 +1433,12 @@ function renderBuilderInfoModal(kind) {
 }
 
 function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly = false) {
+  const defaultDayName = isWeekly ? weekDayName(block.date) : "";
+  const blockTitle = isWeekly ? block.name || defaultDayName : block.name || `Block ${block.index}`;
   return `
     <article class="builder-block">
-      <div class="builder-block-head"><div><strong>${escapeHtml(block.name || `Block ${block.index}`)}</strong>${block.date ? `<span>${escapeHtml(formatDate(block.date))}</span>` : block.note ? `<span>${escapeHtml(block.note)}</span>` : ""}</div>${isWeekly ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-block" data-block-id="${escapeAttr(block.id)}">Delete</button>`}</div>
+      <div class="builder-block-head"><div><strong>${escapeHtml(blockTitle)}</strong>${block.date ? `<span>${escapeHtml(formatDate(block.date))}</span>` : block.note ? `<span>${escapeHtml(block.note)}</span>` : ""}</div>${isWeekly ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-block" data-block-id="${escapeAttr(block.id)}">Delete</button>`}</div>
+      ${isWeekly ? `<form class="builder-day-label-form" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><label class="search-field"><span>Day label</span><input name="name" value="${escapeAttr(block.name || "")}" placeholder="e.g. MD-1, Match day"></label><small>Optional: leave empty to show ${escapeHtml(defaultDayName)}.</small></form>` : ""}
       <div class="builder-sessions">
         ${block.sessions.length ? block.sessions.map((session) => `
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
@@ -1834,6 +1837,9 @@ async function submitBuilderForm(form) {
   if (!draft) return;
   if (mode === "add-block") {
     state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}/blocks`, { method: "POST", body: JSON.stringify(data) });
+  }
+  if (mode === "update-block") {
+    state.builder.draft = await api(`/api/builder/blocks/${encodeURIComponent(form.dataset.blockId)}`, { method: "PATCH", body: JSON.stringify(data) });
   }
   if (mode === "add-session") {
     state.builder.draft = await api(`/api/builder/blocks/${encodeURIComponent(form.dataset.blockId)}/sessions`, { method: "POST", body: JSON.stringify(data) });
@@ -2417,6 +2423,12 @@ function weekMondayIso(value) {
   if (Number.isNaN(date.getTime())) return localDateIso();
   date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
   return localDateIso(date);
+}
+
+function weekDayName(value) {
+  const date = new Date(`${String(value || "").slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return "Day";
+  return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][date.getDay()];
 }
 
 function monthStartIso(value) {

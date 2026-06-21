@@ -3,7 +3,6 @@ import { pool, query } from "../db.js";
 
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
-const WEEKLY_DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 router.get("/plans/:planId", async (req, res, next) => {
   try {
@@ -110,6 +109,18 @@ router.delete("/blocks/:blockId", async (req, res, next) => {
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plan days cannot be deleted." });
     await deleteBlockTree(block.id);
+    res.json(await buildDraft(block.plan));
+  } catch (error) { next(error); }
+});
+
+router.patch("/blocks/:blockId", async (req, res, next) => {
+  try {
+    const block = await getEditableBlock(req.user, req.params.blockId);
+    if (!block) return res.status(404).json({ error: "Program block not found" });
+    await query(
+      "update plans.plan_days set block_name = $2, day_note = $3, updated_at = now() where id = $1",
+      [block.id, nullableText(req.body?.name), nullableText(req.body?.note)],
+    );
     res.json(await buildDraft(block.plan));
   } catch (error) { next(error); }
 });
@@ -421,11 +432,11 @@ async function nextNodeOrder(sessionId, parentId) {
 }
 
 async function createWeeklyDays(client, planId, weekStart) {
-  for (let index = 0; index < WEEKLY_DAY_NAMES.length; index += 1) {
+  for (let index = 0; index < 7; index += 1) {
     await client.query(
       `insert into plans.plan_days (plan_id, date, day_order, block_index, block_order, block_name, block_type)
-       values ($1, $2::date + $3::integer, $4::numeric, $4::integer, $4::numeric, $5, 'session')`,
-      [planId, weekStart, index, index + 1, WEEKLY_DAY_NAMES[index]],
+       values ($1, $2::date + $3::integer, $4::numeric, $4::integer, $4::numeric, null, 'session')`,
+      [planId, weekStart, index, index + 1],
     );
   }
 }
