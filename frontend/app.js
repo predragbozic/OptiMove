@@ -16,7 +16,7 @@ const state = {
   lastProgramBundle: null,
   lastTemplates: [],
   lastExerciseResults: [],
-  builder: { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", showNote: false, addNodeOpen: false },
+  builder: { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "" },
   exerciseSearch: { term: "", limit: 30, hasMore: false },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
@@ -1283,15 +1283,17 @@ function renderBuilder() {
             <div><p class="eyebrow">Program builder</p><h3>Create program</h3><p class="muted">Assign an athlete, or leave it reusable as a template.</p></div>
           </div>
           <form class="builder-form builder-create-form" data-builder-form="create">
-            <label class="search-field"><span>Program name</span><input name="name" required placeholder="e.g. Preseason strength block"></label>
-            <input type="hidden" name="athleteId" value="${escapeAttr(state.builder.createAthleteId)}">
-            <button class="builder-athlete-trigger" type="button" data-action="builder-open-athlete-picker">
-              ${assignedAthlete?.athlete_image_url || assignedAthlete?.image_url ? renderImage(assignedAthlete.athlete_image_url || assignedAthlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${assignedAthlete ? escapeHtml(initialsFor(assignedAthlete.athlete)) : "+"}</span>`}<span><strong>${escapeHtml(assignedAthlete?.athlete || "Assign athlete")}</strong><small>${assignedAthlete ? `ID ${escapeHtml(assignedAthlete.athlete_id)} - athlete program` : "No athlete selected - reusable template"}</small></span><span class="button-icon">></span>
-            </button>
-            <div class="builder-metadata-grid builder-setup-controls">
-              <label class="search-field"><span>Color</span><input name="color" type="color" value="#287e77"></label>
-              <label class="search-field"><span>Icon</span><select name="iconUrl">${builderIconOptions()}</select></label>
+            <div class="builder-details-row">
+              <label class="search-field"><span>Program name</span><input name="name" required placeholder="e.g. Preseason strength block"></label>
+              <div class="builder-metadata-grid builder-setup-controls">
+                <label class="search-field"><span>Color</span><input name="color" type="color" value="#287e77"></label>
+                <label class="search-field"><span>Icon</span><select name="iconUrl">${builderIconOptions()}</select></label>
+              </div>
             </div>
+            <input type="hidden" name="athleteId" value="${escapeAttr(state.builder.createAthleteId)}">
+            <div class="builder-assignment-row"><span class="builder-field-label">Athlete</span><button class="builder-athlete-trigger" type="button" data-action="builder-open-athlete-picker">
+              ${assignedAthlete?.athlete_image_url || assignedAthlete?.image_url ? renderImage(assignedAthlete.athlete_image_url || assignedAthlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${assignedAthlete ? escapeHtml(initialsFor(assignedAthlete.athlete)) : "+"}</span>`}<span><strong>${escapeHtml(assignedAthlete?.athlete || "Choose athlete or template")}</strong>${assignedAthlete ? `<small>ID ${escapeHtml(assignedAthlete.athlete_id)}</small>` : ""}</span><span class="button-icon">></span>
+            </button></div>
             ${state.builder.showNote ? `<label class="search-field"><span>Program note</span><textarea name="note" rows="2" placeholder="Optional coaching note"></textarea></label>` : `<button class="text-action builder-note-toggle" type="button" data-action="builder-toggle-note">Add note</button>`}
             <p class="builder-private-note">Private to your coach account until sharing and publishing are configured.</p>
             <p class="builder-error" aria-live="polite"></p>
@@ -1314,6 +1316,7 @@ function renderBuilder() {
       </header>
       <section class="builder-block-creator">
         <div><p class="eyebrow">Program structure</p><strong>Add a day or block</strong></div>
+        <button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program structure example"><span class="button-icon">i</span></button>
         <form class="builder-inline-form builder-add-block" data-builder-form="add-block">
           <label class="search-field"><span>Block name</span><input name="name" placeholder="Day 1, MD-2, or Block 1"></label>
           <p class="builder-error" aria-live="polite"></p>
@@ -1322,17 +1325,16 @@ function renderBuilder() {
       </section>
       <div class="builder-layout">
         <section class="panel builder-outline">
-          <div class="section-heading"><div><p class="eyebrow">Structure</p><h3>Blocks and sessions</h3></div></div>
+          <div class="section-heading"><div><p class="eyebrow">Day and session structure</p><h3>Blocks and sessions</h3></div><button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session structure example"><span class="button-icon">i</span></button></div>
           ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id)).join("") : `<div class="empty">Add the first day or block to start structuring the program.</div>`}
         </section>
         <section class="panel builder-picker builder-workbench">
-          ${selectedNode?.type === "section" ? renderBuilderSectionPanel(selectedNode) : state.builder.addNodeOpen && selectedSession ? `
-            <div class="section-heading"><div><p class="eyebrow">Structure editor</p><h3>${selectedNode ? `Add below ${selectedNode.name}` : "Select a level"}</h3></div></div>
-            ${renderBuilderStructureEditor(selectedSession, selectedNode)}
-          ` : selectedSession ? `<div class="builder-empty-workbench"><p class="eyebrow">Session selected</p><h3>Build the structure</h3><p class="muted">Use Add in the selected session, or choose an existing domain, category, or section.</p></div>` : `<div class="empty">Choose a session from the structure to start.</div>`
-          }
+          ${selectedNode?.type === "section" ? renderBuilderSectionPanel(selectedNode) : `<div class="builder-empty-workbench"><p class="eyebrow">Section workspace</p><h3>Select a section</h3><p class="muted">Click a section to search the library and add exercises. Use Add session parts to create Domain, Category, or Section.</p></div>`}
         </section>
       </div>
+      ${state.builder.sessionModalBlockId ? renderBuilderSessionModal(state.builder.sessionModalBlockId) : ""}
+      ${state.builder.structureModalOpen && selectedSession ? renderBuilderStructureModal(selectedSession, selectedNode) : ""}
+      ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}
     </section>
   `;
 }
@@ -1373,6 +1375,54 @@ function builderIconGlyph(value) {
   return ({ "icon:target": "◎", "icon:bolt": "ϟ", "icon:dumbbell": "▰", "icon:calendar": "□", "icon:heart": "♥" })[value] || "•";
 }
 
+function renderBuilderSessionModal(blockId) {
+  return `
+    <div class="builder-modal-overlay">
+      <button class="builder-modal-backdrop" type="button" data-action="builder-close-session-modal" aria-label="Close add session"></button>
+      <section class="panel builder-compact-modal" role="dialog" aria-modal="true" aria-label="Add session">
+        <div class="builder-modal-head"><div><p class="eyebrow">Day and session structure</p><h3>Add session</h3><p class="muted">Both fields are optional. Use them only when the day needs a time or training phase.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-session-modal" aria-label="Close"><span class="button-icon">x</span></button></div>
+        <form class="builder-session-modal-form" data-builder-form="add-session" data-block-id="${escapeAttr(blockId)}">
+          <label class="search-field"><span>Time of day</span><select name="amPm"><option value="">No AM/PM</option><option>AM</option><option>PM</option></select></label>
+          <label class="search-field"><span>Training phase</span><select name="bta"><option value="">No phase</option><option value="B">Before training</option><option value="T">Training</option><option value="A">After training</option></select></label>
+          <p class="builder-error" aria-live="polite"></p>
+          <button class="plain-button" type="submit">Add session</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderBuilderStructureModal(session, selectedNode) {
+  return `
+    <div class="builder-modal-overlay">
+      <button class="builder-modal-backdrop" type="button" data-action="builder-close-structure-modal" aria-label="Close session parts"></button>
+      <section class="panel builder-structure-modal" role="dialog" aria-modal="true" aria-label="Add session parts">
+        <div class="builder-modal-head"><div><p class="eyebrow">${escapeHtml(sessionLabel(session))}</p><h3>Add session parts</h3><p class="muted">Build a path with Domain, Category, and Section. A Section can also be added directly.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-structure-modal" aria-label="Close"><span class="button-icon">x</span></button></div>
+        ${renderBuilderStructureEditor(session, selectedNode)}
+      </section>
+    </div>
+  `;
+}
+
+function renderBuilderInfoModal(kind) {
+  const programInfo = kind === "program";
+  return `
+    <div class="builder-modal-overlay">
+      <button class="builder-modal-backdrop" type="button" data-action="builder-close-info" aria-label="Close structure example"></button>
+      <section class="panel builder-info-modal" role="dialog" aria-modal="true" aria-label="Program structure example">
+        <div class="builder-modal-head"><div><p class="eyebrow">Structure guide</p><h3>${programInfo ? "Program and block example" : "Day and session example"}</h3></div><button class="plain-button icon-button" type="button" data-action="builder-close-info" aria-label="Close"><span class="button-icon">x</span></button></div>
+        ${programInfo ? `
+          <div class="builder-schema"><div class="schema-level schema-program">Program</div><div class="schema-line"></div><div class="schema-level schema-block">MD-4 day block</div><div class="schema-line"></div><div class="schema-split"><span>Before training session</span><span>After training session</span></div></div>
+          <p class="muted">A program can have one or many blocks. A block can represent a calendar day, a microcycle day, or any named unit.</p>
+        ` : `
+          <div class="builder-schema-tree"><div><strong>Before training</strong><span>Domain: Power and potentiation</span><span>Category: Warm up or Power</span><span>Section: Mobility, Stability, Activation</span><span>Exercises: selected movements</span></div><div><strong>After training</strong><span>Category: Strength</span><span>Section: Warm up for strength, Strength legs and core</span><span>Category: Sauna or Compressive leggings</span></div></div>
+          <p class="muted">Not every path needs all levels. You can add a Section directly to a session, directly below a Domain, or below a Category. Only Sections contain exercises.</p>
+        `}
+      </section>
+    </div>
+  `;
+}
+
 function renderBuilderBlock(block, selectedSessionId, selectedNodeId) {
   return `
     <article class="builder-block">
@@ -1381,16 +1431,11 @@ function renderBuilderBlock(block, selectedSessionId, selectedNodeId) {
         ${block.sessions.length ? block.sessions.map((session) => `
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             <span>${escapeHtml(sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span>
-          </button><div class="builder-session-actions"><button class="text-action" type="button" data-action="builder-add-structure" data-session-id="${escapeAttr(session.id)}">Add</button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
+          </button><div class="builder-session-actions"><button class="text-action" type="button" data-action="builder-add-structure" data-session-id="${escapeAttr(session.id)}">Add session parts</button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
           ${renderBuilderNodeTree(session, "", selectedNodeId)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}
       </div>
-      <form class="builder-session-form" data-builder-form="add-session" data-block-id="${escapeAttr(block.id)}">
-        <select name="amPm"><option value="">No AM/PM</option><option>AM</option><option>PM</option></select>
-        <select name="bta"><option value="">No phase</option><option value="B">Before training</option><option value="T">Training</option><option value="A">After training</option></select>
-        <p class="builder-error" aria-live="polite"></p>
-        <button type="submit" class="icon-action" aria-label="Add session">+</button>
-      </form>
+      <button class="plain-button builder-add-session" type="button" data-action="builder-open-session-modal" data-block-id="${escapeAttr(block.id)}">Add session</button>
     </article>
   `;
 }
@@ -1536,6 +1581,31 @@ function sessionLabel(session) {
 
 async function handleBuilderAction(action) {
   const type = action.dataset.action;
+  if (type === "builder-open-info") {
+    state.builder.infoOpen = action.dataset.info || "session";
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-close-info") {
+    state.builder.infoOpen = "";
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-open-session-modal") {
+    state.builder.sessionModalBlockId = action.dataset.blockId || "";
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-close-session-modal") {
+    state.builder.sessionModalBlockId = "";
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-close-structure-modal") {
+    state.builder.structureModalOpen = false;
+    renderBuilder();
+    return;
+  }
   if (type === "builder-toggle-note") {
     state.builder.showNote = !state.builder.showNote;
     renderBuilder();
@@ -1571,6 +1641,7 @@ async function handleBuilderAction(action) {
     state.builder.selectedSessionId = action.dataset.sessionId || "";
     state.builder.selectedNodeId = "";
     state.builder.addNodeOpen = true;
+    state.builder.structureModalOpen = true;
     renderBuilder();
     return;
   }
@@ -1591,6 +1662,7 @@ async function handleBuilderAction(action) {
     state.builder.selectedNodeId = "";
     state.builder.sectionPickerOpen = false;
     state.builder.addNodeOpen = false;
+    state.builder.structureModalOpen = false;
     renderBuilder();
     return;
   }
@@ -1599,6 +1671,7 @@ async function handleBuilderAction(action) {
     state.builder.selectedNodeId = action.dataset.nodeId || "";
     state.builder.sectionPickerOpen = findBuilderNode(state.builder.draft, state.builder.selectedNodeId)?.type === "section";
     state.builder.addNodeOpen = true;
+    state.builder.structureModalOpen = !state.builder.sectionPickerOpen;
     renderBuilder();
     return;
   }
@@ -1676,6 +1749,8 @@ async function submitBuilderForm(form) {
     const lastBlock = state.builder.draft.blocks.find((block) => block.id === form.dataset.blockId);
     state.builder.selectedSessionId = lastBlock?.sessions.at(-1)?.id || state.builder.selectedSessionId;
     state.builder.selectedNodeId = "";
+    state.builder.sessionModalBlockId = "";
+    state.builder.structureModalOpen = false;
   }
   if (mode === "add-node") {
     state.builder.draft = await api(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}/nodes`, { method: "POST", body: JSON.stringify(data) });
