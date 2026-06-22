@@ -1180,6 +1180,57 @@ input:focus {
   opacity: 0.45;
 }
 
+.plan-more-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.plan-more-menu > summary {
+  list-style: none;
+  min-width: 38px;
+  padding-inline: 9px;
+  cursor: pointer;
+}
+
+.plan-more-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plan-more-menu-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  min-width: 156px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.plan-more-menu-popover button {
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plan-more-menu-popover button:hover {
+  background: var(--surface-soft);
+}
+
+.plan-more-menu-popover .danger-action {
+  color: #b42318;
+}
+
 .content-section {
   gap: 14px;
   min-width: 0;

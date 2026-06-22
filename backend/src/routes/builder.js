@@ -108,6 +108,27 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
   }
 });
 
+router.post("/plans/:planId/edit", async (req, res, next) => {
+  let client;
+  try {
+    const plan = await getEditablePlan(req.user, req.params.planId);
+    if (!plan) return res.status(404).json({ error: "Program not found or not editable." });
+    client = await pool.connect();
+    await client.query("begin");
+    await materializeLegacyPlan(client, plan.id);
+    await client.query("commit");
+    client.release();
+    client = null;
+    res.json(await buildDraft(plan));
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+      client.release();
+    }
+    next(error);
+  }
+});
+
 router.delete("/plans/:planId", async (req, res, next) => {
   try {
     const plan = await requirePlan(req.user, req.params.planId, res);
@@ -390,6 +411,39 @@ async function copyLegacySession(client, sourceSessionId, targetSessionId) {
     const sectionNote = item.section_name ? item.section_note : item.category_name ? item.category_note : item.domain_note;
     const sectionId = await ensureLegacyNode(client, nodes, targetSessionId, parentId, "section", sectionName, sectionColor, sectionIcon, sectionShortNote, sectionNote);
     await copyPlanItem(client, item, targetSessionId, sectionId);
+  }
+}
+
+// Imported plans store their original grouping on each item. The first direct
+// edit turns that grouping into the Builder node tree without copying the plan.
+async function materializeLegacyPlan(client, planId) {
+  const sessions = await client.query(
+    `select ps.id
+     from plans.plan_sessions ps
+     join plans.plan_days pd on pd.id = ps.plan_day_id
+     where pd.plan_id = $1
+       and not exists (select 1 from plans.plan_nodes pn where pn.plan_session_id = ps.id)`,
+    [planId],
+  );
+  for (const session of sessions.rows) {
+    const items = await client.query("select * from plans.plan_items where plan_session_id = $1 order by item_order", [session.id]);
+    const nodes = new Map();
+    for (const item of items.rows) {
+      let parentId = null;
+      if (item.domain_name) {
+        parentId = await ensureLegacyNode(client, nodes, session.id, null, "domain", item.domain_name, item.domain_color, item.domain_icon_url, item.domain_short_note, item.domain_note);
+      }
+      if (item.category_name) {
+        parentId = await ensureLegacyNode(client, nodes, session.id, parentId, "category", item.category_name, item.category_color, item.category_icon_url, item.category_short_note, item.category_note);
+      }
+      const sectionName = item.section_name || item.category_name || item.domain_name || "General";
+      const sectionColor = item.section_name ? item.section_color : item.category_name ? item.category_color : item.domain_color;
+      const sectionIcon = item.section_name ? item.section_icon_url : item.category_name ? item.category_icon_url : item.domain_icon_url;
+      const sectionShortNote = item.section_name ? item.section_short_note : item.category_name ? item.category_short_note : item.domain_short_note;
+      const sectionNote = item.section_name ? item.section_note : item.category_name ? item.category_note : item.domain_note;
+      const sectionId = await ensureLegacyNode(client, nodes, session.id, parentId, "section", sectionName, sectionColor, sectionIcon, sectionShortNote, sectionNote);
+      await client.query("update plans.plan_items set plan_node_id = $2, updated_at = now() where id = $1", [item.id, sectionId]);
+    }
   }
 }
 

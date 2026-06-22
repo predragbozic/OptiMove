@@ -100,6 +100,11 @@ function bindEvents() {
   });
 
   els.content.addEventListener("click", handleContentClick);
+  els.toolbar.addEventListener("click", (event) => {
+    const action = event.target.closest("[data-action]");
+    if (!action?.dataset.action?.startsWith("builder-")) return;
+    void handleBuilderAction(action).catch(renderBuilderError);
+  });
   els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("input", handleContentInput);
   els.content.addEventListener("change", handleContentChange);
@@ -974,7 +979,7 @@ function renderProgramToolbar(programs) {
           ${escapeHtml(program.name)}
         </button>
       `).join("")}
-      ${state.selectedProgramId ? `<button class="plain-button toolbar-edit-copy" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(state.selectedProgramId)}">Edit copy</button>` : ""}
+      ${state.selectedProgramId ? renderPlanMoreMenu(state.selectedProgramId) : ""}
     </div>
   `);
   els.toolbar.querySelectorAll(".program-toolbar .chip").forEach((button) => {
@@ -984,9 +989,6 @@ function renderProgramToolbar(programs) {
       renderProgramToolbar(programs);
       renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
     });
-  });
-  els.toolbar.querySelector(".toolbar-edit-copy")?.addEventListener("click", (event) => {
-    void handleBuilderAction(event.currentTarget).catch(renderBuilderError);
   });
 }
 
@@ -1007,7 +1009,7 @@ function renderProgramRoot(program) {
           <p class="eyebrow">Specific program</p>
           <h3>${escapeHtml(program.name)}</h3>
         </div>
-        <div class="builder-source-actions"><span class="item-badge">${data.rows?.length || 0} items</span><button class="plain-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(program.id)}">Edit copy</button></div>
+        <div class="builder-source-actions"><span class="item-badge">${data.rows?.length || 0} items</span>${renderPlanMoreMenu(program.id)}</div>
       </div>
       ${isMicrocycle
         ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -1199,7 +1201,7 @@ function renderTemplateToolbar(templates) {
           ${templateSecondaryLabel(template, duplicateNames) ? `<span class="chip-sub">${escapeHtml(templateSecondaryLabel(template, duplicateNames))}</span>` : ""}
         </button>
       `).join("")}
-      ${state.selectedTemplateId ? `<button class="plain-button toolbar-edit-copy" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(state.selectedTemplateId)}">Edit copy</button>` : ""}
+      ${state.selectedTemplateId ? renderPlanMoreMenu(state.selectedTemplateId) : ""}
     </div>
   `;
   els.toolbar.querySelectorAll("[data-template-id]").forEach((button) => {
@@ -1208,9 +1210,6 @@ function renderTemplateToolbar(templates) {
       state.navStack = [];
       await loadTemplates();
     });
-  });
-  els.toolbar.querySelector(".toolbar-edit-copy")?.addEventListener("click", (event) => {
-    void handleBuilderAction(event.currentTarget).catch(renderBuilderError);
   });
 }
 
@@ -1250,7 +1249,7 @@ function renderTemplateList(templates, selected, detail) {
             <h3>${escapeHtml(selected.plan_name)}</h3>
             <p class="muted">${escapeHtml(selected.source_external_id || "Program template")}</p>
           </div>
-          <div class="builder-source-actions"><span class="item-badge">${detail.rows?.length || 0} items</span><button class="plain-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(selected.plan_id)}">Edit copy</button></div>
+          <div class="builder-source-actions"><span class="item-badge">${detail.rows?.length || 0} items</span>${renderPlanMoreMenu(selected.plan_id)}</div>
         </div>
         ${isMicrocycle
           ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -1258,6 +1257,19 @@ function renderTemplateList(templates, selected, detail) {
       </section>
     </section>
     ${renderCopyPlanModal()}
+  `;
+}
+
+function renderPlanMoreMenu(planId) {
+  return `
+    <details class="plan-more-menu">
+      <summary class="plain-button icon-button" aria-label="Program actions" title="Program actions"><span class="button-icon">...</span></summary>
+      <div class="plan-more-menu-popover">
+        <button type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(planId)}">Edit original</button>
+        <button type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(planId)}">Edit copy</button>
+        <button class="danger-action" type="button" data-action="builder-delete-source-plan" data-plan-id="${escapeAttr(planId)}">Delete program</button>
+      </div>
+    </details>
   `;
 }
 
@@ -1665,6 +1677,24 @@ function sessionLabel(session) {
 
 async function handleBuilderAction(action) {
   const type = action.dataset.action;
+  if (type === "builder-edit-plan") {
+    action.disabled = true;
+    try {
+      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(action.dataset.planId || "")}/edit`, { method: "POST" });
+      state.builder.selectedSessionId = "";
+      state.builder.selectedNodeId = "";
+      state.builder.exerciseQuery = "";
+      state.activeTab = "builder";
+      state.navStack = [];
+      renderTabs();
+      renderLibraryNav();
+      await loadBuilderExercises();
+    } catch (error) {
+      action.disabled = false;
+      throw error;
+    }
+    return;
+  }
   if (type === "builder-duplicate-plan") {
     state.builder.copyPlanId = action.dataset.planId || "";
     state.builder.copyPlanName = action.closest(".section-heading")?.querySelector("h3")?.textContent || "Program";
@@ -1901,6 +1931,20 @@ async function handleBuilderAction(action) {
     if (!window.confirm("Remove this exercise from the program?")) return;
     await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`, { method: "DELETE" });
     await refreshBuilderDraft();
+    return;
+  }
+  if (type === "builder-delete-source-plan") {
+    const planId = action.dataset.planId || "";
+    if (!planId || !window.confirm("Delete this original program and all of its contents? This cannot be undone.")) return;
+    action.disabled = true;
+    await api(`/api/builder/plans/${encodeURIComponent(planId)}`, { method: "DELETE" });
+    if (state.activeTab === "programs") {
+      state.selectedProgramId = null;
+      await loadPrograms();
+    } else {
+      state.selectedTemplateId = null;
+      await loadTemplates();
+    }
     return;
   }
   const deleteTargets = {
