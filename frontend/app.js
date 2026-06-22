@@ -1568,7 +1568,7 @@ function renderNodePasteButton(sessionId, parentId, parentType) {
 }
 
 function canPasteNodeType(nodeType, parentType) {
-  if (parentType === "session") return nodeType === "domain" || nodeType === "section";
+  if (parentType === "session") return nodeType === "domain" || nodeType === "category" || nodeType === "section";
   if (parentType === "domain") return nodeType === "category" || nodeType === "section";
   return parentType === "category" && nodeType === "section";
 }
