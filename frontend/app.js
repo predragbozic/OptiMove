@@ -1527,7 +1527,7 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId) {
     <div class="builder-node builder-node-${escapeAttr(node.type)}">
       <div class="builder-node-row">
         <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
-          <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small><span class="builder-node-level builder-node-level-${escapeAttr(node.type)}" title="${escapeAttr(exerciseNodeLabel(node.type))}">${escapeHtml(builderNodeLevel(node.type))}</span>${node.type === "section" ? `<span>${node.items.length} exercise${node.items.length === 1 ? "" : "s"}</span>` : ""}</small>
+          <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${builderNodeMarker(node.type)}${node.type === "section" ? `<span>${node.items.length} exercise${node.items.length === 1 ? "" : "s"}</span>` : ""}</small>
         </button>
         ${renderBuilderNodeMoveActions(node, true, session.id)}
       </div>
@@ -1695,8 +1695,10 @@ function exerciseNodeLabel(type) {
   return ({ domain: "Exercise domain", category: "Exercise category", section: "Exercise section" })[type] || type;
 }
 
-function builderNodeLevel(type) {
-  return ({ domain: "L1", category: "L2", section: "L3" })[type] || "";
+function builderNodeMarker(type) {
+  const label = exerciseNodeLabel(type);
+  const activeSteps = ({ domain: 1, category: 2, section: 3 })[type] || 0;
+  return `<span class="builder-node-level builder-node-level-${escapeAttr(type)}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">${[1, 2, 3].map((step) => `<i class="${step <= activeSteps ? "is-active" : ""}"></i>`).join("")}</span>`;
 }
 
 function renderBuilderItems(node) {
@@ -2341,6 +2343,7 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
     <div class="exercise-detail-overlay">
       <div class="exercise-detail-backdrop" data-action="exercise-back"></div>
       <section class="panel exercise-detail">
+        ${hasSequence ? `<div class="exercise-sequence-indicator" aria-label="Exercise ${currentIndex + 1} of ${ids.length}">${ids.map((id, index) => `<i class="${id === state.exerciseDetail.currentId ? "is-active" : ""}"></i>`).join("")}</div>` : ""}
         <div class="drill-header">
           <div>
             <p class="eyebrow">Exercise</p>
