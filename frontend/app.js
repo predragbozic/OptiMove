@@ -10,6 +10,7 @@ const state = {
   selectedProgramId: null,
   selectedTemplateId: null,
   selectedWeekIndex: 0,
+  selectedWeekDay: "",
   weekSelectorOpen: false,
   pendingScrollDate: "",
   lastWeeklyData: null,
@@ -647,6 +648,7 @@ function handleContentClick(event) {
     const weeks = state.lastWeeklyData?.weeks || [];
     state.selectedWeekIndex = todayWeekIndex(weeks);
     state.weekCalendarMonth = monthStartIso(localDateIso());
+    state.selectedWeekDay = localDateIso();
     state.pendingScrollDate = localDateIso();
     state.navStack = [];
     renderWeeklyRoot(state.lastWeeklyData);
@@ -654,6 +656,7 @@ function handleContentClick(event) {
   }
   if (type === "week-select") {
     state.selectedWeekIndex = Number(action.dataset.weekIndex) || 0;
+    state.selectedWeekDay = "";
     state.navStack = [];
     renderWeeklyRoot(state.lastWeeklyData);
     return;
@@ -664,6 +667,7 @@ function handleContentClick(event) {
     const weekIndex = weekIndexForDate(weeks, date);
     if (weekIndex < 0) return;
     state.selectedWeekIndex = weekIndex;
+    state.selectedWeekDay = date;
     state.pendingScrollDate = date;
     state.weekSelectorOpen = false;
     state.weekCalendarMonth = monthStartIso(date);
@@ -810,16 +814,18 @@ function renderWeeklyRoot(data) {
 
   els.content.innerHTML = `
     <div class="content-section">
+      <div class="week-nav-wrap">
       <section class="week-nav-panel">
         <button class="plain-button week-arrow-button" data-action="week-prev" ${state.selectedWeekIndex <= 0 ? "disabled" : ""} aria-label="Previous week">‹</button>
-        <div class="week-title-button" aria-live="polite">
+        <button class="week-title-button" type="button" data-action="week-toggle" aria-expanded="${state.weekSelectorOpen}" aria-label="Choose weekly plan date">
           <strong>${escapeHtml(weekRange)}</strong>
-        </div>
+        </button>
         <button class="plain-button week-today-button" data-action="week-today">Today</button>
         <button class="plain-button week-arrow-button" data-action="week-next" ${state.selectedWeekIndex >= weeks.length - 1 ? "disabled" : ""} aria-label="Next week">›</button>
         ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : ""}
       </section>
       ${weekSelectorMarkup}
+      </div>
       <section class="panel">
         <div class="calendar-grid">
           ${(activeWeek.days || []).map(renderDayEntry).join("")}
@@ -856,20 +862,20 @@ function renderWeekCalendarPicker(weeks, activeWeek) {
           ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => `<span>${day}</span>`).join("")}
         </div>
         <div class="week-calendar-days">
-          ${month.days.map((day) => renderWeekCalendarDay(day, activeWeek)).join("")}
+          ${month.days.map((day) => renderWeekCalendarDay(day, activeWeek, selectedWeeklyDay(activeWeek))).join("")}
         </div>
       </article>
     </section>
   `;
 }
 
-function renderWeekCalendarDay(day, activeWeek) {
+function renderWeekCalendarDay(day, activeWeek, selectedDate) {
   const classes = [
     "week-calendar-day",
     day.isOutside ? "is-outside" : "",
     day.hasItems ? "has-items" : "",
     day.date === localDateIso() ? "is-today" : "",
-    weekContainsDate(activeWeek, day.date) ? "is-active-week" : "",
+    day.date === selectedDate ? "is-active-week" : "",
   ].filter(Boolean).join(" ");
   const content = `
     <span class="week-calendar-day-number">${escapeHtml(String(day.dayNumber))}</span>
@@ -1540,7 +1546,7 @@ function renderBuilderStructureEditor(session, selectedNode) {
   }
   return `
     <form class="builder-node-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
-      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions"><button class="text-action" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy ${escapeHtml(selectedNode.type)}</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button></span>` : ""}</div>
+      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions"><button class="text-action" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy ${escapeHtml(selectedNode.type)}</button>${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type)}<button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button></span>` : ""}</div>
       <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
       <select name="nodeType">${nodeTypeOptions(selectedNode?.type)}</select>
       <input name="name" placeholder="${selectedNode?.type === "domain" ? "Category or section name" : selectedNode?.type === "category" ? "Section name" : "Domain, category or section name"}" required>
@@ -2578,6 +2584,12 @@ function buildWeeklyCalendarMonth(monthStart, dayMap) {
     label: monthLabel(monthStart),
     days,
   };
+}
+
+function selectedWeeklyDay(week) {
+  if (state.selectedWeekDay && weekContainsDate(week, state.selectedWeekDay)) return state.selectedWeekDay;
+  const today = localDateIso();
+  return weekContainsDate(week, today) ? today : week.weekStart;
 }
 
 function defaultWeekIndex(weeks) {
