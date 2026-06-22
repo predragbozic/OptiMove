@@ -1361,7 +1361,7 @@ function renderBuilder() {
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
         <div><p class="eyebrow">${isWeekly ? `Weekly plan · ${formatDate(draft.plan.weekStart)}` : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><h3>${escapeHtml(draft.plan.name)}</h3><p class="muted">${escapeHtml(draft.plan.athleteName || "Private coach template")}</p></div>
-        <div class="builder-program-actions"><span class="item-badge">${escapeHtml(draft.plan.status || "draft")}</span>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">Save and finish</button>` : `<span class="builder-finished-label">Saved</span>`}<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button></div>
+        <div class="builder-program-actions"><span class="item-badge">${escapeHtml(draft.plan.status || "draft")}</span><button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel">Cancel</button>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">Save and finish</button>` : `<span class="builder-finished-label">Saved</span>`}<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button></div>
       </header>
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       ${isWeekly ? "" : `<section class="builder-block-creator">
@@ -1529,7 +1529,7 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId) {
         <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
           <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${escapeHtml(exerciseNodeLabel(node.type))}${node.type === "section" ? ` - ${node.items.length} exercise${node.items.length === 1 ? "" : "s"}` : ""}</small>
         </button>
-        ${renderBuilderNodeMoveActions(node, true)}
+        ${renderBuilderNodeMoveActions(node, true, session.id)}
       </div>
       ${renderNodePasteButton(session.id, node.id, node.type)}
       ${renderBuilderNodeTree(session, node.id, selectedNodeId)}
@@ -1570,8 +1570,8 @@ function renderNodePasteButton(sessionId, parentId, parentType) {
   return `<button class="text-action builder-paste-node" type="button" data-action="builder-paste-node" data-session-id="${escapeAttr(sessionId)}" data-parent-id="${escapeAttr(parentId)}">Paste ${escapeHtml(clipboard.type)}</button>`;
 }
 
-function renderBuilderNodeMoveActions(node, compact = false) {
-  const session = findBuilderSession(state.builder.draft, state.builder.selectedSessionId);
+function renderBuilderNodeMoveActions(node, compact = false, sessionId = "") {
+  const session = findBuilderSession(state.builder.draft, sessionId || state.builder.selectedSessionId);
   const siblings = (session?.nodes || [])
     .filter((candidate) => candidate.parentId === node.parentId)
     .sort((left, right) => left.order - right.order);
@@ -1937,6 +1937,32 @@ async function handleBuilderAction(action) {
     } catch (error) {
       renderBuilderError(error);
     }
+    return;
+  }
+  if (type === "builder-cancel") {
+    const plan = state.builder.draft?.plan;
+    state.builder = { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false };
+    state.navStack = [];
+    if (plan?.athleteId) state.selectedAthleteId = String(plan.athleteId);
+    if (plan?.planType === "weekly") {
+      state.activeTab = "weekly";
+      state.weekSelectorOpen = false;
+      renderTabs();
+      renderLibraryNav();
+      await loadWeekly();
+      return;
+    }
+    if (plan?.isTemplate || !plan?.athleteId) {
+      state.activeTab = "templates";
+      renderTabs();
+      renderLibraryNav();
+      await loadTemplates();
+      return;
+    }
+    state.activeTab = "programs";
+    renderTabs();
+    renderLibraryNav();
+    await loadPrograms();
     return;
   }
   if (type === "builder-select-session") {

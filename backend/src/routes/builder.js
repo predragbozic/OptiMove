@@ -259,7 +259,7 @@ router.post("/nodes/:nodeId/move", async (req, res, next) => {
        from plans.plan_nodes
        where plan_session_id = $1
          and parent_id is not distinct from $2
-         and node_order ${comparator} $3
+         and node_order ${comparator} $3::numeric
        order by node_order ${sort}
        limit 1`,
       [node.plan_session_id, node.parent_id, node.node_order],
@@ -268,7 +268,7 @@ router.post("/nodes/:nodeId/move", async (req, res, next) => {
     if (!neighbor) return res.json(await buildDraft(node.plan));
     await query(
       `update plans.plan_nodes
-       set node_order = case when id = $1 then $2 when id = $3 then $4 end,
+   set node_order = case when id = $1 then $2::numeric when id = $3 then $4::numeric end,
            updated_at = now()
        where id in ($1, $3)`,
       [node.id, neighbor.node_order, neighbor.id, node.node_order],
