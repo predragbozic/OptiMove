@@ -12,6 +12,7 @@ export function normalizeSlot(amPm, bta) {
 
 export function toPlanItem(row) {
   return {
+    planId: row.plan_id || "",
     rowIndex: row.source_row_ref ? Number(row.source_row_ref) || row.source_row_ref : null,
     plan_item_id: row.plan_item_id,
     item_type: row.item_type,
@@ -65,6 +66,8 @@ export function buildWeeks(rows) {
 
     if (!weeks.has(item.weekStart)) {
       weeks.set(item.weekStart, {
+        planId: item.planId,
+        name: row.plan_name || "",
         weekStart: item.weekStart,
         weekEnd: row.week_end,
         days: buildWeekDays(item.weekStart),

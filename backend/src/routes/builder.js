@@ -85,16 +85,32 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     const targetAthleteExternalId = text(req.body?.athleteId);
     const targetAthlete = targetAthleteExternalId ? await findAthlete(targetAthleteExternalId) : null;
     if (targetAthleteExternalId && !targetAthlete) return res.status(404).json({ error: "Athlete not found." });
-    const isTemplate = !targetAthlete;
+    const targetWeekStart = source.plan_type === "weekly" ? normalizedWeekStart(req.body?.weekStart) : null;
+    if (source.plan_type === "weekly" && !targetAthlete) return res.status(400).json({ error: "Choose an athlete for a weekly plan copy." });
+    if (source.plan_type === "weekly" && !targetWeekStart) return res.status(400).json({ error: "Choose the target week for this copy." });
+    const isTemplate = source.plan_type === "program" && !targetAthlete;
     client = await pool.connect();
     await client.query("begin");
+    if (source.plan_type === "weekly") {
+      const existing = await client.query(
+        "select 1 from plans.plans where plan_type = 'weekly' and athlete_id = $1 and week_start = $2 limit 1",
+        [targetAthlete.id, targetWeekStart],
+      );
+      if (existing.rowCount) {
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return res.status(409).json({ error: "This athlete already has a weekly plan for that week." });
+      }
+    }
     const created = await client.query(
-      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days)
-       values ('program', $1, $2, $3, $4, $5, $6, 'private', $7, 'draft', 'builder', $8, $9)
+      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days, week_start)
+       values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, 'draft', 'builder', $9, $10, $11)
        returning id`,
-      [req.user.id, targetAthlete?.id || null, `${source.name || "Program"} copy`, source.note, source.icon_url, source.color, isTemplate, source.start_date, source.duration_days],
+      [source.plan_type, req.user.id, targetAthlete?.id || null, `${source.name || "Program"} copy`, source.note, source.icon_url, source.color, isTemplate, source.start_date, source.duration_days, targetWeekStart],
     );
-    await copyProgramTree(client, source.id, created.rows[0].id);
+    if (source.plan_type === "weekly") await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
+    else await copyProgramTree(client, source.id, created.rows[0].id);
     await client.query("commit");
     client.release();
     client = null;
@@ -288,6 +304,9 @@ router.post("/nodes/:nodeId/copy", async (req, res, next) => {
     if (!source || !targetSession) return res.status(404).json({ error: "Source node or target session not found" });
     const targetParentId = nullableText(req.body?.targetParentId);
     if (targetParentId && !(await isNodeInSession(targetParentId, targetSession.id))) return res.status(400).json({ error: "Target parent is outside target session." });
+    if (!(await isAllowedNodePlacement(targetSession.id, targetParentId, source.node_type))) {
+      return res.status(400).json({ error: "Choose a compatible target for this copied structure." });
+    }
     await copyNodeTree(source.id, targetSession.id, targetParentId);
     res.status(201).json(await buildDraft(targetSession.plan));
   } catch (error) { next(error); }
@@ -389,6 +408,40 @@ async function copyProgramTree(client, sourcePlanId, targetPlanId) {
       } else {
         await copyLegacySession(client, session.id, createdSession.rows[0].id);
       }
+    }
+  }
+}
+
+async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeekStart) {
+  await createWeeklyDays(client, targetPlanId, targetWeekStart);
+  const sourceDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [sourcePlanId]);
+  const targetDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [targetPlanId]);
+  for (let index = 0; index < sourceDays.rows.length; index += 1) {
+    const sourceDay = sourceDays.rows[index];
+    const targetDay = targetDays.rows[index];
+    if (!targetDay) continue;
+    await client.query(
+      "update plans.plan_days set block_name = $2, block_type = $3, day_note = $4, updated_at = now() where id = $1",
+      [targetDay.id, sourceDay.block_name, sourceDay.block_type, sourceDay.day_note],
+    );
+    await copyDaySessions(client, sourceDay.id, targetDay.id);
+  }
+}
+
+async function copyDaySessions(client, sourceDayId, targetDayId) {
+  const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [sourceDayId]);
+  for (const session of sessions.rows) {
+    const createdSession = await client.query(
+      "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, $2, $3, $4) returning id",
+      [targetDayId, session.am_pm, session.bta, session.session_order],
+    );
+    const nodes = await client.query("select * from plans.plan_nodes where plan_session_id = $1 order by node_order", [session.id]);
+    if (nodes.rowCount) {
+      for (const root of nodes.rows.filter((node) => !node.parent_id)) {
+        await copyNodeTreeWithClient(client, root.id, createdSession.rows[0].id, null);
+      }
+    } else {
+      await copyLegacySession(client, session.id, createdSession.rows[0].id);
     }
   }
 }
@@ -562,9 +615,9 @@ async function getEditablePlan(user, planId) {
 
 async function getCopySource(planId) {
   const result = await query(
-    `select id, athlete_id, name, note, icon_url, color, is_template, start_date, duration_days
+    `select id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days
      from plans.plans
-     where id = $1 and plan_type = 'program' and is_active = true`,
+     where id = $1 and plan_type in ('program', 'weekly') and is_active = true`,
     [planId],
   );
   return result.rows[0] || null;

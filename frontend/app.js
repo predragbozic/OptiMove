@@ -176,6 +176,11 @@ async function handleContentSubmit(event) {
 }
 
 function handleContentInput(event) {
+  const copyWeekStartInput = event.target.closest("[data-builder-copy-week-start]");
+  if (copyWeekStartInput) {
+    state.builder.copyWeekStart = copyWeekStartInput.value;
+    return;
+  }
   const weekStartInput = event.target.closest("[data-builder-week-start]");
   if (weekStartInput) {
     state.builder.weekStart = weekStartInput.value;
@@ -812,6 +817,7 @@ function renderWeeklyRoot(data) {
         </div>
         <button class="plain-button week-today-button" data-action="week-today">Today</button>
         <button class="plain-button week-arrow-button" data-action="week-next" ${state.selectedWeekIndex >= weeks.length - 1 ? "disabled" : ""} aria-label="Next week">›</button>
+        ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : ""}
       </section>
       ${weekSelectorMarkup}
       <section class="panel">
@@ -820,6 +826,7 @@ function renderWeeklyRoot(data) {
         </div>
       </section>
     </div>
+    ${renderCopyPlanModal()}
   `;
   if (state.pendingScrollDate) {
     const date = state.pendingScrollDate;
@@ -1262,13 +1269,14 @@ function renderTemplateList(templates, selected, detail) {
 
 function renderPlanMoreMenu(planId, objectType) {
   const isTemplate = objectType === "template";
-  const objectLabel = isTemplate ? "template" : "program";
+  const isWeekly = objectType === "weekly";
+  const objectLabel = isTemplate ? "template" : isWeekly ? "weekly plan" : "program";
   return `
     <details class="plan-more-menu">
       <summary class="plain-button icon-button" aria-label="${objectLabel} actions" title="${objectLabel} actions"><span class="button-icon">...</span></summary>
       <div class="plan-more-menu-popover">
         <button type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(planId)}">Edit ${objectLabel}</button>
-        <button type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(planId)}">Edit copy</button>
+        <button type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(planId)}" data-plan-type="${isWeekly ? "weekly" : "program"}">Edit copy</button>
         <button class="danger-action" type="button" data-action="builder-delete-source-plan" data-plan-id="${escapeAttr(planId)}" data-object-label="${objectLabel}">Delete ${objectLabel}</button>
       </div>
     </details>
@@ -1349,7 +1357,7 @@ function renderBuilder() {
         <div><p class="eyebrow">${isWeekly ? `Weekly plan · ${formatDate(draft.plan.weekStart)}` : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><h3>${escapeHtml(draft.plan.name)}</h3><p class="muted">${escapeHtml(draft.plan.athleteName || "Private coach template")}</p></div>
         <div class="builder-program-actions"><span class="item-badge">${escapeHtml(draft.plan.status || "draft")}</span>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">Save and finish</button>` : `<span class="builder-finished-label">Saved</span>`}<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button></div>
       </header>
-      ${state.builder.clipboard?.type === "section" ? `<div class="builder-copy-hint"><span>Copied section: <strong>${escapeHtml(state.builder.clipboard.name)}</strong> (${state.builder.clipboard.itemCount} exercises)</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
+      ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       ${isWeekly ? "" : `<section class="builder-block-creator">
         <div><p class="eyebrow">Program structure</p><strong>Add a day or block</strong></div>
         <button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program structure example"><span class="button-icon">i</span></button>
@@ -1398,12 +1406,13 @@ function renderBuilderAthletePicker() {
 function renderCopyPlanModal() {
   if (!state.builder.copyPlanId) return "";
   const selectedAthlete = state.athletes.find((athlete) => String(athlete.athlete_id) === String(state.builder.copyAthleteId));
+  const isWeeklyCopy = state.builder.copyPlanType === "weekly";
   return `
     <div class="builder-modal-overlay">
       <button class="builder-modal-backdrop" type="button" data-action="builder-close-copy-plan" aria-label="Close copy setup"></button>
       <section class="panel builder-compact-modal builder-copy-plan-modal" role="dialog" aria-modal="true" aria-label="Create editable copy">
-        <div class="builder-modal-head"><div><p class="eyebrow">Editable copy</p><h3>${escapeHtml(state.builder.copyPlanName || "Program")}</h3><p class="muted">Choose an athlete for a specific program, or keep the copy reusable as a template.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-copy-plan" aria-label="Close"><span class="button-icon">x</span></button></div>
-        <button class="builder-athlete-option ${state.builder.copyAthleteId ? "" : "is-selected"}" type="button" data-action="builder-select-copy-athlete" data-athlete-id=""><span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Keep this editable copy unassigned</small></span></button>
+        <div class="builder-modal-head"><div><p class="eyebrow">Editable copy</p><h3>${escapeHtml(state.builder.copyPlanName || "Program")}</h3><p class="muted">${isWeeklyCopy ? "Choose an athlete and the new week for this independent copy." : "Choose an athlete for a specific program, or keep the copy reusable as a template."}</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-copy-plan" aria-label="Close"><span class="button-icon">x</span></button></div>
+        ${isWeeklyCopy ? `<label class="search-field builder-copy-week"><span>Target week</span><input data-builder-copy-week-start type="date" value="${escapeAttr(state.builder.copyWeekStart || weekMondayIso(localDateIso()))}"><small>The copied week will begin on Monday.</small></label>` : `<button class="builder-athlete-option ${state.builder.copyAthleteId ? "" : "is-selected"}" type="button" data-action="builder-select-copy-athlete" data-athlete-id=""><span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Keep this editable copy unassigned</small></span></button>`}
         <div class="builder-athlete-options">
           ${state.athletes.map((athlete) => `
             <button class="builder-athlete-option ${String(athlete.athlete_id) === String(state.builder.copyAthleteId) ? "is-selected" : ""}" type="button" data-action="builder-select-copy-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
@@ -1412,10 +1421,16 @@ function renderCopyPlanModal() {
             </button>
           `).join("")}
         </div>
-        <div class="builder-copy-plan-footer"><span class="muted">${selectedAthlete ? `Specific program for ${escapeHtml(selectedAthlete.athlete)}` : "Reusable template"}</span><button class="plain-button" type="button" data-action="builder-confirm-duplicate-plan">Create editable copy</button></div>
+        <div class="builder-copy-plan-footer"><span class="muted">${selectedAthlete ? `${isWeeklyCopy ? "Weekly plan for" : "Specific program for"} ${escapeHtml(selectedAthlete.athlete)}` : isWeeklyCopy ? "Choose an athlete" : "Reusable template"}</span><button class="plain-button" type="button" data-action="builder-confirm-duplicate-plan" ${isWeeklyCopy && !selectedAthlete ? "disabled" : ""}>Create editable copy</button></div>
       </section>
     </div>
   `;
+}
+
+function renderCopyPlanSource() {
+  if (state.activeTab === "weekly") return renderWeeklyRoot(state.lastWeeklyData);
+  if (state.activeTab === "programs") return renderProgramRoot((state.lastProgramBundle?.programs || []).find((program) => program.id === state.selectedProgramId));
+  return loadTemplates();
 }
 
 function builderIconOptions() {
@@ -1491,7 +1506,7 @@ function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly =
         ${block.sessions.length ? block.sessions.map((session) => `
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             <span>${escapeHtml(sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span>
-          </button><div class="builder-session-actions">${state.builder.clipboard?.type === "section" ? `<button class="text-action" type="button" data-action="builder-paste-section" data-session-id="${escapeAttr(session.id)}">Paste section</button>` : ""}<button class="text-action" type="button" data-action="builder-add-structure" data-session-id="${escapeAttr(session.id)}">Add session parts</button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
+          </button><div class="builder-session-actions">${renderNodePasteButton(session.id, "", "session")}<button class="text-action" type="button" data-action="builder-add-structure" data-session-id="${escapeAttr(session.id)}">Add session parts</button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
           ${renderBuilderNodeTree(session, "", selectedNodeId)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}
       </div>
@@ -1507,6 +1522,7 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId) {
       <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
         <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${escapeHtml(exerciseNodeLabel(node.type))}${node.type === "section" ? ` - ${node.items.length} exercise${node.items.length === 1 ? "" : "s"}` : ""}</small>
       </button>
+      ${renderNodePasteButton(session.id, node.id, node.type)}
       ${renderBuilderNodeTree(session, node.id, selectedNodeId)}
     </div>
   `).join("");
@@ -1517,14 +1533,14 @@ function renderBuilderStructureEditor(session, selectedNode) {
     return `
       <div class="builder-selected-section">
         <div><p class="eyebrow">Selected section</p><strong>${escapeHtml(selectedNode.name)}</strong><p class="muted">Sections contain exercises and cannot contain another structural level.</p></div>
-        <button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete section</button>
+        <div class="builder-section-editor-actions"><button class="plain-button" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete section</button></div>
       </div>
       <button class="plain-button builder-open-section" type="button" data-action="builder-open-section-panel">Open section exercise editor</button>
     `;
   }
   return `
     <form class="builder-node-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
-      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button>` : ""}</div>
+      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions"><button class="text-action" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy ${escapeHtml(selectedNode.type)}</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button></span>` : ""}</div>
       <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
       <select name="nodeType">${nodeTypeOptions(selectedNode?.type)}</select>
       <input name="name" placeholder="${selectedNode?.type === "domain" ? "Category or section name" : selectedNode?.type === "category" ? "Section name" : "Domain, category or section name"}" required>
@@ -1537,6 +1553,18 @@ function renderBuilderStructureEditor(session, selectedNode) {
       <div class="empty">${selectedNode.type === "domain" ? "Add a category or section below this domain." : "Add a section below this category."}</div>
     ` : `<div class="empty">Create or select a domain, category or section before adding exercises.</div>`}
   `;
+}
+
+function renderNodePasteButton(sessionId, parentId, parentType) {
+  const clipboard = state.builder.clipboard;
+  if (!clipboard?.type || !canPasteNodeType(clipboard.type, parentType)) return "";
+  return `<button class="text-action builder-paste-node" type="button" data-action="builder-paste-node" data-session-id="${escapeAttr(sessionId)}" data-parent-id="${escapeAttr(parentId)}">Paste ${escapeHtml(clipboard.type)}</button>`;
+}
+
+function canPasteNodeType(nodeType, parentType) {
+  if (parentType === "session") return nodeType === "domain" || nodeType === "section";
+  if (parentType === "domain") return nodeType === "category" || nodeType === "section";
+  return parentType === "category" && nodeType === "section";
 }
 
 function renderBuilderSectionPanelLegacy(selectedNode) {
@@ -1586,7 +1614,7 @@ function renderBuilderSectionPanel(selectedNode) {
   const query = state.builder.exerciseQuery;
   return `
     <div class="builder-section-panel" aria-label="Section exercise editor">
-      <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p><h3>${escapeHtml(selectedNode.name)}</h3><p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions"><button class="plain-button" type="button" data-action="builder-copy-section" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete</button></div></div>
+      <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p><h3>${escapeHtml(selectedNode.name)}</h3><p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions"><button class="plain-button" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete</button></div></div>
       <div class="builder-section-grid">
         <section class="builder-section-library">
           <div class="builder-panel-label">Exercise library</div>
@@ -1701,34 +1729,37 @@ async function handleBuilderAction(action) {
     state.builder.copyPlanId = action.dataset.planId || "";
     state.builder.copyPlanName = action.closest(".section-heading")?.querySelector("h3")?.textContent || "Program";
     state.builder.copyAthleteId = "";
-    if (state.activeTab === "programs") renderProgramRoot((state.lastProgramBundle?.programs || []).find((program) => program.id === state.selectedProgramId));
-    else await loadTemplates();
+    state.builder.copyPlanType = action.dataset.planType === "weekly" ? "weekly" : "program";
+    state.builder.copyWeekStart = state.builder.copyPlanType === "weekly" ? weekMondayIso(localDateIso()) : "";
+    await renderCopyPlanSource();
     return;
   }
   if (type === "builder-close-copy-plan") {
     state.builder.copyPlanId = "";
     state.builder.copyPlanName = "";
     state.builder.copyAthleteId = "";
-    if (state.activeTab === "programs") renderProgramRoot((state.lastProgramBundle?.programs || []).find((program) => program.id === state.selectedProgramId));
-    else await loadTemplates();
+    state.builder.copyPlanType = "program";
+    state.builder.copyWeekStart = "";
+    await renderCopyPlanSource();
     return;
   }
   if (type === "builder-select-copy-athlete") {
     state.builder.copyAthleteId = action.dataset.athleteId || "";
-    if (state.activeTab === "programs") renderProgramRoot((state.lastProgramBundle?.programs || []).find((program) => program.id === state.selectedProgramId));
-    else await loadTemplates();
+    await renderCopyPlanSource();
     return;
   }
   if (type === "builder-confirm-duplicate-plan") {
     action.disabled = true;
     try {
-      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(state.builder.copyPlanId)}/duplicate`, { method: "POST", body: JSON.stringify({ athleteId: state.builder.copyAthleteId }) });
+      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(state.builder.copyPlanId)}/duplicate`, { method: "POST", body: JSON.stringify({ athleteId: state.builder.copyAthleteId, weekStart: state.builder.copyWeekStart }) });
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
       state.builder.copyPlanId = "";
       state.builder.copyPlanName = "";
       state.builder.copyAthleteId = "";
+      state.builder.copyPlanType = "program";
+      state.builder.copyWeekStart = "";
       state.activeTab = "builder";
       state.navStack = [];
       renderTabs();
@@ -1782,12 +1813,14 @@ async function handleBuilderAction(action) {
     renderBuilder();
     return;
   }
-  if (type === "builder-copy-section") {
-    const section = findBuilderNode(state.builder.draft, action.dataset.nodeId || state.builder.selectedNodeId);
-    if (!section || section.type !== "section") return;
-    state.builder.clipboard = { type: "section", nodeId: section.id, name: section.name, itemCount: section.items.length };
+  if (type === "builder-copy-node") {
+    const node = findBuilderNode(state.builder.draft, action.dataset.nodeId || state.builder.selectedNodeId);
+    if (!node) return;
+    state.builder.clipboard = { type: node.type, nodeId: node.id, name: node.name, itemCount: node.items.length };
     state.builder.selectedNodeId = "";
     state.builder.customExerciseOpen = false;
+    state.builder.sectionPickerOpen = false;
+    state.builder.structureModalOpen = false;
     renderBuilder();
     return;
   }
@@ -1796,14 +1829,14 @@ async function handleBuilderAction(action) {
     renderBuilder();
     return;
   }
-  if (type === "builder-paste-section") {
+  if (type === "builder-paste-node") {
     const clipboard = state.builder.clipboard;
-    if (!clipboard || clipboard.type !== "section") return;
+    if (!clipboard) return;
     action.disabled = true;
     try {
       state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(clipboard.nodeId)}/copy`, {
         method: "POST",
-        body: JSON.stringify({ targetSessionId: action.dataset.sessionId, targetParentId: "" }),
+        body: JSON.stringify({ targetSessionId: action.dataset.sessionId, targetParentId: action.dataset.parentId || "" }),
       });
       state.builder.selectedSessionId = action.dataset.sessionId || "";
       state.builder.selectedNodeId = "";
@@ -1941,7 +1974,10 @@ async function handleBuilderAction(action) {
     if (!planId || !window.confirm(`Delete this ${objectLabel} and all of its contents? This cannot be undone.`)) return;
     action.disabled = true;
     await api(`/api/builder/plans/${encodeURIComponent(planId)}`, { method: "DELETE" });
-    if (state.activeTab === "programs") {
+    if (state.activeTab === "weekly") {
+      state.weekSelectorOpen = false;
+      await loadWeekly();
+    } else if (state.activeTab === "programs") {
       state.selectedProgramId = null;
       await loadPrograms();
     } else {
