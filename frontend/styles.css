@@ -3695,14 +3695,19 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-node-icon { width: 20px; height: 20px; display: inline-grid; place-items: center; border-radius: 4px; color: var(--builder-node-color, #287e77); background: color-mix(in srgb, var(--builder-node-color, #287e77) 15%, white); font-size: 13px; }
 .builder-node-button { border-left-color: var(--builder-node-color, #dfe4e8); }
 .builder-node-button small { display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; white-space: nowrap; }
-.builder-node-level { display: inline-flex; align-items: center; gap: 3px; min-width: 22px; height: 20px; padding: 0 4px; border-radius: 4px; background: #edf2f4; }
-.builder-node-level i { width: 4px; height: 4px; border-radius: 50%; background: #c9d3d9; }
+.builder-node-level { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; width: 27px; height: 24px; border-radius: 4px; background: #edf2f4; }
+.builder-node-level i { display: block; height: 3px; border-radius: 2px; background: #c9d3d9; }
+.builder-pyramid-top { width: 6px; }
+.builder-pyramid-middle { width: 12px; }
+.builder-pyramid-base { width: 18px; }
 .builder-node-level-domain { background: #e9f0ff; }
 .builder-node-level-domain i.is-active { background: #5a8dee; }
 .builder-node-level-category { background: #edf7e9; }
 .builder-node-level-category i.is-active { background: #7fba59; }
 .builder-node-level-section { background: #fff1df; }
 .builder-node-level-section i.is-active { background: #e7a049; }
+.builder-exercise-count { display: inline-flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 3px; max-width: 52px; }
+.builder-exercise-count i { width: 5px; height: 5px; border-radius: 50%; background: #287e77; }
 .builder-open-section { width: 100%; margin-top: 8px; }
 .builder-selected-section { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; padding: 12px; border: 1px solid #b9d8d4; border-radius: 7px; background: #eef8f6; }
 .builder-selected-section strong { display: block; margin: 2px 0 4px; }
