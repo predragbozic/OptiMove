@@ -3690,6 +3690,11 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-node-name { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .builder-node-icon { width: 20px; height: 20px; display: inline-grid; place-items: center; border-radius: 4px; color: var(--builder-node-color, #287e77); background: color-mix(in srgb, var(--builder-node-color, #287e77) 15%, white); font-size: 13px; }
 .builder-node-button { border-left-color: var(--builder-node-color, #dfe4e8); }
+.builder-node-button small { display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; white-space: nowrap; }
+.builder-node-level { display: inline-grid; place-items: center; min-width: 24px; height: 20px; padding: 0 5px; border-radius: 4px; color: #49606d; background: #edf2f4; font-size: 10px; font-weight: 800; letter-spacing: 0; }
+.builder-node-level-domain { color: #315ca8; background: #e9f0ff; }
+.builder-node-level-category { color: #3d762e; background: #edf7e9; }
+.builder-node-level-section { color: #9a5b0d; background: #fff1df; }
 .builder-open-section { width: 100%; margin-top: 8px; }
 .builder-selected-section { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; padding: 12px; border: 1px solid #b9d8d4; border-radius: 7px; background: #eef8f6; }
 .builder-selected-section strong { display: block; margin: 2px 0 4px; }

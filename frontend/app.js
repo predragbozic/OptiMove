@@ -1527,7 +1527,7 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId) {
     <div class="builder-node builder-node-${escapeAttr(node.type)}">
       <div class="builder-node-row">
         <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
-          <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${escapeHtml(exerciseNodeLabel(node.type))}${node.type === "section" ? ` - ${node.items.length} exercise${node.items.length === 1 ? "" : "s"}` : ""}</small>
+          <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small><span class="builder-node-level builder-node-level-${escapeAttr(node.type)}" title="${escapeAttr(exerciseNodeLabel(node.type))}">${escapeHtml(builderNodeLevel(node.type))}</span>${node.type === "section" ? `<span>${node.items.length} exercise${node.items.length === 1 ? "" : "s"}</span>` : ""}</small>
         </button>
         ${renderBuilderNodeMoveActions(node, true, session.id)}
       </div>
@@ -1693,6 +1693,10 @@ function renderCustomExerciseModal(section) {
 
 function exerciseNodeLabel(type) {
   return ({ domain: "Exercise domain", category: "Exercise category", section: "Exercise section" })[type] || type;
+}
+
+function builderNodeLevel(type) {
+  return ({ domain: "L1", category: "L2", section: "L3" })[type] || "";
 }
 
 function renderBuilderItems(node) {
