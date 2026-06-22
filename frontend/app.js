@@ -1697,8 +1697,7 @@ function exerciseNodeLabel(type) {
 
 function builderNodeMarker(type) {
   const label = exerciseNodeLabel(type);
-  const activeSteps = ({ domain: 1, category: 2, section: 3 })[type] || 0;
-  return `<span class="builder-node-level builder-node-level-${escapeAttr(type)}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}"><i class="builder-pyramid-top ${activeSteps === 3 ? "is-active" : ""}"></i><i class="builder-pyramid-middle ${activeSteps >= 2 ? "is-active" : ""}"></i><i class="builder-pyramid-base ${activeSteps >= 1 ? "is-active" : ""}"></i></span>`;
+  return `<span class="builder-node-level builder-node-level-${escapeAttr(type)}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}"><i class="builder-pyramid-top ${type === "section" ? "is-active" : ""}"></i><i class="builder-pyramid-middle ${type === "category" ? "is-active" : ""}"></i><i class="builder-pyramid-base ${type === "domain" ? "is-active" : ""}"></i></span>`;
 }
 
 function builderExerciseCountDots(count) {
