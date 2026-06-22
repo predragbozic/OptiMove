@@ -246,6 +246,37 @@ router.delete("/nodes/:nodeId", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.post("/nodes/:nodeId/move", async (req, res, next) => {
+  try {
+    const node = await getEditableNode(req.user, req.params.nodeId);
+    if (!node) return res.status(404).json({ error: "Program node not found" });
+    const direction = text(req.body?.direction);
+    if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: "Move direction is required." });
+    const comparator = direction === 'up' ? '<' : '>';
+    const sort = direction === 'up' ? 'desc' : 'asc';
+    const neighborResult = await query(
+      `select id, node_order
+       from plans.plan_nodes
+       where plan_session_id = $1
+         and parent_id is not distinct from $2
+         and node_order ${comparator} $3
+       order by node_order ${sort}
+       limit 1`,
+      [node.plan_session_id, node.parent_id, node.node_order],
+    );
+    const neighbor = neighborResult.rows[0];
+    if (!neighbor) return res.json(await buildDraft(node.plan));
+    await query(
+      `update plans.plan_nodes
+       set node_order = case when id = $1 then $2 when id = $3 then $4 end,
+           updated_at = now()
+       where id in ($1, $3)`,
+      [node.id, neighbor.node_order, neighbor.id, node.node_order],
+    );
+    res.json(await buildDraft(node.plan));
+  } catch (error) { next(error); }
+});
+
 router.post("/nodes/:nodeId/exercises", async (req, res, next) => {
   try {
     const node = await getEditableNode(req.user, req.params.nodeId);
@@ -654,7 +685,7 @@ async function getEditableSession(user, sessionId) {
 }
 
 async function getEditableNode(user, nodeId) {
-  const result = await query("select pn.id, pn.plan_session_id, pn.node_type, pn.name, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1", [nodeId]);
+  const result = await query("select pn.id, pn.plan_session_id, pn.parent_id, pn.node_type, pn.name, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1", [nodeId]);
   const row = result.rows[0]; if (!row) return null;
   const plan = await getEditablePlan(user, row.plan_id); return plan ? { ...row, plan } : null;
 }

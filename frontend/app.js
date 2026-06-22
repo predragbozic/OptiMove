@@ -1539,14 +1539,14 @@ function renderBuilderStructureEditor(session, selectedNode) {
     return `
       <div class="builder-selected-section">
         <div><p class="eyebrow">Selected section</p><strong>${escapeHtml(selectedNode.name)}</strong><p class="muted">Sections contain exercises and cannot contain another structural level.</p></div>
-        <div class="builder-section-editor-actions"><button class="plain-button" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete section</button></div>
+        <div class="builder-section-editor-actions">${renderBuilderNodeMoveActions(selectedNode)}<button class="plain-button" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete section</button></div>
       </div>
       <button class="plain-button builder-open-section" type="button" data-action="builder-open-section-panel">Open section exercise editor</button>
     `;
   }
   return `
     <form class="builder-node-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
-      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions"><button class="text-action" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy ${escapeHtml(selectedNode.type)}</button>${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type)}<button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button></span>` : ""}</div>
+      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions">${renderBuilderNodeMoveActions(selectedNode)}<button class="text-action" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy ${escapeHtml(selectedNode.type)}</button>${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type)}<button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button></span>` : ""}</div>
       <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
       <select name="nodeType">${nodeTypeOptions(selectedNode?.type)}</select>
       <input name="name" placeholder="${selectedNode?.type === "domain" ? "Category or section name" : selectedNode?.type === "category" ? "Section name" : "Domain, category or section name"}" required>
@@ -1565,6 +1565,15 @@ function renderNodePasteButton(sessionId, parentId, parentType) {
   const clipboard = state.builder.clipboard;
   if (!clipboard?.type || !canPasteNodeType(clipboard.type, parentType)) return "";
   return `<button class="text-action builder-paste-node" type="button" data-action="builder-paste-node" data-session-id="${escapeAttr(sessionId)}" data-parent-id="${escapeAttr(parentId)}">Paste ${escapeHtml(clipboard.type)}</button>`;
+}
+
+function renderBuilderNodeMoveActions(node) {
+  const session = findBuilderSession(state.builder.draft, state.builder.selectedSessionId);
+  const siblings = (session?.nodes || [])
+    .filter((candidate) => candidate.parentId === node.parentId)
+    .sort((left, right) => left.order - right.order);
+  const index = siblings.findIndex((candidate) => candidate.id === node.id);
+  return `<span class="builder-node-move-actions"><button class="text-action" type="button" data-action="builder-move-node" data-node-id="${escapeAttr(node.id)}" data-direction="up" ${index <= 0 ? "disabled" : ""}>Move up</button><button class="text-action" type="button" data-action="builder-move-node" data-node-id="${escapeAttr(node.id)}" data-direction="down" ${index < 0 || index >= siblings.length - 1 ? "disabled" : ""}>Move down</button></span>`;
 }
 
 function canPasteNodeType(nodeType, parentType) {
@@ -1846,6 +1855,20 @@ async function handleBuilderAction(action) {
       });
       state.builder.selectedSessionId = action.dataset.sessionId || "";
       state.builder.selectedNodeId = "";
+      renderBuilder();
+    } catch (error) {
+      action.disabled = false;
+      throw error;
+    }
+    return;
+  }
+  if (type === "builder-move-node") {
+    action.disabled = true;
+    try {
+      state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(action.dataset.nodeId || "")}/move`, {
+        method: "POST",
+        body: JSON.stringify({ direction: action.dataset.direction || "" }),
+      });
       renderBuilder();
     } catch (error) {
       action.disabled = false;
