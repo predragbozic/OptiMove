@@ -1525,9 +1525,12 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId) {
   const nodes = session.nodes.filter((node) => node.parentId === parentId);
   return nodes.map((node) => `
     <div class="builder-node builder-node-${escapeAttr(node.type)}">
-      <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
-        <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${escapeHtml(exerciseNodeLabel(node.type))}${node.type === "section" ? ` - ${node.items.length} exercise${node.items.length === 1 ? "" : "s"}` : ""}</small>
-      </button>
+      <div class="builder-node-row">
+        <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
+          <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${escapeHtml(exerciseNodeLabel(node.type))}${node.type === "section" ? ` - ${node.items.length} exercise${node.items.length === 1 ? "" : "s"}` : ""}</small>
+        </button>
+        ${renderBuilderNodeMoveActions(node, true)}
+      </div>
       ${renderNodePasteButton(session.id, node.id, node.type)}
       ${renderBuilderNodeTree(session, node.id, selectedNodeId)}
     </div>
@@ -1567,13 +1570,16 @@ function renderNodePasteButton(sessionId, parentId, parentType) {
   return `<button class="text-action builder-paste-node" type="button" data-action="builder-paste-node" data-session-id="${escapeAttr(sessionId)}" data-parent-id="${escapeAttr(parentId)}">Paste ${escapeHtml(clipboard.type)}</button>`;
 }
 
-function renderBuilderNodeMoveActions(node) {
+function renderBuilderNodeMoveActions(node, compact = false) {
   const session = findBuilderSession(state.builder.draft, state.builder.selectedSessionId);
   const siblings = (session?.nodes || [])
     .filter((candidate) => candidate.parentId === node.parentId)
     .sort((left, right) => left.order - right.order);
   const index = siblings.findIndex((candidate) => candidate.id === node.id);
-  return `<span class="builder-node-move-actions"><button class="text-action" type="button" data-action="builder-move-node" data-node-id="${escapeAttr(node.id)}" data-direction="up" ${index <= 0 ? "disabled" : ""}>Move up</button><button class="text-action" type="button" data-action="builder-move-node" data-node-id="${escapeAttr(node.id)}" data-direction="down" ${index < 0 || index >= siblings.length - 1 ? "disabled" : ""}>Move down</button></span>`;
+  const buttonClass = compact ? "plain-button builder-node-move-icon" : "text-action";
+  const upLabel = compact ? "&uarr;" : "Move up";
+  const downLabel = compact ? "&darr;" : "Move down";
+  return `<span class="builder-node-move-actions ${compact ? "is-compact" : ""}"><button class="${buttonClass}" type="button" data-action="builder-move-node" data-node-id="${escapeAttr(node.id)}" data-direction="up" aria-label="Move ${escapeAttr(node.type)} up" title="Move up" ${index <= 0 ? "disabled" : ""}>${upLabel}</button><button class="${buttonClass}" type="button" data-action="builder-move-node" data-node-id="${escapeAttr(node.id)}" data-direction="down" aria-label="Move ${escapeAttr(node.type)} down" title="Move down" ${index < 0 || index >= siblings.length - 1 ? "disabled" : ""}>${downLabel}</button></span>`;
 }
 
 function canPasteNodeType(nodeType, parentType) {
