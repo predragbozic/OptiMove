@@ -608,7 +608,19 @@ async function getEditablePlan(user, planId) {
     `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.visibility, p.is_template, p.status, a.athlete_id, a.source_external_id as athlete_source_external_id,
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
-     where p.id = $1 and p.plan_type in ('program', 'weekly') and p.created_by_user_id = $2`, [planId, user.id],
+     where p.id = $1
+       and p.plan_type in ('program', 'weekly')
+       and (
+         p.created_by_user_id = $2
+         or $3 in ('admin', 'platform_admin', 'club_admin')
+         or exists (
+           select 1
+           from public.athletes managed_athlete
+           left join public.user_athletes ua on ua.athlete_id = managed_athlete.id and ua.is_active = true
+           where managed_athlete.id = p.athlete_id
+             and (managed_athlete.user_id = $2 or ua.user_id = $2)
+         )
+       )`, [planId, user.id, user.role_hint || ""],
   );
   return result.rows[0] || null;
 }
@@ -630,25 +642,25 @@ async function requirePlan(user, planId, res) {
 }
 
 async function getEditableBlock(user, blockId) {
-  const result = await query("select pd.id, p.id as plan_id from plans.plan_days pd join plans.plans p on p.id = pd.plan_id where pd.id = $1 and p.created_by_user_id = $2", [blockId, user.id]);
+  const result = await query("select pd.id, pd.plan_id from plans.plan_days pd where pd.id = $1", [blockId]);
   const row = result.rows[0]; if (!row) return null;
   const plan = await getEditablePlan(user, row.plan_id); return plan ? { id: row.id, plan } : null;
 }
 
 async function getEditableSession(user, sessionId) {
-  const result = await query("select ps.id, p.id as plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id join plans.plans p on p.id = pd.plan_id where ps.id = $1 and p.created_by_user_id = $2", [sessionId, user.id]);
+  const result = await query("select ps.id, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
   const row = result.rows[0]; if (!row) return null;
   const plan = await getEditablePlan(user, row.plan_id); return plan ? { id: row.id, plan } : null;
 }
 
 async function getEditableNode(user, nodeId) {
-  const result = await query("select pn.id, pn.plan_session_id, pn.node_type, pn.name, pn.node_order, p.id as plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id join plans.plans p on p.id = pd.plan_id where pn.id = $1 and p.created_by_user_id = $2", [nodeId, user.id]);
+  const result = await query("select pn.id, pn.plan_session_id, pn.node_type, pn.name, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1", [nodeId]);
   const row = result.rows[0]; if (!row) return null;
   const plan = await getEditablePlan(user, row.plan_id); return plan ? { ...row, plan } : null;
 }
 
 async function getEditableItem(user, itemId) {
-  const result = await query("select pi.id, pi.plan_node_id, pi.item_order, p.id as plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id join plans.plans p on p.id = pd.plan_id where pi.id = $1 and p.created_by_user_id = $2", [itemId, user.id]);
+  const result = await query("select pi.id, pi.plan_node_id, pi.item_order, pd.plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pi.id = $1", [itemId]);
   const row = result.rows[0]; if (!row) return null;
   const plan = await getEditablePlan(user, row.plan_id); return plan ? { id: row.id, plan_node_id: row.plan_node_id, item_order: row.item_order, plan } : null;
 }
