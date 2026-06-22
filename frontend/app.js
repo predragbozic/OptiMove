@@ -979,7 +979,7 @@ function renderProgramToolbar(programs) {
           ${escapeHtml(program.name)}
         </button>
       `).join("")}
-      ${state.selectedProgramId ? renderPlanMoreMenu(state.selectedProgramId) : ""}
+      ${state.selectedProgramId ? renderPlanMoreMenu(state.selectedProgramId, "program") : ""}
     </div>
   `);
   els.toolbar.querySelectorAll(".program-toolbar .chip").forEach((button) => {
@@ -1009,7 +1009,7 @@ function renderProgramRoot(program) {
           <p class="eyebrow">Specific program</p>
           <h3>${escapeHtml(program.name)}</h3>
         </div>
-        <div class="builder-source-actions"><span class="item-badge">${data.rows?.length || 0} items</span>${renderPlanMoreMenu(program.id)}</div>
+        <div class="builder-source-actions"><span class="item-badge">${data.rows?.length || 0} items</span>${renderPlanMoreMenu(program.id, "program")}</div>
       </div>
       ${isMicrocycle
         ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -1201,7 +1201,7 @@ function renderTemplateToolbar(templates) {
           ${templateSecondaryLabel(template, duplicateNames) ? `<span class="chip-sub">${escapeHtml(templateSecondaryLabel(template, duplicateNames))}</span>` : ""}
         </button>
       `).join("")}
-      ${state.selectedTemplateId ? renderPlanMoreMenu(state.selectedTemplateId) : ""}
+      ${state.selectedTemplateId ? renderPlanMoreMenu(state.selectedTemplateId, "template") : ""}
     </div>
   `;
   els.toolbar.querySelectorAll("[data-template-id]").forEach((button) => {
@@ -1249,7 +1249,7 @@ function renderTemplateList(templates, selected, detail) {
             <h3>${escapeHtml(selected.plan_name)}</h3>
             <p class="muted">${escapeHtml(selected.source_external_id || "Program template")}</p>
           </div>
-          <div class="builder-source-actions"><span class="item-badge">${detail.rows?.length || 0} items</span>${renderPlanMoreMenu(selected.plan_id)}</div>
+          <div class="builder-source-actions"><span class="item-badge">${detail.rows?.length || 0} items</span>${renderPlanMoreMenu(selected.plan_id, "template")}</div>
         </div>
         ${isMicrocycle
           ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -1260,14 +1260,16 @@ function renderTemplateList(templates, selected, detail) {
   `;
 }
 
-function renderPlanMoreMenu(planId) {
+function renderPlanMoreMenu(planId, objectType) {
+  const isTemplate = objectType === "template";
+  const objectLabel = isTemplate ? "template" : "program";
   return `
     <details class="plan-more-menu">
-      <summary class="plain-button icon-button" aria-label="Program actions" title="Program actions"><span class="button-icon">...</span></summary>
+      <summary class="plain-button icon-button" aria-label="${objectLabel} actions" title="${objectLabel} actions"><span class="button-icon">...</span></summary>
       <div class="plan-more-menu-popover">
-        <button type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(planId)}">Edit original</button>
+        <button type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(planId)}">Edit ${objectLabel}</button>
         <button type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(planId)}">Edit copy</button>
-        <button class="danger-action" type="button" data-action="builder-delete-source-plan" data-plan-id="${escapeAttr(planId)}">Delete program</button>
+        <button class="danger-action" type="button" data-action="builder-delete-source-plan" data-plan-id="${escapeAttr(planId)}" data-object-label="${objectLabel}">Delete ${objectLabel}</button>
       </div>
     </details>
   `;
@@ -1935,7 +1937,8 @@ async function handleBuilderAction(action) {
   }
   if (type === "builder-delete-source-plan") {
     const planId = action.dataset.planId || "";
-    if (!planId || !window.confirm("Delete this original program and all of its contents? This cannot be undone.")) return;
+    const objectLabel = action.dataset.objectLabel || "program";
+    if (!planId || !window.confirm(`Delete this ${objectLabel} and all of its contents? This cannot be undone.`)) return;
     action.disabled = true;
     await api(`/api/builder/plans/${encodeURIComponent(planId)}`, { method: "DELETE" });
     if (state.activeTab === "programs") {
