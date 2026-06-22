@@ -974,6 +974,7 @@ function renderProgramToolbar(programs) {
           ${escapeHtml(program.name)}
         </button>
       `).join("")}
+      ${state.selectedProgramId ? `<button class="plain-button toolbar-edit-copy" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(state.selectedProgramId)}">Edit copy</button>` : ""}
     </div>
   `);
   els.toolbar.querySelectorAll(".program-toolbar .chip").forEach((button) => {
@@ -983,6 +984,9 @@ function renderProgramToolbar(programs) {
       renderProgramToolbar(programs);
       renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
     });
+  });
+  els.toolbar.querySelector(".toolbar-edit-copy")?.addEventListener("click", (event) => {
+    void handleBuilderAction(event.currentTarget).catch(renderBuilderError);
   });
 }
 
@@ -1195,6 +1199,7 @@ function renderTemplateToolbar(templates) {
           ${templateSecondaryLabel(template, duplicateNames) ? `<span class="chip-sub">${escapeHtml(templateSecondaryLabel(template, duplicateNames))}</span>` : ""}
         </button>
       `).join("")}
+      ${state.selectedTemplateId ? `<button class="plain-button toolbar-edit-copy" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(state.selectedTemplateId)}">Edit copy</button>` : ""}
     </div>
   `;
   els.toolbar.querySelectorAll("[data-template-id]").forEach((button) => {
@@ -1203,6 +1208,9 @@ function renderTemplateToolbar(templates) {
       state.navStack = [];
       await loadTemplates();
     });
+  });
+  els.toolbar.querySelector(".toolbar-edit-copy")?.addEventListener("click", (event) => {
+    void handleBuilderAction(event.currentTarget).catch(renderBuilderError);
   });
 }
 
