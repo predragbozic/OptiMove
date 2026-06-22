@@ -16,7 +16,7 @@ const state = {
   lastProgramBundle: null,
   lastTemplates: [],
   lastExerciseResults: [],
-  builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
+  builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
   exerciseSearch: { term: "", limit: 30, hasMore: false },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
@@ -1009,6 +1009,7 @@ function renderProgramRoot(program) {
         ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
         : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
     </section>
+    ${renderCopyPlanModal()}
   `;
 }
 
@@ -1248,6 +1249,7 @@ function renderTemplateList(templates, selected, detail) {
           : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
       </section>
     </section>
+    ${renderCopyPlanModal()}
   `;
 }
 
@@ -1325,6 +1327,7 @@ function renderBuilder() {
         <div><p class="eyebrow">${isWeekly ? `Weekly plan · ${formatDate(draft.plan.weekStart)}` : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><h3>${escapeHtml(draft.plan.name)}</h3><p class="muted">${escapeHtml(draft.plan.athleteName || "Private coach template")}</p></div>
         <div class="builder-program-actions"><span class="item-badge">${escapeHtml(draft.plan.status || "draft")}</span>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">Save and finish</button>` : `<span class="builder-finished-label">Saved</span>`}<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button></div>
       </header>
+      ${state.builder.clipboard?.type === "section" ? `<div class="builder-copy-hint"><span>Copied section: <strong>${escapeHtml(state.builder.clipboard.name)}</strong> (${state.builder.clipboard.itemCount} exercises)</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       ${isWeekly ? "" : `<section class="builder-block-creator">
         <div><p class="eyebrow">Program structure</p><strong>Add a day or block</strong></div>
         <button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program structure example"><span class="button-icon">i</span></button>
@@ -1365,6 +1368,29 @@ function renderBuilderAthletePicker() {
             </button>
           `).join("")}
         </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderCopyPlanModal() {
+  if (!state.builder.copyPlanId) return "";
+  const selectedAthlete = state.athletes.find((athlete) => String(athlete.athlete_id) === String(state.builder.copyAthleteId));
+  return `
+    <div class="builder-modal-overlay">
+      <button class="builder-modal-backdrop" type="button" data-action="builder-close-copy-plan" aria-label="Close copy setup"></button>
+      <section class="panel builder-compact-modal builder-copy-plan-modal" role="dialog" aria-modal="true" aria-label="Create editable copy">
+        <div class="builder-modal-head"><div><p class="eyebrow">Editable copy</p><h3>${escapeHtml(state.builder.copyPlanName || "Program")}</h3><p class="muted">Choose an athlete for a specific program, or keep the copy reusable as a template.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-copy-plan" aria-label="Close"><span class="button-icon">x</span></button></div>
+        <button class="builder-athlete-option ${state.builder.copyAthleteId ? "" : "is-selected"}" type="button" data-action="builder-select-copy-athlete" data-athlete-id=""><span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Keep this editable copy unassigned</small></span></button>
+        <div class="builder-athlete-options">
+          ${state.athletes.map((athlete) => `
+            <button class="builder-athlete-option ${String(athlete.athlete_id) === String(state.builder.copyAthleteId) ? "is-selected" : ""}" type="button" data-action="builder-select-copy-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
+              ${athlete.athlete_image_url || athlete.image_url ? renderImage(athlete.athlete_image_url || athlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${escapeHtml(initialsFor(athlete.athlete))}</span>`}
+              <span><strong>${escapeHtml(athlete.athlete)}</strong><small>ID ${escapeHtml(athlete.athlete_id)}</small></span>
+            </button>
+          `).join("")}
+        </div>
+        <div class="builder-copy-plan-footer"><span class="muted">${selectedAthlete ? `Specific program for ${escapeHtml(selectedAthlete.athlete)}` : "Reusable template"}</span><button class="plain-button" type="button" data-action="builder-confirm-duplicate-plan">Create editable copy</button></div>
       </section>
     </div>
   `;
@@ -1443,7 +1469,7 @@ function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly =
         ${block.sessions.length ? block.sessions.map((session) => `
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             <span>${escapeHtml(sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span>
-          </button><div class="builder-session-actions"><button class="text-action" type="button" data-action="builder-add-structure" data-session-id="${escapeAttr(session.id)}">Add session parts</button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
+          </button><div class="builder-session-actions">${state.builder.clipboard?.type === "section" ? `<button class="text-action" type="button" data-action="builder-paste-section" data-session-id="${escapeAttr(session.id)}">Paste section</button>` : ""}<button class="text-action" type="button" data-action="builder-add-structure" data-session-id="${escapeAttr(session.id)}">Add session parts</button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
           ${renderBuilderNodeTree(session, "", selectedNodeId)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}
       </div>
@@ -1538,7 +1564,7 @@ function renderBuilderSectionPanel(selectedNode) {
   const query = state.builder.exerciseQuery;
   return `
     <div class="builder-section-panel" aria-label="Section exercise editor">
-      <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p><h3>${escapeHtml(selectedNode.name)}</h3><p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions"><button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete</button></div></div>
+      <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p><h3>${escapeHtml(selectedNode.name)}</h3><p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions"><button class="plain-button" type="button" data-action="builder-copy-section" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete</button></div></div>
       <div class="builder-section-grid">
         <section class="builder-section-library">
           <div class="builder-panel-label">Exercise library</div>
@@ -1632,12 +1658,37 @@ function sessionLabel(session) {
 async function handleBuilderAction(action) {
   const type = action.dataset.action;
   if (type === "builder-duplicate-plan") {
+    state.builder.copyPlanId = action.dataset.planId || "";
+    state.builder.copyPlanName = action.closest(".section-heading")?.querySelector("h3")?.textContent || "Program";
+    state.builder.copyAthleteId = "";
+    if (state.activeTab === "programs") renderProgramRoot((state.lastProgramBundle?.programs || []).find((program) => program.id === state.selectedProgramId));
+    else await loadTemplates();
+    return;
+  }
+  if (type === "builder-close-copy-plan") {
+    state.builder.copyPlanId = "";
+    state.builder.copyPlanName = "";
+    state.builder.copyAthleteId = "";
+    if (state.activeTab === "programs") renderProgramRoot((state.lastProgramBundle?.programs || []).find((program) => program.id === state.selectedProgramId));
+    else await loadTemplates();
+    return;
+  }
+  if (type === "builder-select-copy-athlete") {
+    state.builder.copyAthleteId = action.dataset.athleteId || "";
+    if (state.activeTab === "programs") renderProgramRoot((state.lastProgramBundle?.programs || []).find((program) => program.id === state.selectedProgramId));
+    else await loadTemplates();
+    return;
+  }
+  if (type === "builder-confirm-duplicate-plan") {
     action.disabled = true;
     try {
-      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(action.dataset.planId || "")}/duplicate`, { method: "POST" });
+      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(state.builder.copyPlanId)}/duplicate`, { method: "POST", body: JSON.stringify({ athleteId: state.builder.copyAthleteId }) });
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
+      state.builder.copyPlanId = "";
+      state.builder.copyPlanName = "";
+      state.builder.copyAthleteId = "";
       state.activeTab = "builder";
       state.navStack = [];
       renderTabs();
@@ -1689,6 +1740,38 @@ async function handleBuilderAction(action) {
   if (type === "builder-close-custom-exercise") {
     state.builder.customExerciseOpen = false;
     renderBuilder();
+    return;
+  }
+  if (type === "builder-copy-section") {
+    const section = findBuilderNode(state.builder.draft, action.dataset.nodeId || state.builder.selectedNodeId);
+    if (!section || section.type !== "section") return;
+    state.builder.clipboard = { type: "section", nodeId: section.id, name: section.name, itemCount: section.items.length };
+    state.builder.selectedNodeId = "";
+    state.builder.customExerciseOpen = false;
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-clear-clipboard") {
+    state.builder.clipboard = null;
+    renderBuilder();
+    return;
+  }
+  if (type === "builder-paste-section") {
+    const clipboard = state.builder.clipboard;
+    if (!clipboard || clipboard.type !== "section") return;
+    action.disabled = true;
+    try {
+      state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(clipboard.nodeId)}/copy`, {
+        method: "POST",
+        body: JSON.stringify({ targetSessionId: action.dataset.sessionId, targetParentId: "" }),
+      });
+      state.builder.selectedSessionId = action.dataset.sessionId || "";
+      state.builder.selectedNodeId = "";
+      renderBuilder();
+    } catch (error) {
+      action.disabled = false;
+      throw error;
+    }
     return;
   }
   if (type === "builder-finish-section") {

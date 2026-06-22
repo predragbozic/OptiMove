@@ -82,13 +82,17 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
   try {
     const source = await getCopySource(req.params.planId);
     if (!source) return res.status(404).json({ error: "Program or template not found." });
+    const targetAthleteExternalId = text(req.body?.athleteId);
+    const targetAthlete = targetAthleteExternalId ? await findAthlete(targetAthleteExternalId) : null;
+    if (targetAthleteExternalId && !targetAthlete) return res.status(404).json({ error: "Athlete not found." });
+    const isTemplate = !targetAthlete;
     client = await pool.connect();
     await client.query("begin");
     const created = await client.query(
       `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days)
        values ('program', $1, $2, $3, $4, $5, $6, 'private', $7, 'draft', 'builder', $8, $9)
        returning id`,
-      [req.user.id, source.is_template ? null : source.athlete_id, `${source.name || "Program"} copy`, source.note, source.icon_url, source.color, source.is_template, source.start_date, source.duration_days],
+      [req.user.id, targetAthlete?.id || null, `${source.name || "Program"} copy`, source.note, source.icon_url, source.color, isTemplate, source.start_date, source.duration_days],
     );
     await copyProgramTree(client, source.id, created.rows[0].id);
     await client.query("commit");

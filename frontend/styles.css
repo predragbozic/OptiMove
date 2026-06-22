@@ -3549,6 +3549,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-athlete-picker, .builder-section-panel { position: relative; z-index: 1; width: min(620px, 96vw); max-height: min(760px, 88dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
 .builder-athlete-options { display: grid; gap: 8px; max-height: 430px; overflow: auto; margin-top: 10px; padding-right: 2px; }
 .builder-athlete-picker .builder-athlete-option { margin-top: 12px; }
+.builder-copy-plan-modal .builder-athlete-options { max-height: 300px; }
+.builder-copy-plan-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.builder-copy-plan-footer .muted { margin: 0; font-size: 12px; }
 .builder-section-panel { width: min(900px, 96vw); }
 .builder-section-panel-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 18px; }
 .builder-section-panel-head h3 { margin: 2px 0 4px; }
@@ -3588,6 +3591,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-program-actions { display: flex; align-items: center; gap: 12px; padding-top: 8px; }
 .builder-source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .builder-source-actions .plain-button { min-height: 34px; padding: 6px 10px; font-size: 13px; }
+.builder-copy-hint { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid #b9d8d4; border-radius: 6px; background: #eef8f6; color: #1f6f68; font-size: 13px; }
 .builder-finish-button { min-height: 36px; padding: 7px 12px; }
 .builder-finished-label { color: #287e77; font-size: 13px; font-weight: 800; }
 .builder-block-creator { width: min(540px, 100%); display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 12px 14px; border: 1px solid var(--line, #dfe4e8); border-radius: 7px; background: #fff; }
@@ -3683,6 +3687,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-program-bar, .builder-block-creator { display: grid; grid-template-columns: 1fr; }
   .builder-program-actions { padding-top: 0; }
   .builder-source-actions { align-items: flex-end; flex-direction: column; gap: 6px; }
+  .builder-copy-plan-footer { align-items: stretch; flex-direction: column; }
+  .builder-copy-plan-footer .plain-button { width: 100%; }
+  .builder-copy-hint { align-items: flex-start; flex-direction: column; }
   .builder-block-creator .builder-add-block { width: 100%; }
   .builder-section-overlay { z-index: 950; padding: 8px; align-items: end; }
   .builder-section-modal { width: min(560px, 100%); min-height: 0; max-height: 92dvh; padding: 14px; border-radius: 8px; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; }
