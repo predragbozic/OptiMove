@@ -13,6 +13,10 @@
   --shadow: 0 18px 40px rgba(22, 34, 45, 0.08);
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body:not(.athlete-mode):not(.login-mode) {
   --rail-width: 72px;
   --athlete-drawer-left: calc(var(--rail-width) + 12px);
