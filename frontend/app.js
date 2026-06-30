@@ -62,6 +62,7 @@ const state = {
   exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions() },
   markedExerciseIds: new Set(),
   markedExercises: new Map(),
+  tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
@@ -175,6 +176,13 @@ async function loadSession() {
 }
 
 async function handleContentSubmit(event) {
+  const tagForm = event.target.closest("[data-exercise-tag-form]");
+  if (tagForm) {
+    event.preventDefault();
+    await submitExerciseTagForm(tagForm);
+    return;
+  }
+
   const form = event.target.closest("#loginForm");
   if (form) {
     event.preventDefault();
@@ -801,6 +809,87 @@ async function toggleExerciseFavorite(exerciseId, isFavorite) {
   else await searchExercises(state.exerciseSearch.term);
 }
 
+async function openExerciseTagEditor(exerciseId, exerciseName) {
+  if (!exerciseId) return;
+  const data = await api(`/api/exercises/${encodeURIComponent(exerciseId)}/tags`);
+  state.tagEditor = {
+    open: true,
+    exerciseId,
+    exerciseName,
+    tags: data.tags || [],
+    options: data.options || [],
+    error: "",
+  };
+  rerenderCurrentExerciseSurface();
+}
+
+function closeExerciseTagEditor() {
+  state.tagEditor = { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" };
+  rerenderCurrentExerciseSurface();
+}
+
+async function submitExerciseTagForm(form) {
+  const formData = new FormData(form);
+  const tagId = String(formData.get("tagId") || "").trim();
+  const name = String(formData.get("name") || "").trim();
+  if (!tagId && !name) {
+    state.tagEditor.error = "Choose a tag or write a new one.";
+    rerenderCurrentExerciseSurface();
+    return;
+  }
+  try {
+    await api(`/api/exercises/${encodeURIComponent(state.tagEditor.exerciseId)}/tags`, {
+      method: "POST",
+      body: JSON.stringify(tagId ? { tagId } : { name }),
+    });
+    await refreshExerciseTagEditor();
+    state.exerciseSearch.options = emptyExerciseOptions();
+    await loadExerciseFilterOptions();
+    await refreshCurrentExerciseSearch();
+  } catch (error) {
+    state.tagEditor.error = error.message || "Could not add tag.";
+    rerenderCurrentExerciseSurface();
+  }
+}
+
+async function removeExerciseTag(exerciseId, tagId) {
+  if (!exerciseId || !tagId) return;
+  await api(`/api/exercises/${encodeURIComponent(exerciseId)}/tags/${encodeURIComponent(tagId)}`, { method: "DELETE" });
+  await refreshExerciseTagEditor();
+  state.exerciseSearch.options = emptyExerciseOptions();
+  await loadExerciseFilterOptions();
+  await refreshCurrentExerciseSearch();
+}
+
+async function refreshExerciseTagEditor() {
+  if (!state.tagEditor.open || !state.tagEditor.exerciseId) return;
+  const data = await api(`/api/exercises/${encodeURIComponent(state.tagEditor.exerciseId)}/tags`);
+  state.tagEditor = { ...state.tagEditor, tags: data.tags || [], options: data.options || [], error: "" };
+  updateExerciseTagsInCache(state.tagEditor.exerciseId, state.tagEditor.tags);
+}
+
+async function refreshCurrentExerciseSearch() {
+  if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
+  else await searchExercises(state.exerciseSearch.term);
+}
+
+function rerenderCurrentExerciseSurface() {
+  if (state.activeTab === "builder" && state.builder.draft) renderBuilder();
+  else renderExercises(state.lastExerciseResults);
+}
+
+function updateExerciseTagsInCache(exerciseId, tags) {
+  const update = (exercise) => {
+    if (String(exercise.id) === String(exerciseId)) exercise.tags = tags;
+  };
+  state.lastExerciseResults.forEach(update);
+  state.builder.exercises.forEach(update);
+  if (state.markedExercises.has(exerciseId)) {
+    const exercise = state.markedExercises.get(exerciseId);
+    state.markedExercises.set(exerciseId, { ...exercise, tags });
+  }
+}
+
 function handleContentClick(event) {
   const action = event.target.closest("[data-action]");
   if (!action) return;
@@ -884,6 +973,18 @@ function handleContentClick(event) {
       else renderBuilder();
     }
     else searchExercises(state.exerciseSearch.term);
+    return;
+  }
+  if (type === "exercise-tags") {
+    void openExerciseTagEditor(action.dataset.exerciseId, action.dataset.exerciseName || "Exercise");
+    return;
+  }
+  if (type === "exercise-tags-close") {
+    closeExerciseTagEditor();
+    return;
+  }
+  if (type === "exercise-tag-remove") {
+    void removeExerciseTag(action.dataset.exerciseId, action.dataset.tagId);
     return;
   }
   if (type === "week-prev" || type === "week-next") {
@@ -2003,6 +2104,7 @@ function renderBuilderSectionPanel(selectedNode) {
         </section>
       </div>
       ${state.builder.customExerciseOpen ? renderCustomExerciseModal(selectedNode) : ""}
+      ${state.tagEditor.open ? renderExerciseTagModal() : ""}
     </div>
   `;
 }
@@ -2038,12 +2140,13 @@ function renderBuilderExerciseResult(exercise) {
   const video = exercise.video_url || "";
   const title = exercise.name || "Exercise";
   const marked = state.markedExerciseIds.has(exercise.id);
+  const tags = exercise.tags || [];
   return `
     <article class="builder-exercise-result">
       ${image || video
         ? `<button type="button" class="builder-exercise-preview" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}" aria-label="Preview ${escapeAttr(title)}">${image ? renderImage(image, "builder-exercise-thumb") : `<span class="builder-exercise-thumb builder-exercise-thumb-fallback">Video</span>`}</button>`
         : `<span class="builder-exercise-preview builder-exercise-preview-empty"><span class="node-dot"></span></span>`}
-      <span class="builder-exercise-result-text"><strong>${escapeHtml(title)}</strong><small>${video ? "Preview or add" : "Add to section"}</small><span class="builder-exercise-mini-actions"><button type="button" class="text-action" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Fav" : "Favorite"}</button><button type="button" class="text-action" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Marked" : "Mark"}</button></span></span>
+      <span class="builder-exercise-result-text"><strong>${escapeHtml(title)}</strong><small>${video ? "Preview or add" : "Add to section"}</small><span class="builder-exercise-mini-actions"><button type="button" class="text-action" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Fav" : "Favorite"}</button><button type="button" class="text-action" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Marked" : "Mark"}</button><button type="button" class="text-action" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(title)}">Tags${tags.length ? ` (${tags.length})` : ""}</button></span></span>
       <button type="button" class="plain-button builder-exercise-add" data-action="builder-pick-exercise" data-exercise-id="${escapeAttr(exercise.id)}">Add</button>
     </article>
   `;
@@ -2527,11 +2630,13 @@ function renderExercises(exercises) {
         <button class="plain-button" data-action="exercise-load-more">Load more</button>
       </div>
     ` : ""}
+    ${state.tagEditor.open ? renderExerciseTagModal() : ""}
   `;
 }
 
 function renderExerciseLibraryCard(exercise, itemId) {
   const marked = state.markedExerciseIds.has(exercise.id);
+  const tags = exercise.tags || [];
   return `
     <article class="exercise-card">
       ${exercise.image_url ? `
@@ -2549,8 +2654,38 @@ function renderExerciseLibraryCard(exercise, itemId) {
       <div class="exercise-card-actions">
         <button class="text-action" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Unfavorite" : "Favorite"}</button>
         <button class="text-action" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Unmark" : "Mark"}</button>
+        <button class="text-action" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(exercise.name || "Exercise")}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
       </div>
+      ${tags.length ? `<div class="exercise-tag-list">${tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag.name)}</span>`).join("")}${tags.length > 4 ? `<span>+${tags.length - 4}</span>` : ""}</div>` : ""}
     </article>
+  `;
+}
+
+function renderExerciseTagModal() {
+  const editor = state.tagEditor;
+  const assigned = new Set((editor.tags || []).map((tag) => String(tag.id)));
+  const available = (editor.options || []).filter((tag) => !assigned.has(String(tag.id)));
+  return `
+    <div class="exercise-tag-overlay">
+      <button class="exercise-tag-backdrop" type="button" data-action="exercise-tags-close" aria-label="Close tags"></button>
+      <section class="panel exercise-tag-modal" role="dialog" aria-modal="true" aria-label="Exercise tags">
+        <div class="builder-modal-head">
+          <div><p class="eyebrow">Exercise tags</p><h3>${escapeHtml(editor.exerciseName)}</h3><p class="muted">Use tags as your own reusable labels for filtering and building programs faster.</p></div>
+          <button class="plain-button icon-button" type="button" data-action="exercise-tags-close" aria-label="Close"><span class="button-icon">x</span></button>
+        </div>
+        <div class="exercise-tag-current">
+          ${(editor.tags || []).length
+            ? editor.tags.map((tag) => `<span class="exercise-tag-pill">${escapeHtml(tag.name)} <button type="button" data-action="exercise-tag-remove" data-exercise-id="${escapeAttr(editor.exerciseId)}" data-tag-id="${escapeAttr(tag.id)}" aria-label="Remove ${escapeAttr(tag.name)}">x</button></span>`).join("")
+            : `<p class="muted">No tags yet.</p>`}
+        </div>
+        <form class="exercise-tag-form" data-exercise-tag-form>
+          <label class="search-field"><span>Add existing tag</span><select name="tagId"><option value="">Choose tag</option>${available.map((tag) => `<option value="${escapeAttr(tag.id)}">${escapeHtml(tag.name)}</option>`).join("")}</select></label>
+          <label class="search-field"><span>Or create new tag</span><input name="name" placeholder="e.g. hotel gym, pre-match, knee friendly"></label>
+          ${editor.error ? `<p class="builder-error">${escapeHtml(editor.error)}</p>` : ""}
+          <button class="plain-button" type="submit">Add tag</button>
+        </form>
+      </section>
+    </div>
   `;
 }
 

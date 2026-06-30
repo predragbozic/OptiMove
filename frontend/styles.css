@@ -2260,6 +2260,17 @@ input:focus {
 
 .exercise-card-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 2px; }
 .exercise-card-actions .text-action { font-size: 12px; }
+.exercise-tag-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.exercise-tag-list span, .exercise-tag-pill { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 3px 7px; border-radius: 999px; background: #eef2f4; color: var(--muted); font-size: 11px; font-weight: 800; }
+.exercise-tag-overlay { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 18px; }
+.exercise-tag-backdrop { position: absolute; inset: 0; border: 0; background: rgba(13, 27, 36, .46); }
+.exercise-tag-modal { position: relative; z-index: 1; width: min(520px, 96vw); max-height: min(720px, 88dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
+.exercise-tag-current { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
+.exercise-tag-current .muted { margin: 0; }
+.exercise-tag-pill button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: #d9e1e7; color: #4d5a66; font: inherit; font-size: 11px; font-weight: 900; cursor: pointer; }
+.exercise-tag-form { display: grid; gap: 11px; }
+.exercise-tag-form .search-field { margin: 0; }
+.exercise-tag-form select { min-height: 42px; border: 1px solid var(--line); border-radius: 5px; padding: 9px; background: #fff; font: inherit; }
 
 .exercise-head {
   justify-content: space-between;

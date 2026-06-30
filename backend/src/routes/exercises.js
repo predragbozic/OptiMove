@@ -6,6 +6,27 @@ const router = Router();
 const exerciseScope = "e.is_active = true and (e.owner_scope = 'system' or e.owner_user_id = $1)";
 const libraryScope = "(owner_scope = 'system' or owner_user_id = $1)";
 
+function slugify(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || `tag-${Date.now()}`;
+}
+
+async function exerciseExistsForUser(userId, exerciseId) {
+  const result = await query(
+    `select id
+     from library.exercises e
+     where e.id = $2 and ${exerciseScope}`,
+    [userId, exerciseId],
+  );
+  return Boolean(result.rows[0]);
+}
+
 const optionQueries = {
   purposes: `
     select distinct name
@@ -177,7 +198,18 @@ router.get("/", async (req, res, next) => {
         c.name as complexity,
         sp.name as starting_position,
         a.name as attractor,
-        (fav.user_id is not null) as is_favorite
+        (fav.user_id is not null) as is_favorite,
+        coalesce(
+          (
+            select json_agg(json_build_object('id', t.id, 'name', t.name) order by t.name)
+            from library.exercise_tags et
+            join library.tags t on t.id = et.tag_id
+            where et.exercise_id = e.id
+              and t.is_active = true
+              and (t.owner_scope = 'system' or t.owner_user_id = $1)
+          ),
+          '[]'::json
+        ) as tags
       from library.exercises e
       left join library.places p on p.id = e.place_id
       left join library.complexity_levels c on c.id = e.complexity_level_id
@@ -223,6 +255,105 @@ router.delete("/:exerciseId/favorite", async (req, res, next) => {
       [req.user.id, req.params.exerciseId],
     );
     res.json({ ok: true, isFavorite: false });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/:exerciseId/tags", async (req, res, next) => {
+  try {
+    if (!(await exerciseExistsForUser(req.user.id, req.params.exerciseId))) {
+      return res.status(404).json({ error: "Exercise not found." });
+    }
+    const [allTags, exerciseTags] = await Promise.all([
+      query(
+        `select id, name
+         from library.tags
+         where is_active = true and ${libraryScope}
+         order by name`,
+        [req.user.id],
+      ),
+      query(
+        `select t.id, t.name
+         from library.exercise_tags et
+         join library.tags t on t.id = et.tag_id
+         where et.exercise_id = $2
+           and t.is_active = true
+           and ${libraryScope}
+         order by t.name`,
+        [req.user.id, req.params.exerciseId],
+      ),
+    ]);
+    res.json({ tags: exerciseTags.rows, options: allTags.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/:exerciseId/tags", async (req, res, next) => {
+  try {
+    if (!(await exerciseExistsForUser(req.user.id, req.params.exerciseId))) {
+      return res.status(404).json({ error: "Exercise not found." });
+    }
+    const name = String(req.body?.name || "").trim();
+    const tagId = String(req.body?.tagId || "").trim();
+    let finalTagId = tagId;
+
+    if (!finalTagId) {
+      if (!name) return res.status(400).json({ error: "Tag name is required." });
+      const slug = slugify(name);
+      const created = await query(
+        `insert into library.tags (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
+         values ($1, concat($2, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
+         on conflict (name) do nothing
+         returning id`,
+        [name, slug, req.user.id],
+      );
+      if (created.rows[0]?.id) {
+        finalTagId = created.rows[0].id;
+      } else {
+        const existing = await query(
+          `select id
+           from library.tags
+           where lower(name) = lower($2) and is_active = true and ${libraryScope}`,
+          [req.user.id, name],
+        );
+        if (!existing.rows[0]) return res.status(409).json({ error: "Tag name already exists outside your library." });
+        finalTagId = existing.rows[0].id;
+      }
+    }
+
+    const tag = await query(
+      `select id, name
+       from library.tags
+       where id = $2 and is_active = true and ${libraryScope}`,
+      [req.user.id, finalTagId],
+    );
+    if (!tag.rows[0]) return res.status(404).json({ error: "Tag not found." });
+
+    await query(
+      `insert into library.exercise_tags (exercise_id, tag_id)
+       values ($1, $2)
+       on conflict (exercise_id, tag_id) do nothing`,
+      [req.params.exerciseId, finalTagId],
+    );
+    res.status(201).json({ tag: tag.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/:exerciseId/tags/:tagId", async (req, res, next) => {
+  try {
+    if (!(await exerciseExistsForUser(req.user.id, req.params.exerciseId))) {
+      return res.status(404).json({ error: "Exercise not found." });
+    }
+    await query(
+      `delete from library.exercise_tags
+       where exercise_id = $1 and tag_id = $2`,
+      [req.params.exerciseId, req.params.tagId],
+    );
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }
