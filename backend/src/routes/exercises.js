@@ -4,29 +4,24 @@ import { query } from "../db.js";
 const router = Router();
 
 const exerciseScope = "e.is_active = true and (e.owner_scope = 'system' or e.owner_user_id = $1)";
+const libraryScope = "(owner_scope = 'system' or owner_user_id = $1)";
 
 const optionQueries = {
   purposes: `
-    select distinct d.name
-    from library.exercises e
-    join library.exercise_domains ed on ed.exercise_id = e.id
-    join library.domains d on d.id = ed.domain_id
-    where ${exerciseScope} and d.is_active = true
-    order by d.name`,
+    select distinct name
+    from library.domains
+    where is_active = true and ${libraryScope}
+    order by name`,
   qualities: `
-    select distinct c.name
-    from library.exercises e
-    join library.exercise_categories ec on ec.exercise_id = e.id
-    join library.categories c on c.id = ec.category_id
-    where ${exerciseScope} and c.is_active = true
-    order by c.name`,
+    select distinct name
+    from library.categories
+    where is_active = true and ${libraryScope}
+    order by name`,
   groups: `
-    select distinct s.name
-    from library.exercises e
-    join library.exercise_sections es on es.exercise_id = e.id
-    join library.sections s on s.id = es.section_id
-    where ${exerciseScope} and s.is_active = true
-    order by s.name`,
+    select distinct name
+    from library.sections
+    where is_active = true and ${libraryScope}
+    order by name`,
   bodyParts: `
     select distinct bp.name
     from library.exercises e
@@ -42,11 +37,10 @@ const optionQueries = {
     where ${exerciseScope} and mp.is_active = true
     order by mp.name`,
   startingPositions: `
-    select distinct sp.name
-    from library.exercises e
-    join library.starting_positions sp on sp.id = e.starting_position_id
-    where ${exerciseScope} and sp.is_active = true
-    order by sp.name`,
+    select distinct name
+    from library.starting_positions
+    where is_active = true and ${libraryScope}
+    order by name`,
   places: `
     select distinct p.name
     from library.exercises e
@@ -60,18 +54,15 @@ const optionQueries = {
     where ${exerciseScope}
     order by c.name`,
   attractors: `
-    select distinct a.name
-    from library.exercises e
-    join library.attractors a on a.id = e.attractor_id
-    where ${exerciseScope} and a.is_active = true
-    order by a.name`,
+    select distinct name
+    from library.attractors
+    where is_active = true and ${libraryScope}
+    order by name`,
   tags: `
-    select distinct t.name
-    from library.exercises e
-    join library.exercise_tags et on et.exercise_id = e.id
-    join library.tags t on t.id = et.tag_id
-    where ${exerciseScope} and t.is_active = true
-    order by t.name`,
+    select distinct name
+    from library.tags
+    where is_active = true and ${libraryScope}
+    order by name`,
 };
 
 router.get("/options", async (req, res, next) => {

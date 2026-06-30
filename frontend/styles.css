@@ -3757,6 +3757,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .exercise-filter-field select { min-height: 38px; border: 1px solid var(--line, #dfe4e8); border-radius: 5px; padding: 8px; background: #fff; font: inherit; }
 .exercise-filter-toggle { min-height: 38px; display: inline-flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid var(--line, #dfe4e8); border-radius: 5px; background: #fff; color: var(--text, #20242a); font-size: 13px; font-weight: 800; }
 .exercise-filter-toggle input { width: 16px; height: 16px; accent-color: #287e77; }
+.exercise-quick-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 10px; }
+.exercise-quick-filters .exercise-filter-toggle { border-color: rgba(31, 111, 104, .28); background: #eef8f6; color: #1f6f68; }
 .builder-exercise-results { display: grid; gap: 7px; max-height: 315px; overflow: auto; }
 .builder-exercise-result { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; align-items: center; border-radius: 6px; padding: 8px; cursor: default; }
 .builder-exercise-result.is-selected { border-color: #287e77; background: #e7f5f2; }

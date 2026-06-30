@@ -728,11 +728,21 @@ function exerciseSearchUrl(query, limit, filters = {}) {
 }
 
 function renderExerciseFilterControls(values, options, mode = "library") {
-  const attr = mode === "builder" ? "data-builder-exercise-filter" : "data-exercise-filter";
+  const attr = mode.startsWith("builder") ? "data-builder-exercise-filter" : "data-exercise-filter";
+  const includeToggles = mode !== "builder-selects";
   return `
     ${EXERCISE_FILTERS.map((filter) => renderExerciseFilterSelect(filter, values[filter.key], options[filter.optionsKey], attr)).join("")}
-    ${renderExerciseFilterToggle("favorite", "Favorites", values.favorite, attr)}
-    ${renderExerciseFilterToggle("marked", "Marked", values.marked, attr)}
+    ${includeToggles ? renderExerciseFilterToggle("favorite", "Favorites", values.favorite, attr) : ""}
+    ${includeToggles ? renderExerciseFilterToggle("marked", "Marked", values.marked, attr) : ""}
+  `;
+}
+
+function renderExerciseQuickFilters(values, attr) {
+  return `
+    <div class="exercise-quick-filters">
+      ${renderExerciseFilterToggle("favorite", "Favorites", values.favorite, attr)}
+      ${renderExerciseFilterToggle("marked", "Marked", values.marked, attr)}
+    </div>
   `;
 }
 
@@ -765,6 +775,10 @@ function activeExerciseFilterLabels(filters) {
   if (filters.favorite) labels.push("Favorites");
   if (filters.marked) labels.push("Marked");
   return labels;
+}
+
+function activeExerciseSelectFilterCount(filters) {
+  return EXERCISE_FILTERS.filter((filter) => filters[filter.key]).length;
 }
 
 function applyClientExerciseFilters(exercises, filters) {
@@ -1958,6 +1972,7 @@ function renderBuilderSectionOverlay(selectedNode) {
 
 function renderBuilderSectionPanel(selectedNode) {
   const query = state.builder.exerciseQuery;
+  const selectFilterCount = activeExerciseSelectFilterCount(state.builder.exerciseFilters);
   return `
     <div class="builder-section-panel" aria-label="Section exercise editor">
       <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p><h3>${escapeHtml(selectedNode.name)}</h3><p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions"><button class="plain-button" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete</button></div></div>
@@ -1965,10 +1980,11 @@ function renderBuilderSectionPanel(selectedNode) {
         <section class="builder-section-library">
           <div class="builder-panel-label">Exercise library</div>
           <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
-          <details class="builder-exercise-filters" ${activeExerciseFilterLabels(state.builder.exerciseFilters).length ? "open" : ""}>
-            <summary>Filters${activeExerciseFilterLabels(state.builder.exerciseFilters).length ? ` (${activeExerciseFilterLabels(state.builder.exerciseFilters).length})` : ""}</summary>
+          ${renderExerciseQuickFilters(state.builder.exerciseFilters, "data-builder-exercise-filter")}
+          <details class="builder-exercise-filters" ${selectFilterCount ? "open" : ""}>
+            <summary>More filters${selectFilterCount ? ` (${selectFilterCount})` : ""}</summary>
             <div class="exercise-filter-strip builder-filter-strip">
-              ${renderExerciseFilterControls(state.builder.exerciseFilters, state.exerciseSearch.options, "builder")}
+              ${renderExerciseFilterControls(state.builder.exerciseFilters, state.exerciseSearch.options, "builder-selects")}
             </div>
           </details>
           <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
