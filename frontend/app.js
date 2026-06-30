@@ -1607,12 +1607,7 @@ function renderBuilderSectionPanelLegacy(selectedNode) {
       </div>
       <input type="hidden" name="exerciseId" value="">
       <div class="builder-exercise-results">
-        ${state.builder.exercises.map((exercise) => `
-          <button type="button" class="builder-exercise-result" data-action="builder-pick-exercise" data-exercise-id="${escapeAttr(exercise.id)}">
-            ${exercise.image_url ? renderImage(exercise.image_url, "builder-exercise-thumb") : `<span class="node-dot"></span>`}
-            <span><strong>${escapeHtml(exercise.name)}</strong><small>${escapeHtml(exercise.exercise_code || "")}</small></span>
-          </button>
-        `).join("") || `<div class="empty">No matching exercises.</div>`}
+        ${state.builder.exercises.map(renderBuilderExerciseResult).join("") || `<div class="empty">No matching exercises.</div>`}
       </div>
       <p class="builder-error" aria-live="polite"></p>
       <button class="plain-button" type="submit">Add selected exercise</button>
@@ -1650,12 +1645,7 @@ function renderBuilderSectionPanel(selectedNode) {
             <label><span>Load</span><input data-builder-new-dose name="load" placeholder="40 kg"></label>
           </div>
           <div class="builder-exercise-results">
-            ${state.builder.exercises.map((exercise) => `
-              <button type="button" class="builder-exercise-result" data-action="builder-pick-exercise" data-exercise-id="${escapeAttr(exercise.id)}">
-                ${exercise.image_url ? renderImage(exercise.image_url, "builder-exercise-thumb") : `<span class="node-dot"></span>`}
-                <span><strong>${escapeHtml(exercise.name)}</strong><small>Click to add</small></span>
-              </button>
-            `).join("") || `<div class="empty">No matching exercises.</div>`}
+            ${state.builder.exercises.map(renderBuilderExerciseResult).join("") || `<div class="empty">No matching exercises.</div>`}
           </div>
         </section>
         <section class="builder-section-added">
@@ -1691,6 +1681,21 @@ function renderCustomExerciseModal(section) {
         </form>
       </section>
     </div>
+  `;
+}
+
+function renderBuilderExerciseResult(exercise) {
+  const image = exercise.image_url || "";
+  const video = exercise.video_url || "";
+  const title = exercise.name || "Exercise";
+  return `
+    <article class="builder-exercise-result">
+      ${image || video
+        ? `<button type="button" class="builder-exercise-preview" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}" aria-label="Preview ${escapeAttr(title)}">${image ? renderImage(image, "builder-exercise-thumb") : `<span class="builder-exercise-thumb builder-exercise-thumb-fallback">Video</span>`}</button>`
+        : `<span class="builder-exercise-preview builder-exercise-preview-empty"><span class="node-dot"></span></span>`}
+      <span class="builder-exercise-result-text"><strong>${escapeHtml(title)}</strong><small>${video ? "Preview or add" : "Add to section"}</small></span>
+      <button type="button" class="plain-button builder-exercise-add" data-action="builder-pick-exercise" data-exercise-id="${escapeAttr(exercise.id)}">Add</button>
+    </article>
   `;
 }
 
