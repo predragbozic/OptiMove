@@ -245,8 +245,9 @@ function renderUserControls() {
   if (els.signOut) els.signOut.hidden = !authenticated;
   if (els.userRole) {
     els.userRole.hidden = !authenticated;
-    els.userRole.textContent = authenticated ? (state.currentUser.role === "athlete" ? "Athlete" : "Coach") : "";
+    els.userRole.textContent = authenticated ? roleLabel(state.currentUser) : "";
   }
+  renderAccessNav();
 }
 
 async function signOut() {
@@ -256,6 +257,36 @@ async function signOut() {
     state.currentUser = null;
     window.location.replace("/");
   }
+}
+
+function roleLabel(user = state.currentUser) {
+  const role = String(user?.role || user?.role_hint || "").toLowerCase();
+  const labels = {
+    platform_admin: "Platform admin",
+    general_admin: "Platform admin",
+    admin: "Platform admin",
+    club_admin: "Club admin",
+    team_admin: "Team admin",
+    team_coach: "Team coach",
+    coach: "Coach",
+    athlete: "Athlete",
+  };
+  return labels[role] || labels[user?.accessScope] || "User";
+}
+
+function accessScopeLabel(user = state.currentUser) {
+  const scope = String(user?.accessScope || "").toLowerCase();
+  return ({ platform: "All platform data", club: "Club workspace", team: "Team workspace", coach: "Private coach workspace", athlete: "Athlete view" })[scope] || "Workspace";
+}
+
+function hasOrganizationAccess(user = state.currentUser) {
+  return ["platform", "club", "team"].includes(String(user?.accessScope || "").toLowerCase());
+}
+
+function renderAccessNav() {
+  const orgButton = document.querySelector('[data-library-tab="organization"]');
+  if (!orgButton) return;
+  orgButton.hidden = !hasOrganizationAccess();
 }
 
 function toggleAthletesList() {
@@ -482,6 +513,7 @@ async function loadAthletes() {
 async function loadActiveTab() {
   renderTabs();
   renderLibraryNav();
+  if (state.activeTab === "organization") return renderOrganizationPanel();
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
   if (state.activeTab === "templates") return loadTemplates();
@@ -711,7 +743,7 @@ function moveWeek(delta) {
 }
 
 function renderTabs() {
-  const isLibraryTab = ["templates", "exercises", "builder"].includes(state.activeTab);
+  const isLibraryTab = ["organization", "templates", "exercises", "builder"].includes(state.activeTab);
   const tabs = document.querySelectorAll(".tab");
   const tabsContainer = tabs[0]?.closest(".tabs");
   if (tabsContainer) tabsContainer.hidden = isLibraryTab;
@@ -719,6 +751,8 @@ function renderTabs() {
 }
 
 function renderLibraryNav() {
+  renderAccessNav();
+  if (state.activeTab === "organization" && !hasOrganizationAccess()) state.activeTab = "weekly";
   els.libraryTabs.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.libraryTab === state.activeTab);
   });
@@ -730,6 +764,76 @@ function renderAthleteListState() {
   els.athleteList.classList.toggle("is-expanded", state.athletesExpanded);
   els.athletesToggle.setAttribute("aria-expanded", String(state.athletesExpanded));
   document.body.classList.toggle("athletes-drawer-open", state.athletesExpanded);
+}
+
+function renderOrganizationPanel() {
+  state.athletesExpanded = false;
+  state.weekSelectorOpen = false;
+  state.navStack = [];
+  renderAthleteListState();
+  renderLibraryNav();
+  els.context.textContent = "Access management";
+  els.title.textContent = "Organization";
+  els.toolbar.innerHTML = "";
+
+  const role = roleLabel();
+  const scope = accessScopeLabel();
+  const scopeKey = String(state.currentUser?.accessScope || "coach").toLowerCase();
+  const cards = organizationCards(scopeKey);
+  els.content.innerHTML = `
+    <section class="content-section organization-view">
+      <section class="panel organization-hero">
+        <div>
+          <p class="eyebrow">Signed in as</p>
+          <h3>${escapeHtml(state.currentUser?.name || state.currentUser?.email || "User")}</h3>
+          <p class="muted">${escapeHtml(state.currentUser?.email || "")}</p>
+        </div>
+        <div class="organization-scope-card">
+          <span>${escapeHtml(role)}</span>
+          <strong>${escapeHtml(scope)}</strong>
+        </div>
+      </section>
+      <section class="organization-grid">
+        ${cards.map((card) => `
+          <article class="panel organization-card">
+            <span class="organization-card-icon">${card.icon}</span>
+            <div>
+              <p class="eyebrow">${escapeHtml(card.kicker)}</p>
+              <h3>${escapeHtml(card.title)}</h3>
+              <p class="muted">${escapeHtml(card.description)}</p>
+            </div>
+          </article>
+        `).join("")}
+      </section>
+    </section>
+  `;
+}
+
+function organizationCards(scope) {
+  if (scope === "platform") {
+    return [
+      { icon: "OM", kicker: "Platform", title: "All clubs and users", description: "Platform admin can manage global users, public templates, clubs, teams, and moderation rules." },
+      { icon: "CL", kicker: "Club setup", title: "Create club workspaces", description: "Next step is adding club records, club admins, and shared club resources." },
+      { icon: "TM", kicker: "Teams", title: "Assign teams and staff", description: "Team coaches will only see athletes and plans connected to their team." },
+    ];
+  }
+  if (scope === "club") {
+    return [
+      { icon: "CL", kicker: "Club", title: "Club athletes and teams", description: "Club admins can work across teams inside their club workspace." },
+      { icon: "TM", kicker: "Staff", title: "Team coaches", description: "Add team-level coaches and control which athletes belong to each team." },
+      { icon: "LB", kicker: "Library", title: "Club shared templates", description: "Club templates will be shareable across coaches without making them public." },
+    ];
+  }
+  if (scope === "team") {
+    return [
+      { icon: "TM", kicker: "Team", title: "Team athletes", description: "Team coaches can manage assigned team athletes and their programs." },
+      { icon: "WK", kicker: "Weekly work", title: "Team weekly planning", description: "Create and adapt weekly plans for athletes connected to this team." },
+      { icon: "CP", kicker: "Reuse", title: "Copy team content", description: "Reuse sessions, sections, and templates inside the team workflow." },
+    ];
+  }
+  return [
+    { icon: "CO", kicker: "Coach", title: "Private coach workspace", description: "Independent coaches manage directly assigned athletes, templates, and exercises." },
+  ];
 }
 
 function renderAthleteList() {

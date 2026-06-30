@@ -76,6 +76,65 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 .user-role { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
 .sign-out-button { min-height: 34px; padding: 6px 10px; font-size: 13px; }
 
+.organization-view {
+  display: grid;
+  gap: 14px;
+}
+
+.organization-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.organization-scope-card {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid rgba(31, 111, 104, 0.22);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+
+.organization-scope-card span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.organization-scope-card strong {
+  color: var(--text);
+  font-size: 20px;
+}
+
+.organization-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.organization-card {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.organization-card-icon {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #101820;
+  color: #fff;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
 body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-name {
   display: none;
 }
@@ -299,6 +358,21 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
 }
 
 @media (max-width: 760px) {
+  .organization-hero,
+  .organization-card {
+    grid-template-columns: 1fr;
+  }
+
+  .organization-card {
+    gap: 10px;
+  }
+
+  .organization-card-icon {
+    width: 44px;
+    height: 44px;
+    font-size: 13px;
+  }
+
   body:not(.athlete-mode):not(.login-mode) {
     --rail-width: 58px;
   }
