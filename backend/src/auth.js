@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { query } from "./db.js";
+import { isCoachUser } from "./access.js";
 
 const COOKIE_NAME = "optimove_session";
 const SESSION_DAYS = 14;
@@ -109,7 +110,7 @@ export function requireAuth(req, res, next) {
 }
 
 export function requireCoach(req, res, next) {
-  if (req.user && req.user.role_hint !== "athlete") return next();
+  if (isCoachUser(req.user)) return next();
   res.status(403).json({ error: "Forbidden" });
 }
 

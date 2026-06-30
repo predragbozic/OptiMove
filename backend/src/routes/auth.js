@@ -7,6 +7,7 @@ import {
   sessionCookie,
   verifyPassword,
 } from "../auth.js";
+import { accessScope, publicRole } from "../access.js";
 
 const router = Router();
 
@@ -59,7 +60,9 @@ function publicUser(user) {
     id: user.id,
     email: user.email,
     name: user.display_name || user.full_name || user.email,
-    role: user.role_hint || "user",
+    role: publicRole(user),
+    role_hint: user.role_hint || "user",
+    accessScope: accessScope(user),
   };
 }
 

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool, query } from "../db.js";
+import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
@@ -86,7 +87,7 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
 router.post("/plans/:planId/duplicate", async (req, res, next) => {
   let client;
   try {
-    const source = await getCopySource(req.params.planId);
+    const source = await getCopySource(req.user, req.params.planId);
     if (!source) return res.status(404).json({ error: "Program or template not found." });
     const targetAthleteExternalId = text(req.body?.athleteId);
     const targetAthlete = targetAthleteExternalId ? await findAthlete(targetAthleteExternalId) : null;
@@ -752,20 +753,20 @@ async function getEditablePlan(user, planId) {
        and p.plan_type in ('program', 'weekly')
        and (
          p.created_by_user_id = $2
-         or $3 in ('admin', 'platform_admin', 'club_admin')
+         or $3::boolean
          or exists (
            select 1
            from public.athletes managed_athlete
-           left join public.user_athletes ua on ua.athlete_id = managed_athlete.id and ua.is_active = true
            where managed_athlete.id = p.athlete_id
-             and (managed_athlete.user_id = $2 or ua.user_id = $2)
+             and ${athleteAccessPredicate("managed_athlete", "$2")}
          )
-       )`, [planId, user.id, user.role_hint || ""],
+       )`, [planId, user.id, canAccessAllAthletes(user)],
   );
   return result.rows[0] || null;
 }
 
-async function getCopySource(planId) {
+async function getCopySource(user, planId) {
+  if (!(await canAccessPlan(query, user, planId))) return null;
   const result = await query(
     `select id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days
      from plans.plans

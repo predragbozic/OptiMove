@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../db.js";
 import { buildPrograms, buildWeeks } from "../utils/grouping.js";
+import { athleteListAccessFilter, canAccessAthlete } from "../access.js";
 
 const router = Router();
 
@@ -51,7 +52,7 @@ router.get("/", async (req, res, next) => {
 router.get("/:athleteId/plans", async (req, res, next) => {
   try {
     const athleteId = req.params.athleteId;
-    if (!(await canAccessAthlete(req.user, athleteId))) return res.status(403).json({ error: "Forbidden" });
+    if (!(await canAccessAthlete(query, req.user, athleteId))) return res.status(403).json({ error: "Forbidden" });
     const result = await query(
       `
       select *
@@ -70,7 +71,7 @@ router.get("/:athleteId/plans", async (req, res, next) => {
 router.get("/:athleteId/program-data", async (req, res, next) => {
   try {
     const athleteId = req.params.athleteId;
-    if (!(await canAccessAthlete(req.user, athleteId))) return res.status(403).json({ error: "Forbidden" });
+    if (!(await canAccessAthlete(query, req.user, athleteId))) return res.status(403).json({ error: "Forbidden" });
     const requestedProgram = String(req.query.program || "");
 
     const weeklyPlans = await query(
@@ -206,48 +207,6 @@ async function getAthleteRows(user = null) {
     athlete: row.athlete_name,
     athlete_image_url: row.athlete_image_url || "",
   }));
-}
-
-function athleteAccessFilter(user) {
-  if (!user || user.role_hint !== "athlete") return { sql: "", params: [] };
-  return {
-    sql: "and athlete_uuid in (select a.id from public.athletes a left join public.user_athletes ua on ua.athlete_id = a.id and ua.is_active = true where a.user_id = $1 or ua.user_id = $1)",
-    params: [user.id],
-  };
-}
-
-function athleteListAccessFilter(user, athleteAlias = "a") {
-  if (!user || canAccessAllAthletes(user)) return { sql: "", params: [] };
-  return {
-    sql: `and ${athleteAlias}.id in (
-      select linked_a.id
-      from public.athletes linked_a
-      left join public.user_athletes ua on ua.athlete_id = linked_a.id and ua.is_active = true
-      where linked_a.user_id = $1 or ua.user_id = $1
-    )`,
-    params: [user.id],
-  };
-}
-
-function canAccessAllAthletes(user) {
-  return ["admin", "platform_admin", "club_admin"].includes(user?.role_hint);
-}
-
-async function canAccessAthlete(user, athleteId) {
-  if (!user) return false;
-  if (canAccessAllAthletes(user)) return true;
-  const result = await query(
-    `
-    select 1
-    from public.athletes a
-    left join public.user_athletes ua on ua.athlete_id = a.id and ua.is_active = true
-    where (a.athlete_id = $1 or a.source_external_id = $1)
-      and (a.user_id = $2 or ua.user_id = $2)
-    limit 1
-    `,
-    [athleteId, user.id],
-  );
-  return result.rowCount > 0;
 }
 
 export default router;
