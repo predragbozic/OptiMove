@@ -24,6 +24,8 @@ const state = {
   exerciseLayout: "horizontal",
   touch: { startX: 0, startY: 0, startTime: 0 },
   appHistoryDepth: 0,
+  backGuardReady: false,
+  allowBrowserExit: false,
   weekCalendarMonth: "",
   openWeekCalendarOnLoad: false,
 };
@@ -63,6 +65,7 @@ async function init() {
     window.location.replace("/athlete");
     return;
   }
+  ensureBackGuard();
   await loadAthletes();
 }
 
@@ -74,6 +77,7 @@ function bindEvents() {
   els.calendarToggle?.addEventListener("click", openWeeklyCalendarFromRail);
   els.tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
+      if (state.activeTab !== tab.dataset.tab) pushAppHistory();
       state.activeTab = tab.dataset.tab;
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
@@ -86,6 +90,7 @@ function bindEvents() {
   });
   els.libraryTabs.forEach((button) => {
     button.addEventListener("click", () => {
+      if (state.activeTab !== button.dataset.libraryTab) pushAppHistory();
       state.activeTab = button.dataset.libraryTab;
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
@@ -150,6 +155,7 @@ async function handleContentSubmit(event) {
         window.location.replace("/athlete");
         return;
       }
+      ensureBackGuard();
       await loadAthletes();
     } catch (loginError) {
       if (error) error.textContent = loginError.message || "Login failed.";
@@ -290,6 +296,7 @@ function renderAccessNav() {
 }
 
 function toggleAthletesList() {
+  if (!state.athletesExpanded) pushAppHistory();
   state.athletesExpanded = !state.athletesExpanded;
   if (state.athletesExpanded) state.weekSelectorOpen = false;
   renderAthleteList();
@@ -314,6 +321,7 @@ function renderRailState() {
 
 function openWeeklyCalendarFromRail() {
   const shouldToggleLoadedWeekly = state.activeTab === "weekly" && state.lastWeeklyData && state.selectedAthleteId;
+  if (state.activeTab !== "weekly" || (shouldToggleLoadedWeekly && !state.weekSelectorOpen)) pushAppHistory();
   state.activeTab = "weekly";
   state.selectedProgramId = null;
   state.selectedTemplateId = null;
@@ -387,6 +395,7 @@ function handleGlobalClick(event) {
       openWeeklyCalendarFromRail();
       return;
     }
+    if (state.activeTab !== nextTab) pushAppHistory();
     state.activeTab = nextTab;
     state.selectedProgramId = null;
     state.selectedTemplateId = null;
@@ -463,13 +472,35 @@ function handleHorizontalSwipe(direction) {
 }
 
 function pushAppHistory() {
+  ensureBackGuard();
   window.history.pushState({ optimove: true }, "", window.location.href);
   state.appHistoryDepth += 1;
 }
 
+function ensureBackGuard() {
+  if (state.backGuardReady || !state.currentUser) return;
+  window.history.replaceState({ optimoveBase: true }, "", window.location.href);
+  window.history.pushState({ optimoveGuard: true }, "", window.location.href);
+  state.backGuardReady = true;
+}
+
 function handleBrowserBack() {
-  if (state.appHistoryDepth > 0) state.appHistoryDepth -= 1;
-  handleAppBack();
+  if (state.allowBrowserExit) return;
+  if (state.appHistoryDepth > 0) {
+    state.appHistoryDepth -= 1;
+    handleAppBack();
+    return;
+  }
+  if (handleAppBack()) {
+    window.history.pushState({ optimoveGuard: true }, "", window.location.href);
+    return;
+  }
+  if (window.confirm("Exit OptiMove?")) {
+    state.allowBrowserExit = true;
+    window.history.back();
+    return;
+  }
+  window.history.pushState({ optimoveGuard: true }, "", window.location.href);
 }
 
 function handleAppBack() {
@@ -486,6 +517,29 @@ function handleAppBack() {
   if (state.navStack.length) {
     state.navStack.pop();
     renderCurrentNode();
+    return true;
+  }
+
+  if (state.weekSelectorOpen) {
+    state.weekSelectorOpen = false;
+    renderWeeklyRoot(state.lastWeeklyData);
+    return true;
+  }
+
+  if (state.athletesExpanded) {
+    state.athletesExpanded = false;
+    renderAthleteListState();
+    return true;
+  }
+
+  if (state.activeTab !== "weekly") {
+    state.activeTab = "weekly";
+    state.selectedProgramId = null;
+    state.selectedTemplateId = null;
+    state.openWeekCalendarOnLoad = false;
+    renderTabs();
+    renderLibraryNav();
+    void loadActiveTab();
     return true;
   }
 
