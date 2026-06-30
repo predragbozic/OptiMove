@@ -3874,9 +3874,16 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-exercise-preview, .builder-exercise-thumb { width: 46px; height: 38px; min-width: 46px; object-position: center top; }
   .builder-exercise-add { min-height: 32px; padding: 5px 8px; }
   .builder-node-row { grid-template-columns: minmax(0, 1fr) 74px; gap: 5px; }
-  .builder-node-button { align-items: flex-start; flex-direction: column; gap: 6px; padding: 8px; }
-  .builder-node-name { width: 100%; align-items: flex-start; overflow-wrap: anywhere; line-height: 1.15; }
-  .builder-node-button small { width: 100%; justify-content: flex-end; white-space: normal; }
+  .builder-node-button { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; }
+  .builder-node-name { width: 100%; min-width: 0; align-items: flex-start; line-height: 1.15; }
+  .builder-node-name .builder-node-icon { flex: 0 0 auto; }
+  .builder-node-name {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .builder-node-button small { width: auto; justify-content: flex-end; white-space: normal; }
   .builder-node-level { width: 24px; height: 21px; }
   .builder-exercise-count { max-width: 38px; gap: 2px; }
   .builder-exercise-count i { width: 4px; height: 4px; }
