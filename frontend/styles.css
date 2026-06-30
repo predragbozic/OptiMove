@@ -1266,7 +1266,7 @@ input:focus {
   }
 }
 
-/* Compact weekly date picker, anchored to the current-week heading. */
+/* Compact weekly date picker, opened as a small floating panel above the week. */
 .week-nav-wrap { position: relative; z-index: 10; }
 .week-nav-panel { grid-template-columns: 38px minmax(0, 1fr) 74px 38px 38px; }
 .week-title-button { pointer-events: auto; cursor: pointer; }
@@ -1282,17 +1282,27 @@ input:focus {
 .week-calendar-picker {
   position: absolute;
   z-index: 100;
-  top: calc(100% + 6px);
-  left: 0;
+  top: calc(100% + 8px);
+  left: clamp(0px, 50%, calc(100% - 320px));
   display: block;
-  width: 304px;
+  width: min(320px, 100%);
   margin: 0;
   padding: 0;
 }
 .week-calendar-month { width: 100%; padding: 11px; }
 .week-calendar-head { grid-template-columns: 34px minmax(0, 1fr) 34px; gap: 4px; }
 .week-calendar-head .plain-button { min-height: 32px; }
-.week-calendar-close { display: none; }
+.week-calendar-close {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  margin: 8px 0 9px;
+  padding: 0 10px;
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+}
 .week-calendar-day { font-size: 11px; }
 
 @media (max-width: 760px) {
@@ -1301,7 +1311,10 @@ input:focus {
   }
   body:not(.athlete-mode):not(.login-mode) .week-nav-panel .week-today-button { grid-column: 2; }
   body:not(.athlete-mode):not(.login-mode) .week-nav-panel .week-arrow-button:last-of-type { grid-column: 3; }
-  .week-calendar-picker { width: min(304px, calc(100vw - var(--rail-width) - 24px)); }
+  .week-calendar-picker {
+    left: 0;
+    width: min(304px, calc(100vw - var(--rail-width) - 24px));
+  }
 }
 
 .content-section {
