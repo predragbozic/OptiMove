@@ -5,8 +5,17 @@
 -- publishing is intentionally not enabled yet; every new draft starts private.
 alter table plans.plans
   add column if not exists color varchar(32),
+  add column if not exists is_active boolean not null default true,
   add column if not exists visibility varchar(32) not null default 'private'
     check (visibility in ('private', 'team', 'club', 'public'));
+
+alter table plans.plans
+  add column if not exists edit_source_plan_id uuid references plans.plans(id) on delete cascade,
+  add column if not exists is_edit_draft boolean not null default false;
+
+create index if not exists plans_edit_source_idx
+  on plans.plans (edit_source_plan_id)
+  where is_edit_draft = true;
 
 create table if not exists plans.plan_nodes (
   id uuid primary key default gen_random_uuid(),

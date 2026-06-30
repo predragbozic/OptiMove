@@ -35,6 +35,8 @@ router.post("/plans", async (req, res, next) => {
         `select p.id, p.created_by_user_id, p.source_type, p.status, count(pd.id)::int as day_count
          from plans.plans p left join plans.plan_days pd on pd.plan_id = p.id
          where p.plan_type = 'weekly' and p.athlete_id = $1 and p.week_start = $2
+           and coalesce(p.is_active, true)
+           and not coalesce(p.is_edit_draft, false)
          group by p.id, p.created_by_user_id, p.source_type, p.status
          limit 1`,
         [athlete.id, weekStart],
@@ -72,6 +74,10 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
   try {
     const plan = await requirePlan(req.user, req.params.planId, res);
     if (!plan) return;
+    if (plan.is_edit_draft && plan.edit_source_plan_id) {
+      const updated = await applyEditDraft(req.user, plan);
+      return res.json(await buildDraft(updated));
+    }
     await query("update plans.plans set status = 'published', updated_at = now() where id = $1", [plan.id]);
     res.json(await buildDraft(await getEditablePlan(req.user, plan.id)));
   } catch (error) { next(error); }
@@ -93,7 +99,7 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     await client.query("begin");
     if (source.plan_type === "weekly") {
       const existing = await client.query(
-        "select 1 from plans.plans where plan_type = 'weekly' and athlete_id = $1 and week_start = $2 limit 1",
+        "select 1 from plans.plans where plan_type = 'weekly' and athlete_id = $1 and week_start = $2 and coalesce(is_active, true) and not coalesce(is_edit_draft, false) limit 1",
         [targetAthlete.id, targetWeekStart],
       );
       if (existing.rowCount) {
@@ -129,13 +135,46 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
   try {
     const plan = await getEditablePlan(req.user, req.params.planId);
     if (!plan) return res.status(404).json({ error: "Program not found or not editable." });
+    if (plan.is_edit_draft) return res.json(await buildDraft(plan));
+    if (plan.status === "draft" && plan.source_type === "builder" && !plan.edit_source_plan_id) {
+      return res.json(await buildDraft(plan));
+    }
+
+    const existingDraft = await query(
+      `select id
+       from plans.plans
+       where edit_source_plan_id = $1
+         and is_edit_draft = true
+         and created_by_user_id = $2
+       order by updated_at desc
+       limit 1`,
+      [plan.id, req.user.id],
+    );
+    if (existingDraft.rows[0]) {
+      return res.json(await buildDraft(await getEditablePlan(req.user, existingDraft.rows[0].id)));
+    }
+
     client = await pool.connect();
     await client.query("begin");
-    await materializeLegacyPlan(client, plan.id);
+    const created = await client.query(
+      `insert into plans.plans (
+        plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility,
+        is_template, status, source_type, start_date, duration_days, week_start,
+        is_active, is_edit_draft, edit_source_plan_id
+      )
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', 'builder_edit_draft', $10, $11, $12, false, true, $13)
+       returning id`,
+      [
+        plan.plan_type, req.user.id, plan.athlete_uuid || null, plan.name, plan.note, plan.icon_url, plan.color,
+        plan.visibility || "private", plan.is_template, plan.start_date, plan.duration_days, plan.week_start, plan.id,
+      ],
+    );
+    if (plan.plan_type === "weekly") await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start);
+    else await copyProgramTree(client, plan.id, created.rows[0].id);
     await client.query("commit");
     client.release();
     client = null;
-    res.json(await buildDraft(plan));
+    res.json(await buildDraft(await getEditablePlan(req.user, created.rows[0].id)));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -414,7 +453,65 @@ async function buildDraft(plan) {
     }
     if (row.item_id) node.items.push({ id: row.item_id, exerciseId: row.exercise_id, title: row.title, description: row.description || "", imageUrl: row.image_url || "", videoUrl: row.video_url || "", sets: row.sets || "", reps: row.reps || "", load: row.load || "", itemOrder: Number(row.item_order || 0) });
   });
-  return { plan: { id: plan.id, planType: plan.plan_type, weekStart: plan.week_start || "", name: plan.name, note: plan.note || "", iconUrl: plan.icon_url || "", color: plan.color || "", visibility: plan.visibility || "private", isTemplate: plan.is_template, athleteId: plan.athlete_source_external_id || plan.athlete_id || "", athleteName: plan.athlete_name || "", status: plan.status }, blocks: [...blocks.values()] };
+  return {
+    plan: {
+      id: plan.id,
+      planType: plan.plan_type,
+      weekStart: plan.week_start || "",
+      name: plan.name,
+      note: plan.note || "",
+      iconUrl: plan.icon_url || "",
+      color: plan.color || "",
+      visibility: plan.visibility || "private",
+      isTemplate: plan.is_template,
+      athleteId: plan.athlete_source_external_id || plan.athlete_id || "",
+      athleteName: plan.athlete_name || "",
+      status: plan.status,
+      isEditDraft: Boolean(plan.is_edit_draft),
+      editSourcePlanId: plan.edit_source_plan_id || "",
+    },
+    blocks: [...blocks.values()],
+  };
+}
+
+async function applyEditDraft(user, draftPlan) {
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query("begin");
+    const source = await getEditablePlan(user, draftPlan.edit_source_plan_id);
+    if (!source) throw new Error("Original program not found or not editable.");
+    const sourceDays = await client.query("select id from plans.plan_days where plan_id = $1", [source.id]);
+    for (const day of sourceDays.rows) await deleteBlockTreeWithClient(client, day.id);
+    await client.query(
+      `update plans.plans
+       set name = $2,
+           note = $3,
+           icon_url = $4,
+           color = $5,
+           visibility = $6,
+           is_template = $7,
+           status = 'published',
+           updated_at = now()
+       where id = $1`,
+      [source.id, draftPlan.name, draftPlan.note, draftPlan.icon_url, draftPlan.color, draftPlan.visibility || "private", draftPlan.is_template],
+    );
+    if (draftPlan.plan_type === "weekly") await copyWeeklyPlanTree(client, draftPlan.id, source.id, draftPlan.week_start);
+    else await copyProgramTree(client, draftPlan.id, source.id);
+    const draftDays = await client.query("select id from plans.plan_days where plan_id = $1", [draftPlan.id]);
+    for (const day of draftDays.rows) await deleteBlockTreeWithClient(client, day.id);
+    await client.query("delete from plans.plans where id = $1", [draftPlan.id]);
+    await client.query("commit");
+    client.release();
+    client = null;
+    return await getEditablePlan(user, source.id);
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+      client.release();
+    }
+    throw error;
+  }
 }
 
 async function copyProgramTree(client, sourcePlanId, targetPlanId) {
@@ -617,6 +714,16 @@ async function deleteBlockTree(blockId) {
   await query("delete from plans.plan_days where id = $1", [blockId]);
 }
 
+async function deleteBlockTreeWithClient(client, blockId) {
+  const sessions = await client.query("select id from plans.plan_sessions where plan_day_id = $1", [blockId]);
+  for (const session of sessions.rows) {
+    await client.query("delete from plans.plan_items where plan_session_id = $1", [session.id]);
+    await client.query("delete from plans.plan_nodes where plan_session_id = $1", [session.id]);
+    await client.query("delete from plans.plan_sessions where id = $1", [session.id]);
+  }
+  await client.query("delete from plans.plan_days where id = $1", [blockId]);
+}
+
 async function deleteSessionTree(sessionId) {
   await query("delete from plans.plan_items where plan_session_id = $1", [sessionId]);
   await query("delete from plans.plan_nodes where plan_session_id = $1", [sessionId]);
@@ -636,7 +743,9 @@ async function deleteNodeTree(nodeId) {
 
 async function getEditablePlan(user, planId) {
   const result = await query(
-    `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.visibility, p.is_template, p.status, a.athlete_id, a.source_external_id as athlete_source_external_id,
+    `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.visibility, p.is_template, p.status,
+            p.source_type, p.start_date, p.duration_days, p.athlete_id as athlete_uuid, p.is_edit_draft, p.edit_source_plan_id,
+            a.athlete_id, a.source_external_id as athlete_source_external_id,
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
      where p.id = $1

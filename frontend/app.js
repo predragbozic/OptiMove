@@ -1357,11 +1357,14 @@ function renderBuilder() {
   const selectedSession = findBuilderSession(draft, state.builder.selectedSessionId);
   const selectedNode = findBuilderNode(draft, state.builder.selectedNodeId);
   const isWeekly = draft.plan.planType === "weekly";
+  const isEditDraft = Boolean(draft.plan.isEditDraft);
+  const closeLabel = isEditDraft ? "Cancel changes" : "Close editor";
+  const saveLabel = isEditDraft ? "Apply changes" : "Save and finish";
   els.content.innerHTML = `
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
-        <div><p class="eyebrow">${isWeekly ? `Weekly plan · ${formatDate(draft.plan.weekStart)}` : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><h3>${escapeHtml(draft.plan.name)}</h3><p class="muted">${escapeHtml(draft.plan.athleteName || "Private coach template")}</p></div>
-        <div class="builder-program-actions"><span class="item-badge">${escapeHtml(draft.plan.status || "draft")}</span><button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="Close the editor. Autosaved changes remain.">Close editor</button>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">Save and finish</button>` : `<span class="builder-finished-label">Saved</span>`}<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button></div>
+        <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? `Weekly plan · ${formatDate(draft.plan.weekStart)}` : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><h3>${escapeHtml(draft.plan.name)}</h3><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
+        <div class="builder-program-actions"><span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span><button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="${isEditDraft ? "Discard this edit draft and keep the original unchanged." : "Close the editor. Autosaved changes remain."}">${closeLabel}</button>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">${saveLabel}</button>` : `<span class="builder-finished-label">Saved</span>`}${isEditDraft ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button>`}</div>
       </header>
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       ${isWeekly ? "" : `<section class="builder-block-creator">
@@ -1951,6 +1954,10 @@ async function handleBuilderAction(action) {
   }
   if (type === "builder-cancel") {
     const plan = state.builder.draft?.plan;
+    if (plan?.isEditDraft) {
+      if (!window.confirm("Discard these changes and keep the original unchanged?")) return;
+      await api(`/api/builder/plans/${encodeURIComponent(plan.id)}`, { method: "DELETE" });
+    }
     state.builder = { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false };
     state.navStack = [];
     if (plan?.athleteId) state.selectedAthleteId = String(plan.athleteId);
