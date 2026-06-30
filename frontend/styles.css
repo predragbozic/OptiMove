@@ -2258,6 +2258,9 @@ input:focus {
   border-color: var(--accent);
 }
 
+.exercise-card-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 2px; }
+.exercise-card-actions .text-action { font-size: 12px; }
+
 .exercise-head {
   justify-content: space-between;
   gap: 12px;
@@ -3749,6 +3752,11 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-node-form .builder-error { grid-column: 1 / -1; }
 .builder-dose-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .builder-dose-inputs label { display: grid; gap: 4px; font-size: 12px; color: var(--muted, #667085); font-weight: 700; }
+.exercise-filter-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; min-width: min(100%, 620px); }
+.exercise-filter-field { margin: 0; }
+.exercise-filter-field select { min-height: 38px; border: 1px solid var(--line, #dfe4e8); border-radius: 5px; padding: 8px; background: #fff; font: inherit; }
+.exercise-filter-toggle { min-height: 38px; display: inline-flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid var(--line, #dfe4e8); border-radius: 5px; background: #fff; color: var(--text, #20242a); font-size: 13px; font-weight: 800; }
+.exercise-filter-toggle input { width: 16px; height: 16px; accent-color: #287e77; }
 .builder-exercise-results { display: grid; gap: 7px; max-height: 315px; overflow: auto; }
 .builder-exercise-result { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; align-items: center; border-radius: 6px; padding: 8px; cursor: default; }
 .builder-exercise-result.is-selected { border-color: #287e77; background: #e7f5f2; }
@@ -3756,6 +3764,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-exercise-result small { color: var(--muted, #667085); margin-top: 3px; }
 .builder-exercise-result-text { min-width: 0; }
 .builder-exercise-result-text strong { overflow: hidden; text-overflow: ellipsis; }
+.builder-exercise-mini-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 11px; }
+.builder-exercise-mini-actions .text-action { font-size: 11px; }
 .builder-exercise-preview { width: 52px; height: 42px; min-width: 52px; padding: 0; border: 0; border-radius: 4px; background: #f2f4f7; cursor: pointer; overflow: hidden; }
 .builder-exercise-preview-empty { display: grid; place-items: center; cursor: default; }
 .builder-exercise-thumb { width: 52px; height: 42px; object-fit: cover; border-radius: 4px; background: #f2f4f7; }
@@ -3861,6 +3871,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-section-added { padding-left: 16px; border-left: 1px solid var(--line, #dfe4e8); }
 .builder-panel-label { display: flex; justify-content: space-between; align-items: center; margin: 0 0 12px; color: var(--muted, #667085); font-size: 12px; font-weight: 800; text-transform: uppercase; }
 .builder-panel-label span { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: #eef8f6; color: #287e77; }
+.builder-exercise-filters { margin: 0 0 12px; }
+.builder-exercise-filters summary { cursor: pointer; color: #287e77; font-size: 13px; font-weight: 800; }
+.builder-filter-strip { margin-top: 8px; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); }
 .builder-quick-dose { margin-bottom: 12px; }
 .builder-exercise-results { max-height: 420px; }
 .builder-exercise-result { min-height: 62px; }
@@ -3945,6 +3958,10 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-section-editor-actions { flex: 0 0 auto; }
   .builder-section-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .builder-section-added { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--line, #dfe4e8); }
+  .exercise-filter-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
+  .exercise-filter-field span { font-size: 10px; }
+  .exercise-filter-field select, .exercise-filter-toggle { min-height: 34px; padding: 6px 7px; font-size: 12px; }
+  .builder-filter-strip { grid-template-columns: minmax(0, 1fr); }
   .builder-exercise-results { max-height: min(27dvh, 220px); overflow-x: hidden; }
   .builder-exercise-result { grid-template-columns: 46px minmax(0, 1fr) 48px; min-width: 0; align-items: center; gap: 8px; padding: 7px; }
   .builder-exercise-result > * { min-width: 0; }

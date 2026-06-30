@@ -1,5 +1,46 @@
 const API_BASE = "";
 
+const EXERCISE_FILTERS = [
+  { key: "purpose", label: "Purpose", optionsKey: "purposes" },
+  { key: "quality", label: "Quality / modality", optionsKey: "qualities" },
+  { key: "group", label: "Exercise group", optionsKey: "groups" },
+  { key: "bodyPart", label: "Body part", optionsKey: "bodyParts" },
+  { key: "movementPattern", label: "Movement pattern", optionsKey: "movementPatterns" },
+  { key: "startingPosition", label: "Starting position", optionsKey: "startingPositions" },
+  { key: "place", label: "Place", optionsKey: "places" },
+  { key: "complexity", label: "Complexity", optionsKey: "complexities" },
+  { key: "attractor", label: "Attractor", optionsKey: "attractors" },
+  { key: "tag", label: "Tag", optionsKey: "tags" },
+];
+
+const emptyExerciseFilters = () => ({
+  purpose: "",
+  quality: "",
+  group: "",
+  bodyPart: "",
+  movementPattern: "",
+  startingPosition: "",
+  place: "",
+  complexity: "",
+  attractor: "",
+  tag: "",
+  favorite: false,
+  marked: false,
+});
+
+const emptyExerciseOptions = () => ({
+  purposes: [],
+  qualities: [],
+  groups: [],
+  bodyParts: [],
+  movementPatterns: [],
+  startingPositions: [],
+  places: [],
+  complexities: [],
+  attractors: [],
+  tags: [],
+});
+
 const state = {
   currentUser: null,
   athletes: [],
@@ -17,8 +58,10 @@ const state = {
   lastProgramBundle: null,
   lastTemplates: [],
   lastExerciseResults: [],
-  builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
-  exerciseSearch: { term: "", limit: 30, hasMore: false },
+  builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
+  exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions() },
+  markedExerciseIds: new Set(),
+  markedExercises: new Map(),
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
@@ -200,6 +243,14 @@ function handleContentInput(event) {
 }
 
 async function handleContentChange(event) {
+  const builderFilter = event.target.closest("[data-builder-exercise-filter]");
+  if (builderFilter) {
+    state.builder.exerciseFilters[builderFilter.dataset.builderExerciseFilter] =
+      builderFilter.type === "checkbox" ? builderFilter.checked : builderFilter.value;
+    debounceBuilderSearch();
+    return;
+  }
+
   const form = event.target.closest("[data-builder-autosave]");
   if (!form || !event.target.matches("input, textarea")) return;
   try {
@@ -426,7 +477,13 @@ function handleSwipeEnd(event) {
   const deltaX = touch.clientX - state.touch.startX;
   const deltaY = touch.clientY - state.touch.startY;
   const elapsed = Math.max(1, Date.now() - state.touch.startTime);
-  const velocity = Math.abs(deltaX) / elapsed;
+  const velocityX = Math.abs(deltaX) / elapsed;
+  const velocityY = Math.abs(deltaY) / elapsed;
+  if (els.content.querySelector(".exercise-detail") && Math.abs(deltaY) >= 72 && velocityY >= 0.22 && Math.abs(deltaY) > Math.abs(deltaX) * 1.35) {
+    moveExerciseDetail(deltaY < 0 ? 1 : -1);
+    return;
+  }
+  const velocity = velocityX;
   if (Math.abs(deltaX) < 86 || velocity < 0.28 || Math.abs(deltaX) < Math.abs(deltaY) * 1.8) return;
   handleHorizontalSwipe(deltaX < 0 ? 1 : -1);
 }
@@ -620,17 +677,29 @@ async function loadTemplates() {
 
 async function loadExercises() {
   state.navStack = [];
+  await loadExerciseFilterOptions();
   els.toolbar.innerHTML = `
-    <label class="search-field">
+    <label class="search-field exercise-search-field">
       <span>Exercise search</span>
       <input id="exerciseSearch" type="search" placeholder="Name or code" value="">
     </label>
+    <div class="exercise-filter-strip">
+      ${renderExerciseFilterControls(state.exerciseSearch.filters, state.exerciseSearch.options)}
+    </div>
   `;
   const input = document.querySelector("#exerciseSearch");
   input.addEventListener("input", debounce(() => {
     state.exerciseSearch.limit = 30;
     searchExercises(input.value);
   }, 250));
+  document.querySelectorAll("[data-exercise-filter]").forEach((control) => {
+    control.addEventListener("change", () => {
+      state.exerciseSearch.filters[control.dataset.exerciseFilter] =
+        control.type === "checkbox" ? control.checked : control.value;
+      state.exerciseSearch.limit = 30;
+      searchExercises(input.value);
+    });
+  });
   await searchExercises(input.value);
 }
 
@@ -638,9 +707,84 @@ async function searchExercises(term) {
   const query = term.trim();
   state.exerciseSearch.term = query;
   setLoading(query ? "Searching exercises..." : "Loading exercises...");
-  const data = await api(`/api/exercises?search=${encodeURIComponent(query)}&limit=${state.exerciseSearch.limit}`);
+  const data = await api(exerciseSearchUrl(query, state.exerciseSearch.limit, state.exerciseSearch.filters));
   state.exerciseSearch.hasMore = Boolean(data.hasMore);
-  renderExercises(data.exercises || []);
+  renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters));
+}
+
+async function loadExerciseFilterOptions() {
+  if (EXERCISE_FILTERS.some((filter) => state.exerciseSearch.options[filter.optionsKey]?.length)) return;
+  const data = await api("/api/exercises/options");
+  state.exerciseSearch.options = { ...emptyExerciseOptions(), ...data };
+}
+
+function exerciseSearchUrl(query, limit, filters = {}) {
+  const params = new URLSearchParams({ search: query || "", limit: String(limit || 30) });
+  EXERCISE_FILTERS.forEach((filter) => {
+    if (filters[filter.key]) params.set(filter.key, filters[filter.key]);
+  });
+  if (filters.favorite) params.set("favorite", "true");
+  return `/api/exercises?${params.toString()}`;
+}
+
+function renderExerciseFilterControls(values, options, mode = "library") {
+  const attr = mode === "builder" ? "data-builder-exercise-filter" : "data-exercise-filter";
+  return `
+    ${EXERCISE_FILTERS.map((filter) => renderExerciseFilterSelect(filter, values[filter.key], options[filter.optionsKey], attr)).join("")}
+    ${renderExerciseFilterToggle("favorite", "Favorites", values.favorite, attr)}
+    ${renderExerciseFilterToggle("marked", "Marked", values.marked, attr)}
+  `;
+}
+
+function renderExerciseFilterSelect(filter, value, options, attr) {
+  if (!options?.length) return "";
+  return `
+    <label class="search-field exercise-filter-field">
+      <span>${escapeHtml(filter.label)}</span>
+      <select ${attr}="${escapeAttr(filter.key)}">
+        <option value="">All</option>
+        ${options.map((option) => `<option value="${escapeAttr(option)}" ${option === value ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function renderExerciseFilterToggle(key, label, checked, attr) {
+  return `
+    <label class="exercise-filter-toggle">
+      <input type="checkbox" ${attr}="${escapeAttr(key)}" ${checked ? "checked" : ""}>
+      <span>${escapeHtml(label)}</span>
+    </label>
+  `;
+}
+
+function activeExerciseFilterLabels(filters) {
+  const labels = EXERCISE_FILTERS
+    .filter((filter) => filters[filter.key])
+    .map((filter) => `${filter.label}: ${filters[filter.key]}`);
+  if (filters.favorite) labels.push("Favorites");
+  if (filters.marked) labels.push("Marked");
+  return labels;
+}
+
+function applyClientExerciseFilters(exercises, filters) {
+  if (!filters.marked) return exercises;
+  const hasOtherFilters = EXERCISE_FILTERS.some((filter) => filters[filter.key]) || filters.favorite;
+  if (!hasOtherFilters) return [...state.markedExercises.values()];
+  return exercises.filter((exercise) => state.markedExerciseIds.has(exercise.id));
+}
+
+function findExerciseResultById(exerciseId) {
+  return [...state.lastExerciseResults, ...state.builder.exercises].find((exercise) => String(exercise.id) === String(exerciseId)) || null;
+}
+
+async function toggleExerciseFavorite(exerciseId, isFavorite) {
+  if (!exerciseId) return;
+  await api(`/api/exercises/${encodeURIComponent(exerciseId)}/favorite`, {
+    method: isFavorite ? "DELETE" : "POST",
+  });
+  if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
+  else await searchExercises(state.exerciseSearch.term);
 }
 
 function handleContentClick(event) {
@@ -702,6 +846,30 @@ function handleContentClick(event) {
   if (type === "exercise-load-more") {
     state.exerciseSearch.limit += 30;
     searchExercises(state.exerciseSearch.term);
+    return;
+  }
+  if (type === "exercise-toggle-favorite") {
+    const exerciseId = action.dataset.exerciseId;
+    const isFavorite = action.dataset.favorite === "true";
+    void toggleExerciseFavorite(exerciseId, isFavorite);
+    return;
+  }
+  if (type === "exercise-toggle-mark") {
+    const exerciseId = action.dataset.exerciseId;
+    if (!exerciseId) return;
+    if (state.markedExerciseIds.has(exerciseId)) {
+      state.markedExerciseIds.delete(exerciseId);
+      state.markedExercises.delete(exerciseId);
+    } else {
+      state.markedExerciseIds.add(exerciseId);
+      const exercise = findExerciseResultById(exerciseId);
+      if (exercise) state.markedExercises.set(exerciseId, exercise);
+    }
+    if (state.activeTab === "builder" && state.builder.selectedNodeId) {
+      if (state.builder.exerciseFilters.marked) void loadBuilderExercises();
+      else renderBuilder();
+    }
+    else searchExercises(state.exerciseSearch.term);
     return;
   }
   if (type === "week-prev" || type === "week-next") {
@@ -1464,9 +1632,10 @@ async function loadBuilder() {
 
 async function loadBuilderExercises() {
   if (state.activeTab !== "builder") return;
+  await loadExerciseFilterOptions();
   const query = state.builder.exerciseQuery.trim();
-  const data = await api(`/api/exercises?search=${encodeURIComponent(query)}&limit=12`);
-  state.builder.exercises = data.exercises || [];
+  const data = await api(exerciseSearchUrl(query, 18, state.builder.exerciseFilters));
+  state.builder.exercises = applyClientExerciseFilters(data.exercises || [], state.builder.exerciseFilters);
   renderBuilder();
 }
 
@@ -1796,6 +1965,12 @@ function renderBuilderSectionPanel(selectedNode) {
         <section class="builder-section-library">
           <div class="builder-panel-label">Exercise library</div>
           <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
+          <details class="builder-exercise-filters" ${activeExerciseFilterLabels(state.builder.exerciseFilters).length ? "open" : ""}>
+            <summary>Filters${activeExerciseFilterLabels(state.builder.exerciseFilters).length ? ` (${activeExerciseFilterLabels(state.builder.exerciseFilters).length})` : ""}</summary>
+            <div class="exercise-filter-strip builder-filter-strip">
+              ${renderExerciseFilterControls(state.builder.exerciseFilters, state.exerciseSearch.options, "builder")}
+            </div>
+          </details>
           <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
           <div class="builder-dose-inputs builder-quick-dose">
             <label><span>Sets</span><input data-builder-new-dose name="sets" placeholder="3"></label>
@@ -1846,12 +2021,13 @@ function renderBuilderExerciseResult(exercise) {
   const image = exercise.image_url || "";
   const video = exercise.video_url || "";
   const title = exercise.name || "Exercise";
+  const marked = state.markedExerciseIds.has(exercise.id);
   return `
     <article class="builder-exercise-result">
       ${image || video
         ? `<button type="button" class="builder-exercise-preview" data-action="open-media" data-title="${escapeAttr(title)}" data-image="${escapeAttr(image)}" data-video="${escapeAttr(video)}" aria-label="Preview ${escapeAttr(title)}">${image ? renderImage(image, "builder-exercise-thumb") : `<span class="builder-exercise-thumb builder-exercise-thumb-fallback">Video</span>`}</button>`
         : `<span class="builder-exercise-preview builder-exercise-preview-empty"><span class="node-dot"></span></span>`}
-      <span class="builder-exercise-result-text"><strong>${escapeHtml(title)}</strong><small>${video ? "Preview or add" : "Add to section"}</small></span>
+      <span class="builder-exercise-result-text"><strong>${escapeHtml(title)}</strong><small>${video ? "Preview or add" : "Add to section"}</small><span class="builder-exercise-mini-actions"><button type="button" class="text-action" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Fav" : "Favorite"}</button><button type="button" class="text-action" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Marked" : "Mark"}</button></span></span>
       <button type="button" class="plain-button builder-exercise-add" data-action="builder-pick-exercise" data-exercise-id="${escapeAttr(exercise.id)}">Add</button>
     </article>
   `;
@@ -2121,7 +2297,7 @@ async function handleBuilderAction(action) {
       if (!window.confirm("Discard these changes and keep the original unchanged?")) return;
       await api(`/api/builder/plans/${encodeURIComponent(plan.id)}`, { method: "DELETE" });
     }
-    state.builder = { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false };
+    state.builder = { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false };
     state.navStack = [];
     if (plan?.athleteId) state.selectedAthleteId = String(plan.athleteId);
     if (plan?.planType === "weekly") {
@@ -2238,7 +2414,7 @@ async function handleBuilderAction(action) {
     if (!window.confirm(`Delete this ${label}? This cannot be undone.`)) return;
     await api(url, { method: "DELETE" });
     if (type === "builder-delete-plan") {
-      state.builder = { draft: null, selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exercises: [] };
+      state.builder = { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false };
     } else {
       state.builder.selectedNodeId = "";
       state.builder.selectedSessionId = "";
@@ -2325,6 +2501,7 @@ function renderExercises(exercises) {
     <div class="library-results-head">
       <span class="muted">${exercises.length} exercises shown</span>
       ${state.exerciseSearch.term ? `<span class="item-badge">${escapeHtml(state.exerciseSearch.term)}</span>` : ""}
+      ${activeExerciseFilterLabels(state.exerciseSearch.filters).map((label) => `<span class="item-badge">${escapeHtml(label)}</span>`).join("")}
     </div>
     <div class="exercise-grid">
       ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index])).join("")}
@@ -2338,6 +2515,7 @@ function renderExercises(exercises) {
 }
 
 function renderExerciseLibraryCard(exercise, itemId) {
+  const marked = state.markedExerciseIds.has(exercise.id);
   return `
     <article class="exercise-card">
       ${exercise.image_url ? `
@@ -2352,6 +2530,10 @@ function renderExerciseLibraryCard(exercise, itemId) {
         <span class="muted">${escapeHtml(exercise.aim || "")}</span>
         <span class="item-description">${escapeHtml(exercise.execution_notes || exercise.instruction || "")}</span>
       </button>
+      <div class="exercise-card-actions">
+        <button class="text-action" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Unfavorite" : "Favorite"}</button>
+        <button class="text-action" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Unmark" : "Mark"}</button>
+      </div>
     </article>
   `;
 }
