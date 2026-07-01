@@ -146,6 +146,34 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   align-items: start;
 }
 
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.settings-tab {
+  min-height: 38px;
+  padding: 8px 13px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.settings-tab:hover,
+.settings-tab.is-active {
+  border-color: rgba(31, 111, 104, .24);
+  background: #eef8f6;
+  color: #1f6f68;
+}
+
 .organization-form {
   display: grid;
   gap: 10px;
@@ -192,7 +220,7 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 }
 
 .organization-lists-browser {
-  grid-template-columns: minmax(220px, .8fr) minmax(240px, 1fr) minmax(260px, 1.1fr) minmax(300px, 1.35fr);
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
 .organization-list-card {

@@ -63,7 +63,7 @@ const state = {
   markedExerciseIds: new Set(),
   markedExercises: new Map(),
   tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },
-  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "" },
+  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview" },
   organizationEditor: { open: false, type: "", row: null },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
@@ -1034,6 +1034,11 @@ function handleContentClick(event) {
     void renderOrganizationPanel({ refresh: false });
     return;
   }
+  if (type === "organization-section") {
+    state.organization.section = action.dataset.section || "overview";
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
   if (type === "organization-edit-close") {
     state.organizationEditor = { open: false, type: "", row: null };
     void renderOrganizationPanel();
@@ -1165,8 +1170,8 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
   state.navStack = [];
   renderAthleteListState();
   renderLibraryNav();
-  els.context.textContent = "Access management";
-  els.title.textContent = "Organization";
+  els.context.textContent = "Workspace settings";
+  els.title.textContent = "Settings";
   els.toolbar.innerHTML = "";
 
   if (refresh || !state.organization.data) {
@@ -1198,17 +1203,39 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
         </div>
       </section>
       ${state.organization.error ? `<p class="builder-error">${escapeHtml(state.organization.error)}</p>` : ""}
-      <section class="organization-actions">
-        ${data.canCreateUser ? renderOrganizationUserForm() : ""}
-        ${data.canCreateClub ? renderOrganizationClubForm() : ""}
-        ${data.canCreateTeam ? renderOrganizationTeamForm(data.clubs) : ""}
-        ${data.canCreateAthlete ? renderOrganizationAthleteForm(data.clubs, data.teams) : ""}
-        ${renderOrganizationRoleForms(data)}
-      </section>
+      ${renderSettingsNav()}
+      ${renderOrganizationActions(data)}
       ${renderOrganizationBrowser(data)}
       ${state.organizationEditor.open ? renderOrganizationEditModal(data) : ""}
     </section>
   `;
+}
+
+function renderSettingsNav() {
+  const items = [
+    ["overview", "Overview"],
+    ["clubs", "Clubs"],
+    ["teams", "Teams"],
+    ["athletes", "Athletes"],
+    ["users", "Users"],
+  ];
+  return `
+    <nav class="settings-tabs" aria-label="Settings sections">
+      ${items.map(([value, label]) => `<button class="settings-tab ${state.organization.section === value ? "is-active" : ""}" type="button" data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(label)}</button>`).join("")}
+    </nav>
+  `;
+}
+
+function renderOrganizationActions(data) {
+  const section = state.organization.section || "overview";
+  const actions = {
+    overview: "",
+    clubs: data.canCreateClub ? renderOrganizationClubForm() : "",
+    teams: data.canCreateTeam ? renderOrganizationTeamForm(data.clubs) : "",
+    athletes: data.canCreateAthlete ? renderOrganizationAthleteForm(data.clubs, data.teams) : "",
+    users: `${data.canCreateUser ? renderOrganizationUserForm() : ""}${renderOrganizationRoleForms(data)}`,
+  }[section] || "";
+  return actions ? `<section class="organization-actions">${actions}</section>` : "";
 }
 
 function renderOrganizationUserForm() {
@@ -1247,6 +1274,7 @@ function renderOrganizationBrowser(data) {
   const teams = data.teams || [];
   const athletes = data.athletes || [];
   const users = data.users || [];
+  const section = state.organization.section || "overview";
   const selectedClub = clubs.find((club) => String(club.id) === String(state.organization.selectedClubId));
   const selectedTeam = teams.find((team) => String(team.id) === String(state.organization.selectedTeamId));
   const visibleTeams = state.organization.selectedClubId
@@ -1268,12 +1296,12 @@ function renderOrganizationBrowser(data) {
         ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
       </div>
       <section class="organization-lists organization-lists-browser">
-        ${renderOrganizationList("Users", users, "user")}
-        ${renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId)}
-        ${renderOrganizationSelectableList(selectedClub ? `Teams · ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId)}
-        ${renderOrganizationList(selectedTeam ? `Athletes · ${selectedTeam.name}` : selectedClub ? `Athletes · ${selectedClub.name}` : "Athletes", visibleAthletes, "athlete")}
+        ${section === "overview" || section === "users" ? renderOrganizationList("Users", users, "user") : ""}
+        ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId) : ""}
+        ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams · ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
+        ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes" ? renderOrganizationList(selectedTeam ? `Athletes · ${selectedTeam.name}` : selectedClub ? `Athletes · ${selectedClub.name}` : "Athletes", visibleAthletes, "athlete") : ""}
       </section>
-      ${selectedTeam ? renderAssignAthleteToTeamForm(selectedTeam, visibleAthletes, athletes) : ""}
+      ${(section === "overview" || section === "teams" || section === "athletes") && selectedTeam ? renderAssignAthleteToTeamForm(selectedTeam, visibleAthletes, athletes) : ""}
     </section>
   `;
 }
