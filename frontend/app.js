@@ -63,6 +63,7 @@ const state = {
   markedExerciseIds: new Set(),
   markedExercises: new Map(),
   tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },
+  organization: { data: null, error: "" },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
@@ -176,6 +177,13 @@ async function loadSession() {
 }
 
 async function handleContentSubmit(event) {
+  const organizationForm = event.target.closest("[data-organization-form]");
+  if (organizationForm) {
+    event.preventDefault();
+    await submitOrganizationForm(organizationForm);
+    return;
+  }
+
   const tagForm = event.target.closest("[data-exercise-tag-form]");
   if (tagForm) {
     event.preventDefault();
@@ -345,7 +353,7 @@ function accessScopeLabel(user = state.currentUser) {
 }
 
 function hasOrganizationAccess(user = state.currentUser) {
-  return ["platform", "club", "team"].includes(String(user?.accessScope || "").toLowerCase());
+  return Boolean(user) && String(user?.accessScope || "").toLowerCase() !== "athlete";
 }
 
 function renderAccessNav() {
@@ -1103,7 +1111,7 @@ function renderAthleteListState() {
   document.body.classList.toggle("athletes-drawer-open", state.athletesExpanded);
 }
 
-function renderOrganizationPanel() {
+async function renderOrganizationPanel() {
   state.athletesExpanded = false;
   state.weekSelectorOpen = false;
   state.navStack = [];
@@ -1113,10 +1121,18 @@ function renderOrganizationPanel() {
   els.title.textContent = "Organization";
   els.toolbar.innerHTML = "";
 
+  setLoading("Loading organization...");
+  try {
+    state.organization.data = await api("/api/organization");
+    state.organization.error = "";
+  } catch (error) {
+    state.organization.error = error.message || "Could not load organization.";
+    state.organization.data = null;
+  }
+
+  const data = state.organization.data || { clubs: [], teams: [], athletes: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true };
   const role = roleLabel();
   const scope = accessScopeLabel();
-  const scopeKey = String(state.currentUser?.accessScope || "coach").toLowerCase();
-  const cards = organizationCards(scopeKey);
   els.content.innerHTML = `
     <section class="content-section organization-view">
       <section class="panel organization-hero">
@@ -1130,47 +1146,113 @@ function renderOrganizationPanel() {
           <strong>${escapeHtml(scope)}</strong>
         </div>
       </section>
-      <section class="organization-grid">
-        ${cards.map((card) => `
-          <article class="panel organization-card">
-            <span class="organization-card-icon">${card.icon}</span>
-            <div>
-              <p class="eyebrow">${escapeHtml(card.kicker)}</p>
-              <h3>${escapeHtml(card.title)}</h3>
-              <p class="muted">${escapeHtml(card.description)}</p>
-            </div>
-          </article>
-        `).join("")}
+      ${state.organization.error ? `<p class="builder-error">${escapeHtml(state.organization.error)}</p>` : ""}
+      <section class="organization-actions">
+        ${data.canCreateClub ? renderOrganizationClubForm() : ""}
+        ${data.canCreateTeam ? renderOrganizationTeamForm(data.clubs) : ""}
+        ${data.canCreateAthlete ? renderOrganizationAthleteForm(data.clubs, data.teams) : ""}
+      </section>
+      <section class="organization-lists">
+        ${renderOrganizationList("Clubs", data.clubs, "club")}
+        ${renderOrganizationList("Teams", data.teams, "team")}
+        ${renderOrganizationList("Athletes", data.athletes, "athlete")}
       </section>
     </section>
   `;
 }
 
-function organizationCards(scope) {
-  if (scope === "platform") {
-    return [
-      { icon: "OM", kicker: "Platform", title: "All clubs and users", description: "Platform admin can manage global users, public templates, clubs, teams, and moderation rules." },
-      { icon: "CL", kicker: "Club setup", title: "Create club workspaces", description: "Next step is adding club records, club admins, and shared club resources." },
-      { icon: "TM", kicker: "Teams", title: "Assign teams and staff", description: "Team coaches will only see athletes and plans connected to their team." },
-    ];
+function renderOrganizationClubForm() {
+  return `
+    <form class="panel organization-form" data-organization-form="club">
+      <div><p class="eyebrow">Platform</p><h3>Add club</h3></div>
+      <label class="search-field"><span>Club name</span><input name="name" required placeholder="e.g. FK Borac"></label>
+      <label class="search-field"><span>Short name</span><input name="shortName" placeholder="e.g. Borac"></label>
+      <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" placeholder="https://..."></label>
+      <div class="organization-form-row">
+        <label class="search-field"><span>City</span><input name="city"></label>
+        <label class="search-field"><span>Country</span><input name="country"></label>
+      </div>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Add club</button>
+    </form>
+  `;
+}
+
+function renderOrganizationTeamForm(clubs) {
+  return `
+    <form class="panel organization-form" data-organization-form="team">
+      <div><p class="eyebrow">Club</p><h3>Add team</h3></div>
+      <label class="search-field"><span>Club</span><select name="clubId" required>${clubs.map((club) => `<option value="${escapeAttr(club.id)}">${escapeHtml(club.name)}</option>`).join("")}</select></label>
+      <label class="search-field"><span>Team name</span><input name="name" required placeholder="e.g. First team"></label>
+      <label class="search-field"><span>Short name</span><input name="shortName" placeholder="e.g. U19"></label>
+      <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" placeholder="https://..."></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit" ${clubs.length ? "" : "disabled"}>Add team</button>
+    </form>
+  `;
+}
+
+function renderOrganizationAthleteForm(clubs, teams) {
+  return `
+    <form class="panel organization-form" data-organization-form="athlete">
+      <div><p class="eyebrow">Athletes</p><h3>Add athlete</h3></div>
+      <label class="search-field"><span>Athlete name</span><input name="fullName" required placeholder="First and last name"></label>
+      <label class="search-field"><span>External ID</span><input name="athleteId" placeholder="Optional old ID"></label>
+      <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" placeholder="https://..."></label>
+      <div class="organization-form-row">
+        <label class="search-field"><span>Club</span><select name="clubId"><option value="">No club</option>${clubs.map((club) => `<option value="${escapeAttr(club.id)}">${escapeHtml(club.name)}</option>`).join("")}</select></label>
+        <label class="search-field"><span>Team</span><select name="teamId"><option value="">No team</option>${teams.map((team) => `<option value="${escapeAttr(team.id)}">${escapeHtml(team.name)}${team.club_name ? ` · ${escapeHtml(team.club_name)}` : ""}</option>`).join("")}</select></label>
+      </div>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Add athlete</button>
+    </form>
+  `;
+}
+
+function renderOrganizationList(title, rows, type) {
+  return `
+    <section class="panel organization-list-card">
+      <div class="organization-list-head"><p class="eyebrow">${escapeHtml(title)}</p><strong>${rows.length}</strong></div>
+      <div class="organization-list">
+        ${rows.length ? rows.map((row) => renderOrganizationRow(row, type)).join("") : `<p class="muted">No ${escapeHtml(title.toLowerCase())} yet.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderOrganizationRow(row, type) {
+  const title = row.name || row.full_name || row.display_name || row.athlete_id || "Untitled";
+  const subtitle = type === "athlete"
+    ? [row.athlete_id || row.source_external_id, row.team_name, row.club_name].filter(Boolean).join(" · ")
+    : [row.short_name, row.club_name, row.city, row.country].filter(Boolean).join(" · ");
+  const image = row.image_url || row.logo_url || "";
+  return `
+    <article class="organization-row">
+      ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">${escapeHtml(type.slice(0, 2).toUpperCase())}</span>`}
+      <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(subtitle || type)}</small></span>
+    </article>
+  `;
+}
+
+async function submitOrganizationForm(form) {
+  const type = form.dataset.organizationForm;
+  const button = form.querySelector("button[type='submit']");
+  const error = form.querySelector(".builder-error");
+  if (error) error.textContent = "";
+  if (button) button.disabled = true;
+  const formData = new FormData(form);
+  const payload = Object.fromEntries(formData.entries());
+  const endpoint = { club: "/api/organization/clubs", team: "/api/organization/teams", athlete: "/api/organization/athletes" }[type];
+  try {
+    await api(endpoint, { method: "POST", body: JSON.stringify(payload) });
+    form.reset();
+    await loadAthletes();
+    if (state.activeTab === "organization") await renderOrganizationPanel();
+  } catch (submitError) {
+    if (error) error.textContent = submitError.message || "Could not save.";
+  } finally {
+    if (button) button.disabled = false;
   }
-  if (scope === "club") {
-    return [
-      { icon: "CL", kicker: "Club", title: "Club athletes and teams", description: "Club admins can work across teams inside their club workspace." },
-      { icon: "TM", kicker: "Staff", title: "Team coaches", description: "Add team-level coaches and control which athletes belong to each team." },
-      { icon: "LB", kicker: "Library", title: "Club shared templates", description: "Club templates will be shareable across coaches without making them public." },
-    ];
-  }
-  if (scope === "team") {
-    return [
-      { icon: "TM", kicker: "Team", title: "Team athletes", description: "Team coaches can manage assigned team athletes and their programs." },
-      { icon: "WK", kicker: "Weekly work", title: "Team weekly planning", description: "Create and adapt weekly plans for athletes connected to this team." },
-      { icon: "CP", kicker: "Reuse", title: "Copy team content", description: "Reuse sessions, sections, and templates inside the team workflow." },
-    ];
-  }
-  return [
-    { icon: "CO", kicker: "Coach", title: "Private coach workspace", description: "Independent coaches manage directly assigned athletes, templates, and exercises." },
-  ];
 }
 
 function renderAthleteList() {
