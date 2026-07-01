@@ -205,13 +205,21 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
 .organization-row {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-columns: 42px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   padding: 9px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #fff;
+}
+
+.organization-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: 12px;
 }
 
 .organization-row strong,
@@ -240,6 +248,10 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   color: #344054;
   font-size: 12px;
   font-weight: 900;
+}
+
+.organization-edit-modal {
+  width: min(560px, 94vw);
 }
 
 body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-name {
@@ -484,6 +496,15 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
   .organization-lists,
   .organization-form-row {
     grid-template-columns: 1fr;
+  }
+
+  .organization-row {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .organization-row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 
   .organization-list {

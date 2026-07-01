@@ -64,6 +64,7 @@ const state = {
   markedExercises: new Map(),
   tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },
   organization: { data: null, error: "" },
+  organizationEditor: { open: false, type: "", row: null },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
@@ -995,6 +996,22 @@ function handleContentClick(event) {
     void removeExerciseTag(action.dataset.exerciseId, action.dataset.tagId);
     return;
   }
+  if (type === "organization-edit") {
+    const row = findOrganizationRow(action.dataset.orgType, action.dataset.orgId);
+    if (!row) return;
+    state.organizationEditor = { open: true, type: action.dataset.orgType, row };
+    void renderOrganizationPanel();
+    return;
+  }
+  if (type === "organization-edit-close") {
+    state.organizationEditor = { open: false, type: "", row: null };
+    void renderOrganizationPanel();
+    return;
+  }
+  if (type === "organization-delete") {
+    void deleteOrganizationRow(action.dataset.orgType, action.dataset.orgId);
+    return;
+  }
   if (type === "week-prev" || type === "week-next") {
     const delta = type === "week-prev" ? -1 : 1;
     moveWeek(delta);
@@ -1130,7 +1147,7 @@ async function renderOrganizationPanel() {
     state.organization.data = null;
   }
 
-  const data = state.organization.data || { clubs: [], teams: [], athletes: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true };
+  const data = state.organization.data || { clubs: [], teams: [], athletes: [], users: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true, canCreateUser: true };
   const role = roleLabel();
   const scope = accessScopeLabel();
   els.content.innerHTML = `
@@ -1148,16 +1165,41 @@ async function renderOrganizationPanel() {
       </section>
       ${state.organization.error ? `<p class="builder-error">${escapeHtml(state.organization.error)}</p>` : ""}
       <section class="organization-actions">
+        ${data.canCreateUser ? renderOrganizationUserForm() : ""}
         ${data.canCreateClub ? renderOrganizationClubForm() : ""}
         ${data.canCreateTeam ? renderOrganizationTeamForm(data.clubs) : ""}
         ${data.canCreateAthlete ? renderOrganizationAthleteForm(data.clubs, data.teams) : ""}
+        ${renderOrganizationRoleForms(data)}
       </section>
       <section class="organization-lists">
+        ${renderOrganizationList("Users", data.users || [], "user")}
         ${renderOrganizationList("Clubs", data.clubs, "club")}
         ${renderOrganizationList("Teams", data.teams, "team")}
         ${renderOrganizationList("Athletes", data.athletes, "athlete")}
       </section>
+      ${state.organizationEditor.open ? renderOrganizationEditModal(data) : ""}
     </section>
+  `;
+}
+
+function renderOrganizationUserForm() {
+  const roles = [
+    ["athlete", "Athlete login"],
+    ["coach", "Independent coach"],
+    ["team_coach", "Team coach"],
+    ["club_admin", "Club admin"],
+    ["platform_admin", "Platform admin"],
+  ];
+  return `
+    <form class="panel organization-form" data-organization-form="user">
+      <div><p class="eyebrow">Access</p><h3>Add user account</h3></div>
+      <label class="search-field"><span>Full name</span><input name="fullName" placeholder="Name"></label>
+      <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="name@example.com"></label>
+      <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters"></label>
+      <label class="search-field"><span>Role</span><select name="roleHint">${roles.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Add user</button>
+    </form>
   `;
 }
 
@@ -1209,12 +1251,41 @@ function renderOrganizationAthleteForm(clubs, teams) {
   `;
 }
 
+function renderOrganizationRoleForms(data) {
+  const users = data.users || [];
+  if (!users.length) return "";
+  return `
+    <form class="panel organization-form" data-organization-form="clubRole">
+      <div><p class="eyebrow">Club access</p><h3>Assign club admin</h3></div>
+      <label class="search-field"><span>User</span><select name="userId" required>${users.map((user) => `<option value="${escapeAttr(user.id)}">${escapeHtml(user.name || user.email)}</option>`).join("")}</select></label>
+      <label class="search-field"><span>Club</span><select name="clubId" required>${(data.clubs || []).map((club) => `<option value="${escapeAttr(club.id)}">${escapeHtml(club.name)}</option>`).join("")}</select></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit" ${(data.clubs || []).length ? "" : "disabled"}>Assign club</button>
+    </form>
+    <form class="panel organization-form" data-organization-form="teamRole">
+      <div><p class="eyebrow">Team access</p><h3>Assign team coach</h3></div>
+      <label class="search-field"><span>User</span><select name="userId" required>${users.map((user) => `<option value="${escapeAttr(user.id)}">${escapeHtml(user.name || user.email)}</option>`).join("")}</select></label>
+      <label class="search-field"><span>Team</span><select name="teamId" required>${(data.teams || []).map((team) => `<option value="${escapeAttr(team.id)}">${escapeHtml(team.name)}${team.club_name ? ` - ${escapeHtml(team.club_name)}` : ""}</option>`).join("")}</select></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit" ${(data.teams || []).length ? "" : "disabled"}>Assign team</button>
+    </form>
+    <form class="panel organization-form" data-organization-form="athleteLogin">
+      <div><p class="eyebrow">Athlete app</p><h3>Create athlete login</h3></div>
+      <label class="search-field"><span>Athlete</span><select name="athleteId" required>${(data.athletes || []).map((athlete) => `<option value="${escapeAttr(athlete.id)}">${escapeHtml(athlete.name)}</option>`).join("")}</select></label>
+      <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="athlete@example.com"></label>
+      <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters"></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit" ${(data.athletes || []).length ? "" : "disabled"}>Create login</button>
+    </form>
+  `;
+}
+
 function renderOrganizationList(title, rows, type) {
   return `
     <section class="panel organization-list-card">
       <div class="organization-list-head"><p class="eyebrow">${escapeHtml(title)}</p><strong>${rows.length}</strong></div>
       <div class="organization-list">
-        ${rows.length ? rows.map((row) => renderOrganizationRow(row, type)).join("") : `<p class="muted">No ${escapeHtml(title.toLowerCase())} yet.</p>`}
+        ${rows.length ? rows.map((row) => renderOrganizationRowV2(row, type)).join("") : `<p class="muted">No ${escapeHtml(title.toLowerCase())} yet.</p>`}
       </div>
     </section>
   `;
@@ -1234,6 +1305,83 @@ function renderOrganizationRow(row, type) {
   `;
 }
 
+function renderOrganizationRowV2(row, type) {
+  const title = row.name || row.full_name || row.display_name || row.athlete_id || "Untitled";
+  const subtitle = type === "athlete"
+    ? [row.athlete_id || row.source_external_id, row.team_name, row.club_name, row.user_id ? "login enabled" : ""].filter(Boolean).join(" - ")
+    : type === "user"
+      ? [row.email, row.role_hint].filter(Boolean).join(" - ")
+      : [row.short_name, row.club_name, row.city, row.country].filter(Boolean).join(" - ");
+  const image = row.image_url || row.logo_url || "";
+  return `
+    <article class="organization-row">
+      ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">${escapeHtml(type.slice(0, 2).toUpperCase())}</span>`}
+      <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(subtitle || type)}</small></span>
+      ${type === "user" ? "" : `<span class="organization-row-actions"><button class="text-action" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}">Edit</button><button class="text-action danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}">Delete</button></span>`}
+    </article>
+  `;
+}
+
+function renderOrganizationEditModal(data) {
+  const { type, row } = state.organizationEditor;
+  if (!row) return "";
+  const title = `Edit ${type}`;
+  return `
+    <div class="exercise-tag-overlay">
+      <button class="exercise-tag-backdrop" type="button" data-action="organization-edit-close" aria-label="Close editor"></button>
+      <section class="panel exercise-tag-modal organization-edit-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(title)}">
+        <div class="builder-modal-head">
+          <div><p class="eyebrow">Organization</p><h3>${escapeHtml(title)}</h3></div>
+          <button class="plain-button icon-button" type="button" data-action="organization-edit-close" aria-label="Close"><span class="button-icon">x</span></button>
+        </div>
+        ${type === "club" ? renderOrganizationClubEditForm(row) : type === "team" ? renderOrganizationTeamEditForm(row, data.clubs || []) : renderOrganizationAthleteEditForm(row, data.clubs || [], data.teams || [])}
+      </section>
+    </div>
+  `;
+}
+
+function renderOrganizationClubEditForm(row) {
+  return `
+    <form class="organization-form" data-organization-form="edit-club" data-organization-edit-id="${escapeAttr(row.id)}">
+      <label class="search-field"><span>Club name</span><input name="name" required value="${escapeAttr(row.name || "")}"></label>
+      <label class="search-field"><span>Short name</span><input name="shortName" value="${escapeAttr(row.short_name || "")}"></label>
+      <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" value="${escapeAttr(row.logo_url || "")}"></label>
+      <div class="organization-form-row"><label class="search-field"><span>City</span><input name="city" value="${escapeAttr(row.city || "")}"></label><label class="search-field"><span>Country</span><input name="country" value="${escapeAttr(row.country || "")}"></label></div>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Save changes</button>
+    </form>
+  `;
+}
+
+function renderOrganizationTeamEditForm(row, clubs) {
+  return `
+    <form class="organization-form" data-organization-form="edit-team" data-organization-edit-id="${escapeAttr(row.id)}">
+      <label class="search-field"><span>Club</span><select name="clubId" required>${clubs.map((club) => `<option value="${escapeAttr(club.id)}" ${club.id === row.club_id ? "selected" : ""}>${escapeHtml(club.name)}</option>`).join("")}</select></label>
+      <label class="search-field"><span>Team name</span><input name="name" required value="${escapeAttr(row.name || "")}"></label>
+      <label class="search-field"><span>Short name</span><input name="shortName" value="${escapeAttr(row.short_name || "")}"></label>
+      <label class="search-field"><span>Logo URL</span><input name="logoUrl" type="url" value="${escapeAttr(row.logo_url || "")}"></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Save changes</button>
+    </form>
+  `;
+}
+
+function renderOrganizationAthleteEditForm(row, clubs, teams) {
+  return `
+    <form class="organization-form" data-organization-form="edit-athlete" data-organization-edit-id="${escapeAttr(row.id)}">
+      <label class="search-field"><span>Athlete name</span><input name="fullName" required value="${escapeAttr(row.name || "")}"></label>
+      <label class="search-field"><span>External ID</span><input name="athleteId" value="${escapeAttr(row.athlete_id || row.source_external_id || "")}"></label>
+      <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" value="${escapeAttr(row.image_url || "")}"></label>
+      <div class="organization-form-row">
+        <label class="search-field"><span>Club</span><select name="clubId"><option value="">No club</option>${clubs.map((club) => `<option value="${escapeAttr(club.id)}" ${club.id === row.club_id ? "selected" : ""}>${escapeHtml(club.name)}</option>`).join("")}</select></label>
+        <label class="search-field"><span>Team</span><select name="teamId"><option value="">No team</option>${teams.map((team) => `<option value="${escapeAttr(team.id)}" ${team.id === row.team_id ? "selected" : ""}>${escapeHtml(team.name)}${team.club_name ? ` - ${escapeHtml(team.club_name)}` : ""}</option>`).join("")}</select></label>
+      </div>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Save changes</button>
+    </form>
+  `;
+}
+
 async function submitOrganizationForm(form) {
   const type = form.dataset.organizationForm;
   const button = form.querySelector("button[type='submit']");
@@ -1242,10 +1390,24 @@ async function submitOrganizationForm(form) {
   if (button) button.disabled = true;
   const formData = new FormData(form);
   const payload = Object.fromEntries(formData.entries());
-  const endpoint = { club: "/api/organization/clubs", team: "/api/organization/teams", athlete: "/api/organization/athletes" }[type];
+  const editId = form.dataset.organizationEditId;
+  const endpoint = {
+    club: "/api/organization/clubs",
+    team: "/api/organization/teams",
+    athlete: "/api/organization/athletes",
+    user: "/api/organization/users",
+    clubRole: "/api/organization/club-roles",
+    teamRole: "/api/organization/team-roles",
+    athleteLogin: "/api/organization/athlete-logins",
+    "edit-club": `/api/organization/clubs/${encodeURIComponent(editId)}`,
+    "edit-team": `/api/organization/teams/${encodeURIComponent(editId)}`,
+    "edit-athlete": `/api/organization/athletes/${encodeURIComponent(editId)}`,
+  }[type];
+  const method = type.startsWith("edit-") ? "PUT" : "POST";
   try {
-    await api(endpoint, { method: "POST", body: JSON.stringify(payload) });
+    await api(endpoint, { method, body: JSON.stringify(payload) });
     form.reset();
+    state.organizationEditor = { open: false, type: "", row: null };
     await loadAthletes();
     if (state.activeTab === "organization") await renderOrganizationPanel();
   } catch (submitError) {
@@ -1253,6 +1415,21 @@ async function submitOrganizationForm(form) {
   } finally {
     if (button) button.disabled = false;
   }
+}
+
+function findOrganizationRow(type, id) {
+  const data = state.organization.data || {};
+  const rows = type === "club" ? data.clubs : type === "team" ? data.teams : type === "athlete" ? data.athletes : [];
+  return (rows || []).find((row) => String(row.id) === String(id)) || null;
+}
+
+async function deleteOrganizationRow(type, id) {
+  const labels = { club: "club", team: "team", athlete: "athlete" };
+  if (!id || !labels[type]) return;
+  if (!window.confirm(`Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`)) return;
+  await api(`/api/organization/${type}s/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await loadAthletes();
+  if (state.activeTab === "organization") await renderOrganizationPanel();
 }
 
 function renderAthleteList() {
