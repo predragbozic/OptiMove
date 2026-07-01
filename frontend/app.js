@@ -101,6 +101,7 @@ init();
 
 async function init() {
   bindEvents();
+  state.railExpanded = window.matchMedia("(min-width: 900px)").matches;
   renderRailState();
   if (window.location.pathname === "/invite") {
     await renderInviteAccept();
