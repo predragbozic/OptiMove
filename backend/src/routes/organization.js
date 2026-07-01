@@ -37,12 +37,13 @@ router.post("/users", async (req, res, next) => {
     const roleHint = allowedUserRole(req.user, clean(req.body?.roleHint) || "athlete");
     if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
     if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters." });
+    const nameParts = splitName(fullName || email);
     const result = await query(
-      `insert into public.users (email, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
-       values ($1, $2, $3, $3, $4, $5, true)
+      `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
+       values ($1, $2, $3, $4, $5, $5, $6, $7, true)
        on conflict (email) do nothing
        returning id, email, full_name, display_name, role_hint`,
-      [email, hashPassword(password), fullName || email, roleHint, req.user.id],
+      [email, nameParts.firstName, nameParts.lastName, hashPassword(password), fullName || email, roleHint, req.user.id],
     );
     if (!result.rows[0]) return res.status(409).json({ error: "A user with this email already exists." });
     res.status(201).json({ user: result.rows[0] });
@@ -162,11 +163,8 @@ router.post("/athletes", async (req, res, next) => {
   try {
     const fullName = clean(req.body?.fullName);
     const athleteId = clean(req.body?.athleteId);
-    const clubId = clean(req.body?.clubId) || null;
-    const teamId = clean(req.body?.teamId) || null;
+    const { clubId, teamId } = await resolveAthleteClubTeam(req.user, clean(req.body?.clubId), clean(req.body?.teamId));
     if (!fullName) return res.status(400).json({ error: "Athlete name is required." });
-    if (clubId && !(await canManageClub(req.user, clubId))) return res.status(403).json({ error: "Club is outside your access." });
-    if (teamId && !(await canManageTeam(req.user, teamId))) return res.status(403).json({ error: "Team is outside your access." });
 
     const generatedId = athleteId || await nextAthleteId();
     const result = await query(
@@ -194,11 +192,8 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
     if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     const fullName = clean(req.body?.fullName);
     const athleteId = clean(req.body?.athleteId);
-    const clubId = clean(req.body?.clubId) || null;
-    const teamId = clean(req.body?.teamId) || null;
+    const { clubId, teamId } = await resolveAthleteClubTeam(req.user, clean(req.body?.clubId), clean(req.body?.teamId));
     if (!fullName) return res.status(400).json({ error: "Athlete name is required." });
-    if (clubId && !(await canManageClub(req.user, clubId))) return res.status(403).json({ error: "Club is outside your access." });
-    if (teamId && !(await canManageTeam(req.user, teamId))) return res.status(403).json({ error: "Team is outside your access." });
     const result = await query(
       `update public.athletes
        set athlete_id = coalesce(nullif($2, ''), athlete_id),
@@ -211,6 +206,29 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
        where id = $1
        returning id, athlete_id, source_external_id, full_name, display_name, image_url, club_id, team_id`,
       [req.params.athleteId, athleteId, fullName, clean(req.body?.imageUrl), clubId, teamId],
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Athlete not found." });
+    res.json({ athlete: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/teams/:teamId/athletes", async (req, res, next) => {
+  try {
+    const teamId = clean(req.params.teamId);
+    const athleteId = clean(req.body?.athleteId);
+    if (!teamId || !athleteId) return res.status(400).json({ error: "Team and athlete are required." });
+    if (!(await canManageTeam(req.user, teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    const team = await query(`select id, club_id from public.teams where id = $1 and coalesce(is_active, true) limit 1`, [teamId]);
+    if (!team.rows[0]) return res.status(404).json({ error: "Team not found." });
+    const result = await query(
+      `update public.athletes
+       set club_id = $2, team_id = $3
+       where id = $1
+       returning id, athlete_id, source_external_id, full_name, display_name, image_url, club_id, team_id`,
+      [athleteId, team.rows[0].club_id, teamId],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Athlete not found." });
     res.json({ athlete: result.rows[0] });
@@ -284,12 +302,13 @@ router.post("/athlete-logins", async (req, res, next) => {
       [athleteId],
     );
     if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
+    const nameParts = splitName(athlete.rows[0].name || email);
     const user = await query(
-      `insert into public.users (email, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
-       values ($1, $2, $3, $3, 'athlete', $4, true)
+      `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
+       values ($1, $2, $3, $4, $5, $5, 'athlete', $6, true)
        on conflict (email) do nothing
        returning id, email`,
-      [email, hashPassword(password), athlete.rows[0].name, req.user.id],
+      [email, nameParts.firstName, nameParts.lastName, hashPassword(password), athlete.rows[0].name, req.user.id],
     );
     if (!user.rows[0]) return res.status(409).json({ error: "A user with this email already exists." });
     await query(`update public.athletes set user_id = $2 where id = $1`, [athleteId, user.rows[0].id]);
@@ -486,6 +505,35 @@ async function canManageTeam(user, teamId) {
   return result.rowCount > 0;
 }
 
+async function resolveAthleteClubTeam(user, requestedClubId, requestedTeamId) {
+  let clubId = clean(requestedClubId) || null;
+  const teamId = clean(requestedTeamId) || null;
+  if (clubId && !(await canManageClub(user, clubId))) {
+    const error = new Error("Club is outside your access.");
+    error.status = 403;
+    throw error;
+  }
+  if (!teamId) return { clubId, teamId: null };
+  if (!(await canManageTeam(user, teamId))) {
+    const error = new Error("Team is outside your access.");
+    error.status = 403;
+    throw error;
+  }
+  const result = await query(`select id, club_id from public.teams where id = $1 and coalesce(is_active, true) limit 1`, [teamId]);
+  const team = result.rows[0];
+  if (!team) {
+    const error = new Error("Team not found.");
+    error.status = 404;
+    throw error;
+  }
+  if (clubId && String(clubId) !== String(team.club_id)) {
+    const error = new Error("Selected team does not belong to the selected club.");
+    error.status = 400;
+    throw error;
+  }
+  return { clubId: team.club_id, teamId: team.id };
+}
+
 function allowedUserRole(currentUser, requestedRole) {
   const role = clean(requestedRole).toLowerCase();
   const platformRoles = new Set(["platform_admin", "club_admin", "team_coach", "coach", "athlete"]);
@@ -505,6 +553,14 @@ async function nextAthleteId() {
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+function splitName(value) {
+  const parts = clean(value).split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || "User",
+    lastName: parts.slice(1).join(" ") || null,
+  };
 }
 
 export default router;

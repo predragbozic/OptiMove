@@ -60,9 +60,10 @@ app.use((req, res) => {
 
 app.use((error, _req, res, _next) => {
   console.error(error);
-  res.status(500).json({
-    error: "Internal server error",
-    message: isProduction ? "Something went wrong." : error.message,
+  const status = Number(error.status || error.statusCode || 500);
+  res.status(status).json({
+    error: status >= 500 ? "Internal server error" : error.message,
+    message: status >= 500 && isProduction ? "Something went wrong." : error.message,
   });
 });
 
