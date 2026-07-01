@@ -111,11 +111,33 @@ create table if not exists public.user_athletes (
   unique (user_id, athlete_id, relationship_type)
 );
 
+create table if not exists public.athlete_invites (
+  id uuid primary key default gen_random_uuid(),
+  athlete_id uuid not null references public.athletes(id) on delete cascade,
+  email text not null,
+  token_hash text not null unique,
+  invited_by_user_id uuid references public.users(id) on delete set null,
+  accepted_by_user_id uuid references public.users(id) on delete set null,
+  accepted_at timestamptz,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+
 alter table public.user_athletes
   add column if not exists relationship_type varchar(40) not null default 'coach',
   add column if not exists is_active boolean not null default true,
   add column if not exists created_at timestamptz not null default now(),
   add column if not exists updated_at timestamptz not null default now();
+
+alter table public.athlete_invites
+  add column if not exists athlete_id uuid references public.athletes(id) on delete cascade,
+  add column if not exists email text,
+  add column if not exists token_hash text,
+  add column if not exists invited_by_user_id uuid references public.users(id) on delete set null,
+  add column if not exists accepted_by_user_id uuid references public.users(id) on delete set null,
+  add column if not exists accepted_at timestamptz,
+  add column if not exists expires_at timestamptz not null default (now() + interval '14 days'),
+  add column if not exists created_at timestamptz not null default now();
 
 create index if not exists user_club_roles_user_active_idx
   on public.user_club_roles (user_id, club_id)
@@ -132,3 +154,7 @@ create index if not exists user_athletes_user_active_idx
 create index if not exists athletes_club_team_idx
   on public.athletes (club_id, team_id)
   where coalesce(is_active, true);
+
+create index if not exists athlete_invites_lookup_idx
+  on public.athlete_invites (token_hash)
+  where accepted_at is null;

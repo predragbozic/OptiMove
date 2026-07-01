@@ -341,10 +341,103 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
 .organization-assign-panel {
   max-width: 560px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
 }
 
 .organization-edit-modal {
   width: min(560px, 94vw);
+}
+
+.organization-team-detail {
+  min-width: min(100%, 620px);
+}
+
+.organization-team-head {
+  align-items: start;
+}
+
+.compact-button {
+  min-height: 36px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.organization-table {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.organization-table-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(80px, .55fr) minmax(90px, .55fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.organization-table-row:first-child {
+  border-top: 0;
+}
+
+.organization-table-head {
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.organization-table-athlete {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.organization-table-athlete strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.organization-empty-row {
+  padding: 14px;
+}
+
+.organization-invite-modal {
+  width: min(560px, 94vw);
+}
+
+.invite-result {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.invite-result input {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.invite-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-name {
@@ -607,6 +700,14 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
 
   .organization-list {
     max-height: none;
+  }
+
+  .organization-table {
+    overflow-x: auto;
+  }
+
+  .organization-table-row {
+    min-width: 560px;
   }
 
   body:not(.athlete-mode):not(.login-mode) {

@@ -63,8 +63,9 @@ const state = {
   markedExerciseIds: new Set(),
   markedExercises: new Map(),
   tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },
-  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview" },
+  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", assignOpen: false },
   organizationEditor: { open: false, type: "", row: null },
+  organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
@@ -101,6 +102,10 @@ init();
 async function init() {
   bindEvents();
   renderRailState();
+  if (window.location.pathname === "/invite") {
+    await renderInviteAccept();
+    return;
+  }
   await loadSession();
   if (!state.currentUser) {
     renderLogin();
@@ -178,6 +183,13 @@ async function loadSession() {
 }
 
 async function handleContentSubmit(event) {
+  const inviteForm = event.target.closest("#inviteAcceptForm");
+  if (inviteForm) {
+    event.preventDefault();
+    await submitInviteAccept(inviteForm);
+    return;
+  }
+
   const organizationForm = event.target.closest("[data-organization-form]");
   if (organizationForm) {
     event.preventDefault();
@@ -324,6 +336,80 @@ function renderLogin() {
       </form>
     </section>
   `;
+}
+
+async function renderInviteAccept() {
+  document.body.classList.add("login-mode");
+  setStatus("Invite");
+  els.context.textContent = "OptiMove";
+  els.title.textContent = "Activate account";
+  els.athleteList.innerHTML = "";
+  els.athleteSearch.value = "";
+  els.toolbar.innerHTML = "";
+  state.currentUser = null;
+  renderUserControls();
+  const token = new URLSearchParams(window.location.search).get("token") || "";
+  if (!token) {
+    els.content.innerHTML = `<section class="login-panel"><div class="login-form"><h3>Invite link is missing</h3><p class="muted">Ask your coach to send a new invite link.</p></div></section>`;
+    return;
+  }
+  try {
+    const data = await api(`/api/auth/invites/${encodeURIComponent(token)}`);
+    const invite = data.invite || {};
+    els.content.innerHTML = `
+      <section class="login-panel">
+        <form class="login-form invite-form" id="inviteAcceptForm" data-token="${escapeAttr(token)}">
+          <div>
+            <p class="eyebrow">Athlete access</p>
+            <h3>Activate OptiMove account</h3>
+            <p class="muted">${escapeHtml(invite.athlete_name || "Athlete")} ${invite.athlete_code ? `- ID ${escapeHtml(invite.athlete_code)}` : ""}</p>
+          </div>
+          <label class="search-field">
+            <span>Email</span>
+            <input value="${escapeAttr(invite.email || "")}" readonly>
+          </label>
+          <label class="search-field">
+            <span>Password</span>
+            <input name="password" type="password" autocomplete="new-password" required minlength="8" placeholder="At least 8 characters">
+          </label>
+          <label class="search-field">
+            <span>Confirm password</span>
+            <input name="confirmPassword" type="password" autocomplete="new-password" required minlength="8">
+          </label>
+          <p class="login-error" aria-live="polite"></p>
+          <button class="plain-button" type="submit">Activate account</button>
+        </form>
+      </section>
+    `;
+  } catch (error) {
+    els.content.innerHTML = `<section class="login-panel"><div class="login-form"><h3>Invite is not valid</h3><p class="login-error">${escapeHtml(error.message || "This invite has expired.")}</p></div></section>`;
+  }
+}
+
+async function submitInviteAccept(form) {
+  const error = form.querySelector(".login-error");
+  const button = form.querySelector("button[type='submit']");
+  const formData = new FormData(form);
+  const password = String(formData.get("password") || "");
+  const confirmPassword = String(formData.get("confirmPassword") || "");
+  if (error) error.textContent = "";
+  if (password !== confirmPassword) {
+    if (error) error.textContent = "Passwords do not match.";
+    return;
+  }
+  if (button) button.disabled = true;
+  try {
+    const data = await api(`/api/auth/invites/${encodeURIComponent(form.dataset.token || "")}/accept`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+    state.currentUser = data.user;
+    window.location.replace(state.currentUser?.role === "athlete" ? "/athlete" : "/");
+  } catch (submitError) {
+    if (error) error.textContent = submitError.message || "Could not activate account.";
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function renderUserControls() {
@@ -1018,6 +1104,7 @@ function handleContentClick(event) {
   if (type === "organization-select-club") {
     state.organization.selectedClubId = action.dataset.clubId || "";
     state.organization.selectedTeamId = "";
+    state.organization.assignOpen = false;
     void renderOrganizationPanel({ refresh: false });
     return;
   }
@@ -1025,12 +1112,14 @@ function handleContentClick(event) {
     state.organization.selectedTeamId = action.dataset.teamId || "";
     const team = findOrganizationRow("team", state.organization.selectedTeamId);
     if (team?.club_id) state.organization.selectedClubId = team.club_id;
+    state.organization.assignOpen = false;
     void renderOrganizationPanel({ refresh: false });
     return;
   }
   if (type === "organization-clear-selection") {
     state.organization.selectedClubId = "";
     state.organization.selectedTeamId = "";
+    state.organization.assignOpen = false;
     void renderOrganizationPanel({ refresh: false });
     return;
   }
@@ -1042,6 +1131,29 @@ function handleContentClick(event) {
   if (type === "organization-edit-close") {
     state.organizationEditor = { open: false, type: "", row: null };
     void renderOrganizationPanel();
+    return;
+  }
+  if (type === "organization-toggle-assign-athlete") {
+    state.organization.assignOpen = !state.organization.assignOpen;
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
+  if (type === "organization-invite-athlete") {
+    const row = findOrganizationRow("athlete", action.dataset.athleteId);
+    if (!row) return;
+    state.organizationInvite = { open: true, athleteId: row.id, inviteUrl: "", mailtoUrl: "", error: "" };
+    state.organizationEditor = { open: false, type: "", row: null };
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
+  if (type === "organization-invite-close") {
+    state.organizationInvite = { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" };
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
+  if (type === "organization-copy-invite") {
+    const inviteUrl = state.organizationInvite.inviteUrl || "";
+    if (inviteUrl) void navigator.clipboard?.writeText(inviteUrl);
     return;
   }
   if (type === "organization-delete") {
@@ -1344,6 +1456,127 @@ function renderAssignAthleteToTeamForm(team, visibleAthletes, allAthletes) {
   `;
 }
 
+function renderOrganizationBrowser(data) {
+  const clubs = data.clubs || [];
+  const teams = data.teams || [];
+  const athletes = data.athletes || [];
+  const users = data.users || [];
+  const section = state.organization.section || "overview";
+  const selectedClub = clubs.find((club) => String(club.id) === String(state.organization.selectedClubId));
+  const selectedTeam = teams.find((team) => String(team.id) === String(state.organization.selectedTeamId));
+  const visibleTeams = state.organization.selectedClubId
+    ? teams.filter((team) => String(team.club_id) === String(state.organization.selectedClubId))
+    : teams;
+  const visibleAthletes = state.organization.selectedTeamId
+    ? athletes.filter((athlete) => String(athlete.team_id) === String(state.organization.selectedTeamId))
+    : state.organization.selectedClubId
+      ? athletes.filter((athlete) => String(athlete.club_id) === String(state.organization.selectedClubId) || visibleTeams.some((team) => String(team.id) === String(athlete.team_id)))
+      : athletes;
+  return `
+    <section class="organization-browser">
+      <div class="organization-browser-head">
+        <div>
+          <p class="eyebrow">Organization browser</p>
+          <h3>${escapeHtml(selectedTeam?.name || selectedClub?.name || "All accessible organization")}</h3>
+          <p class="muted">${escapeHtml(selectedTeam ? `${visibleAthletes.length} athletes in team` : selectedClub ? `${visibleTeams.length} teams - ${visibleAthletes.length} athletes` : `${clubs.length} clubs - ${teams.length} teams - ${athletes.length} athletes`)}</p>
+        </div>
+        ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
+      </div>
+      <section class="organization-lists organization-lists-browser">
+        ${section === "overview" || section === "users" ? renderOrganizationList("Users", users, "user") : ""}
+        ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId) : ""}
+        ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
+        ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes" ? selectedTeam ? renderTeamAthleteTable(selectedTeam, visibleAthletes, athletes) : renderOrganizationList(selectedClub ? `Athletes - ${selectedClub.name}` : "Athletes", visibleAthletes, "athlete") : ""}
+      </section>
+      ${state.organizationInvite.open ? renderAthleteInviteModal(athletes) : ""}
+    </section>
+  `;
+}
+
+function renderAssignAthleteToTeamForm(team, visibleAthletes, allAthletes) {
+  const assignedIds = new Set(visibleAthletes.map((athlete) => String(athlete.id)));
+  const options = allAthletes
+    .filter((athlete) => !assignedIds.has(String(athlete.id)) && !athlete.team_id)
+    .map((athlete) => ({ value: athlete.id, label: [athlete.name, athlete.athlete_id ? `ID ${athlete.athlete_id}` : "", athlete.club_name || "No club"].filter(Boolean).join(" - ") }));
+  return `
+    <form class="organization-form organization-assign-panel" data-organization-form="assignTeamAthlete" data-team-id="${escapeAttr(team.id)}">
+      <div><p class="eyebrow">Existing athletes</p><h3>Add athlete to ${escapeHtml(team.name)}</h3><p class="muted">Shows athletes without a team. Assigning also sets the club to ${escapeHtml(team.club_name || "this team's club")}.</p></div>
+      ${renderFilterableSelect({ name: "athleteId", label: "Athlete", options, required: true, placeholder: "Type athlete name or ID" })}
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit" ${options.length ? "" : "disabled"}>Assign athlete</button>
+    </form>
+  `;
+}
+
+function renderTeamAthleteTable(team, teamAthletes, allAthletes) {
+  return `
+    <section class="panel organization-list-card organization-team-detail">
+      <div class="organization-list-head organization-team-head">
+        <div>
+          <p class="eyebrow">Team roster</p>
+          <h3>${escapeHtml(team.name)}</h3>
+          <p class="muted">${escapeHtml(team.club_name || "No club")} - ${teamAthletes.length} athletes</p>
+        </div>
+        <button class="plain-button compact-button" type="button" data-action="organization-toggle-assign-athlete">${state.organization.assignOpen ? "Close add" : "Add athlete"}</button>
+      </div>
+      ${state.organization.assignOpen ? renderAssignAthleteToTeamForm(team, teamAthletes, allAthletes) : ""}
+      <div class="organization-table" role="table" aria-label="${escapeAttr(team.name)} athletes">
+        <div class="organization-table-row organization-table-head" role="row">
+          <span>Athlete</span><span>ID</span><span>Login</span><span></span>
+        </div>
+        ${teamAthletes.length ? teamAthletes.map((athlete) => renderTeamAthleteRow(athlete)).join("") : `<p class="muted organization-empty-row">No athletes assigned to this team yet.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderTeamAthleteRow(athlete) {
+  const image = athlete.image_url || "";
+  return `
+    <div class="organization-table-row" role="row">
+      <span class="organization-table-athlete">${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">AT</span>`}<strong>${escapeHtml(athlete.name || "Athlete")}</strong></span>
+      <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "-")}</span>
+      <span>${athlete.user_id ? "Enabled" : "No login"}</span>
+      <span class="organization-row-actions">
+        <button class="text-action" type="button" data-action="organization-invite-athlete" data-athlete-id="${escapeAttr(athlete.id)}">Invite</button>
+        <button class="text-action" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}">Edit</button>
+      </span>
+    </div>
+  `;
+}
+
+function renderAthleteInviteModal(athletes) {
+  const athlete = athletes.find((entry) => String(entry.id) === String(state.organizationInvite.athleteId));
+  if (!athlete) return "";
+  return `
+    <div class="exercise-tag-overlay">
+      <button class="exercise-tag-backdrop" type="button" data-action="organization-invite-close" aria-label="Close invite"></button>
+      <section class="panel exercise-tag-modal organization-invite-modal" role="dialog" aria-modal="true" aria-label="Athlete invite">
+        <div class="builder-modal-head">
+          <div><p class="eyebrow">Athlete invite</p><h3>${escapeHtml(athlete.name || "Athlete")}</h3></div>
+          <button class="plain-button icon-button" type="button" data-action="organization-invite-close" aria-label="Close"><span class="button-icon">x</span></button>
+        </div>
+        <form class="organization-form" data-organization-form="athleteInvite">
+          <input type="hidden" name="athleteId" value="${escapeAttr(athlete.id)}">
+          <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="athlete@example.com"></label>
+          <p class="builder-error" aria-live="polite">${escapeHtml(state.organizationInvite.error || "")}</p>
+          <button class="plain-button" type="submit">Create invite link</button>
+        </form>
+        ${state.organizationInvite.inviteUrl ? `
+          <div class="invite-result">
+            <p class="muted">Share this link with the athlete. It expires in 14 days.</p>
+            <input readonly value="${escapeAttr(state.organizationInvite.inviteUrl)}">
+            <div class="invite-actions">
+              <button class="plain-button compact-button" type="button" data-action="organization-copy-invite">Copy link</button>
+              <a class="plain-button compact-button" href="${escapeAttr(state.organizationInvite.mailtoUrl || "#")}">Open email</a>
+            </div>
+          </div>
+        ` : ""}
+      </section>
+    </div>
+  `;
+}
+
 function renderFilterableSelect({ name, label, options = [], value = "", required = false, placeholder = "Filter", includeEmpty = "", extraSelectAttrs = "" }) {
   const normalizedValue = String(value || "");
   return `
@@ -1603,6 +1836,7 @@ async function submitOrganizationForm(form) {
     clubRole: "/api/organization/club-roles",
     teamRole: "/api/organization/team-roles",
     athleteLogin: "/api/organization/athlete-logins",
+    athleteInvite: "/api/organization/athlete-invites",
     assignTeamAthlete: `/api/organization/teams/${encodeURIComponent(teamId || "")}/athletes`,
     "edit-club": `/api/organization/clubs/${encodeURIComponent(editId)}`,
     "edit-team": `/api/organization/teams/${encodeURIComponent(editId)}`,
@@ -1610,7 +1844,18 @@ async function submitOrganizationForm(form) {
   }[type];
   const method = type.startsWith("edit-") ? "PUT" : "POST";
   try {
-    await api(endpoint, { method, body: JSON.stringify(payload) });
+    const result = await api(endpoint, { method, body: JSON.stringify(payload) });
+    if (type === "athleteInvite") {
+      state.organizationInvite = {
+        open: true,
+        athleteId: payload.athleteId || state.organizationInvite.athleteId,
+        inviteUrl: result.inviteUrl || "",
+        mailtoUrl: result.mailtoUrl || "",
+        error: "",
+      };
+      await renderOrganizationPanel({ refresh: false });
+      return;
+    }
     form.reset();
     state.organizationEditor = { open: false, type: "", row: null };
     await loadAthletes();

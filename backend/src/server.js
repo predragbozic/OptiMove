@@ -47,7 +47,7 @@ app.use("/api/builder", requireAuth, requireCoach, builderRouter);
 app.use("/api/organization", requireAuth, requireCoach, organizationRouter);
 
 app.use(express.static(frontendDir));
-app.get(["/", "/app"], (_req, res) => {
+app.get(["/", "/app", "/invite"], (_req, res) => {
   res.sendFile(path.join(frontendDir, "index.html"));
 });
 app.get("/athlete", (_req, res) => {

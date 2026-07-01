@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import { query } from "../db.js";
 import { isClubAdmin, isPlatformAdmin, isTeamCoach } from "../access.js";
@@ -232,6 +233,38 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Athlete not found." });
     res.json({ athlete: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/athlete-invites", async (req, res, next) => {
+  try {
+    const athleteId = clean(req.body?.athleteId);
+    const email = clean(req.body?.email).toLowerCase();
+    if (!athleteId || !email) return res.status(400).json({ error: "Athlete and email are required." });
+    if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    const athlete = await query(
+      `select id, coalesce(display_name, full_name, athlete_id) as name from public.athletes where id = $1 and coalesce(is_active, true) limit 1`,
+      [athleteId],
+    );
+    if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
+    const token = crypto.randomBytes(32).toString("base64url");
+    const tokenHash = hashInviteToken(token);
+    const invite = await query(
+      `insert into public.athlete_invites (athlete_id, email, token_hash, invited_by_user_id, expires_at)
+       values ($1, $2, $3, $4, now() + interval '14 days')
+       returning id, athlete_id, email, expires_at, created_at`,
+      [athleteId, email, tokenHash, req.user.id],
+    );
+    const inviteUrl = `${appOrigin(req)}/invite?token=${encodeURIComponent(token)}`;
+    const subject = encodeURIComponent("OptiMove athlete access");
+    const body = encodeURIComponent(`Hi ${athlete.rows[0].name || ""},\n\nUse this link to activate your OptiMove athlete account:\n${inviteUrl}\n\nThis link expires in 14 days.`);
+    res.status(201).json({
+      invite: invite.rows[0],
+      inviteUrl,
+      mailtoUrl: `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`,
+    });
   } catch (error) {
     next(error);
   }
@@ -553,6 +586,17 @@ async function nextAthleteId() {
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+function hashInviteToken(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("base64url");
+}
+
+function appOrigin(req) {
+  const configured = clean(process.env.PUBLIC_APP_URL);
+  if (configured) return configured.replace(/\/$/, "");
+  const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+  return `${protocol}://${req.get("host")}`;
 }
 
 function splitName(value) {
