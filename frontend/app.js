@@ -1381,7 +1381,7 @@ function normalizeOrganizationSelection(data) {
   if (selectedTeam?.club_id && !state.organization.selectedClubId) state.organization.selectedClubId = selectedTeam.club_id;
 }
 
-function renderOrganizationBrowser(data) {
+function renderOrganizationBrowserLegacy(data) {
   const clubs = data.clubs || [];
   const teams = data.teams || [];
   const athletes = data.athletes || [];
@@ -1441,7 +1441,7 @@ function renderOrganizationSelectableRow(row, type, selectedId) {
   `;
 }
 
-function renderAssignAthleteToTeamForm(team, visibleAthletes, allAthletes) {
+function renderAssignAthleteToTeamFormLegacy(team, visibleAthletes, allAthletes) {
   const assignedIds = new Set(visibleAthletes.map((athlete) => String(athlete.id)));
   const options = allAthletes
     .filter((athlete) => !assignedIds.has(String(athlete.id)))
