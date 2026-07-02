@@ -129,6 +129,28 @@ alter table public.user_athletes
   add column if not exists created_at timestamptz not null default now(),
   add column if not exists updated_at timestamptz not null default now();
 
+delete from public.user_athletes ua
+using public.user_athletes duplicate
+where ua.ctid < duplicate.ctid
+  and ua.user_id = duplicate.user_id
+  and ua.athlete_id = duplicate.athlete_id
+  and ua.relationship_type = duplicate.relationship_type;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.user_athletes'::regclass
+      and contype = 'u'
+      and pg_get_constraintdef(oid) = 'UNIQUE (user_id, athlete_id, relationship_type)'
+  ) then
+    alter table public.user_athletes
+      add constraint user_athletes_user_athlete_relationship_unique
+      unique (user_id, athlete_id, relationship_type);
+  end if;
+end $$;
+
 alter table public.athlete_invites
   add column if not exists athlete_id uuid references public.athletes(id) on delete cascade,
   add column if not exists email text,

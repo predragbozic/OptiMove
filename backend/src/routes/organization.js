@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router } from "express";
-import { query } from "../db.js";
+import { pool, query } from "../db.js";
 import { isClubAdmin, isPlatformAdmin, isTeamCoach } from "../access.js";
 import { hashPassword } from "../auth.js";
 
@@ -323,6 +323,7 @@ router.post("/team-roles", async (req, res, next) => {
 });
 
 router.post("/athlete-logins", async (req, res, next) => {
+  const client = await pool.connect();
   try {
     const athleteId = clean(req.body?.athleteId);
     const email = clean(req.body?.email).toLowerCase();
@@ -336,24 +337,59 @@ router.post("/athlete-logins", async (req, res, next) => {
     );
     if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
     const nameParts = splitName(athlete.rows[0].name || email);
-    const user = await query(
-      `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
-       values ($1, $2, $3, $4, $5, $5, 'athlete', $6, true)
-       on conflict (email) do nothing
-       returning id, email`,
-      [email, nameParts.firstName, nameParts.lastName, hashPassword(password), athlete.rows[0].name, req.user.id],
+    await client.query("begin");
+    const existing = await client.query(
+      `select u.id, u.email, u.role_hint, a.id as linked_athlete_id
+       from public.users u
+       left join public.athletes a on a.user_id = u.id
+       where lower(u.email) = lower($1)
+       limit 1`,
+      [email],
     );
-    if (!user.rows[0]) return res.status(409).json({ error: "A user with this email already exists." });
-    await query(`update public.athletes set user_id = $2 where id = $1`, [athleteId, user.rows[0].id]);
-    await query(
+    const existingUser = existing.rows[0];
+    const existingRole = String(existingUser?.role_hint || "").toLowerCase();
+    if (existingUser && existingRole && !["athlete", "user"].includes(existingRole)) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This email already belongs to a staff user." });
+    }
+    if (existingUser?.linked_athlete_id && String(existingUser.linked_athlete_id) !== String(athleteId)) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This email is already connected to another athlete." });
+    }
+    const user = existingUser
+      ? await client.query(
+          `update public.users
+           set first_name = coalesce(first_name, $2),
+               last_name = coalesce(last_name, $3),
+               full_name = coalesce(full_name, $4),
+               display_name = coalesce(display_name, $4),
+               role_hint = 'athlete',
+               is_active = true,
+               updated_at = now()
+           where id = $1
+           returning id, email`,
+          [existingUser.id, nameParts.firstName, nameParts.lastName, athlete.rows[0].name],
+        )
+      : await client.query(
+          `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
+           values ($1, $2, $3, $4, $5, $5, 'athlete', $6, true)
+           returning id, email`,
+          [email, nameParts.firstName, nameParts.lastName, hashPassword(password), athlete.rows[0].name, req.user.id],
+        );
+    await client.query(`update public.athletes set user_id = $2 where id = $1`, [athleteId, user.rows[0].id]);
+    await client.query(
       `insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active)
        values ($1, $2, 'athlete', true)
        on conflict (user_id, athlete_id, relationship_type) do update set is_active = true, updated_at = now()`,
       [user.rows[0].id, athleteId],
     );
+    await client.query("commit");
     res.status(201).json({ user: user.rows[0] });
   } catch (error) {
+    await client.query("rollback").catch(() => {});
     next(error);
+  } finally {
+    client.release();
   }
 });
 
