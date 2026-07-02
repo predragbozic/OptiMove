@@ -279,6 +279,12 @@ function handleContentInput(event) {
 }
 
 async function handleContentChange(event) {
+  const orgFilter = event.target.closest("[data-org-select-filter]");
+  if (orgFilter) {
+    filterOrganizationSelect(orgFilter);
+    return;
+  }
+
   const organizationClubSelect = event.target.closest("[data-organization-club-select]");
   if (organizationClubSelect) {
     syncOrganizationTeamSelect(organizationClubSelect.closest("form"));
@@ -1561,15 +1567,15 @@ function renderAthleteInviteModal(athletes) {
           <input type="hidden" name="athleteId" value="${escapeAttr(athlete.id)}">
           <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="athlete@example.com"></label>
           <p class="builder-error" aria-live="polite">${escapeHtml(state.organizationInvite.error || "")}</p>
-          <button class="plain-button" type="submit">Create invite link</button>
+          <button class="plain-button" type="submit">Create invite email</button>
         </form>
         ${state.organizationInvite.inviteUrl ? `
           <div class="invite-result">
-            <p class="muted">Share this link with the athlete. It expires in 14 days.</p>
+            <p class="muted">Send this activation link to the athlete. They will open it and set their own password. It expires in 14 days.</p>
             <input readonly value="${escapeAttr(state.organizationInvite.inviteUrl)}">
             <div class="invite-actions">
               <button class="plain-button compact-button" type="button" data-action="organization-copy-invite">Copy link</button>
-              <a class="plain-button compact-button" href="${escapeAttr(state.organizationInvite.mailtoUrl || "#")}">Open email</a>
+              <a class="plain-button compact-button" href="${escapeAttr(state.organizationInvite.mailtoUrl || "#")}">Open email draft</a>
             </div>
           </div>
         ` : ""}
@@ -1580,48 +1586,82 @@ function renderAthleteInviteModal(athletes) {
 
 function renderFilterableSelect({ name, label, options = [], value = "", required = false, placeholder = "Filter", includeEmpty = "", extraSelectAttrs = "" }) {
   const normalizedValue = String(value || "");
+  const selected = options.find((option) => String(option.value) === normalizedValue);
+  const visibleValue = normalizedValue ? selected?.label || includeEmpty || "" : "";
+  const listId = `org-options-${name}-${Math.random().toString(36).slice(2)}`;
   return `
     <label class="search-field filterable-select-field">
       <span>${escapeHtml(label)}</span>
-      <input data-org-select-filter data-target-select="${escapeAttr(name)}" type="search" placeholder="${escapeAttr(placeholder)}" autocomplete="off">
-      <select name="${escapeAttr(name)}" ${required ? "required" : ""} ${extraSelectAttrs}>
-        ${includeEmpty ? `<option value="">${escapeHtml(includeEmpty)}</option>` : ""}
-        ${options.map((option) => `<option value="${escapeAttr(option.value)}" data-label="${escapeAttr(option.label)}" data-club-id="${escapeAttr(option.clubId || "")}" ${String(option.value) === normalizedValue ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
-      </select>
+      <input
+        data-org-select-filter
+        data-target-select="${escapeAttr(name)}"
+        type="search"
+        list="${escapeAttr(listId)}"
+        placeholder="${escapeAttr(placeholder)}"
+        autocomplete="off"
+        value="${escapeAttr(visibleValue)}"
+        ${required ? "required" : ""}
+      >
+      <input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(normalizedValue)}" ${extraSelectAttrs}>
+      <datalist id="${escapeAttr(listId)}">
+        ${includeEmpty ? `<option value="${escapeAttr(includeEmpty)}" data-value=""></option>` : ""}
+        ${options.map((option) => `<option value="${escapeAttr(option.label)}" data-value="${escapeAttr(option.value)}" data-club-id="${escapeAttr(option.clubId || "")}"></option>`).join("")}
+      </datalist>
     </label>
   `;
 }
 
 function filterOrganizationSelect(input) {
   const field = input.closest(".filterable-select-field");
-  const select = field?.querySelector("select");
-  if (!select) return;
+  const hiddenInput = field?.querySelector('input[type="hidden"]');
+  const list = input.list;
+  if (!hiddenInput || !list) return;
   const term = input.value.trim().toLowerCase();
   const form = input.closest("form");
   const selectedClubId = form?.querySelector("[data-organization-club-select]")?.value || "";
-  Array.from(select.options).forEach((option) => {
-    const isEmpty = !option.value;
+  let matchedValue = "";
+  Array.from(list.options).forEach((option) => {
     const clubMatches = !option.dataset.clubId || !selectedClubId || option.dataset.clubId === selectedClubId;
-    const textMatches = !term || String(option.dataset.label || option.textContent || "").toLowerCase().includes(term);
-    option.hidden = !isEmpty && (!clubMatches || !textMatches);
+    option.hidden = !clubMatches;
+    option.disabled = !clubMatches;
+    const label = String(option.value || "");
+    if (clubMatches && term && label.toLowerCase() === term) matchedValue = option.dataset.value || "";
   });
-  if (select.selectedOptions[0]?.hidden) select.value = "";
+  hiddenInput.value = matchedValue;
+  if (hiddenInput.matches("[data-organization-club-select]")) syncOrganizationTeamSelect(form);
+}
+
+function validateFilterableSelects(form) {
+  const invalid = Array.from(form.querySelectorAll(".filterable-select-field"))
+    .map((field) => {
+      const search = field.querySelector("[data-org-select-filter]");
+      const hiddenInput = field.querySelector('input[type="hidden"]');
+      if (!search || !hiddenInput || !search.required) return null;
+      return hiddenInput.value ? null : search;
+    })
+    .filter(Boolean);
+  invalid[0]?.setCustomValidity("Choose an item from the list.");
+  if (invalid[0]) {
+    invalid[0].reportValidity();
+    invalid[0].setCustomValidity("");
+    return false;
+  }
+  return true;
 }
 
 function syncOrganizationTeamSelect(form) {
-  const clubSelect = form?.querySelector("[data-organization-club-select]");
-  const teamSelect = form?.querySelector("[data-organization-team-select]");
-  if (!clubSelect || !teamSelect) return;
-  const selectedClubId = clubSelect.value;
-  Array.from(teamSelect.options).forEach((option) => {
-    option.hidden = Boolean(option.dataset.clubId && selectedClubId && option.dataset.clubId !== selectedClubId);
-  });
-  const selectedTeam = teamSelect.selectedOptions[0];
-  if (selectedTeam?.dataset.clubId && selectedClubId && selectedTeam.dataset.clubId !== selectedClubId) {
-    teamSelect.value = "";
+  const clubInput = form?.querySelector("[data-organization-club-select]");
+  const teamInput = form?.querySelector("[data-organization-team-select]");
+  if (!clubInput || !teamInput) return;
+  const selectedClubId = clubInput.value;
+  const teamField = teamInput.closest(".filterable-select-field");
+  const teamSearch = teamField?.querySelector("[data-org-select-filter]");
+  const teamOption = Array.from(teamSearch?.list?.options || []).find((option) => option.dataset.value === teamInput.value);
+  if (teamOption?.dataset.clubId && selectedClubId && teamOption.dataset.clubId !== selectedClubId) {
+    teamInput.value = "";
+    if (teamSearch) teamSearch.value = "";
   }
-  const filter = Array.from(form.querySelectorAll("[data-org-select-filter]")).find((entry) => entry.dataset.targetSelect === teamSelect.name);
-  if (filter) filterOrganizationSelect(filter);
+  if (teamSearch) filterOrganizationSelect(teamSearch);
 }
 
 function renderOrganizationClubForm() {
@@ -1698,7 +1738,7 @@ function renderOrganizationRoleForms(data) {
       <button class="plain-button" type="submit" ${(data.teams || []).length ? "" : "disabled"}>Assign team</button>
     </form>
     <form class="panel organization-form" data-organization-form="athleteLogin">
-      <div><p class="eyebrow">Athlete app</p><h3>Create athlete login</h3></div>
+      <div><p class="eyebrow">Athlete app</p><h3>Manual athlete login</h3><p class="muted">For normal onboarding, use Invite on the athlete row so the athlete sets their own password.</p></div>
       ${renderFilterableSelect({ name: "athleteId", label: "Athlete", options: athleteOptions, required: true, placeholder: "Type athlete name or ID" })}
       <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="athlete@example.com"></label>
       <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters"></label>
@@ -1820,6 +1860,7 @@ function renderOrganizationAthleteEditForm(row, clubs, teams) {
 }
 
 async function submitOrganizationForm(form) {
+  if (!validateFilterableSelects(form)) return;
   const type = form.dataset.organizationForm;
   const button = form.querySelector("button[type='submit']");
   const error = form.querySelector(".builder-error");
