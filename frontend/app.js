@@ -1967,17 +1967,28 @@ function renderAthleteList() {
 
 function renderAthleteHeader(data) {
   const athlete = state.athletes.find((entry) => entry.athlete_id === state.selectedAthleteId);
-  els.context.textContent = athlete ? "Selected athlete" : "Program view";
+  const isAthleteMode = document.body.classList.contains("athlete-mode");
+  els.context.textContent = athlete ? (isAthleteMode ? "Athlete" : "Selected athlete") : "Program view";
   els.title.textContent = athlete?.athlete || "Plans";
   els.toolbar.innerHTML = "";
 
   if (!athlete) return;
+  const imageMarkup = athlete.athlete_image_url
+    ? renderImage(athlete.athlete_image_url, "athlete-hero-image", initialsFor(athlete.athlete))
+    : `<div class="athlete-hero-fallback">${escapeHtml(initialsFor(athlete.athlete))}</div>`;
+  const athleteDetailsMarkup = isAthleteMode ? `
+    <div class="athlete-hero-copy">
+      <p class="eyebrow">My program</p>
+      <h3>${escapeHtml(athlete.athlete)}</h3>
+      <p class="muted">Athlete ID ${escapeHtml(athlete.athlete_id || "")}</p>
+    </div>
+  ` : "";
+
   els.toolbar.innerHTML = `
     <div class="athlete-toolbar-row">
-      <section class="athlete-hero athlete-hero-compact" aria-label="Selected athlete image">
-        ${athlete.athlete_image_url
-          ? renderImage(athlete.athlete_image_url, "athlete-hero-image", initialsFor(athlete.athlete))
-          : `<div class="athlete-hero-fallback">${escapeHtml(initialsFor(athlete.athlete))}</div>`}
+      <section class="athlete-hero ${isAthleteMode ? "" : "athlete-hero-compact"}" aria-label="Selected athlete">
+        ${imageMarkup}
+        ${athleteDetailsMarkup}
       </section>
       <nav class="tabs athlete-tabs" aria-label="Athlete views">
         <button class="tab tab-with-icon" data-tab="weekly" data-open-calendar="true">

@@ -842,7 +842,7 @@ button {
 }
 
 .athlete-mode .workspace {
-  width: min(1440px, 100%);
+  width: min(1520px, 100%);
   margin: 0 auto;
 }
 
@@ -864,7 +864,7 @@ button {
 }
 
 .athlete-mode .workspace {
-  padding-top: 14px;
+  padding: 16px 28px 40px;
 }
 
 .sidebar {
@@ -1249,22 +1249,29 @@ input:focus {
 }
 
 .athlete-mode .athlete-toolbar-row {
-  grid-template-columns: minmax(150px, 0.46fr) minmax(220px, 0.54fr);
+  grid-template-columns: minmax(360px, 0.46fr) minmax(360px, 0.54fr);
 }
 
 .athlete-mode .athlete-hero {
-  grid-template-columns: 64px minmax(0, 1fr);
-  min-height: 82px;
+  grid-template-columns: 86px minmax(0, 1fr);
+  min-height: 110px;
+  padding: 14px 16px;
 }
 
 .athlete-mode .athlete-hero h3 {
-  margin-bottom: 0;
+  margin-bottom: 2px;
+  font-size: 24px;
+  line-height: 1.1;
 }
 
 .athlete-mode .athlete-hero-image,
 .athlete-mode .athlete-hero-fallback {
-  width: 64px;
-  height: 64px;
+  width: 86px;
+  height: 86px;
+}
+
+.athlete-hero-copy {
+  min-width: 0;
 }
 
 .athlete-hero h3 {
@@ -1733,6 +1740,10 @@ input:focus {
   min-width: 0;
 }
 
+.athlete-mode .content-section {
+  width: 100%;
+}
+
 .panel {
   min-width: 0;
   overflow: hidden;
@@ -1741,6 +1752,10 @@ input:focus {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.athlete-mode .panel {
+  padding: 14px;
 }
 
 .summary-grid {
@@ -1789,6 +1804,10 @@ input:focus {
   background: var(--surface);
 }
 
+.athlete-mode .calendar-grid {
+  grid-template-columns: repeat(7, minmax(165px, 1fr));
+}
+
 .calendar-day {
   min-width: 150px;
   min-height: 300px;
@@ -1797,6 +1816,11 @@ input:focus {
   border-right: 1px solid #e8edf2;
   background: #fbfcfd;
   scroll-snap-align: start;
+}
+
+.athlete-mode .calendar-day {
+  min-width: 165px;
+  min-height: 340px;
 }
 
 .calendar-day:last-child {
@@ -3320,24 +3344,33 @@ input:focus {
   }
 
   .athlete-mode .athlete-toolbar-row {
-    grid-template-columns: 0.78fr 1.22fr;
-    align-items: stretch;
+    grid-template-columns: 1fr;
+    gap: 10px;
   }
 
   .athlete-mode .athlete-hero {
-    grid-template-columns: 52px minmax(0, 1fr);
-    padding: 8px;
+    grid-template-columns: 68px minmax(0, 1fr);
+    min-height: 88px;
+    padding: 10px;
   }
 
   .athlete-mode .athlete-hero-image,
   .athlete-mode .athlete-hero-fallback {
-    width: 52px;
-    height: 52px;
+    width: 68px;
+    height: 68px;
   }
 
   .athlete-mode .athlete-hero h3 {
-    font-size: 15px;
+    font-size: 18px;
     line-height: 1.15;
+  }
+
+  .athlete-mode .workspace {
+    padding: 12px;
+  }
+
+  .athlete-mode .athlete-tabs .tab {
+    min-height: 48px;
   }
 
   .athlete-tabs {
