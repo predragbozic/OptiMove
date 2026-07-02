@@ -834,11 +834,27 @@ button {
 }
 
 .athlete-mode .app-shell {
-  grid-template-columns: 1fr;
+  --rail-width: 72px;
+  display: grid;
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
 }
 
 .athlete-mode .sidebar {
-  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  width: var(--rail-width);
+  height: 100vh;
+  max-height: none;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  align-content: start;
+  gap: 10px;
+  overflow: visible;
+  padding: 12px 10px;
+  border-right: 0;
+  border-bottom: 0;
+  background: #101820;
 }
 
 .athlete-mode .workspace {
@@ -865,6 +881,73 @@ button {
 
 .athlete-mode .workspace {
   padding: 16px 28px 40px;
+}
+
+.athlete-mode .brand {
+  display: grid;
+  grid-template-columns: 44px;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 0;
+}
+
+.athlete-mode .brand-mark {
+  width: 44px;
+  height: 44px;
+  background: #fff;
+  color: #101820;
+  font-size: 13px;
+}
+
+.athlete-mode .brand-name,
+.athlete-mode .rail-toggle,
+.athlete-mode .rail-button span {
+  display: none;
+}
+
+.athlete-mode .sidebar-primary,
+.athlete-mode .sidebar-section {
+  display: grid;
+  align-content: start;
+  align-items: start;
+  grid-auto-rows: 52px;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.athlete-mode .sidebar-primary {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.athlete-mode .sidebar-nav-button {
+  width: 52px;
+  height: 52px;
+  min-height: 52px;
+  display: inline-grid;
+  grid-template-columns: 1fr;
+  place-items: center;
+  margin-bottom: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: #d9e1ea;
+}
+
+.athlete-mode .sidebar-nav-button:hover,
+.athlete-mode .sidebar-nav-button.is-active {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--accent);
+  color: #fff;
+}
+
+.athlete-mode .rail-icon {
+  width: 24px;
+  height: 24px;
 }
 
 .sidebar {
@@ -1756,6 +1839,39 @@ input:focus {
 
 .athlete-mode .panel {
   padding: 14px;
+}
+
+.athlete-simple-view {
+  max-width: 780px;
+}
+
+.athlete-settings-card {
+  display: grid;
+  gap: 18px;
+}
+
+.athlete-setting-list {
+  display: grid;
+  gap: 10px;
+}
+
+.athlete-setting-list article {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.athlete-setting-list strong {
+  font-size: 15px;
+}
+
+.athlete-setting-list span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .summary-grid {
@@ -3366,7 +3482,32 @@ input:focus {
   }
 
   .athlete-mode .workspace {
-    padding: 12px;
+    padding: 10px 10px 18px;
+  }
+
+  .athlete-mode .app-shell {
+    --rail-width: 58px;
+  }
+
+  .athlete-mode .sidebar {
+    width: var(--rail-width);
+    padding: 10px 6px;
+  }
+
+  .athlete-mode .brand-mark {
+    width: 44px;
+    height: 44px;
+  }
+
+  .athlete-mode .sidebar-nav-button {
+    width: 46px;
+    height: 46px;
+    min-height: 46px;
+  }
+
+  .athlete-mode .rail-icon {
+    width: 22px;
+    height: 22px;
   }
 
   .athlete-mode .athlete-tabs .tab {

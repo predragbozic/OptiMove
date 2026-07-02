@@ -88,6 +88,7 @@ const els = {
   calendarToggle: document.querySelector("#calendarToggle"),
   tabs: document.querySelectorAll(".tab"),
   libraryTabs: document.querySelectorAll("[data-library-tab]"),
+  athleteTabs: document.querySelectorAll("[data-athlete-tab]"),
   toolbar: document.querySelector("#viewToolbar"),
   content: document.querySelector("#content"),
   mediaModal: document.querySelector("#mediaModal"),
@@ -122,8 +123,8 @@ async function init() {
 }
 
 function bindEvents() {
-  els.athleteSearch.addEventListener("input", renderAthleteList);
-  els.athletesToggle.addEventListener("click", toggleAthletesList);
+  els.athleteSearch?.addEventListener("input", renderAthleteList);
+  els.athletesToggle?.addEventListener("click", toggleAthletesList);
   els.railToggle?.addEventListener("click", toggleRail);
   els.signOut?.addEventListener("click", signOut);
   els.calendarToggle?.addEventListener("click", openWeeklyCalendarFromRail);
@@ -151,6 +152,21 @@ function bindEvents() {
       state.weekSelectorOpen = false;
       state.openWeekCalendarOnLoad = false;
       renderAthleteListState();
+      renderTabs();
+      renderLibraryNav();
+      loadActiveTab();
+    });
+  });
+  els.athleteTabs.forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetTab = button.dataset.athleteTab || "weekly";
+      if (state.activeTab !== targetTab) pushAppHistory();
+      state.selectedProgramId = null;
+      state.selectedTemplateId = null;
+      state.navStack = [];
+      state.weekSelectorOpen = false;
+      state.openWeekCalendarOnLoad = targetTab === "calendar";
+      state.activeTab = targetTab === "calendar" ? "weekly" : targetTab;
       renderTabs();
       renderLibraryNav();
       loadActiveTab();
@@ -746,6 +762,8 @@ async function loadAthletes() {
 async function loadActiveTab() {
   renderTabs();
   renderLibraryNav();
+  if (state.activeTab === "athlete-settings") return renderAthleteSettings();
+  if (state.activeTab === "athlete-library") return renderAthleteLibrary();
   if (state.activeTab === "organization") return renderOrganizationPanel();
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
@@ -1247,6 +1265,8 @@ function renderCurrentNode() {
   if (state.activeTab === "templates") return loadTemplates();
   if (state.activeTab === "builder") return renderBuilder();
   if (state.activeTab === "exercises") return renderExercises(state.lastExerciseResults);
+  if (state.activeTab === "athlete-settings") return renderAthleteSettings();
+  if (state.activeTab === "athlete-library") return renderAthleteLibrary();
 }
 
 function moveWeek(delta) {
@@ -1273,13 +1293,20 @@ function renderLibraryNav() {
   els.libraryTabs.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.libraryTab === state.activeTab);
   });
+  els.athleteTabs.forEach((button) => {
+    const tab = button.dataset.athleteTab || "";
+    const isCalendar = tab === "calendar" && state.activeTab === "weekly" && state.weekSelectorOpen;
+    const isWeeklyPlan = tab === "weekly" && state.activeTab === "weekly" && !state.weekSelectorOpen;
+    const isDirectTab = tab !== "weekly" && tab !== "calendar" && tab === state.activeTab;
+    button.classList.toggle("is-active", isWeeklyPlan || isCalendar || isDirectTab);
+  });
   els.athletesToggle?.classList.toggle("is-active", state.athletesExpanded);
   els.calendarToggle?.classList.toggle("is-active", state.activeTab === "weekly" && state.weekSelectorOpen);
 }
 
 function renderAthleteListState() {
   els.athleteList.classList.toggle("is-expanded", state.athletesExpanded);
-  els.athletesToggle.setAttribute("aria-expanded", String(state.athletesExpanded));
+  els.athletesToggle?.setAttribute("aria-expanded", String(state.athletesExpanded));
   document.body.classList.toggle("athletes-drawer-open", state.athletesExpanded);
 }
 
@@ -2005,6 +2032,65 @@ function renderAthleteHeader(data) {
     </div>
   `;
   renderTabs();
+}
+
+function renderAthleteSettings() {
+  const athlete = state.athletes.find((entry) => entry.athlete_id === state.selectedAthleteId);
+  renderAthleteHeader({});
+  els.context.textContent = "Athlete settings";
+  els.title.textContent = "Settings";
+  els.content.innerHTML = `
+    <section class="content-section athlete-simple-view">
+      <section class="panel athlete-settings-card">
+        <div>
+          <p class="eyebrow">Profile</p>
+          <h3>${escapeHtml(athlete?.athlete || "Athlete profile")}</h3>
+          <p class="muted">Your coach controls program assignment. Profile editing and password change will live here.</p>
+        </div>
+        <div class="athlete-setting-list">
+          <article>
+            <strong>Account</strong>
+            <span>Email and password management.</span>
+          </article>
+          <article>
+            <strong>Personal data</strong>
+            <span>Photo, contact details, and basic profile information.</span>
+          </article>
+          <article>
+            <strong>Notifications</strong>
+            <span>Future reminders for programs, wellness, and testing.</span>
+          </article>
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderAthleteLibrary() {
+  renderAthleteHeader({});
+  els.context.textContent = "Athlete library";
+  els.title.textContent = "Library";
+  els.content.innerHTML = `
+    <section class="content-section athlete-simple-view">
+      <section class="panel athlete-settings-card">
+        <div>
+          <p class="eyebrow">Available later</p>
+          <h3>Shared exercises and programs</h3>
+          <p class="muted">This area is reserved for exercises, templates, or programs that a coach makes available to athletes.</p>
+        </div>
+        <div class="athlete-setting-list">
+          <article>
+            <strong>Exercise groups</strong>
+            <span>Collections approved for athlete viewing.</span>
+          </article>
+          <article>
+            <strong>Program downloads</strong>
+            <span>Future option for templates or assigned resources.</span>
+          </article>
+        </div>
+      </section>
+    </section>
+  `;
 }
 
 function renderWeeklyRoot(data) {

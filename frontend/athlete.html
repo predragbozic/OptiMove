@@ -8,21 +8,68 @@
   </head>
   <body class="athlete-mode">
     <div class="app-shell">
-      <aside class="sidebar" aria-hidden="true">
+      <aside class="sidebar athlete-sidebar">
         <div class="brand">
           <div class="brand-mark">OM</div>
-          <div>
-            <p class="eyebrow">OptiMove</p>
-            <button class="brand-title" id="athletesToggle" type="button" aria-expanded="false">Athletes</button>
-          </div>
+          <p class="brand-name">OptiMove</p>
+          <button class="rail-toggle" id="railToggle" type="button" aria-expanded="false" aria-label="Expand navigation">
+            <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 18l6-6-6-6"></path>
+            </svg>
+          </button>
         </div>
 
-        <label class="search-field">
+        <div class="sidebar-section sidebar-primary">
+          <button class="sidebar-nav-button rail-button" data-athlete-tab="weekly" type="button" title="My plan">
+            <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="5" width="16" height="15" rx="2"></rect>
+              <path d="M8 3v4"></path>
+              <path d="M16 3v4"></path>
+              <path d="M4 10h16"></path>
+            </svg>
+            <span>My plan</span>
+          </button>
+          <button class="sidebar-nav-button rail-button" data-athlete-tab="calendar" type="button" title="Calendar">
+            <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="5" width="16" height="15" rx="2"></rect>
+              <path d="M8 3v4"></path>
+              <path d="M16 3v4"></path>
+              <path d="M4 10h16"></path>
+              <path d="M8 14h.01"></path>
+              <path d="M12 14h.01"></path>
+              <path d="M16 14h.01"></path>
+            </svg>
+            <span>Calendar</span>
+          </button>
+        </div>
+
+        <div class="sidebar-section">
+          <button class="sidebar-nav-button rail-button" data-athlete-tab="athlete-library" type="button" title="Library">
+            <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 7h12"></path>
+              <path d="M6 17h12"></path>
+              <path d="M8 7v10"></path>
+              <path d="M16 7v10"></path>
+              <path d="M4 9v6"></path>
+              <path d="M20 9v6"></path>
+            </svg>
+            <span>Library</span>
+          </button>
+          <button class="sidebar-nav-button rail-button" data-athlete-tab="athlete-settings" type="button" title="Settings">
+            <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2a2 2 0 0 1-4 0V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 0 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 0 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 0 1 7.2 4.2l.1.1A1.7 1.7 0 0 0 9.2 4a1.7 1.7 0 0 0 1-1.6V2a2 2 0 0 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 0 1 20 6.2l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1H21a2 2 0 0 1 0 4h-.2a1.7 1.7 0 0 0-1.4 1Z"></path>
+            </svg>
+            <span>Settings</span>
+          </button>
+        </div>
+
+        <label class="search-field" hidden>
           <span>Athlete search</span>
           <input id="athleteSearch" type="search" placeholder="Name or ID">
         </label>
 
-        <div class="athlete-list" id="athleteList"></div>
+        <div class="athlete-list" id="athleteList" hidden></div>
       </aside>
 
       <main class="workspace">
