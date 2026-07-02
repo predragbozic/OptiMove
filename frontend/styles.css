@@ -539,6 +539,42 @@ body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button.is-active {
   color: #fff;
 }
 
+body:not(.athlete-mode):not(.login-mode) .sidebar-submenu {
+  display: grid;
+  gap: 6px;
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar-subnav {
+  display: none;
+  gap: 2px;
+  padding: 0 0 2px 42px;
+}
+
+body:not(.athlete-mode):not(.login-mode).rail-expanded .sidebar-submenu.is-open .sidebar-subnav {
+  display: grid;
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar-subnav-button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.68);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-align: left;
+  cursor: pointer;
+}
+
+body:not(.athlete-mode):not(.login-mode) .sidebar-subnav-button:hover,
+body:not(.athlete-mode):not(.login-mode) .sidebar-subnav-button.is-active {
+  background: rgba(31, 122, 111, 0.28);
+  color: #fff;
+}
+
 body:not(.athlete-mode):not(.login-mode) .rail-icon {
   width: 23px;
   height: 23px;

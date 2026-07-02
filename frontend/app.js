@@ -48,6 +48,7 @@ const state = {
   athletesExpanded: false,
   railExpanded: false,
   activeTab: "weekly",
+  templateScope: "my",
   selectedProgramId: null,
   selectedTemplateId: null,
   selectedWeekIndex: 0,
@@ -145,6 +146,7 @@ function bindEvents() {
     button.addEventListener("click", () => {
       if (state.activeTab !== button.dataset.libraryTab) pushAppHistory();
       state.activeTab = button.dataset.libraryTab;
+      if (button.dataset.templateScope) state.templateScope = button.dataset.templateScope;
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
       state.navStack = [];
@@ -804,6 +806,22 @@ async function loadPrograms() {
 
 async function loadTemplates() {
   state.navStack = [];
+  const scope = templateScopeMeta();
+  els.context.textContent = "Program library";
+  els.title.textContent = scope.label;
+  if (state.templateScope !== "my") {
+    els.toolbar.innerHTML = "";
+    els.content.innerHTML = `
+      <section class="content-section">
+        <section class="panel library-placeholder-panel">
+          <p class="eyebrow">${escapeHtml(scope.eyebrow)}</p>
+          <h3>${escapeHtml(scope.label)}</h3>
+          <p class="muted">${escapeHtml(scope.note)}</p>
+        </section>
+      </section>
+    `;
+    return;
+  }
   setLoading("Loading templates...");
   const data = await api("/api/templates");
   state.lastTemplates = data.templates || [];
@@ -1287,11 +1305,45 @@ function renderTabs() {
   tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.activeTab));
 }
 
+function templateScopeMeta(scope = state.templateScope) {
+  const scopes = {
+    my: {
+      label: "My templates",
+      eyebrow: "Private library",
+      note: "Reusable programs and templates available in your current coach workspace.",
+    },
+    club: {
+      label: "Club",
+      eyebrow: "Club library",
+      note: "Club-shared programs will live here once club publishing rules are enabled.",
+    },
+    optimove: {
+      label: "OptiMove",
+      eyebrow: "OptiMove library",
+      note: "Curated OptiMove programs will be organized here as the platform library grows.",
+    },
+    marketplace: {
+      label: "Marketplace",
+      eyebrow: "Program marketplace",
+      note: "Free and paid public programs will appear here after marketplace access is added.",
+    },
+  };
+  return scopes[scope] || scopes.my;
+}
+
 function renderLibraryNav() {
   renderAccessNav();
   if (state.activeTab === "organization" && !hasOrganizationAccess()) state.activeTab = "weekly";
   els.libraryTabs.forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.libraryTab === state.activeTab);
+    const tab = button.dataset.libraryTab;
+    const scope = button.dataset.templateScope || "";
+    const isTemplateTab = tab === "templates" && state.activeTab === "templates";
+    const isTemplateScope = isTemplateTab && scope && scope === state.templateScope;
+    const isTemplateMain = isTemplateTab && button.classList.contains("sidebar-nav-button");
+    button.classList.toggle("is-active", isTemplateMain || isTemplateScope || (!scope && tab === state.activeTab));
+  });
+  document.querySelectorAll("[data-sidebar-submenu]").forEach((submenu) => {
+    submenu.classList.toggle("is-open", submenu.dataset.sidebarSubmenu === "program-library" && state.activeTab === "templates");
   });
   els.athleteTabs.forEach((button) => {
     const tab = button.dataset.athleteTab || "";
@@ -2492,8 +2544,9 @@ function renderNodeButton(node) {
 }
 
 function renderTemplateToolbar(templates) {
+  const scope = templateScopeMeta();
   els.context.textContent = "Program library";
-  els.title.textContent = "Templates";
+  els.title.textContent = scope.label;
   const duplicateNames = duplicateTemplateNames(templates);
   els.toolbar.innerHTML = `
     <div class="chip-row template-toolbar">
@@ -2532,8 +2585,9 @@ function templateSecondaryLabel(template, duplicateNames) {
 }
 
 function renderTemplateList(templates, selected, detail) {
+  const scope = templateScopeMeta();
   els.context.textContent = "Program library";
-  els.title.textContent = "Templates";
+  els.title.textContent = scope.label;
   const data = detail || {};
   const isMicrocycle = data.mode === "microcycle";
   const groups = isMicrocycle
@@ -2563,6 +2617,7 @@ function renderTemplateList(templates, selected, detail) {
 }
 
 function renderPlanMoreMenu(planId, objectType) {
+  if (document.body.classList.contains("athlete-mode")) return "";
   const isTemplate = objectType === "template";
   const isWeekly = objectType === "weekly";
   const objectLabel = isTemplate ? "template" : isWeekly ? "weekly plan" : "program";

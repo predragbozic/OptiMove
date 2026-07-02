@@ -68,15 +68,23 @@
             </svg>
             <span>Builder</span>
           </button>
-          <button class="sidebar-nav-button rail-button" data-library-tab="templates" title="Templates">
-            <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-              <path d="M8 8h8"></path>
-              <path d="M8 12h8"></path>
-              <path d="M8 16h5"></path>
-            </svg>
-            <span>Templates</span>
-          </button>
+          <div class="sidebar-submenu" data-sidebar-submenu="program-library">
+            <button class="sidebar-nav-button rail-button" data-library-tab="templates" data-template-scope="my" title="Program Library">
+              <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+                <path d="M8 8h8"></path>
+                <path d="M8 12h8"></path>
+                <path d="M8 16h5"></path>
+              </svg>
+              <span>Program Library</span>
+            </button>
+            <div class="sidebar-subnav" aria-label="Program Library sections">
+              <button class="sidebar-subnav-button" data-library-tab="templates" data-template-scope="my" type="button">My templates</button>
+              <button class="sidebar-subnav-button" data-library-tab="templates" data-template-scope="club" type="button">Club</button>
+              <button class="sidebar-subnav-button" data-library-tab="templates" data-template-scope="optimove" type="button">OptiMove</button>
+              <button class="sidebar-subnav-button" data-library-tab="templates" data-template-scope="marketplace" type="button">Marketplace</button>
+            </div>
+          </div>
           <button class="sidebar-nav-button rail-button" data-library-tab="exercises" title="Exercises">
             <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M6 7h12"></path>
