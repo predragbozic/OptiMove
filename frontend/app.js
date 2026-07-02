@@ -825,7 +825,7 @@ async function loadTemplates() {
   }
   els.toolbar.innerHTML = "";
   setLoading("Loading program library...");
-  const data = await api("/api/templates");
+  const data = await api(`/api/templates?scope=${encodeURIComponent(state.templateScope)}`);
   state.lastTemplates = data.templates || [];
   if (!state.selectedTemplateId) state.selectedTemplateId = state.lastTemplates[0]?.plan_id || null;
   renderTemplateLibrary(state.lastTemplates);
@@ -2641,6 +2641,7 @@ function renderTemplateList(templates, selected, detail) {
 function renderTemplateLibrary(templates) {
   const scope = templateScopeMeta();
   const duplicateNames = duplicateTemplateNames(templates);
+  const shelves = groupTemplatesByCategory(templates);
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
   els.toolbar.innerHTML = "";
@@ -2655,28 +2656,58 @@ function renderTemplateLibrary(templates) {
         </div>
         <p class="muted">${templates.length} programs</p>
       </div>
-      <div class="program-library-grid">
-        ${templates.map((template) => renderProgramLibraryCard(template, duplicateNames)).join("")}
+      <div class="program-library-shelves">
+        ${shelves.map((shelf) => `
+          <section class="program-library-shelf" aria-label="${escapeAttr(shelf.label)}">
+            <div class="program-library-shelf-head">
+              <h4>${escapeHtml(shelf.label)}</h4>
+              <span>${shelf.templates.length} programs</span>
+            </div>
+            <div class="program-library-row">
+              ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames)).join("")}
+            </div>
+          </section>
+        `).join("")}
       </div>
     </section>
     ${renderTemplatePreviewModal()}
   `;
 }
 
+function groupTemplatesByCategory(templates) {
+  const groups = new Map();
+  templates.forEach((template) => {
+    const category = clean(template.library_category) || inferProgramCategory(template) || "General";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(template);
+  });
+  return [...groups.entries()].map(([label, rows]) => ({ label, templates: rows }));
+}
+
+function inferProgramCategory(template) {
+  const text = `${template.plan_name || ""} ${template.source_external_id || ""}`.toLowerCase();
+  if (/(rehab|rechab|rtp|return|injury|pain|calf|groin|neck)/.test(text)) return "Rehabilitation";
+  if (/(strength|strenght|power|gym|core|legs|arms)/.test(text)) return "Strength & power";
+  if (/(speed|sprint|acceleration|deceleration|running)/.test(text)) return "Speed & conditioning";
+  if (/(mobility|stability|activation|warm)/.test(text)) return "Movement prep";
+  return "";
+}
+
 function renderProgramLibraryCard(template, duplicateNames) {
   const secondary = templateSecondaryLabel(template, duplicateNames) || "Program template";
   const isSelected = String(template.plan_id) === String(state.selectedTemplateId);
+  const price = template.is_free === false && template.price_cents ? `${Math.round(template.price_cents / 100)} EUR` : "Free";
   return `
     <button class="program-library-card ${isSelected ? "is-selected" : ""}" type="button" data-action="template-open" data-template-id="${escapeAttr(template.plan_id)}">
       <span class="program-library-card-media">
-        <span class="program-library-card-icon">${escapeHtml(programInitials(template.plan_name))}</span>
+        ${template.cover_image_url ? renderImage(template.cover_image_url, "program-library-cover") : `<span class="program-library-card-icon">${escapeHtml(programInitials(template.plan_name))}</span>`}
       </span>
       <span class="program-library-card-body">
         <span class="program-library-card-title">${escapeHtml(template.plan_name || "Untitled program")}</span>
         <span class="program-library-card-sub">${escapeHtml(secondary)}</span>
       </span>
       <span class="program-library-card-foot">
-        <span class="item-badge">${escapeHtml(template.plan_type || "template")}</span>
+        <span class="item-badge">${escapeHtml(price)}</span>
         <span class="text-action">Preview</span>
       </span>
     </button>

@@ -7,6 +7,14 @@ select
   p.status,
   p.source_type,
   p.source_external_id,
+  p.library_scope,
+  p.library_category,
+  p.cover_image_url,
+  p.is_free,
+  p.price_cents,
+  p.available_until,
+  p.owner_type,
+  p.visibility,
   p.week_start,
   case
     when p.week_start is not null then p.week_start + interval '6 days'

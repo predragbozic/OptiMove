@@ -10,6 +10,17 @@ alter table plans.plans
     check (visibility in ('private', 'team', 'club', 'public'));
 
 alter table plans.plans
+  add column if not exists library_scope varchar(32) not null default 'my'
+    check (library_scope in ('my', 'club', 'optimove', 'marketplace')),
+  add column if not exists library_category varchar(80),
+  add column if not exists cover_image_url text,
+  add column if not exists is_free boolean not null default true,
+  add column if not exists price_cents integer,
+  add column if not exists available_until date,
+  add column if not exists owner_type varchar(32) not null default 'coach'
+    check (owner_type in ('coach', 'club', 'optimove', 'marketplace'));
+
+alter table plans.plans
   add column if not exists edit_source_plan_id uuid references plans.plans(id) on delete cascade,
   add column if not exists is_edit_draft boolean not null default false;
 

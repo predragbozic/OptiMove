@@ -1486,10 +1486,44 @@ input:focus {
   gap: 16px;
 }
 
-.program-library-grid {
+.program-library-shelves {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 20px;
+}
+
+.program-library-shelf {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.program-library-shelf-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.program-library-shelf-head h4 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.program-library-shelf-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.program-library-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 260px);
   gap: 14px;
+  overflow-x: auto;
+  padding: 2px 2px 12px;
+  scroll-snap-type: x proximity;
+  scrollbar-gutter: stable;
 }
 
 .program-library-card {
@@ -1505,6 +1539,7 @@ input:focus {
   text-align: left;
   box-shadow: var(--soft-shadow);
   cursor: pointer;
+  scroll-snap-align: start;
 }
 
 .program-library-card:hover,
@@ -1535,6 +1570,14 @@ input:focus {
   color: #fff;
   font-size: 22px;
   font-weight: 950;
+}
+
+.program-library-cover {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  object-position: center;
 }
 
 .program-library-card-body {
@@ -1632,8 +1675,8 @@ input:focus {
     flex-direction: column;
   }
 
-  .program-library-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .program-library-row {
+    grid-auto-columns: minmax(210px, 78vw);
   }
 
   .program-library-card {
