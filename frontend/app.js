@@ -58,6 +58,7 @@ const state = {
   lastWeeklyData: null,
   lastProgramBundle: null,
   lastTemplates: [],
+  templatePreview: { open: false, loading: false, detail: null, error: "" },
   lastExerciseResults: [],
   builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
   exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions() },
@@ -822,15 +823,12 @@ async function loadTemplates() {
     `;
     return;
   }
-  setLoading("Loading templates...");
+  els.toolbar.innerHTML = "";
+  setLoading("Loading program library...");
   const data = await api("/api/templates");
   state.lastTemplates = data.templates || [];
   if (!state.selectedTemplateId) state.selectedTemplateId = state.lastTemplates[0]?.plan_id || null;
-  renderTemplateToolbar(state.lastTemplates);
-  const selected = state.lastTemplates.find((template) => template.plan_id === state.selectedTemplateId);
-  if (!selected) return renderEmpty("No template programs.");
-  const detail = await api(`/api/plans/${selected.plan_id}/program`);
-  renderTemplateList(state.lastTemplates, selected, detail);
+  renderTemplateLibrary(state.lastTemplates);
 }
 
 async function loadExercises() {
@@ -1127,6 +1125,15 @@ function handleContentClick(event) {
   }
   if (type === "exercise-tags") {
     void openExerciseTagEditor(action.dataset.exerciseId, action.dataset.exerciseName || "Exercise");
+    return;
+  }
+  if (type === "template-open") {
+    void openTemplatePreview(action.dataset.templateId);
+    return;
+  }
+  if (type === "template-close") {
+    state.templatePreview = { open: false, loading: false, detail: null, error: "" };
+    renderTemplateLibrary(state.lastTemplates);
     return;
   }
   if (type === "exercise-tags-close") {
@@ -2568,6 +2575,21 @@ function renderTemplateToolbar(templates) {
   });
 }
 
+async function openTemplatePreview(planId) {
+  const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(planId));
+  if (!selected) return;
+  state.selectedTemplateId = selected.plan_id;
+  state.templatePreview = { open: true, loading: true, detail: null, error: "" };
+  renderTemplateLibrary(state.lastTemplates);
+  try {
+    const detail = await api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`);
+    state.templatePreview = { open: true, loading: false, detail, error: "" };
+  } catch (error) {
+    state.templatePreview = { open: true, loading: false, detail: null, error: error.message || "Could not load program." };
+  }
+  renderTemplateLibrary(state.lastTemplates);
+}
+
 function duplicateTemplateNames(templates) {
   const counts = new Map();
   templates.forEach((template) => {
@@ -2613,6 +2635,96 @@ function renderTemplateList(templates, selected, detail) {
       </section>
     </section>
     ${renderCopyPlanModal()}
+  `;
+}
+
+function renderTemplateLibrary(templates) {
+  const scope = templateScopeMeta();
+  const duplicateNames = duplicateTemplateNames(templates);
+  els.context.textContent = "Program library";
+  els.title.textContent = scope.label;
+  els.toolbar.innerHTML = "";
+  if (!templates.length) return renderEmpty("No template programs.");
+
+  els.content.innerHTML = `
+    <section class="content-section program-library-page">
+      <div class="program-library-head">
+        <div>
+          <p class="eyebrow">${escapeHtml(scope.eyebrow)}</p>
+          <h3>${escapeHtml(scope.label)}</h3>
+        </div>
+        <p class="muted">${templates.length} programs</p>
+      </div>
+      <div class="program-library-grid">
+        ${templates.map((template) => renderProgramLibraryCard(template, duplicateNames)).join("")}
+      </div>
+    </section>
+    ${renderTemplatePreviewModal()}
+  `;
+}
+
+function renderProgramLibraryCard(template, duplicateNames) {
+  const secondary = templateSecondaryLabel(template, duplicateNames) || "Program template";
+  const isSelected = String(template.plan_id) === String(state.selectedTemplateId);
+  return `
+    <button class="program-library-card ${isSelected ? "is-selected" : ""}" type="button" data-action="template-open" data-template-id="${escapeAttr(template.plan_id)}">
+      <span class="program-library-card-media">
+        <span class="program-library-card-icon">${escapeHtml(programInitials(template.plan_name))}</span>
+      </span>
+      <span class="program-library-card-body">
+        <span class="program-library-card-title">${escapeHtml(template.plan_name || "Untitled program")}</span>
+        <span class="program-library-card-sub">${escapeHtml(secondary)}</span>
+      </span>
+      <span class="program-library-card-foot">
+        <span class="item-badge">${escapeHtml(template.plan_type || "template")}</span>
+        <span class="text-action">Preview</span>
+      </span>
+    </button>
+  `;
+}
+
+function programInitials(name = "") {
+  const words = clean(name).split(/\s+/).filter(Boolean);
+  if (!words.length) return "PL";
+  return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+}
+
+function renderTemplatePreviewModal() {
+  if (!state.templatePreview.open) return "";
+  const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(state.selectedTemplateId));
+  const detail = state.templatePreview.detail || {};
+  const isMicrocycle = detail.mode === "microcycle";
+  const groups = state.templatePreview.loading || state.templatePreview.error
+    ? []
+    : isMicrocycle
+      ? (detail.microcycles || []).map((microcycle) => makeNode("microcycle", microcycle.name, flattenDayGroups(microcycle.dayGroups), {
+          subtitle: `${(microcycle.dayGroups || []).length} blocks`,
+        }))
+      : programDayGroupNodes(detail.dayGroups || []);
+
+  return `
+    <div class="program-preview-overlay">
+      <button class="program-preview-backdrop" type="button" data-action="template-close" aria-label="Close program preview"></button>
+      <section class="program-preview-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(selected?.plan_name || "Program preview")}">
+        <div class="program-preview-head">
+          <div>
+            <p class="eyebrow">Program preview</p>
+            <h3>${escapeHtml(selected?.plan_name || "Program")}</h3>
+            <p class="muted">${escapeHtml(selected?.source_external_id || "Program template")}</p>
+          </div>
+          <div class="builder-source-actions">
+            ${state.templatePreview.loading ? `<span class="item-badge">Loading</span>` : state.templatePreview.error ? "" : `<span class="item-badge">${detail.rows?.length || 0} items</span>`}
+            ${selected ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
+            <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">×</span></button>
+          </div>
+        </div>
+        <div class="program-preview-body">
+          ${state.templatePreview.loading ? `<div class="empty-state">Loading program...</div>` : state.templatePreview.error ? `<div class="empty-state">${escapeHtml(state.templatePreview.error)}</div>` : isMicrocycle
+            ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
+            : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
+        </div>
+      </section>
+    </div>
   `;
 }
 
