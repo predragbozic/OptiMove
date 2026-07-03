@@ -177,11 +177,10 @@ router.get("/:planId/tags", async (req, res, next) => {
         `select t.id, t.name
          from library.program_tags pt
          join library.tags t on t.id = pt.tag_id
-         where pt.plan_id = $3
+         where pt.plan_id = $1
            and t.is_active = true
-           and (t.owner_scope = 'system' or t.owner_user_id = $1 or $2::boolean)
          order by t.name`,
-        [req.user.id, canAccessAllAthletes(req.user), req.params.planId],
+        [req.params.planId],
       ),
     ]);
     res.json({ tags: programTags.rows, options: allTags.rows });

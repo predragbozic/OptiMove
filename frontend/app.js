@@ -3066,7 +3066,7 @@ function renderProgramInlineTags(template) {
       <div class="program-tags-head">
         <div>
           <span>Program tags</span>
-          <small>Add labels you want to use later in filters.</small>
+          <small>Add labels for filtering. Use x to remove a label from this program.</small>
         </div>
         ${tags.length ? `<div class="program-tag-list">${tags.map((tag) => `<span class="exercise-tag-pill">${escapeHtml(tag.name)} <button type="button" data-action="program-tag-remove" data-plan-id="${escapeAttr(template.plan_id)}" data-tag-id="${escapeAttr(tag.id)}" aria-label="Remove ${escapeAttr(tag.name)}">x</button></span>`).join("")}</div>` : `<p class="muted">No program tags yet.</p>`}
       </div>
