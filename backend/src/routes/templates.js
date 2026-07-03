@@ -207,10 +207,9 @@ router.post("/:planId/tags", async (req, res, next) => {
     const tag = await query(
       `select id, name
        from library.tags
-       where id = $2
-         and is_active = true
-         and (owner_scope = 'system' or owner_user_id = $1 or $3::boolean)`,
-      [req.user.id, finalTagId, canAccessAllAthletes(req.user)],
+       where id = $1
+         and is_active = true`,
+      [finalTagId],
     );
     if (!tag.rows[0]) return res.status(404).json({ error: "Tag not found." });
 
@@ -296,11 +295,10 @@ async function findOrCreateUserTag(user, name) {
   const existing = await query(
     `select id
      from library.tags
-     where lower(name) = lower($2)
+     where lower(name) = lower($1)
        and is_active = true
-       and (owner_scope = 'system' or owner_user_id = $1 or $3::boolean)
      limit 1`,
-    [user.id, name, canAccessAllAthletes(user)],
+    [name],
   );
   if (existing.rows[0]?.id) return existing.rows[0].id;
 
