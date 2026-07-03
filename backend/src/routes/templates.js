@@ -201,27 +201,7 @@ router.post("/:planId/tags", async (req, res, next) => {
 
     if (!finalTagId) {
       if (!name) return res.status(400).json({ error: "Tag name is required." });
-      const created = await query(
-        `insert into library.tags (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
-         values ($1, concat($2, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
-         on conflict (name) do nothing
-         returning id`,
-        [name, slugify(name), req.user.id],
-      );
-      if (created.rows[0]?.id) {
-        finalTagId = created.rows[0].id;
-      } else {
-        const existing = await query(
-          `select id
-           from library.tags
-           where lower(name) = lower($2)
-             and is_active = true
-             and (owner_scope = 'system' or owner_user_id = $1 or $3::boolean)`,
-          [req.user.id, name, canAccessAllAthletes(req.user)],
-        );
-        if (!existing.rows[0]) return res.status(409).json({ error: "Tag name already exists outside your library." });
-        finalTagId = existing.rows[0].id;
-      }
+      finalTagId = await findOrCreateUserTag(req.user, name);
     }
 
     const tag = await query(
@@ -310,6 +290,27 @@ async function canEditTemplate(user, planId) {
     [planId, user.id, canAccessAllAthletes(user)],
   );
   return Boolean(result.rows[0]);
+}
+
+async function findOrCreateUserTag(user, name) {
+  const existing = await query(
+    `select id
+     from library.tags
+     where lower(name) = lower($2)
+       and is_active = true
+       and (owner_scope = 'system' or owner_user_id = $1 or $3::boolean)
+     limit 1`,
+    [user.id, name, canAccessAllAthletes(user)],
+  );
+  if (existing.rows[0]?.id) return existing.rows[0].id;
+
+  const created = await query(
+    `insert into library.tags (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
+     values ($1, concat($2, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
+     returning id`,
+    [name, slugify(name), user.id],
+  );
+  return created.rows[0].id;
 }
 
 function ownerTypeForScope(scope) {

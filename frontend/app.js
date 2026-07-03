@@ -3015,6 +3015,7 @@ function renderTemplatePreviewModal() {
 function renderTemplateMetadataForm(template) {
   const price = template.price_cents ? Number(template.price_cents) / 100 : "";
   const isFree = template.is_free !== false;
+  const programGroup = template.library_category || inferProgramCategory(template) || "General";
   return `
     <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}">
       <div class="program-metadata-grid">
@@ -3024,7 +3025,7 @@ function renderTemplateMetadataForm(template) {
           ${renderOption("optimove", "OptiMove", template.library_scope)}
           ${renderOption("marketplace", "Marketplace", template.library_scope)}
         </select></label>
-        <label class="search-field"><span>Program group</span><input name="libraryCategory" list="program-settings-group-options" value="${escapeAttr(template.library_category || inferProgramCategory(template) || "")}" placeholder="e.g. Rehabilitation"></label>
+        <label class="search-field"><span>Program group</span><input name="libraryCategory" list="program-settings-group-options" value="${escapeAttr(programGroup)}" placeholder="e.g. Rehabilitation"></label>
         <label class="search-field"><span>Cover image URL</span><input name="coverImageUrl" type="url" value="${escapeAttr(template.cover_image_url || "")}" placeholder="https://..."></label>
         <label class="search-field"><span>Access</span><select name="visibility">
           ${renderOption("private", "Private", template.visibility || "private")}
@@ -3064,10 +3065,10 @@ function renderProgramInlineTags(template) {
     <section class="program-tags-panel" aria-label="Program tags">
       <div class="program-tags-head">
         <div>
-          <span>Tags</span>
-          <small>Only assigned tags appear in the filter.</small>
+          <span>Program tags</span>
+          <small>Add labels you want to use later in filters.</small>
         </div>
-        ${tags.length ? `<div class="program-tag-list">${tags.map((tag) => `<span class="exercise-tag-pill">${escapeHtml(tag.name)} <button type="button" data-action="program-tag-remove" data-plan-id="${escapeAttr(template.plan_id)}" data-tag-id="${escapeAttr(tag.id)}" aria-label="Remove ${escapeAttr(tag.name)}">x</button></span>`).join("")}</div>` : `<p class="muted">No tags assigned.</p>`}
+        ${tags.length ? `<div class="program-tag-list">${tags.map((tag) => `<span class="exercise-tag-pill">${escapeHtml(tag.name)} <button type="button" data-action="program-tag-remove" data-plan-id="${escapeAttr(template.plan_id)}" data-tag-id="${escapeAttr(tag.id)}" aria-label="Remove ${escapeAttr(tag.name)}">x</button></span>`).join("")}</div>` : `<p class="muted">No program tags yet.</p>`}
       </div>
       ${state.programTagEditor.error && String(state.programTagEditor.planId) === String(template.plan_id) ? `<p class="builder-error">${escapeHtml(state.programTagEditor.error)}</p>` : ""}
       <div class="program-inline-tag-form">
@@ -3093,9 +3094,11 @@ function renderPlanMoreMenu(planId, objectType) {
   const isTemplate = objectType === "template";
   const isWeekly = objectType === "weekly";
   const objectLabel = isTemplate ? "template" : isWeekly ? "weekly plan" : "program";
+  const summaryClass = isTemplate ? "plain-button compact-button" : "plain-button icon-button";
+  const summaryContent = isTemplate ? "Editing" : `<span class="button-icon">...</span>`;
   return `
     <details class="plan-more-menu">
-      <summary class="plain-button icon-button" aria-label="${objectLabel} actions" title="${objectLabel} actions"><span class="button-icon">...</span></summary>
+      <summary class="${summaryClass}" aria-label="${objectLabel} actions" title="${objectLabel} actions">${summaryContent}</summary>
       <div class="plan-more-menu-popover">
         <button type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(planId)}">Edit ${objectLabel}</button>
         <button type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(planId)}" data-plan-type="${isWeekly ? "weekly" : "program"}">Edit copy</button>

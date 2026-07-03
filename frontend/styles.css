@@ -1493,7 +1493,7 @@ input:focus {
 
 .program-filter-panel {
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(128px, 1fr));
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -1509,6 +1509,7 @@ input:focus {
 .program-filter-panel input,
 .program-filter-panel select {
   min-height: 42px;
+  width: 100%;
 }
 
 .program-library-shelf {
