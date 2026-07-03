@@ -7,14 +7,6 @@ select
   p.status,
   p.source_type,
   p.source_external_id,
-  p.library_scope,
-  p.library_category,
-  p.cover_image_url,
-  p.is_free,
-  p.price_cents,
-  p.available_until,
-  p.owner_type,
-  p.visibility,
   p.week_start,
   case
     when p.week_start is not null then p.week_start + interval '6 days'
@@ -37,7 +29,15 @@ select
   count(distinct ps.id) as session_count,
   count(pi.id) as item_count,
   count(pi.exercise_id) as matched_exercise_count,
-  count(pi.id) - count(pi.exercise_id) as item_without_exercise_id_count
+  count(pi.id) - count(pi.exercise_id) as item_without_exercise_id_count,
+  p.library_scope,
+  p.library_category,
+  p.cover_image_url,
+  p.is_free,
+  p.price_cents,
+  p.available_until,
+  p.owner_type,
+  p.visibility
 from plans.plans p
 left join public.athletes a on a.id = p.athlete_id
 left join plans.plan_days pd on pd.plan_id = p.id
