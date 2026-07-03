@@ -323,6 +323,14 @@ function handleContentInput(event) {
     debounceTemplateSearch();
     return;
   }
+  const templateTextFilter = event.target.closest("input[data-template-filter]");
+  if (templateTextFilter) {
+    state.templateFilters[templateTextFilter.dataset.templateFilter] = templateTextFilter.value;
+    state.selectedTemplateId = null;
+    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    debounceTemplateSearch();
+    return;
+  }
   const input = event.target.closest("[data-builder-exercise-search]");
   if (!input) return;
   state.builder.exerciseQuery = input.value;
@@ -357,6 +365,16 @@ async function handleContentChange(event) {
     state.selectedTemplateId = null;
     state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
     void loadTemplates();
+    return;
+  }
+
+  const metadataPricing = event.target.closest("[data-template-metadata-form] select[name='isFree']");
+  if (metadataPricing) {
+    const priceInput = metadataPricing.form?.querySelector("input[name='price']");
+    if (priceInput) {
+      priceInput.disabled = metadataPricing.value === "true";
+      if (priceInput.disabled) priceInput.value = "";
+    }
     return;
   }
 
@@ -1111,17 +1129,19 @@ function closeProgramTagEditor() {
 
 async function submitProgramTagForm(form) {
   const formData = new FormData(form);
+  const planId = form.dataset.planId || state.programTagEditor.planId;
   try {
-    await api(`/api/templates/${encodeURIComponent(state.programTagEditor.planId)}/tags`, {
+    await api(`/api/templates/${encodeURIComponent(planId)}/tags`, {
       method: "POST",
       body: JSON.stringify({
         tagId: formData.get("tagId"),
         name: formData.get("name"),
       }),
     });
-    await refreshProgramTagEditor();
+    form.reset();
+    await refreshProgramTags(planId);
   } catch (error) {
-    state.programTagEditor = { ...state.programTagEditor, error: error.message || "Could not add tag." };
+    state.programTagEditor = { ...state.programTagEditor, error: error.message || "Could not add tag.", planId };
     renderTemplateLibrary(state.lastTemplates);
   }
 }
@@ -1129,15 +1149,39 @@ async function submitProgramTagForm(form) {
 async function removeProgramTag(planId, tagId) {
   if (!planId || !tagId) return;
   await api(`/api/templates/${encodeURIComponent(planId)}/tags/${encodeURIComponent(tagId)}`, { method: "DELETE" });
-  await refreshProgramTagEditor();
+  await refreshProgramTags(planId);
 }
 
 async function refreshProgramTagEditor() {
-  const data = await api(`/api/templates/${encodeURIComponent(state.programTagEditor.planId)}/tags`);
-  state.programTagEditor = { ...state.programTagEditor, tags: data.tags || [], options: data.options || [], error: "" };
-  updateProgramTagsInCache(state.programTagEditor.planId, state.programTagEditor.tags);
-  state.templateOptions.loaded = false;
+  await refreshProgramTags(state.programTagEditor.planId);
+}
+
+async function refreshProgramTags(planId) {
+  const data = await api(`/api/templates/${encodeURIComponent(planId)}/tags`);
+  if (state.programTagEditor.open && String(state.programTagEditor.planId) === String(planId)) {
+    state.programTagEditor = { ...state.programTagEditor, tags: data.tags || [], options: data.options || [], error: "" };
+  }
+  updateProgramTagsInCache(planId, data.tags || []);
+  const options = await api("/api/templates/options");
+  state.templateOptions = { ...options, loaded: true };
   renderTemplateLibrary(state.lastTemplates);
+}
+
+async function addInlineProgramTag(planId) {
+  const input = document.querySelector(`[data-program-tag-input="${CSS.escape(String(planId))}"]`);
+  const name = clean(input?.value);
+  if (!planId || !name) return;
+  try {
+    await api(`/api/templates/${encodeURIComponent(planId)}/tags`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    if (input) input.value = "";
+    await refreshProgramTags(planId);
+  } catch (error) {
+    state.programTagEditor = { ...state.programTagEditor, error: error.message || "Could not add tag.", planId };
+    renderTemplateLibrary(state.lastTemplates);
+  }
 }
 
 function updateProgramTagsInCache(planId, tags) {
@@ -1249,12 +1293,12 @@ function handleContentClick(event) {
     renderTemplateLibrary(state.lastTemplates);
     return;
   }
-  if (type === "program-tags") {
-    void openProgramTagEditor(action.dataset.planId, action.dataset.programName || "Program");
-    return;
-  }
   if (type === "program-tags-close") {
     closeProgramTagEditor();
+    return;
+  }
+  if (type === "program-tag-add") {
+    void addInlineProgramTag(action.dataset.planId);
     return;
   }
   if (type === "program-tag-remove") {
@@ -2800,7 +2844,6 @@ function renderTemplateLibrary(templates) {
         `).join("") : `<div class="empty-state">No programs match these filters.</div>`}
       </div>
     </section>
-    ${state.programTagEditor.open ? renderProgramTagModal() : ""}
     ${renderTemplatePreviewModal()}
   `;
 }
@@ -2825,18 +2868,18 @@ function renderTemplateFilters() {
         </select>
       </label>
       <label class="search-field">
-        <span>Category</span>
-        <select data-template-filter="category">
-          <option value="">All</option>
-          ${(options.categories || []).map((category) => renderOption(category, category, filters.category)).join("")}
-        </select>
+        <span>Program group</span>
+        <input data-template-filter="category" list="program-group-options" value="${escapeAttr(filters.category || "")}" placeholder="All groups">
+        <datalist id="program-group-options">
+          ${(options.categories || []).map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
+        </datalist>
       </label>
       <label class="search-field">
         <span>Tag</span>
-        <select data-template-filter="tag">
-          <option value="">All</option>
-          ${(options.tags || []).map((tag) => renderOption(tag, tag, filters.tag)).join("")}
-        </select>
+        <input data-template-filter="tag" list="program-tag-filter-options" value="${escapeAttr(filters.tag || "")}" placeholder="${(options.tags || []).length ? "All tags" : "No assigned tags"}">
+        <datalist id="program-tag-filter-options">
+          ${(options.tags || []).map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
+        </datalist>
       </label>
       <label class="search-field">
         <span>Pricing</span>
@@ -2953,8 +2996,7 @@ function renderTemplatePreviewModal() {
           </div>
           <div class="builder-source-actions">
             ${state.templatePreview.loading ? `<span class="item-badge">Loading</span>` : state.templatePreview.error ? "" : `<span class="item-badge">${detail.rows?.length || 0} items</span>`}
-            ${selected ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${state.templatePreview.settingsOpen ? "Hide settings" : "Program settings"}</button>` : ""}
-            ${selected ? `<button class="plain-button compact-button" type="button" data-action="program-tags" data-plan-id="${escapeAttr(selected.plan_id)}" data-program-name="${escapeAttr(selected.plan_name || "Program")}">Tags${selected.tags?.length ? ` (${selected.tags.length})` : ""}</button>` : ""}
+            ${selected ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${state.templatePreview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}
             ${selected ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">×</span></button>
           </div>
@@ -2972,6 +3014,7 @@ function renderTemplatePreviewModal() {
 
 function renderTemplateMetadataForm(template) {
   const price = template.price_cents ? Number(template.price_cents) / 100 : "";
+  const isFree = template.is_free !== false;
   return `
     <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}">
       <div class="program-metadata-grid">
@@ -2981,7 +3024,7 @@ function renderTemplateMetadataForm(template) {
           ${renderOption("optimove", "OptiMove", template.library_scope)}
           ${renderOption("marketplace", "Marketplace", template.library_scope)}
         </select></label>
-        <label class="search-field"><span>Category</span><input name="libraryCategory" value="${escapeAttr(template.library_category || inferProgramCategory(template) || "")}" placeholder="e.g. Rehabilitation"></label>
+        <label class="search-field"><span>Program group</span><input name="libraryCategory" list="program-settings-group-options" value="${escapeAttr(template.library_category || inferProgramCategory(template) || "")}" placeholder="e.g. Rehabilitation"></label>
         <label class="search-field"><span>Cover image URL</span><input name="coverImageUrl" type="url" value="${escapeAttr(template.cover_image_url || "")}" placeholder="https://..."></label>
         <label class="search-field"><span>Access</span><select name="visibility">
           ${renderOption("private", "Private", template.visibility || "private")}
@@ -2996,17 +3039,48 @@ function renderTemplateMetadataForm(template) {
           ${renderOption("marketplace", "Marketplace", template.owner_type)}
         </select></label>
         <label class="search-field"><span>Pricing</span><select name="isFree">
-          ${renderOption("true", "Free", template.is_free === false ? "false" : "true")}
-          ${renderOption("false", "Paid", template.is_free === false ? "false" : "true")}
+          ${renderOption("true", "Free", isFree ? "true" : "false")}
+          ${renderOption("false", "Paid", isFree ? "true" : "false")}
         </select></label>
-        <label class="search-field"><span>Price EUR</span><input name="price" type="number" min="0" step="0.01" value="${escapeAttr(price)}" placeholder="0"></label>
+        <label class="search-field"><span>Price EUR</span><input name="price" type="number" min="0" step="0.01" value="${escapeAttr(price)}" placeholder="0" ${isFree ? "disabled" : ""}></label>
         <label class="search-field"><span>Available until</span><input name="availableUntil" type="date" value="${escapeAttr(template.available_until || "")}"></label>
       </div>
+      <datalist id="program-settings-group-options">
+        ${(state.templateOptions.categories || []).map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
+      </datalist>
+      ${renderProgramInlineTags(template)}
       <div class="program-metadata-actions">
         <p class="builder-error" aria-live="polite"></p>
         <button class="plain-button compact-button" type="submit">Save library settings</button>
       </div>
     </form>
+  `;
+}
+
+function renderProgramInlineTags(template) {
+  const tags = template.tags || [];
+  const datalistId = `program-tag-options-${String(template.plan_id || "").replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  return `
+    <section class="program-tags-panel" aria-label="Program tags">
+      <div class="program-tags-head">
+        <div>
+          <span>Tags</span>
+          <small>Only assigned tags appear in the filter.</small>
+        </div>
+        ${tags.length ? `<div class="program-tag-list">${tags.map((tag) => `<span class="exercise-tag-pill">${escapeHtml(tag.name)} <button type="button" data-action="program-tag-remove" data-plan-id="${escapeAttr(template.plan_id)}" data-tag-id="${escapeAttr(tag.id)}" aria-label="Remove ${escapeAttr(tag.name)}">x</button></span>`).join("")}</div>` : `<p class="muted">No tags assigned.</p>`}
+      </div>
+      ${state.programTagEditor.error && String(state.programTagEditor.planId) === String(template.plan_id) ? `<p class="builder-error">${escapeHtml(state.programTagEditor.error)}</p>` : ""}
+      <div class="program-inline-tag-form">
+        <label class="search-field">
+          <span>Add tag</span>
+          <input data-program-tag-input="${escapeAttr(template.plan_id)}" list="${escapeAttr(datalistId)}" placeholder="Type tag name">
+          <datalist id="${escapeAttr(datalistId)}">
+            ${(state.templateOptions.tags || []).map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
+          </datalist>
+        </label>
+        <button class="plain-button compact-button" type="button" data-action="program-tag-add" data-plan-id="${escapeAttr(template.plan_id)}">Add</button>
+      </div>
+    </section>
   `;
 }
 

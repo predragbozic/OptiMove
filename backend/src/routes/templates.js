@@ -75,10 +75,13 @@ router.get("/options", async (req, res, next) => {
         `
         select distinct t.name
         from library.tags t
-        left join library.program_tags pt on pt.tag_id = t.id
-        left join plans.plans p on p.id = pt.plan_id
+        join library.program_tags pt on pt.tag_id = t.id
+        join plans.plans p on p.id = pt.plan_id
         where t.is_active = true
-          and (t.owner_scope = 'system' or t.owner_user_id = $1 or $2::boolean)
+          and p.plan_type = 'program'
+          and p.is_template = true
+          and coalesce(p.is_active, true)
+          and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
         order by t.name
         `,
         [req.user.id, canAccessAllAthletes(req.user)],
@@ -157,7 +160,16 @@ router.get("/:planId/tags", async (req, res, next) => {
         `select id, name
          from library.tags
          where is_active = true
-           and (owner_scope = 'system' or owner_user_id = $1 or $2::boolean)
+           and exists (
+             select 1
+             from library.program_tags pt
+             join plans.plans p on p.id = pt.plan_id
+             where pt.tag_id = library.tags.id
+               and p.plan_type = 'program'
+               and p.is_template = true
+               and coalesce(p.is_active, true)
+               and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+           )
          order by name`,
         [req.user.id, canAccessAllAthletes(req.user)],
       ),
