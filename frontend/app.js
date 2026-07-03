@@ -224,6 +224,13 @@ async function handleContentSubmit(event) {
     return;
   }
 
+  const templateMetadataForm = event.target.closest("[data-template-metadata-form]");
+  if (templateMetadataForm) {
+    event.preventDefault();
+    await submitTemplateMetadataForm(templateMetadataForm);
+    return;
+  }
+
   const form = event.target.closest("#loginForm");
   if (form) {
     event.preventDefault();
@@ -2714,6 +2721,37 @@ function renderProgramLibraryCard(template, duplicateNames) {
   `;
 }
 
+async function submitTemplateMetadataForm(form) {
+  const planId = form.dataset.planId || "";
+  const error = form.querySelector(".builder-error");
+  const button = form.querySelector("button[type='submit']");
+  if (error) error.textContent = "";
+  if (button) button.disabled = true;
+  const formData = new FormData(form);
+  try {
+    await api(`/api/templates/${encodeURIComponent(planId)}/metadata`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        libraryScope: formData.get("libraryScope"),
+        libraryCategory: formData.get("libraryCategory"),
+        coverImageUrl: formData.get("coverImageUrl"),
+        isFree: formData.get("isFree") === "true",
+        priceCents: Math.round(Number(formData.get("price") || 0) * 100),
+        availableUntil: formData.get("availableUntil"),
+        ownerType: formData.get("ownerType"),
+        visibility: formData.get("visibility"),
+      }),
+    });
+    state.templatePreview = { open: false, loading: false, detail: null, error: "" };
+    state.selectedTemplateId = null;
+    await loadTemplates();
+  } catch (submitError) {
+    if (error) error.textContent = submitError.message || "Could not save library settings.";
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function programInitials(name = "") {
   const words = clean(name).split(/\s+/).filter(Boolean);
   if (!words.length) return "PL";
@@ -2749,6 +2787,7 @@ function renderTemplatePreviewModal() {
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">×</span></button>
           </div>
         </div>
+        ${selected ? renderTemplateMetadataForm(selected) : ""}
         <div class="program-preview-body">
           ${state.templatePreview.loading ? `<div class="empty-state">Loading program...</div>` : state.templatePreview.error ? `<div class="empty-state">${escapeHtml(state.templatePreview.error)}</div>` : isMicrocycle
             ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -2757,6 +2796,50 @@ function renderTemplatePreviewModal() {
       </section>
     </div>
   `;
+}
+
+function renderTemplateMetadataForm(template) {
+  const price = template.price_cents ? Number(template.price_cents) / 100 : "";
+  return `
+    <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}">
+      <div class="program-metadata-grid">
+        <label class="search-field"><span>Library</span><select name="libraryScope">
+          ${renderOption("my", "My templates", template.library_scope || "my")}
+          ${renderOption("club", "Club", template.library_scope)}
+          ${renderOption("optimove", "OptiMove", template.library_scope)}
+          ${renderOption("marketplace", "Marketplace", template.library_scope)}
+        </select></label>
+        <label class="search-field"><span>Category</span><input name="libraryCategory" value="${escapeAttr(template.library_category || inferProgramCategory(template) || "")}" placeholder="e.g. Rehabilitation"></label>
+        <label class="search-field"><span>Cover image URL</span><input name="coverImageUrl" type="url" value="${escapeAttr(template.cover_image_url || "")}" placeholder="https://..."></label>
+        <label class="search-field"><span>Access</span><select name="visibility">
+          ${renderOption("private", "Private", template.visibility || "private")}
+          ${renderOption("team", "Team", template.visibility)}
+          ${renderOption("club", "Club", template.visibility)}
+          ${renderOption("public", "Public", template.visibility)}
+        </select></label>
+        <label class="search-field"><span>Owner</span><select name="ownerType">
+          ${renderOption("coach", "Coach", template.owner_type || "coach")}
+          ${renderOption("club", "Club", template.owner_type)}
+          ${renderOption("optimove", "OptiMove", template.owner_type)}
+          ${renderOption("marketplace", "Marketplace", template.owner_type)}
+        </select></label>
+        <label class="search-field"><span>Pricing</span><select name="isFree">
+          ${renderOption("true", "Free", template.is_free === false ? "false" : "true")}
+          ${renderOption("false", "Paid", template.is_free === false ? "false" : "true")}
+        </select></label>
+        <label class="search-field"><span>Price EUR</span><input name="price" type="number" min="0" step="0.01" value="${escapeAttr(price)}" placeholder="0"></label>
+        <label class="search-field"><span>Available until</span><input name="availableUntil" type="date" value="${escapeAttr(template.available_until || "")}"></label>
+      </div>
+      <div class="program-metadata-actions">
+        <p class="builder-error" aria-live="polite"></p>
+        <button class="plain-button compact-button" type="submit">Save library settings</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderOption(value, label, selectedValue) {
+  return `<option value="${escapeAttr(value)}" ${String(selectedValue || "") === String(value) ? "selected" : ""}>${escapeHtml(label)}</option>`;
 }
 
 function renderPlanMoreMenu(planId, objectType) {
