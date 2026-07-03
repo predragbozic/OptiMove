@@ -41,6 +41,13 @@ const emptyExerciseOptions = () => ({
   tags: [],
 });
 
+const emptyTemplateFilters = () => ({
+  search: "",
+  category: "",
+  tag: "",
+  pricing: "all",
+});
+
 const state = {
   currentUser: null,
   athletes: [],
@@ -58,13 +65,16 @@ const state = {
   lastWeeklyData: null,
   lastProgramBundle: null,
   lastTemplates: [],
-  templatePreview: { open: false, loading: false, detail: null, error: "" },
+  templatePreview: { open: false, loading: false, detail: null, error: "", settingsOpen: false },
+  templateFilters: emptyTemplateFilters(),
+  templateOptions: { categories: [], tags: [] },
   lastExerciseResults: [],
   builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
   exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions() },
   markedExerciseIds: new Set(),
   markedExercises: new Map(),
   tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },
+  programTagEditor: { open: false, planId: "", programName: "", tags: [], options: [], error: "" },
   organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", assignOpen: false },
   organizationEditor: { open: false, type: "", row: null },
   organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
@@ -224,6 +234,13 @@ async function handleContentSubmit(event) {
     return;
   }
 
+  const programTagForm = event.target.closest("[data-program-tag-form]");
+  if (programTagForm) {
+    event.preventDefault();
+    await submitProgramTagForm(programTagForm);
+    return;
+  }
+
   const templateMetadataForm = event.target.closest("[data-template-metadata-form]");
   if (templateMetadataForm) {
     event.preventDefault();
@@ -298,6 +315,14 @@ function handleContentInput(event) {
     state.builder.weekStart = weekStartInput.value;
     return;
   }
+  const templateSearch = event.target.closest("[data-template-filter='search']");
+  if (templateSearch) {
+    state.templateFilters.search = templateSearch.value;
+    state.selectedTemplateId = null;
+    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    debounceTemplateSearch();
+    return;
+  }
   const input = event.target.closest("[data-builder-exercise-search]");
   if (!input) return;
   state.builder.exerciseQuery = input.value;
@@ -325,6 +350,16 @@ async function handleContentChange(event) {
     return;
   }
 
+  const templateFilter = event.target.closest("[data-template-filter]");
+  if (templateFilter) {
+    if (templateFilter.dataset.templateFilter === "scope") state.templateScope = templateFilter.value || "my";
+    else state.templateFilters[templateFilter.dataset.templateFilter] = templateFilter.value;
+    state.selectedTemplateId = null;
+    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    void loadTemplates();
+    return;
+  }
+
   const form = event.target.closest("[data-builder-autosave]");
   if (!form || !event.target.matches("input, textarea")) return;
   try {
@@ -338,6 +373,12 @@ let builderSearchTimer = null;
 function debounceBuilderSearch() {
   clearTimeout(builderSearchTimer);
   builderSearchTimer = setTimeout(loadBuilderExercises, 250);
+}
+
+let templateSearchTimer = null;
+function debounceTemplateSearch() {
+  clearTimeout(templateSearchTimer);
+  templateSearchTimer = setTimeout(loadTemplates, 250);
 }
 
 function renderLogin() {
@@ -817,25 +858,25 @@ async function loadTemplates() {
   const scope = templateScopeMeta();
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
-  if (state.templateScope !== "my") {
-    els.toolbar.innerHTML = "";
-    els.content.innerHTML = `
-      <section class="content-section">
-        <section class="panel library-placeholder-panel">
-          <p class="eyebrow">${escapeHtml(scope.eyebrow)}</p>
-          <h3>${escapeHtml(scope.label)}</h3>
-          <p class="muted">${escapeHtml(scope.note)}</p>
-        </section>
-      </section>
-    `;
-    return;
-  }
   els.toolbar.innerHTML = "";
   setLoading("Loading program library...");
-  const data = await api(`/api/templates?scope=${encodeURIComponent(state.templateScope)}`);
+  if (!state.templateOptions.loaded) {
+    const options = await api("/api/templates/options");
+    state.templateOptions = { ...options, loaded: true };
+  }
+  const data = await api(templateSearchUrl());
   state.lastTemplates = data.templates || [];
   if (!state.selectedTemplateId) state.selectedTemplateId = state.lastTemplates[0]?.plan_id || null;
   renderTemplateLibrary(state.lastTemplates);
+}
+
+function templateSearchUrl() {
+  const params = new URLSearchParams();
+  params.set("scope", state.templateScope || "my");
+  Object.entries(state.templateFilters).forEach(([key, value]) => {
+    if (value) params.set(key, value);
+  });
+  return `/api/templates?${params.toString()}`;
 }
 
 async function loadExercises() {
@@ -1045,6 +1086,66 @@ function updateExerciseTagsInCache(exerciseId, tags) {
   }
 }
 
+async function openProgramTagEditor(planId, programName) {
+  if (!planId) return;
+  try {
+    const data = await api(`/api/templates/${encodeURIComponent(planId)}/tags`);
+    state.programTagEditor = {
+      open: true,
+      planId,
+      programName,
+      tags: data.tags || [],
+      options: data.options || [],
+      error: "",
+    };
+    renderTemplateLibrary(state.lastTemplates);
+  } catch (error) {
+    renderError(error);
+  }
+}
+
+function closeProgramTagEditor() {
+  state.programTagEditor = { open: false, planId: "", programName: "", tags: [], options: [], error: "" };
+  renderTemplateLibrary(state.lastTemplates);
+}
+
+async function submitProgramTagForm(form) {
+  const formData = new FormData(form);
+  try {
+    await api(`/api/templates/${encodeURIComponent(state.programTagEditor.planId)}/tags`, {
+      method: "POST",
+      body: JSON.stringify({
+        tagId: formData.get("tagId"),
+        name: formData.get("name"),
+      }),
+    });
+    await refreshProgramTagEditor();
+  } catch (error) {
+    state.programTagEditor = { ...state.programTagEditor, error: error.message || "Could not add tag." };
+    renderTemplateLibrary(state.lastTemplates);
+  }
+}
+
+async function removeProgramTag(planId, tagId) {
+  if (!planId || !tagId) return;
+  await api(`/api/templates/${encodeURIComponent(planId)}/tags/${encodeURIComponent(tagId)}`, { method: "DELETE" });
+  await refreshProgramTagEditor();
+}
+
+async function refreshProgramTagEditor() {
+  const data = await api(`/api/templates/${encodeURIComponent(state.programTagEditor.planId)}/tags`);
+  state.programTagEditor = { ...state.programTagEditor, tags: data.tags || [], options: data.options || [], error: "" };
+  updateProgramTagsInCache(state.programTagEditor.planId, state.programTagEditor.tags);
+  state.templateOptions.loaded = false;
+  renderTemplateLibrary(state.lastTemplates);
+}
+
+function updateProgramTagsInCache(planId, tags) {
+  state.lastTemplates.forEach((template) => {
+    if (String(template.plan_id) === String(planId)) template.tags = tags;
+  });
+}
+
 function handleContentClick(event) {
   const action = event.target.closest("[data-action]");
   if (!action) return;
@@ -1138,9 +1239,26 @@ function handleContentClick(event) {
     void openTemplatePreview(action.dataset.templateId);
     return;
   }
-  if (type === "template-close") {
-    state.templatePreview = { open: false, loading: false, detail: null, error: "" };
+  if (type === "template-settings-toggle") {
+    state.templatePreview = { ...state.templatePreview, settingsOpen: !state.templatePreview.settingsOpen };
     renderTemplateLibrary(state.lastTemplates);
+    return;
+  }
+  if (type === "template-close") {
+    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    renderTemplateLibrary(state.lastTemplates);
+    return;
+  }
+  if (type === "program-tags") {
+    void openProgramTagEditor(action.dataset.planId, action.dataset.programName || "Program");
+    return;
+  }
+  if (type === "program-tags-close") {
+    closeProgramTagEditor();
+    return;
+  }
+  if (type === "program-tag-remove") {
+    void removeProgramTag(action.dataset.planId, action.dataset.tagId);
     return;
   }
   if (type === "exercise-tags-close") {
@@ -1321,6 +1439,11 @@ function renderTabs() {
 
 function templateScopeMeta(scope = state.templateScope) {
   const scopes = {
+    all: {
+      label: "All programs",
+      eyebrow: "Program library",
+      note: "All template programs available to your current account.",
+    },
     my: {
       label: "My templates",
       eyebrow: "Private library",
@@ -2586,13 +2709,13 @@ async function openTemplatePreview(planId) {
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(planId));
   if (!selected) return;
   state.selectedTemplateId = selected.plan_id;
-  state.templatePreview = { open: true, loading: true, detail: null, error: "" };
+  state.templatePreview = { open: true, loading: true, detail: null, error: "", settingsOpen: false };
   renderTemplateLibrary(state.lastTemplates);
   try {
     const detail = await api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`);
-    state.templatePreview = { open: true, loading: false, detail, error: "" };
+    state.templatePreview = { open: true, loading: false, detail, error: "", settingsOpen: state.templatePreview.settingsOpen };
   } catch (error) {
-    state.templatePreview = { open: true, loading: false, detail: null, error: error.message || "Could not load program." };
+    state.templatePreview = { open: true, loading: false, detail: null, error: error.message || "Could not load program.", settingsOpen: state.templatePreview.settingsOpen };
   }
   renderTemplateLibrary(state.lastTemplates);
 }
@@ -2652,7 +2775,6 @@ function renderTemplateLibrary(templates) {
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
   els.toolbar.innerHTML = "";
-  if (!templates.length) return renderEmpty("No template programs.");
 
   els.content.innerHTML = `
     <section class="content-section program-library-page">
@@ -2663,8 +2785,9 @@ function renderTemplateLibrary(templates) {
         </div>
         <p class="muted">${templates.length} programs</p>
       </div>
+      ${renderTemplateFilters()}
       <div class="program-library-shelves">
-        ${shelves.map((shelf) => `
+        ${templates.length ? shelves.map((shelf) => `
           <section class="program-library-shelf" aria-label="${escapeAttr(shelf.label)}">
             <div class="program-library-shelf-head">
               <h4>${escapeHtml(shelf.label)}</h4>
@@ -2674,10 +2797,56 @@ function renderTemplateLibrary(templates) {
               ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames)).join("")}
             </div>
           </section>
-        `).join("")}
+        `).join("") : `<div class="empty-state">No programs match these filters.</div>`}
       </div>
     </section>
+    ${state.programTagEditor.open ? renderProgramTagModal() : ""}
     ${renderTemplatePreviewModal()}
+  `;
+}
+
+function renderTemplateFilters() {
+  const filters = state.templateFilters;
+  const options = state.templateOptions || {};
+  return `
+    <section class="program-filter-panel" aria-label="Program filters">
+      <label class="search-field program-filter-search">
+        <span>Search programs</span>
+        <input data-template-filter="search" type="search" value="${escapeAttr(filters.search || "")}" placeholder="Program name or code">
+      </label>
+      <label class="search-field">
+        <span>Library</span>
+        <select data-template-filter="scope">
+          ${renderOption("all", "All", state.templateScope)}
+          ${renderOption("my", "My templates", state.templateScope)}
+          ${renderOption("club", "Club", state.templateScope)}
+          ${renderOption("optimove", "OptiMove", state.templateScope)}
+          ${renderOption("marketplace", "Marketplace", state.templateScope)}
+        </select>
+      </label>
+      <label class="search-field">
+        <span>Category</span>
+        <select data-template-filter="category">
+          <option value="">All</option>
+          ${(options.categories || []).map((category) => renderOption(category, category, filters.category)).join("")}
+        </select>
+      </label>
+      <label class="search-field">
+        <span>Tag</span>
+        <select data-template-filter="tag">
+          <option value="">All</option>
+          ${(options.tags || []).map((tag) => renderOption(tag, tag, filters.tag)).join("")}
+        </select>
+      </label>
+      <label class="search-field">
+        <span>Pricing</span>
+        <select data-template-filter="pricing">
+          ${renderOption("all", "All", filters.pricing)}
+          ${renderOption("free", "Free", filters.pricing)}
+          ${renderOption("paid", "Paid", filters.pricing)}
+        </select>
+      </label>
+    </section>
   `;
 }
 
@@ -2715,6 +2884,7 @@ function renderProgramLibraryCard(template, duplicateNames) {
       </span>
       <span class="program-library-card-foot">
         <span class="item-badge">${escapeHtml(price)}</span>
+        ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
         <span class="text-action">Preview</span>
       </span>
     </button>
@@ -2742,7 +2912,7 @@ async function submitTemplateMetadataForm(form) {
         visibility: formData.get("visibility"),
       }),
     });
-    state.templatePreview = { open: false, loading: false, detail: null, error: "" };
+    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
     state.selectedTemplateId = null;
     await loadTemplates();
   } catch (submitError) {
@@ -2783,11 +2953,13 @@ function renderTemplatePreviewModal() {
           </div>
           <div class="builder-source-actions">
             ${state.templatePreview.loading ? `<span class="item-badge">Loading</span>` : state.templatePreview.error ? "" : `<span class="item-badge">${detail.rows?.length || 0} items</span>`}
+            ${selected ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${state.templatePreview.settingsOpen ? "Hide settings" : "Program settings"}</button>` : ""}
+            ${selected ? `<button class="plain-button compact-button" type="button" data-action="program-tags" data-plan-id="${escapeAttr(selected.plan_id)}" data-program-name="${escapeAttr(selected.plan_name || "Program")}">Tags${selected.tags?.length ? ` (${selected.tags.length})` : ""}</button>` : ""}
             ${selected ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">×</span></button>
           </div>
         </div>
-        ${selected ? renderTemplateMetadataForm(selected) : ""}
+        ${selected && state.templatePreview.settingsOpen ? renderTemplateMetadataForm(selected) : ""}
         <div class="program-preview-body">
           ${state.templatePreview.loading ? `<div class="empty-state">Loading program...</div>` : state.templatePreview.error ? `<div class="empty-state">${escapeHtml(state.templatePreview.error)}</div>` : isMicrocycle
             ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -3810,6 +3982,34 @@ function renderExerciseTagModal() {
         <form class="exercise-tag-form" data-exercise-tag-form>
           <label class="search-field"><span>Add existing tag</span><select name="tagId"><option value="">Choose tag</option>${available.map((tag) => `<option value="${escapeAttr(tag.id)}">${escapeHtml(tag.name)}</option>`).join("")}</select></label>
           <label class="search-field"><span>Or create new tag</span><input name="name" placeholder="e.g. hotel gym, pre-match, knee friendly"></label>
+          ${editor.error ? `<p class="builder-error">${escapeHtml(editor.error)}</p>` : ""}
+          <button class="plain-button" type="submit">Add tag</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderProgramTagModal() {
+  const editor = state.programTagEditor;
+  const assigned = new Set((editor.tags || []).map((tag) => String(tag.id)));
+  const available = (editor.options || []).filter((tag) => !assigned.has(String(tag.id)));
+  return `
+    <div class="exercise-tag-overlay">
+      <button class="exercise-tag-backdrop" type="button" data-action="program-tags-close" aria-label="Close tags"></button>
+      <section class="panel exercise-tag-modal" role="dialog" aria-modal="true" aria-label="Program tags">
+        <div class="builder-modal-head">
+          <div><p class="eyebrow">Program tags</p><h3>${escapeHtml(editor.programName)}</h3><p class="muted">Use your own labels to find and reuse programs faster.</p></div>
+          <button class="plain-button icon-button" type="button" data-action="program-tags-close" aria-label="Close"><span class="button-icon">x</span></button>
+        </div>
+        <div class="exercise-tag-current">
+          ${(editor.tags || []).length
+            ? editor.tags.map((tag) => `<span class="exercise-tag-pill">${escapeHtml(tag.name)} <button type="button" data-action="program-tag-remove" data-plan-id="${escapeAttr(editor.planId)}" data-tag-id="${escapeAttr(tag.id)}" aria-label="Remove ${escapeAttr(tag.name)}">x</button></span>`).join("")
+            : `<p class="muted">No tags yet.</p>`}
+        </div>
+        <form class="exercise-tag-form" data-program-tag-form>
+          <label class="search-field"><span>Add existing tag</span><select name="tagId"><option value="">Choose tag</option>${available.map((tag) => `<option value="${escapeAttr(tag.id)}">${escapeHtml(tag.name)}</option>`).join("")}</select></label>
+          <label class="search-field"><span>Or create new tag</span><input name="name" placeholder="e.g. rehab, preseason, youth, premium"></label>
           ${editor.error ? `<p class="builder-error">${escapeHtml(editor.error)}</p>` : ""}
           <button class="plain-button" type="submit">Add tag</button>
         </form>

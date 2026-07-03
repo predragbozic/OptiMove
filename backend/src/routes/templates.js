@@ -6,23 +6,88 @@ const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    const allowedScopes = new Set(["my", "club", "optimove", "marketplace"]);
+    const allowedScopes = new Set(["all", "my", "club", "optimove", "marketplace"]);
     const requestedScope = allowedScopes.has(String(req.query.scope || "")) ? String(req.query.scope) : "my";
-    const params = [req.user.id, canAccessAllAthletes(req.user), requestedScope];
+    const search = text(req.query.search);
+    const category = text(req.query.category);
+    const tag = text(req.query.tag);
+    const pricing = normalizeChoice(req.query.pricing, ["all", "free", "paid"], "all");
+    const params = [req.user.id, canAccessAllAthletes(req.user), requestedScope, search, category, tag, pricing];
     const result = await query(
       `
-      select ps.*
+      select ps.*,
+        coalesce(
+          jsonb_agg(distinct jsonb_build_object('id', t.id, 'name', t.name))
+            filter (where t.id is not null),
+          '[]'::jsonb
+        ) as tags
       from plans.v_plan_summary ps
       join plans.plans p on p.id = ps.plan_id
+      left join library.program_tags pt on pt.plan_id = p.id
+      left join library.tags t on t.id = pt.tag_id and t.is_active = true
       where ps.plan_type = 'program'
         and ps.is_template = true
         and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
-        and coalesce(p.library_scope, 'my') = $3
+        and ($3 = 'all' or coalesce(p.library_scope, 'my') = $3)
+        and ($4 = '' or ps.plan_name ilike '%' || $4 || '%' or coalesce(ps.source_external_id, '') ilike '%' || $4 || '%')
+        and ($5 = '' or coalesce(ps.library_category, '') = $5)
+        and ($6 = '' or exists (
+          select 1
+          from library.program_tags fpt
+          join library.tags ft on ft.id = fpt.tag_id
+          where fpt.plan_id = p.id
+            and ft.is_active = true
+            and ft.name = $6
+        ))
+        and ($7 = 'all' or ($7 = 'free' and coalesce(ps.is_free, true)) or ($7 = 'paid' and not coalesce(ps.is_free, true)))
+      group by ps.plan_id, ps.plan_type, ps.is_template, ps.plan_name, ps.status, ps.source_type, ps.source_external_id,
+        ps.week_start, ps.week_end, ps.start_date, ps.valid_until, ps.duration_days, ps.program_order,
+        ps.athlete_uuid, ps.athlete_id, ps.athlete_source_external_id, ps.athlete_name, ps.athlete_image_url,
+        ps.block_or_day_count, ps.session_count, ps.item_count, ps.matched_exercise_count, ps.item_without_exercise_id_count,
+        ps.library_scope, ps.library_category, ps.cover_image_url, ps.is_free, ps.price_cents, ps.available_until, ps.owner_type, ps.visibility
       order by coalesce(ps.library_category, 'General'), ps.source_external_id, ps.program_order nulls last, ps.plan_name
       `,
       params,
     );
     res.json({ scope: requestedScope, templates: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/options", async (req, res, next) => {
+  try {
+    const [categories, tags] = await Promise.all([
+      query(
+        `
+        select distinct library_category as name
+        from plans.plans p
+        where p.plan_type = 'program'
+          and p.is_template = true
+          and coalesce(p.is_active, true)
+          and nullif(trim(p.library_category), '') is not null
+          and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+        order by library_category
+        `,
+        [req.user.id, canAccessAllAthletes(req.user)],
+      ),
+      query(
+        `
+        select distinct t.name
+        from library.tags t
+        left join library.program_tags pt on pt.tag_id = t.id
+        left join plans.plans p on p.id = pt.plan_id
+        where t.is_active = true
+          and (t.owner_scope = 'system' or t.owner_user_id = $1 or $2::boolean)
+        order by t.name
+        `,
+        [req.user.id, canAccessAllAthletes(req.user)],
+      ),
+    ]);
+    res.json({
+      categories: categories.rows.map((row) => row.name).filter(Boolean),
+      tags: tags.rows.map((row) => row.name).filter(Boolean),
+    });
   } catch (error) {
     next(error);
   }
@@ -82,6 +147,109 @@ router.patch("/:planId/metadata", async (req, res, next) => {
   }
 });
 
+router.get("/:planId/tags", async (req, res, next) => {
+  try {
+    if (!(await canUseTemplate(req.user, req.params.planId))) {
+      return res.status(404).json({ error: "Template not found." });
+    }
+    const [allTags, programTags] = await Promise.all([
+      query(
+        `select id, name
+         from library.tags
+         where is_active = true
+           and (owner_scope = 'system' or owner_user_id = $1 or $2::boolean)
+         order by name`,
+        [req.user.id, canAccessAllAthletes(req.user)],
+      ),
+      query(
+        `select t.id, t.name
+         from library.program_tags pt
+         join library.tags t on t.id = pt.tag_id
+         where pt.plan_id = $3
+           and t.is_active = true
+           and (t.owner_scope = 'system' or t.owner_user_id = $1 or $2::boolean)
+         order by t.name`,
+        [req.user.id, canAccessAllAthletes(req.user), req.params.planId],
+      ),
+    ]);
+    res.json({ tags: programTags.rows, options: allTags.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/:planId/tags", async (req, res, next) => {
+  try {
+    if (!(await canEditTemplate(req.user, req.params.planId))) {
+      return res.status(404).json({ error: "Template not found." });
+    }
+    const name = text(req.body?.name);
+    const tagId = text(req.body?.tagId);
+    let finalTagId = tagId;
+
+    if (!finalTagId) {
+      if (!name) return res.status(400).json({ error: "Tag name is required." });
+      const created = await query(
+        `insert into library.tags (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
+         values ($1, concat($2, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
+         on conflict (name) do nothing
+         returning id`,
+        [name, slugify(name), req.user.id],
+      );
+      if (created.rows[0]?.id) {
+        finalTagId = created.rows[0].id;
+      } else {
+        const existing = await query(
+          `select id
+           from library.tags
+           where lower(name) = lower($2)
+             and is_active = true
+             and (owner_scope = 'system' or owner_user_id = $1 or $3::boolean)`,
+          [req.user.id, name, canAccessAllAthletes(req.user)],
+        );
+        if (!existing.rows[0]) return res.status(409).json({ error: "Tag name already exists outside your library." });
+        finalTagId = existing.rows[0].id;
+      }
+    }
+
+    const tag = await query(
+      `select id, name
+       from library.tags
+       where id = $2
+         and is_active = true
+         and (owner_scope = 'system' or owner_user_id = $1 or $3::boolean)`,
+      [req.user.id, finalTagId, canAccessAllAthletes(req.user)],
+    );
+    if (!tag.rows[0]) return res.status(404).json({ error: "Tag not found." });
+
+    await query(
+      `insert into library.program_tags (plan_id, tag_id)
+       values ($1, $2)
+       on conflict (plan_id, tag_id) do nothing`,
+      [req.params.planId, finalTagId],
+    );
+    res.status(201).json({ tag: tag.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/:planId/tags/:tagId", async (req, res, next) => {
+  try {
+    if (!(await canEditTemplate(req.user, req.params.planId))) {
+      return res.status(404).json({ error: "Template not found." });
+    }
+    await query(
+      `delete from library.program_tags
+       where plan_id = $1 and tag_id = $2`,
+      [req.params.planId, req.params.tagId],
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 function text(value) {
   return String(value ?? "").trim();
 }
@@ -89,6 +257,47 @@ function text(value) {
 function normalizeChoice(value, allowed, fallback) {
   const normalized = text(value).toLowerCase();
   return allowed.includes(normalized) ? normalized : fallback;
+}
+
+function slugify(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || `tag-${Date.now()}`;
+}
+
+async function canUseTemplate(user, planId) {
+  const result = await query(
+    `select 1
+     from plans.plans p
+     where p.id = $1
+       and p.plan_type = 'program'
+       and p.is_template = true
+       and coalesce(p.is_active, true)
+       and ($3::boolean or p.created_by_user_id = $2 or p.visibility = 'public')
+     limit 1`,
+    [planId, user.id, canAccessAllAthletes(user)],
+  );
+  return Boolean(result.rows[0]);
+}
+
+async function canEditTemplate(user, planId) {
+  const result = await query(
+    `select 1
+     from plans.plans p
+     where p.id = $1
+       and p.plan_type = 'program'
+       and p.is_template = true
+       and coalesce(p.is_active, true)
+       and ($3::boolean or p.created_by_user_id = $2)
+     limit 1`,
+    [planId, user.id, canAccessAllAthletes(user)],
+  );
+  return Boolean(result.rows[0]);
 }
 
 function ownerTypeForScope(scope) {

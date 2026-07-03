@@ -1491,6 +1491,20 @@ input:focus {
   gap: 20px;
 }
 
+.program-filter-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(128px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.program-filter-panel .search-field {
+  margin: 0;
+}
+
 .program-library-shelf {
   min-width: 0;
   display: grid;
@@ -1706,6 +1720,14 @@ input:focus {
 
   .program-library-row {
     grid-auto-columns: minmax(210px, 78vw);
+  }
+
+  .program-filter-panel {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .program-filter-search {
+    grid-column: 1 / -1;
   }
 
   .program-library-card {

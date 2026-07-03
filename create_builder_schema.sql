@@ -51,3 +51,25 @@ create index if not exists plan_nodes_session_order_idx
 
 create index if not exists plan_items_plan_node_order_idx
   on plans.plan_items (plan_node_id, item_order);
+
+create table if not exists library.tags (
+  id uuid primary key default gen_random_uuid(),
+  name varchar(120) not null unique,
+  slug varchar(140) not null unique,
+  owner_scope varchar(20) not null default 'user' check (owner_scope in ('system', 'user', 'club')),
+  owner_user_id uuid references public.users(id) on delete cascade,
+  created_by_user_id uuid references public.users(id) on delete set null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists library.program_tags (
+  plan_id uuid not null references plans.plans(id) on delete cascade,
+  tag_id uuid not null references library.tags(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (plan_id, tag_id)
+);
+
+create index if not exists program_tags_tag_idx
+  on library.program_tags (tag_id);
