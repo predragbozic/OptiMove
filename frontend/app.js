@@ -320,7 +320,7 @@ function handleContentInput(event) {
     state.templateFilters.search = templateSearch.value;
     state.selectedTemplateId = null;
     state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
-    debounceTemplateSearch();
+    debounceTemplateResultRender();
     return;
   }
   const templateTextFilter = event.target.closest("input[data-template-filter]");
@@ -329,7 +329,7 @@ function handleContentInput(event) {
     syncTemplateFilterSuggestions(templateTextFilter);
     state.selectedTemplateId = null;
     state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
-    debounceTemplateSearch();
+    debounceTemplateResultRender();
     return;
   }
   const input = event.target.closest("[data-builder-exercise-search]");
@@ -400,6 +400,11 @@ function debounceTemplateSearch() {
   clearTimeout(templateSearchTimer);
   const focus = captureTemplateFilterFocus();
   templateSearchTimer = setTimeout(() => loadTemplates({ restoreFocus: focus }), 250);
+}
+
+function debounceTemplateResultRender() {
+  clearTimeout(templateSearchTimer);
+  templateSearchTimer = setTimeout(renderTemplateLibraryResults, 160);
 }
 
 function captureTemplateFilterFocus() {
@@ -934,11 +939,6 @@ async function loadTemplates(options = {}) {
 function templateSearchUrl() {
   const params = new URLSearchParams();
   params.set("scope", state.templateScope || "my");
-  Object.entries(state.templateFilters).forEach(([key, value]) => {
-    const normalized = clean(value);
-    if (!normalized || normalized.toLowerCase() === "all" || key === "category") return;
-    params.set(key, normalized);
-  });
   return `/api/templates?${params.toString()}`;
 }
 
@@ -2865,8 +2865,6 @@ function renderTemplateList(templates, selected, detail) {
 function renderTemplateLibrary(templates) {
   const scope = templateScopeMeta();
   const visibleTemplates = applyTemplateClientFilters(templates);
-  const duplicateNames = duplicateTemplateNames(visibleTemplates);
-  const shelves = groupTemplatesByCategory(visibleTemplates);
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
   els.toolbar.innerHTML = "";
@@ -2878,32 +2876,60 @@ function renderTemplateLibrary(templates) {
           <p class="eyebrow">${escapeHtml(scope.eyebrow)}</p>
           <h3>${escapeHtml(scope.label)}</h3>
         </div>
-        <p class="muted">${visibleTemplates.length} programs</p>
+        <p class="muted" data-template-count>${visibleTemplates.length} programs</p>
       </div>
       ${renderTemplateFilters()}
-      <div class="program-library-shelves">
-        ${visibleTemplates.length ? shelves.map((shelf) => `
-          <section class="program-library-shelf" aria-label="${escapeAttr(shelf.label)}">
-            <div class="program-library-shelf-head">
-              <h4>${escapeHtml(shelf.label)}</h4>
-              <span>${shelf.templates.length} programs</span>
-            </div>
-            <div class="program-library-row">
-              ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames)).join("")}
-            </div>
-          </section>
-        `).join("") : `<div class="empty-state">No programs match these filters.</div>`}
+      <div class="program-library-shelves" data-template-results>
+        ${renderTemplateLibraryResultsHtml(visibleTemplates)}
       </div>
     </section>
     ${renderTemplatePreviewModal()}
   `;
 }
 
+function renderTemplateLibraryResults() {
+  const visibleTemplates = applyTemplateClientFilters(state.lastTemplates || []);
+  const count = document.querySelector("[data-template-count]");
+  if (count) count.textContent = `${visibleTemplates.length} programs`;
+  document.querySelector(".program-preview-overlay")?.remove();
+  const target = document.querySelector("[data-template-results]");
+  if (target) target.innerHTML = renderTemplateLibraryResultsHtml(visibleTemplates);
+}
+
+function renderTemplateLibraryResultsHtml(templates) {
+  const duplicateNames = duplicateTemplateNames(templates);
+  const shelves = groupTemplatesByCategory(templates);
+  if (!templates.length) return `<div class="empty-state">No programs match these filters.</div>`;
+  return shelves.map((shelf) => `
+    <section class="program-library-shelf" aria-label="${escapeAttr(shelf.label)}">
+      <div class="program-library-shelf-head">
+        <h4>${escapeHtml(shelf.label)}</h4>
+        <span>${shelf.templates.length} programs</span>
+      </div>
+      <div class="program-library-row">
+        ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames)).join("")}
+      </div>
+    </section>
+  `).join("");
+}
+
 function applyTemplateClientFilters(templates) {
+  const search = clean(state.templateFilters.search).toLowerCase();
   const category = clean(state.templateFilters.category);
-  if (!category || category.toLowerCase() === "all") return templates;
-  const needle = category.toLowerCase();
-  return templates.filter((template) => templateFilterOptionMatches(templateCategoryLabel(template), needle));
+  const categoryNeedle = category.toLowerCase();
+  const tag = clean(state.templateFilters.tag).toLowerCase();
+  const pricing = clean(state.templateFilters.pricing).toLowerCase();
+  return templates.filter((template) => {
+    if (search) {
+      const haystack = `${template.plan_name || ""} ${template.source_external_id || ""}`.toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    if (categoryNeedle && categoryNeedle !== "all" && !templateFilterOptionMatches(templateCategoryLabel(template), categoryNeedle)) return false;
+    if (tag && tag !== "all" && !(template.tags || []).some((row) => templateFilterOptionMatches(row.name, tag))) return false;
+    if (pricing === "free" && template.is_free === false) return false;
+    if (pricing === "paid" && template.is_free !== false) return false;
+    return true;
+  });
 }
 
 function renderTemplateFilters() {
