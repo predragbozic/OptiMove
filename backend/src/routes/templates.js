@@ -37,7 +37,7 @@ router.get("/", async (req, res, next) => {
           join library.program_tag_definitions ft on ft.id = fpt.tag_id
           where fpt.plan_id = p.id
             and ft.is_active = true
-            and ft.name = $6
+            and ft.name ilike '%' || $6 || '%'
         ))
         and ($7 = 'all' or ($7 = 'free' and coalesce(ps.is_free, true)) or ($7 = 'paid' and not coalesce(ps.is_free, true)))
       group by ps.plan_id, ps.plan_type, ps.is_template, ps.plan_name, ps.status, ps.source_type, ps.source_external_id,

@@ -326,7 +326,7 @@ function handleContentInput(event) {
   const templateTextFilter = event.target.closest("input[data-template-filter]");
   if (templateTextFilter && templateTextFilter.type !== "checkbox") {
     state.templateFilters[templateTextFilter.dataset.templateFilter] = templateTextFilter.value;
-    if (templateTextFilter.dataset.templateFilter === "tag") syncTemplateTagSuggestions(templateTextFilter);
+    syncTemplateFilterSuggestions(templateTextFilter);
     state.selectedTemplateId = null;
     state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
     debounceTemplateSearch();
@@ -362,7 +362,7 @@ async function handleContentChange(event) {
   const templateFilter = event.target.closest("[data-template-filter]");
   if (templateFilter) {
     if (templateFilter.dataset.templateFilter === "scope") state.templateScope = templateFilter.value || "my";
-    else if (templateFilter.dataset.templateFilter === "paidOnly") state.templateFilters.pricing = templateFilter.checked ? "paid" : "all";
+    else if (templateFilter.dataset.templateFilter === "freeOnly") state.templateFilters.pricing = templateFilter.checked ? "free" : "all";
     else state.templateFilters[templateFilter.dataset.templateFilter] = templateFilter.value;
     state.selectedTemplateId = null;
     state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
@@ -401,15 +401,20 @@ function debounceTemplateSearch() {
   templateSearchTimer = setTimeout(loadTemplates, 250);
 }
 
-function syncTemplateTagSuggestions(input) {
+function syncTemplateFilterSuggestions(input) {
   const listId = input.getAttribute("list");
   if (!listId) return;
   const list = document.getElementById(listId);
   if (!list) return;
   const prefix = clean(input.value).toLowerCase();
-  const tags = state.templateOptions.tags || [];
-  const matches = prefix ? tags.filter((tag) => String(tag).toLowerCase().startsWith(prefix)) : tags;
-  list.innerHTML = `<option value=""></option>${matches.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}`;
+  const values = input.dataset.templateFilter === "category" ? templateCategoryOptions() : state.templateOptions.tags || [];
+  const matches = prefix ? values.filter((value) => templateFilterOptionMatches(value, prefix)) : values;
+  list.innerHTML = `<option value="All"></option>${matches.map((value) => `<option value="${escapeAttr(value)}"></option>`).join("")}`;
+}
+
+function templateFilterOptionMatches(value, prefix) {
+  const normalized = String(value || "").toLowerCase();
+  return normalized.includes(prefix) || normalized.split(/[\s&/,-]+/).some((part) => part.startsWith(prefix));
 }
 
 function renderLogin() {
@@ -905,7 +910,9 @@ function templateSearchUrl() {
   const params = new URLSearchParams();
   params.set("scope", state.templateScope || "my");
   Object.entries(state.templateFilters).forEach(([key, value]) => {
-    if (value) params.set(key, value);
+    const normalized = clean(value);
+    if (!normalized || normalized.toLowerCase() === "all" || key === "category") return;
+    params.set(key, normalized);
   });
   return `/api/templates?${params.toString()}`;
 }
@@ -2795,9 +2802,7 @@ function duplicateTemplateNames(templates) {
 }
 
 function templateSecondaryLabel(template, duplicateNames) {
-  const source = clean(template.source_external_id);
-  if (duplicateNames.has(clean(template.plan_name))) return source || "Duplicate name";
-  return source && source !== clean(template.plan_name) ? source : "";
+  return "";
 }
 
 function renderTemplateList(templates, selected, detail) {
@@ -2819,7 +2824,7 @@ function renderTemplateList(templates, selected, detail) {
           <div>
             <p class="eyebrow">Template</p>
             <h3>${escapeHtml(selected.plan_name)}</h3>
-            <p class="muted">${escapeHtml(selected.source_external_id || "Program template")}</p>
+            <p class="muted">${escapeHtml([templateCategoryLabel(selected), programPriceLabel(selected)].filter(Boolean).join(" · "))}</p>
           </div>
           <div class="builder-source-actions"><span class="item-badge">${detail.rows?.length || 0} items</span>${renderPlanMoreMenu(selected.plan_id, "template")}</div>
         </div>
@@ -2834,8 +2839,9 @@ function renderTemplateList(templates, selected, detail) {
 
 function renderTemplateLibrary(templates) {
   const scope = templateScopeMeta();
-  const duplicateNames = duplicateTemplateNames(templates);
-  const shelves = groupTemplatesByCategory(templates);
+  const visibleTemplates = applyTemplateClientFilters(templates);
+  const duplicateNames = duplicateTemplateNames(visibleTemplates);
+  const shelves = groupTemplatesByCategory(visibleTemplates);
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
   els.toolbar.innerHTML = "";
@@ -2847,11 +2853,11 @@ function renderTemplateLibrary(templates) {
           <p class="eyebrow">${escapeHtml(scope.eyebrow)}</p>
           <h3>${escapeHtml(scope.label)}</h3>
         </div>
-        <p class="muted">${templates.length} programs</p>
+        <p class="muted">${visibleTemplates.length} programs</p>
       </div>
       ${renderTemplateFilters()}
       <div class="program-library-shelves">
-        ${templates.length ? shelves.map((shelf) => `
+        ${visibleTemplates.length ? shelves.map((shelf) => `
           <section class="program-library-shelf" aria-label="${escapeAttr(shelf.label)}">
             <div class="program-library-shelf-head">
               <h4>${escapeHtml(shelf.label)}</h4>
@@ -2868,11 +2874,21 @@ function renderTemplateLibrary(templates) {
   `;
 }
 
+function applyTemplateClientFilters(templates) {
+  const category = clean(state.templateFilters.category);
+  if (!category || category.toLowerCase() === "all") return templates;
+  const needle = category.toLowerCase();
+  return templates.filter((template) => templateFilterOptionMatches(templateCategoryLabel(template), needle));
+}
+
 function renderTemplateFilters() {
   const filters = state.templateFilters;
   const options = state.templateOptions || {};
   const tagPrefix = clean(filters.tag).toLowerCase();
-  const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => String(tag).toLowerCase().startsWith(tagPrefix)) : (options.tags || []);
+  const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => templateFilterOptionMatches(tag, tagPrefix)) : (options.tags || []);
+  const categories = templateCategoryOptions();
+  const categoryPrefix = clean(filters.category).toLowerCase();
+  const visibleCategories = categoryPrefix ? categories.filter((category) => templateFilterOptionMatches(category, categoryPrefix)) : categories;
   return `
     <div class="program-scope-tabs" role="group" aria-label="Program library scope">
       ${renderTemplateScopeButton("all", "All")}
@@ -2890,24 +2906,31 @@ function renderTemplateFilters() {
         <span>Program group</span>
         <input data-template-filter="category" list="program-group-options" value="${escapeAttr(filters.category || "")}" placeholder="All">
         <datalist id="program-group-options">
-          <option value=""></option>
-          ${(options.categories || []).map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
+          <option value="All"></option>
+          ${visibleCategories.map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
         </datalist>
       </label>
       <label class="search-field">
         <span>Tag</span>
         <input data-template-filter="tag" list="program-tag-filter-options" value="${escapeAttr(filters.tag || "")}" placeholder="${(options.tags || []).length ? "All" : "No assigned tags"}">
         <datalist id="program-tag-filter-options">
-          <option value=""></option>
+          <option value="All"></option>
           ${visibleTags.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
         </datalist>
       </label>
       <label class="program-paid-filter">
-        <input data-template-filter="paidOnly" type="checkbox" ${filters.pricing === "paid" ? "checked" : ""}>
-        <span>Paid only</span>
+        <input data-template-filter="freeOnly" type="checkbox" ${filters.pricing === "free" ? "checked" : ""}>
+        <span>Free only</span>
       </label>
     </section>
   `;
+}
+
+function templateCategoryOptions() {
+  const defaults = ["General", "Rehabilitation", "Strength & power", "Speed & conditioning", "Movement prep", "Corrective & preventive", "Fitness & health", "Education"];
+  const assigned = state.templateOptions.categories || [];
+  const inferred = (state.lastTemplates || []).map(templateCategoryLabel).filter(Boolean);
+  return [...new Set([...defaults, ...assigned, ...inferred])].sort((a, b) => a.localeCompare(b));
 }
 
 function renderTemplateScopeButton(value, label) {
@@ -2917,11 +2940,15 @@ function renderTemplateScopeButton(value, label) {
 function groupTemplatesByCategory(templates) {
   const groups = new Map();
   templates.forEach((template) => {
-    const category = clean(template.library_category) || inferProgramCategory(template) || "General";
+    const category = templateCategoryLabel(template);
     if (!groups.has(category)) groups.set(category, []);
     groups.get(category).push(template);
   });
   return [...groups.entries()].map(([label, rows]) => ({ label, templates: rows }));
+}
+
+function templateCategoryLabel(template) {
+  return clean(template.library_category) || inferProgramCategory(template) || "General";
 }
 
 function inferProgramCategory(template) {
@@ -2934,9 +2961,9 @@ function inferProgramCategory(template) {
 }
 
 function renderProgramLibraryCard(template, duplicateNames) {
-  const secondary = templateSecondaryLabel(template, duplicateNames) || "Program template";
+  const category = templateCategoryLabel(template);
   const isSelected = String(template.plan_id) === String(state.selectedTemplateId);
-  const price = template.is_free === false && template.price_cents ? `${Math.round(template.price_cents / 100)} EUR` : "Free";
+  const price = programPriceLabel(template);
   return `
     <button class="program-library-card ${isSelected ? "is-selected" : ""}" type="button" data-action="template-open" data-template-id="${escapeAttr(template.plan_id)}">
       <span class="program-library-card-media">
@@ -2944,7 +2971,7 @@ function renderProgramLibraryCard(template, duplicateNames) {
       </span>
       <span class="program-library-card-body">
         <span class="program-library-card-title">${escapeHtml(template.plan_name || "Untitled program")}</span>
-        <span class="program-library-card-sub">${escapeHtml(secondary)}</span>
+        <span class="program-library-card-sub">${escapeHtml(category)}</span>
       </span>
       <span class="program-library-card-foot">
         <span class="item-badge">${escapeHtml(price)}</span>
@@ -2953,6 +2980,13 @@ function renderProgramLibraryCard(template, duplicateNames) {
       </span>
     </button>
   `;
+}
+
+function programPriceLabel(template) {
+  if (template.is_free === false) {
+    return template.price_cents ? `${Math.round(template.price_cents / 100)} EUR` : "Paid";
+  }
+  return "Free";
 }
 
 async function submitTemplateMetadataForm(form) {
@@ -2996,6 +3030,7 @@ function renderTemplatePreviewModal() {
   if (!state.templatePreview.open) return "";
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(state.selectedTemplateId));
   const detail = state.templatePreview.detail || {};
+  const selectedMeta = selected ? [templateCategoryLabel(selected), programPriceLabel(selected)].filter(Boolean).join(" · ") : "Program template";
   const isMicrocycle = detail.mode === "microcycle";
   const groups = state.templatePreview.loading || state.templatePreview.error
     ? []
@@ -3013,7 +3048,7 @@ function renderTemplatePreviewModal() {
           <div>
             <p class="eyebrow">Program preview</p>
             <h3>${escapeHtml(selected?.plan_name || "Program")}</h3>
-            <p class="muted">${escapeHtml(selected?.source_external_id || "Program template")}</p>
+            <p class="muted">${escapeHtml(selectedMeta)}</p>
           </div>
           <div class="builder-source-actions">
             ${state.templatePreview.loading ? `<span class="item-badge">Loading</span>` : state.templatePreview.error ? "" : `<span class="item-badge">${detail.rows?.length || 0} items</span>`}
