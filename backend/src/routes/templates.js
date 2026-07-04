@@ -292,22 +292,42 @@ async function canEditTemplate(user, planId) {
 
 async function findOrCreateUserTag(user, name) {
   const existing = await query(
-    `select id
+    `select id, is_active
      from library.tags
      where lower(name) = lower($1)
-       and is_active = true
      limit 1`,
     [name],
   );
-  if (existing.rows[0]?.id) return existing.rows[0].id;
+  if (existing.rows[0]?.id) {
+    if (!existing.rows[0].is_active) {
+      await query(`update library.tags set is_active = true, updated_at = now() where id = $1`, [existing.rows[0].id]);
+    }
+    return existing.rows[0].id;
+  }
 
-  const created = await query(
-    `insert into library.tags (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
-     values ($1, concat($2, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
-     returning id`,
-    [name, slugify(name), user.id],
-  );
-  return created.rows[0].id;
+  try {
+    const created = await query(
+      `insert into library.tags (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
+       values ($1, concat($2, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
+       returning id`,
+      [name, slugify(name), user.id],
+    );
+    return created.rows[0].id;
+  } catch (error) {
+    if (error?.code !== "23505") throw error;
+    const fallback = await query(
+      `select id
+       from library.tags
+       where lower(name) = lower($1)
+       limit 1`,
+      [name],
+    );
+    if (fallback.rows[0]?.id) {
+      await query(`update library.tags set is_active = true, updated_at = now() where id = $1`, [fallback.rows[0].id]);
+      return fallback.rows[0].id;
+    }
+    throw error;
+  }
 }
 
 function ownerTypeForScope(scope) {
