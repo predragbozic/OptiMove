@@ -158,6 +158,7 @@ function bindEvents() {
       if (state.activeTab !== button.dataset.libraryTab) pushAppHistory();
       state.activeTab = button.dataset.libraryTab;
       if (button.dataset.templateScope) state.templateScope = button.dataset.templateScope;
+      if (button.dataset.organizationSection) state.organization.section = button.dataset.organizationSection;
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
       state.navStack = [];
@@ -596,8 +597,11 @@ function hasOrganizationAccess(user = state.currentUser) {
 
 function renderAccessNav() {
   const orgButton = document.querySelector('[data-library-tab="organization"]');
+  const orgSubmenu = document.querySelector('[data-sidebar-submenu="settings"]');
   if (!orgButton) return;
-  orgButton.hidden = !hasOrganizationAccess();
+  const visible = hasOrganizationAccess();
+  orgButton.hidden = !visible;
+  if (orgSubmenu) orgSubmenu.hidden = !visible;
 }
 
 function toggleAthletesList() {
@@ -1534,21 +1538,24 @@ function renderTabs() {
 }
 
 function templateScopeMeta(scope = state.templateScope) {
+  const access = String(state.currentUser?.accessScope || "").toLowerCase();
+  const isPlatform = access === "platform";
+  const isClub = access === "club";
   const scopes = {
     all: {
-      label: "All programs",
+      label: isPlatform ? "All platform programs" : "All programs",
       eyebrow: "Program library",
-      note: "All template programs available to your current account.",
+      note: isPlatform ? "All coach, club, OptiMove and marketplace programs visible to platform admins." : "All template programs available to your current account.",
     },
     my: {
-      label: "My templates",
-      eyebrow: "Private library",
-      note: "Reusable programs and templates available in your current coach workspace.",
+      label: isPlatform ? "Admin workspace" : "My templates",
+      eyebrow: isPlatform ? "Private admin library" : "Private library",
+      note: isPlatform ? "Programs created inside your own platform admin workspace." : "Reusable programs and templates available in your current coach workspace.",
     },
     club: {
-      label: "Club",
+      label: isClub || isPlatform ? "Club library" : "Club",
       eyebrow: "Club library",
-      note: "Club-shared programs will live here once club publishing rules are enabled.",
+      note: isPlatform ? "Club-shared program libraries grouped by club ownership." : "Club-shared programs available to this workspace.",
     },
     optimove: {
       label: "OptiMove",
@@ -1570,14 +1577,23 @@ function renderLibraryNav() {
   els.libraryTabs.forEach((button) => {
     const tab = button.dataset.libraryTab;
     const scope = button.dataset.templateScope || "";
+    const organizationSection = button.dataset.organizationSection || "";
     const isTemplateTab = tab === "templates" && state.activeTab === "templates";
     const isTemplateScope = isTemplateTab && scope && scope === state.templateScope;
     const isTemplateMain = isTemplateTab && button.classList.contains("sidebar-nav-button");
-    button.classList.toggle("is-active", isTemplateMain || isTemplateScope || (!scope && tab === state.activeTab));
+    const isOrganizationTab = tab === "organization" && state.activeTab === "organization";
+    const isOrganizationScope = isOrganizationTab && organizationSection && organizationSection === (state.organization.section || "overview");
+    const isOrganizationMain = isOrganizationTab && button.classList.contains("sidebar-nav-button");
+    button.classList.toggle("is-active", isTemplateMain || isTemplateScope || isOrganizationMain || isOrganizationScope || (!scope && !organizationSection && tab === state.activeTab));
   });
   document.querySelectorAll("[data-sidebar-submenu]").forEach((submenu) => {
-    submenu.classList.toggle("is-open", submenu.dataset.sidebarSubmenu === "program-library" && state.activeTab === "templates");
+    const key = submenu.dataset.sidebarSubmenu;
+    submenu.classList.toggle("is-open",
+      (key === "program-library" && state.activeTab === "templates") ||
+      (key === "settings" && state.activeTab === "organization"),
+    );
   });
+  updateProgramLibraryNavLabels();
   els.athleteTabs.forEach((button) => {
     const tab = button.dataset.athleteTab || "";
     const isCalendar = tab === "calendar" && state.activeTab === "weekly" && state.weekSelectorOpen;
@@ -1587,6 +1603,13 @@ function renderLibraryNav() {
   });
   els.athletesToggle?.classList.toggle("is-active", state.athletesExpanded);
   els.calendarToggle?.classList.toggle("is-active", state.activeTab === "weekly" && state.weekSelectorOpen);
+}
+
+function updateProgramLibraryNavLabels() {
+  document.querySelectorAll(".sidebar-subnav-button[data-template-scope]").forEach((button) => {
+    const label = templateScopeMeta(button.dataset.templateScope).label;
+    if (label) button.textContent = label;
+  });
 }
 
 function renderAthleteListState() {
@@ -4096,8 +4119,8 @@ function renderBuilderError(error) {
 
 function renderExercises(exercises) {
   state.lastExerciseResults = exercises;
-  els.context.textContent = "Library";
-  els.title.textContent = "Exercises";
+  els.context.textContent = "Exercise library";
+  els.title.textContent = "Exercise Library";
   if (!exercises.length) return renderEmpty("No exercises for this search.");
   const itemIds = registerItems(exercises);
   state.exerciseDetail = { ids: itemIds, currentId: null };
