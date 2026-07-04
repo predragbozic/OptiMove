@@ -308,7 +308,7 @@ async function findOrCreateProgramTag(user, name) {
   try {
     const created = await query(
       `insert into library.program_tag_definitions (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
-       values ($1, concat($2, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
+       values ($1, concat($2::text, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
        returning id`,
       [name, slugify(name), user.id],
     );
