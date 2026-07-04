@@ -24,7 +24,7 @@ router.get("/", async (req, res, next) => {
       from plans.v_plan_summary ps
       join plans.plans p on p.id = ps.plan_id
       left join library.program_tags pt on pt.plan_id = p.id
-      left join library.tags t on t.id = pt.tag_id and t.is_active = true
+      left join library.program_tag_definitions t on t.id = pt.tag_id and t.is_active = true
       where ps.plan_type = 'program'
         and ps.is_template = true
         and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
@@ -34,7 +34,7 @@ router.get("/", async (req, res, next) => {
         and ($6 = '' or exists (
           select 1
           from library.program_tags fpt
-          join library.tags ft on ft.id = fpt.tag_id
+          join library.program_tag_definitions ft on ft.id = fpt.tag_id
           where fpt.plan_id = p.id
             and ft.is_active = true
             and ft.name = $6
@@ -74,7 +74,7 @@ router.get("/options", async (req, res, next) => {
       query(
         `
         select distinct t.name
-        from library.tags t
+        from library.program_tag_definitions t
         join library.program_tags pt on pt.tag_id = t.id
         join plans.plans p on p.id = pt.plan_id
         where t.is_active = true
@@ -158,13 +158,13 @@ router.get("/:planId/tags", async (req, res, next) => {
     const [allTags, programTags] = await Promise.all([
       query(
         `select id, name
-         from library.tags
+         from library.program_tag_definitions
          where is_active = true
            and exists (
              select 1
              from library.program_tags pt
              join plans.plans p on p.id = pt.plan_id
-             where pt.tag_id = library.tags.id
+             where pt.tag_id = library.program_tag_definitions.id
                and p.plan_type = 'program'
                and p.is_template = true
                and coalesce(p.is_active, true)
@@ -176,7 +176,7 @@ router.get("/:planId/tags", async (req, res, next) => {
       query(
         `select t.id, t.name
          from library.program_tags pt
-         join library.tags t on t.id = pt.tag_id
+         join library.program_tag_definitions t on t.id = pt.tag_id
          where pt.plan_id = $1
            and t.is_active = true
          order by t.name`,
@@ -200,12 +200,12 @@ router.post("/:planId/tags", async (req, res, next) => {
 
     if (!finalTagId) {
       if (!name) return res.status(400).json({ error: "Tag name is required." });
-      finalTagId = await findOrCreateUserTag(req.user, name);
+      finalTagId = await findOrCreateProgramTag(req.user, name);
     }
 
     const tag = await query(
       `select id, name
-       from library.tags
+       from library.program_tag_definitions
        where id = $1
          and is_active = true`,
       [finalTagId],
@@ -290,24 +290,24 @@ async function canEditTemplate(user, planId) {
   return Boolean(result.rows[0]);
 }
 
-async function findOrCreateUserTag(user, name) {
+async function findOrCreateProgramTag(user, name) {
   const existing = await query(
     `select id, is_active
-     from library.tags
+     from library.program_tag_definitions
      where lower(name) = lower($1)
      limit 1`,
     [name],
   );
   if (existing.rows[0]?.id) {
     if (!existing.rows[0].is_active) {
-      await query(`update library.tags set is_active = true, updated_at = now() where id = $1`, [existing.rows[0].id]);
+      await query(`update library.program_tag_definitions set is_active = true, updated_at = now() where id = $1`, [existing.rows[0].id]);
     }
     return existing.rows[0].id;
   }
 
   try {
     const created = await query(
-      `insert into library.tags (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
+      `insert into library.program_tag_definitions (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
        values ($1, concat($2, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
        returning id`,
       [name, slugify(name), user.id],
@@ -317,13 +317,13 @@ async function findOrCreateUserTag(user, name) {
     if (error?.code !== "23505") throw error;
     const fallback = await query(
       `select id
-       from library.tags
+       from library.program_tag_definitions
        where lower(name) = lower($1)
        limit 1`,
       [name],
     );
     if (fallback.rows[0]?.id) {
-      await query(`update library.tags set is_active = true, updated_at = now() where id = $1`, [fallback.rows[0].id]);
+      await query(`update library.program_tag_definitions set is_active = true, updated_at = now() where id = $1`, [fallback.rows[0].id]);
       return fallback.rows[0].id;
     }
     throw error;

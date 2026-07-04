@@ -73,6 +73,27 @@ alter table library.tags
   add column if not exists created_at timestamptz not null default now(),
   add column if not exists updated_at timestamptz not null default now();
 
+create table if not exists library.program_tag_definitions (
+  id uuid primary key default gen_random_uuid(),
+  name varchar(120) not null,
+  slug varchar(140),
+  owner_scope varchar(20) not null default 'user' check (owner_scope in ('system', 'user', 'club')),
+  owner_user_id uuid references public.users(id) on delete cascade,
+  created_by_user_id uuid references public.users(id) on delete set null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table library.program_tag_definitions
+  add column if not exists slug varchar(140),
+  add column if not exists owner_scope varchar(20) not null default 'user',
+  add column if not exists owner_user_id uuid references public.users(id) on delete cascade,
+  add column if not exists created_by_user_id uuid references public.users(id) on delete set null,
+  add column if not exists is_active boolean not null default true,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
 create table if not exists library.program_tags (
   plan_id uuid not null references plans.plans(id) on delete cascade,
   tag_id uuid not null references library.tags(id) on delete cascade,
@@ -80,5 +101,21 @@ create table if not exists library.program_tags (
   primary key (plan_id, tag_id)
 );
 
+insert into library.program_tag_definitions (id, name, slug, owner_scope, owner_user_id, created_by_user_id, is_active, created_at, updated_at)
+select distinct t.id, t.name, t.slug, t.owner_scope, t.owner_user_id, t.created_by_user_id, t.is_active, t.created_at, t.updated_at
+from library.tags t
+join library.program_tags pt on pt.tag_id = t.id
+on conflict (id) do nothing;
+
+alter table library.program_tags
+  drop constraint if exists program_tags_tag_id_fkey;
+
+alter table library.program_tags
+  add constraint program_tags_tag_id_fkey
+  foreign key (tag_id) references library.program_tag_definitions(id) on delete cascade;
+
 create index if not exists program_tags_tag_idx
   on library.program_tags (tag_id);
+
+create index if not exists program_tag_definitions_name_idx
+  on library.program_tag_definitions (lower(name));
