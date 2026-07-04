@@ -398,7 +398,31 @@ function debounceBuilderSearch() {
 let templateSearchTimer = null;
 function debounceTemplateSearch() {
   clearTimeout(templateSearchTimer);
-  templateSearchTimer = setTimeout(loadTemplates, 250);
+  const focus = captureTemplateFilterFocus();
+  templateSearchTimer = setTimeout(() => loadTemplates({ restoreFocus: focus }), 250);
+}
+
+function captureTemplateFilterFocus() {
+  const active = document.activeElement;
+  if (!active?.matches?.("input[data-template-filter]")) return null;
+  return {
+    filter: active.dataset.templateFilter,
+    start: active.selectionStart,
+    end: active.selectionEnd,
+  };
+}
+
+function restoreTemplateFilterFocus(focus) {
+  if (!focus?.filter) return;
+  requestAnimationFrame(() => {
+    const escapedFilter = window.CSS?.escape ? CSS.escape(focus.filter) : String(focus.filter).replace(/"/g, '\\"');
+    const input = document.querySelector(`input[data-template-filter="${escapedFilter}"]`);
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (typeof input.setSelectionRange === "function" && focus.start !== null && focus.end !== null) {
+      input.setSelectionRange(focus.start, focus.end);
+    }
+  });
 }
 
 function syncTemplateFilterSuggestions(input) {
@@ -889,21 +913,22 @@ async function loadPrograms() {
   renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
 }
 
-async function loadTemplates() {
+async function loadTemplates(options = {}) {
   state.navStack = [];
   const scope = templateScopeMeta();
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
   els.toolbar.innerHTML = "";
-  setLoading("Loading program library...");
+  if (!options.restoreFocus) setLoading("Loading program library...");
   if (!state.templateOptions.loaded) {
-    const options = await api("/api/templates/options");
-    state.templateOptions = { ...options, loaded: true };
+    const filterOptions = await api("/api/templates/options");
+    state.templateOptions = { ...filterOptions, loaded: true };
   }
   const data = await api(templateSearchUrl());
   state.lastTemplates = data.templates || [];
   if (!state.selectedTemplateId) state.selectedTemplateId = state.lastTemplates[0]?.plan_id || null;
   renderTemplateLibrary(state.lastTemplates);
+  restoreTemplateFilterFocus(options.restoreFocus);
 }
 
 function templateSearchUrl() {
