@@ -324,8 +324,9 @@ function handleContentInput(event) {
     return;
   }
   const templateTextFilter = event.target.closest("input[data-template-filter]");
-  if (templateTextFilter) {
+  if (templateTextFilter && templateTextFilter.type !== "checkbox") {
     state.templateFilters[templateTextFilter.dataset.templateFilter] = templateTextFilter.value;
+    if (templateTextFilter.dataset.templateFilter === "tag") syncTemplateTagSuggestions(templateTextFilter);
     state.selectedTemplateId = null;
     state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
     debounceTemplateSearch();
@@ -361,6 +362,7 @@ async function handleContentChange(event) {
   const templateFilter = event.target.closest("[data-template-filter]");
   if (templateFilter) {
     if (templateFilter.dataset.templateFilter === "scope") state.templateScope = templateFilter.value || "my";
+    else if (templateFilter.dataset.templateFilter === "paidOnly") state.templateFilters.pricing = templateFilter.checked ? "paid" : "all";
     else state.templateFilters[templateFilter.dataset.templateFilter] = templateFilter.value;
     state.selectedTemplateId = null;
     state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
@@ -397,6 +399,17 @@ let templateSearchTimer = null;
 function debounceTemplateSearch() {
   clearTimeout(templateSearchTimer);
   templateSearchTimer = setTimeout(loadTemplates, 250);
+}
+
+function syncTemplateTagSuggestions(input) {
+  const listId = input.getAttribute("list");
+  if (!listId) return;
+  const list = document.getElementById(listId);
+  if (!list) return;
+  const prefix = clean(input.value).toLowerCase();
+  const tags = state.templateOptions.tags || [];
+  const matches = prefix ? tags.filter((tag) => String(tag).toLowerCase().startsWith(prefix)) : tags;
+  list.innerHTML = `<option value=""></option>${matches.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}`;
 }
 
 function renderLogin() {
@@ -1281,6 +1294,13 @@ function handleContentClick(event) {
   }
   if (type === "template-open") {
     void openTemplatePreview(action.dataset.templateId);
+    return;
+  }
+  if (type === "template-scope") {
+    state.templateScope = action.dataset.scope || "my";
+    state.selectedTemplateId = null;
+    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    void loadTemplates();
     return;
   }
   if (type === "template-settings-toggle") {
@@ -2851,46 +2871,47 @@ function renderTemplateLibrary(templates) {
 function renderTemplateFilters() {
   const filters = state.templateFilters;
   const options = state.templateOptions || {};
+  const tagPrefix = clean(filters.tag).toLowerCase();
+  const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => String(tag).toLowerCase().startsWith(tagPrefix)) : (options.tags || []);
   return `
+    <div class="program-scope-tabs" role="group" aria-label="Program library scope">
+      ${renderTemplateScopeButton("all", "All")}
+      ${renderTemplateScopeButton("my", "My templates")}
+      ${renderTemplateScopeButton("club", "Club templates")}
+      ${renderTemplateScopeButton("optimove", "OptiMove templates")}
+      ${renderTemplateScopeButton("marketplace", "Marketplace")}
+    </div>
     <section class="program-filter-panel" aria-label="Program filters">
       <label class="search-field program-filter-search">
         <span>Search programs</span>
         <input data-template-filter="search" type="search" value="${escapeAttr(filters.search || "")}" placeholder="Program name or code">
       </label>
       <label class="search-field">
-        <span>Library</span>
-        <select data-template-filter="scope">
-          ${renderOption("all", "All", state.templateScope)}
-          ${renderOption("my", "My templates", state.templateScope)}
-          ${renderOption("club", "Club", state.templateScope)}
-          ${renderOption("optimove", "OptiMove", state.templateScope)}
-          ${renderOption("marketplace", "Marketplace", state.templateScope)}
-        </select>
-      </label>
-      <label class="search-field">
         <span>Program group</span>
-        <input data-template-filter="category" list="program-group-options" value="${escapeAttr(filters.category || "")}" placeholder="All groups">
+        <input data-template-filter="category" list="program-group-options" value="${escapeAttr(filters.category || "")}" placeholder="All">
         <datalist id="program-group-options">
+          <option value=""></option>
           ${(options.categories || []).map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
         </datalist>
       </label>
       <label class="search-field">
         <span>Tag</span>
-        <input data-template-filter="tag" list="program-tag-filter-options" value="${escapeAttr(filters.tag || "")}" placeholder="${(options.tags || []).length ? "All tags" : "No assigned tags"}">
+        <input data-template-filter="tag" list="program-tag-filter-options" value="${escapeAttr(filters.tag || "")}" placeholder="${(options.tags || []).length ? "All" : "No assigned tags"}">
         <datalist id="program-tag-filter-options">
-          ${(options.tags || []).map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
+          <option value=""></option>
+          ${visibleTags.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
         </datalist>
       </label>
-      <label class="search-field">
-        <span>Pricing</span>
-        <select data-template-filter="pricing">
-          ${renderOption("all", "All", filters.pricing)}
-          ${renderOption("free", "Free", filters.pricing)}
-          ${renderOption("paid", "Paid", filters.pricing)}
-        </select>
+      <label class="program-paid-filter">
+        <input data-template-filter="paidOnly" type="checkbox" ${filters.pricing === "paid" ? "checked" : ""}>
+        <span>Paid only</span>
       </label>
     </section>
   `;
+}
+
+function renderTemplateScopeButton(value, label) {
+  return `<button class="program-scope-button ${state.templateScope === value ? "is-active" : ""}" type="button" data-action="template-scope" data-scope="${escapeAttr(value)}">${escapeHtml(label)}</button>`;
 }
 
 function groupTemplatesByCategory(templates) {
