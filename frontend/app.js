@@ -45,6 +45,8 @@ const emptyTemplateFilters = () => ({
   search: "",
   category: "",
   tag: "",
+  ownerType: "",
+  visibility: "",
   pricing: "all",
 });
 
@@ -367,7 +369,7 @@ async function handleContentChange(event) {
     else state.templateFilters[templateFilter.dataset.templateFilter] = templateFilter.value;
     state.selectedTemplateId = null;
     state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
-    void loadTemplates();
+    renderTemplateLibraryResults();
     return;
   }
 
@@ -2941,6 +2943,8 @@ function applyTemplateClientFilters(templates) {
   const category = clean(state.templateFilters.category);
   const categoryNeedle = category.toLowerCase();
   const tag = clean(state.templateFilters.tag).toLowerCase();
+  const ownerType = clean(state.templateFilters.ownerType).toLowerCase();
+  const visibility = clean(state.templateFilters.visibility).toLowerCase();
   const pricing = clean(state.templateFilters.pricing).toLowerCase();
   return templates.filter((template) => {
     if (search) {
@@ -2949,15 +2953,22 @@ function applyTemplateClientFilters(templates) {
     }
     if (categoryNeedle && categoryNeedle !== "all" && !templateFilterOptionMatches(templateCategoryLabel(template), categoryNeedle)) return false;
     if (tag && tag !== "all" && !(template.tags || []).some((row) => templateFilterOptionMatches(row.name, tag))) return false;
+    if (ownerType && ownerType !== "all" && clean(template.owner_type).toLowerCase() !== ownerType) return false;
+    if (visibility && visibility !== "all" && clean(template.visibility).toLowerCase() !== visibility) return false;
     if (pricing === "free" && template.is_free === false) return false;
     if (pricing === "paid" && template.is_free !== false) return false;
     return true;
   });
 }
 
+function canUseProgramAdminFilters() {
+  return ["platform", "club"].includes(String(state.currentUser?.accessScope || "").toLowerCase());
+}
+
 function renderTemplateFilters() {
   const filters = state.templateFilters;
   const options = state.templateOptions || {};
+  const showAdminFilters = canUseProgramAdminFilters();
   const tagPrefix = clean(filters.tag).toLowerCase();
   const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => templateFilterOptionMatches(tag, tagPrefix)) : (options.tags || []);
   const categories = templateCategoryOptions();
@@ -2965,11 +2976,7 @@ function renderTemplateFilters() {
   const visibleCategories = categoryPrefix ? categories.filter((category) => templateFilterOptionMatches(category, categoryPrefix)) : categories;
   return `
     <div class="program-scope-tabs" role="group" aria-label="Program library scope">
-      ${renderTemplateScopeButton("all", "All")}
-      ${renderTemplateScopeButton("my", "My templates")}
-      ${renderTemplateScopeButton("club", "Club templates")}
-      ${renderTemplateScopeButton("optimove", "OptiMove templates")}
-      ${renderTemplateScopeButton("marketplace", "Marketplace")}
+      ${["all", "my", "club", "optimove", "marketplace"].map((scope) => renderTemplateScopeButton(scope, templateScopeMeta(scope).label)).join("")}
     </div>
     <section class="program-filter-panel" aria-label="Program filters">
       <label class="search-field program-filter-search">
@@ -2992,6 +2999,28 @@ function renderTemplateFilters() {
           ${visibleTags.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
         </datalist>
       </label>
+      ${showAdminFilters ? `
+        <label class="search-field">
+          <span>Owner</span>
+          <select data-template-filter="ownerType">
+            ${renderOption("all", "All owners", filters.ownerType || "all")}
+            ${renderOption("coach", "Coach", filters.ownerType)}
+            ${renderOption("club", "Club", filters.ownerType)}
+            ${renderOption("optimove", "OptiMove", filters.ownerType)}
+            ${renderOption("marketplace", "Marketplace", filters.ownerType)}
+          </select>
+        </label>
+        <label class="search-field">
+          <span>Access</span>
+          <select data-template-filter="visibility">
+            ${renderOption("all", "All access", filters.visibility || "all")}
+            ${renderOption("private", "Private", filters.visibility)}
+            ${renderOption("team", "Team shared", filters.visibility)}
+            ${renderOption("club", "Club shared", filters.visibility)}
+            ${renderOption("public", "Public", filters.visibility)}
+          </select>
+        </label>
+      ` : ""}
       <label class="program-paid-filter">
         <input data-template-filter="freeOnly" type="checkbox" ${filters.pricing === "free" ? "checked" : ""}>
         <span>Free only</span>
