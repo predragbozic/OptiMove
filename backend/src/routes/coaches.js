@@ -107,6 +107,63 @@ router.post("/:profileId/contact", async (req, res, next) => {
   }
 });
 
+router.patch("/contact-requests/:requestId", async (req, res, next) => {
+  try {
+    const status = normalizeChoice(req.body?.status, ["read", "replied", "accepted", "archived"], "");
+    if (!status) return res.status(400).json({ error: "Choose a valid contact status." });
+    const result = await query(
+      `update public.coach_contact_requests ccr
+       set status = $2,
+           updated_at = now()
+       from public.coach_profiles cp
+       where ccr.id = $1
+         and cp.id = ccr.coach_profile_id
+         and (cp.user_id = $3 or $4::boolean)
+       returning ccr.id, ccr.status, ccr.updated_at`,
+      [req.params.requestId, status, req.user.id, canAccessAllAthletes(req.user)],
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Contact request not found." });
+    res.json({ contactRequest: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/:profileId/reviews", async (req, res, next) => {
+  try {
+    const profile = await loadVisibleCoachProfile(req.params.profileId, req.user);
+    if (!profile) return res.status(404).json({ error: "Coach profile not found." });
+    if (String(profile.user_id) === String(req.user.id)) {
+      return res.status(400).json({ error: "You cannot review your own coach profile." });
+    }
+    const contact = await requireVerifiedCoachContact(req.user, profile.id);
+    if (!contact) {
+      return res.status(403).json({ error: "Contact this coach and receive a reply before leaving a review." });
+    }
+    const rating = Number.parseInt(req.body?.rating, 10);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: "Rating must be between 1 and 5." });
+    }
+    const review = await query(
+      `insert into public.coach_profile_reviews (coach_profile_id, reviewer_user_id, rating, comment, status, is_verified, verified_contact_request_id)
+       values ($1, $2, $3, nullif(trim($4), ''), 'published', true, $5)
+       on conflict (coach_profile_id, reviewer_user_id)
+       where reviewer_user_id is not null
+       do update set rating = excluded.rating,
+                     comment = excluded.comment,
+                     status = 'published',
+                     is_verified = true,
+                     verified_contact_request_id = excluded.verified_contact_request_id,
+                     updated_at = now()
+       returning id, rating, comment, status, is_verified, updated_at`,
+      [profile.id, req.user.id, rating, text(req.body?.comment), contact.id],
+    );
+    res.status(201).json({ review: review.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 function coachListSql({ includeOrder = true } = {}) {
   return `
     select cp.id, cp.user_id,
@@ -193,6 +250,20 @@ async function loadVisibleCoachProfile(profileId, viewer) {
   const result = await query(
     `${coachListSql({ includeOrder: false })} and cp.id = $4`,
     [viewer.id, canAccessAllAthletes(viewer), canUseClubProfiles(viewer), profileId],
+  );
+  return result.rows[0] || null;
+}
+
+async function requireVerifiedCoachContact(user, profileId) {
+  const result = await query(
+    `select id, status
+     from public.coach_contact_requests
+     where coach_profile_id = $1
+       and sender_user_id = $2
+       and status in ('replied', 'accepted')
+     order by updated_at desc
+     limit 1`,
+    [profileId, user.id],
   );
   return result.rows[0] || null;
 }

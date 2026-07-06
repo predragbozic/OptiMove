@@ -118,6 +118,16 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     );
     if (source.plan_type === "weekly") await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
     else await copyProgramTree(client, source.id, created.rows[0].id);
+    await client.query(
+      `insert into library.program_access (plan_id, user_id, access_type, status, related_plan_id)
+       values ($1, $2, 'copied', 'accessed', $3)
+       on conflict (plan_id, user_id, access_type)
+       do update set related_plan_id = excluded.related_plan_id,
+                     status = case when library.program_access.status = 'revoked' then 'accessed' else library.program_access.status end,
+                     accessed_at = now(),
+                     updated_at = now()`,
+      [source.id, req.user.id, created.rows[0].id],
+    );
     await client.query("commit");
     client.release();
     client = null;

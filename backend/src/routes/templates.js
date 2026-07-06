@@ -298,6 +298,52 @@ router.delete("/:planId/tags/:tagId", async (req, res, next) => {
   }
 });
 
+router.post("/:planId/use", async (req, res, next) => {
+  try {
+    if (!(await canUseTemplate(req.user, req.params.planId))) {
+      return res.status(404).json({ error: "Template not found." });
+    }
+    const access = await markProgramUsed(req.user, req.params.planId, text(req.body?.note));
+    res.json({ access });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/:planId/reviews", async (req, res, next) => {
+  try {
+    if (!(await canUseTemplate(req.user, req.params.planId))) {
+      return res.status(404).json({ error: "Template not found." });
+    }
+    const access = await requireUsedProgramAccess(req.user, req.params.planId);
+    if (!access) {
+      return res.status(403).json({ error: "Use this program before leaving a review." });
+    }
+    const rating = Number.parseInt(req.body?.rating, 10);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: "Rating must be between 1 and 5." });
+    }
+    const review = await query(
+      `insert into library.program_reviews (plan_id, reviewer_user_id, rating, comment, status, is_verified, verified_access_id, verification_type)
+       values ($1, $2, $3, nullif(trim($4), ''), 'published', true, $5, $6)
+       on conflict (plan_id, reviewer_user_id)
+       where reviewer_user_id is not null
+       do update set rating = excluded.rating,
+                     comment = excluded.comment,
+                     status = 'published',
+                     is_verified = true,
+                     verified_access_id = excluded.verified_access_id,
+                     verification_type = excluded.verification_type,
+                     updated_at = now()
+       returning id, rating, comment, status, is_verified, verification_type, updated_at`,
+      [req.params.planId, req.user.id, rating, text(req.body?.comment), access.id, access.access_type],
+    );
+    res.status(201).json({ review: review.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 function text(value) {
   return String(value ?? "").trim();
 }
@@ -346,6 +392,39 @@ async function canEditTemplate(user, planId) {
     [planId, user.id, canAccessAllAthletes(user)],
   );
   return Boolean(result.rows[0]);
+}
+
+async function markProgramUsed(user, planId, note) {
+  const access = await query(
+    `insert into library.program_access (plan_id, user_id, access_type, status, used_at)
+     values ($1, $2, 'downloaded', 'used', now())
+     on conflict (plan_id, user_id, access_type)
+     do update set status = case when library.program_access.status = 'completed' then 'completed' else 'used' end,
+                   used_at = coalesce(library.program_access.used_at, now()),
+                   updated_at = now()
+     returning id, plan_id, user_id, access_type, status, used_at`,
+    [planId, user.id],
+  );
+  await query(
+    `insert into library.program_usage_events (program_access_id, user_id, event_type, note)
+     values ($1, $2, 'used', nullif(trim($3), ''))`,
+    [access.rows[0].id, user.id, note],
+  );
+  return access.rows[0];
+}
+
+async function requireUsedProgramAccess(user, planId) {
+  const result = await query(
+    `select id, access_type, status
+     from library.program_access
+     where plan_id = $1
+       and user_id = $2
+       and status in ('used', 'completed')
+     order by used_at desc nulls last, updated_at desc
+     limit 1`,
+    [planId, user.id],
+  );
+  return result.rows[0] || null;
 }
 
 async function findOrCreateProgramTag(user, name) {
