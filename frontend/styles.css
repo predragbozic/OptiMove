@@ -1602,8 +1602,16 @@ input:focus {
   display: flex;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 900;
+}
+
+.rating-line {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
   font-weight: 900;
 }
 

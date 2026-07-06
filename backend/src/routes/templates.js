@@ -21,6 +21,8 @@ router.get("/", async (req, res, next) => {
         creator.email as creator_email,
         coalesce(creator_clubs.club_ids, '[]'::jsonb) as creator_club_ids,
         coalesce(creator_clubs.club_names, '') as creator_club_names,
+        reviews.average_rating,
+        coalesce(reviews.review_count, 0)::int as review_count,
         coalesce(
           jsonb_agg(distinct jsonb_build_object('id', t.id, 'name', t.name))
             filter (where t.id is not null),
@@ -38,6 +40,13 @@ router.get("/", async (req, res, next) => {
         where ucr.user_id = p.created_by_user_id
           and ucr.is_active = true
       ) creator_clubs on true
+      left join lateral (
+        select round(avg(pr.rating)::numeric, 1) as average_rating,
+               count(*)::int as review_count
+        from library.program_reviews pr
+        where pr.plan_id = p.id
+          and pr.status = 'published'
+      ) reviews on true
       left join library.program_tags pt on pt.plan_id = p.id
       left join library.program_tag_definitions t on t.id = pt.tag_id and t.is_active = true
       where ps.plan_type = 'program'
@@ -60,7 +69,8 @@ router.get("/", async (req, res, next) => {
         ps.athlete_uuid, ps.athlete_id, ps.athlete_source_external_id, ps.athlete_name, ps.athlete_image_url,
         ps.block_or_day_count, ps.session_count, ps.item_count, ps.matched_exercise_count, ps.item_without_exercise_id_count,
         ps.library_scope, ps.library_category, ps.cover_image_url, ps.is_free, ps.price_cents, ps.available_until, ps.owner_type, ps.visibility,
-        p.created_by_user_id, creator.display_name, creator.full_name, creator.email, creator_clubs.club_ids, creator_clubs.club_names
+        p.created_by_user_id, creator.display_name, creator.full_name, creator.email, creator_clubs.club_ids, creator_clubs.club_names,
+        reviews.average_rating, reviews.review_count
       order by coalesce(ps.library_category, 'General'), ps.source_external_id, ps.program_order nulls last, ps.plan_name
       `,
       params,

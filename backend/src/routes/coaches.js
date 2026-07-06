@@ -64,9 +64,18 @@ router.get("/:profileId", async (req, res, next) => {
     if (!profile) return res.status(404).json({ error: "Coach profile not found." });
     const programs = await query(
       `select ps.plan_id, ps.plan_name, ps.library_category, ps.cover_image_url, ps.is_free, ps.price_cents, ps.item_count,
-              coalesce(ps.library_scope, 'my') as library_scope
+              coalesce(ps.library_scope, 'my') as library_scope,
+              reviews.average_rating,
+              coalesce(reviews.review_count, 0)::int as review_count
        from plans.v_plan_summary ps
        join plans.plans p on p.id = ps.plan_id
+       left join lateral (
+         select round(avg(pr.rating)::numeric, 1) as average_rating,
+                count(*)::int as review_count
+         from library.program_reviews pr
+         where pr.plan_id = p.id
+           and pr.status = 'published'
+       ) reviews on true
        where p.created_by_user_id = $1
          and ps.plan_type = 'program'
          and ps.is_template = true
@@ -111,6 +120,8 @@ function coachListSql({ includeOrder = true } = {}) {
       cp.contact_enabled,
       cp.visibility,
       coalesce(tags.tags, '[]'::jsonb) as tags,
+      reviews.average_rating,
+      coalesce(reviews.review_count, 0)::int as review_count,
       coalesce(programs.program_count, 0)::int as program_count,
       coalesce(programs.marketplace_count, 0)::int as marketplace_count,
       coalesce(clubs.club_names, '') as club_names
@@ -130,6 +141,13 @@ function coachListSql({ includeOrder = true } = {}) {
         and p.is_template = true
         and coalesce(p.is_active, true)
     ) programs on true
+    left join lateral (
+      select round(avg(cpr.rating)::numeric, 1) as average_rating,
+             count(*)::int as review_count
+      from public.coach_profile_reviews cpr
+      where cpr.coach_profile_id = cp.id
+        and cpr.status = 'published'
+    ) reviews on true
     left join lateral (
       select string_agg(distinct c.name, ', ' order by c.name) as club_names
       from public.user_club_roles ucr

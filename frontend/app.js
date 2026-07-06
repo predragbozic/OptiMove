@@ -1049,7 +1049,7 @@ function renderCoachCard(profile) {
           </div>
           <div class="coach-card-meta">
             <span>${Number(profile.program_count || 0)} programs</span>
-            <span>${Number(profile.marketplace_count || 0)} marketplace</span>
+            <span>${escapeHtml(ratingLabel(profile))}</span>
           </div>
         </div>
       </button>
@@ -1116,6 +1116,7 @@ function renderCoachDetailModal() {
         <div class="coach-profile-body">
           <section class="coach-profile-summary">
             <p>${escapeHtml(profile.bio || "No profile description yet.")}</p>
+            <p class="rating-line">${escapeHtml(ratingLabel(profile))}</p>
             <div class="coach-tag-row">${(profile.tags || []).map((tag) => `<span>${escapeHtml(tag.name || tag)}</span>`).join("")}</div>
             ${profile.club_names ? `<p class="muted">${escapeHtml(profile.club_names)}</p>` : ""}
           </section>
@@ -1157,6 +1158,7 @@ function renderCoachProgramCard(program) {
       </div>
       <div class="program-library-card-foot">
         <span>${program.is_free === false ? "Paid" : "Free"}</span>
+        <span>${escapeHtml(ratingLabel(program))}</span>
         <span>${Number(program.item_count || 0)} items</span>
       </div>
     </article>
@@ -3398,6 +3400,7 @@ function renderProgramLibraryCard(template, duplicateNames) {
       </span>
       <span class="program-library-card-foot">
         <span class="item-badge">${escapeHtml(price)}</span>
+        <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
         ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
         <span class="text-action">Preview</span>
       </span>
@@ -3410,6 +3413,13 @@ function programPriceLabel(template) {
     return template.price_cents ? `${Math.round(template.price_cents / 100)} EUR` : "Paid";
   }
   return "Free";
+}
+
+function ratingLabel(entity) {
+  const count = Number(entity?.review_count || 0);
+  if (!count) return "No reviews yet";
+  const average = Number(entity?.average_rating || 0);
+  return `${average.toFixed(average % 1 ? 1 : 0)} / 5 (${count})`;
 }
 
 async function submitTemplateMetadataForm(form) {
@@ -3475,6 +3485,7 @@ function renderTemplatePreviewModal() {
           </div>
           <div class="builder-source-actions">
             ${state.templatePreview.loading ? `<span class="item-badge">Loading</span>` : state.templatePreview.error ? "" : `<span class="item-badge">${detail.rows?.length || 0} items</span>`}
+            ${selected ? `<span class="item-badge">${escapeHtml(ratingLabel(selected))}</span>` : ""}
             ${selected ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${state.templatePreview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}
             ${selected ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">×</span></button>
