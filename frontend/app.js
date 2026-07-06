@@ -45,6 +45,8 @@ const emptyTemplateFilters = () => ({
   search: "",
   category: "",
   tag: "",
+  creator: "",
+  club: "",
   ownerType: "",
   visibility: "",
   pricing: "all",
@@ -69,7 +71,7 @@ const state = {
   lastTemplates: [],
   templatePreview: { open: false, loading: false, detail: null, error: "", settingsOpen: false },
   templateFilters: emptyTemplateFilters(),
-  templateOptions: { categories: [], tags: [] },
+  templateOptions: { categories: [], tags: [], creators: [], clubs: [] },
   lastExerciseResults: [],
   builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
   exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions() },
@@ -439,9 +441,21 @@ function syncTemplateFilterSuggestions(input) {
   const list = document.getElementById(listId);
   if (!list) return;
   const prefix = clean(input.value).toLowerCase();
-  const values = input.dataset.templateFilter === "category" ? templateCategoryOptions() : state.templateOptions.tags || [];
+  const values = templateFilterSuggestions(input.dataset.templateFilter);
   const matches = prefix ? values.filter((value) => templateFilterOptionMatches(value, prefix)) : values;
   list.innerHTML = `<option value="All"></option>${matches.map((value) => `<option value="${escapeAttr(value)}"></option>`).join("")}`;
+}
+
+function templateFilterSuggestions(filter) {
+  if (filter === "category") return templateCategoryOptions();
+  if (filter === "tag") return state.templateOptions.tags || [];
+  if (filter === "creator") {
+    return (state.templateOptions.creators || [])
+      .map((row) => clean(`${row.name || ""}${row.email ? ` - ${row.email}` : ""}`))
+      .filter(Boolean);
+  }
+  if (filter === "club") return (state.templateOptions.clubs || []).map((row) => row.name).filter(Boolean);
+  return [];
 }
 
 function templateFilterOptionMatches(value, prefix) {
@@ -2943,6 +2957,8 @@ function applyTemplateClientFilters(templates) {
   const category = clean(state.templateFilters.category);
   const categoryNeedle = category.toLowerCase();
   const tag = clean(state.templateFilters.tag).toLowerCase();
+  const creator = clean(state.templateFilters.creator).toLowerCase();
+  const club = clean(state.templateFilters.club).toLowerCase();
   const ownerType = clean(state.templateFilters.ownerType).toLowerCase();
   const visibility = clean(state.templateFilters.visibility).toLowerCase();
   const pricing = clean(state.templateFilters.pricing).toLowerCase();
@@ -2953,6 +2969,11 @@ function applyTemplateClientFilters(templates) {
     }
     if (categoryNeedle && categoryNeedle !== "all" && !templateFilterOptionMatches(templateCategoryLabel(template), categoryNeedle)) return false;
     if (tag && tag !== "all" && !(template.tags || []).some((row) => templateFilterOptionMatches(row.name, tag))) return false;
+    if (creator && creator !== "all") {
+      const creatorText = `${template.creator_name || ""} ${template.creator_email || ""}`.trim();
+      if (!templateFilterOptionMatches(creatorText, creator)) return false;
+    }
+    if (club && club !== "all" && !templateFilterOptionMatches(template.creator_club_names, club)) return false;
     if (ownerType && ownerType !== "all" && clean(template.owner_type).toLowerCase() !== ownerType) return false;
     if (visibility && visibility !== "all" && clean(template.visibility).toLowerCase() !== visibility) return false;
     if (pricing === "free" && template.is_free === false) return false;
@@ -2974,6 +2995,12 @@ function renderTemplateFilters() {
   const categories = templateCategoryOptions();
   const categoryPrefix = clean(filters.category).toLowerCase();
   const visibleCategories = categoryPrefix ? categories.filter((category) => templateFilterOptionMatches(category, categoryPrefix)) : categories;
+  const creatorOptions = templateFilterSuggestions("creator");
+  const creatorPrefix = clean(filters.creator).toLowerCase();
+  const visibleCreators = creatorPrefix ? creatorOptions.filter((creator) => templateFilterOptionMatches(creator, creatorPrefix)) : creatorOptions;
+  const clubOptions = templateFilterSuggestions("club");
+  const clubPrefix = clean(filters.club).toLowerCase();
+  const visibleClubs = clubPrefix ? clubOptions.filter((club) => templateFilterOptionMatches(club, clubPrefix)) : clubOptions;
   return `
     <div class="program-scope-tabs" role="group" aria-label="Program library scope">
       ${["all", "my", "club", "optimove", "marketplace"].map((scope) => renderTemplateScopeButton(scope, templateScopeMeta(scope).label)).join("")}
@@ -3000,6 +3027,22 @@ function renderTemplateFilters() {
         </datalist>
       </label>
       ${showAdminFilters ? `
+        <label class="search-field">
+          <span>Coach</span>
+          <input data-template-filter="creator" list="program-creator-filter-options" value="${escapeAttr(filters.creator || "")}" placeholder="${creatorOptions.length ? "All coaches" : "No coaches"}">
+          <datalist id="program-creator-filter-options">
+            <option value="All"></option>
+            ${visibleCreators.map((creator) => `<option value="${escapeAttr(creator)}"></option>`).join("")}
+          </datalist>
+        </label>
+        <label class="search-field">
+          <span>Club</span>
+          <input data-template-filter="club" list="program-club-filter-options" value="${escapeAttr(filters.club || "")}" placeholder="${clubOptions.length ? "All clubs" : "No clubs"}">
+          <datalist id="program-club-filter-options">
+            <option value="All"></option>
+            ${visibleClubs.map((club) => `<option value="${escapeAttr(club)}"></option>`).join("")}
+          </datalist>
+        </label>
         <label class="search-field">
           <span>Owner</span>
           <select data-template-filter="ownerType">

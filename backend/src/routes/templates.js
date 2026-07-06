@@ -16,6 +16,11 @@ router.get("/", async (req, res, next) => {
     const result = await query(
       `
       select ps.*,
+        p.created_by_user_id,
+        coalesce(nullif(creator.display_name, ''), nullif(creator.full_name, ''), creator.email) as creator_name,
+        creator.email as creator_email,
+        coalesce(creator_clubs.club_ids, '[]'::jsonb) as creator_club_ids,
+        coalesce(creator_clubs.club_names, '') as creator_club_names,
         coalesce(
           jsonb_agg(distinct jsonb_build_object('id', t.id, 'name', t.name))
             filter (where t.id is not null),
@@ -23,6 +28,16 @@ router.get("/", async (req, res, next) => {
         ) as tags
       from plans.v_plan_summary ps
       join plans.plans p on p.id = ps.plan_id
+      left join public.users creator on creator.id = p.created_by_user_id
+      left join lateral (
+        select
+          jsonb_agg(distinct c.id) filter (where c.id is not null) as club_ids,
+          string_agg(distinct c.name, ', ' order by c.name) filter (where c.id is not null) as club_names
+        from public.user_club_roles ucr
+        join public.clubs c on c.id = ucr.club_id and coalesce(c.is_active, true)
+        where ucr.user_id = p.created_by_user_id
+          and ucr.is_active = true
+      ) creator_clubs on true
       left join library.program_tags pt on pt.plan_id = p.id
       left join library.program_tag_definitions t on t.id = pt.tag_id and t.is_active = true
       where ps.plan_type = 'program'
@@ -44,7 +59,8 @@ router.get("/", async (req, res, next) => {
         ps.week_start, ps.week_end, ps.start_date, ps.valid_until, ps.duration_days, ps.program_order,
         ps.athlete_uuid, ps.athlete_id, ps.athlete_source_external_id, ps.athlete_name, ps.athlete_image_url,
         ps.block_or_day_count, ps.session_count, ps.item_count, ps.matched_exercise_count, ps.item_without_exercise_id_count,
-        ps.library_scope, ps.library_category, ps.cover_image_url, ps.is_free, ps.price_cents, ps.available_until, ps.owner_type, ps.visibility
+        ps.library_scope, ps.library_category, ps.cover_image_url, ps.is_free, ps.price_cents, ps.available_until, ps.owner_type, ps.visibility,
+        p.created_by_user_id, creator.display_name, creator.full_name, creator.email, creator_clubs.club_ids, creator_clubs.club_names
       order by coalesce(ps.library_category, 'General'), ps.source_external_id, ps.program_order nulls last, ps.plan_name
       `,
       params,
@@ -57,7 +73,7 @@ router.get("/", async (req, res, next) => {
 
 router.get("/options", async (req, res, next) => {
   try {
-    const [categories, tags] = await Promise.all([
+    const [categories, tags, creators, clubs] = await Promise.all([
       query(
         `
         select distinct library_category as name
@@ -86,10 +102,42 @@ router.get("/options", async (req, res, next) => {
         `,
         [req.user.id, canAccessAllAthletes(req.user)],
       ),
+      query(
+        `
+        select distinct
+          p.created_by_user_id as id,
+          coalesce(nullif(u.display_name, ''), nullif(u.full_name, ''), u.email) as name,
+          u.email
+        from plans.plans p
+        join public.users u on u.id = p.created_by_user_id
+        where p.plan_type = 'program'
+          and p.is_template = true
+          and coalesce(p.is_active, true)
+          and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+        order by name, u.email
+        `,
+        [req.user.id, canAccessAllAthletes(req.user)],
+      ),
+      query(
+        `
+        select distinct c.id, c.name
+        from plans.plans p
+        join public.user_club_roles ucr on ucr.user_id = p.created_by_user_id and ucr.is_active = true
+        join public.clubs c on c.id = ucr.club_id and coalesce(c.is_active, true)
+        where p.plan_type = 'program'
+          and p.is_template = true
+          and coalesce(p.is_active, true)
+          and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+        order by c.name
+        `,
+        [req.user.id, canAccessAllAthletes(req.user)],
+      ),
     ]);
     res.json({
       categories: categories.rows.map((row) => row.name).filter(Boolean),
       tags: tags.rows.map((row) => row.name).filter(Boolean),
+      creators: creators.rows,
+      clubs: clubs.rows,
     });
   } catch (error) {
     next(error);
