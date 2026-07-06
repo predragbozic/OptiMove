@@ -82,6 +82,7 @@ const state = {
   organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", assignOpen: false },
   organizationEditor: { open: false, type: "", row: null },
   organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
+  coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
@@ -250,6 +251,20 @@ async function handleContentSubmit(event) {
   if (templateMetadataForm) {
     event.preventDefault();
     await submitTemplateMetadataForm(templateMetadataForm);
+    return;
+  }
+
+  const coachProfileForm = event.target.closest("[data-coach-profile-form]");
+  if (coachProfileForm) {
+    event.preventDefault();
+    await submitCoachProfileForm(coachProfileForm);
+    return;
+  }
+
+  const coachContactForm = event.target.closest("[data-coach-contact-form]");
+  if (coachContactForm) {
+    event.preventDefault();
+    await submitCoachContactForm(coachContactForm);
     return;
   }
 
@@ -904,8 +919,25 @@ async function loadActiveTab() {
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
   if (state.activeTab === "templates") return loadTemplates();
+  if (state.activeTab === "coaches") return loadCoaches();
   if (state.activeTab === "builder") return loadBuilder();
   return loadExercises();
+}
+
+async function loadCoaches() {
+  state.navStack = [];
+  els.context.textContent = "Coach directory";
+  els.title.textContent = "Coaches";
+  els.toolbar.innerHTML = "";
+  setLoading("Loading coach profiles...");
+  try {
+    const data = await api("/api/coaches");
+    state.coaches = { ...state.coaches, rows: data.coaches || [], error: "" };
+    renderCoaches();
+  } catch (error) {
+    state.coaches = { ...state.coaches, error: error.message || "Could not load coach profiles." };
+    renderCoaches();
+  }
 }
 
 async function loadWeekly() {
@@ -960,6 +992,231 @@ function templateSearchUrl() {
   const params = new URLSearchParams();
   params.set("scope", state.templateScope || "my");
   return `/api/templates?${params.toString()}`;
+}
+
+async function openCoachProfile(profileId) {
+  if (!profileId) return;
+  state.coaches = { ...state.coaches, selected: profileId, detail: null, editOpen: false, contactOpen: false, error: "" };
+  renderCoaches();
+  try {
+    const detail = await api(`/api/coaches/${encodeURIComponent(profileId)}`);
+    state.coaches = { ...state.coaches, detail, error: "" };
+  } catch (error) {
+    state.coaches = { ...state.coaches, error: error.message || "Could not load coach profile." };
+  }
+  renderCoaches();
+}
+
+function renderCoaches() {
+  const rows = state.coaches.rows || [];
+  const ownProfile = rows.find((profile) => String(profile.user_id) === String(state.currentUser?.id));
+  els.content.innerHTML = `
+    <section class="content-section coach-directory">
+      <section class="coach-directory-head">
+        <div>
+          <p class="eyebrow">Expert directory</p>
+          <h3>Coach profiles</h3>
+          <p class="muted">Profiles can connect programs, specialties, and future marketplace requests.</p>
+        </div>
+        <button class="plain-button compact-button" type="button" data-action="coach-edit-toggle">${ownProfile ? "Edit my profile" : "Create my profile"}</button>
+      </section>
+      ${state.coaches.error ? `<p class="builder-error">${escapeHtml(state.coaches.error)}</p>` : ""}
+      ${state.coaches.editOpen ? renderCoachProfileForm(ownProfile) : ""}
+      <section class="coach-card-grid">
+        ${rows.length ? rows.map(renderCoachCard).join("") : `<div class="empty-state">No visible coach profiles yet.</div>`}
+      </section>
+    </section>
+    ${state.coaches.selected ? renderCoachDetailModal() : ""}
+  `;
+}
+
+function renderCoachCard(profile) {
+  const tags = (profile.tags || []).slice(0, 4);
+  const image = profile.photo_url || profile.cover_image_url || "";
+  return `
+    <article class="coach-card">
+      <button class="coach-card-hit" type="button" data-action="coach-open" data-profile-id="${escapeAttr(profile.id)}">
+        <div class="coach-card-media">
+          ${image ? renderImage(image, "coach-card-image") : `<span class="coach-card-initials">${escapeHtml(programInitials(profile.name || "Coach"))}</span>`}
+        </div>
+        <div class="coach-card-body">
+          <p class="eyebrow">${escapeHtml(profile.visibility || "private")}</p>
+          <h4>${escapeHtml(profile.name || "Coach")}</h4>
+          <p class="muted">${escapeHtml(profile.headline || profile.specialties || "Coach profile")}</p>
+          ${profile.club_names ? `<p class="coach-card-club">${escapeHtml(profile.club_names)}</p>` : ""}
+          <div class="coach-tag-row">
+            ${tags.map((tag) => `<span>${escapeHtml(tag.name || tag)}</span>`).join("")}
+          </div>
+          <div class="coach-card-meta">
+            <span>${Number(profile.program_count || 0)} programs</span>
+            <span>${Number(profile.marketplace_count || 0)} marketplace</span>
+          </div>
+        </div>
+      </button>
+    </article>
+  `;
+}
+
+function renderCoachProfileForm(profile) {
+  const tags = (profile?.tags || []).map((tag) => tag.name || tag).join(", ");
+  return `
+    <form class="panel coach-profile-form" data-coach-profile-form>
+      <div>
+        <p class="eyebrow">My coach profile</p>
+        <h4>${escapeHtml(profile?.name || state.currentUser?.name || "Coach profile")}</h4>
+      </div>
+      <div class="program-metadata-grid">
+        <label class="search-field"><span>Headline</span><input name="headline" value="${escapeAttr(profile?.headline || "")}" placeholder="e.g. Strength and return-to-play coach"></label>
+        <label class="search-field"><span>Specialties</span><input name="specialties" value="${escapeAttr(profile?.specialties || "")}" placeholder="Speed, strength, rehab"></label>
+        <label class="search-field"><span>Photo URL</span><input name="photoUrl" value="${escapeAttr(profile?.photo_url || "")}" placeholder="https://..."></label>
+        <label class="search-field"><span>Cover image URL</span><input name="coverImageUrl" value="${escapeAttr(profile?.cover_image_url || "")}" placeholder="https://..."></label>
+        <label class="search-field"><span>Contact email</span><input name="contactEmail" value="${escapeAttr(profile?.contact_email || state.currentUser?.email || "")}"></label>
+        <label class="search-field"><span>Visibility</span><select name="visibility">
+          ${renderOption("private", "Private", profile?.visibility || "private")}
+          ${renderOption("club", "Club only", profile?.visibility)}
+          ${renderOption("public", "Platform visible", profile?.visibility)}
+          ${renderOption("marketplace", "Marketplace visible", profile?.visibility)}
+        </select></label>
+        <label class="search-field"><span>Tags</span><input name="tags" value="${escapeAttr(tags)}" placeholder="RTP, football, hamstring"></label>
+        <label class="program-paid-filter"><input name="contactEnabled" type="checkbox" ${profile?.contact_enabled === false ? "" : "checked"}><span>Allow contact requests</span></label>
+      </div>
+      <label class="search-field"><span>Short bio</span><textarea name="bio" rows="4" placeholder="Short professional introduction">${escapeHtml(profile?.bio || "")}</textarea></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <div class="builder-source-actions">
+        <button class="plain-button compact-button" type="submit">Save profile</button>
+        <button class="plain-button compact-button" type="button" data-action="coach-edit-toggle">Cancel</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderCoachDetailModal() {
+  const detail = state.coaches.detail;
+  const profile = detail?.profile || state.coaches.rows.find((row) => String(row.id) === String(state.coaches.selected));
+  if (!profile) return "";
+  const programs = detail?.programs || [];
+  return `
+    <div class="program-preview-overlay">
+      <button class="program-preview-backdrop" type="button" data-action="coach-close" aria-label="Close coach profile"></button>
+      <section class="program-preview-modal coach-profile-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(profile.name || "Coach profile")}">
+        <div class="program-preview-head coach-profile-head">
+          <div class="coach-profile-title">
+            ${profile.photo_url ? renderImage(profile.photo_url, "coach-profile-photo") : `<span class="coach-card-initials">${escapeHtml(programInitials(profile.name || "Coach"))}</span>`}
+            <div>
+              <p class="eyebrow">${escapeHtml(profile.visibility || "profile")}</p>
+              <h3>${escapeHtml(profile.name || "Coach")}</h3>
+              <p class="muted">${escapeHtml(profile.headline || profile.specialties || "")}</p>
+            </div>
+          </div>
+          <div class="builder-source-actions">
+            ${profile.contact_enabled ? `<button class="plain-button compact-button" type="button" data-action="coach-contact-toggle">${state.coaches.contactOpen ? "Close contact" : "Contact coach"}</button>` : ""}
+            <button class="plain-button icon-button" type="button" data-action="coach-close" aria-label="Close"><span class="button-icon">x</span></button>
+          </div>
+        </div>
+        <div class="coach-profile-body">
+          <section class="coach-profile-summary">
+            <p>${escapeHtml(profile.bio || "No profile description yet.")}</p>
+            <div class="coach-tag-row">${(profile.tags || []).map((tag) => `<span>${escapeHtml(tag.name || tag)}</span>`).join("")}</div>
+            ${profile.club_names ? `<p class="muted">${escapeHtml(profile.club_names)}</p>` : ""}
+          </section>
+          ${state.coaches.contactOpen ? renderCoachContactForm(profile) : ""}
+          <section>
+            <div class="program-library-shelf-head"><h4>Published programs</h4><span>${programs.length} programs</span></div>
+            <div class="program-library-row">
+              ${detail ? programs.length ? programs.map(renderCoachProgramCard).join("") : `<div class="empty-state">No visible programs from this coach yet.</div>` : `<div class="empty-state">Loading programs...</div>`}
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderCoachContactForm(profile) {
+  return `
+    <form class="panel coach-contact-form" data-coach-contact-form data-profile-id="${escapeAttr(profile.id)}">
+      <label class="search-field"><span>Your name</span><input name="name" value="${escapeAttr(state.currentUser?.name || "")}"></label>
+      <label class="search-field"><span>Your email</span><input name="email" value="${escapeAttr(state.currentUser?.email || "")}"></label>
+      <label class="search-field"><span>Message</span><textarea name="message" rows="3" required placeholder="Write what kind of program or support you need"></textarea></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button compact-button" type="submit">Send request</button>
+    </form>
+  `;
+}
+
+function renderCoachProgramCard(program) {
+  const image = program.cover_image_url || "";
+  return `
+    <article class="program-library-card">
+      <div class="program-library-cover">
+        ${image ? renderImage(image, "program-library-cover-image") : `<span>${escapeHtml(programInitials(program.plan_name || "Program"))}</span>`}
+      </div>
+      <div class="program-library-card-body">
+        <h4>${escapeHtml(program.plan_name || "Program")}</h4>
+        <p class="muted">${escapeHtml(program.library_category || "General")}</p>
+      </div>
+      <div class="program-library-card-foot">
+        <span>${program.is_free === false ? "Paid" : "Free"}</span>
+        <span>${Number(program.item_count || 0)} items</span>
+      </div>
+    </article>
+  `;
+}
+
+async function submitCoachProfileForm(form) {
+  const error = form.querySelector(".builder-error");
+  const button = form.querySelector("button[type='submit']");
+  if (error) error.textContent = "";
+  if (button) button.disabled = true;
+  const formData = new FormData(form);
+  try {
+    await api("/api/coaches/me", {
+      method: "PATCH",
+      body: JSON.stringify({
+        headline: formData.get("headline"),
+        specialties: formData.get("specialties"),
+        photoUrl: formData.get("photoUrl"),
+        coverImageUrl: formData.get("coverImageUrl"),
+        contactEmail: formData.get("contactEmail"),
+        visibility: formData.get("visibility"),
+        tags: formData.get("tags"),
+        bio: formData.get("bio"),
+        contactEnabled: formData.get("contactEnabled") === "on",
+      }),
+    });
+    state.coaches.editOpen = false;
+    await loadCoaches();
+  } catch (submitError) {
+    if (error) error.textContent = submitError.message || "Could not save profile.";
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function submitCoachContactForm(form) {
+  const profileId = form.dataset.profileId || "";
+  const error = form.querySelector(".builder-error");
+  const button = form.querySelector("button[type='submit']");
+  if (error) error.textContent = "";
+  if (button) button.disabled = true;
+  const formData = new FormData(form);
+  try {
+    await api(`/api/coaches/${encodeURIComponent(profileId)}/contact`, {
+      method: "POST",
+      body: JSON.stringify({
+        name: formData.get("name"),
+        email: formData.get("email"),
+        message: formData.get("message"),
+      }),
+    });
+    state.coaches.contactOpen = false;
+    state.coaches.error = "Contact request sent.";
+    renderCoaches();
+  } catch (submitError) {
+    if (error) error.textContent = submitError.message || "Could not send request.";
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 async function loadExercises() {
@@ -1365,6 +1622,25 @@ function handleContentClick(event) {
     renderTemplateLibrary(state.lastTemplates);
     return;
   }
+  if (type === "coach-open") {
+    void openCoachProfile(action.dataset.profileId);
+    return;
+  }
+  if (type === "coach-close") {
+    state.coaches = { ...state.coaches, selected: null, detail: null, editOpen: false, contactOpen: false, error: "" };
+    renderCoaches();
+    return;
+  }
+  if (type === "coach-edit-toggle") {
+    state.coaches.editOpen = !state.coaches.editOpen;
+    renderCoaches();
+    return;
+  }
+  if (type === "coach-contact-toggle") {
+    state.coaches.contactOpen = !state.coaches.contactOpen;
+    renderCoaches();
+    return;
+  }
   if (type === "program-tags-close") {
     closeProgramTagEditor();
     return;
@@ -1546,7 +1822,7 @@ function moveWeek(delta) {
 }
 
 function renderTabs() {
-  const isLibraryTab = ["organization", "templates", "exercises", "builder"].includes(state.activeTab);
+  const isLibraryTab = ["organization", "templates", "exercises", "builder", "coaches"].includes(state.activeTab);
   const tabs = document.querySelectorAll(".tab");
   const tabsContainer = tabs[0]?.closest(".tabs");
   if (tabsContainer) tabsContainer.hidden = isLibraryTab;
@@ -3108,6 +3384,7 @@ function inferProgramCategory(template) {
 
 function renderProgramLibraryCard(template, duplicateNames) {
   const category = templateCategoryLabel(template);
+  const creator = clean(template.creator_name);
   const isSelected = String(template.plan_id) === String(state.selectedTemplateId);
   const price = programPriceLabel(template);
   return `
@@ -3117,7 +3394,7 @@ function renderProgramLibraryCard(template, duplicateNames) {
       </span>
       <span class="program-library-card-body">
         <span class="program-library-card-title">${escapeHtml(template.plan_name || "Untitled program")}</span>
-        <span class="program-library-card-sub">${escapeHtml(category)}</span>
+        <span class="program-library-card-sub">${escapeHtml([category, creator ? `by ${creator}` : ""].filter(Boolean).join(" - "))}</span>
       </span>
       <span class="program-library-card-foot">
         <span class="item-badge">${escapeHtml(price)}</span>

@@ -11,6 +11,7 @@ import templatesRouter from "./routes/templates.js";
 import exercisesRouter from "./routes/exercises.js";
 import builderRouter from "./routes/builder.js";
 import organizationRouter from "./routes/organization.js";
+import coachesRouter from "./routes/coaches.js";
 import { authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 
@@ -45,6 +46,7 @@ app.use("/api/templates", requireAuth, requireCoach, templatesRouter);
 app.use("/api/exercises", requireAuth, requireCoach, exercisesRouter);
 app.use("/api/builder", requireAuth, requireCoach, builderRouter);
 app.use("/api/organization", requireAuth, requireCoach, organizationRouter);
+app.use("/api/coaches", requireAuth, requireCoach, coachesRouter);
 
 app.use(express.static(frontendDir));
 app.get(["/", "/app", "/invite"], (_req, res) => {
