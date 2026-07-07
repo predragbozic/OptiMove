@@ -21,6 +21,37 @@ alter table plans.plans
     check (owner_type in ('coach', 'club', 'optimove', 'marketplace'));
 
 alter table plans.plans
+  add column if not exists access_model varchar(32) not null default 'free_forever',
+  add column if not exists access_duration_days integer,
+  add column if not exists subscription_period varchar(16),
+  add column if not exists can_copy boolean not null default true,
+  add column if not exists can_edit_copy boolean not null default true,
+  add column if not exists can_assign_to_athlete boolean not null default true,
+  add column if not exists athlete_can_view_directly boolean not null default false,
+  add column if not exists requires_approval boolean not null default false;
+
+alter table plans.plans
+  drop constraint if exists plans_access_model_check;
+
+alter table plans.plans
+  add constraint plans_access_model_check
+  check (access_model in ('free_forever', 'one_time_forever', 'time_limited', 'subscription', 'assigned', 'trial'));
+
+alter table plans.plans
+  drop constraint if exists plans_subscription_period_check;
+
+alter table plans.plans
+  add constraint plans_subscription_period_check
+  check (subscription_period is null or subscription_period in ('month', 'year'));
+
+alter table plans.plans
+  drop constraint if exists plans_access_duration_days_check;
+
+alter table plans.plans
+  add constraint plans_access_duration_days_check
+  check (access_duration_days is null or access_duration_days > 0);
+
+alter table plans.plans
   add column if not exists edit_source_plan_id uuid references plans.plans(id) on delete cascade,
   add column if not exists is_edit_draft boolean not null default false;
 

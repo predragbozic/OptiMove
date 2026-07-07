@@ -37,7 +37,15 @@ select
   p.price_cents,
   p.available_until,
   p.owner_type,
-  p.visibility
+  p.visibility,
+  p.access_model,
+  p.access_duration_days,
+  p.subscription_period,
+  p.can_copy,
+  p.can_edit_copy,
+  p.can_assign_to_athlete,
+  p.athlete_can_view_directly,
+  p.requires_approval
 from plans.plans p
 left join public.athletes a on a.id = p.athlete_id
 left join plans.plan_days pd on pd.plan_id = p.id

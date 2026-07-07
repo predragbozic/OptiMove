@@ -69,6 +69,8 @@ router.get("/", async (req, res, next) => {
         ps.athlete_uuid, ps.athlete_id, ps.athlete_source_external_id, ps.athlete_name, ps.athlete_image_url,
         ps.block_or_day_count, ps.session_count, ps.item_count, ps.matched_exercise_count, ps.item_without_exercise_id_count,
         ps.library_scope, ps.library_category, ps.cover_image_url, ps.is_free, ps.price_cents, ps.available_until, ps.owner_type, ps.visibility,
+        ps.access_model, ps.access_duration_days, ps.subscription_period, ps.can_copy, ps.can_edit_copy, ps.can_assign_to_athlete,
+        ps.athlete_can_view_directly, ps.requires_approval,
         p.created_by_user_id, creator.display_name, creator.full_name, creator.email, creator_clubs.club_ids, creator_clubs.club_names,
         reviews.average_rating, reviews.review_count
       order by coalesce(ps.library_category, 'General'), ps.source_external_id, ps.program_order nulls last, ps.plan_name
@@ -175,6 +177,15 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
+    const accessModel = normalizeChoice(
+      req.body?.accessModel,
+      ["free_forever", "one_time_forever", "time_limited", "subscription", "assigned", "trial"],
+      isFree ? "free_forever" : "one_time_forever",
+    );
+    const accessDurationDays = positiveIntegerOrNull(req.body?.accessDurationDays);
+    const subscriptionPeriod = accessModel === "subscription"
+      ? normalizeChoice(req.body?.subscriptionPeriod, ["month", "year"], "month")
+      : null;
     const result = await query(
       `
       update plans.plans
@@ -186,6 +197,14 @@ router.patch("/:planId/metadata", async (req, res, next) => {
           available_until = nullif($7, '')::date,
           owner_type = $8,
           visibility = $9,
+          access_model = $10,
+          access_duration_days = $11,
+          subscription_period = $12,
+          can_copy = $13,
+          can_edit_copy = $14,
+          can_assign_to_athlete = $15,
+          athlete_can_view_directly = $16,
+          requires_approval = $17,
           updated_at = now()
       where id = $1
       returning id
@@ -200,6 +219,14 @@ router.patch("/:planId/metadata", async (req, res, next) => {
         text(req.body?.availableUntil),
         ownerType,
         normalizeChoice(req.body?.visibility, ["private", "team", "club", "public"], "private"),
+        accessModel,
+        accessDurationDays,
+        subscriptionPeriod,
+        booleanValue(req.body?.canCopy, true),
+        booleanValue(req.body?.canEditCopy, true),
+        booleanValue(req.body?.canAssignToAthlete, true),
+        booleanValue(req.body?.athleteCanViewDirectly, false),
+        booleanValue(req.body?.requiresApproval, false),
       ],
     );
     res.json({ ok: true, planId: result.rows[0].id });
@@ -423,15 +450,40 @@ async function canEditTemplate(user, planId) {
 }
 
 async function markProgramUsed(user, planId, note) {
+  const plan = await query(
+    `select access_model,
+            access_duration_days,
+            subscription_period,
+            is_free,
+            price_cents,
+            can_copy,
+            can_edit_copy,
+            can_assign_to_athlete,
+            athlete_can_view_directly,
+            requires_approval
+     from plans.plans
+     where id = $1
+     limit 1`,
+    [planId],
+  );
+  const license = plan.rows[0] || {};
+  const snapshot = licenseSnapshot(license);
+  const accessType = accessTypeForLicense(license);
+  const expiresAt = accessExpiresAt(license);
   const access = await query(
-    `insert into library.program_access (plan_id, user_id, access_type, status, used_at)
-     values ($1, $2, 'downloaded', 'used', now())
+    `insert into library.program_access (
+       plan_id, user_id, access_type, status, used_at, starts_at, expires_at, source, license_snapshot
+     )
+     values ($1, $2, $3, 'used', now(), now(), $4, $5, $6::jsonb)
      on conflict (plan_id, user_id, access_type)
      do update set status = case when library.program_access.status = 'completed' then 'completed' else 'used' end,
                    used_at = coalesce(library.program_access.used_at, now()),
+                   expires_at = excluded.expires_at,
+                   source = excluded.source,
+                   license_snapshot = excluded.license_snapshot,
                    updated_at = now()
-     returning id, plan_id, user_id, access_type, status, used_at`,
-    [planId, user.id],
+     returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
+    [planId, user.id, accessType, expiresAt, snapshot.accessModel, JSON.stringify(snapshot)],
   );
   await query(
     `insert into library.program_usage_events (program_access_id, user_id, event_type, note)
@@ -443,11 +495,12 @@ async function markProgramUsed(user, planId, note) {
 
 async function requireUsedProgramAccess(user, planId) {
   const result = await query(
-    `select id, access_type, status
+    `select id, access_type, status, expires_at
      from library.program_access
      where plan_id = $1
        and user_id = $2
        and status in ('used', 'completed')
+       and (expires_at is null or expires_at > now())
      order by used_at desc nulls last, updated_at desc
      limit 1`,
     [planId, user.id],
@@ -500,6 +553,44 @@ function ownerTypeForScope(scope) {
   if (scope === "optimove") return "optimove";
   if (scope === "marketplace") return "marketplace";
   return "coach";
+}
+
+function booleanValue(value, fallback = false) {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  return fallback;
+}
+
+function positiveIntegerOrNull(value) {
+  const number = Number.parseInt(value, 10);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function accessExpiresAt(plan) {
+  const days = positiveIntegerOrNull(plan?.access_duration_days);
+  if (!days) return null;
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+}
+
+function accessTypeForLicense(plan) {
+  if (plan?.access_model === "assigned") return "assigned";
+  if (plan?.access_model === "subscription" || plan?.is_free === false) return "purchased";
+  return "downloaded";
+}
+
+function licenseSnapshot(plan) {
+  return {
+    accessModel: plan?.access_model || "free_forever",
+    accessDurationDays: plan?.access_duration_days || null,
+    subscriptionPeriod: plan?.subscription_period || null,
+    isFree: plan?.is_free !== false,
+    priceCents: plan?.price_cents || null,
+    canCopy: plan?.can_copy !== false,
+    canEditCopy: plan?.can_edit_copy !== false,
+    canAssignToAthlete: plan?.can_assign_to_athlete !== false,
+    athleteCanViewDirectly: plan?.athlete_can_view_directly === true,
+    requiresApproval: plan?.requires_approval === true,
+  };
 }
 
 export default router;

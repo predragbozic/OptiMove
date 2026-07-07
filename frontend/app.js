@@ -3462,9 +3462,17 @@ function renderProgramLibraryCard(template, duplicateNames) {
 }
 
 function programPriceLabel(template) {
+  const accessModel = template.access_model || (template.is_free === false ? "one_time_forever" : "free_forever");
+  const durationDays = Number(template.access_duration_days || 0);
   if (template.is_free === false) {
-    return template.price_cents ? `${Math.round(template.price_cents / 100)} EUR` : "Paid";
+    const price = template.price_cents ? `${Math.round(template.price_cents / 100)} EUR` : "Paid";
+    if (accessModel === "subscription") return `${price} / ${template.subscription_period || "month"}`;
+    if (durationDays) return `${price} - ${durationDays} days`;
+    return price;
   }
+  if (accessModel === "trial") return durationDays ? `Free trial - ${durationDays} days` : "Free trial";
+  if (accessModel === "time_limited") return durationDays ? `Free - ${durationDays} days` : "Time-limited";
+  if (accessModel === "assigned") return "Assigned";
   return "Free";
 }
 
@@ -3494,6 +3502,14 @@ async function submitTemplateMetadataForm(form) {
         availableUntil: formData.get("availableUntil"),
         ownerType: formData.get("ownerType"),
         visibility: formData.get("visibility"),
+        accessModel: formData.get("accessModel"),
+        accessDurationDays: formData.get("accessDurationDays"),
+        subscriptionPeriod: formData.get("subscriptionPeriod"),
+        canCopy: formData.get("canCopy") === "true",
+        canEditCopy: formData.get("canEditCopy") === "true",
+        canAssignToAthlete: formData.get("canAssignToAthlete") === "true",
+        athleteCanViewDirectly: formData.get("athleteCanViewDirectly") === "true",
+        requiresApproval: formData.get("requiresApproval") === "true",
       }),
     });
     state.templatePreview = emptyTemplatePreview();
@@ -3525,7 +3541,7 @@ async function markTemplateUsed(planId) {
       submittingUse: false,
       usedMarked: true,
       reviewOpen: true,
-      reviewMessage: "Marked as used. You can now leave a review.",
+      reviewMessage: "Access active. You can now leave a review after using this program.",
       reviewError: "",
     };
   } catch (error) {
@@ -3638,10 +3654,10 @@ function renderTemplateReviewPanel(template) {
       <div class="program-review-summary">
         <div>
           <span class="eyebrow">Verified program review</span>
-          <p class="muted">Reviews are enabled after you mark that you used this program.</p>
+          <p class="muted">Reviews are enabled after access is active and the program has been used.</p>
         </div>
         <div class="program-review-actions">
-          <button class="plain-button compact-button" type="button" data-action="template-use" data-template-id="${escapeAttr(template.plan_id)}" ${review.submittingUse ? "disabled" : ""}>${review.submittingUse ? "Marking..." : review.usedMarked ? "Used" : "Mark as used"}</button>
+          <button class="plain-button compact-button" type="button" data-action="template-use" data-template-id="${escapeAttr(template.plan_id)}" ${review.submittingUse ? "disabled" : ""}>${review.submittingUse ? "Saving..." : review.usedMarked ? "Access active" : "Get access"}</button>
           <button class="plain-button compact-button" type="button" data-action="template-review-toggle">${review.reviewOpen ? "Hide review" : "Leave review"}</button>
           <button class="plain-button compact-button" type="button" data-action="template-reviews-toggle">${review.reviewsOpen ? "Hide reviews" : `Reviews (${reviews.length})`}</button>
         </div>
@@ -3684,6 +3700,7 @@ function renderTemplateMetadataForm(template) {
   const price = template.price_cents ? Number(template.price_cents) / 100 : "";
   const isFree = template.is_free !== false;
   const programGroup = template.library_category || inferProgramCategory(template) || "General";
+  const accessModel = template.access_model || (isFree ? "free_forever" : "one_time_forever");
   return `
     <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}">
       <div class="program-metadata-grid">
@@ -3713,6 +3730,24 @@ function renderTemplateMetadataForm(template) {
         </select></label>
         <label class="search-field"><span>Price EUR</span><input name="price" type="number" min="0" step="0.01" value="${escapeAttr(price)}" placeholder="0" ${isFree ? "disabled" : ""}></label>
         <label class="search-field"><span>Available until</span><input name="availableUntil" type="date" value="${escapeAttr(template.available_until || "")}"></label>
+        <label class="search-field"><span>License model</span><select name="accessModel">
+          ${renderOption("free_forever", "Free forever", accessModel)}
+          ${renderOption("one_time_forever", "One-time forever", accessModel)}
+          ${renderOption("time_limited", "Time-limited", accessModel)}
+          ${renderOption("subscription", "Subscription", accessModel)}
+          ${renderOption("assigned", "Assigned only", accessModel)}
+          ${renderOption("trial", "Trial", accessModel)}
+        </select></label>
+        <label class="search-field"><span>Duration days</span><input name="accessDurationDays" type="number" min="1" step="1" value="${escapeAttr(template.access_duration_days || "")}" placeholder="e.g. 30"></label>
+        <label class="search-field"><span>Subscription</span><select name="subscriptionPeriod">
+          ${renderOption("month", "Monthly", template.subscription_period || "month")}
+          ${renderOption("year", "Yearly", template.subscription_period)}
+        </select></label>
+        ${renderBooleanSelect("canCopy", "Can copy", template.can_copy !== false)}
+        ${renderBooleanSelect("canEditCopy", "Can edit copy", template.can_edit_copy !== false)}
+        ${renderBooleanSelect("canAssignToAthlete", "Can assign", template.can_assign_to_athlete !== false)}
+        ${renderBooleanSelect("athleteCanViewDirectly", "Athlete view", template.athlete_can_view_directly === true)}
+        ${renderBooleanSelect("requiresApproval", "Needs approval", template.requires_approval === true)}
       </div>
       <datalist id="program-settings-group-options">
         ${(state.templateOptions.categories || []).map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
@@ -3750,6 +3785,16 @@ function renderProgramInlineTags(template) {
         <button class="plain-button compact-button" type="button" data-action="program-tag-add" data-plan-id="${escapeAttr(template.plan_id)}">Add</button>
       </div>
     </section>
+  `;
+}
+
+function renderBooleanSelect(name, label, selected) {
+  const value = selected ? "true" : "false";
+  return `
+    <label class="search-field"><span>${escapeHtml(label)}</span><select name="${escapeAttr(name)}">
+      ${renderOption("true", "Yes", value)}
+      ${renderOption("false", "No", value)}
+    </select></label>
   `;
 }
 
