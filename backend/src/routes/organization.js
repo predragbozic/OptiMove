@@ -363,12 +363,13 @@ router.post("/athlete-logins", async (req, res, next) => {
                last_name = coalesce(last_name, $3),
                full_name = coalesce(full_name, $4),
                display_name = coalesce(display_name, $4),
+               password_hash = $5,
                role_hint = 'athlete',
                is_active = true,
                updated_at = now()
            where id = $1
            returning id, email`,
-          [existingUser.id, nameParts.firstName, nameParts.lastName, athlete.rows[0].name],
+          [existingUser.id, nameParts.firstName, nameParts.lastName, athlete.rows[0].name, hashPassword(password)],
         )
       : await client.query(
           `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
