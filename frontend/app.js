@@ -52,6 +52,21 @@ const emptyTemplateFilters = () => ({
   pricing: "all",
 });
 
+const emptyTemplatePreview = (overrides = {}) => ({
+  open: false,
+  loading: false,
+  detail: null,
+  error: "",
+  settingsOpen: false,
+  reviewOpen: false,
+  reviewMessage: "",
+  reviewError: "",
+  usedMarked: false,
+  submittingUse: false,
+  submittingReview: false,
+  ...overrides,
+});
+
 const state = {
   currentUser: null,
   athletes: [],
@@ -69,7 +84,7 @@ const state = {
   lastWeeklyData: null,
   lastProgramBundle: null,
   lastTemplates: [],
-  templatePreview: { open: false, loading: false, detail: null, error: "", settingsOpen: false },
+  templatePreview: emptyTemplatePreview(),
   templateFilters: emptyTemplateFilters(),
   templateOptions: { categories: [], tags: [], creators: [], clubs: [] },
   lastExerciseResults: [],
@@ -254,6 +269,13 @@ async function handleContentSubmit(event) {
     return;
   }
 
+  const templateReviewForm = event.target.closest("[data-template-review-form]");
+  if (templateReviewForm) {
+    event.preventDefault();
+    await submitTemplateReviewForm(templateReviewForm);
+    return;
+  }
+
   const coachProfileForm = event.target.closest("[data-coach-profile-form]");
   if (coachProfileForm) {
     event.preventDefault();
@@ -339,7 +361,7 @@ function handleContentInput(event) {
   if (templateSearch) {
     state.templateFilters.search = templateSearch.value;
     state.selectedTemplateId = null;
-    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    state.templatePreview = emptyTemplatePreview();
     debounceTemplateResultRender();
     return;
   }
@@ -348,7 +370,7 @@ function handleContentInput(event) {
     state.templateFilters[templateTextFilter.dataset.templateFilter] = templateTextFilter.value;
     syncTemplateFilterSuggestions(templateTextFilter);
     state.selectedTemplateId = null;
-    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    state.templatePreview = emptyTemplatePreview();
     debounceTemplateResultRender();
     return;
   }
@@ -385,7 +407,7 @@ async function handleContentChange(event) {
     else if (templateFilter.dataset.templateFilter === "freeOnly") state.templateFilters.pricing = templateFilter.checked ? "free" : "all";
     else state.templateFilters[templateFilter.dataset.templateFilter] = templateFilter.value;
     state.selectedTemplateId = null;
-    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    state.templatePreview = emptyTemplatePreview();
     renderTemplateLibraryResults();
     return;
   }
@@ -1610,7 +1632,7 @@ function handleContentClick(event) {
   if (type === "template-scope") {
     state.templateScope = action.dataset.scope || "my";
     state.selectedTemplateId = null;
-    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    state.templatePreview = emptyTemplatePreview();
     void loadTemplates();
     return;
   }
@@ -1619,8 +1641,22 @@ function handleContentClick(event) {
     renderTemplateLibrary(state.lastTemplates);
     return;
   }
+  if (type === "template-use") {
+    void markTemplateUsed(action.dataset.templateId);
+    return;
+  }
+  if (type === "template-review-toggle") {
+    state.templatePreview = {
+      ...state.templatePreview,
+      reviewOpen: !state.templatePreview.reviewOpen,
+      reviewError: "",
+      reviewMessage: "",
+    };
+    renderTemplateLibrary(state.lastTemplates);
+    return;
+  }
   if (type === "template-close") {
-    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    state.templatePreview = emptyTemplatePreview();
     renderTemplateLibrary(state.lastTemplates);
     return;
   }
@@ -3122,13 +3158,13 @@ async function openTemplatePreview(planId) {
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(planId));
   if (!selected) return;
   state.selectedTemplateId = selected.plan_id;
-  state.templatePreview = { open: true, loading: true, detail: null, error: "", settingsOpen: false };
+  state.templatePreview = emptyTemplatePreview({ open: true, loading: true });
   renderTemplateLibrary(state.lastTemplates);
   try {
     const detail = await api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`);
-    state.templatePreview = { open: true, loading: false, detail, error: "", settingsOpen: state.templatePreview.settingsOpen };
+    state.templatePreview = emptyTemplatePreview({ ...state.templatePreview, open: true, loading: false, detail, error: "" });
   } catch (error) {
-    state.templatePreview = { open: true, loading: false, detail: null, error: error.message || "Could not load program.", settingsOpen: state.templatePreview.settingsOpen };
+    state.templatePreview = emptyTemplatePreview({ ...state.templatePreview, open: true, loading: false, detail: null, error: error.message || "Could not load program." });
   }
   renderTemplateLibrary(state.lastTemplates);
 }
@@ -3443,13 +3479,84 @@ async function submitTemplateMetadataForm(form) {
         visibility: formData.get("visibility"),
       }),
     });
-    state.templatePreview = { open: false, loading: false, detail: null, error: "", settingsOpen: false };
+    state.templatePreview = emptyTemplatePreview();
     state.selectedTemplateId = null;
     await loadTemplates();
   } catch (submitError) {
     if (error) error.textContent = submitError.message || "Could not save library settings.";
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+async function markTemplateUsed(planId) {
+  if (!planId || state.templatePreview.submittingUse) return;
+  state.templatePreview = {
+    ...state.templatePreview,
+    submittingUse: true,
+    reviewError: "",
+    reviewMessage: "",
+  };
+  renderTemplateLibrary(state.lastTemplates);
+  try {
+    await api(`/api/templates/${encodeURIComponent(planId)}/use`, {
+      method: "POST",
+      body: JSON.stringify({ note: "Marked as used from Program Library." }),
+    });
+    state.templatePreview = {
+      ...state.templatePreview,
+      submittingUse: false,
+      usedMarked: true,
+      reviewOpen: true,
+      reviewMessage: "Marked as used. You can now leave a review.",
+      reviewError: "",
+    };
+  } catch (error) {
+    state.templatePreview = {
+      ...state.templatePreview,
+      submittingUse: false,
+      reviewError: error.message || "Could not mark this program as used.",
+      reviewMessage: "",
+    };
+  }
+  renderTemplateLibrary(state.lastTemplates);
+}
+
+async function submitTemplateReviewForm(form) {
+  const planId = form.dataset.planId || "";
+  if (!planId || state.templatePreview.submittingReview) return;
+  const formData = new FormData(form);
+  const rating = Number(formData.get("rating") || 0);
+  const comment = clean(formData.get("comment"));
+  state.templatePreview = {
+    ...state.templatePreview,
+    submittingReview: true,
+    reviewError: "",
+    reviewMessage: "",
+  };
+  renderTemplateLibrary(state.lastTemplates);
+  try {
+    await api(`/api/templates/${encodeURIComponent(planId)}/reviews`, {
+      method: "POST",
+      body: JSON.stringify({ rating, comment }),
+    });
+    state.templatePreview = {
+      ...state.templatePreview,
+      submittingReview: false,
+      reviewOpen: false,
+      usedMarked: true,
+      reviewMessage: "Review saved.",
+      reviewError: "",
+    };
+    await loadTemplates();
+  } catch (error) {
+    state.templatePreview = {
+      ...state.templatePreview,
+      submittingReview: false,
+      reviewError: error.message || "Could not save review.",
+      reviewMessage: "",
+    };
+    renderTemplateLibrary(state.lastTemplates);
   }
 }
 
@@ -3492,6 +3599,7 @@ function renderTemplatePreviewModal() {
           </div>
         </div>
         ${selected && state.templatePreview.settingsOpen ? renderTemplateMetadataForm(selected) : ""}
+        ${selected && !state.templatePreview.loading && !state.templatePreview.error ? renderTemplateReviewPanel(selected) : ""}
         <div class="program-preview-body">
           ${state.templatePreview.loading ? `<div class="empty-state">Loading program...</div>` : state.templatePreview.error ? `<div class="empty-state">${escapeHtml(state.templatePreview.error)}</div>` : isMicrocycle
             ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -3499,6 +3607,35 @@ function renderTemplatePreviewModal() {
         </div>
       </section>
     </div>
+  `;
+}
+
+function renderTemplateReviewPanel(template) {
+  const review = state.templatePreview;
+  return `
+    <section class="program-review-panel">
+      <div class="program-review-summary">
+        <div>
+          <span class="eyebrow">Verified program review</span>
+          <p class="muted">Reviews are enabled after you mark that you used this program.</p>
+        </div>
+        <div class="program-review-actions">
+          <button class="plain-button compact-button" type="button" data-action="template-use" data-template-id="${escapeAttr(template.plan_id)}" ${review.submittingUse ? "disabled" : ""}>${review.submittingUse ? "Marking..." : review.usedMarked ? "Used" : "Mark as used"}</button>
+          <button class="plain-button compact-button" type="button" data-action="template-review-toggle">${review.reviewOpen ? "Hide review" : "Leave review"}</button>
+        </div>
+      </div>
+      ${review.reviewMessage ? `<p class="builder-success">${escapeHtml(review.reviewMessage)}</p>` : ""}
+      ${review.reviewError ? `<p class="builder-error">${escapeHtml(review.reviewError)}</p>` : ""}
+      ${review.reviewOpen ? `
+        <form class="program-review-form" data-template-review-form data-plan-id="${escapeAttr(template.plan_id)}">
+          <label class="search-field"><span>Rating</span><select name="rating" required>
+            ${[5, 4, 3, 2, 1].map((rating) => `<option value="${rating}">${rating} / 5</option>`).join("")}
+          </select></label>
+          <label class="search-field program-review-comment"><span>Comment</span><textarea name="comment" rows="2" placeholder="Short note about how useful this program was"></textarea></label>
+          <button class="plain-button compact-button" type="submit" ${review.submittingReview ? "disabled" : ""}>${review.submittingReview ? "Saving..." : "Save review"}</button>
+        </form>
+      ` : ""}
+    </section>
   `;
 }
 

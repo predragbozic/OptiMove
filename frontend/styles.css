@@ -1872,7 +1872,7 @@ input:focus {
   width: min(1180px, calc(100vw - 56px));
   max-height: min(820px, calc(100vh - 56px));
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1920,6 +1920,69 @@ input:focus {
 
 .program-metadata-actions .builder-error {
   flex: 1;
+}
+
+.program-review-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(40, 126, 119, 0.06);
+}
+
+.program-review-summary,
+.program-review-actions,
+.program-review-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.program-review-summary {
+  justify-content: space-between;
+}
+
+.program-review-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.program-review-form {
+  align-items: end;
+}
+
+.program-review-form .search-field {
+  margin: 0;
+  background: var(--surface);
+}
+
+.program-review-comment {
+  flex: 1;
+}
+
+.program-review-comment textarea {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  resize: vertical;
+}
+
+.program-review-comment textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(31, 111, 104, 0.14);
+}
+
+.builder-success {
+  margin: 0;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 850;
 }
 
 .program-tags-panel {
@@ -2039,6 +2102,25 @@ input:focus {
   .program-metadata-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .program-review-panel {
+    padding: 12px 14px;
+  }
+
+  .program-review-summary,
+  .program-review-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .program-review-actions {
+    justify-content: stretch;
+  }
+
+  .program-review-actions .plain-button,
+  .program-review-form .plain-button {
+    width: 100%;
   }
 
   .program-tags-head {
