@@ -247,6 +247,34 @@ router.get("/:planId/tags", async (req, res, next) => {
   }
 });
 
+router.get("/:planId/reviews", async (req, res, next) => {
+  try {
+    if (!(await canUseTemplate(req.user, req.params.planId))) {
+      return res.status(404).json({ error: "Template not found." });
+    }
+    const result = await query(
+      `select pr.id,
+              pr.rating,
+              pr.comment,
+              pr.is_verified,
+              pr.verification_type,
+              pr.updated_at,
+              pr.created_at,
+              coalesce(nullif(u.display_name, ''), nullif(u.full_name, ''), u.email, 'User') as reviewer_name
+       from library.program_reviews pr
+       left join public.users u on u.id = pr.reviewer_user_id
+       where pr.plan_id = $1
+         and pr.status = 'published'
+       order by pr.updated_at desc, pr.created_at desc
+       limit 30`,
+      [req.params.planId],
+    );
+    res.json({ reviews: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/:planId/tags", async (req, res, next) => {
   try {
     if (!(await canEditTemplate(req.user, req.params.planId))) {

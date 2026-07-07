@@ -1985,6 +1985,37 @@ input:focus {
   font-weight: 850;
 }
 
+.program-review-list {
+  display: grid;
+  gap: 8px;
+}
+
+.program-review-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.program-review-item span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.program-review-item p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .program-tags-panel {
   display: grid;
   gap: 10px;

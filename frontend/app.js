@@ -61,6 +61,8 @@ const emptyTemplatePreview = (overrides = {}) => ({
   reviewOpen: false,
   reviewMessage: "",
   reviewError: "",
+  reviewsOpen: false,
+  reviews: [],
   usedMarked: false,
   submittingUse: false,
   submittingReview: false,
@@ -1655,6 +1657,11 @@ function handleContentClick(event) {
     renderTemplateLibrary(state.lastTemplates);
     return;
   }
+  if (type === "template-reviews-toggle") {
+    state.templatePreview = { ...state.templatePreview, reviewsOpen: !state.templatePreview.reviewsOpen };
+    renderTemplateLibrary(state.lastTemplates);
+    return;
+  }
   if (type === "template-close") {
     state.templatePreview = emptyTemplatePreview();
     renderTemplateLibrary(state.lastTemplates);
@@ -3161,8 +3168,18 @@ async function openTemplatePreview(planId) {
   state.templatePreview = emptyTemplatePreview({ open: true, loading: true });
   renderTemplateLibrary(state.lastTemplates);
   try {
-    const detail = await api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`);
-    state.templatePreview = emptyTemplatePreview({ ...state.templatePreview, open: true, loading: false, detail, error: "" });
+    const [detail, reviewsData] = await Promise.all([
+      api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`),
+      api(`/api/templates/${encodeURIComponent(selected.plan_id)}/reviews`),
+    ]);
+    state.templatePreview = emptyTemplatePreview({
+      ...state.templatePreview,
+      open: true,
+      loading: false,
+      detail,
+      reviews: reviewsData.reviews || [],
+      error: "",
+    });
   } catch (error) {
     state.templatePreview = emptyTemplatePreview({ ...state.templatePreview, open: true, loading: false, detail: null, error: error.message || "Could not load program." });
   }
@@ -3540,10 +3557,13 @@ async function submitTemplateReviewForm(form) {
       method: "POST",
       body: JSON.stringify({ rating, comment }),
     });
+    const reviewsData = await api(`/api/templates/${encodeURIComponent(planId)}/reviews`);
     state.templatePreview = {
       ...state.templatePreview,
       submittingReview: false,
       reviewOpen: false,
+      reviewsOpen: true,
+      reviews: reviewsData.reviews || [],
       usedMarked: true,
       reviewMessage: "Review saved.",
       reviewError: "",
@@ -3612,6 +3632,7 @@ function renderTemplatePreviewModal() {
 
 function renderTemplateReviewPanel(template) {
   const review = state.templatePreview;
+  const reviews = review.reviews || [];
   return `
     <section class="program-review-panel">
       <div class="program-review-summary">
@@ -3622,6 +3643,7 @@ function renderTemplateReviewPanel(template) {
         <div class="program-review-actions">
           <button class="plain-button compact-button" type="button" data-action="template-use" data-template-id="${escapeAttr(template.plan_id)}" ${review.submittingUse ? "disabled" : ""}>${review.submittingUse ? "Marking..." : review.usedMarked ? "Used" : "Mark as used"}</button>
           <button class="plain-button compact-button" type="button" data-action="template-review-toggle">${review.reviewOpen ? "Hide review" : "Leave review"}</button>
+          <button class="plain-button compact-button" type="button" data-action="template-reviews-toggle">${review.reviewsOpen ? "Hide reviews" : `Reviews (${reviews.length})`}</button>
         </div>
       </div>
       ${review.reviewMessage ? `<p class="builder-success">${escapeHtml(review.reviewMessage)}</p>` : ""}
@@ -3635,7 +3657,26 @@ function renderTemplateReviewPanel(template) {
           <button class="plain-button compact-button" type="submit" ${review.submittingReview ? "disabled" : ""}>${review.submittingReview ? "Saving..." : "Save review"}</button>
         </form>
       ` : ""}
+      ${review.reviewsOpen ? renderTemplateReviewList(reviews) : ""}
     </section>
+  `;
+}
+
+function renderTemplateReviewList(reviews) {
+  if (!reviews.length) return `<div class="program-review-list"><p class="muted">No written reviews yet.</p></div>`;
+  return `
+    <div class="program-review-list">
+      ${reviews.map((item) => `
+        <article class="program-review-item">
+          <div>
+            <strong>${escapeHtml(item.reviewer_name || "User")}</strong>
+            <span>${escapeHtml(item.is_verified ? "Verified use" : "Review")}</span>
+          </div>
+          <b>${escapeHtml(String(item.rating || ""))}/5</b>
+          ${item.comment ? `<p>${escapeHtml(item.comment)}</p>` : `<p class="muted">No comment.</p>`}
+        </article>
+      `).join("")}
+    </div>
   `;
 }
 
