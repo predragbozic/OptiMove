@@ -1238,6 +1238,7 @@ function renderCoachProgramCard(program) {
   const price = programPriceLabel(program);
   return `
     <article class="program-library-card">
+      <button class="program-library-info-button" type="button" data-action="coach-program-info" data-template-id="${escapeAttr(program.plan_id)}" aria-label="Program information">i</button>
       <button class="program-library-card-hit" type="button" data-action="coach-program-open" data-template-id="${escapeAttr(program.plan_id)}">
         <span class="program-library-card-media">
           ${image ? renderImage(image, "program-library-cover") : `<span class="program-library-card-icon">${escapeHtml(programInitials(program.plan_name || "Program"))}</span>`}
@@ -1249,7 +1250,7 @@ function renderCoachProgramCard(program) {
         <span class="program-library-card-foot">
           <span class="item-badge">${escapeHtml(price)}</span>
           <span class="item-badge">${escapeHtml(ratingLabel(program))}</span>
-          <span class="text-action">Preview</span>
+          <span class="text-action">Open</span>
         </span>
       </button>
     </article>
@@ -1700,7 +1701,17 @@ function handleContentClick(event) {
   }
   if (type === "coach-program-open") {
     const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
-    void openTemplatePreviewFromCoachProgram(program);
+    if (program?.plan_id) {
+      state.coaches = { ...state.coaches, selected: null, detail: null, contactOpen: false, error: "" };
+      void openTemplatePreviewFromCoachProgram(program);
+    }
+    return;
+  }
+  if (type === "coach-program-info") {
+    const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
+    if (program) {
+      alert(`${program.plan_name || "Program"}\n\n${program.description || program.program_note || program.library_category || "No additional information yet."}`);
+    }
     return;
   }
   if (type === "template-scope") {
@@ -3308,7 +3319,7 @@ async function openTemplatePreviewFromCoachProgram(program) {
     state.lastTemplates = [...state.lastTemplates, normalizeCoachProgramAsTemplate(program)];
   }
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(program.plan_id));
-  await openTemplatePreviewWithRenderer(selected, renderCoachContext);
+  await openTemplatePreviewWithRenderer(selected, renderCurrentNode);
 }
 
 async function openTemplatePreviewWithRenderer(selected, renderAfter) {

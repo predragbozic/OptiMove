@@ -1796,6 +1796,7 @@ input:focus {
 }
 
 .program-library-card {
+  position: relative;
   min-width: 0;
   display: grid;
   grid-template-rows: auto auto;
@@ -1809,6 +1810,31 @@ input:focus {
   box-shadow: var(--soft-shadow);
   cursor: default;
   scroll-snap-align: start;
+}
+
+.program-library-info-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+}
+
+.program-library-info-button:hover {
+  border-color: rgba(31, 122, 111, 0.55);
+  background: #fff;
 }
 
 .program-library-card-hit {
