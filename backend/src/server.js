@@ -42,7 +42,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/athletes", requireAuth, athletesRouter);
 app.use("/api/admin/athletes", requireAuth, athletesRouter);
 app.use("/api/plans", requireAuth, plansRouter);
-app.use("/api/templates", requireAuth, requireCoach, templatesRouter);
+app.use("/api/templates", requireAuth, templatesRouter);
 app.use("/api/exercises", requireAuth, requireCoach, exercisesRouter);
 app.use("/api/builder", requireAuth, requireCoach, builderRouter);
 app.use("/api/organization", requireAuth, requireCoach, organizationRouter);
