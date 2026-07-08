@@ -1092,6 +1092,7 @@ function renderCoaches() {
       </section>
     </section>
     ${renderCoachDetailModal()}
+    ${renderTemplatePreviewModal()}
   `;
 }
 
@@ -1195,6 +1196,7 @@ function renderCoachDetailModal() {
             </div>
           </div>
           <div class="builder-source-actions">
+            ${programs.length ? `<button class="plain-button compact-button" type="button" data-action="coach-programs-focus">View programs</button>` : ""}
             ${profile.contact_enabled ? `<button class="plain-button compact-button" type="button" data-action="coach-contact-toggle">${state.coaches.contactOpen ? "Close contact" : "Contact coach"}</button>` : ""}
             <button class="plain-button icon-button" type="button" data-action="coach-close" aria-label="Close"><span class="button-icon">x</span></button>
           </div>
@@ -1207,7 +1209,7 @@ function renderCoachDetailModal() {
             ${profile.club_names ? `<p class="muted">${escapeHtml(profile.club_names)}</p>` : ""}
           </section>
           ${state.coaches.contactOpen ? renderCoachContactForm(profile) : ""}
-          <section>
+          <section data-coach-programs>
             <div class="program-library-shelf-head"><h4>Published programs</h4><span>${programs.length} programs</span></div>
             <div class="program-library-row">
               ${detail ? programs.length ? programs.map(renderCoachProgramCard).join("") : `<div class="empty-state">No visible programs from this coach yet.</div>` : `<div class="empty-state">Loading programs...</div>`}
@@ -1233,19 +1235,23 @@ function renderCoachContactForm(profile) {
 
 function renderCoachProgramCard(program) {
   const image = program.cover_image_url || "";
+  const price = programPriceLabel(program);
   return `
     <article class="program-library-card">
-      <div class="program-library-cover">
-        ${image ? renderImage(image, "program-library-cover-image") : `<span>${escapeHtml(programInitials(program.plan_name || "Program"))}</span>`}
-      </div>
-      <div class="program-library-card-body">
-        <h4>${escapeHtml(program.plan_name || "Program")}</h4>
-        <p class="muted">${escapeHtml(program.library_category || "General")}</p>
-      </div>
-      <div class="program-library-card-foot">
-        <span>${program.is_free === false ? "Paid" : "Free"}</span>
-        <span>${escapeHtml(ratingLabel(program))}</span>
-      </div>
+      <button class="program-library-card-hit" type="button" data-action="coach-program-open" data-template-id="${escapeAttr(program.plan_id)}">
+        <span class="program-library-card-media">
+          ${image ? renderImage(image, "program-library-cover") : `<span class="program-library-card-icon">${escapeHtml(programInitials(program.plan_name || "Program"))}</span>`}
+        </span>
+        <span class="program-library-card-body">
+          <span class="program-library-card-title">${escapeHtml(program.plan_name || "Program")}</span>
+          <span class="program-library-card-sub">${escapeHtml(program.library_category || "General")}</span>
+        </span>
+        <span class="program-library-card-foot">
+          <span class="item-badge">${escapeHtml(price)}</span>
+          <span class="item-badge">${escapeHtml(ratingLabel(program))}</span>
+          <span class="text-action">Preview</span>
+        </span>
+      </button>
     </article>
   `;
 }
@@ -1692,6 +1698,11 @@ function handleContentClick(event) {
     void openTemplatePreview(action.dataset.templateId);
     return;
   }
+  if (type === "coach-program-open") {
+    const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
+    void openTemplatePreviewFromCoachProgram(program);
+    return;
+  }
   if (type === "template-scope") {
     state.templateScope = action.dataset.scope || "my";
     state.selectedTemplateId = null;
@@ -1736,7 +1747,13 @@ function handleContentClick(event) {
   }
   if (type === "template-close") {
     state.templatePreview = emptyTemplatePreview();
-    renderTemplateLibrary(state.lastTemplates);
+    if (state.activeTab === "coaches") renderCoachContext();
+    else renderTemplateLibrary(state.lastTemplates);
+    return;
+  }
+  if (type === "coach-programs-focus") {
+    const section = document.querySelector("[data-coach-programs]");
+    section?.scrollIntoView({ behavior: "smooth", block: "start" });
     return;
   }
   if (type === "coach-open") {
@@ -3282,9 +3299,22 @@ function renderTemplateToolbar(templates) {
 async function openTemplatePreview(planId) {
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(planId));
   if (!selected) return;
+  await openTemplatePreviewWithRenderer(selected, () => renderTemplateLibrary(state.lastTemplates));
+}
+
+async function openTemplatePreviewFromCoachProgram(program) {
+  if (!program?.plan_id) return;
+  if (!state.lastTemplates.some((template) => String(template.plan_id) === String(program.plan_id))) {
+    state.lastTemplates = [...state.lastTemplates, normalizeCoachProgramAsTemplate(program)];
+  }
+  const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(program.plan_id));
+  await openTemplatePreviewWithRenderer(selected, renderCoachContext);
+}
+
+async function openTemplatePreviewWithRenderer(selected, renderAfter) {
   state.selectedTemplateId = selected.plan_id;
   state.templatePreview = emptyTemplatePreview({ open: true, loading: true });
-  renderTemplateLibrary(state.lastTemplates);
+  renderAfter();
   try {
     const [detail, reviewsData] = await Promise.all([
       api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`),
@@ -3301,7 +3331,23 @@ async function openTemplatePreview(planId) {
   } catch (error) {
     state.templatePreview = emptyTemplatePreview({ ...state.templatePreview, open: true, loading: false, detail: null, error: error.message || "Could not load program." });
   }
-  renderTemplateLibrary(state.lastTemplates);
+  renderAfter();
+}
+
+function normalizeCoachProgramAsTemplate(program) {
+  return {
+    ...program,
+    plan_id: program.plan_id,
+    plan_name: program.plan_name,
+    library_category: program.library_category,
+    cover_image_url: program.cover_image_url,
+    is_free: program.is_free,
+    price_cents: program.price_cents,
+    average_rating: program.average_rating,
+    review_count: program.review_count,
+    library_scope: program.library_scope || "coach",
+    tags: program.tags || [],
+  };
 }
 
 function duplicateTemplateNames(templates) {
