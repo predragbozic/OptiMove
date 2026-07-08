@@ -657,6 +657,13 @@ function hasOrganizationAccess(user = state.currentUser) {
   return Boolean(user) && String(user?.accessScope || "").toLowerCase() !== "athlete";
 }
 
+function canManageCoachProfile(user = state.currentUser) {
+  if (!user || isAthleteMode()) return false;
+  const role = String(user.role || user.role_hint || "").toLowerCase();
+  return ["coach", "team_coach", "team_admin", "club_admin", "platform_admin", "general_admin", "admin"].includes(role)
+    || ["coach", "team", "club", "platform"].includes(String(user.accessScope || "").toLowerCase());
+}
+
 function renderAccessNav() {
   const orgButton = document.querySelector('[data-library-tab="organization"]');
   const orgSubmenu = document.querySelector('[data-sidebar-submenu="settings"]');
@@ -1067,6 +1074,7 @@ function renderCoachContext() {
 function renderCoaches() {
   const rows = state.coaches.rows || [];
   const ownProfile = rows.find((profile) => String(profile.user_id) === String(state.currentUser?.id));
+  const canEditProfile = canManageCoachProfile();
   els.content.innerHTML = `
     <section class="content-section coach-directory">
       <section class="coach-directory-head">
@@ -1075,10 +1083,10 @@ function renderCoaches() {
           <h3>Coach profiles</h3>
           <p class="muted">Profiles can connect programs, specialties, and future marketplace requests.</p>
         </div>
-        <button class="plain-button compact-button" type="button" data-action="coach-edit-toggle">${ownProfile ? "Edit my profile" : "Create my profile"}</button>
+        ${canEditProfile ? `<button class="plain-button compact-button" type="button" data-action="coach-edit-toggle">${ownProfile ? "Edit my profile" : "Create my profile"}</button>` : ""}
       </section>
       ${state.coaches.error ? `<p class="builder-error">${escapeHtml(state.coaches.error)}</p>` : ""}
-      ${state.coaches.editOpen ? renderCoachProfileForm(ownProfile) : ""}
+      ${canEditProfile && state.coaches.editOpen ? renderCoachProfileForm(ownProfile) : ""}
       <section class="coach-card-grid">
         ${rows.length ? rows.map(renderCoachCard).join("") : `<div class="empty-state">No visible coach profiles yet.</div>`}
       </section>
@@ -1741,6 +1749,7 @@ function handleContentClick(event) {
     return;
   }
   if (type === "coach-edit-toggle") {
+    if (!canManageCoachProfile()) return;
     state.coaches.editOpen = !state.coaches.editOpen;
     renderCoachContext();
     return;
