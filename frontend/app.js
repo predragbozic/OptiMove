@@ -1150,7 +1150,28 @@ function renderCoachProfileForm(profile) {
 function renderCoachDetailModal() {
   const detail = state.coaches.detail;
   const profile = detail?.profile || state.coaches.rows.find((row) => String(row.id) === String(state.coaches.selected));
-  if (!profile) return "";
+  if (!state.coaches.selected) return "";
+  if (!profile) {
+    const title = state.coaches.error ? "Coach profile unavailable" : "Loading coach profile";
+    const message = state.coaches.error || "Loading coach profile...";
+    return `
+      <div class="program-preview-overlay">
+        <button class="program-preview-backdrop" type="button" data-action="coach-close" aria-label="Close coach profile"></button>
+        <section class="program-preview-modal coach-profile-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(title)}">
+          <div class="program-preview-head coach-profile-head">
+            <div>
+              <p class="eyebrow">Coach profile</p>
+              <h3>${escapeHtml(title)}</h3>
+            </div>
+            <button class="plain-button icon-button" type="button" data-action="coach-close" aria-label="Close"><span class="button-icon">x</span></button>
+          </div>
+          <div class="coach-profile-body">
+            <div class="empty-state">${escapeHtml(message)}</div>
+          </div>
+        </section>
+      </div>
+    `;
+  }
   const programs = detail?.programs || [];
   return `
     <div class="program-preview-overlay">
@@ -1893,6 +1914,7 @@ function renderCurrentNode() {
     return renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
   }
   if (state.activeTab === "templates") return loadTemplates();
+  if (state.activeTab === "coaches") return loadCoaches();
   if (state.activeTab === "builder") return renderBuilder();
   if (state.activeTab === "exercises") return renderExercises(state.lastExerciseResults);
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();

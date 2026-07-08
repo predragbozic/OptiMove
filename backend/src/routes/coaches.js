@@ -220,17 +220,23 @@ function coachListSql({ includeOrder = true } = {}) {
         or exists (
           select 1
           from public.athletes viewer_athlete
-          join public.user_athletes athlete_link
-            on athlete_link.athlete_id = viewer_athlete.id
-           and athlete_link.user_id = $1
-           and athlete_link.relationship_type = 'athlete'
-           and athlete_link.is_active = true
           join public.user_athletes coach_rel
             on coach_rel.athlete_id = viewer_athlete.id
            and coach_rel.user_id = cp.user_id
            and coach_rel.relationship_type = 'coach'
            and coach_rel.is_active = true
           where coalesce(viewer_athlete.is_active, true)
+            and (
+              viewer_athlete.user_id = $1
+              or exists (
+                select 1
+                from public.user_athletes athlete_link
+                where athlete_link.athlete_id = viewer_athlete.id
+                  and athlete_link.user_id = $1
+                  and athlete_link.relationship_type = 'athlete'
+                  and athlete_link.is_active = true
+              )
+            )
         )
         or ($3::boolean and cp.visibility = 'club' and exists (
           select 1

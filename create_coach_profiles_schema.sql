@@ -46,3 +46,33 @@ create index if not exists coach_profile_tags_slug_idx
 
 create index if not exists coach_contact_requests_profile_idx
   on public.coach_contact_requests (coach_profile_id, created_at desc);
+
+insert into public.coach_profiles (user_id, contact_email, visibility)
+select distinct u.id, u.email, 'private'
+from public.users u
+where coalesce(u.is_active, true)
+  and (
+    exists (
+      select 1
+      from plans.plans p
+      where p.created_by_user_id = u.id
+        and p.plan_type = 'program'
+        and p.is_template = true
+        and coalesce(p.is_active, true)
+    )
+    or exists (
+      select 1
+      from public.user_athletes ua
+      where ua.user_id = u.id
+        and ua.relationship_type = 'coach'
+        and ua.is_active = true
+    )
+    or exists (
+      select 1
+      from public.user_club_roles ucr
+      where ucr.user_id = u.id
+        and ucr.is_active = true
+    )
+    or lower(coalesce(u.role_hint, '')) in ('coach', 'team_coach', 'club_admin', 'platform_admin')
+  )
+on conflict (user_id) do nothing;
