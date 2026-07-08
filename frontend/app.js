@@ -1003,28 +1003,40 @@ async function loadPrograms() {
 }
 
 async function loadTemplates(options = {}) {
-  state.navStack = [];
-  ensureTemplateScopeIsVisible();
-  const requestedScope = state.templateScope;
-  const scope = templateScopeMeta();
-  els.context.textContent = "Program library";
-  els.title.textContent = scope.label;
-  els.toolbar.innerHTML = "";
-  if (!options.restoreFocus) setLoading("Loading program library...");
-  if (!state.templateOptions.loaded) {
+  try {
+    state.navStack = [];
+    ensureTemplateScopeIsVisible();
+    const requestedScope = state.templateScope;
+    const scope = templateScopeMeta();
+    els.context.textContent = "Program library";
+    els.title.textContent = scope.label;
+    els.toolbar.innerHTML = "";
+    if (!options.restoreFocus) setLoading("Loading program library...");
+    const data = await api(templateSearchUrl());
+    state.templateAllowedScopes = Array.isArray(data.allowedScopes) ? data.allowedScopes : TEMPLATE_SCOPES;
+    ensureTemplateScopeIsVisible();
+    if (state.templateScope !== requestedScope) return loadTemplates(options);
+    state.lastTemplates = data.templates || [];
+    if (!state.lastTemplates.some((template) => String(template.plan_id) === String(state.selectedTemplateId))) {
+      state.selectedTemplateId = state.lastTemplates[0]?.plan_id || null;
+    }
+    if (!state.templateOptions.loaded) loadTemplateOptionsInBackground();
+    renderTemplateLibrary(state.lastTemplates);
+    restoreTemplateFilterFocus(options.restoreFocus);
+  } catch (error) {
+    setStatus("Error");
+    renderError(error);
+  }
+}
+
+async function loadTemplateOptionsInBackground() {
+  try {
     const filterOptions = await api("/api/templates/options");
     state.templateOptions = { ...filterOptions, loaded: true };
+    if (state.activeTab === "templates" || state.activeTab === "athlete-library") renderTemplateLibraryResults();
+  } catch (error) {
+    state.templateOptions = { ...state.templateOptions, loaded: true, error: error.message || "Could not load filters." };
   }
-  const data = await api(templateSearchUrl());
-  state.templateAllowedScopes = Array.isArray(data.allowedScopes) ? data.allowedScopes : TEMPLATE_SCOPES;
-  ensureTemplateScopeIsVisible();
-  if (state.templateScope !== requestedScope) return loadTemplates(options);
-  state.lastTemplates = data.templates || [];
-  if (!state.lastTemplates.some((template) => String(template.plan_id) === String(state.selectedTemplateId))) {
-    state.selectedTemplateId = state.lastTemplates[0]?.plan_id || null;
-  }
-  renderTemplateLibrary(state.lastTemplates);
-  restoreTemplateFilterFocus(options.restoreFocus);
 }
 
 function templateSearchUrl() {
