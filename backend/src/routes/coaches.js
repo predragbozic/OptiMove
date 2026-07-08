@@ -216,7 +216,7 @@ function coachListSql({ includeOrder = true } = {}) {
       and (
         cp.user_id = $1
         or $2::boolean
-        or cp.visibility in ('public', 'marketplace')
+        or (not $3::boolean and cp.visibility in ('public', 'marketplace'))
         or exists (
           select 1
           from public.athletes viewer_athlete
@@ -243,6 +243,29 @@ function coachListSql({ includeOrder = true } = {}) {
           from public.user_club_roles viewer_role
           join public.user_club_roles coach_role on coach_role.club_id = viewer_role.club_id and coach_role.user_id = cp.user_id and coach_role.is_active = true
           where viewer_role.user_id = $1 and viewer_role.is_active = true
+        ))
+        or ($3::boolean and exists (
+          select 1
+          from public.user_team_roles viewer_team
+          join public.user_team_roles coach_team
+            on coach_team.team_id = viewer_team.team_id
+           and coach_team.user_id = cp.user_id
+           and coach_team.is_active = true
+          where viewer_team.user_id = $1
+            and viewer_team.is_active = true
+        ))
+        or ($3::boolean and exists (
+          select 1
+          from public.user_club_roles viewer_club
+          join public.teams club_team
+            on club_team.club_id = viewer_club.club_id
+           and coalesce(club_team.is_active, true)
+          join public.user_team_roles coach_team
+            on coach_team.team_id = club_team.id
+           and coach_team.user_id = cp.user_id
+           and coach_team.is_active = true
+          where viewer_club.user_id = $1
+            and viewer_club.is_active = true
         ))
       )
     ${includeOrder ? "order by cp.visibility = 'marketplace' desc, programs.marketplace_count desc, name" : ""}
