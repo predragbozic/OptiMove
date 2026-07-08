@@ -72,7 +72,6 @@ router.get("/", async (req, res, next) => {
           (not $8::boolean and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public'))
           or (
             $8::boolean
-            and coalesce(ps.athlete_can_view_directly, false)
             and (not $14::boolean or coalesce(ps.is_free, true))
             and (
               (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and exists (
@@ -83,9 +82,9 @@ router.get("/", async (req, res, next) => {
                   and coach_rel.relationship_type = 'coach'
                   and coach_rel.is_active = true
               ))
-              or (coalesce(p.library_scope, 'my') = 'club' and $11::boolean and p.visibility in ('club', 'public'))
-              or (coalesce(p.library_scope, 'my') = 'optimove' and $12::boolean and p.visibility = 'public')
-              or (coalesce(p.library_scope, 'my') = 'marketplace' and $13::boolean and p.visibility = 'public')
+              or (coalesce(p.library_scope, 'my') = 'club' and $11::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
+              or (coalesce(p.library_scope, 'my') = 'optimove' and $12::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
+              or (coalesce(p.library_scope, 'my') = 'marketplace' and $13::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
             )
           )
         )
@@ -479,7 +478,6 @@ async function canUseTemplate(user, planId) {
        and p.plan_type = 'program'
        and p.is_template = true
        and coalesce(p.is_active, true)
-       and coalesce(p.athlete_can_view_directly, false)
        and (not $7::boolean or coalesce(p.is_free, true))
        and (
          (coalesce(p.library_scope, 'my') = 'my' and $3::boolean and exists (
@@ -490,9 +488,9 @@ async function canUseTemplate(user, planId) {
              and coach_rel.relationship_type = 'coach'
              and coach_rel.is_active = true
          ))
-         or (coalesce(p.library_scope, 'my') = 'club' and $4::boolean and p.visibility in ('club', 'public'))
-         or (coalesce(p.library_scope, 'my') = 'optimove' and $5::boolean and p.visibility = 'public')
-         or (coalesce(p.library_scope, 'my') = 'marketplace' and $6::boolean and p.visibility = 'public')
+         or (coalesce(p.library_scope, 'my') = 'club' and $4::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
+         or (coalesce(p.library_scope, 'my') = 'optimove' and $5::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
+         or (coalesce(p.library_scope, 'my') = 'marketplace' and $6::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
        )
      limit 1`,
     [

@@ -96,7 +96,6 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
         or (
           p.plan_type = 'program'
           and p.is_template = true
-          and coalesce(p.athlete_can_view_directly, false)
           and exists (
             select 1
             from public.athletes viewer_athlete
@@ -123,9 +122,9 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
                     and coach_rel.relationship_type = 'coach'
                     and coach_rel.is_active = true
                 ))
-                or (coalesce(p.library_scope, 'my') = 'club' and coalesce(ala.can_view_club_library, false) and p.visibility in ('club', 'public'))
-                or (coalesce(p.library_scope, 'my') = 'optimove' and coalesce(ala.can_view_optimove_library, false) and p.visibility = 'public')
-                or (coalesce(p.library_scope, 'my') = 'marketplace' and coalesce(ala.can_view_marketplace, false) and p.visibility = 'public')
+                or (coalesce(p.library_scope, 'my') = 'club' and coalesce(ala.can_view_club_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
+                or (coalesce(p.library_scope, 'my') = 'optimove' and coalesce(ala.can_view_optimove_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
+                or (coalesce(p.library_scope, 'my') = 'marketplace' and coalesce(ala.can_view_marketplace, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
               )
           )
         )
