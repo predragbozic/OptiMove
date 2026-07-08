@@ -69,6 +69,8 @@ const emptyTemplatePreview = (overrides = {}) => ({
   ...overrides,
 });
 
+const TEMPLATE_SCOPES = ["all", "workspace", "my", "club", "optimove", "marketplace"];
+
 const state = {
   currentUser: null,
   athletes: [],
@@ -1647,6 +1649,17 @@ function handleContentClick(event) {
     void markTemplateUsed(action.dataset.templateId);
     return;
   }
+  if (type === "template-assign") {
+    const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(action.dataset.templateId));
+    if (!selected) return;
+    state.builder.copyPlanId = selected.plan_id;
+    state.builder.copyPlanName = selected.plan_name || "Program";
+    state.builder.copyAthleteId = "";
+    state.builder.copyPlanType = "program";
+    state.builder.copyWeekStart = "";
+    renderTemplateLibrary(state.lastTemplates);
+    return;
+  }
   if (type === "template-review-toggle") {
     state.templatePreview = {
       ...state.templatePreview,
@@ -1888,6 +1901,11 @@ function templateScopeMeta(scope = state.templateScope) {
       label: isPlatform ? "Admin workspace" : "My templates",
       eyebrow: isPlatform ? "Private admin library" : "Private library",
       note: isPlatform ? "Programs created inside your own platform admin workspace." : "Reusable programs and templates available in your current coach workspace.",
+    },
+    workspace: {
+      label: "Working materials",
+      eyebrow: "Private workspace",
+      note: "Unfinished or reusable coach materials that only you can see and use while building programs.",
     },
     club: {
       label: isClub || isPlatform ? "Club library" : "Club",
@@ -2480,7 +2498,7 @@ function renderOrganizationEditModal(data) {
           <div><p class="eyebrow">Organization</p><h3>${escapeHtml(title)}</h3></div>
           <button class="plain-button icon-button" type="button" data-action="organization-edit-close" aria-label="Close"><span class="button-icon">x</span></button>
         </div>
-        ${type === "club" ? renderOrganizationClubEditForm(row) : type === "team" ? renderOrganizationTeamEditForm(row, data.clubs || []) : renderOrganizationAthleteEditForm(row, data.clubs || [], data.teams || [])}
+        ${type === "club" ? renderOrganizationClubEditForm(row) : type === "team" ? renderOrganizationTeamEditForm(row, data.clubs || []) : `${renderOrganizationAthleteEditForm(row, data.clubs || [], data.teams || [])}${renderAthleteLibraryAccessForm(row)}`}
       </section>
     </div>
   `;
@@ -2531,6 +2549,37 @@ function renderOrganizationAthleteEditForm(row, clubs, teams) {
   `;
 }
 
+function renderAthleteLibraryAccessForm(row) {
+  return `
+    <form class="organization-form athlete-access-form" data-organization-form="athleteLibraryAccess" data-athlete-id="${escapeAttr(row.id)}">
+      <div>
+        <p class="eyebrow">Athlete library access</p>
+        <h3>Visible program libraries</h3>
+        <p class="muted">Control what this athlete can browse from Program Library. Assigned weekly and specific programs stay visible as before.</p>
+      </div>
+      <div class="athlete-access-grid">
+        ${renderAccessCheckbox("canViewCoachLibrary", "Coach library", row.can_view_coach_library !== false)}
+        ${renderAccessCheckbox("canViewClubLibrary", "Club library", row.can_view_club_library === true)}
+        ${renderAccessCheckbox("canViewOptimoveLibrary", "OptiMove", row.can_view_optimove_library === true)}
+        ${renderAccessCheckbox("canViewMarketplace", "Marketplace", row.can_view_marketplace === true)}
+        ${renderAccessCheckbox("freeOnly", "Free programs only", row.free_only !== false)}
+        ${renderAccessCheckbox("requireApproval", "Require approval", row.require_approval !== false)}
+      </div>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button compact-button" type="submit">Save library access</button>
+    </form>
+  `;
+}
+
+function renderAccessCheckbox(name, label, checked) {
+  return `
+    <label class="program-checkbox">
+      <input type="checkbox" name="${escapeAttr(name)}" value="true" ${checked ? "checked" : ""}>
+      <span>${escapeHtml(label)}</span>
+    </label>
+  `;
+}
+
 async function submitOrganizationForm(form) {
   if (!validateFilterableSelects(form)) return;
   const type = form.dataset.organizationForm;
@@ -2541,6 +2590,7 @@ async function submitOrganizationForm(form) {
   const formData = new FormData(form);
   const payload = Object.fromEntries(formData.entries());
   const editId = form.dataset.organizationEditId;
+  const athleteId = form.dataset.athleteId;
   const teamId = form.dataset.teamId;
   const endpoint = {
     club: "/api/organization/clubs",
@@ -2552,11 +2602,20 @@ async function submitOrganizationForm(form) {
     athleteLogin: "/api/organization/athlete-logins",
     athleteInvite: "/api/organization/athlete-invites",
     assignTeamAthlete: `/api/organization/teams/${encodeURIComponent(teamId || "")}/athletes`,
+    athleteLibraryAccess: `/api/organization/athletes/${encodeURIComponent(athleteId || "")}/library-access`,
     "edit-club": `/api/organization/clubs/${encodeURIComponent(editId)}`,
     "edit-team": `/api/organization/teams/${encodeURIComponent(editId)}`,
     "edit-athlete": `/api/organization/athletes/${encodeURIComponent(editId)}`,
   }[type];
-  const method = type.startsWith("edit-") ? "PUT" : "POST";
+  const method = type.startsWith("edit-") || type === "athleteLibraryAccess" ? "PUT" : "POST";
+  if (type === "athleteLibraryAccess") {
+    payload.canViewCoachLibrary = formData.has("canViewCoachLibrary");
+    payload.canViewClubLibrary = formData.has("canViewClubLibrary");
+    payload.canViewOptimoveLibrary = formData.has("canViewOptimoveLibrary");
+    payload.canViewMarketplace = formData.has("canViewMarketplace");
+    payload.freeOnly = formData.has("freeOnly");
+    payload.requireApproval = formData.has("requireApproval");
+  }
   try {
     const result = await api(endpoint, { method, body: JSON.stringify(payload) });
     if (type === "athleteInvite") {
@@ -3254,6 +3313,7 @@ function renderTemplateLibrary(templates) {
       </div>
     </section>
     ${renderTemplatePreviewModal()}
+    ${renderCopyPlanModal()}
   `;
 }
 
@@ -3334,7 +3394,7 @@ function renderTemplateFilters() {
   const visibleClubs = clubPrefix ? clubOptions.filter((club) => templateFilterOptionMatches(club, clubPrefix)) : clubOptions;
   return `
     <div class="program-scope-tabs" role="group" aria-label="Program library scope">
-      ${["all", "my", "club", "optimove", "marketplace"].map((scope) => renderTemplateScopeButton(scope, templateScopeMeta(scope).label)).join("")}
+      ${TEMPLATE_SCOPES.map((scope) => renderTemplateScopeButton(scope, templateScopeMeta(scope).label)).join("")}
     </div>
     <section class="program-filter-panel" aria-label="Program filters">
       <label class="search-field program-filter-search">
@@ -3629,6 +3689,7 @@ function renderTemplatePreviewModal() {
           <div class="builder-source-actions">
             ${state.templatePreview.loading ? `<span class="item-badge">Loading</span>` : state.templatePreview.error ? "" : `<span class="item-badge">${detail.rows?.length || 0} items</span>`}
             ${selected ? `<span class="item-badge">${escapeHtml(ratingLabel(selected))}</span>` : ""}
+            ${selected && state.currentUser?.role !== "athlete" && selected.can_assign_to_athlete !== false ? `<button class="plain-button compact-button" type="button" data-action="template-assign" data-template-id="${escapeAttr(selected.plan_id)}">Assign</button>` : ""}
             ${selected ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${state.templatePreview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}
             ${selected ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">×</span></button>
@@ -3705,6 +3766,7 @@ function renderTemplateMetadataForm(template) {
     <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}">
       <div class="program-metadata-grid">
         <label class="search-field"><span>Library</span><select name="libraryScope">
+          ${renderOption("workspace", "Working materials", template.library_scope)}
           ${renderOption("my", "My templates", template.library_scope || "my")}
           ${renderOption("club", "Club", template.library_scope)}
           ${renderOption("optimove", "OptiMove", template.library_scope)}

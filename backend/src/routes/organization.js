@@ -215,6 +215,52 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
   }
 });
 
+router.put("/athletes/:athleteId/library-access", async (req, res, next) => {
+  try {
+    if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    const result = await query(
+      `insert into public.athlete_library_access (
+         athlete_id,
+         managed_by_user_id,
+         can_view_coach_library,
+         can_view_club_library,
+         can_view_optimove_library,
+         can_view_marketplace,
+         free_only,
+         require_approval,
+         selected_programs_only
+       )
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       on conflict (athlete_id) do update set
+         managed_by_user_id = excluded.managed_by_user_id,
+         can_view_coach_library = excluded.can_view_coach_library,
+         can_view_club_library = excluded.can_view_club_library,
+         can_view_optimove_library = excluded.can_view_optimove_library,
+         can_view_marketplace = excluded.can_view_marketplace,
+         free_only = excluded.free_only,
+         require_approval = excluded.require_approval,
+         selected_programs_only = excluded.selected_programs_only,
+         updated_at = now()
+       returning athlete_id, can_view_coach_library, can_view_club_library, can_view_optimove_library,
+         can_view_marketplace, free_only, require_approval, selected_programs_only`,
+      [
+        req.params.athleteId,
+        req.user.id,
+        bool(req.body?.canViewCoachLibrary, true),
+        bool(req.body?.canViewClubLibrary, false),
+        bool(req.body?.canViewOptimoveLibrary, false),
+        bool(req.body?.canViewMarketplace, false),
+        bool(req.body?.freeOnly, true),
+        bool(req.body?.requireApproval, true),
+        bool(req.body?.selectedProgramsOnly, false),
+      ],
+    );
+    res.json({ access: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/teams/:teamId/athletes", async (req, res, next) => {
   try {
     const teamId = clean(req.params.teamId);
@@ -503,10 +549,18 @@ async function loadManagedAthletes(user) {
     `select
        a.id, a.athlete_id, a.source_external_id,
        coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as name,
-       a.image_url, a.club_id, c.name as club_name, a.team_id, t.name as team_name, a.user_id
+       a.image_url, a.club_id, c.name as club_name, a.team_id, t.name as team_name, a.user_id,
+       coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
+       coalesce(ala.can_view_club_library, false) as can_view_club_library,
+       coalesce(ala.can_view_optimove_library, false) as can_view_optimove_library,
+       coalesce(ala.can_view_marketplace, false) as can_view_marketplace,
+       coalesce(ala.free_only, true) as free_only,
+       coalesce(ala.require_approval, true) as require_approval,
+       coalesce(ala.selected_programs_only, false) as selected_programs_only
      from public.athletes a
      left join public.clubs c on c.id = a.club_id
      left join public.teams t on t.id = a.team_id
+     left join public.athlete_library_access ala on ala.athlete_id = a.id
      where coalesce(a.is_active, true)
        and (
          $2::boolean
@@ -623,6 +677,12 @@ async function nextAthleteId() {
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+function bool(value, fallback = false) {
+  if (value === true || value === "true" || value === "on" || value === "1") return true;
+  if (value === false || value === "false" || value === "0" || value === "") return false;
+  return fallback;
 }
 
 function hashInviteToken(token) {

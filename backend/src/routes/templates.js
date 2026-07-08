@@ -6,13 +6,29 @@ const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    const allowedScopes = new Set(["all", "my", "club", "optimove", "marketplace"]);
+    const allowedScopes = new Set(["all", "workspace", "my", "club", "optimove", "marketplace"]);
     const requestedScope = allowedScopes.has(String(req.query.scope || "")) ? String(req.query.scope) : "my";
     const search = text(req.query.search);
     const category = text(req.query.category);
     const tag = text(req.query.tag);
     const pricing = normalizeChoice(req.query.pricing, ["all", "free", "paid"], "all");
-    const params = [req.user.id, canAccessAllAthletes(req.user), requestedScope, search, category, tag, pricing];
+    const athleteAccess = await loadAthleteLibraryAccess(req.user);
+    const params = [
+      req.user.id,
+      canAccessAllAthletes(req.user),
+      requestedScope,
+      search,
+      category,
+      tag,
+      pricing,
+      Boolean(athleteAccess),
+      athleteAccess?.athlete_id || null,
+      athleteAccess?.can_view_coach_library === true,
+      athleteAccess?.can_view_club_library === true,
+      athleteAccess?.can_view_optimove_library === true,
+      athleteAccess?.can_view_marketplace === true,
+      athleteAccess?.free_only !== false,
+    ];
     const result = await query(
       `
       select ps.*,
@@ -51,7 +67,27 @@ router.get("/", async (req, res, next) => {
       left join library.program_tag_definitions t on t.id = pt.tag_id and t.is_active = true
       where ps.plan_type = 'program'
         and ps.is_template = true
-        and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+        and (
+          (not $8::boolean and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public'))
+          or (
+            $8::boolean
+            and coalesce(ps.athlete_can_view_directly, false)
+            and (not $14::boolean or coalesce(ps.is_free, true))
+            and (
+              (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and exists (
+                select 1
+                from public.user_athletes coach_rel
+                where coach_rel.athlete_id = $9
+                  and coach_rel.user_id = p.created_by_user_id
+                  and coach_rel.relationship_type = 'coach'
+                  and coach_rel.is_active = true
+              ))
+              or (coalesce(p.library_scope, 'my') = 'club' and $11::boolean and p.visibility in ('club', 'public'))
+              or (coalesce(p.library_scope, 'my') = 'optimove' and $12::boolean and p.visibility = 'public')
+              or (coalesce(p.library_scope, 'my') = 'marketplace' and $13::boolean and p.visibility = 'public')
+            )
+          )
+        )
         and ($3 = 'all' or coalesce(p.library_scope, 'my') = $3)
         and ($4 = '' or ps.plan_name ilike '%' || $4 || '%' or coalesce(ps.source_external_id, '') ilike '%' || $4 || '%')
         and ($5 = '' or coalesce(ps.library_category, '') = $5)
@@ -173,7 +209,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     );
     if (!canEdit.rowCount) return res.status(404).json({ error: "Template not found." });
 
-    const scope = normalizeChoice(req.body?.libraryScope, ["my", "club", "optimove", "marketplace"], "my");
+    const scope = normalizeChoice(req.body?.libraryScope, ["workspace", "my", "club", "optimove", "marketplace"], "my");
     const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
@@ -431,7 +467,77 @@ async function canUseTemplate(user, planId) {
      limit 1`,
     [planId, user.id, canAccessAllAthletes(user)],
   );
-  return Boolean(result.rows[0]);
+  if (result.rows[0]) return true;
+
+  const athleteAccess = await loadAthleteLibraryAccess(user);
+  if (!athleteAccess) return false;
+  const athleteResult = await query(
+    `select 1
+     from plans.plans p
+     where p.id = $1
+       and p.plan_type = 'program'
+       and p.is_template = true
+       and coalesce(p.is_active, true)
+       and coalesce(p.athlete_can_view_directly, false)
+       and (not $7::boolean or coalesce(p.is_free, true))
+       and (
+         (coalesce(p.library_scope, 'my') = 'my' and $3::boolean and exists (
+           select 1
+           from public.user_athletes coach_rel
+           where coach_rel.athlete_id = $2
+             and coach_rel.user_id = p.created_by_user_id
+             and coach_rel.relationship_type = 'coach'
+             and coach_rel.is_active = true
+         ))
+         or (coalesce(p.library_scope, 'my') = 'club' and $4::boolean and p.visibility in ('club', 'public'))
+         or (coalesce(p.library_scope, 'my') = 'optimove' and $5::boolean and p.visibility = 'public')
+         or (coalesce(p.library_scope, 'my') = 'marketplace' and $6::boolean and p.visibility = 'public')
+       )
+     limit 1`,
+    [
+      planId,
+      athleteAccess.athlete_id,
+      athleteAccess.can_view_coach_library === true,
+      athleteAccess.can_view_club_library === true,
+      athleteAccess.can_view_optimove_library === true,
+      athleteAccess.can_view_marketplace === true,
+      athleteAccess.free_only !== false,
+    ],
+  );
+  return Boolean(athleteResult.rows[0]);
+}
+
+async function loadAthleteLibraryAccess(user) {
+  if (String(user?.role_hint || "").toLowerCase() !== "athlete") return null;
+  const result = await query(
+    `select
+       a.id as athlete_id,
+       coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
+       coalesce(ala.can_view_club_library, false) as can_view_club_library,
+       coalesce(ala.can_view_optimove_library, false) as can_view_optimove_library,
+       coalesce(ala.can_view_marketplace, false) as can_view_marketplace,
+       coalesce(ala.free_only, true) as free_only,
+       coalesce(ala.require_approval, true) as require_approval,
+       coalesce(ala.selected_programs_only, false) as selected_programs_only
+     from public.athletes a
+     left join public.athlete_library_access ala on ala.athlete_id = a.id
+     where coalesce(a.is_active, true)
+       and (
+         a.user_id = $1
+         or exists (
+           select 1
+           from public.user_athletes ua
+           where ua.user_id = $1
+             and ua.athlete_id = a.id
+             and ua.relationship_type = 'athlete'
+             and ua.is_active = true
+         )
+       )
+     order by a.created_at nulls last
+     limit 1`,
+    [user.id],
+  );
+  return result.rows[0] || null;
 }
 
 async function canEditTemplate(user, planId) {

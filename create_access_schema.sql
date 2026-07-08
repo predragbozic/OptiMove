@@ -123,6 +123,20 @@ create table if not exists public.athlete_invites (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.athlete_library_access (
+  athlete_id uuid primary key references public.athletes(id) on delete cascade,
+  managed_by_user_id uuid references public.users(id) on delete set null,
+  can_view_coach_library boolean not null default true,
+  can_view_club_library boolean not null default false,
+  can_view_optimove_library boolean not null default false,
+  can_view_marketplace boolean not null default false,
+  free_only boolean not null default true,
+  require_approval boolean not null default true,
+  selected_programs_only boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.user_athletes
   add column if not exists relationship_type varchar(40) not null default 'coach',
   add column if not exists is_active boolean not null default true,
@@ -161,6 +175,18 @@ alter table public.athlete_invites
   add column if not exists expires_at timestamptz not null default (now() + interval '14 days'),
   add column if not exists created_at timestamptz not null default now();
 
+alter table public.athlete_library_access
+  add column if not exists managed_by_user_id uuid references public.users(id) on delete set null,
+  add column if not exists can_view_coach_library boolean not null default true,
+  add column if not exists can_view_club_library boolean not null default false,
+  add column if not exists can_view_optimove_library boolean not null default false,
+  add column if not exists can_view_marketplace boolean not null default false,
+  add column if not exists free_only boolean not null default true,
+  add column if not exists require_approval boolean not null default true,
+  add column if not exists selected_programs_only boolean not null default false,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
 create index if not exists user_club_roles_user_active_idx
   on public.user_club_roles (user_id, club_id)
   where is_active = true;
@@ -180,3 +206,6 @@ create index if not exists athletes_club_team_idx
 create index if not exists athlete_invites_lookup_idx
   on public.athlete_invites (token_hash)
   where accepted_at is null;
+
+create index if not exists athlete_library_access_manager_idx
+  on public.athlete_library_access (managed_by_user_id);

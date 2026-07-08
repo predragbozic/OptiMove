@@ -193,6 +193,37 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   gap: 8px;
 }
 
+.athlete-access-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.athlete-access-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.program-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.program-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
 .organization-lists {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -717,6 +748,10 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
   .organization-actions,
   .organization-lists,
   .organization-form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .athlete-access-grid {
     grid-template-columns: 1fr;
   }
 

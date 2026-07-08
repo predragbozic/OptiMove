@@ -93,6 +93,42 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
         p.visibility = 'public'
         ${ownPlanStatus}
         or (a.id is not null and ${athleteAccessPredicate("a", "$2")})
+        or (
+          p.plan_type = 'program'
+          and p.is_template = true
+          and coalesce(p.athlete_can_view_directly, false)
+          and exists (
+            select 1
+            from public.athletes viewer_athlete
+            left join public.athlete_library_access ala on ala.athlete_id = viewer_athlete.id
+            where (
+                viewer_athlete.user_id = $2
+                or exists (
+                  select 1
+                  from public.user_athletes viewer_link
+                  where viewer_link.user_id = $2
+                    and viewer_link.athlete_id = viewer_athlete.id
+                    and viewer_link.relationship_type = 'athlete'
+                    and viewer_link.is_active = true
+                )
+              )
+              and coalesce(viewer_athlete.is_active, true)
+              and (not coalesce(ala.free_only, true) or coalesce(p.is_free, true))
+              and (
+                (coalesce(p.library_scope, 'my') = 'my' and coalesce(ala.can_view_coach_library, true) and exists (
+                  select 1
+                  from public.user_athletes coach_rel
+                  where coach_rel.athlete_id = viewer_athlete.id
+                    and coach_rel.user_id = p.created_by_user_id
+                    and coach_rel.relationship_type = 'coach'
+                    and coach_rel.is_active = true
+                ))
+                or (coalesce(p.library_scope, 'my') = 'club' and coalesce(ala.can_view_club_library, false) and p.visibility in ('club', 'public'))
+                or (coalesce(p.library_scope, 'my') = 'optimove' and coalesce(ala.can_view_optimove_library, false) and p.visibility = 'public')
+                or (coalesce(p.library_scope, 'my') = 'marketplace' and coalesce(ala.can_view_marketplace, false) and p.visibility = 'public')
+              )
+          )
+        )
       )
     limit 1
     `,
