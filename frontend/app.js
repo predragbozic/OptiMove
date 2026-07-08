@@ -1,4 +1,27 @@
-const API_BASE = "";
+import { api } from "./api.js";
+import {
+  addDaysIso,
+  addMonthsIso,
+  clean,
+  countLabel,
+  dateValue,
+  debounce,
+  endOfWeekIso,
+  escapeAttr,
+  escapeHtml,
+  formatDate,
+  formatDayMonth,
+  formatWeekday,
+  groupBy,
+  initialsFor,
+  localDateIso,
+  monthLabel,
+  monthStartIso,
+  orderedUnique,
+  startOfWeekIso,
+  weekDayName,
+  weekMondayIso,
+} from "./utils.js";
 
 const EXERCISE_FILTERS = [
   { key: "purpose", label: "Purpose", optionsKey: "purposes" },
@@ -5500,107 +5523,10 @@ function todayWeekIndex(weeks) {
   return closestIndex;
 }
 
-function localDateIso(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function weekMondayIso(value) {
-  const date = new Date(`${String(value).slice(0, 10)}T12:00:00`);
-  if (Number.isNaN(date.getTime())) return localDateIso();
-  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
-  return localDateIso(date);
-}
-
-function weekDayName(value) {
-  const date = new Date(`${String(value || "").slice(0, 10)}T12:00:00`);
-  if (Number.isNaN(date.getTime())) return "Day";
-  return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][date.getDay()];
-}
-
-function monthStartIso(value) {
-  return `${String(value).slice(0, 7)}-01`;
-}
-
-function addMonthsIso(value, amount) {
-  const date = new Date(`${value}T12:00:00`);
-  date.setMonth(date.getMonth() + amount, 1);
-  return localDateIso(date);
-}
-
-function addDaysIso(value, amount) {
-  const date = new Date(`${value}T12:00:00`);
-  date.setDate(date.getDate() + amount);
-  return localDateIso(date);
-}
-
-function startOfWeekIso(value) {
-  const date = new Date(`${value}T12:00:00`);
-  const day = date.getDay() || 7;
-  date.setDate(date.getDate() - day + 1);
-  return localDateIso(date);
-}
-
-function endOfWeekIso(value) {
-  return addDaysIso(startOfWeekIso(value), 6);
-}
-
-function monthLabel(value) {
-  return new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${value}T12:00:00`));
-}
-
-function dateValue(value) {
-  if (!value) return 0;
-  return new Date(`${value}T12:00:00`).getTime();
-}
-
-function countLabel(items) {
-  const count = (items || []).length;
-  return `${count} ${count === 1 ? "item" : "items"}`;
-}
-
-function orderedUnique(items, field) {
-  const seen = new Set();
-  const names = [];
-  items.forEach((item) => {
-    const name = clean(item[field]);
-    if (!name || seen.has(name)) return;
-    seen.add(name);
-    names.push(name);
-  });
-  return names;
-}
-
-function groupBy(items, labelFn) {
-  const map = new Map();
-  items.forEach((item) => {
-    const label = labelFn(item);
-    if (!map.has(label)) map.set(label, []);
-    map.get(label).push(item);
-  });
-  return Array.from(map, ([label, groupItemsValue]) => ({ label, items: groupItemsValue }));
-}
-
-function clean(value) {
-  return String(value || "").trim();
-}
-
 function avatarMarkup(athlete) {
   const initials = initialsFor(athlete.athlete);
   if (!athlete.athlete_image_url) return `<span class="avatar-fallback">${escapeHtml(initials)}</span>`;
   return renderImage(athlete.athlete_image_url, "avatar", initials);
-}
-
-function initialsFor(name) {
-  return String(name || "?")
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase();
 }
 
 function openMedia(title, imageUrl, videoUrl) {
@@ -5763,23 +5689,6 @@ function getDriveId(url) {
   return "";
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    credentials: "same-origin",
-    headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers,
-    ...options,
-  });
-  if (!response.ok) {
-    let message = `${response.status} ${response.statusText}`;
-    try {
-      const errorData = await response.json();
-      message = errorData.error || errorData.message || message;
-    } catch {}
-    throw new Error(message);
-  }
-  return response.json();
-}
-
 function setStatus(text) {
   els.status.textContent = text;
 }
@@ -5794,42 +5703,4 @@ function renderEmpty(message) {
 
 function renderError(error) {
   els.content.innerHTML = `<div class="error">${escapeHtml(error.message || String(error))}</div>`;
-}
-
-function formatDate(value) {
-  if (!value) return "";
-  const [year, month, day] = String(value).slice(0, 10).split("-");
-  return day && month && year ? `${day}.${month}.${year}` : String(value);
-}
-
-function formatWeekday(value) {
-  if (!value) return "";
-  return new Intl.DateTimeFormat("en-GB", { weekday: "short" }).format(new Date(`${String(value).slice(0, 10)}T12:00:00`));
-}
-
-function formatDayMonth(value) {
-  if (!value) return "";
-  const [year, month, day] = String(value).slice(0, 10).split("-");
-  return day && month && year ? `${day}.${month}` : String(value);
-}
-
-function debounce(fn, delay) {
-  let timer = null;
-  return (...args) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), delay);
-  };
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function escapeAttr(value) {
-  return escapeHtml(value).replaceAll("`", "&#096;");
 }
