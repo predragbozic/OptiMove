@@ -13,6 +13,7 @@ router.get("/", async (req, res, next) => {
     const tag = text(req.query.tag);
     const pricing = normalizeChoice(req.query.pricing, ["all", "free", "paid"], "all");
     const athleteAccess = await loadAthleteLibraryAccess(req.user);
+    const visibleScopes = templateScopesForUser(athleteAccess);
     const params = [
       req.user.id,
       canAccessAllAthletes(req.user),
@@ -113,7 +114,7 @@ router.get("/", async (req, res, next) => {
       `,
       params,
     );
-    res.json({ scope: requestedScope, templates: result.rows });
+    res.json({ scope: requestedScope, allowedScopes: visibleScopes, templates: result.rows });
   } catch (error) {
     next(error);
   }
@@ -538,6 +539,16 @@ async function loadAthleteLibraryAccess(user) {
     [user.id],
   );
   return result.rows[0] || null;
+}
+
+function templateScopesForUser(athleteAccess) {
+  if (!athleteAccess) return ["all", "workspace", "my", "club", "optimove", "marketplace"];
+  const scopes = [];
+  if (athleteAccess.can_view_coach_library === true) scopes.push("my");
+  if (athleteAccess.can_view_club_library === true) scopes.push("club");
+  if (athleteAccess.can_view_optimove_library === true) scopes.push("optimove");
+  if (athleteAccess.can_view_marketplace === true) scopes.push("marketplace");
+  return scopes.length ? ["all", ...scopes] : [];
 }
 
 async function canEditTemplate(user, planId) {

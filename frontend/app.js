@@ -70,6 +70,7 @@ const emptyTemplatePreview = (overrides = {}) => ({
 });
 
 const TEMPLATE_SCOPES = ["all", "workspace", "my", "club", "optimove", "marketplace"];
+const ATHLETE_TEMPLATE_SCOPES = ["all", "my", "club", "optimove", "marketplace"];
 
 const state = {
   currentUser: null,
@@ -88,6 +89,7 @@ const state = {
   lastWeeklyData: null,
   lastProgramBundle: null,
   lastTemplates: [],
+  templateAllowedScopes: TEMPLATE_SCOPES,
   templatePreview: emptyTemplatePreview(),
   templateFilters: emptyTemplateFilters(),
   templateOptions: { categories: [], tags: [], creators: [], clubs: [] },
@@ -181,7 +183,10 @@ function bindEvents() {
     button.addEventListener("click", () => {
       if (state.activeTab !== button.dataset.libraryTab) pushAppHistory();
       state.activeTab = button.dataset.libraryTab;
-      if (button.dataset.templateScope) state.templateScope = button.dataset.templateScope;
+      if (button.dataset.templateScope) {
+        state.templateScope = isAthleteMode() && button.classList.contains("sidebar-nav-button") ? "all" : button.dataset.templateScope;
+        ensureTemplateScopeIsVisible();
+      }
       if (button.dataset.organizationSection) state.organization.section = button.dataset.organizationSection;
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
@@ -655,10 +660,11 @@ function hasOrganizationAccess(user = state.currentUser) {
 function renderAccessNav() {
   const orgButton = document.querySelector('[data-library-tab="organization"]');
   const orgSubmenu = document.querySelector('[data-sidebar-submenu="settings"]');
-  if (!orgButton) return;
+  const builderButton = document.querySelector('[data-library-tab="builder"]');
   const visible = hasOrganizationAccess();
-  orgButton.hidden = !visible;
+  if (orgButton) orgButton.hidden = !visible;
   if (orgSubmenu) orgSubmenu.hidden = !visible;
+  if (builderButton) builderButton.hidden = isAthleteMode();
 }
 
 function toggleAthletesList() {
@@ -998,6 +1004,8 @@ async function loadPrograms() {
 
 async function loadTemplates(options = {}) {
   state.navStack = [];
+  ensureTemplateScopeIsVisible();
+  const requestedScope = state.templateScope;
   const scope = templateScopeMeta();
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
@@ -1008,8 +1016,13 @@ async function loadTemplates(options = {}) {
     state.templateOptions = { ...filterOptions, loaded: true };
   }
   const data = await api(templateSearchUrl());
+  state.templateAllowedScopes = Array.isArray(data.allowedScopes) ? data.allowedScopes : TEMPLATE_SCOPES;
+  ensureTemplateScopeIsVisible();
+  if (state.templateScope !== requestedScope) return loadTemplates(options);
   state.lastTemplates = data.templates || [];
-  if (!state.selectedTemplateId) state.selectedTemplateId = state.lastTemplates[0]?.plan_id || null;
+  if (!state.lastTemplates.some((template) => String(template.plan_id) === String(state.selectedTemplateId))) {
+    state.selectedTemplateId = state.lastTemplates[0]?.plan_id || null;
+  }
   renderTemplateLibrary(state.lastTemplates);
   restoreTemplateFilterFocus(options.restoreFocus);
 }
@@ -1889,18 +1902,19 @@ function renderTabs() {
 
 function templateScopeMeta(scope = state.templateScope) {
   const access = String(state.currentUser?.accessScope || "").toLowerCase();
+  const isAthlete = isAthleteMode() || access === "athlete";
   const isPlatform = access === "platform";
   const isClub = access === "club";
   const scopes = {
     all: {
-      label: isPlatform ? "All platform programs" : "All programs",
+      label: isAthlete ? "Allowed programs" : (isPlatform ? "All platform programs" : "All programs"),
       eyebrow: "Program library",
-      note: isPlatform ? "All coach, club, OptiMove and marketplace programs visible to platform admins." : "All template programs available to your current account.",
+      note: isAthlete ? "Programs your coach or organization made available to you." : (isPlatform ? "All coach, club, OptiMove and marketplace programs visible to platform admins." : "All template programs available to your current account."),
     },
     my: {
-      label: isPlatform ? "Admin workspace" : "My templates",
-      eyebrow: isPlatform ? "Private admin library" : "Private library",
-      note: isPlatform ? "Programs created inside your own platform admin workspace." : "Reusable programs and templates available in your current coach workspace.",
+      label: isAthlete ? "Coach library" : (isPlatform ? "Admin workspace" : "My templates"),
+      eyebrow: isAthlete ? "Coach library" : (isPlatform ? "Private admin library" : "Private library"),
+      note: isAthlete ? "Programs your coach allowed you to browse and use." : (isPlatform ? "Programs created inside your own platform admin workspace." : "Reusable programs and templates available in your current coach workspace."),
     },
     workspace: {
       label: "Working materials",
@@ -1929,9 +1943,12 @@ function templateScopeMeta(scope = state.templateScope) {
 function renderLibraryNav() {
   renderAccessNav();
   if (state.activeTab === "organization" && !hasOrganizationAccess()) state.activeTab = "weekly";
+  if (isAthleteMode() && state.activeTab === "builder") state.activeTab = "weekly";
   els.libraryTabs.forEach((button) => {
     const tab = button.dataset.libraryTab;
     const scope = button.dataset.templateScope || "";
+    const isHiddenScope = tab === "templates" && scope && button.classList.contains("sidebar-subnav-button") && !visibleTemplateScopes().includes(scope);
+    button.hidden = isHiddenScope;
     const organizationSection = button.dataset.organizationSection || "";
     const isTemplateTab = tab === "templates" && state.activeTab === "templates";
     const isTemplateScope = isTemplateTab && scope && scope === state.templateScope;
@@ -1965,6 +1982,21 @@ function updateProgramLibraryNavLabels() {
     const label = templateScopeMeta(button.dataset.templateScope).label;
     if (label) button.textContent = label;
   });
+}
+
+function visibleTemplateScopes() {
+  const allowed = new Set(state.templateAllowedScopes || TEMPLATE_SCOPES);
+  const base = isAthleteMode() ? ATHLETE_TEMPLATE_SCOPES : TEMPLATE_SCOPES;
+  return base.filter((scope) => allowed.has(scope));
+}
+
+function ensureTemplateScopeIsVisible() {
+  const scopes = visibleTemplateScopes();
+  if (scopes.length && !scopes.includes(state.templateScope)) state.templateScope = scopes[0];
+}
+
+function isAthleteMode() {
+  return document.body.classList.contains("athlete-mode");
 }
 
 function renderAthleteListState() {
@@ -2770,31 +2802,10 @@ function renderAthleteSettings() {
   `;
 }
 
-function renderAthleteLibrary() {
+async function renderAthleteLibrary() {
   renderAthleteHeader({});
-  els.context.textContent = "Athlete library";
-  els.title.textContent = "Library";
-  els.content.innerHTML = `
-    <section class="content-section athlete-simple-view">
-      <section class="panel athlete-settings-card">
-        <div>
-          <p class="eyebrow">Available later</p>
-          <h3>Shared exercises and programs</h3>
-          <p class="muted">This area is reserved for exercises, templates, or programs that a coach makes available to athletes.</p>
-        </div>
-        <div class="athlete-setting-list">
-          <article>
-            <strong>Exercise groups</strong>
-            <span>Collections approved for athlete viewing.</span>
-          </article>
-          <article>
-            <strong>Program downloads</strong>
-            <span>Future option for templates or assigned resources.</span>
-          </article>
-        </div>
-      </section>
-    </section>
-  `;
+  state.templateScope = state.templateScope === "workspace" ? "all" : state.templateScope;
+  await loadTemplates();
 }
 
 function renderWeeklyRoot(data) {
@@ -3381,6 +3392,7 @@ function renderTemplateFilters() {
   const filters = state.templateFilters;
   const options = state.templateOptions || {};
   const showAdminFilters = canUseProgramAdminFilters();
+  const scopes = visibleTemplateScopes();
   const tagPrefix = clean(filters.tag).toLowerCase();
   const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => templateFilterOptionMatches(tag, tagPrefix)) : (options.tags || []);
   const categories = templateCategoryOptions();
@@ -3394,7 +3406,7 @@ function renderTemplateFilters() {
   const visibleClubs = clubPrefix ? clubOptions.filter((club) => templateFilterOptionMatches(club, clubPrefix)) : clubOptions;
   return `
     <div class="program-scope-tabs" role="group" aria-label="Program library scope">
-      ${TEMPLATE_SCOPES.map((scope) => renderTemplateScopeButton(scope, templateScopeMeta(scope).label)).join("")}
+      ${scopes.map((scope) => renderTemplateScopeButton(scope, templateScopeMeta(scope).label)).join("")}
     </div>
     <section class="program-filter-panel" aria-label="Program filters">
       <label class="search-field program-filter-search">

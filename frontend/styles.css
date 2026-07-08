@@ -1021,6 +1021,10 @@ button {
   height: 24px;
 }
 
+.athlete-mode .sidebar-subnav {
+  display: none;
+}
+
 .sidebar {
   position: sticky;
   top: 0;
