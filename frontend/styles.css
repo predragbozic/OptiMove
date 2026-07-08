@@ -1798,7 +1798,7 @@ input:focus {
 .program-library-card {
   min-width: 0;
   display: grid;
-  grid-template-rows: 120px 1fr auto;
+  grid-template-rows: auto auto;
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -1807,8 +1807,20 @@ input:focus {
   color: var(--text);
   text-align: left;
   box-shadow: var(--soft-shadow);
-  cursor: pointer;
+  cursor: default;
   scroll-snap-align: start;
+}
+
+.program-library-card-hit {
+  display: grid;
+  grid-template-rows: 120px 1fr auto;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .program-library-card:hover,
@@ -1885,6 +1897,85 @@ input:focus {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.program-library-creator,
+.program-created-by {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.program-library-creator:disabled,
+.program-created-by:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
+
+.program-library-creator-photo,
+.program-library-creator-initials {
+  width: 30px;
+  height: 30px;
+  border-radius: 5px;
+  object-fit: cover;
+  object-position: center top;
+  background: #e7f5f2;
+}
+
+.program-library-creator-initials {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.program-library-creator small,
+.program-created-by small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.program-library-creator strong,
+.program-created-by strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-created-by {
+  width: min(360px, 100%);
+  margin-top: 10px;
+  background: #fff;
+}
+
+.program-created-by em {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .program-preview-overlay {
@@ -2144,7 +2235,7 @@ input:focus {
     grid-template-columns: 1fr;
   }
 
-  .program-library-card {
+  .program-library-card-hit {
     grid-template-rows: 96px auto auto;
   }
 

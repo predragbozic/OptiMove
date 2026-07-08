@@ -34,6 +34,9 @@ router.get("/", async (req, res, next) => {
       `
       select ps.*,
         p.created_by_user_id,
+        creator_profile.id as creator_profile_id,
+        creator_profile.photo_url as creator_photo_url,
+        creator_profile.headline as creator_headline,
         coalesce(nullif(creator.display_name, ''), nullif(creator.full_name, ''), creator.email) as creator_name,
         creator.email as creator_email,
         coalesce(creator_clubs.club_ids, '[]'::jsonb) as creator_club_ids,
@@ -48,6 +51,7 @@ router.get("/", async (req, res, next) => {
       from plans.v_plan_summary ps
       join plans.plans p on p.id = ps.plan_id
       left join public.users creator on creator.id = p.created_by_user_id
+      left join public.coach_profiles creator_profile on creator_profile.user_id = p.created_by_user_id and creator_profile.is_active = true
       left join lateral (
         select
           jsonb_agg(distinct c.id) filter (where c.id is not null) as club_ids,
@@ -107,7 +111,8 @@ router.get("/", async (req, res, next) => {
         ps.library_scope, ps.library_category, ps.cover_image_url, ps.is_free, ps.price_cents, ps.available_until, ps.owner_type, ps.visibility,
         ps.access_model, ps.access_duration_days, ps.subscription_period, ps.can_copy, ps.can_edit_copy, ps.can_assign_to_athlete,
         ps.athlete_can_view_directly, ps.requires_approval,
-        p.created_by_user_id, creator.display_name, creator.full_name, creator.email, creator_clubs.club_ids, creator_clubs.club_names,
+        p.created_by_user_id, creator_profile.id, creator_profile.photo_url, creator_profile.headline,
+        creator.display_name, creator.full_name, creator.email, creator_clubs.club_ids, creator_clubs.club_names,
         reviews.average_rating, reviews.review_count
       order by coalesce(ps.library_category, 'General'), ps.source_external_id, ps.program_order nulls last, ps.plan_name
       `,

@@ -1048,14 +1048,20 @@ function templateSearchUrl() {
 async function openCoachProfile(profileId) {
   if (!profileId) return;
   state.coaches = { ...state.coaches, selected: profileId, detail: null, editOpen: false, contactOpen: false, error: "" };
-  renderCoaches();
+  renderCoachContext();
   try {
     const detail = await api(`/api/coaches/${encodeURIComponent(profileId)}`);
     state.coaches = { ...state.coaches, detail, error: "" };
   } catch (error) {
     state.coaches = { ...state.coaches, error: error.message || "Could not load coach profile." };
   }
-  renderCoaches();
+  renderCoachContext();
+}
+
+function renderCoachContext() {
+  if (state.activeTab === "coaches") return renderCoaches();
+  if (state.activeTab === "templates" || state.activeTab === "athlete-library") return renderTemplateLibrary(state.lastTemplates);
+  return renderCurrentNode();
 }
 
 function renderCoaches() {
@@ -1077,7 +1083,7 @@ function renderCoaches() {
         ${rows.length ? rows.map(renderCoachCard).join("") : `<div class="empty-state">No visible coach profiles yet.</div>`}
       </section>
     </section>
-    ${state.coaches.selected ? renderCoachDetailModal() : ""}
+    ${renderCoachDetailModal()}
   `;
 }
 
@@ -1210,7 +1216,6 @@ function renderCoachProgramCard(program) {
       <div class="program-library-card-foot">
         <span>${program.is_free === false ? "Paid" : "Free"}</span>
         <span>${escapeHtml(ratingLabel(program))}</span>
-        <span>${Number(program.item_count || 0)} items</span>
       </div>
     </article>
   `;
@@ -1264,7 +1269,7 @@ async function submitCoachContactForm(form) {
     });
     state.coaches.contactOpen = false;
     state.coaches.error = "Contact request sent.";
-    renderCoaches();
+    renderCoachContext();
   } catch (submitError) {
     if (error) error.textContent = submitError.message || "Could not send request.";
   } finally {
@@ -1711,17 +1716,17 @@ function handleContentClick(event) {
   }
   if (type === "coach-close") {
     state.coaches = { ...state.coaches, selected: null, detail: null, editOpen: false, contactOpen: false, error: "" };
-    renderCoaches();
+    renderCoachContext();
     return;
   }
   if (type === "coach-edit-toggle") {
     state.coaches.editOpen = !state.coaches.editOpen;
-    renderCoaches();
+    renderCoachContext();
     return;
   }
   if (type === "coach-contact-toggle") {
     state.coaches.contactOpen = !state.coaches.contactOpen;
-    renderCoaches();
+    renderCoachContext();
     return;
   }
   if (type === "program-tags-close") {
@@ -3303,7 +3308,7 @@ function renderTemplateList(templates, selected, detail) {
             <h3>${escapeHtml(selected.plan_name)}</h3>
             <p class="muted">${escapeHtml([templateCategoryLabel(selected), programPriceLabel(selected)].filter(Boolean).join(" · "))}</p>
           </div>
-          <div class="builder-source-actions"><span class="item-badge">${detail.rows?.length || 0} items</span>${renderPlanMoreMenu(selected.plan_id, "template")}</div>
+          <div class="builder-source-actions">${renderPlanMoreMenu(selected.plan_id, "template")}</div>
         </div>
         ${isMicrocycle
           ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -3336,6 +3341,7 @@ function renderTemplateLibrary(templates) {
       </div>
     </section>
     ${renderTemplatePreviewModal()}
+    ${renderCoachDetailModal()}
     ${renderCopyPlanModal()}
   `;
 }
@@ -3524,24 +3530,33 @@ function inferProgramCategory(template) {
 function renderProgramLibraryCard(template, duplicateNames) {
   const category = templateCategoryLabel(template);
   const creator = clean(template.creator_name);
+  const creatorProfileId = clean(template.creator_profile_id);
   const isSelected = String(template.plan_id) === String(state.selectedTemplateId);
   const price = programPriceLabel(template);
   return `
-    <button class="program-library-card ${isSelected ? "is-selected" : ""}" type="button" data-action="template-open" data-template-id="${escapeAttr(template.plan_id)}">
-      <span class="program-library-card-media">
-        ${template.cover_image_url ? renderImage(template.cover_image_url, "program-library-cover") : `<span class="program-library-card-icon">${escapeHtml(programInitials(template.plan_name))}</span>`}
-      </span>
-      <span class="program-library-card-body">
-        <span class="program-library-card-title">${escapeHtml(template.plan_name || "Untitled program")}</span>
-        <span class="program-library-card-sub">${escapeHtml([category, creator ? `by ${creator}` : ""].filter(Boolean).join(" - "))}</span>
-      </span>
-      <span class="program-library-card-foot">
-        <span class="item-badge">${escapeHtml(price)}</span>
-        <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
-        ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
-        <span class="text-action">Preview</span>
-      </span>
-    </button>
+    <article class="program-library-card ${isSelected ? "is-selected" : ""}">
+      <button class="program-library-card-hit" type="button" data-action="template-open" data-template-id="${escapeAttr(template.plan_id)}">
+        <span class="program-library-card-media">
+          ${template.cover_image_url ? renderImage(template.cover_image_url, "program-library-cover") : `<span class="program-library-card-icon">${escapeHtml(programInitials(template.plan_name))}</span>`}
+        </span>
+        <span class="program-library-card-body">
+          <span class="program-library-card-title">${escapeHtml(template.plan_name || "Untitled program")}</span>
+          <span class="program-library-card-sub">${escapeHtml(category)}</span>
+        </span>
+        <span class="program-library-card-foot">
+          <span class="item-badge">${escapeHtml(price)}</span>
+          <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
+          ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
+          <span class="text-action">Preview</span>
+        </span>
+      </button>
+      ${creator ? `
+        <button class="program-library-creator" type="button" ${creatorProfileId ? `data-action="coach-open" data-profile-id="${escapeAttr(creatorProfileId)}"` : "disabled"}>
+          ${template.creator_photo_url ? renderImage(template.creator_photo_url, "program-library-creator-photo") : `<span class="program-library-creator-initials">${escapeHtml(programInitials(creator))}</span>`}
+          <span><small>Created by</small><strong>${escapeHtml(creator)}</strong></span>
+        </button>
+      ` : ""}
+    </article>
   `;
 }
 
@@ -3691,6 +3706,8 @@ function renderTemplatePreviewModal() {
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(state.selectedTemplateId));
   const detail = state.templatePreview.detail || {};
   const selectedMeta = selected ? [templateCategoryLabel(selected), programPriceLabel(selected)].filter(Boolean).join(" · ") : "Program template";
+  const creatorName = clean(selected?.creator_name);
+  const creatorProfileId = clean(selected?.creator_profile_id);
   const isMicrocycle = detail.mode === "microcycle";
   const groups = state.templatePreview.loading || state.templatePreview.error
     ? []
@@ -3709,9 +3726,15 @@ function renderTemplatePreviewModal() {
             <p class="eyebrow">Program preview</p>
             <h3>${escapeHtml(selected?.plan_name || "Program")}</h3>
             <p class="muted">${escapeHtml(selectedMeta)}</p>
+            ${creatorName ? `
+              <button class="program-created-by" type="button" ${creatorProfileId ? `data-action="coach-open" data-profile-id="${escapeAttr(creatorProfileId)}"` : "disabled"}>
+                ${selected.creator_photo_url ? renderImage(selected.creator_photo_url, "program-library-creator-photo") : `<span class="program-library-creator-initials">${escapeHtml(programInitials(creatorName))}</span>`}
+                <span><small>Created by</small><strong>${escapeHtml(creatorName)}</strong>${selected.creator_headline ? `<em>${escapeHtml(selected.creator_headline)}</em>` : ""}</span>
+              </button>
+            ` : ""}
           </div>
           <div class="builder-source-actions">
-            ${state.templatePreview.loading ? `<span class="item-badge">Loading</span>` : state.templatePreview.error ? "" : `<span class="item-badge">${detail.rows?.length || 0} items</span>`}
+            ${state.templatePreview.loading ? `<span class="item-badge">Loading</span>` : ""}
             ${selected ? `<span class="item-badge">${escapeHtml(ratingLabel(selected))}</span>` : ""}
             ${selected && state.currentUser?.role !== "athlete" && selected.can_assign_to_athlete !== false ? `<button class="plain-button compact-button" type="button" data-action="template-assign" data-template-id="${escapeAttr(selected.plan_id)}">Assign</button>` : ""}
             ${selected ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${state.templatePreview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}

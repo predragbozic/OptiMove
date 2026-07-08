@@ -46,7 +46,7 @@ app.use("/api/templates", requireAuth, templatesRouter);
 app.use("/api/exercises", requireAuth, requireCoach, exercisesRouter);
 app.use("/api/builder", requireAuth, requireCoach, builderRouter);
 app.use("/api/organization", requireAuth, requireCoach, organizationRouter);
-app.use("/api/coaches", requireAuth, requireCoach, coachesRouter);
+app.use("/api/coaches", requireAuth, coachesRouter);
 
 app.use(express.static(frontendDir));
 app.get(["/", "/app", "/invite"], (_req, res) => {
