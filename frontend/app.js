@@ -9,9 +9,10 @@ import {
 import { closeMedia, enterMediaFullscreen, handleFullscreenChange, openMedia } from "./media-modal.js";
 import {
   duplicateTemplateNames,
-  programInfoModel,
   programPriceLabel,
   ratingLabel,
+  renderProgramInfoModal,
+  renderProgramLibraryCard,
   templateCategoryLabel,
   templateSecondaryLabel,
 } from "./program-library.js";
@@ -975,7 +976,7 @@ function renderCoaches() {
       </section>
     </section>
     ${renderCoachDetailModal()}
-    ${renderProgramInfoModal()}
+    ${renderProgramInfoModal(state.programInfo)}
     ${renderTemplatePreviewModal()}
   `;
 }
@@ -3310,7 +3311,7 @@ function renderTemplateLibrary(templates) {
       </div>
     </section>
     ${renderTemplatePreviewModal()}
-    ${renderProgramInfoModal()}
+    ${renderProgramInfoModal(state.programInfo)}
     ${renderCoachDetailModal()}
     ${renderCopyPlanModal()}
   `;
@@ -3336,7 +3337,7 @@ function renderTemplateLibraryResultsHtml(templates) {
         <span>${shelf.templates.length} programs</span>
       </div>
       <div class="program-library-row">
-        ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames)).join("")}
+        ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames, state.selectedTemplateId)).join("")}
       </div>
     </section>
   `).join("");
@@ -3482,71 +3483,6 @@ function groupTemplatesByCategory(templates) {
     groups.get(category).push(template);
   });
   return [...groups.entries()].map(([label, rows]) => ({ label, templates: rows }));
-}
-
-function renderProgramLibraryCard(template, duplicateNames) {
-  const category = templateCategoryLabel(template);
-  const creator = clean(template.creator_name);
-  const creatorProfileId = clean(template.creator_profile_id);
-  const isSelected = String(template.plan_id) === String(state.selectedTemplateId);
-  const price = programPriceLabel(template);
-  return `
-    <article class="program-library-card ${isSelected ? "is-selected" : ""}">
-      <button class="program-library-info-button" type="button" data-action="template-info" data-template-id="${escapeAttr(template.plan_id)}" aria-label="Program information">i</button>
-      <button class="program-library-card-hit" type="button" data-action="template-open" data-template-id="${escapeAttr(template.plan_id)}">
-        <span class="program-library-card-media">
-          ${template.cover_image_url ? renderImage(template.cover_image_url, "program-library-cover") : `<span class="program-library-card-icon">${escapeHtml(programInitials(template.plan_name))}</span>`}
-        </span>
-        <span class="program-library-card-body">
-          <span class="program-library-card-title">${escapeHtml(template.plan_name || "Untitled program")}</span>
-          <span class="program-library-card-sub">${escapeHtml(category)}</span>
-        </span>
-        <span class="program-library-card-foot">
-          <span class="item-badge">${escapeHtml(price)}</span>
-          <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
-          ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
-          <span class="text-action">Preview</span>
-        </span>
-      </button>
-      ${creator ? `
-        <button class="program-library-creator" type="button" ${creatorProfileId ? `data-action="coach-open" data-profile-id="${escapeAttr(creatorProfileId)}"` : "disabled"}>
-          ${template.creator_photo_url ? renderImage(template.creator_photo_url, "program-library-creator-photo") : `<span class="program-library-creator-initials">${escapeHtml(programInitials(creator))}</span>`}
-          <span><small>Created by</small><strong>${escapeHtml(creator)}</strong></span>
-        </button>
-      ` : ""}
-    </article>
-  `;
-}
-
-function renderProgramInfoModal() {
-  const program = state.programInfo?.program;
-  if (!state.programInfo?.open || !program) return "";
-  const info = programInfoModel(program);
-  const meta = [info.group, info.price].filter(Boolean).join(" - ");
-  return `
-    <div class="program-preview-overlay program-info-overlay">
-      <button class="program-preview-backdrop" type="button" data-action="program-info-close" aria-label="Close program information"></button>
-      <section class="program-info-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(info.title)} information">
-        <div class="program-info-head">
-          <div>
-            <p class="eyebrow">Program information</p>
-            <h3>${escapeHtml(info.title)}</h3>
-            ${meta ? `<p class="muted">${escapeHtml(meta)}</p>` : ""}
-          </div>
-          <button class="plain-button icon-button" type="button" data-action="program-info-close" aria-label="Close"><span class="button-icon">x</span></button>
-        </div>
-        <div class="program-info-body">
-          <p>${escapeHtml(info.description || "No additional information yet.")}</p>
-          <dl class="program-info-list">
-            ${info.creator ? `<div><dt>Created by</dt><dd>${escapeHtml(info.creator)}</dd></div>` : ""}
-            ${info.group ? `<div><dt>Program group</dt><dd>${escapeHtml(info.group)}</dd></div>` : ""}
-            <div><dt>Access</dt><dd>${escapeHtml(info.price)}</dd></div>
-            ${info.tags.length ? `<div><dt>Tags</dt><dd class="program-info-tags">${info.tags.map((tag) => `<span class="item-badge">${escapeHtml(tag)}</span>`).join("")}</dd></div>` : ""}
-          </dl>
-        </div>
-      </section>
-    </div>
-  `;
 }
 
 async function submitTemplateMetadataForm(form) {
