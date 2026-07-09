@@ -96,6 +96,33 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   `;
 }
 
+export function renderTemplateLibraryResultsHtml(templates, selectedTemplateId) {
+  const duplicateNames = duplicateTemplateNames(templates);
+  const shelves = groupTemplatesByCategory(templates);
+  if (!templates.length) return `<div class="empty-state">No programs match these filters.</div>`;
+  return shelves.map((shelf) => `
+    <section class="program-library-shelf" aria-label="${escapeAttr(shelf.label)}">
+      <div class="program-library-shelf-head">
+        <h4>${escapeHtml(shelf.label)}</h4>
+        <span>${shelf.templates.length} ${shelf.templates.length === 1 ? "program" : "programs"}</span>
+      </div>
+      <div class="program-library-row">
+        ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames, selectedTemplateId)).join("")}
+      </div>
+    </section>
+  `).join("");
+}
+
+export function groupTemplatesByCategory(templates) {
+  const groups = new Map();
+  templates.forEach((template) => {
+    const category = templateCategoryLabel(template);
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(template);
+  });
+  return [...groups.entries()].map(([label, rows]) => ({ label, templates: rows }));
+}
+
 export function renderProgramInfoModal(programInfo) {
   const program = programInfo?.program;
   if (!programInfo?.open || !program) return "";

@@ -12,7 +12,7 @@ import {
   programPriceLabel,
   ratingLabel,
   renderProgramInfoModal,
-  renderProgramLibraryCard,
+  renderTemplateLibraryResultsHtml,
   templateCategoryLabel,
   templateSecondaryLabel,
 } from "./program-library.js";
@@ -3314,7 +3314,7 @@ function renderTemplateLibrary(templates) {
       </div>
       ${renderTemplateFilters()}
       <div class="program-library-shelves" data-template-results>
-        ${renderTemplateLibraryResultsHtml(visibleTemplates)}
+        ${renderTemplateLibraryResultsHtml(visibleTemplates, state.selectedTemplateId)}
       </div>
     </section>
     ${renderTemplatePreviewModal()}
@@ -3330,24 +3330,7 @@ function renderTemplateLibraryResults() {
   if (count) count.textContent = `${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}`;
   document.querySelector(".program-preview-overlay")?.remove();
   const target = document.querySelector("[data-template-results]");
-  if (target) target.innerHTML = renderTemplateLibraryResultsHtml(visibleTemplates);
-}
-
-function renderTemplateLibraryResultsHtml(templates) {
-  const duplicateNames = duplicateTemplateNames(templates);
-  const shelves = groupTemplatesByCategory(templates);
-  if (!templates.length) return `<div class="empty-state">No programs match these filters.</div>`;
-  return shelves.map((shelf) => `
-    <section class="program-library-shelf" aria-label="${escapeAttr(shelf.label)}">
-      <div class="program-library-shelf-head">
-        <h4>${escapeHtml(shelf.label)}</h4>
-        <span>${shelf.templates.length} ${shelf.templates.length === 1 ? "program" : "programs"}</span>
-      </div>
-      <div class="program-library-row">
-        ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames, state.selectedTemplateId)).join("")}
-      </div>
-    </section>
-  `).join("");
+  if (target) target.innerHTML = renderTemplateLibraryResultsHtml(visibleTemplates, state.selectedTemplateId);
 }
 
 function applyTemplateClientFilters(templates) {
@@ -3480,16 +3463,6 @@ function templateCategoryOptions() {
 
 function renderTemplateScopeButton(value, label) {
   return `<button class="program-scope-button ${state.templateScope === value ? "is-active" : ""}" type="button" data-action="template-scope" data-scope="${escapeAttr(value)}">${escapeHtml(label)}</button>`;
-}
-
-function groupTemplatesByCategory(templates) {
-  const groups = new Map();
-  templates.forEach((template) => {
-    const category = templateCategoryLabel(template);
-    if (!groups.has(category)) groups.set(category, []);
-    groups.get(category).push(template);
-  });
-  return [...groups.entries()].map(([label, rows]) => ({ label, templates: rows }));
 }
 
 async function submitTemplateMetadataForm(form) {
