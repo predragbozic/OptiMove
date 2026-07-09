@@ -5446,7 +5446,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-section-added { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--line, #dfe4e8); }
   .exercise-filter-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
   .exercise-filter-field span { font-size: 10px; }
-  .exercise-filter-field select, .exercise-filter-toggle { min-height: 34px; padding: 6px 7px; font-size: 12px; }
+  .exercise-filter-field select { min-height: 34px; padding: 6px 7px; font-size: 16px; }
+  .exercise-filter-toggle { min-height: 34px; padding: 6px 7px; font-size: 12px; }
   .builder-filter-strip { grid-template-columns: minmax(0, 1fr); }
   .builder-exercise-results { max-height: min(27dvh, 220px); overflow-x: hidden; }
   .builder-exercise-result { grid-template-columns: 46px minmax(0, 1fr) 48px; min-width: 0; align-items: center; gap: 8px; padding: 7px; }
