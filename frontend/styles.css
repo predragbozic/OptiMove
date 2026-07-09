@@ -4385,9 +4385,15 @@ input:focus {
   body:not(.athlete-mode):not(.login-mode) .topbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
+    align-items: start;
     gap: 10px;
     margin-bottom: 10px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions {
+    justify-self: end;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   body:not(.athlete-mode):not(.login-mode) h2 {
@@ -4520,6 +4526,14 @@ input:focus {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .topbar {
+    grid-template-columns: 1fr;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .topbar-actions {
+    justify-self: start;
   }
 
   .drill-header {
