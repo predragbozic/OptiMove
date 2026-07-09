@@ -138,3 +138,7 @@ export function escapeHtml(value) {
 export function escapeAttr(value) {
   return escapeHtml(value).replaceAll("`", "&#096;");
 }
+
+export function renderOption(value, label, selectedValue) {
+  return `<option value="${escapeAttr(value)}" ${String(selectedValue || "") === String(value) ? "selected" : ""}>${escapeHtml(label)}</option>`;
+}

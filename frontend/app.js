@@ -13,6 +13,7 @@ import {
   ratingLabel,
   renderProgramInfoModal,
   renderTemplateLibraryResultsHtml,
+  renderTemplateFiltersHtml,
   templateCategoryLabel,
   templateSecondaryLabel,
 } from "./program-library.js";
@@ -46,6 +47,7 @@ import {
   monthStartIso,
   orderedUnique,
   programInitials,
+  renderOption,
   startOfWeekIso,
   weekDayName,
   weekMondayIso,
@@ -3383,75 +3385,20 @@ function renderTemplateFilters() {
   const clubOptions = templateFilterSuggestions("club");
   const clubPrefix = clean(filters.club).toLowerCase();
   const visibleClubs = clubPrefix ? clubOptions.filter((club) => templateFilterOptionMatches(club, clubPrefix)) : clubOptions;
-  return `
-    <div class="program-scope-tabs" role="group" aria-label="Program library scope">
-      ${scopes.map((scope) => renderTemplateScopeButton(scope, templateScopeMeta(scope).label)).join("")}
-    </div>
-    <section class="program-filter-panel" aria-label="Program filters">
-      <label class="search-field program-filter-search">
-        <span>Search programs</span>
-        <input data-template-filter="search" type="search" value="${escapeAttr(filters.search || "")}" placeholder="Program name or code">
-      </label>
-      <label class="search-field">
-        <span>Program group</span>
-        <input data-template-filter="category" list="program-group-options" value="${escapeAttr(filters.category || "")}" placeholder="All">
-        <datalist id="program-group-options">
-          <option value="All"></option>
-          ${visibleCategories.map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
-        </datalist>
-      </label>
-      <label class="search-field">
-        <span>Tag</span>
-        <input data-template-filter="tag" list="program-tag-filter-options" value="${escapeAttr(filters.tag || "")}" placeholder="${(options.tags || []).length ? "All" : "No assigned tags"}">
-        <datalist id="program-tag-filter-options">
-          <option value="All"></option>
-          ${visibleTags.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
-        </datalist>
-      </label>
-      ${showAdminFilters ? `
-        <label class="search-field">
-          <span>Coach</span>
-          <input data-template-filter="creator" list="program-creator-filter-options" value="${escapeAttr(filters.creator || "")}" placeholder="${creatorOptions.length ? "All coaches" : "No coaches"}">
-          <datalist id="program-creator-filter-options">
-            <option value="All"></option>
-            ${visibleCreators.map((creator) => `<option value="${escapeAttr(creator)}"></option>`).join("")}
-          </datalist>
-        </label>
-        <label class="search-field">
-          <span>Club</span>
-          <input data-template-filter="club" list="program-club-filter-options" value="${escapeAttr(filters.club || "")}" placeholder="${clubOptions.length ? "All clubs" : "No clubs"}">
-          <datalist id="program-club-filter-options">
-            <option value="All"></option>
-            ${visibleClubs.map((club) => `<option value="${escapeAttr(club)}"></option>`).join("")}
-          </datalist>
-        </label>
-        <label class="search-field">
-          <span>Owner</span>
-          <select data-template-filter="ownerType">
-            ${renderOption("all", "All owners", filters.ownerType || "all")}
-            ${renderOption("coach", "Coach", filters.ownerType)}
-            ${renderOption("club", "Club", filters.ownerType)}
-            ${renderOption("optimove", "OptiMove", filters.ownerType)}
-            ${renderOption("marketplace", "Marketplace", filters.ownerType)}
-          </select>
-        </label>
-        <label class="search-field">
-          <span>Access</span>
-          <select data-template-filter="visibility">
-            ${renderOption("all", "All access", filters.visibility || "all")}
-            ${renderOption("private", "Private", filters.visibility)}
-            ${renderOption("team", "Team shared", filters.visibility)}
-            ${renderOption("club", "Club shared", filters.visibility)}
-            ${renderOption("public", "Public", filters.visibility)}
-          </select>
-        </label>
-      ` : ""}
-      <label class="program-paid-filter">
-        <input data-template-filter="freeOnly" type="checkbox" ${filters.pricing === "free" ? "checked" : ""}>
-        <span>Free only</span>
-      </label>
-    </section>
-  `;
+  return renderTemplateFiltersHtml({
+    filters,
+    options,
+    showAdminFilters,
+    scopes,
+    activeScope: state.templateScope,
+    scopeLabel: (scope) => templateScopeMeta(scope).label,
+    visibleTags,
+    visibleCategories,
+    creatorOptions,
+    visibleCreators,
+    clubOptions,
+    visibleClubs,
+  });
 }
 
 function templateCategoryOptions() {
@@ -3459,10 +3406,6 @@ function templateCategoryOptions() {
   const assigned = state.templateOptions.categories || [];
   const inferred = (state.lastTemplates || []).map(templateCategoryLabel).filter(Boolean);
   return [...new Set([...defaults, ...assigned, ...inferred])].sort((a, b) => a.localeCompare(b));
-}
-
-function renderTemplateScopeButton(value, label) {
-  return `<button class="program-scope-button ${state.templateScope === value ? "is-active" : ""}" type="button" data-action="template-scope" data-scope="${escapeAttr(value)}">${escapeHtml(label)}</button>`;
 }
 
 async function submitTemplateMetadataForm(form) {
@@ -3782,10 +3725,6 @@ function renderBooleanSelect(name, label, selected) {
       ${renderOption("false", "No", value)}
     </select></label>
   `;
-}
-
-function renderOption(value, label, selectedValue) {
-  return `<option value="${escapeAttr(value)}" ${String(selectedValue || "") === String(value) ? "selected" : ""}>${escapeHtml(label)}</option>`;
 }
 
 function renderPlanMoreMenu(planId, objectType) {
