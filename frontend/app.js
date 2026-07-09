@@ -1,4 +1,6 @@
 import { api } from "./api.js";
+import { accessScopeLabel, canManageCoachProfile, hasOrganizationAccess, roleLabel } from "./access.js";
+import { els } from "./dom.js";
 import {
   getDriveId,
   imageSources,
@@ -42,27 +44,6 @@ import {
   weekDayName,
   weekMondayIso,
 } from "./utils.js";
-
-const els = {
-  status: document.querySelector("#apiStatus"),
-  title: document.querySelector("#screenTitle"),
-  context: document.querySelector("#contextLabel"),
-  athleteList: document.querySelector("#athleteList"),
-  athleteSearch: document.querySelector("#athleteSearch"),
-  athletesToggle: document.querySelector("#athletesToggle"),
-  railToggle: document.querySelector("#railToggle"),
-  calendarToggle: document.querySelector("#calendarToggle"),
-  tabs: document.querySelectorAll(".tab"),
-  libraryTabs: document.querySelectorAll("[data-library-tab]"),
-  athleteTabs: document.querySelectorAll("[data-athlete-tab]"),
-  toolbar: document.querySelector("#viewToolbar"),
-  content: document.querySelector("#content"),
-  mediaModal: document.querySelector("#mediaModal"),
-  mediaTitle: document.querySelector("#mediaTitle"),
-  mediaBody: document.querySelector("#mediaBody"),
-  signOut: document.querySelector("#signOutButton"),
-  userRole: document.querySelector("#userRole"),
-};
 
 init();
 
@@ -559,37 +540,6 @@ async function signOut() {
     state.currentUser = null;
     window.location.replace("/");
   }
-}
-
-function roleLabel(user = state.currentUser) {
-  const role = String(user?.role || user?.role_hint || "").toLowerCase();
-  const labels = {
-    platform_admin: "Platform admin",
-    general_admin: "Platform admin",
-    admin: "Platform admin",
-    club_admin: "Club admin",
-    team_admin: "Team admin",
-    team_coach: "Team coach",
-    coach: "Coach",
-    athlete: "Athlete",
-  };
-  return labels[role] || labels[user?.accessScope] || "User";
-}
-
-function accessScopeLabel(user = state.currentUser) {
-  const scope = String(user?.accessScope || "").toLowerCase();
-  return ({ platform: "All platform data", club: "Club workspace", team: "Team workspace", coach: "Private coach workspace", athlete: "Athlete view" })[scope] || "Workspace";
-}
-
-function hasOrganizationAccess(user = state.currentUser) {
-  return Boolean(user) && String(user?.accessScope || "").toLowerCase() !== "athlete";
-}
-
-function canManageCoachProfile(user = state.currentUser) {
-  if (!user || isAthleteMode()) return false;
-  const role = String(user.role || user.role_hint || "").toLowerCase();
-  return ["coach", "team_coach", "team_admin", "club_admin", "platform_admin", "general_admin", "admin"].includes(role)
-    || ["coach", "team", "club", "platform"].includes(String(user.accessScope || "").toLowerCase());
 }
 
 function renderAccessNav() {
