@@ -1584,8 +1584,13 @@ function handleContentClick(event) {
   if (type === "coach-program-info") {
     const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
     if (program) {
-      alert(`${program.plan_name || "Program"}\n\n${program.description || program.program_note || program.library_category || "No additional information yet."}`);
+      alert(programInfoText(program));
     }
+    return;
+  }
+  if (type === "template-info") {
+    const template = state.lastTemplates.find((row) => String(row.plan_id) === String(action.dataset.templateId));
+    if (template) alert(programInfoText(template));
     return;
   }
   if (type === "template-scope") {
@@ -3493,6 +3498,7 @@ function renderProgramLibraryCard(template, duplicateNames) {
   const price = programPriceLabel(template);
   return `
     <article class="program-library-card ${isSelected ? "is-selected" : ""}">
+      <button class="program-library-info-button" type="button" data-action="template-info" data-template-id="${escapeAttr(template.plan_id)}" aria-label="Program information">i</button>
       <button class="program-library-card-hit" type="button" data-action="template-open" data-template-id="${escapeAttr(template.plan_id)}">
         <span class="program-library-card-media">
           ${template.cover_image_url ? renderImage(template.cover_image_url, "program-library-cover") : `<span class="program-library-card-icon">${escapeHtml(programInitials(template.plan_name))}</span>`}
@@ -3516,6 +3522,22 @@ function renderProgramLibraryCard(template, duplicateNames) {
       ` : ""}
     </article>
   `;
+}
+
+function programInfoText(program) {
+  const title = program.plan_name || "Program";
+  const group = templateCategoryLabel(program);
+  const creator = clean(program.creator_name);
+  const description = clean(program.description || program.program_note || program.short_note || program.note);
+  const tags = (program.tags || []).map((tag) => clean(tag.name)).filter(Boolean);
+  return [
+    title,
+    "",
+    description || "No additional information yet.",
+    group ? `Group: ${group}` : "",
+    creator ? `Created by: ${creator}` : "",
+    tags.length ? `Tags: ${tags.join(", ")}` : "",
+  ].filter((line, index) => index < 2 || line).join("\n");
 }
 
 function programPriceLabel(template) {
