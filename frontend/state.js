@@ -98,6 +98,7 @@ export const createInitialState = () => ({
   markedExercises: new Map(),
   tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },
   programTagEditor: { open: false, planId: "", programName: "", tags: [], options: [], error: "" },
+  programInfo: { open: false, program: null },
   organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", assignOpen: false },
   organizationEditor: { open: false, type: "", row: null },
   organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },

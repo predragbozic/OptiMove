@@ -966,6 +966,7 @@ function renderCoaches() {
       </section>
     </section>
     ${renderCoachDetailModal()}
+    ${renderProgramInfoModal()}
     ${renderTemplatePreviewModal()}
   `;
 }
@@ -1584,13 +1585,23 @@ function handleContentClick(event) {
   if (type === "coach-program-info") {
     const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
     if (program) {
-      alert(programInfoText(program));
+      state.programInfo = { open: true, program };
+      renderCoachContext();
     }
     return;
   }
   if (type === "template-info") {
     const template = state.lastTemplates.find((row) => String(row.plan_id) === String(action.dataset.templateId));
-    if (template) alert(programInfoText(template));
+    if (template) {
+      state.programInfo = { open: true, program: template };
+      renderTemplateLibrary(state.lastTemplates);
+    }
+    return;
+  }
+  if (type === "program-info-close") {
+    state.programInfo = { open: false, program: null };
+    if (state.activeTab === "coaches") renderCoachContext();
+    else renderTemplateLibrary(state.lastTemplates);
     return;
   }
   if (type === "template-scope") {
@@ -3304,6 +3315,7 @@ function renderTemplateLibrary(templates) {
       </div>
     </section>
     ${renderTemplatePreviewModal()}
+    ${renderProgramInfoModal()}
     ${renderCoachDetailModal()}
     ${renderCopyPlanModal()}
   `;
@@ -3524,20 +3536,47 @@ function renderProgramLibraryCard(template, duplicateNames) {
   `;
 }
 
-function programInfoText(program) {
-  const title = program.plan_name || "Program";
-  const group = templateCategoryLabel(program);
-  const creator = clean(program.creator_name);
-  const description = clean(program.description || program.program_note || program.short_note || program.note);
+function programInfoModel(program) {
   const tags = (program.tags || []).map((tag) => clean(tag.name)).filter(Boolean);
-  return [
-    title,
-    "",
-    description || "No additional information yet.",
-    group ? `Group: ${group}` : "",
-    creator ? `Created by: ${creator}` : "",
-    tags.length ? `Tags: ${tags.join(", ")}` : "",
-  ].filter((line, index) => index < 2 || line).join("\n");
+  return {
+    title: program.plan_name || "Program",
+    group: templateCategoryLabel(program),
+    creator: clean(program.creator_name),
+    description: clean(program.description || program.program_note || program.short_note || program.note),
+    price: programPriceLabel(program),
+    tags,
+  };
+}
+
+function renderProgramInfoModal() {
+  const program = state.programInfo?.program;
+  if (!state.programInfo?.open || !program) return "";
+  const info = programInfoModel(program);
+  const meta = [info.group, info.price].filter(Boolean).join(" - ");
+  return `
+    <div class="program-preview-overlay program-info-overlay">
+      <button class="program-preview-backdrop" type="button" data-action="program-info-close" aria-label="Close program information"></button>
+      <section class="program-info-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(info.title)} information">
+        <div class="program-info-head">
+          <div>
+            <p class="eyebrow">Program information</p>
+            <h3>${escapeHtml(info.title)}</h3>
+            ${meta ? `<p class="muted">${escapeHtml(meta)}</p>` : ""}
+          </div>
+          <button class="plain-button icon-button" type="button" data-action="program-info-close" aria-label="Close"><span class="button-icon">x</span></button>
+        </div>
+        <div class="program-info-body">
+          <p>${escapeHtml(info.description || "No additional information yet.")}</p>
+          <dl class="program-info-list">
+            ${info.creator ? `<div><dt>Created by</dt><dd>${escapeHtml(info.creator)}</dd></div>` : ""}
+            ${info.group ? `<div><dt>Program group</dt><dd>${escapeHtml(info.group)}</dd></div>` : ""}
+            <div><dt>Access</dt><dd>${escapeHtml(info.price)}</dd></div>
+            ${info.tags.length ? `<div><dt>Tags</dt><dd class="program-info-tags">${info.tags.map((tag) => `<span class="item-badge">${escapeHtml(tag)}</span>`).join("")}</dd></div>` : ""}
+          </dl>
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function programPriceLabel(template) {
