@@ -1,0 +1,116 @@
+export const EXERCISE_FILTERS = [
+  { key: "purpose", label: "Purpose", optionsKey: "purposes" },
+  { key: "quality", label: "Quality / modality", optionsKey: "qualities" },
+  { key: "group", label: "Exercise group", optionsKey: "groups" },
+  { key: "bodyPart", label: "Body part", optionsKey: "bodyParts" },
+  { key: "movementPattern", label: "Movement pattern", optionsKey: "movementPatterns" },
+  { key: "startingPosition", label: "Starting position", optionsKey: "startingPositions" },
+  { key: "place", label: "Place", optionsKey: "places" },
+  { key: "complexity", label: "Complexity", optionsKey: "complexities" },
+  { key: "attractor", label: "Attractor", optionsKey: "attractors" },
+  { key: "tag", label: "Tag", optionsKey: "tags" },
+];
+
+export const emptyExerciseFilters = () => ({
+  purpose: "",
+  quality: "",
+  group: "",
+  bodyPart: "",
+  movementPattern: "",
+  startingPosition: "",
+  place: "",
+  complexity: "",
+  attractor: "",
+  tag: "",
+  favorite: false,
+  marked: false,
+});
+
+export const emptyExerciseOptions = () => ({
+  purposes: [],
+  qualities: [],
+  groups: [],
+  bodyParts: [],
+  movementPatterns: [],
+  startingPositions: [],
+  places: [],
+  complexities: [],
+  attractors: [],
+  tags: [],
+});
+
+export const emptyTemplateFilters = () => ({
+  search: "",
+  category: "",
+  tag: "",
+  creator: "",
+  club: "",
+  ownerType: "",
+  visibility: "",
+  pricing: "all",
+});
+
+export const emptyTemplatePreview = (overrides = {}) => ({
+  open: false,
+  loading: false,
+  detail: null,
+  error: "",
+  settingsOpen: false,
+  reviewOpen: false,
+  reviewMessage: "",
+  reviewError: "",
+  reviewsOpen: false,
+  reviews: [],
+  usedMarked: false,
+  submittingUse: false,
+  submittingReview: false,
+  ...overrides,
+});
+
+export const TEMPLATE_SCOPES = ["all", "workspace", "my", "club", "optimove", "marketplace"];
+export const ATHLETE_TEMPLATE_SCOPES = ["all", "my", "club", "optimove", "marketplace"];
+
+export const createInitialState = () => ({
+  currentUser: null,
+  athletes: [],
+  selectedAthleteId: null,
+  athletesExpanded: false,
+  railExpanded: false,
+  activeTab: "weekly",
+  templateScope: "my",
+  selectedProgramId: null,
+  selectedTemplateId: null,
+  selectedWeekIndex: 0,
+  selectedWeekDay: "",
+  weekSelectorOpen: false,
+  pendingScrollDate: "",
+  lastWeeklyData: null,
+  lastProgramBundle: null,
+  lastTemplates: [],
+  templateAllowedScopes: TEMPLATE_SCOPES,
+  templatePreview: emptyTemplatePreview(),
+  templateFilters: emptyTemplateFilters(),
+  templateOptions: { categories: [], tags: [], creators: [], clubs: [] },
+  lastExerciseResults: [],
+  builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
+  exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions() },
+  markedExerciseIds: new Set(),
+  markedExercises: new Map(),
+  tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },
+  programTagEditor: { open: false, planId: "", programName: "", tags: [], options: [], error: "" },
+  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", assignOpen: false },
+  organizationEditor: { open: false, type: "", row: null },
+  organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
+  coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
+  navStack: [],
+  exerciseDetail: { ids: [], currentId: null },
+  exerciseLayout: "horizontal",
+  touch: { startX: 0, startY: 0, startTime: 0 },
+  appHistoryDepth: 0,
+  backGuardReady: false,
+  allowBrowserExit: false,
+  weekCalendarMonth: "",
+  openWeekCalendarOnLoad: false,
+});
+
+export const state = createInitialState();
