@@ -5,6 +5,11 @@ import {
   renderBuilderItems,
   renderCustomExerciseModal,
 } from "./builder-exercises.js";
+import {
+  renderBuilderBlock,
+  renderBuilderSessionModal,
+  renderBuilderStructureModal,
+} from "./builder-structure.js";
 import { renderCoachDetailModalHtml, renderCoachesHtml } from "./coach-profiles.js";
 import { els } from "./dom.js";
 import {
@@ -69,7 +74,6 @@ import {
   monthStartIso,
   orderedUnique,
   startOfWeekIso,
-  weekDayName,
   weekMondayIso,
 } from "./utils.js";
 
@@ -3291,7 +3295,7 @@ function renderBuilder() {
       <div class="builder-layout">
         <section class="panel builder-outline">
           <div class="section-heading"><div><p class="eyebrow">Day and session structure</p><h3>${isWeekly ? "Seven-day plan" : "Blocks and sessions"}</h3></div><button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session structure example"><span class="button-icon">i</span></button></div>
-          ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id, isWeekly)).join("") : `
+          ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id, isWeekly, builderStructureContext())).join("") : `
             <div class="empty builder-outline-empty">
               <span class="builder-outline-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg></span>
               <strong>No days or blocks yet</strong>
@@ -3300,7 +3304,7 @@ function renderBuilder() {
         </section>
       </div>
       ${state.builder.sessionModalBlockId ? renderBuilderSessionModal(state.builder.sessionModalBlockId) : ""}
-      ${state.builder.structureModalOpen && selectedSession ? renderBuilderStructureModal(selectedSession, selectedNode) : ""}
+      ${state.builder.structureModalOpen && selectedSession ? renderBuilderStructureModal(selectedSession, selectedNode, builderStructureContext()) : ""}
       ${selectedNode?.type === "section" ? renderBuilderSectionOverlay(selectedNode) : ""}
       ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}
     </section>
@@ -3373,33 +3377,19 @@ function builderIconGlyph(value) {
   return ({ "icon:target": "◎", "icon:bolt": "ϟ", "icon:dumbbell": "▰", "icon:calendar": "□", "icon:heart": "♥" })[value] || "•";
 }
 
-function renderBuilderSessionModal(blockId) {
-  return `
-    <div class="builder-modal-overlay">
-      <button class="builder-modal-backdrop" type="button" data-action="builder-close-session-modal" aria-label="Close add session"></button>
-      <section class="panel builder-compact-modal" role="dialog" aria-modal="true" aria-label="Add session">
-        <div class="builder-modal-head"><div><p class="eyebrow">Day and session structure</p><h3>Add session</h3><p class="muted">Both fields are optional. Use them only when the day needs a time or training phase.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-session-modal" aria-label="Close"><span class="button-icon">x</span></button></div>
-        <form class="builder-session-modal-form" data-builder-form="add-session" data-block-id="${escapeAttr(blockId)}">
-          <label class="search-field"><span>Time of day</span><select name="amPm"><option value="">No AM/PM</option><option>AM</option><option>PM</option></select></label>
-          <label class="search-field"><span>Training phase</span><select name="bta"><option value="">No phase</option><option value="B">Before training</option><option value="T">Training</option><option value="A">After training</option></select></label>
-          <p class="builder-error" aria-live="polite"></p>
-          <button class="plain-button" type="submit">Add session</button>
-        </form>
-      </section>
-    </div>
-  `;
-}
-
-function renderBuilderStructureModal(session, selectedNode) {
-  return `
-    <div class="builder-modal-overlay">
-      <button class="builder-modal-backdrop" type="button" data-action="builder-close-structure-modal" aria-label="Close session parts"></button>
-      <section class="panel builder-structure-modal" role="dialog" aria-modal="true" aria-label="Add session parts">
-        <div class="builder-modal-head"><div><p class="eyebrow">${escapeHtml(sessionLabel(session))}</p><h3>Add session parts</h3><p class="muted">Build a path with Exercise domain, Exercise category, and Exercise section. An Exercise section can also be added directly.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-structure-modal" aria-label="Close"><span class="button-icon">x</span></button></div>
-        ${renderBuilderStructureEditor(session, selectedNode)}
-      </section>
-    </div>
-  `;
+function builderStructureContext() {
+  return {
+    builderExerciseCountDots,
+    builderIconGlyph,
+    builderIconOptions,
+    builderNodeMarker,
+    canPasteNodeType,
+    clipboard: state.builder.clipboard,
+    findBuilderSession: (id) => findBuilderSession(state.builder.draft, id),
+    nodeTypeOptions,
+    selectedSessionId: state.builder.selectedSessionId,
+    sessionLabel,
+  };
 }
 
 function renderBuilderInfoModal(kind) {
@@ -3419,87 +3409,6 @@ function renderBuilderInfoModal(kind) {
       </section>
     </div>
   `;
-}
-
-function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly = false) {
-  const defaultDayName = isWeekly ? weekDayName(block.date) : "";
-  const blockTitle = isWeekly ? block.name || defaultDayName : block.name || `Block ${block.index}`;
-  return `
-    <article class="builder-block">
-      <div class="builder-block-head"><div><strong>${escapeHtml(blockTitle)}</strong>${block.date ? `<span>${escapeHtml(formatDate(block.date))}</span>` : block.note ? `<span>${escapeHtml(block.note)}</span>` : ""}</div>${isWeekly ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-block" data-block-id="${escapeAttr(block.id)}">Delete</button>`}</div>
-      ${isWeekly ? `<form class="builder-day-label-form" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><label class="search-field"><span>Day label</span><input name="name" value="${escapeAttr(block.name || "")}" placeholder="e.g. MD-1, Match day"></label><small>Optional: leave empty to show ${escapeHtml(defaultDayName)}.</small></form>` : ""}
-      <div class="builder-sessions">
-        ${block.sessions.length ? block.sessions.map((session) => `
-          <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
-            <span>${escapeHtml(sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span>
-          </button><div class="builder-session-actions">${renderNodePasteButton(session.id, "", "session")}<button class="text-action" type="button" data-action="builder-add-structure" data-session-id="${escapeAttr(session.id)}">Add session parts</button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
-          ${renderBuilderNodeTree(session, "", selectedNodeId)}
-        `).join("") : `<p class="muted">No sessions yet.</p>`}
-      </div>
-      <button class="plain-button builder-add-session" type="button" data-action="builder-open-session-modal" data-block-id="${escapeAttr(block.id)}">Add session</button>
-    </article>
-  `;
-}
-
-function renderBuilderNodeTree(session, parentId, selectedNodeId) {
-  const nodes = session.nodes.filter((node) => node.parentId === parentId);
-  return nodes.map((node) => `
-    <div class="builder-node builder-node-${escapeAttr(node.type)}">
-      <div class="builder-node-row">
-        <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
-          <span class="builder-node-name"><span class="builder-node-icon">${builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${builderNodeMarker(node.type)}${node.type === "section" ? builderExerciseCountDots(node.items.length) : ""}</small>
-        </button>
-        ${renderBuilderNodeMoveActions(node, true, session.id)}
-      </div>
-      ${renderNodePasteButton(session.id, node.id, node.type)}
-      ${renderBuilderNodeTree(session, node.id, selectedNodeId)}
-    </div>
-  `).join("");
-}
-
-function renderBuilderStructureEditor(session, selectedNode) {
-  if (selectedNode?.type === "section") {
-    return `
-      <div class="builder-selected-section">
-        <div><p class="eyebrow">Selected section</p><strong>${escapeHtml(selectedNode.name)}</strong><p class="muted">Sections contain exercises and cannot contain another structural level.</p></div>
-        <div class="builder-section-editor-actions">${renderBuilderNodeMoveActions(selectedNode)}<button class="plain-button" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete section</button></div>
-      </div>
-      <button class="plain-button builder-open-section" type="button" data-action="builder-open-section-panel">Open section exercise editor</button>
-    `;
-  }
-  return `
-    <form class="builder-node-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
-      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions">${renderBuilderNodeMoveActions(selectedNode)}<button class="text-action" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy ${escapeHtml(selectedNode.type)}</button>${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type)}<button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button></span>` : ""}</div>
-      <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
-      <select name="nodeType">${nodeTypeOptions(selectedNode?.type)}</select>
-      <input name="name" placeholder="${selectedNode?.type === "domain" ? "Category or section name" : selectedNode?.type === "category" ? "Section name" : "Domain, category or section name"}" required>
-      <input name="color" type="color" value="#287e77" aria-label="Node color">
-      <select name="iconUrl" aria-label="Node icon">${builderIconOptions()}</select>
-      <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Add</button>
-    </form>
-    ${selectedNode ? `
-      <div class="empty">${selectedNode.type === "domain" ? "Add a category or section below this domain." : "Add a section below this category."}</div>
-    ` : `<div class="empty">Create or select a domain, category or section before adding exercises.</div>`}
-  `;
-}
-
-function renderNodePasteButton(sessionId, parentId, parentType) {
-  const clipboard = state.builder.clipboard;
-  if (!clipboard?.type || !canPasteNodeType(clipboard.type, parentType)) return "";
-  return `<button class="text-action builder-paste-node" type="button" data-action="builder-paste-node" data-session-id="${escapeAttr(sessionId)}" data-parent-id="${escapeAttr(parentId)}">Paste ${escapeHtml(clipboard.type)}</button>`;
-}
-
-function renderBuilderNodeMoveActions(node, compact = false, sessionId = "") {
-  const session = findBuilderSession(state.builder.draft, sessionId || state.builder.selectedSessionId);
-  const siblings = (session?.nodes || [])
-    .filter((candidate) => candidate.parentId === node.parentId)
-    .sort((left, right) => left.order - right.order);
-  const index = siblings.findIndex((candidate) => candidate.id === node.id);
-  const buttonClass = compact ? "plain-button builder-node-move-icon" : "text-action";
-  const upLabel = compact ? "&uarr;" : "Move up";
-  const downLabel = compact ? "&darr;" : "Move down";
-  return `<span class="builder-node-move-actions ${compact ? "is-compact" : ""}"><button class="${buttonClass}" type="button" data-action="builder-move-node" data-node-id="${escapeAttr(node.id)}" data-direction="up" aria-label="Move ${escapeAttr(node.type)} up" title="Move up" ${index <= 0 ? "disabled" : ""}>${upLabel}</button><button class="${buttonClass}" type="button" data-action="builder-move-node" data-node-id="${escapeAttr(node.id)}" data-direction="down" aria-label="Move ${escapeAttr(node.type)} down" title="Move down" ${index < 0 || index >= siblings.length - 1 ? "disabled" : ""}>${downLabel}</button></span>`;
 }
 
 function canPasteNodeType(nodeType, parentType) {
@@ -3524,7 +3433,7 @@ function renderBuilderSectionPanelLegacy(selectedNode) {
       </div>
       <input type="hidden" name="exerciseId" value="">
       <div class="builder-exercise-results">
-        ${state.builder.exercises.map(renderBuilderExerciseResult).join("") || `<div class="empty">No matching exercises.</div>`}
+        ${state.builder.exercises.map((exercise) => renderBuilderExerciseResult(exercise, state.markedExerciseIds)).join("") || `<div class="empty">No matching exercises.</div>`}
       </div>
       <p class="builder-error" aria-live="polite"></p>
       <button class="plain-button" type="submit">Add selected exercise</button>
