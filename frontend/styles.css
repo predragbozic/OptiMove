@@ -705,7 +705,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
 .week-title-button {
   min-height: 46px;
   display: grid;
-  place-items: center;
+  align-items: center;
+  justify-items: stretch;
+  overflow: hidden;
   padding: 8px 14px;
   pointer-events: none;
 }
@@ -926,6 +928,14 @@ button {
   border-right: 0;
   border-bottom: 0;
   background: #101820;
+}
+
+/* Short viewports (landscape phones) can't fit every rail icon within 100vh; let the rail scroll instead of clipping items. */
+@media (max-height: 480px) {
+  body:not(.athlete-mode):not(.login-mode) .sidebar,
+  .athlete-mode .sidebar {
+    overflow-y: auto;
+  }
 }
 
 .athlete-mode .workspace {
@@ -1521,7 +1531,7 @@ input:focus {
 .program-library-head {
   display: flex;
   align-items: end;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 16px;
 }
 
@@ -1578,12 +1588,22 @@ input:focus {
 }
 
 .coach-card-media {
+  position: relative;
   display: grid;
   place-items: center;
+  overflow: hidden;
   background: linear-gradient(135deg, rgba(31, 125, 113, .2), rgba(20, 42, 55, .12));
 }
 
-.coach-card-image,
+.coach-card-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+}
+
 .coach-profile-photo {
   width: 100%;
   height: 100%;
@@ -1678,6 +1698,7 @@ input:focus {
 
 .coach-profile-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
 }
 
@@ -1763,6 +1784,7 @@ input:focus {
 .program-library-shelf {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -1789,6 +1811,7 @@ input:focus {
   grid-auto-flow: column;
   grid-auto-columns: minmax(220px, 260px);
   gap: 14px;
+  min-width: 0;
   overflow-x: auto;
   padding: 2px 2px 12px;
   scroll-snap-type: x proximity;
@@ -2028,6 +2051,7 @@ input:focus {
   width: min(1180px, calc(100vw - 56px));
   max-height: min(820px, calc(100vh - 56px));
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto auto minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
@@ -2304,11 +2328,6 @@ input:focus {
 }
 
 @media (max-width: 760px) {
-  .program-library-head {
-    align-items: start;
-    flex-direction: column;
-  }
-
   .program-library-row {
     grid-auto-columns: minmax(210px, 78vw);
   }
@@ -2448,6 +2467,7 @@ input:focus {
 .week-title-button strong,
 .week-title-button span {
   display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3878,6 +3898,7 @@ input:focus {
 }
 
 .empty,
+.empty-state,
 .error {
   padding: 18px;
   border: 1px dashed var(--line-strong);
@@ -3889,6 +3910,44 @@ input:focus {
 .error {
   border-color: rgba(162, 59, 59, 0.35);
   color: var(--danger);
+}
+
+.builder-outline-empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px 18px;
+  text-align: center;
+}
+
+.builder-outline-empty-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--surface-alt, #eef2f5);
+  color: var(--muted);
+}
+
+.builder-outline-empty-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.builder-outline-empty strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.builder-outline-empty p {
+  max-width: 32ch;
+  margin: 0;
 }
 
 .login-panel {

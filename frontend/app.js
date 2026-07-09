@@ -89,6 +89,7 @@ function bindEvents() {
       state.selectedTemplateId = null;
       state.navStack = [];
       if (state.activeTab === "weekly") state.openWeekCalendarOnLoad = true;
+      collapseRailAfterNav();
       renderTabs();
       renderLibraryNav();
       loadActiveTab();
@@ -109,6 +110,7 @@ function bindEvents() {
       state.athletesExpanded = false;
       state.weekSelectorOpen = false;
       state.openWeekCalendarOnLoad = false;
+      collapseRailAfterNav();
       renderAthleteListState();
       renderTabs();
       renderLibraryNav();
@@ -125,6 +127,7 @@ function bindEvents() {
       state.weekSelectorOpen = false;
       state.openWeekCalendarOnLoad = targetTab === "calendar";
       state.activeTab = targetTab === "calendar" ? "weekly" : targetTab;
+      collapseRailAfterNav();
       renderTabs();
       renderLibraryNav();
       loadActiveTab();
@@ -576,6 +579,13 @@ function toggleRail() {
   renderRailState();
 }
 
+function collapseRailAfterNav() {
+  if (state.railExpanded && !window.matchMedia("(min-width: 900px)").matches) {
+    state.railExpanded = false;
+    renderRailState();
+  }
+}
+
 function renderRailState() {
   document.body.classList.toggle("rail-expanded", state.railExpanded);
   els.railToggle?.setAttribute("aria-expanded", String(state.railExpanded));
@@ -591,6 +601,7 @@ function openWeeklyCalendarFromRail() {
   state.navStack = [];
   state.athletesExpanded = false;
   state.openWeekCalendarOnLoad = !shouldToggleLoadedWeekly;
+  collapseRailAfterNav();
   renderAthleteListState();
   renderTabs();
   renderLibraryNav();
@@ -1095,7 +1106,7 @@ function renderCoachDetailModal() {
           </section>
           ${state.coaches.contactOpen ? renderCoachContactForm(profile) : ""}
           <section data-coach-programs>
-            <div class="program-library-shelf-head"><h4>Published programs</h4><span>${programs.length} programs</span></div>
+            <div class="program-library-shelf-head"><h4>Published programs</h4><span>${programs.length} ${programs.length === 1 ? "program" : "programs"}</span></div>
             <div class="program-library-row">
               ${detail ? programs.length ? programs.map(renderCoachProgramCard).join("") : `<div class="empty-state">No visible programs from this coach yet.</div>` : `<div class="empty-state">Loading programs...</div>`}
             </div>
@@ -2692,6 +2703,7 @@ function renderAthleteList() {
       state.selectedTemplateId = null;
       state.navStack = [];
       state.openWeekCalendarOnLoad = false;
+      collapseRailAfterNav();
       renderAthleteList();
       renderTabs();
       renderLibraryNav();
@@ -2715,7 +2727,6 @@ function renderAthleteHeader(data) {
     <div class="athlete-hero-copy">
       <p class="eyebrow">My program</p>
       <h3>${escapeHtml(athlete.athlete)}</h3>
-      <p class="muted">Athlete ID ${escapeHtml(athlete.athlete_id || "")}</p>
     </div>
   ` : "";
 
@@ -2987,7 +2998,7 @@ function renderProgramRoot(program) {
   const isMicrocycle = data.mode === "microcycle";
   const groups = isMicrocycle
     ? (data.microcycles || []).map((microcycle) => makeNode("microcycle", microcycle.name, flattenDayGroups(microcycle.dayGroups), {
-        subtitle: `${(microcycle.dayGroups || []).length} blocks`,
+        subtitle: `${(microcycle.dayGroups || []).length} ${(microcycle.dayGroups || []).length === 1 ? "block" : "blocks"}`,
       }))
     : programDayGroupNodes(data.dayGroups || []);
 
@@ -3265,7 +3276,7 @@ function renderTemplateList(templates, selected, detail) {
   const isMicrocycle = data.mode === "microcycle";
   const groups = isMicrocycle
     ? (data.microcycles || []).map((microcycle) => makeNode("microcycle", microcycle.name, flattenDayGroups(microcycle.dayGroups), {
-        subtitle: `${(microcycle.dayGroups || []).length} blocks`,
+        subtitle: `${(microcycle.dayGroups || []).length} ${(microcycle.dayGroups || []).length === 1 ? "block" : "blocks"}`,
       }))
     : programDayGroupNodes(data.dayGroups || []);
 
@@ -3299,11 +3310,7 @@ function renderTemplateLibrary(templates) {
   els.content.innerHTML = `
     <section class="content-section program-library-page">
       <div class="program-library-head">
-        <div>
-          <p class="eyebrow">${escapeHtml(scope.eyebrow)}</p>
-          <h3>${escapeHtml(scope.label)}</h3>
-        </div>
-        <p class="muted" data-template-count>${visibleTemplates.length} programs</p>
+        <p class="muted" data-template-count>${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}</p>
       </div>
       ${renderTemplateFilters()}
       <div class="program-library-shelves" data-template-results>
@@ -3320,7 +3327,7 @@ function renderTemplateLibrary(templates) {
 function renderTemplateLibraryResults() {
   const visibleTemplates = applyTemplateClientFilters(state.lastTemplates || []);
   const count = document.querySelector("[data-template-count]");
-  if (count) count.textContent = `${visibleTemplates.length} programs`;
+  if (count) count.textContent = `${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}`;
   document.querySelector(".program-preview-overlay")?.remove();
   const target = document.querySelector("[data-template-results]");
   if (target) target.innerHTML = renderTemplateLibraryResultsHtml(visibleTemplates);
@@ -3334,7 +3341,7 @@ function renderTemplateLibraryResultsHtml(templates) {
     <section class="program-library-shelf" aria-label="${escapeAttr(shelf.label)}">
       <div class="program-library-shelf-head">
         <h4>${escapeHtml(shelf.label)}</h4>
-        <span>${shelf.templates.length} programs</span>
+        <span>${shelf.templates.length} ${shelf.templates.length === 1 ? "program" : "programs"}</span>
       </div>
       <div class="program-library-row">
         ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames, state.selectedTemplateId)).join("")}
@@ -3610,7 +3617,7 @@ function renderTemplatePreviewModal() {
     ? []
     : isMicrocycle
       ? (detail.microcycles || []).map((microcycle) => makeNode("microcycle", microcycle.name, flattenDayGroups(microcycle.dayGroups), {
-          subtitle: `${(microcycle.dayGroups || []).length} blocks`,
+          subtitle: `${(microcycle.dayGroups || []).length} ${(microcycle.dayGroups || []).length === 1 ? "block" : "blocks"}`,
         }))
       : programDayGroupNodes(detail.dayGroups || []);
 
@@ -3918,7 +3925,12 @@ function renderBuilder() {
       <div class="builder-layout">
         <section class="panel builder-outline">
           <div class="section-heading"><div><p class="eyebrow">Day and session structure</p><h3>${isWeekly ? "Seven-day plan" : "Blocks and sessions"}</h3></div><button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session structure example"><span class="button-icon">i</span></button></div>
-          ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id, isWeekly)).join("") : `<div class="empty">Add the first day or block to start structuring the program.</div>`}
+          ${draft.blocks.length ? draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id, isWeekly)).join("") : `
+            <div class="empty builder-outline-empty">
+              <span class="builder-outline-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg></span>
+              <strong>No days or blocks yet</strong>
+              <p class="muted">Use the form above to add the first day or block, then build sessions inside it.</p>
+            </div>`}
         </section>
       </div>
       ${state.builder.sessionModalBlockId ? renderBuilderSessionModal(state.builder.sessionModalBlockId) : ""}
