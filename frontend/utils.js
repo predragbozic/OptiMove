@@ -95,6 +95,12 @@ export function initialsFor(name) {
     .toUpperCase();
 }
 
+export function programInitials(name = "") {
+  const words = clean(name).split(/\s+/).filter(Boolean);
+  if (!words.length) return "PL";
+  return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+}
+
 export function formatDate(value) {
   if (!value) return "";
   const [year, month, day] = String(value).slice(0, 10).split("-");

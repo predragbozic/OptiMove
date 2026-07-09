@@ -36,6 +36,7 @@ import {
   monthLabel,
   monthStartIso,
   orderedUnique,
+  programInitials,
   startOfWeekIso,
   weekDayName,
   weekMondayIso,
@@ -3712,12 +3713,6 @@ async function submitTemplateReviewForm(form) {
     };
     renderTemplateLibrary(state.lastTemplates);
   }
-}
-
-function programInitials(name = "") {
-  const words = clean(name).split(/\s+/).filter(Boolean);
-  if (!words.length) return "PL";
-  return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
 }
 
 function renderTemplatePreviewModal() {
