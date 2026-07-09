@@ -33,10 +33,14 @@ export function hasOrganizationAccess(user = state.currentUser) {
 }
 
 export function canManageCoachProfile(user = state.currentUser) {
-  if (!user || document.body.classList.contains("athlete-mode")) return false;
+  if (!user || isAthleteMode()) return false;
   const role = String(user.role || user.role_hint || "").toLowerCase();
   return (
     ["coach", "team_coach", "team_admin", "club_admin", "platform_admin", "general_admin", "admin"].includes(role) ||
     ["coach", "team", "club", "platform"].includes(String(user.accessScope || "").toLowerCase())
   );
+}
+
+export function isAthleteMode() {
+  return document.body.classList.contains("athlete-mode");
 }

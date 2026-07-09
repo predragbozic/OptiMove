@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { accessScopeLabel, canManageCoachProfile, hasOrganizationAccess, roleLabel } from "./access.js";
+import { accessScopeLabel, canManageCoachProfile, hasOrganizationAccess, isAthleteMode, roleLabel } from "./access.js";
 import { els } from "./dom.js";
 import {
   getDriveId,
@@ -1947,10 +1947,6 @@ function visibleTemplateScopes() {
 function ensureTemplateScopeIsVisible() {
   const scopes = visibleTemplateScopes();
   if (scopes.length && !scopes.includes(state.templateScope)) state.templateScope = scopes[0];
-}
-
-function isAthleteMode() {
-  return document.body.classList.contains("athlete-mode");
 }
 
 function renderAthleteListState() {
