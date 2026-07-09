@@ -8,12 +8,16 @@ import {
 } from "./media.js";
 import { closeMedia, enterMediaFullscreen, handleFullscreenChange, openMedia } from "./media-modal.js";
 import {
+  applyTemplateClientFilters,
   duplicateTemplateNames,
   programPriceLabel,
   ratingLabel,
   renderProgramInfoModal,
   renderTemplateLibraryResultsHtml,
   renderTemplateFiltersHtml,
+  templateCategoryOptions,
+  templateFilterOptionMatches,
+  templateFilterSuggestions,
   templateCategoryLabel,
   templateSecondaryLabel,
 } from "./program-library.js";
@@ -407,26 +411,9 @@ function syncTemplateFilterSuggestions(input) {
   const list = document.getElementById(listId);
   if (!list) return;
   const prefix = clean(input.value).toLowerCase();
-  const values = templateFilterSuggestions(input.dataset.templateFilter);
+  const values = templateFilterSuggestions(input.dataset.templateFilter, state.templateOptions, state.lastTemplates);
   const matches = prefix ? values.filter((value) => templateFilterOptionMatches(value, prefix)) : values;
   list.innerHTML = `<option value="All"></option>${matches.map((value) => `<option value="${escapeAttr(value)}"></option>`).join("")}`;
-}
-
-function templateFilterSuggestions(filter) {
-  if (filter === "category") return templateCategoryOptions();
-  if (filter === "tag") return state.templateOptions.tags || [];
-  if (filter === "creator") {
-    return (state.templateOptions.creators || [])
-      .map((row) => clean(`${row.name || ""}${row.email ? ` - ${row.email}` : ""}`))
-      .filter(Boolean);
-  }
-  if (filter === "club") return (state.templateOptions.clubs || []).map((row) => row.name).filter(Boolean);
-  return [];
-}
-
-function templateFilterOptionMatches(value, prefix) {
-  const normalized = String(value || "").toLowerCase();
-  return normalized.includes(prefix) || normalized.split(/[\s&/,-]+/).some((part) => part.startsWith(prefix));
 }
 
 function renderLogin() {
@@ -3304,7 +3291,7 @@ function renderTemplateList(templates, selected, detail) {
 
 function renderTemplateLibrary(templates) {
   const scope = templateScopeMeta();
-  const visibleTemplates = applyTemplateClientFilters(templates);
+  const visibleTemplates = applyTemplateClientFilters(templates, state.templateFilters);
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
   els.toolbar.innerHTML = "";
@@ -3327,42 +3314,12 @@ function renderTemplateLibrary(templates) {
 }
 
 function renderTemplateLibraryResults() {
-  const visibleTemplates = applyTemplateClientFilters(state.lastTemplates || []);
+  const visibleTemplates = applyTemplateClientFilters(state.lastTemplates || [], state.templateFilters);
   const count = document.querySelector("[data-template-count]");
   if (count) count.textContent = `${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}`;
   document.querySelector(".program-preview-overlay")?.remove();
   const target = document.querySelector("[data-template-results]");
   if (target) target.innerHTML = renderTemplateLibraryResultsHtml(visibleTemplates, state.selectedTemplateId);
-}
-
-function applyTemplateClientFilters(templates) {
-  const search = clean(state.templateFilters.search).toLowerCase();
-  const category = clean(state.templateFilters.category);
-  const categoryNeedle = category.toLowerCase();
-  const tag = clean(state.templateFilters.tag).toLowerCase();
-  const creator = clean(state.templateFilters.creator).toLowerCase();
-  const club = clean(state.templateFilters.club).toLowerCase();
-  const ownerType = clean(state.templateFilters.ownerType).toLowerCase();
-  const visibility = clean(state.templateFilters.visibility).toLowerCase();
-  const pricing = clean(state.templateFilters.pricing).toLowerCase();
-  return templates.filter((template) => {
-    if (search) {
-      const haystack = `${template.plan_name || ""} ${template.source_external_id || ""}`.toLowerCase();
-      if (!haystack.includes(search)) return false;
-    }
-    if (categoryNeedle && categoryNeedle !== "all" && !templateFilterOptionMatches(templateCategoryLabel(template), categoryNeedle)) return false;
-    if (tag && tag !== "all" && !(template.tags || []).some((row) => templateFilterOptionMatches(row.name, tag))) return false;
-    if (creator && creator !== "all") {
-      const creatorText = `${template.creator_name || ""} ${template.creator_email || ""}`.trim();
-      if (!templateFilterOptionMatches(creatorText, creator)) return false;
-    }
-    if (club && club !== "all" && !templateFilterOptionMatches(template.creator_club_names, club)) return false;
-    if (ownerType && ownerType !== "all" && clean(template.owner_type).toLowerCase() !== ownerType) return false;
-    if (visibility && visibility !== "all" && clean(template.visibility).toLowerCase() !== visibility) return false;
-    if (pricing === "free" && template.is_free === false) return false;
-    if (pricing === "paid" && template.is_free !== false) return false;
-    return true;
-  });
 }
 
 function canUseProgramAdminFilters() {
@@ -3376,13 +3333,13 @@ function renderTemplateFilters() {
   const scopes = visibleTemplateScopes();
   const tagPrefix = clean(filters.tag).toLowerCase();
   const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => templateFilterOptionMatches(tag, tagPrefix)) : (options.tags || []);
-  const categories = templateCategoryOptions();
+  const categories = templateCategoryOptions(options, state.lastTemplates);
   const categoryPrefix = clean(filters.category).toLowerCase();
   const visibleCategories = categoryPrefix ? categories.filter((category) => templateFilterOptionMatches(category, categoryPrefix)) : categories;
-  const creatorOptions = templateFilterSuggestions("creator");
+  const creatorOptions = templateFilterSuggestions("creator", options, state.lastTemplates);
   const creatorPrefix = clean(filters.creator).toLowerCase();
   const visibleCreators = creatorPrefix ? creatorOptions.filter((creator) => templateFilterOptionMatches(creator, creatorPrefix)) : creatorOptions;
-  const clubOptions = templateFilterSuggestions("club");
+  const clubOptions = templateFilterSuggestions("club", options, state.lastTemplates);
   const clubPrefix = clean(filters.club).toLowerCase();
   const visibleClubs = clubPrefix ? clubOptions.filter((club) => templateFilterOptionMatches(club, clubPrefix)) : clubOptions;
   return renderTemplateFiltersHtml({
@@ -3399,13 +3356,6 @@ function renderTemplateFilters() {
     clubOptions,
     visibleClubs,
   });
-}
-
-function templateCategoryOptions() {
-  const defaults = ["General", "Rehabilitation", "Strength & power", "Speed & conditioning", "Movement prep", "Corrective & preventive", "Fitness & health", "Education"];
-  const assigned = state.templateOptions.categories || [];
-  const inferred = (state.lastTemplates || []).map(templateCategoryLabel).filter(Boolean);
-  return [...new Set([...defaults, ...assigned, ...inferred])].sort((a, b) => a.localeCompare(b));
 }
 
 async function submitTemplateMetadataForm(form) {

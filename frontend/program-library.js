@@ -1,6 +1,8 @@
 import { renderImage } from "./media.js";
 import { clean, escapeAttr, escapeHtml, programInitials, renderOption } from "./utils.js";
 
+const PROGRAM_CATEGORY_DEFAULTS = ["General", "Rehabilitation", "Strength & power", "Speed & conditioning", "Movement prep", "Corrective & preventive", "Fitness & health", "Education"];
+
 export function duplicateTemplateNames(templates) {
   const counts = new Map();
   templates.forEach((template) => {
@@ -121,6 +123,59 @@ export function groupTemplatesByCategory(templates) {
     groups.get(category).push(template);
   });
   return [...groups.entries()].map(([label, rows]) => ({ label, templates: rows }));
+}
+
+export function templateFilterOptionMatches(value, prefix) {
+  const normalized = String(value || "").toLowerCase();
+  return normalized.includes(prefix) || normalized.split(/[\s&/,-]+/).some((part) => part.startsWith(prefix));
+}
+
+export function templateCategoryOptions(templateOptions, templates) {
+  const assigned = templateOptions?.categories || [];
+  const inferred = (templates || []).map(templateCategoryLabel).filter(Boolean);
+  return [...new Set([...PROGRAM_CATEGORY_DEFAULTS, ...assigned, ...inferred])].sort((a, b) => a.localeCompare(b));
+}
+
+export function templateFilterSuggestions(filter, templateOptions, templates) {
+  if (filter === "category") return templateCategoryOptions(templateOptions, templates);
+  if (filter === "tag") return templateOptions?.tags || [];
+  if (filter === "creator") {
+    return (templateOptions?.creators || [])
+      .map((row) => clean(`${row.name || ""}${row.email ? ` - ${row.email}` : ""}`))
+      .filter(Boolean);
+  }
+  if (filter === "club") return (templateOptions?.clubs || []).map((row) => row.name).filter(Boolean);
+  return [];
+}
+
+export function applyTemplateClientFilters(templates, filters) {
+  const search = clean(filters.search).toLowerCase();
+  const category = clean(filters.category);
+  const categoryNeedle = category.toLowerCase();
+  const tag = clean(filters.tag).toLowerCase();
+  const creator = clean(filters.creator).toLowerCase();
+  const club = clean(filters.club).toLowerCase();
+  const ownerType = clean(filters.ownerType).toLowerCase();
+  const visibility = clean(filters.visibility).toLowerCase();
+  const pricing = clean(filters.pricing).toLowerCase();
+  return templates.filter((template) => {
+    if (search) {
+      const haystack = `${template.plan_name || ""} ${template.source_external_id || ""}`.toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    if (categoryNeedle && categoryNeedle !== "all" && !templateFilterOptionMatches(templateCategoryLabel(template), categoryNeedle)) return false;
+    if (tag && tag !== "all" && !(template.tags || []).some((row) => templateFilterOptionMatches(row.name, tag))) return false;
+    if (creator && creator !== "all") {
+      const creatorText = `${template.creator_name || ""} ${template.creator_email || ""}`.trim();
+      if (!templateFilterOptionMatches(creatorText, creator)) return false;
+    }
+    if (club && club !== "all" && !templateFilterOptionMatches(template.creator_club_names, club)) return false;
+    if (ownerType && ownerType !== "all" && clean(template.owner_type).toLowerCase() !== ownerType) return false;
+    if (visibility && visibility !== "all" && clean(template.visibility).toLowerCase() !== visibility) return false;
+    if (pricing === "free" && template.is_free === false) return false;
+    if (pricing === "paid" && template.is_free !== false) return false;
+    return true;
+  });
 }
 
 export function renderTemplateFiltersHtml(data) {
