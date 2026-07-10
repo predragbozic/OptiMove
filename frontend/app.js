@@ -1334,6 +1334,12 @@ function handleContentClick(event) {
     moveExerciseDetail(1);
     return;
   }
+  if (type === "exercise-jump") {
+    const item = getItemById(action.dataset.itemId);
+    if (!item) return;
+    renderExerciseDetail(item, action.dataset.itemId);
+    return;
+  }
   if (type === "exercise-load-more") {
     state.exerciseSearch.limit += 30;
     searchExercises(state.exerciseSearch.term);
@@ -3848,19 +3854,6 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
             <h3>${escapeHtml(title)}</h3>
             ${hierarchy ? `<div class="breadcrumb">${escapeHtml(hierarchy)}</div>` : ""}
           </div>
-          <div class="drill-actions">
-            <div class="drill-main-actions">
-              <button class="plain-button icon-button" data-action="exercise-back"><span class="button-icon">←</span><span>Back</span></button>
-              <button class="plain-button icon-button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
-            </div>
-            ${hasSequence ? `
-              <div class="drill-sibling-actions">
-                <button class="plain-button icon-button" data-action="exercise-prev" ${canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>
-                <span class="exercise-position">${currentIndex + 1} / ${ids.length}</span>
-                <button class="plain-button icon-button" data-action="exercise-next" ${canGoNext ? "" : "disabled"}><span>Next</span><span class="button-icon">›</span></button>
-              </div>
-            ` : ""}
-          </div>
         </div>
 
         <div class="exercise-detail-layout">
@@ -3895,7 +3888,36 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
               </div>
             ` : `<div class="empty">No additional exercise notes.</div>`}
           </div>
+
+          ${hasSequence ? `
+            <div class="exercise-sibling-strip">
+              <p class="eyebrow">Other exercises in this section</p>
+              <div class="exercise-sibling-row">
+                ${ids.map((id) => {
+                  const sibling = getItemById(id);
+                  if (!sibling) return "";
+                  const isActive = id === state.exerciseDetail.currentId;
+                  const siblingTitle = clean(sibling.title || sibling.name || "Exercise");
+                  const siblingImage = sibling.image || sibling.image_url || "";
+                  return `
+                    <button class="exercise-sibling-card ${isActive ? "is-active" : ""}" type="button" data-action="exercise-jump" data-item-id="${escapeAttr(id)}" ${isActive ? "disabled" : ""}>
+                      ${siblingImage ? `<img src="${escapeAttr(siblingImage)}" alt="" loading="lazy">` : `<span class="exercise-sibling-fallback">${escapeHtml(initialsFor(siblingTitle))}</span>`}
+                      <span>${escapeHtml(siblingTitle)}</span>
+                    </button>
+                  `;
+                }).join("")}
+              </div>
+            </div>
+          ` : ""}
         </div>
+
+        <nav class="exercise-detail-footer">
+          <button class="footer-nav-button" type="button" data-action="exercise-back"><span class="button-icon">←</span><span>Back</span></button>
+          ${hasSequence ? `<button class="footer-nav-button" type="button" data-action="exercise-prev" ${canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>` : ""}
+          ${hasSequence ? `<span class="exercise-position">${currentIndex + 1} / ${ids.length}</span>` : ""}
+          ${hasSequence ? `<button class="footer-nav-button" type="button" data-action="exercise-next" ${canGoNext ? "" : "disabled"}><span class="button-icon">›</span><span>Next</span></button>` : ""}
+          <button class="footer-nav-button" type="button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
+        </nav>
       </section>
     </div>
   `;
