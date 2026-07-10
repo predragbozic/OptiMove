@@ -10,6 +10,12 @@ import {
 import { loadBuilderExercises, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder } from "./builder-view.js";
+import {
+  loadCoaches as loadCoachesAction,
+  openCoachProfile as openCoachProfileAction,
+  submitCoachContactForm as submitCoachContactFormAction,
+  submitCoachProfileForm as submitCoachProfileFormAction,
+} from "./coach-profile-actions.js";
 import { renderCoachDetailModalHtml, renderCoachesHtml } from "./coach-profiles.js";
 import { els } from "./dom.js";
 import {
@@ -245,14 +251,14 @@ async function handleContentSubmit(event) {
   const coachProfileForm = event.target.closest("[data-coach-profile-form]");
   if (coachProfileForm) {
     event.preventDefault();
-    await submitCoachProfileForm(coachProfileForm);
+    await submitCoachProfileFormAction(coachProfileForm, { loadCoaches });
     return;
   }
 
   const coachContactForm = event.target.closest("[data-coach-contact-form]");
   if (coachContactForm) {
     event.preventDefault();
-    await submitCoachContactForm(coachContactForm);
+    await submitCoachContactFormAction(coachContactForm, { renderCoachContext });
     return;
   }
 
@@ -891,19 +897,10 @@ async function loadActiveTab() {
 }
 
 async function loadCoaches() {
-  state.navStack = [];
   els.context.textContent = "Coach directory";
   els.title.textContent = "Coaches";
   els.toolbar.innerHTML = "";
-  setLoading("Loading coach profiles...");
-  try {
-    const data = await api("/api/coaches");
-    state.coaches = { ...state.coaches, rows: data.coaches || [], error: "" };
-    renderCoaches();
-  } catch (error) {
-    state.coaches = { ...state.coaches, error: error.message || "Could not load coach profiles." };
-    renderCoaches();
-  }
+  return loadCoachesAction({ setLoading, renderCoaches });
 }
 
 async function loadWeekly() {
@@ -956,16 +953,7 @@ function programLibraryDataContext() {
 }
 
 async function openCoachProfile(profileId) {
-  if (!profileId) return;
-  state.coaches = { ...state.coaches, selected: profileId, detail: null, editOpen: false, contactOpen: false, error: "" };
-  renderCoachContext();
-  try {
-    const detail = await api(`/api/coaches/${encodeURIComponent(profileId)}`);
-    state.coaches = { ...state.coaches, detail, error: "" };
-  } catch (error) {
-    state.coaches = { ...state.coaches, error: error.message || "Could not load coach profile." };
-  }
-  renderCoachContext();
+  return openCoachProfileAction(profileId, { renderCoachContext });
 }
 
 function renderCoachContext() {
@@ -982,62 +970,6 @@ function renderCoaches() {
     renderProgramInfoModal,
     renderTemplatePreviewModal,
   });
-}
-
-async function submitCoachProfileForm(form) {
-  const error = form.querySelector(".builder-error");
-  const button = form.querySelector("button[type='submit']");
-  if (error) error.textContent = "";
-  if (button) button.disabled = true;
-  const formData = new FormData(form);
-  try {
-    await api("/api/coaches/me", {
-      method: "PATCH",
-      body: JSON.stringify({
-        headline: formData.get("headline"),
-        specialties: formData.get("specialties"),
-        photoUrl: formData.get("photoUrl"),
-        coverImageUrl: formData.get("coverImageUrl"),
-        contactEmail: formData.get("contactEmail"),
-        visibility: formData.get("visibility"),
-        tags: formData.get("tags"),
-        bio: formData.get("bio"),
-        contactEnabled: formData.get("contactEnabled") === "on",
-      }),
-    });
-    state.coaches.editOpen = false;
-    await loadCoaches();
-  } catch (submitError) {
-    if (error) error.textContent = submitError.message || "Could not save profile.";
-  } finally {
-    if (button) button.disabled = false;
-  }
-}
-
-async function submitCoachContactForm(form) {
-  const profileId = form.dataset.profileId || "";
-  const error = form.querySelector(".builder-error");
-  const button = form.querySelector("button[type='submit']");
-  if (error) error.textContent = "";
-  if (button) button.disabled = true;
-  const formData = new FormData(form);
-  try {
-    await api(`/api/coaches/${encodeURIComponent(profileId)}/contact`, {
-      method: "POST",
-      body: JSON.stringify({
-        name: formData.get("name"),
-        email: formData.get("email"),
-        message: formData.get("message"),
-      }),
-    });
-    state.coaches.contactOpen = false;
-    state.coaches.error = "Contact request sent.";
-    renderCoachContext();
-  } catch (submitError) {
-    if (error) error.textContent = submitError.message || "Could not send request.";
-  } finally {
-    if (button) button.disabled = false;
-  }
 }
 
 async function handleContentClick(event) {
