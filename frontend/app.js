@@ -13,12 +13,11 @@ import { renderBuilder } from "./builder-view.js";
 import { renderCoachDetailModalHtml, renderCoachesHtml } from "./coach-profiles.js";
 import { els } from "./dom.js";
 import {
-  applyClientExerciseFilters,
-  exerciseSearchUrl,
-  loadExerciseFilterOptions,
-} from "./exercise-data.js";
+  handleExerciseLibraryAction,
+  loadExercises,
+  submitExerciseTagForm as submitExerciseTagFormAction,
+} from "./exercise-actions.js";
 import {
-  renderExerciseFilterControls,
   renderExerciseLibraryHtml,
 } from "./exercise-library.js";
 import {
@@ -50,7 +49,6 @@ import {
 import { renderTemplatePreviewModalHtml } from "./program-preview.js";
 import {
   TEMPLATE_SCOPES,
-  emptyExerciseOptions,
   emptyTemplateFilters,
   emptyTemplatePreview,
   state,
@@ -205,7 +203,7 @@ async function handleContentSubmit(event) {
   const tagForm = event.target.closest("[data-exercise-tag-form]");
   if (tagForm) {
     event.preventDefault();
-    await submitExerciseTagForm(tagForm);
+    await submitExerciseTagFormAction(tagForm, { renderExercises, setLoading });
     return;
   }
 
@@ -875,7 +873,7 @@ async function loadActiveTab() {
   if (state.activeTab === "templates") return loadTemplates();
   if (state.activeTab === "coaches") return loadCoaches();
   if (state.activeTab === "builder") return loadBuilder();
-  return loadExercises();
+  return loadExercises({ renderExercises, setLoading });
 }
 
 async function loadCoaches() {
@@ -1052,137 +1050,6 @@ async function submitCoachContactForm(form) {
   }
 }
 
-async function loadExercises() {
-  state.navStack = [];
-  await loadExerciseFilterOptions();
-  els.toolbar.innerHTML = `
-    <label class="search-field exercise-search-field">
-      <span>Exercise search</span>
-      <input id="exerciseSearch" type="search" placeholder="Name or code" value="">
-    </label>
-    <div class="exercise-filter-strip">
-      ${renderExerciseFilterControls(state.exerciseSearch.filters, state.exerciseSearch.options)}
-    </div>
-  `;
-  const input = document.querySelector("#exerciseSearch");
-  input.addEventListener("input", debounce(() => {
-    state.exerciseSearch.limit = 30;
-    searchExercises(input.value);
-  }, 250));
-  document.querySelectorAll("[data-exercise-filter]").forEach((control) => {
-    control.addEventListener("change", () => {
-      state.exerciseSearch.filters[control.dataset.exerciseFilter] =
-        control.type === "checkbox" ? control.checked : control.value;
-      state.exerciseSearch.limit = 30;
-      searchExercises(input.value);
-    });
-  });
-  await searchExercises(input.value);
-}
-
-async function searchExercises(term) {
-  const query = term.trim();
-  state.exerciseSearch.term = query;
-  setLoading(query ? "Searching exercises..." : "Loading exercises...");
-  const data = await api(exerciseSearchUrl(query, state.exerciseSearch.limit, state.exerciseSearch.filters));
-  state.exerciseSearch.hasMore = Boolean(data.hasMore);
-  renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters));
-}
-
-function findExerciseResultById(exerciseId) {
-  return [...state.lastExerciseResults, ...state.builder.exercises].find((exercise) => String(exercise.id) === String(exerciseId)) || null;
-}
-
-async function toggleExerciseFavorite(exerciseId, isFavorite) {
-  if (!exerciseId) return;
-  await api(`/api/exercises/${encodeURIComponent(exerciseId)}/favorite`, {
-    method: isFavorite ? "DELETE" : "POST",
-  });
-  if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
-  else await searchExercises(state.exerciseSearch.term);
-}
-
-async function openExerciseTagEditor(exerciseId, exerciseName) {
-  if (!exerciseId) return;
-  const data = await api(`/api/exercises/${encodeURIComponent(exerciseId)}/tags`);
-  state.tagEditor = {
-    open: true,
-    exerciseId,
-    exerciseName,
-    tags: data.tags || [],
-    options: data.options || [],
-    error: "",
-  };
-  rerenderCurrentExerciseSurface();
-}
-
-function closeExerciseTagEditor() {
-  state.tagEditor = { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" };
-  rerenderCurrentExerciseSurface();
-}
-
-async function submitExerciseTagForm(form) {
-  const formData = new FormData(form);
-  const tagId = String(formData.get("tagId") || "").trim();
-  const name = String(formData.get("name") || "").trim();
-  if (!tagId && !name) {
-    state.tagEditor.error = "Choose a tag or write a new one.";
-    rerenderCurrentExerciseSurface();
-    return;
-  }
-  try {
-    await api(`/api/exercises/${encodeURIComponent(state.tagEditor.exerciseId)}/tags`, {
-      method: "POST",
-      body: JSON.stringify(tagId ? { tagId } : { name }),
-    });
-    await refreshExerciseTagEditor();
-    state.exerciseSearch.options = emptyExerciseOptions();
-    await loadExerciseFilterOptions();
-    await refreshCurrentExerciseSearch();
-  } catch (error) {
-    state.tagEditor.error = error.message || "Could not add tag.";
-    rerenderCurrentExerciseSurface();
-  }
-}
-
-async function removeExerciseTag(exerciseId, tagId) {
-  if (!exerciseId || !tagId) return;
-  await api(`/api/exercises/${encodeURIComponent(exerciseId)}/tags/${encodeURIComponent(tagId)}`, { method: "DELETE" });
-  await refreshExerciseTagEditor();
-  state.exerciseSearch.options = emptyExerciseOptions();
-  await loadExerciseFilterOptions();
-  await refreshCurrentExerciseSearch();
-}
-
-async function refreshExerciseTagEditor() {
-  if (!state.tagEditor.open || !state.tagEditor.exerciseId) return;
-  const data = await api(`/api/exercises/${encodeURIComponent(state.tagEditor.exerciseId)}/tags`);
-  state.tagEditor = { ...state.tagEditor, tags: data.tags || [], options: data.options || [], error: "" };
-  updateExerciseTagsInCache(state.tagEditor.exerciseId, state.tagEditor.tags);
-}
-
-async function refreshCurrentExerciseSearch() {
-  if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
-  else await searchExercises(state.exerciseSearch.term);
-}
-
-function rerenderCurrentExerciseSurface() {
-  if (state.activeTab === "builder" && state.builder.draft) renderBuilder();
-  else renderExercises(state.lastExerciseResults);
-}
-
-function updateExerciseTagsInCache(exerciseId, tags) {
-  const update = (exercise) => {
-    if (String(exercise.id) === String(exerciseId)) exercise.tags = tags;
-  };
-  state.lastExerciseResults.forEach(update);
-  state.builder.exercises.forEach(update);
-  if (state.markedExercises.has(exerciseId)) {
-    const exercise = state.markedExercises.get(exerciseId);
-    state.markedExercises.set(exerciseId, { ...exercise, tags });
-  }
-}
-
 async function openProgramTagEditor(planId, programName) {
   if (!planId) return;
   try {
@@ -1330,39 +1197,7 @@ function handleContentClick(event) {
     renderExerciseDetail(item, action.dataset.itemId);
     return;
   }
-  if (type === "exercise-load-more") {
-    state.exerciseSearch.limit += 30;
-    searchExercises(state.exerciseSearch.term);
-    return;
-  }
-  if (type === "exercise-toggle-favorite") {
-    const exerciseId = action.dataset.exerciseId;
-    const isFavorite = action.dataset.favorite === "true";
-    void toggleExerciseFavorite(exerciseId, isFavorite);
-    return;
-  }
-  if (type === "exercise-toggle-mark") {
-    const exerciseId = action.dataset.exerciseId;
-    if (!exerciseId) return;
-    if (state.markedExerciseIds.has(exerciseId)) {
-      state.markedExerciseIds.delete(exerciseId);
-      state.markedExercises.delete(exerciseId);
-    } else {
-      state.markedExerciseIds.add(exerciseId);
-      const exercise = findExerciseResultById(exerciseId);
-      if (exercise) state.markedExercises.set(exerciseId, exercise);
-    }
-    if (state.activeTab === "builder" && state.builder.selectedNodeId) {
-      if (state.builder.exerciseFilters.marked) void loadBuilderExercises();
-      else renderBuilder();
-    }
-    else searchExercises(state.exerciseSearch.term);
-    return;
-  }
-  if (type === "exercise-tags") {
-    void openExerciseTagEditor(action.dataset.exerciseId, action.dataset.exerciseName || "Exercise");
-    return;
-  }
+  if (await handleExerciseLibraryAction(action, { renderExercises, setLoading })) return;
   if (type === "template-open") {
     void openTemplatePreview(action.dataset.templateId);
     return;
@@ -1480,14 +1315,6 @@ function handleContentClick(event) {
   }
   if (type === "program-tag-remove") {
     void removeProgramTag(action.dataset.planId, action.dataset.tagId);
-    return;
-  }
-  if (type === "exercise-tags-close") {
-    closeExerciseTagEditor();
-    return;
-  }
-  if (type === "exercise-tag-remove") {
-    void removeExerciseTag(action.dataset.exerciseId, action.dataset.tagId);
     return;
   }
   if (type === "organization-edit") {
