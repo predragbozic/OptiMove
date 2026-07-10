@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { accessScopeLabel, canManageCoachProfile, hasOrganizationAccess, isAthleteMode, roleLabel } from "./access.js";
-import { handleBuilderPlanAction } from "./builder-actions.js";
+import { handleBuilderDraftAction, handleBuilderPlanAction, handleBuilderWorkspaceAction } from "./builder-actions.js";
 import {
   findBuilderNode,
   findBuilderSession,
@@ -43,7 +43,6 @@ import { renderTemplatePreviewModalHtml } from "./program-preview.js";
 import {
   EXERCISE_FILTERS,
   TEMPLATE_SCOPES,
-  emptyBuilderState,
   emptyExerciseOptions,
   emptyTemplateFilters,
   emptyTemplatePreview,
@@ -3233,201 +3232,8 @@ function renderCopyPlanSource() {
 async function handleBuilderAction(action) {
   const type = action.dataset.action;
   if (await handleBuilderPlanAction(action, { renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises })) return;
-  if (type === "builder-set-plan-type") {
-    state.builder.planType = action.dataset.planType === "weekly" ? "weekly" : "program";
-    state.builder.weekStart ||= weekMondayIso(localDateIso());
-    state.builder.athletePickerOpen = false;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-open-info") {
-    state.builder.infoOpen = action.dataset.info || "session";
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-close-info") {
-    state.builder.infoOpen = "";
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-open-session-modal") {
-    state.builder.sessionModalBlockId = action.dataset.blockId || "";
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-close-session-modal") {
-    state.builder.sessionModalBlockId = "";
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-close-structure-modal") {
-    state.builder.structureModalOpen = false;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-open-custom-exercise") {
-    state.builder.customExerciseOpen = true;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-close-custom-exercise") {
-    state.builder.customExerciseOpen = false;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-copy-node") {
-    const node = findBuilderNode(state.builder.draft, action.dataset.nodeId || state.builder.selectedNodeId);
-    if (!node) return;
-    state.builder.clipboard = { type: node.type, nodeId: node.id, name: node.name, itemCount: node.items.length };
-    state.builder.selectedNodeId = "";
-    state.builder.customExerciseOpen = false;
-    state.builder.sectionPickerOpen = false;
-    state.builder.structureModalOpen = false;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-clear-clipboard") {
-    state.builder.clipboard = null;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-paste-node") {
-    const clipboard = state.builder.clipboard;
-    if (!clipboard) return;
-    action.disabled = true;
-    try {
-      state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(clipboard.nodeId)}/copy`, {
-        method: "POST",
-        body: JSON.stringify({ targetSessionId: action.dataset.sessionId, targetParentId: action.dataset.parentId || "" }),
-      });
-      state.builder.selectedSessionId = action.dataset.sessionId || "";
-      state.builder.selectedNodeId = "";
-      renderBuilder();
-    } catch (error) {
-      action.disabled = false;
-      throw error;
-    }
-    return;
-  }
-  if (type === "builder-move-node") {
-    action.disabled = true;
-    try {
-      state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(action.dataset.nodeId || "")}/move`, {
-        method: "POST",
-        body: JSON.stringify({ direction: action.dataset.direction || "" }),
-      });
-      renderBuilder();
-    } catch (error) {
-      action.disabled = false;
-      throw error;
-    }
-    return;
-  }
-  if (type === "builder-finish-section") {
-    state.builder.selectedNodeId = "";
-    state.builder.customExerciseOpen = false;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-toggle-note") {
-    state.builder.showNote = !state.builder.showNote;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-open-athlete-picker") {
-    state.builder.athletePickerOpen = true;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-close-athlete-picker") {
-    state.builder.athletePickerOpen = false;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-select-athlete") {
-    state.builder.createAthleteId = action.dataset.athleteId || "";
-    state.builder.athletePickerOpen = false;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-open-section-panel") {
-    state.builder.sectionPickerOpen = true;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-close-section-panel") {
-    state.builder.sectionPickerOpen = false;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-add-structure") {
-    state.builder.selectedSessionId = action.dataset.sessionId || "";
-    state.builder.selectedNodeId = "";
-    state.builder.addNodeOpen = true;
-    state.builder.structureModalOpen = true;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-submit-plan") {
-    const draft = state.builder.draft;
-    if (!draft) return;
-    action.disabled = true;
-    try {
-      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}/submit`, { method: "POST" });
-      renderBuilder();
-    } catch (error) {
-      renderBuilderError(error);
-    }
-    return;
-  }
-  if (type === "builder-cancel") {
-    const plan = state.builder.draft?.plan;
-    if (plan?.isEditDraft) {
-      if (!window.confirm("Discard these changes and keep the original unchanged?")) return;
-      await api(`/api/builder/plans/${encodeURIComponent(plan.id)}`, { method: "DELETE" });
-    }
-    state.builder = emptyBuilderState();
-    state.navStack = [];
-    if (plan?.athleteId) state.selectedAthleteId = String(plan.athleteId);
-    if (plan?.planType === "weekly") {
-      state.activeTab = "weekly";
-      state.weekSelectorOpen = false;
-      renderTabs();
-      renderLibraryNav();
-      await loadWeekly();
-      return;
-    }
-    if (plan?.isTemplate || !plan?.athleteId) {
-      state.activeTab = "templates";
-      renderTabs();
-      renderLibraryNav();
-      await loadTemplates();
-      return;
-    }
-    state.activeTab = "programs";
-    renderTabs();
-    renderLibraryNav();
-    await loadPrograms();
-    return;
-  }
-  if (type === "builder-select-session") {
-    state.builder.selectedSessionId = action.dataset.sessionId || "";
-    state.builder.selectedNodeId = "";
-    state.builder.sectionPickerOpen = false;
-    state.builder.addNodeOpen = false;
-    state.builder.structureModalOpen = false;
-    renderBuilder();
-    return;
-  }
-  if (type === "builder-select-node") {
-    state.builder.selectedSessionId = action.dataset.sessionId || "";
-    state.builder.selectedNodeId = action.dataset.nodeId || "";
-    state.builder.sectionPickerOpen = findBuilderNode(state.builder.draft, state.builder.selectedNodeId)?.type === "section";
-    state.builder.addNodeOpen = true;
-    state.builder.structureModalOpen = !state.builder.sectionPickerOpen;
-    renderBuilder();
-    return;
-  }
+  if (await handleBuilderWorkspaceAction(action, { renderBuilder })) return;
+  if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft })) return;
   if (type === "builder-pick-exercise") {
     const section = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
     const panel = action.closest(".builder-section-panel");
@@ -3473,44 +3279,6 @@ async function handleBuilderAction(action) {
     await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`, { method: "DELETE" });
     await refreshBuilderDraft();
     return;
-  }
-  if (type === "builder-delete-source-plan") {
-    const planId = action.dataset.planId || "";
-    const objectLabel = action.dataset.objectLabel || "program";
-    if (!planId || !window.confirm(`Delete this ${objectLabel} and all of its contents? This cannot be undone.`)) return;
-    action.disabled = true;
-    await api(`/api/builder/plans/${encodeURIComponent(planId)}`, { method: "DELETE" });
-    if (state.activeTab === "weekly") {
-      state.weekSelectorOpen = false;
-      await loadWeekly();
-    } else if (state.activeTab === "programs") {
-      state.selectedProgramId = null;
-      await loadPrograms();
-    } else {
-      state.selectedTemplateId = null;
-      await loadTemplates();
-    }
-    return;
-  }
-  const deleteTargets = {
-    "builder-delete-plan": ["draft program", `/api/builder/plans/${encodeURIComponent(state.builder.draft?.plan.id || "")}`],
-    "builder-delete-block": ["block and its contents", `/api/builder/blocks/${encodeURIComponent(action.dataset.blockId || "")}`],
-    "builder-delete-session": ["session and its contents", `/api/builder/sessions/${encodeURIComponent(action.dataset.sessionId || "")}`],
-    "builder-delete-node": ["selected node and its contents", `/api/builder/nodes/${encodeURIComponent(action.dataset.nodeId || "")}`],
-  };
-  if (deleteTargets[type]) {
-    const [label, url] = deleteTargets[type];
-    if (!window.confirm(`Delete this ${label}? This cannot be undone.`)) return;
-    await api(url, { method: "DELETE" });
-    if (type === "builder-delete-plan") {
-      state.builder = emptyBuilderState();
-    } else {
-      state.builder.selectedNodeId = "";
-      state.builder.selectedSessionId = "";
-      await refreshBuilderDraft();
-      return;
-    }
-    renderBuilder();
   }
 }
 
