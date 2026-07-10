@@ -7,10 +7,16 @@ import {
   handleBuilderWorkspaceAction,
   submitBuilderForm as submitBuilderFormAction,
 } from "./builder-actions.js";
+import { loadBuilderExercises, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder } from "./builder-view.js";
 import { renderCoachDetailModalHtml, renderCoachesHtml } from "./coach-profiles.js";
 import { els } from "./dom.js";
+import {
+  applyClientExerciseFilters,
+  exerciseSearchUrl,
+  loadExerciseFilterOptions,
+} from "./exercise-data.js";
 import {
   renderExerciseFilterControls,
   renderExerciseLibraryHtml,
@@ -43,7 +49,6 @@ import {
 } from "./program-library.js";
 import { renderTemplatePreviewModalHtml } from "./program-preview.js";
 import {
-  EXERCISE_FILTERS,
   TEMPLATE_SCOPES,
   emptyExerciseOptions,
   emptyTemplateFilters,
@@ -1082,28 +1087,6 @@ async function searchExercises(term) {
   const data = await api(exerciseSearchUrl(query, state.exerciseSearch.limit, state.exerciseSearch.filters));
   state.exerciseSearch.hasMore = Boolean(data.hasMore);
   renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters));
-}
-
-async function loadExerciseFilterOptions() {
-  if (EXERCISE_FILTERS.some((filter) => state.exerciseSearch.options[filter.optionsKey]?.length)) return;
-  const data = await api("/api/exercises/options");
-  state.exerciseSearch.options = { ...emptyExerciseOptions(), ...data };
-}
-
-function exerciseSearchUrl(query, limit, filters = {}) {
-  const params = new URLSearchParams({ search: query || "", limit: String(limit || 30) });
-  EXERCISE_FILTERS.forEach((filter) => {
-    if (filters[filter.key]) params.set(filter.key, filters[filter.key]);
-  });
-  if (filters.favorite) params.set("favorite", "true");
-  return `/api/exercises?${params.toString()}`;
-}
-
-function applyClientExerciseFilters(exercises, filters) {
-  if (!filters.marked) return exercises;
-  const hasOtherFilters = EXERCISE_FILTERS.some((filter) => filters[filter.key]) || filters.favorite;
-  if (!hasOtherFilters) return [...state.markedExercises.values()];
-  return exercises.filter((exercise) => state.markedExerciseIds.has(exercise.id));
 }
 
 function findExerciseResultById(exerciseId) {
@@ -2726,7 +2709,7 @@ function renderNode(node) {
   const crumbs = state.navStack.map((entry) => entry.label);
   const siblingState = nodeSiblingState();
   els.content.innerHTML = `
-    <section class="panel">
+    <section class="panel node-detail-panel">
       <div class="drill-header">
         <div>
           <p class="eyebrow">${escapeHtml(node.typeLabel || node.type)}</p>
@@ -2734,10 +2717,12 @@ function renderNode(node) {
           <div class="breadcrumb">${crumbs.map(escapeHtml).join(" / ")}</div>
         </div>
       </div>
-      ${node.note ? `<p class="node-note">${escapeHtml(node.note)}</p>` : ""}
-      ${next.length
-        ? `<div class="node-grid">${next.map(renderNodeButton).join("")}</div>`
-        : renderTerminalNode(node)}
+      <div class="node-detail-body">
+        ${node.note ? `<p class="node-note">${escapeHtml(node.note)}</p>` : ""}
+        ${next.length
+          ? `<div class="node-grid">${next.map(renderNodeButton).join("")}</div>`
+          : renderTerminalNode(node)}
+      </div>
       <nav class="node-detail-footer">
         <button class="footer-nav-button" type="button" data-action="back"><span class="button-icon">←</span><span>Back</span></button>
         ${siblingState.hasSiblings ? `<button class="footer-nav-button" type="button" data-action="node-prev" ${siblingState.canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>` : ""}
@@ -3216,15 +3201,6 @@ async function loadBuilder() {
   await loadBuilderExercises();
 }
 
-async function loadBuilderExercises() {
-  if (state.activeTab !== "builder") return;
-  await loadExerciseFilterOptions();
-  const query = state.builder.exerciseQuery.trim();
-  const data = await api(exerciseSearchUrl(query, 18, state.builder.exerciseFilters));
-  state.builder.exercises = applyClientExerciseFilters(data.exercises || [], state.builder.exerciseFilters);
-  renderBuilder();
-}
-
 function renderCopyPlanSource() {
   if (state.activeTab === "weekly") return renderWeeklyRoot(state.lastWeeklyData);
   if (state.activeTab === "programs") return renderProgramRoot((state.lastProgramBundle?.programs || []).find((program) => program.id === state.selectedProgramId));
@@ -3236,12 +3212,6 @@ async function handleBuilderAction(action) {
   if (await handleBuilderWorkspaceAction(action, { renderBuilder })) return;
   if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft })) return;
   if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderError, refreshBuilderDraft })) return;
-}
-
-async function refreshBuilderDraft() {
-  if (!state.builder.draft) return;
-  state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(state.builder.draft.plan.id)}`);
-  renderBuilder();
 }
 
 function renderBuilderError(error) {
