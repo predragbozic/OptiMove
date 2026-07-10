@@ -7,6 +7,7 @@ import {
 } from "./builder-exercises.js";
 import {
   renderBuilderAthletePicker,
+  renderBuilderInfoModal,
   renderCopyPlanModal,
 } from "./builder-modals.js";
 import {
@@ -3396,7 +3397,7 @@ function builderStructureContext() {
   };
 }
 
-function renderBuilderInfoModal(kind) {
+function renderBuilderInfoModalLegacy(kind) {
   const programInfo = kind === "program";
   return `
     <div class="builder-modal-overlay">
