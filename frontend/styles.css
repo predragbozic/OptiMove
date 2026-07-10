@@ -518,7 +518,7 @@ body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button {
   gap: 10px;
   align-items: center;
   justify-content: start;
-  justify-items: center;
+  justify-items: start;
   margin: 0;
   padding: 0 10px;
   border: 1px solid transparent;
@@ -1071,10 +1071,20 @@ button {
   height: 42px;
   display: grid;
   place-items: center;
+  border: 0;
   border-radius: 8px;
   background: #18212b;
   color: #fff;
+  font: inherit;
   font-weight: 800;
+  cursor: pointer;
+}
+
+.brand-mark-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 5px;
 }
 
 .eyebrow {
@@ -3257,52 +3267,14 @@ input:focus {
   margin-bottom: 14px;
 }
 
-.drill-actions {
+.node-detail-footer {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.drill-main-actions,
-.drill-sibling-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  justify-content: flex-end;
-}
-
-.drill-sibling-actions {
-  min-height: 38px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-soft);
-  justify-content: flex-end;
-}
-
-.drill-main-actions {
-  min-height: 38px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: rgba(247, 248, 250, 0.82);
-}
-
-.drill-actions .plain-button {
-  min-height: 36px;
-  padding: 0 12px;
-  font-size: 12px;
-}
-
-.drill-main-actions .plain-button {
-  border-color: transparent;
-  background: transparent;
-}
-
-.drill-actions .plain-button:hover {
-  border-color: var(--line-strong);
+  align-items: stretch;
+  justify-content: space-around;
+  gap: 4px;
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
 }
 
 .exercise-position {
@@ -4746,31 +4718,8 @@ input:focus {
     overflow: hidden;
   }
 
-  .drill-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .drill-main-actions,
-  .drill-sibling-actions {
-    width: 100%;
-    gap: 4px;
-  }
-
-  .drill-sibling-actions {
-    justify-content: space-between;
-  }
-
-  .drill-main-actions .plain-button,
-  .drill-sibling-actions .plain-button {
-    flex: 1 1 0;
-    min-width: 0;
-    padding: 0 8px;
-  }
-
-  .drill-actions .exercise-position {
-    flex: 0 0 auto;
-    min-width: 52px;
+  .node-detail-footer {
+    padding-top: 8px;
   }
 
   .summary-grid {

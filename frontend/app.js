@@ -668,6 +668,11 @@ function handleImageError(event) {
   image.classList.add("image-missing");
 }
 
+function goHome() {
+  state.navStack = [];
+  renderCurrentNode();
+}
+
 function handleGlobalClick(event) {
   const tab = event.target.closest("[data-tab]");
   if (tab) {
@@ -691,6 +696,7 @@ function handleGlobalClick(event) {
   const action = event.target.closest("[data-action]");
   if (!action) return;
   if (action.dataset.action === "close-media") closeMedia();
+  if (action.dataset.action === "home") goHome();
 }
 
 function handleSwipeStart(event) {
@@ -1293,8 +1299,7 @@ function handleContentClick(event) {
     return;
   }
   if (type === "home") {
-    state.navStack = [];
-    renderCurrentNode();
+    goHome();
     return;
   }
   if (type === "exercise-back") {
@@ -2726,24 +2731,18 @@ function renderNode(node) {
           <h3>${escapeHtml(node.label)}</h3>
           <div class="breadcrumb">${crumbs.map(escapeHtml).join(" / ")}</div>
         </div>
-        <div class="drill-actions">
-          <div class="drill-main-actions">
-            <button class="plain-button icon-button" data-action="back"><span class="button-icon">←</span><span>Back</span></button>
-            <button class="plain-button icon-button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
-          </div>
-          ${siblingState.hasSiblings ? `
-            <div class="drill-sibling-actions">
-              <button class="plain-button icon-button" data-action="node-prev" ${siblingState.canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>
-              <span class="exercise-position">${siblingState.index + 1} / ${siblingState.total}</span>
-              <button class="plain-button icon-button" data-action="node-next" ${siblingState.canGoNext ? "" : "disabled"}><span>Next</span><span class="button-icon">›</span></button>
-            </div>
-          ` : ""}
-        </div>
       </div>
       ${node.note ? `<p class="node-note">${escapeHtml(node.note)}</p>` : ""}
       ${next.length
         ? `<div class="node-grid">${next.map(renderNodeButton).join("")}</div>`
         : renderTerminalNode(node)}
+      <nav class="node-detail-footer">
+        <button class="footer-nav-button" type="button" data-action="back"><span class="button-icon">←</span><span>Back</span></button>
+        ${siblingState.hasSiblings ? `<button class="footer-nav-button" type="button" data-action="node-prev" ${siblingState.canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>` : ""}
+        ${siblingState.hasSiblings ? `<span class="exercise-position">${siblingState.index + 1} / ${siblingState.total}</span>` : ""}
+        ${siblingState.hasSiblings ? `<button class="footer-nav-button" type="button" data-action="node-next" ${siblingState.canGoNext ? "" : "disabled"}><span class="button-icon">›</span><span>Next</span></button>` : ""}
+        <button class="footer-nav-button" type="button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
+      </nav>
     </section>
   `;
 }
@@ -3901,7 +3900,7 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
                   const siblingImage = sibling.image || sibling.image_url || "";
                   return `
                     <button class="exercise-sibling-card ${isActive ? "is-active" : ""}" type="button" data-action="exercise-jump" data-item-id="${escapeAttr(id)}" ${isActive ? "disabled" : ""}>
-                      ${siblingImage ? `<img src="${escapeAttr(siblingImage)}" alt="" loading="lazy">` : `<span class="exercise-sibling-fallback">${escapeHtml(initialsFor(siblingTitle))}</span>`}
+                      ${siblingImage ? renderImage(siblingImage, "exercise-sibling-image") : `<span class="exercise-sibling-fallback">${escapeHtml(initialsFor(siblingTitle))}</span>`}
                       <span>${escapeHtml(siblingTitle)}</span>
                     </button>
                   `;
