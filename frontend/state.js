@@ -67,6 +67,33 @@ export const emptyTemplatePreview = (overrides = {}) => ({
   ...overrides,
 });
 
+export const emptyBuilderState = (overrides = {}) => ({
+  draft: null,
+  planType: "program",
+  weekStart: "",
+  selectedSessionId: "",
+  selectedNodeId: "",
+  exerciseQuery: "",
+  exerciseFilters: emptyExerciseFilters(),
+  exercises: [],
+  athletePickerOpen: false,
+  sectionPickerOpen: false,
+  createAthleteId: "",
+  copyPlanId: "",
+  copyPlanName: "",
+  copyAthleteId: "",
+  copyPlanType: "program",
+  copyWeekStart: "",
+  clipboard: null,
+  showNote: false,
+  addNodeOpen: false,
+  sessionModalBlockId: "",
+  structureModalOpen: false,
+  infoOpen: "",
+  customExerciseOpen: false,
+  ...overrides,
+});
+
 export const TEMPLATE_SCOPES = ["all", "workspace", "my", "club", "optimove", "marketplace"];
 export const ATHLETE_TEMPLATE_SCOPES = ["all", "my", "club", "optimove", "marketplace"];
 
@@ -92,7 +119,7 @@ export const createInitialState = () => ({
   templateFilters: emptyTemplateFilters(),
   templateOptions: { categories: [], tags: [], creators: [], clubs: [] },
   lastExerciseResults: [],
-  builder: { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false },
+  builder: emptyBuilderState(),
   exerciseSearch: { term: "", limit: 30, hasMore: false, filters: emptyExerciseFilters(), options: emptyExerciseOptions() },
   markedExerciseIds: new Set(),
   markedExercises: new Map(),

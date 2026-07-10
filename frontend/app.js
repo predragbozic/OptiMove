@@ -42,7 +42,7 @@ import { renderTemplatePreviewModalHtml } from "./program-preview.js";
 import {
   EXERCISE_FILTERS,
   TEMPLATE_SCOPES,
-  emptyExerciseFilters,
+  emptyBuilderState,
   emptyExerciseOptions,
   emptyTemplateFilters,
   emptyTemplatePreview,
@@ -3443,7 +3443,7 @@ async function handleBuilderAction(action) {
       if (!window.confirm("Discard these changes and keep the original unchanged?")) return;
       await api(`/api/builder/plans/${encodeURIComponent(plan.id)}`, { method: "DELETE" });
     }
-    state.builder = { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false };
+    state.builder = emptyBuilderState();
     state.navStack = [];
     if (plan?.athleteId) state.selectedAthleteId = String(plan.athleteId);
     if (plan?.planType === "weekly") {
@@ -3560,7 +3560,7 @@ async function handleBuilderAction(action) {
     if (!window.confirm(`Delete this ${label}? This cannot be undone.`)) return;
     await api(url, { method: "DELETE" });
     if (type === "builder-delete-plan") {
-      state.builder = { draft: null, planType: "program", weekStart: "", selectedSessionId: "", selectedNodeId: "", exerciseQuery: "", exerciseFilters: emptyExerciseFilters(), exercises: [], athletePickerOpen: false, sectionPickerOpen: false, createAthleteId: "", copyPlanId: "", copyPlanName: "", copyAthleteId: "", clipboard: null, showNote: false, addNodeOpen: false, sessionModalBlockId: "", structureModalOpen: false, infoOpen: "", customExerciseOpen: false };
+      state.builder = emptyBuilderState();
     } else {
       state.builder.selectedNodeId = "";
       state.builder.selectedSessionId = "";
