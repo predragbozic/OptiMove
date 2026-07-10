@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { accessScopeLabel, canManageCoachProfile, hasOrganizationAccess, isAthleteMode, roleLabel } from "./access.js";
+import { handleBuilderPlanAction } from "./builder-actions.js";
 import {
   findBuilderNode,
   findBuilderSession,
@@ -3231,70 +3232,7 @@ function renderCopyPlanSource() {
 
 async function handleBuilderAction(action) {
   const type = action.dataset.action;
-  if (type === "builder-edit-plan") {
-    action.disabled = true;
-    try {
-      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(action.dataset.planId || "")}/edit`, { method: "POST" });
-      state.builder.selectedSessionId = "";
-      state.builder.selectedNodeId = "";
-      state.builder.exerciseQuery = "";
-      state.activeTab = "builder";
-      state.navStack = [];
-      renderTabs();
-      renderLibraryNav();
-      await loadBuilderExercises();
-    } catch (error) {
-      action.disabled = false;
-      throw error;
-    }
-    return;
-  }
-  if (type === "builder-duplicate-plan") {
-    state.builder.copyPlanId = action.dataset.planId || "";
-    state.builder.copyPlanName = action.closest(".section-heading")?.querySelector("h3")?.textContent || "Program";
-    state.builder.copyAthleteId = "";
-    state.builder.copyPlanType = action.dataset.planType === "weekly" ? "weekly" : "program";
-    state.builder.copyWeekStart = state.builder.copyPlanType === "weekly" ? weekMondayIso(localDateIso()) : "";
-    await renderCopyPlanSource();
-    return;
-  }
-  if (type === "builder-close-copy-plan") {
-    state.builder.copyPlanId = "";
-    state.builder.copyPlanName = "";
-    state.builder.copyAthleteId = "";
-    state.builder.copyPlanType = "program";
-    state.builder.copyWeekStart = "";
-    await renderCopyPlanSource();
-    return;
-  }
-  if (type === "builder-select-copy-athlete") {
-    state.builder.copyAthleteId = action.dataset.athleteId || "";
-    await renderCopyPlanSource();
-    return;
-  }
-  if (type === "builder-confirm-duplicate-plan") {
-    action.disabled = true;
-    try {
-      state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(state.builder.copyPlanId)}/duplicate`, { method: "POST", body: JSON.stringify({ athleteId: state.builder.copyAthleteId, weekStart: state.builder.copyWeekStart }) });
-      state.builder.selectedSessionId = "";
-      state.builder.selectedNodeId = "";
-      state.builder.exerciseQuery = "";
-      state.builder.copyPlanId = "";
-      state.builder.copyPlanName = "";
-      state.builder.copyAthleteId = "";
-      state.builder.copyPlanType = "program";
-      state.builder.copyWeekStart = "";
-      state.activeTab = "builder";
-      state.navStack = [];
-      renderTabs();
-      renderLibraryNav();
-      await loadBuilderExercises();
-    } catch (error) {
-      action.disabled = false;
-      throw error;
-    }
-    return;
-  }
+  if (await handleBuilderPlanAction(action, { renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises })) return;
   if (type === "builder-set-plan-type") {
     state.builder.planType = action.dataset.planType === "weekly" ? "weekly" : "program";
     state.builder.weekStart ||= weekMondayIso(localDateIso());
