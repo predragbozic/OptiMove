@@ -6,6 +6,10 @@ import {
   renderCustomExerciseModal,
 } from "./builder-exercises.js";
 import {
+  renderBuilderAthletePicker,
+  renderCopyPlanModal,
+} from "./builder-modals.js";
+import {
   renderBuilderBlock,
   renderBuilderSessionModal,
   renderBuilderStructureModal,
@@ -2495,7 +2499,7 @@ function renderWeeklyRoot(data) {
         </div>
       </section>
     </div>
-    ${renderCopyPlanModal()}
+    ${renderCopyPlanModal(state)}
   `;
   if (state.pendingScrollDate) {
     const date = state.pendingScrollDate;
@@ -2691,7 +2695,7 @@ function renderProgramRoot(program) {
         ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
         : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
     </section>
-    ${renderCopyPlanModal()}
+    ${renderCopyPlanModal(state)}
   `;
 }
 
@@ -2972,7 +2976,7 @@ function renderTemplateList(templates, selected, detail) {
           : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
       </section>
     </section>
-    ${renderCopyPlanModal()}
+    ${renderCopyPlanModal(state)}
   `;
 }
 
@@ -2996,7 +3000,7 @@ function renderTemplateLibrary(templates) {
     ${renderTemplatePreviewModal()}
     ${renderProgramInfoModal(state.programInfo)}
     ${renderCoachDetailModalHtml(state.coaches, state.currentUser)}
-    ${renderCopyPlanModal()}
+    ${renderCopyPlanModal(state)}
   `;
 }
 
@@ -3264,7 +3268,7 @@ function renderBuilder() {
             <button class="plain-button builder-create-button" type="submit">${isWeekly ? "Create weekly plan" : "Create draft"}</button>
           </form>
         </section>
-        ${state.builder.athletePickerOpen ? renderBuilderAthletePicker() : ""}
+        ${state.builder.athletePickerOpen ? renderBuilderAthletePicker(state) : ""}
       </section>
     `;
     return;
@@ -3311,7 +3315,7 @@ function renderBuilder() {
   `;
 }
 
-function renderBuilderAthletePicker() {
+function renderBuilderAthletePickerLegacy() {
   return `
     <div class="builder-athlete-overlay">
       <button class="builder-athlete-backdrop" type="button" data-action="builder-close-athlete-picker" aria-label="Close athlete picker"></button>
@@ -3333,7 +3337,7 @@ function renderBuilderAthletePicker() {
   `;
 }
 
-function renderCopyPlanModal() {
+function renderCopyPlanModalLegacy() {
   if (!state.builder.copyPlanId) return "";
   const selectedAthlete = state.athletes.find((athlete) => String(athlete.athlete_id) === String(state.builder.copyAthleteId));
   const isWeeklyCopy = state.builder.copyPlanType === "weekly";
