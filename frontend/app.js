@@ -46,9 +46,23 @@ import {
   templateCategoryLabel,
   templateSecondaryLabel,
 } from "./program-library.js";
+import {
+  addInlineProgramTag,
+  closeProgramTagEditor,
+  markTemplateUsed,
+  openTemplatePreview,
+  openTemplatePreviewFromCoachProgram,
+  removeProgramTag,
+  submitProgramTagForm as submitProgramTagFormAction,
+  submitTemplateMetadataForm as submitTemplateMetadataFormAction,
+  submitTemplateReviewForm as submitTemplateReviewFormAction,
+} from "./program-library-actions.js";
+import {
+  loadTemplates as loadTemplatesData,
+  loadTemplateOptionsInBackground as loadTemplateOptionsInBackgroundData,
+} from "./program-library-data.js";
 import { renderTemplatePreviewModalHtml } from "./program-preview.js";
 import {
-  TEMPLATE_SCOPES,
   emptyTemplateFilters,
   emptyTemplatePreview,
   state,
@@ -210,21 +224,21 @@ async function handleContentSubmit(event) {
   const programTagForm = event.target.closest("[data-program-tag-form]");
   if (programTagForm) {
     event.preventDefault();
-    await submitProgramTagForm(programTagForm);
+    await submitProgramTagFormAction(programTagForm, { renderTemplateLibrary });
     return;
   }
 
   const templateMetadataForm = event.target.closest("[data-template-metadata-form]");
   if (templateMetadataForm) {
     event.preventDefault();
-    await submitTemplateMetadataForm(templateMetadataForm);
+    await submitTemplateMetadataFormAction(templateMetadataForm, { loadTemplates });
     return;
   }
 
   const templateReviewForm = event.target.closest("[data-template-review-form]");
   if (templateReviewForm) {
     event.preventDefault();
-    await submitTemplateReviewForm(templateReviewForm);
+    await submitTemplateReviewFormAction(templateReviewForm, { loadTemplates, renderTemplateLibrary });
     return;
   }
 
@@ -923,46 +937,22 @@ async function loadPrograms() {
 }
 
 async function loadTemplates(options = {}) {
-  try {
-    state.navStack = [];
-    ensureTemplateScopeIsVisible();
-    const requestedScope = state.templateScope;
-    const scope = templateScopeMeta();
-    els.context.textContent = "Program library";
-    els.title.textContent = scope.label;
-    els.toolbar.innerHTML = "";
-    if (!options.restoreFocus) setLoading("Loading program library...");
-    const data = await api(templateSearchUrl());
-    state.templateAllowedScopes = Array.isArray(data.allowedScopes) ? data.allowedScopes : TEMPLATE_SCOPES;
-    ensureTemplateScopeIsVisible();
-    if (state.templateScope !== requestedScope) return loadTemplates(options);
-    state.lastTemplates = data.templates || [];
-    if (!state.lastTemplates.some((template) => String(template.plan_id) === String(state.selectedTemplateId))) {
-      state.selectedTemplateId = state.lastTemplates[0]?.plan_id || null;
-    }
-    if (!state.templateOptions.loaded) loadTemplateOptionsInBackground();
-    renderTemplateLibrary(state.lastTemplates);
-    restoreTemplateFilterFocus(options.restoreFocus);
-  } catch (error) {
-    setStatus("Error");
-    renderError(error);
-  }
+  return loadTemplatesData(programLibraryDataContext(), options);
 }
 
 async function loadTemplateOptionsInBackground() {
-  try {
-    const filterOptions = await api("/api/templates/options");
-    state.templateOptions = { ...filterOptions, loaded: true };
-    if (state.activeTab === "templates" || state.activeTab === "athlete-library") renderTemplateLibraryResults();
-  } catch (error) {
-    state.templateOptions = { ...state.templateOptions, loaded: true, error: error.message || "Could not load filters." };
-  }
+  return loadTemplateOptionsInBackgroundData({ renderTemplateLibraryResults });
 }
 
-function templateSearchUrl() {
-  const params = new URLSearchParams();
-  params.set("scope", state.templateScope || "my");
-  return `/api/templates?${params.toString()}`;
+function programLibraryDataContext() {
+  return {
+    renderError,
+    renderTemplateLibrary,
+    renderTemplateLibraryResults,
+    restoreTemplateFilterFocus,
+    setStatus,
+    setLoading,
+  };
 }
 
 async function openCoachProfile(profileId) {
@@ -1050,93 +1040,7 @@ async function submitCoachContactForm(form) {
   }
 }
 
-async function openProgramTagEditor(planId, programName) {
-  if (!planId) return;
-  try {
-    const data = await api(`/api/templates/${encodeURIComponent(planId)}/tags`);
-    state.programTagEditor = {
-      open: true,
-      planId,
-      programName,
-      tags: data.tags || [],
-      options: data.options || [],
-      error: "",
-    };
-    renderTemplateLibrary(state.lastTemplates);
-  } catch (error) {
-    renderError(error);
-  }
-}
-
-function closeProgramTagEditor() {
-  state.programTagEditor = { open: false, planId: "", programName: "", tags: [], options: [], error: "" };
-  renderTemplateLibrary(state.lastTemplates);
-}
-
-async function submitProgramTagForm(form) {
-  const formData = new FormData(form);
-  const planId = form.dataset.planId || state.programTagEditor.planId;
-  try {
-    await api(`/api/templates/${encodeURIComponent(planId)}/tags`, {
-      method: "POST",
-      body: JSON.stringify({
-        tagId: formData.get("tagId"),
-        name: formData.get("name"),
-      }),
-    });
-    form.reset();
-    await refreshProgramTags(planId);
-  } catch (error) {
-    state.programTagEditor = { ...state.programTagEditor, error: error.message || "Could not add tag.", planId };
-    renderTemplateLibrary(state.lastTemplates);
-  }
-}
-
-async function removeProgramTag(planId, tagId) {
-  if (!planId || !tagId) return;
-  await api(`/api/templates/${encodeURIComponent(planId)}/tags/${encodeURIComponent(tagId)}`, { method: "DELETE" });
-  await refreshProgramTags(planId);
-}
-
-async function refreshProgramTagEditor() {
-  await refreshProgramTags(state.programTagEditor.planId);
-}
-
-async function refreshProgramTags(planId) {
-  const data = await api(`/api/templates/${encodeURIComponent(planId)}/tags`);
-  if (state.programTagEditor.open && String(state.programTagEditor.planId) === String(planId)) {
-    state.programTagEditor = { ...state.programTagEditor, tags: data.tags || [], options: data.options || [], error: "" };
-  }
-  updateProgramTagsInCache(planId, data.tags || []);
-  const options = await api("/api/templates/options");
-  state.templateOptions = { ...options, loaded: true };
-  renderTemplateLibrary(state.lastTemplates);
-}
-
-async function addInlineProgramTag(planId) {
-  const input = document.querySelector(`[data-program-tag-input="${CSS.escape(String(planId))}"]`);
-  const name = clean(input?.value);
-  if (!planId || !name) return;
-  try {
-    await api(`/api/templates/${encodeURIComponent(planId)}/tags`, {
-      method: "POST",
-      body: JSON.stringify({ name }),
-    });
-    if (input) input.value = "";
-    await refreshProgramTags(planId);
-  } catch (error) {
-    state.programTagEditor = { ...state.programTagEditor, error: error.message || "Could not add tag.", planId };
-    renderTemplateLibrary(state.lastTemplates);
-  }
-}
-
-function updateProgramTagsInCache(planId, tags) {
-  state.lastTemplates.forEach((template) => {
-    if (String(template.plan_id) === String(planId)) template.tags = tags;
-  });
-}
-
-function handleContentClick(event) {
+async function handleContentClick(event) {
   const action = event.target.closest("[data-action]");
   if (!action) return;
 
@@ -1199,14 +1103,14 @@ function handleContentClick(event) {
   }
   if (await handleExerciseLibraryAction(action, { renderExercises, setLoading })) return;
   if (type === "template-open") {
-    void openTemplatePreview(action.dataset.templateId);
+    void openTemplatePreview(action.dataset.templateId, () => renderTemplateLibrary(state.lastTemplates));
     return;
   }
   if (type === "coach-program-open") {
     const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
     if (program?.plan_id) {
       state.coaches = { ...state.coaches, selected: null, detail: null, contactOpen: false, error: "" };
-      void openTemplatePreviewFromCoachProgram(program);
+      void openTemplatePreviewFromCoachProgram(program, renderCurrentNode);
     }
     return;
   }
@@ -1245,7 +1149,7 @@ function handleContentClick(event) {
     return;
   }
   if (type === "template-use") {
-    void markTemplateUsed(action.dataset.templateId);
+    void markTemplateUsed(action.dataset.templateId, { renderTemplateLibrary });
     return;
   }
   if (type === "template-assign") {
@@ -1306,15 +1210,15 @@ function handleContentClick(event) {
     return;
   }
   if (type === "program-tags-close") {
-    closeProgramTagEditor();
+    closeProgramTagEditor({ renderTemplateLibrary });
     return;
   }
   if (type === "program-tag-add") {
-    void addInlineProgramTag(action.dataset.planId);
+    void addInlineProgramTag(action.dataset.planId, { renderTemplateLibrary });
     return;
   }
   if (type === "program-tag-remove") {
-    void removeProgramTag(action.dataset.planId, action.dataset.tagId);
+    void removeProgramTag(action.dataset.planId, action.dataset.tagId, { renderTemplateLibrary });
     return;
   }
   if (type === "organization-edit") {
@@ -2699,60 +2603,6 @@ function renderTemplateToolbar(templates) {
   });
 }
 
-async function openTemplatePreview(planId) {
-  const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(planId));
-  if (!selected) return;
-  await openTemplatePreviewWithRenderer(selected, () => renderTemplateLibrary(state.lastTemplates));
-}
-
-async function openTemplatePreviewFromCoachProgram(program) {
-  if (!program?.plan_id) return;
-  if (!state.lastTemplates.some((template) => String(template.plan_id) === String(program.plan_id))) {
-    state.lastTemplates = [...state.lastTemplates, normalizeCoachProgramAsTemplate(program)];
-  }
-  const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(program.plan_id));
-  await openTemplatePreviewWithRenderer(selected, renderCurrentNode);
-}
-
-async function openTemplatePreviewWithRenderer(selected, renderAfter) {
-  state.selectedTemplateId = selected.plan_id;
-  state.templatePreview = emptyTemplatePreview({ open: true, loading: true });
-  renderAfter();
-  try {
-    const [detail, reviewsData] = await Promise.all([
-      api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`),
-      api(`/api/templates/${encodeURIComponent(selected.plan_id)}/reviews`),
-    ]);
-    state.templatePreview = emptyTemplatePreview({
-      ...state.templatePreview,
-      open: true,
-      loading: false,
-      detail,
-      reviews: reviewsData.reviews || [],
-      error: "",
-    });
-  } catch (error) {
-    state.templatePreview = emptyTemplatePreview({ ...state.templatePreview, open: true, loading: false, detail: null, error: error.message || "Could not load program." });
-  }
-  renderAfter();
-}
-
-function normalizeCoachProgramAsTemplate(program) {
-  return {
-    ...program,
-    plan_id: program.plan_id,
-    plan_name: program.plan_name,
-    library_category: program.library_category,
-    cover_image_url: program.cover_image_url,
-    is_free: program.is_free,
-    price_cents: program.price_cents,
-    average_rating: program.average_rating,
-    review_count: program.review_count,
-    library_scope: program.library_scope || "coach",
-    tags: program.tags || [],
-  };
-}
-
 function renderTemplateList(templates, selected, detail) {
   const scope = templateScopeMeta();
   els.context.textContent = "Program library";
@@ -2854,119 +2704,6 @@ function renderTemplateFilters() {
   });
 }
 
-async function submitTemplateMetadataForm(form) {
-  const planId = form.dataset.planId || "";
-  const error = form.querySelector(".builder-error");
-  const button = form.querySelector("button[type='submit']");
-  if (error) error.textContent = "";
-  if (button) button.disabled = true;
-  const formData = new FormData(form);
-  try {
-    await api(`/api/templates/${encodeURIComponent(planId)}/metadata`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        libraryScope: formData.get("libraryScope"),
-        libraryCategory: formData.get("libraryCategory"),
-        coverImageUrl: formData.get("coverImageUrl"),
-        isFree: formData.get("isFree") === "true",
-        priceCents: Math.round(Number(formData.get("price") || 0) * 100),
-        availableUntil: formData.get("availableUntil"),
-        ownerType: formData.get("ownerType"),
-        visibility: formData.get("visibility"),
-        accessModel: formData.get("accessModel"),
-        accessDurationDays: formData.get("accessDurationDays"),
-        subscriptionPeriod: formData.get("subscriptionPeriod"),
-        canCopy: formData.get("canCopy") === "true",
-        canEditCopy: formData.get("canEditCopy") === "true",
-        canAssignToAthlete: formData.get("canAssignToAthlete") === "true",
-        athleteCanViewDirectly: formData.get("athleteCanViewDirectly") === "true",
-        requiresApproval: formData.get("requiresApproval") === "true",
-      }),
-    });
-    state.templatePreview = emptyTemplatePreview();
-    state.selectedTemplateId = null;
-    await loadTemplates();
-  } catch (submitError) {
-    if (error) error.textContent = submitError.message || "Could not save library settings.";
-  } finally {
-    if (button) button.disabled = false;
-  }
-}
-
-async function markTemplateUsed(planId) {
-  if (!planId || state.templatePreview.submittingUse) return;
-  state.templatePreview = {
-    ...state.templatePreview,
-    submittingUse: true,
-    reviewError: "",
-    reviewMessage: "",
-  };
-  renderTemplateLibrary(state.lastTemplates);
-  try {
-    await api(`/api/templates/${encodeURIComponent(planId)}/use`, {
-      method: "POST",
-      body: JSON.stringify({ note: "Marked as used from Program Library." }),
-    });
-    state.templatePreview = {
-      ...state.templatePreview,
-      submittingUse: false,
-      usedMarked: true,
-      reviewOpen: true,
-      reviewMessage: "Access active. You can now leave a review after using this program.",
-      reviewError: "",
-    };
-  } catch (error) {
-    state.templatePreview = {
-      ...state.templatePreview,
-      submittingUse: false,
-      reviewError: error.message || "Could not mark this program as used.",
-      reviewMessage: "",
-    };
-  }
-  renderTemplateLibrary(state.lastTemplates);
-}
-
-async function submitTemplateReviewForm(form) {
-  const planId = form.dataset.planId || "";
-  if (!planId || state.templatePreview.submittingReview) return;
-  const formData = new FormData(form);
-  const rating = Number(formData.get("rating") || 0);
-  const comment = clean(formData.get("comment"));
-  state.templatePreview = {
-    ...state.templatePreview,
-    submittingReview: true,
-    reviewError: "",
-    reviewMessage: "",
-  };
-  renderTemplateLibrary(state.lastTemplates);
-  try {
-    await api(`/api/templates/${encodeURIComponent(planId)}/reviews`, {
-      method: "POST",
-      body: JSON.stringify({ rating, comment }),
-    });
-    const reviewsData = await api(`/api/templates/${encodeURIComponent(planId)}/reviews`);
-    state.templatePreview = {
-      ...state.templatePreview,
-      submittingReview: false,
-      reviewOpen: false,
-      reviewsOpen: true,
-      reviews: reviewsData.reviews || [],
-      usedMarked: true,
-      reviewMessage: "Review saved.",
-      reviewError: "",
-    };
-    await loadTemplates();
-  } catch (error) {
-    state.templatePreview = {
-      ...state.templatePreview,
-      submittingReview: false,
-      reviewError: error.message || "Could not save review.",
-      reviewMessage: "",
-    };
-    renderTemplateLibrary(state.lastTemplates);
-  }
-}
-
 function renderTemplatePreviewModal() {
   if (!state.templatePreview.open) return "";
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(state.selectedTemplateId));
@@ -3060,34 +2797,6 @@ function renderExercises(exercises) {
     search: state.exerciseSearch,
     tagEditor: state.tagEditor,
   });
-}
-
-function renderProgramTagModal() {
-  const editor = state.programTagEditor;
-  const assigned = new Set((editor.tags || []).map((tag) => String(tag.id)));
-  const available = (editor.options || []).filter((tag) => !assigned.has(String(tag.id)));
-  return `
-    <div class="exercise-tag-overlay">
-      <button class="exercise-tag-backdrop" type="button" data-action="program-tags-close" aria-label="Close tags"></button>
-      <section class="panel exercise-tag-modal" role="dialog" aria-modal="true" aria-label="Program tags">
-        <div class="builder-modal-head">
-          <div><p class="eyebrow">Program tags</p><h3>${escapeHtml(editor.programName)}</h3><p class="muted">Use your own labels to find and reuse programs faster.</p></div>
-          <button class="plain-button icon-button" type="button" data-action="program-tags-close" aria-label="Close"><span class="button-icon">x</span></button>
-        </div>
-        <div class="exercise-tag-current">
-          ${(editor.tags || []).length
-            ? editor.tags.map((tag) => `<span class="exercise-tag-pill">${escapeHtml(tag.name)} <button type="button" data-action="program-tag-remove" data-plan-id="${escapeAttr(editor.planId)}" data-tag-id="${escapeAttr(tag.id)}" aria-label="Remove ${escapeAttr(tag.name)}">x</button></span>`).join("")
-            : `<p class="muted">No tags yet.</p>`}
-        </div>
-        <form class="exercise-tag-form" data-program-tag-form>
-          <label class="search-field"><span>Add existing tag</span><select name="tagId"><option value="">Choose tag</option>${available.map((tag) => `<option value="${escapeAttr(tag.id)}">${escapeHtml(tag.name)}</option>`).join("")}</select></label>
-          <label class="search-field"><span>Or create new tag</span><input name="name" placeholder="e.g. rehab, preseason, youth, premium"></label>
-          ${editor.error ? `<p class="builder-error">${escapeHtml(editor.error)}</p>` : ""}
-          <button class="plain-button" type="submit">Add tag</button>
-        </form>
-      </section>
-    </div>
-  `;
 }
 
 function renderExerciseList(items) {
