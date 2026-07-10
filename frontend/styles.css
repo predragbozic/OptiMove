@@ -4241,7 +4241,8 @@ input:focus {
     grid-template-rows: auto 1fr auto;
     align-content: start;
     gap: 12px;
-    overflow: visible;
+    overflow-x: visible;
+    overflow-y: auto;
     padding: 10px 7px;
     border-right: 0;
     border-bottom: 0;
@@ -4891,8 +4892,8 @@ body:not(.athlete-mode):not(.login-mode) .sidebar-section {
   grid-auto-rows: auto;
 }
 
-body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-title,
-body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .sidebar-nav-button {
+body:not(.athlete-mode):not(.login-mode):not(.rail-expanded):not(.athletes-drawer-open) .brand-title,
+body:not(.athlete-mode):not(.login-mode):not(.rail-expanded):not(.athletes-drawer-open) .sidebar-nav-button {
   width: 52px;
   height: 52px;
   min-height: 52px;
@@ -4972,8 +4973,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     --rail-width: clamp(150px, 40vw, 190px);
   }
 
-  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-title,
-  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .sidebar-nav-button {
+  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded):not(.athletes-drawer-open) .brand-title,
+  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded):not(.athletes-drawer-open) .sidebar-nav-button {
     width: 44px;
     height: 44px;
     min-height: 44px;
@@ -5106,8 +5107,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     gap: 8px;
   }
 
-  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-title,
-  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .sidebar-nav-button,
+  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded):not(.athletes-drawer-open) .brand-title,
+  body:not(.athlete-mode):not(.login-mode):not(.rail-expanded):not(.athletes-drawer-open) .sidebar-nav-button,
   body:not(.athlete-mode):not(.login-mode) .brand-title,
   body:not(.athlete-mode):not(.login-mode) .sidebar-nav-button {
     width: 44px;
