@@ -406,7 +406,8 @@ async function handleContentChange(event) {
 let builderSearchTimer = null;
 function debounceBuilderSearch() {
   clearTimeout(builderSearchTimer);
-  builderSearchTimer = setTimeout(loadBuilderExercises, 250);
+  const focus = captureBuilderExerciseSearchFocus();
+  builderSearchTimer = setTimeout(() => loadBuilderExercises({ afterRender: () => restoreBuilderExerciseSearchFocus(focus) }), 250);
 }
 
 let templateSearchTimer = null;
@@ -436,6 +437,27 @@ function restoreTemplateFilterFocus(focus) {
   requestAnimationFrame(() => {
     const escapedFilter = window.CSS?.escape ? CSS.escape(focus.filter) : String(focus.filter).replace(/"/g, '\\"');
     const input = document.querySelector(`input[data-template-filter="${escapedFilter}"]`);
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (typeof input.setSelectionRange === "function" && focus.start !== null && focus.end !== null) {
+      input.setSelectionRange(focus.start, focus.end);
+    }
+  });
+}
+
+function captureBuilderExerciseSearchFocus() {
+  const active = document.activeElement;
+  if (!active?.matches?.("[data-builder-exercise-search]")) return null;
+  return {
+    start: active.selectionStart,
+    end: active.selectionEnd,
+  };
+}
+
+function restoreBuilderExerciseSearchFocus(focus) {
+  if (!focus) return;
+  requestAnimationFrame(() => {
+    const input = document.querySelector("[data-builder-exercise-search]");
     if (!input) return;
     input.focus({ preventScroll: true });
     if (typeof input.setSelectionRange === "function" && focus.start !== null && focus.end !== null) {
