@@ -1,10 +1,12 @@
 import { api } from "./api.js";
 import { accessScopeLabel, canManageCoachProfile, hasOrganizationAccess, isAthleteMode, roleLabel } from "./access.js";
-import { handleBuilderDraftAction, handleBuilderPlanAction, handleBuilderWorkspaceAction } from "./builder-actions.js";
 import {
-  findBuilderNode,
-  findBuilderSession,
-} from "./builder-helpers.js";
+  handleBuilderDraftAction,
+  handleBuilderItemAction,
+  handleBuilderPlanAction,
+  handleBuilderWorkspaceAction,
+  submitBuilderForm as submitBuilderFormAction,
+} from "./builder-actions.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder } from "./builder-view.js";
 import { renderCoachDetailModalHtml, renderCoachesHtml } from "./coach-profiles.js";
@@ -278,7 +280,7 @@ async function handleContentSubmit(event) {
   if (error) error.textContent = "";
   if (submitButton) submitButton.disabled = true;
   try {
-    await submitBuilderForm(builderForm);
+    await submitBuilderFormAction(builderForm, { loadBuilderExercises, renderBuilder });
   } catch (builderError) {
     if (error) error.textContent = builderError.message || "Could not save this change.";
     else renderBuilderError(builderError);
@@ -372,7 +374,7 @@ async function handleContentChange(event) {
   const form = event.target.closest("[data-builder-autosave]");
   if (!form || !event.target.matches("input, textarea")) return;
   try {
-    await submitBuilderForm(form);
+    await submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder });
   } catch (error) {
     renderBuilderError(error);
   }
@@ -3230,110 +3232,10 @@ function renderCopyPlanSource() {
 }
 
 async function handleBuilderAction(action) {
-  const type = action.dataset.action;
   if (await handleBuilderPlanAction(action, { renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises })) return;
   if (await handleBuilderWorkspaceAction(action, { renderBuilder })) return;
   if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft })) return;
-  if (type === "builder-pick-exercise") {
-    const section = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
-    const panel = action.closest(".builder-section-panel");
-    if (!section || section.type !== "section") return;
-    action.disabled = true;
-    try {
-      state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(section.id)}/exercises`, {
-        method: "POST",
-        body: JSON.stringify({
-          exerciseId: action.dataset.exerciseId || "",
-          sets: panel?.querySelector("[name='sets']")?.value || "",
-          reps: panel?.querySelector("[name='reps']")?.value || "",
-          load: panel?.querySelector("[name='load']")?.value || "",
-        }),
-      });
-      renderBuilder();
-    } catch (error) {
-      renderBuilderError(error);
-    }
-    return;
-  }
-  if (type === "builder-move-item") {
-    const node = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
-    const currentIndex = node?.items.findIndex((item) => item.id === action.dataset.itemId) ?? -1;
-    const targetIndex = currentIndex + (action.dataset.direction === "up" ? -1 : 1);
-    if (!node || currentIndex < 0 || targetIndex < 0 || targetIndex >= node.items.length) return;
-    [node.items[currentIndex], node.items[targetIndex]] = [node.items[targetIndex], node.items[currentIndex]];
-    renderBuilder();
-    try {
-      state.builder.draft = await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}/move`, {
-        method: "POST",
-        body: JSON.stringify({ direction: action.dataset.direction }),
-      });
-      renderBuilder();
-    } catch (error) {
-      await refreshBuilderDraft();
-      throw error;
-    }
-    return;
-  }
-  if (type === "builder-delete-item") {
-    if (!window.confirm("Remove this exercise from the program?")) return;
-    await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`, { method: "DELETE" });
-    await refreshBuilderDraft();
-    return;
-  }
-}
-
-async function submitBuilderForm(form) {
-  const mode = form.dataset.builderForm;
-  const data = Object.fromEntries(new FormData(form));
-  const draft = state.builder.draft;
-  if (mode === "create") {
-    const created = await api("/api/builder/plans", { method: "POST", body: JSON.stringify(data) });
-    state.builder.draft = created;
-    state.builder.selectedSessionId = "";
-    state.builder.selectedNodeId = "";
-    state.builder.athletePickerOpen = false;
-    state.builder.sectionPickerOpen = false;
-    state.builder.createAthleteId = "";
-    state.builder.planType = "program";
-    state.builder.weekStart = "";
-    state.builder.addNodeOpen = false;
-    await loadBuilderExercises();
-    return;
-  }
-  if (!draft) return;
-  if (mode === "add-block") {
-    state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}/blocks`, { method: "POST", body: JSON.stringify(data) });
-  }
-  if (mode === "update-block") {
-    state.builder.draft = await api(`/api/builder/blocks/${encodeURIComponent(form.dataset.blockId)}`, { method: "PATCH", body: JSON.stringify(data) });
-  }
-  if (mode === "add-session") {
-    state.builder.draft = await api(`/api/builder/blocks/${encodeURIComponent(form.dataset.blockId)}/sessions`, { method: "POST", body: JSON.stringify(data) });
-    const lastBlock = state.builder.draft.blocks.find((block) => block.id === form.dataset.blockId);
-    state.builder.selectedSessionId = lastBlock?.sessions.at(-1)?.id || state.builder.selectedSessionId;
-    state.builder.selectedNodeId = "";
-    state.builder.sessionModalBlockId = "";
-    state.builder.structureModalOpen = false;
-  }
-  if (mode === "add-node") {
-    state.builder.draft = await api(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}/nodes`, { method: "POST", body: JSON.stringify(data) });
-    const session = findBuilderSession(state.builder.draft, form.dataset.sessionId);
-    const added = session?.nodes.at(-1);
-    state.builder.selectedSessionId = form.dataset.sessionId;
-    state.builder.selectedNodeId = added?.id || "";
-  }
-  if (mode === "add-exercise") {
-    if (!data.exerciseId) return;
-    state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/exercises`, { method: "POST", body: JSON.stringify(data) });
-  }
-  if (mode === "add-custom-exercise") {
-    state.builder.draft = await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/custom-exercise`, { method: "POST", body: JSON.stringify(data) });
-    state.builder.customExerciseOpen = false;
-  }
-  if (mode === "update-item") {
-    state.builder.draft = await api(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(data) });
-  }
-  renderBuilder();
+  if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderError, refreshBuilderDraft })) return;
 }
 
 async function refreshBuilderDraft() {
