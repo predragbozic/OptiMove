@@ -1,7 +1,31 @@
 import { renderImage } from "./media.js";
+import { renderSettingsNavHtml } from "./navigation.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+
+export function renderOrganizationPanelHtml({ currentUser, data, error, role, scope }) {
+  return `
+    <section class="content-section organization-view">
+      <section class="panel organization-hero">
+        <div>
+          <p class="eyebrow">Signed in as</p>
+          <h3>${escapeHtml(currentUser?.name || currentUser?.email || "User")}</h3>
+          <p class="muted">${escapeHtml(currentUser?.email || "")}</p>
+        </div>
+        <div class="organization-scope-card">
+          <span>${escapeHtml(role)}</span>
+          <strong>${escapeHtml(scope)}</strong>
+        </div>
+      </section>
+      ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
+      ${renderSettingsNavHtml()}
+      ${renderOrganizationActions(data)}
+      ${renderOrganizationBrowser(data)}
+      ${state.organizationEditor.open ? renderOrganizationEditModal(data) : ""}
+    </section>
+  `;
+}
 
 export function renderOrganizationActions(data) {
   const section = state.organization.section || "overview";
@@ -401,4 +425,3 @@ function renderAccessCheckbox(name, label, checked) {
     </label>
   `;
 }
-

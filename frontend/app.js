@@ -51,7 +51,6 @@ import {
   renderAccessNav,
   renderLibraryNav,
   renderRailState,
-  renderSettingsNavHtml,
   templateScopeMeta,
   visibleTemplateScopes,
 } from "./navigation.js";
@@ -63,9 +62,7 @@ import {
 } from "./organization-actions.js";
 import {
   normalizeOrganizationSelection,
-  renderOrganizationActions,
-  renderOrganizationBrowser,
-  renderOrganizationEditModal,
+  renderOrganizationPanelHtml,
 } from "./organization-view.js";
 import { renderPlanMoreMenu } from "./plan-actions-view.js";
 import {
@@ -109,6 +106,7 @@ import {
   loadTemplateOptionsInBackground as loadTemplateOptionsInBackgroundData,
 } from "./program-library-data.js";
 import {
+  renderNodeDetailHtml,
   renderNodeButtonHtml,
   renderProgramDayCardHtml,
   renderProgramRootHtml,
@@ -1235,26 +1233,13 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
   normalizeOrganizationSelection(data);
   const role = roleLabel();
   const scope = accessScopeLabel();
-  els.content.innerHTML = `
-    <section class="content-section organization-view">
-      <section class="panel organization-hero">
-        <div>
-          <p class="eyebrow">Signed in as</p>
-          <h3>${escapeHtml(state.currentUser?.name || state.currentUser?.email || "User")}</h3>
-          <p class="muted">${escapeHtml(state.currentUser?.email || "")}</p>
-        </div>
-        <div class="organization-scope-card">
-          <span>${escapeHtml(role)}</span>
-          <strong>${escapeHtml(scope)}</strong>
-        </div>
-      </section>
-      ${state.organization.error ? `<p class="builder-error">${escapeHtml(state.organization.error)}</p>` : ""}
-      ${renderSettingsNavHtml()}
-      ${renderOrganizationActions(data)}
-      ${renderOrganizationBrowser(data)}
-      ${state.organizationEditor.open ? renderOrganizationEditModal(data) : ""}
-    </section>
-  `;
+  els.content.innerHTML = renderOrganizationPanelHtml({
+    currentUser: state.currentUser,
+    data,
+    error: state.organization.error,
+    role,
+    scope,
+  });
 }
 
 function renderAthleteList() {
@@ -1428,32 +1413,15 @@ function renderNode(node) {
   const next = nextNodes(node);
   const crumbs = state.navStack.map((entry) => entry.label);
   const siblingState = nodeSiblingState();
-  els.content.innerHTML = `
-    <section class="panel node-detail-panel">
-      <div class="drill-header">
-        <div>
-          <p class="eyebrow">${escapeHtml(node.typeLabel || node.type)}</p>
-          <h3>${escapeHtml(node.label)}</h3>
-          <div class="breadcrumb">${crumbs.map(escapeHtml).join(" / ")}</div>
-        </div>
-      </div>
-      <div class="node-detail-body">
-        ${node.note ? `<p class="node-note">${escapeHtml(node.note)}</p>` : ""}
-        ${next.length
-          ? `<div class="node-grid">${next.map(renderNodeButton).join("")}</div>`
-          : renderTerminalNode(node)}
-      </div>
-      <nav class="node-detail-footer">
-        <button class="footer-nav-button" type="button" data-action="back"><span class="button-icon">←</span><span>Back</span></button>
-        ${siblingState.hasSiblings ? `<button class="footer-nav-button" type="button" data-action="node-prev" ${siblingState.canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>` : ""}
-        ${siblingState.hasSiblings ? `<span class="exercise-position">${siblingState.index + 1} / ${siblingState.total}</span>` : ""}
-        ${siblingState.hasSiblings ? `<button class="footer-nav-button" type="button" data-action="node-next" ${siblingState.canGoNext ? "" : "disabled"}><span class="button-icon">›</span><span>Next</span></button>` : ""}
-        <button class="footer-nav-button" type="button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
-      </nav>
-    </section>
-  `;
+  els.content.innerHTML = renderNodeDetailHtml({
+    crumbs,
+    next,
+    node,
+    renderNodeButton,
+    siblingState,
+    terminalHtml: next.length ? "" : renderTerminalNode(node),
+  });
 }
-
 function renderTerminalNode(node) {
   if (!(node.items || []).some(isExerciseItem)) return renderOrganizationSummary(node);
   return renderExerciseList(node.items);

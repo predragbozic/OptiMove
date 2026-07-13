@@ -195,6 +195,33 @@ export function renderProgramRootHtml({
   `;
 }
 
+export function renderNodeDetailHtml({ crumbs, next, node, renderNodeButton, siblingState, terminalHtml }) {
+  return `
+    <section class="panel node-detail-panel">
+      <div class="drill-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(node.typeLabel || node.type)}</p>
+          <h3>${escapeHtml(node.label)}</h3>
+          <div class="breadcrumb">${crumbs.map(escapeHtml).join(" / ")}</div>
+        </div>
+      </div>
+      <div class="node-detail-body">
+        ${node.note ? `<p class="node-note">${escapeHtml(node.note)}</p>` : ""}
+        ${next.length
+          ? `<div class="node-grid">${next.map(renderNodeButton).join("")}</div>`
+          : terminalHtml}
+      </div>
+      <nav class="node-detail-footer">
+        <button class="footer-nav-button" type="button" data-action="back"><span class="button-icon">←</span><span>Back</span></button>
+        ${siblingState.hasSiblings ? `<button class="footer-nav-button" type="button" data-action="node-prev" ${siblingState.canGoPrevious ? "" : "disabled"}><span class="button-icon">‹</span><span>Previous</span></button>` : ""}
+        ${siblingState.hasSiblings ? `<span class="exercise-position">${siblingState.index + 1} / ${siblingState.total}</span>` : ""}
+        ${siblingState.hasSiblings ? `<button class="footer-nav-button" type="button" data-action="node-next" ${siblingState.canGoNext ? "" : "disabled"}><span class="button-icon">›</span><span>Next</span></button>` : ""}
+        <button class="footer-nav-button" type="button" data-action="home"><span class="button-icon">⌂</span><span>Home</span></button>
+      </nav>
+    </section>
+  `;
+}
+
 export function renderNodeButtonHtml(node) {
   if (!node.items.length) return "";
   return `
