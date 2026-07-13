@@ -1,4 +1,5 @@
 import { hasOrganizationAccess, isAthleteMode } from "./access.js";
+import { els } from "./dom.js";
 import { ATHLETE_TEMPLATE_SCOPES, TEMPLATE_SCOPES, state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -42,7 +43,17 @@ export function templateScopeMeta(scope = state.templateScope, user = state.curr
   return scopes[scope] || scopes.my;
 }
 
-export function renderLibraryNav(renderAccessNav) {
+export function renderAccessNav() {
+  const orgButton = document.querySelector('[data-library-tab="organization"]');
+  const orgSubmenu = document.querySelector('[data-sidebar-submenu="settings"]');
+  const builderButton = document.querySelector('[data-library-tab="builder"]');
+  const visible = hasOrganizationAccess();
+  if (orgButton) orgButton.hidden = !visible;
+  if (orgSubmenu) orgSubmenu.hidden = !visible;
+  if (builderButton) builderButton.hidden = isAthleteMode();
+}
+
+export function renderLibraryNav() {
   renderAccessNav();
   if (state.activeTab === "organization" && !hasOrganizationAccess()) state.activeTab = "weekly";
   if (isAthleteMode() && state.activeTab === "builder") state.activeTab = "weekly";
@@ -77,6 +88,12 @@ export function renderLibraryNav(renderAccessNav) {
   });
   document.querySelector("#athletesToggle")?.classList.toggle("is-active", state.athletesExpanded);
   document.querySelector("#calendarToggle")?.classList.toggle("is-active", state.activeTab === "weekly" && state.weekSelectorOpen);
+}
+
+export function renderRailState() {
+  document.body.classList.toggle("rail-expanded", state.railExpanded);
+  els.railToggle?.setAttribute("aria-expanded", String(state.railExpanded));
+  els.railToggle?.setAttribute("aria-label", state.railExpanded ? "Collapse navigation" : "Expand navigation");
 }
 
 export function updateProgramLibraryNavLabels() {

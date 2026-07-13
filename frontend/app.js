@@ -1,5 +1,15 @@
 import { api } from "./api.js";
-import { accessScopeLabel, canManageCoachProfile, hasOrganizationAccess, isAthleteMode, roleLabel } from "./access.js";
+import { accessScopeLabel, canManageCoachProfile, isAthleteMode, roleLabel } from "./access.js";
+import {
+  renderInviteAccept as renderInviteAcceptAction,
+  renderLogin as renderLoginAction,
+  submitInviteAccept as submitInviteAcceptAction,
+} from "./auth-actions.js";
+import {
+  renderAthleteHeaderToolbarHtml,
+  renderAthleteListHtml,
+  renderAthleteSettingsHtml,
+} from "./athlete-view.js";
 import {
   handleBuilderDraftAction,
   handleBuilderItemAction,
@@ -34,16 +44,19 @@ import {
 import { closeMedia, enterMediaFullscreen, handleFullscreenChange, openMedia } from "./media-modal.js";
 import {
   ensureTemplateScopeIsVisible,
-  renderLibraryNav as renderLibraryNavState,
+  renderAccessNav,
+  renderLibraryNav,
+  renderRailState,
   renderSettingsNavHtml,
   templateScopeMeta,
   visibleTemplateScopes,
 } from "./navigation.js";
 import {
-  filterOrganizationSelect,
-  syncOrganizationTeamSelect,
-  validateFilterableSelects,
-} from "./organization-select.js";
+  handleOrganizationAction,
+  handleOrganizationFilterInput,
+  handleOrganizationSelectChange,
+  submitOrganizationForm as submitOrganizationFormAction,
+} from "./organization-actions.js";
 import {
   normalizeOrganizationSelection,
   renderOrganizationActions,
@@ -114,12 +127,12 @@ async function init() {
   state.railExpanded = window.matchMedia("(min-width: 900px)").matches;
   renderRailState();
   if (window.location.pathname === "/invite") {
-    await renderInviteAccept();
+    await renderInviteAcceptAction({ renderUserControls, setStatus });
     return;
   }
   await loadSession();
   if (!state.currentUser) {
-    renderLogin();
+    renderLoginAction({ renderUserControls, setStatus });
     return;
   }
   renderUserControls();
@@ -220,14 +233,14 @@ async function handleContentSubmit(event) {
   const inviteForm = event.target.closest("#inviteAcceptForm");
   if (inviteForm) {
     event.preventDefault();
-    await submitInviteAccept(inviteForm);
+    await submitInviteAcceptAction(inviteForm);
     return;
   }
 
   const organizationForm = event.target.closest("[data-organization-form]");
   if (organizationForm) {
     event.preventDefault();
-    await submitOrganizationForm(organizationForm);
+    await submitOrganizationFormAction(organizationForm, { loadAthletes, renderOrganizationPanel });
     return;
   }
 
@@ -326,7 +339,7 @@ async function handleContentSubmit(event) {
 function handleContentInput(event) {
   const orgFilter = event.target.closest("[data-org-select-filter]");
   if (orgFilter) {
-    filterOrganizationSelect(orgFilter);
+    handleOrganizationFilterInput(orgFilter);
     return;
   }
 
@@ -366,13 +379,13 @@ function handleContentInput(event) {
 async function handleContentChange(event) {
   const orgFilter = event.target.closest("[data-org-select-filter]");
   if (orgFilter) {
-    filterOrganizationSelect(orgFilter);
+    handleOrganizationFilterInput(orgFilter);
     return;
   }
 
   const organizationClubSelect = event.target.closest("[data-organization-club-select]");
   if (organizationClubSelect) {
-    syncOrganizationTeamSelect(organizationClubSelect.closest("form"));
+    handleOrganizationSelectChange(organizationClubSelect.closest("form"));
     return;
   }
 
@@ -488,111 +501,6 @@ function syncTemplateFilterSuggestions(input) {
   list.innerHTML = `<option value="All"></option>${matches.map((value) => `<option value="${escapeAttr(value)}"></option>`).join("")}`;
 }
 
-function renderLogin() {
-  document.body.classList.add("login-mode");
-  setStatus("Sign in");
-  els.context.textContent = "OptiMove";
-  els.title.textContent = "Sign in";
-  els.athleteList.innerHTML = "";
-  els.athleteSearch.value = "";
-  els.toolbar.innerHTML = "";
-  renderUserControls();
-  els.content.innerHTML = `
-    <section class="login-panel">
-      <form class="login-form" id="loginForm">
-        <div>
-          <p class="eyebrow">Account</p>
-          <h3>Sign in to OptiMove</h3>
-        </div>
-        <label class="search-field">
-          <span>Email</span>
-          <input name="email" type="email" autocomplete="username" required>
-        </label>
-        <label class="search-field">
-          <span>Password</span>
-          <input name="password" type="password" autocomplete="current-password" required>
-        </label>
-        <p class="login-error" aria-live="polite"></p>
-        <button class="plain-button" type="submit">Sign in</button>
-      </form>
-    </section>
-  `;
-}
-
-async function renderInviteAccept() {
-  document.body.classList.add("login-mode");
-  setStatus("Invite");
-  els.context.textContent = "OptiMove";
-  els.title.textContent = "Activate account";
-  els.athleteList.innerHTML = "";
-  els.athleteSearch.value = "";
-  els.toolbar.innerHTML = "";
-  state.currentUser = null;
-  renderUserControls();
-  const token = new URLSearchParams(window.location.search).get("token") || "";
-  if (!token) {
-    els.content.innerHTML = `<section class="login-panel"><div class="login-form"><h3>Invite link is missing</h3><p class="muted">Ask your coach to send a new invite link.</p></div></section>`;
-    return;
-  }
-  try {
-    const data = await api(`/api/auth/invites/${encodeURIComponent(token)}`);
-    const invite = data.invite || {};
-    els.content.innerHTML = `
-      <section class="login-panel">
-        <form class="login-form invite-form" id="inviteAcceptForm" data-token="${escapeAttr(token)}">
-          <div>
-            <p class="eyebrow">Athlete access</p>
-            <h3>Activate OptiMove account</h3>
-            <p class="muted">${escapeHtml(invite.athlete_name || "Athlete")} ${invite.athlete_code ? `- ID ${escapeHtml(invite.athlete_code)}` : ""}</p>
-          </div>
-          <label class="search-field">
-            <span>Email</span>
-            <input value="${escapeAttr(invite.email || "")}" readonly>
-          </label>
-          <label class="search-field">
-            <span>Password</span>
-            <input name="password" type="password" autocomplete="new-password" required minlength="8" placeholder="At least 8 characters">
-          </label>
-          <label class="search-field">
-            <span>Confirm password</span>
-            <input name="confirmPassword" type="password" autocomplete="new-password" required minlength="8">
-          </label>
-          <p class="login-error" aria-live="polite"></p>
-          <button class="plain-button" type="submit">Activate account</button>
-        </form>
-      </section>
-    `;
-  } catch (error) {
-    els.content.innerHTML = `<section class="login-panel"><div class="login-form"><h3>Invite is not valid</h3><p class="login-error">${escapeHtml(error.message || "This invite has expired.")}</p></div></section>`;
-  }
-}
-
-async function submitInviteAccept(form) {
-  const error = form.querySelector(".login-error");
-  const button = form.querySelector("button[type='submit']");
-  const formData = new FormData(form);
-  const password = String(formData.get("password") || "");
-  const confirmPassword = String(formData.get("confirmPassword") || "");
-  if (error) error.textContent = "";
-  if (password !== confirmPassword) {
-    if (error) error.textContent = "Passwords do not match.";
-    return;
-  }
-  if (button) button.disabled = true;
-  try {
-    const data = await api(`/api/auth/invites/${encodeURIComponent(form.dataset.token || "")}/accept`, {
-      method: "POST",
-      body: JSON.stringify({ password }),
-    });
-    state.currentUser = data.user;
-    window.location.replace(state.currentUser?.role === "athlete" ? "/athlete" : "/");
-  } catch (submitError) {
-    if (error) error.textContent = submitError.message || "Could not activate account.";
-  } finally {
-    if (button) button.disabled = false;
-  }
-}
-
 function renderUserControls() {
   const authenticated = Boolean(state.currentUser);
   if (els.signOut) els.signOut.hidden = !authenticated;
@@ -610,20 +518,6 @@ async function signOut() {
     state.currentUser = null;
     window.location.replace("/");
   }
-}
-
-function renderAccessNav() {
-  const orgButton = document.querySelector('[data-library-tab="organization"]');
-  const orgSubmenu = document.querySelector('[data-sidebar-submenu="settings"]');
-  const builderButton = document.querySelector('[data-library-tab="builder"]');
-  const visible = hasOrganizationAccess();
-  if (orgButton) orgButton.hidden = !visible;
-  if (orgSubmenu) orgSubmenu.hidden = !visible;
-  if (builderButton) builderButton.hidden = isAthleteMode();
-}
-
-function renderLibraryNav() {
-  renderLibraryNavState(renderAccessNav);
 }
 
 function toggleAthletesList() {
@@ -649,12 +543,6 @@ function collapseRailAfterNav() {
     state.railExpanded = false;
     renderRailState();
   }
-}
-
-function renderRailState() {
-  document.body.classList.toggle("rail-expanded", state.railExpanded);
-  els.railToggle?.setAttribute("aria-expanded", String(state.railExpanded));
-  els.railToggle?.setAttribute("aria-label", state.railExpanded ? "Collapse navigation" : "Expand navigation");
 }
 
 function openWeeklyCalendarFromRail() {
@@ -1186,72 +1074,7 @@ async function handleContentClick(event) {
     void removeProgramTag(action.dataset.planId, action.dataset.tagId, { renderTemplateLibrary });
     return;
   }
-  if (type === "organization-edit") {
-    const row = findOrganizationRow(action.dataset.orgType, action.dataset.orgId);
-    if (!row) return;
-    state.organizationEditor = { open: true, type: action.dataset.orgType, row };
-    void renderOrganizationPanel();
-    return;
-  }
-  if (type === "organization-select-club") {
-    state.organization.selectedClubId = action.dataset.clubId || "";
-    state.organization.selectedTeamId = "";
-    state.organization.assignOpen = false;
-    void renderOrganizationPanel({ refresh: false });
-    return;
-  }
-  if (type === "organization-select-team") {
-    state.organization.selectedTeamId = action.dataset.teamId || "";
-    const team = findOrganizationRow("team", state.organization.selectedTeamId);
-    if (team?.club_id) state.organization.selectedClubId = team.club_id;
-    state.organization.assignOpen = false;
-    void renderOrganizationPanel({ refresh: false });
-    return;
-  }
-  if (type === "organization-clear-selection") {
-    state.organization.selectedClubId = "";
-    state.organization.selectedTeamId = "";
-    state.organization.assignOpen = false;
-    void renderOrganizationPanel({ refresh: false });
-    return;
-  }
-  if (type === "organization-section") {
-    state.organization.section = action.dataset.section || "overview";
-    void renderOrganizationPanel({ refresh: false });
-    return;
-  }
-  if (type === "organization-edit-close") {
-    state.organizationEditor = { open: false, type: "", row: null };
-    void renderOrganizationPanel();
-    return;
-  }
-  if (type === "organization-toggle-assign-athlete") {
-    state.organization.assignOpen = !state.organization.assignOpen;
-    void renderOrganizationPanel({ refresh: false });
-    return;
-  }
-  if (type === "organization-invite-athlete") {
-    const row = findOrganizationRow("athlete", action.dataset.athleteId);
-    if (!row) return;
-    state.organizationInvite = { open: true, athleteId: row.id, inviteUrl: "", mailtoUrl: "", error: "" };
-    state.organizationEditor = { open: false, type: "", row: null };
-    void renderOrganizationPanel({ refresh: false });
-    return;
-  }
-  if (type === "organization-invite-close") {
-    state.organizationInvite = { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" };
-    void renderOrganizationPanel({ refresh: false });
-    return;
-  }
-  if (type === "organization-copy-invite") {
-    const inviteUrl = state.organizationInvite.inviteUrl || "";
-    if (inviteUrl) void navigator.clipboard?.writeText(inviteUrl);
-    return;
-  }
-  if (type === "organization-delete") {
-    void deleteOrganizationRow(action.dataset.orgType, action.dataset.orgId);
-    return;
-  }
+  if (await handleOrganizationAction(action, { loadAthletes, renderOrganizationPanel })) return;
   if (type === "week-prev" || type === "week-next") {
     const delta = type === "week-prev" ? -1 : 1;
     moveWeek(delta);
@@ -1408,81 +1231,6 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
   `;
 }
 
-async function submitOrganizationForm(form) {
-  if (!validateFilterableSelects(form)) return;
-  const type = form.dataset.organizationForm;
-  const button = form.querySelector("button[type='submit']");
-  const error = form.querySelector(".builder-error");
-  if (error) error.textContent = "";
-  if (button) button.disabled = true;
-  const formData = new FormData(form);
-  const payload = Object.fromEntries(formData.entries());
-  const editId = form.dataset.organizationEditId;
-  const athleteId = form.dataset.athleteId;
-  const teamId = form.dataset.teamId;
-  const endpoint = {
-    club: "/api/organization/clubs",
-    team: "/api/organization/teams",
-    athlete: "/api/organization/athletes",
-    user: "/api/organization/users",
-    clubRole: "/api/organization/club-roles",
-    teamRole: "/api/organization/team-roles",
-    athleteLogin: "/api/organization/athlete-logins",
-    athleteInvite: "/api/organization/athlete-invites",
-    assignTeamAthlete: `/api/organization/teams/${encodeURIComponent(teamId || "")}/athletes`,
-    athleteLibraryAccess: `/api/organization/athletes/${encodeURIComponent(athleteId || "")}/library-access`,
-    "edit-club": `/api/organization/clubs/${encodeURIComponent(editId)}`,
-    "edit-team": `/api/organization/teams/${encodeURIComponent(editId)}`,
-    "edit-athlete": `/api/organization/athletes/${encodeURIComponent(editId)}`,
-  }[type];
-  const method = type.startsWith("edit-") || type === "athleteLibraryAccess" ? "PUT" : "POST";
-  if (type === "athleteLibraryAccess") {
-    payload.canViewCoachLibrary = formData.has("canViewCoachLibrary");
-    payload.canViewClubLibrary = formData.has("canViewClubLibrary");
-    payload.canViewOptimoveLibrary = formData.has("canViewOptimoveLibrary");
-    payload.canViewMarketplace = formData.has("canViewMarketplace");
-    payload.freeOnly = formData.has("freeOnly");
-    payload.requireApproval = formData.has("requireApproval");
-  }
-  try {
-    const result = await api(endpoint, { method, body: JSON.stringify(payload) });
-    if (type === "athleteInvite") {
-      state.organizationInvite = {
-        open: true,
-        athleteId: payload.athleteId || state.organizationInvite.athleteId,
-        inviteUrl: result.inviteUrl || "",
-        mailtoUrl: result.mailtoUrl || "",
-        error: "",
-      };
-      await renderOrganizationPanel({ refresh: false });
-      return;
-    }
-    form.reset();
-    state.organizationEditor = { open: false, type: "", row: null };
-    await loadAthletes();
-    if (state.activeTab === "organization") await renderOrganizationPanel();
-  } catch (submitError) {
-    if (error) error.textContent = submitError.message || "Could not save.";
-  } finally {
-    if (button) button.disabled = false;
-  }
-}
-
-function findOrganizationRow(type, id) {
-  const data = state.organization.data || {};
-  const rows = type === "club" ? data.clubs : type === "team" ? data.teams : type === "athlete" ? data.athletes : [];
-  return (rows || []).find((row) => String(row.id) === String(id)) || null;
-}
-
-async function deleteOrganizationRow(type, id) {
-  const labels = { club: "club", team: "team", athlete: "athlete" };
-  if (!id || !labels[type]) return;
-  if (!window.confirm(`Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`)) return;
-  await api(`/api/organization/${type}s/${encodeURIComponent(id)}`, { method: "DELETE" });
-  await loadAthletes();
-  if (state.activeTab === "organization") await renderOrganizationPanel();
-}
-
 function renderAthleteList() {
   const search = els.athleteSearch.value.trim().toLowerCase();
   const filteredAthletes = state.athletes.filter((athlete) => {
@@ -1491,19 +1239,7 @@ function renderAthleteList() {
   });
   const athletes = filteredAthletes;
 
-  els.athleteList.innerHTML = athletes.map((athlete) => `
-    <button class="athlete-button ${athlete.athlete_id === state.selectedAthleteId ? "is-active" : ""}" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
-      ${avatarMarkup(athlete)}
-      <span>
-        <span class="athlete-name">${escapeHtml(athlete.athlete)}</span>
-        <span class="athlete-meta">ID ${escapeHtml(athlete.athlete_id)}</span>
-        <span class="athlete-counts">
-          <span>${athlete.weekly_plan_count || 0} weekly</span>
-          <span>${athlete.program_count || 0} specific</span>
-        </span>
-      </span>
-    </button>
-  `).join("");
+  els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId);
 
   renderAthleteListState();
 
@@ -1533,36 +1269,7 @@ function renderAthleteHeader(data) {
   els.toolbar.innerHTML = "";
 
   if (!athlete) return;
-  const imageMarkup = athlete.athlete_image_url
-    ? renderImage(athlete.athlete_image_url, "athlete-hero-image", initialsFor(athlete.athlete))
-    : `<div class="athlete-hero-fallback">${escapeHtml(initialsFor(athlete.athlete))}</div>`;
-  const athleteDetailsMarkup = isAthleteMode ? `
-    <div class="athlete-hero-copy">
-      <p class="eyebrow">My program</p>
-      <h3>${escapeHtml(athlete.athlete)}</h3>
-    </div>
-  ` : "";
-
-  els.toolbar.innerHTML = `
-    <div class="athlete-toolbar-row">
-      <section class="athlete-hero ${isAthleteMode ? "" : "athlete-hero-compact"}" aria-label="Selected athlete">
-        ${imageMarkup}
-        ${athleteDetailsMarkup}
-      </section>
-      <nav class="tabs athlete-tabs" aria-label="Athlete views">
-        <button class="tab tab-with-icon" data-tab="weekly" data-open-calendar="true">
-          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="4" y="5" width="16" height="15" rx="2"></rect>
-            <path d="M8 3v4"></path>
-            <path d="M16 3v4"></path>
-            <path d="M4 10h16"></path>
-          </svg>
-          <span>Weekly plans</span>
-        </button>
-        <button class="tab" data-tab="programs">Specific programs</button>
-      </nav>
-    </div>
-  `;
+  els.toolbar.innerHTML = renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode });
   renderTabs();
 }
 
@@ -1571,31 +1278,7 @@ function renderAthleteSettings() {
   renderAthleteHeader({});
   els.context.textContent = "Athlete settings";
   els.title.textContent = "Settings";
-  els.content.innerHTML = `
-    <section class="content-section athlete-simple-view">
-      <section class="panel athlete-settings-card">
-        <div>
-          <p class="eyebrow">Profile</p>
-          <h3>${escapeHtml(athlete?.athlete || "Athlete profile")}</h3>
-          <p class="muted">Your coach controls program assignment. Profile editing and password change will live here.</p>
-        </div>
-        <div class="athlete-setting-list">
-          <article>
-            <strong>Account</strong>
-            <span>Email and password management.</span>
-          </article>
-          <article>
-            <strong>Personal data</strong>
-            <span>Photo, contact details, and basic profile information.</span>
-          </article>
-          <article>
-            <strong>Notifications</strong>
-            <span>Future reminders for programs, wellness, and testing.</span>
-          </article>
-        </div>
-      </section>
-    </section>
-  `;
+  els.content.innerHTML = renderAthleteSettingsHtml(athlete);
 }
 
 async function renderAthleteLibrary() {
@@ -2728,12 +2411,6 @@ function todayWeekIndex(weeks) {
     }
   });
   return closestIndex;
-}
-
-function avatarMarkup(athlete) {
-  const initials = initialsFor(athlete.athlete);
-  if (!athlete.athlete_image_url) return `<span class="avatar-fallback">${escapeHtml(initials)}</span>`;
-  return renderImage(athlete.athlete_image_url, "avatar", initials);
 }
 
 function setStatus(text) {
