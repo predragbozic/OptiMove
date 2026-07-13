@@ -121,6 +121,80 @@ export function renderProgramDayCardHtml(node, makeNode) {
   `;
 }
 
+export function renderWeeklyRootHtml({
+  activeWeek,
+  copyPlanModal,
+  makeNode,
+  renderPlanMoreMenu,
+  selectedWeekIndex,
+  weekSelectorMarkup,
+  weeks,
+}) {
+  const weekRange = `${formatDate(activeWeek.weekStart)} - ${formatDate(activeWeek.weekEnd)}`;
+  return `
+    <div class="content-section">
+      <div class="week-nav-wrap">
+      <section class="week-nav-panel">
+        <button class="plain-button week-arrow-button" data-action="week-prev" ${selectedWeekIndex <= 0 ? "disabled" : ""} aria-label="Previous week">‹</button>
+        <button class="week-title-button" type="button" data-action="week-toggle" aria-expanded="${Boolean(weekSelectorMarkup)}" aria-label="Choose weekly plan date">
+          <strong>${escapeHtml(weekRange)}</strong>
+        </button>
+        <button class="plain-button week-today-button" data-action="week-today">Today</button>
+        <button class="plain-button week-arrow-button" data-action="week-next" ${selectedWeekIndex >= weeks.length - 1 ? "disabled" : ""} aria-label="Next week">›</button>
+        ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : ""}
+      </section>
+      ${weekSelectorMarkup}
+      </div>
+      <section class="panel">
+        <div class="calendar-grid">
+          ${(activeWeek.days || []).map((day) => renderDayEntryHtml(day, makeNode)).join("")}
+        </div>
+      </section>
+    </div>
+    ${copyPlanModal}
+  `;
+}
+
+export function renderProgramToolbarHtml(programs, selectedProgramId, renderPlanMoreMenu) {
+  return `
+    <div class="chip-row program-toolbar">
+      ${programs.map((program) => `
+        <button class="chip ${program.id === selectedProgramId ? "is-active" : ""}" data-program-id="${escapeAttr(program.id)}">
+          ${escapeHtml(program.name)}
+        </button>
+      `).join("")}
+      ${selectedProgramId ? renderPlanMoreMenu(selectedProgramId, "program") : ""}
+    </div>
+  `;
+}
+
+export function renderProgramRootHtml({
+  copyPlanModal,
+  data,
+  groups,
+  isMicrocycle,
+  program,
+  renderNodeButton,
+  renderPlanMoreMenu,
+  renderProgramDayCard,
+}) {
+  return `
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Specific program</p>
+          <h3>${escapeHtml(program.name)}</h3>
+        </div>
+        <div class="builder-source-actions"><span class="item-badge">${data.rows?.length || 0} items</span>${renderPlanMoreMenu(program.id, "program")}</div>
+      </div>
+      ${isMicrocycle
+        ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
+        : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
+    </section>
+    ${copyPlanModal}
+  `;
+}
+
 export function renderNodeButtonHtml(node) {
   if (!node.items.length) return "";
   return `

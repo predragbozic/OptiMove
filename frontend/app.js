@@ -109,14 +109,11 @@ import {
   loadTemplateOptionsInBackground as loadTemplateOptionsInBackgroundData,
 } from "./program-library-data.js";
 import {
-  renderCalendarBtaGroupHtml,
-  renderCalendarBtaGroupsHtml,
-  renderCalendarEventHtml,
-  renderCalendarHierarchyHtml,
-  renderCalendarSessionHtml,
-  renderDayEntryHtml,
   renderNodeButtonHtml,
   renderProgramDayCardHtml,
+  renderProgramRootHtml,
+  renderProgramToolbarHtml,
+  renderWeeklyRootHtml,
   renderWeekCalendarDayHtml,
 } from "./program-view.js";
 import {
@@ -1321,38 +1318,23 @@ function renderWeeklyRoot(data) {
   const weeks = data?.weeks || [];
   if (!weeks.length) return renderEmpty("This athlete has no weekly plans.");
   const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
-  const weekRange = `${formatDate(activeWeek.weekStart)} - ${formatDate(activeWeek.weekEnd)}`;
   const weekSelectorMarkup = state.weekSelectorOpen ? renderWeekCalendarPicker(weeks, activeWeek) : "";
 
-  els.content.innerHTML = `
-    <div class="content-section">
-      <div class="week-nav-wrap">
-      <section class="week-nav-panel">
-        <button class="plain-button week-arrow-button" data-action="week-prev" ${state.selectedWeekIndex <= 0 ? "disabled" : ""} aria-label="Previous week">‹</button>
-        <button class="week-title-button" type="button" data-action="week-toggle" aria-expanded="${state.weekSelectorOpen}" aria-label="Choose weekly plan date">
-          <strong>${escapeHtml(weekRange)}</strong>
-        </button>
-        <button class="plain-button week-today-button" data-action="week-today">Today</button>
-        <button class="plain-button week-arrow-button" data-action="week-next" ${state.selectedWeekIndex >= weeks.length - 1 ? "disabled" : ""} aria-label="Next week">›</button>
-        ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : ""}
-      </section>
-      ${weekSelectorMarkup}
-      </div>
-      <section class="panel">
-        <div class="calendar-grid">
-          ${(activeWeek.days || []).map(renderDayEntry).join("")}
-        </div>
-      </section>
-    </div>
-    ${renderCopyPlanModal(state)}
-  `;
+  els.content.innerHTML = renderWeeklyRootHtml({
+    activeWeek,
+    copyPlanModal: renderCopyPlanModal(state),
+    makeNode,
+    renderPlanMoreMenu,
+    selectedWeekIndex: state.selectedWeekIndex,
+    weekSelectorMarkup,
+    weeks,
+  });
   if (state.pendingScrollDate) {
     const date = state.pendingScrollDate;
     state.pendingScrollDate = "";
     requestAnimationFrame(() => scrollCalendarToDate(date));
   }
 }
-
 function renderWeekCalendarPicker(weeks, activeWeek) {
   const availableMonths = weeklyCalendarMonthRange(weeks);
   if (!availableMonths.length) return "";
@@ -1385,14 +1367,6 @@ function renderWeekCalendarDay(day, activeWeek, selectedDate) {
   return renderWeekCalendarDayHtml(day, selectedDate);
 }
 
-function renderDayEntry(day) {
-  return renderDayEntryHtml(day, makeNode);
-}
-
-function renderCalendarHierarchy(items) {
-  return renderCalendarHierarchyHtml(items, makeNode);
-}
-
 function scrollCalendarToDate(date) {
   const grid = els.content.querySelector(".calendar-grid");
   if (!grid) return;
@@ -1406,34 +1380,9 @@ function scrollCalendarToDate(date) {
   grid.scrollTo({ left: Math.max(0, day.offsetLeft - grid.offsetLeft), behavior: "smooth" });
 }
 
-function renderCalendarSession(node) {
-  return renderCalendarSessionHtml(node, makeNode);
-}
-
-function renderCalendarBtaGroups(items) {
-  return renderCalendarBtaGroupsHtml(items, makeNode);
-}
-
-function renderCalendarBtaGroup(node) {
-  return renderCalendarBtaGroupHtml(node, makeNode);
-}
-
-function renderCalendarEvent(node) {
-  return renderCalendarEventHtml(node);
-}
-
 function renderProgramToolbar(programs) {
   els.toolbar.querySelector(".program-toolbar")?.remove();
-  els.toolbar.insertAdjacentHTML("beforeend", `
-    <div class="chip-row program-toolbar">
-      ${programs.map((program) => `
-        <button class="chip ${program.id === state.selectedProgramId ? "is-active" : ""}" data-program-id="${escapeAttr(program.id)}">
-          ${escapeHtml(program.name)}
-        </button>
-      `).join("")}
-      ${state.selectedProgramId ? renderPlanMoreMenu(state.selectedProgramId, "program") : ""}
-    </div>
-  `);
+  els.toolbar.insertAdjacentHTML("beforeend", renderProgramToolbarHtml(programs, state.selectedProgramId, renderPlanMoreMenu));
   els.toolbar.querySelectorAll(".program-toolbar .chip").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedProgramId = button.dataset.programId;
@@ -1443,7 +1392,6 @@ function renderProgramToolbar(programs) {
     });
   });
 }
-
 function renderProgramRoot(program) {
   if (!program) return renderEmpty("This athlete has no specific programs.");
   const data = program.data || {};
@@ -1454,23 +1402,17 @@ function renderProgramRoot(program) {
       }))
     : programDayGroupNodes(data.dayGroups || []);
 
-  els.content.innerHTML = `
-    <section class="panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Specific program</p>
-          <h3>${escapeHtml(program.name)}</h3>
-        </div>
-        <div class="builder-source-actions"><span class="item-badge">${data.rows?.length || 0} items</span>${renderPlanMoreMenu(program.id, "program")}</div>
-      </div>
-      ${isMicrocycle
-        ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
-        : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
-    </section>
-    ${renderCopyPlanModal(state)}
-  `;
+  els.content.innerHTML = renderProgramRootHtml({
+    copyPlanModal: renderCopyPlanModal(state),
+    data,
+    groups,
+    isMicrocycle,
+    program,
+    renderNodeButton,
+    renderPlanMoreMenu,
+    renderProgramDayCard,
+  });
 }
-
 function programDayGroupNodes(dayGroups) {
   return (dayGroups || []).map((group, index) => makeNode("dayGroup", group.dayNote || `Block ${index + 1}`, groupItems(group), {
     subtitle: countLabel(groupItems(group)),
