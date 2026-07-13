@@ -98,6 +98,37 @@ export async function handleExerciseLibraryAction(action, handlers) {
   return false;
 }
 
+export function handleExerciseDetailAction(action, handlers) {
+  const type = action.dataset.action;
+  if (type === "exercise-layout") {
+    state.exerciseLayout = action.dataset.layout === "vertical" ? "vertical" : "horizontal";
+    handlers.renderCurrentNode();
+    return true;
+  }
+  if (type === "open-exercise") {
+    const item = handlers.getItemById(action.dataset.itemId);
+    if (!item) return true;
+    handlers.pushAppHistory();
+    handlers.renderExerciseDetail(item, action.dataset.itemId);
+    return true;
+  }
+  if (type === "exercise-prev") {
+    handlers.moveExerciseDetail(-1);
+    return true;
+  }
+  if (type === "exercise-next") {
+    handlers.moveExerciseDetail(1);
+    return true;
+  }
+  if (type === "exercise-jump") {
+    const item = handlers.getItemById(action.dataset.itemId);
+    if (!item) return true;
+    handlers.renderExerciseDetail(item, action.dataset.itemId);
+    return true;
+  }
+  return false;
+}
+
 function findExerciseResultById(exerciseId) {
   return [...state.lastExerciseResults, ...state.builder.exercises].find((exercise) => String(exercise.id) === String(exerciseId)) || null;
 }

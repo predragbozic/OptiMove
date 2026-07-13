@@ -88,6 +88,23 @@ export function enterMediaFullscreen(silent = false) {
   }
 }
 
+export function handleMediaAction(action) {
+  const type = action.dataset.action;
+  if (type === "open-media") {
+    openMedia(action.dataset.title || "Exercise media", action.dataset.image || "", action.dataset.video || "");
+    return true;
+  }
+  if (type === "enter-fullscreen") {
+    enterMediaFullscreen();
+    return true;
+  }
+  if (type === "close-media") {
+    closeMedia();
+    return true;
+  }
+  return false;
+}
+
 export function handleFullscreenChange() {
   const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
   if (!fullscreenElement && els.mediaModal?.classList.contains("is-video") && !els.mediaModal.hidden) {

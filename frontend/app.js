@@ -30,6 +30,7 @@ import {
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { els } from "./dom.js";
 import {
+  handleExerciseDetailAction,
   handleExerciseLibraryAction,
   loadExercises,
   submitExerciseTagForm as submitExerciseTagFormAction,
@@ -46,7 +47,7 @@ import {
 import {
   parseImageFallbacks,
 } from "./media.js";
-import { closeMedia, enterMediaFullscreen, handleFullscreenChange, openMedia } from "./media-modal.js";
+import { closeMedia, handleFullscreenChange, handleMediaAction } from "./media-modal.js";
 import {
   ensureTemplateScopeIsVisible,
   renderLibraryNav,
@@ -936,48 +937,19 @@ async function handleContentClick(event) {
     moveNodeSibling(type === "node-next" ? 1 : -1);
     return;
   }
-  if (type === "exercise-layout") {
-    state.exerciseLayout = action.dataset.layout === "vertical" ? "vertical" : "horizontal";
-    renderCurrentNode();
-    return;
-  }
-  if (type === "open-exercise") {
-    const item = getItemById(action.dataset.itemId);
-    if (!item) return;
-    pushAppHistory();
-    renderExerciseDetail(item, action.dataset.itemId);
-    return;
-  }
-  if (type === "exercise-prev") {
-    moveExerciseDetail(-1);
-    return;
-  }
-  if (type === "exercise-next") {
-    moveExerciseDetail(1);
-    return;
-  }
-  if (type === "exercise-jump") {
-    const item = getItemById(action.dataset.itemId);
-    if (!item) return;
-    renderExerciseDetail(item, action.dataset.itemId);
-    return;
-  }
+  if (handleExerciseDetailAction(action, {
+    getItemById,
+    moveExerciseDetail,
+    pushAppHistory,
+    renderCurrentNode,
+    renderExerciseDetail,
+  })) return;
   if (await handleExerciseLibraryAction(action, { renderExercises, setLoading })) return;
   if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleOrganizationAction(action, { loadAthletes, renderOrganizationPanel })) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
-  if (type === "open-media") {
-    openMedia(action.dataset.title || "Exercise media", action.dataset.image || "", action.dataset.video || "");
-    return;
-  }
-  if (type === "enter-fullscreen") {
-    enterMediaFullscreen();
-    return;
-  }
-  if (type === "close-media") {
-    closeMedia();
-  }
+  handleMediaAction(action);
 }
 
 function renderCurrentNode() {
