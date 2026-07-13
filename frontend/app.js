@@ -105,6 +105,17 @@ import {
 } from "./program-library-data.js";
 import { renderTemplatePreviewModalHtml } from "./program-preview.js";
 import {
+  renderCalendarBtaGroupHtml,
+  renderCalendarBtaGroupsHtml,
+  renderCalendarEventHtml,
+  renderCalendarHierarchyHtml,
+  renderCalendarSessionHtml,
+  renderDayEntryHtml,
+  renderNodeButtonHtml,
+  renderProgramDayCardHtml,
+  renderWeekCalendarDayHtml,
+} from "./program-view.js";
+import {
   emptyTemplateFilters,
   emptyTemplatePreview,
   state,
@@ -117,15 +128,12 @@ import {
   escapeAttr,
   escapeHtml,
   formatDate,
-  formatDayMonth,
-  formatWeekday,
   initialsFor,
   localDateIso,
   monthStartIso,
   weekMondayIso,
 } from "./utils.js";
 import {
-  allSlotItems,
   buildWeeklyCalendarMonth,
   clampMonth,
   defaultWeekIndex,
@@ -1371,46 +1379,15 @@ function renderWeekCalendarPicker(weeks, activeWeek) {
 }
 
 function renderWeekCalendarDay(day, activeWeek, selectedDate) {
-  const classes = [
-    "week-calendar-day",
-    day.isOutside ? "is-outside" : "",
-    day.hasItems ? "has-items" : "",
-    day.date === localDateIso() ? "is-today" : "",
-    day.date === selectedDate ? "is-active-week" : "",
-  ].filter(Boolean).join(" ");
-  const content = `
-    <span class="week-calendar-day-number">${escapeHtml(String(day.dayNumber))}</span>
-    ${day.hasItems ? `<span class="week-calendar-dot"></span><span class="week-calendar-count">${day.itemCount}</span>` : ""}
-  `;
-  if (!day.hasItems) {
-    return `<span class="${classes}" aria-label="${escapeAttr(day.date)}">${content}</span>`;
-  }
-  return `
-    <button class="${classes}" data-action="week-day-select" data-date="${escapeAttr(day.date)}" aria-label="${escapeAttr(`${formatDate(day.date)}, ${day.itemCount} items`)}">
-      ${content}
-    </button>
-  `;
+  return renderWeekCalendarDayHtml(day, selectedDate);
 }
 
 function renderDayEntry(day) {
-  const items = allSlotItems(day.slots);
-  const isToday = day.date === localDateIso();
-  return `
-    <article class="calendar-day ${isToday ? "is-today" : ""}" data-date="${escapeAttr(day.date)}">
-      <div class="calendar-day-head">
-        <span class="calendar-weekday">${escapeHtml(formatWeekday(day.date))}</span>
-        <span class="calendar-date">${escapeHtml(formatDayMonth(day.date))}${isToday ? " · Today" : ""}</span>
-      </div>
-      ${day.dayNote ? `<div class="calendar-note">${escapeHtml(day.dayNote)}</div>` : ""}
-      <div class="calendar-events">
-        ${items.length ? renderCalendarHierarchy(items) : `<div class="calendar-empty">No entries</div>`}
-      </div>
-    </article>
-  `;
+  return renderDayEntryHtml(day, makeNode);
 }
 
 function renderCalendarHierarchy(items) {
-  return sessionNodes(items).map(renderCalendarSession).join("");
+  return renderCalendarHierarchyHtml(items, makeNode);
 }
 
 function scrollCalendarToDate(date) {
@@ -1427,61 +1404,19 @@ function scrollCalendarToDate(date) {
 }
 
 function renderCalendarSession(node) {
-  if (node.type === "amPm") {
-    return `
-      <div class="calendar-session">
-        <div class="calendar-session-label">${escapeHtml(node.label)}</div>
-        ${renderCalendarBtaGroups(node.items)}
-      </div>
-    `;
-  }
-
-  if (node.type === "session") {
-    return `
-      <div class="calendar-session">
-        <div class="calendar-session-label">${escapeHtml(node.label)}</div>
-        ${renderCalendarBtaGroups(node.items)}
-      </div>
-    `;
-  }
-
-  if (node.type === "bta") return renderCalendarBtaGroup(node);
-  return renderCalendarEvent(node);
+  return renderCalendarSessionHtml(node, makeNode);
 }
 
 function renderCalendarBtaGroups(items) {
-  const nodes = btaNodes(items);
-  if (nodes.length) return nodes.map(renderCalendarBtaGroup).join("");
-  const directNodes = structureNodes(items);
-  return directNodes.length ? directNodes.map(renderCalendarEvent).join("") : "";
+  return renderCalendarBtaGroupsHtml(items, makeNode);
 }
 
 function renderCalendarBtaGroup(node) {
-  const children = structureNodes(node.items);
-  const eventNodes = children.length ? children : [node];
-  return `
-    <div class="calendar-bta">
-      <div class="calendar-bta-label">${escapeHtml(node.label)}</div>
-      <div class="calendar-bta-events">
-        ${eventNodes.map(renderCalendarEvent).join("")}
-      </div>
-    </div>
-  `;
+  return renderCalendarBtaGroupHtml(node, makeNode);
 }
 
 function renderCalendarEvent(node) {
-  if (!node.items.length) return "";
-  const shortNote = node.shortNote || node.note || "";
-  return `
-    <button class="calendar-event" data-action="node" data-node-id="${escapeAttr(node.id)}" style="${node.color ? `--node-color:${escapeAttr(node.color)}` : ""}">
-      <span class="calendar-event-head">
-        ${node.icon ? `${renderImage(node.icon, "calendar-event-icon")}<span class="calendar-event-dot calendar-event-dot-fallback"></span>` : `<span class="calendar-event-dot"></span>`}
-        <span class="calendar-event-title">${escapeHtml(node.label)}</span>
-      </span>
-      ${shortNote ? `<span class="calendar-event-note">${escapeHtml(shortNote)}</span>` : ""}
-      <span class="calendar-event-count">${escapeHtml(node.subtitle || countLabel(node.items))}</span>
-    </button>
-  `;
+  return renderCalendarEventHtml(node);
 }
 
 function renderProgramToolbar(programs) {
@@ -1541,19 +1476,7 @@ function programDayGroupNodes(dayGroups) {
 }
 
 function renderProgramDayCard(node) {
-  return `
-    <article class="program-day-card">
-      <div class="program-day-head">
-        <div>
-          <h4>${escapeHtml(node.label)}</h4>
-        </div>
-        <span class="item-badge">${escapeHtml(node.subtitle || countLabel(node.items))}</span>
-      </div>
-      <div class="calendar-events">
-        ${node.items.length ? renderCalendarHierarchy(node.items) : `<div class="calendar-empty">No entries</div>`}
-      </div>
-    </article>
-  `;
+  return renderProgramDayCardHtml(node, makeNode);
 }
 
 function renderNode(node) {
@@ -1624,19 +1547,7 @@ function groupNodes(items, type) {
 }
 
 function renderNodeButton(node) {
-  if (!node.items.length) return "";
-  return `
-    <button class="node-card" data-action="node" data-node-id="${escapeAttr(node.id)}" style="${node.color ? `--node-color:${escapeAttr(node.color)}` : ""}">
-      <span class="node-card-head">
-        ${node.icon ? `${renderImage(node.icon, "node-icon")}<span class="node-dot node-dot-fallback"></span>` : `<span class="node-dot"></span>`}
-        <span>
-          <span class="node-title">${escapeHtml(node.label)}</span>
-          <span class="node-sub">${escapeHtml(node.subtitle || countLabel(node.items))}</span>
-        </span>
-      </span>
-      ${node.note ? `<span class="node-note-short">${escapeHtml(node.note)}</span>` : ""}
-    </button>
-  `;
+  return renderNodeButtonHtml(node);
 }
 
 function renderTemplateToolbar(templates) {
