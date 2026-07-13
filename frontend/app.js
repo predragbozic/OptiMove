@@ -26,7 +26,7 @@ import {
   submitCoachContactForm as submitCoachContactFormAction,
   submitCoachProfileForm as submitCoachProfileFormAction,
 } from "./coach-profile-actions.js";
-import { renderCoachDetailModalHtml, renderCoachesHtml } from "./coach-profiles.js";
+import { renderCoachesHtml } from "./coach-profiles.js";
 import { els } from "./dom.js";
 import {
   handleExerciseLibraryAction,
@@ -81,17 +81,18 @@ import {
 } from "./program-structure.js";
 import {
   applyTemplateClientFilters,
-  duplicateTemplateNames,
-  programPriceLabel,
   renderProgramInfoModal,
-  renderTemplateLibraryResultsHtml,
-  renderTemplateFiltersHtml,
-  templateCategoryOptions,
   templateFilterOptionMatches,
   templateFilterSuggestions,
-  templateCategoryLabel,
-  templateSecondaryLabel,
 } from "./program-library.js";
+import {
+  renderTemplateDetailHtml,
+  renderTemplateFiltersViewHtml,
+  renderTemplateLibraryPageHtml,
+  renderTemplateLibraryResultsOnlyHtml,
+  renderTemplatePreviewModalViewHtml,
+  renderTemplateToolbarHtml,
+} from "./program-library-view.js";
 import {
   addInlineProgramTag,
   closeProgramTagEditor,
@@ -107,7 +108,6 @@ import {
   loadTemplates as loadTemplatesData,
   loadTemplateOptionsInBackground as loadTemplateOptionsInBackgroundData,
 } from "./program-library-data.js";
-import { renderTemplatePreviewModalHtml } from "./program-preview.js";
 import {
   renderCalendarBtaGroupHtml,
   renderCalendarBtaGroupsHtml,
@@ -1557,18 +1557,7 @@ function renderTemplateToolbar(templates) {
   const scope = templateScopeMeta();
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
-  const duplicateNames = duplicateTemplateNames(templates);
-  els.toolbar.innerHTML = `
-    <div class="chip-row template-toolbar">
-      ${templates.map((template) => `
-        <button class="chip ${template.plan_id === state.selectedTemplateId ? "is-active" : ""}" data-template-id="${escapeAttr(template.plan_id)}">
-          <span class="chip-main">${escapeHtml(template.plan_name)}</span>
-          ${templateSecondaryLabel(template, duplicateNames) ? `<span class="chip-sub">${escapeHtml(templateSecondaryLabel(template, duplicateNames))}</span>` : ""}
-        </button>
-      `).join("")}
-      ${state.selectedTemplateId ? renderPlanMoreMenu(state.selectedTemplateId, "template") : ""}
-    </div>
-  `;
+  els.toolbar.innerHTML = renderTemplateToolbarHtml(templates, state.selectedTemplateId);
   els.toolbar.querySelectorAll("[data-template-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.selectedTemplateId = button.dataset.templateId;
@@ -1590,26 +1579,15 @@ function renderTemplateList(templates, selected, detail) {
       }))
     : programDayGroupNodes(data.dayGroups || []);
 
-  els.content.innerHTML = `
-    <section class="content-section">
-      <section class="panel">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Template</p>
-            <h3>${escapeHtml(selected.plan_name)}</h3>
-            <p class="muted">${escapeHtml([templateCategoryLabel(selected), programPriceLabel(selected)].filter(Boolean).join(" · "))}</p>
-          </div>
-          <div class="builder-source-actions">${renderPlanMoreMenu(selected.plan_id, "template")}</div>
-        </div>
-        ${isMicrocycle
-          ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
-          : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
-      </section>
-    </section>
-    ${renderCopyPlanModal(state)}
-  `;
+  els.content.innerHTML = renderTemplateDetailHtml({
+    groups,
+    isMicrocycle,
+    renderNodeButton,
+    renderProgramDayCard,
+    selected,
+    state,
+  });
 }
-
 function renderTemplateLibrary(templates) {
   const scope = templateScopeMeta();
   const visibleTemplates = applyTemplateClientFilters(templates, state.templateFilters);
@@ -1617,21 +1595,16 @@ function renderTemplateLibrary(templates) {
   els.title.textContent = scope.label;
   els.toolbar.innerHTML = "";
 
-  els.content.innerHTML = `
-    <section class="content-section program-library-page">
-      <div class="program-library-head">
-        <p class="muted" data-template-count>${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}</p>
-      </div>
-      ${renderTemplateFilters()}
-      <div class="program-library-shelves" data-template-results>
-        ${renderTemplateLibraryResultsHtml(visibleTemplates, state.selectedTemplateId)}
-      </div>
-    </section>
-    ${renderTemplatePreviewModal()}
-    ${renderProgramInfoModal(state.programInfo)}
-    ${renderCoachDetailModalHtml(state.coaches, state.currentUser)}
-    ${renderCopyPlanModal(state)}
-  `;
+  els.content.innerHTML = renderTemplateLibraryPageHtml({
+    coaches: state.coaches,
+    currentUser: state.currentUser,
+    programInfo: state.programInfo,
+    selectedTemplateId: state.selectedTemplateId,
+    state,
+    templates: visibleTemplates,
+    templateFiltersHtml: renderTemplateFilters(),
+    templatePreviewHtml: renderTemplatePreviewModal(),
+  });
 }
 
 function renderTemplateLibraryResults() {
@@ -1640,7 +1613,7 @@ function renderTemplateLibraryResults() {
   if (count) count.textContent = `${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}`;
   document.querySelector(".program-preview-overlay")?.remove();
   const target = document.querySelector("[data-template-results]");
-  if (target) target.innerHTML = renderTemplateLibraryResultsHtml(visibleTemplates, state.selectedTemplateId);
+  if (target) target.innerHTML = renderTemplateLibraryResultsOnlyHtml(visibleTemplates, state.selectedTemplateId);
 }
 
 function canUseProgramAdminFilters() {
@@ -1650,32 +1623,14 @@ function canUseProgramAdminFilters() {
 function renderTemplateFilters() {
   const filters = state.templateFilters;
   const options = state.templateOptions || {};
-  const showAdminFilters = canUseProgramAdminFilters();
-  const scopes = visibleTemplateScopes();
-  const tagPrefix = clean(filters.tag).toLowerCase();
-  const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => templateFilterOptionMatches(tag, tagPrefix)) : (options.tags || []);
-  const categories = templateCategoryOptions(options, state.lastTemplates);
-  const categoryPrefix = clean(filters.category).toLowerCase();
-  const visibleCategories = categoryPrefix ? categories.filter((category) => templateFilterOptionMatches(category, categoryPrefix)) : categories;
-  const creatorOptions = templateFilterSuggestions("creator", options, state.lastTemplates);
-  const creatorPrefix = clean(filters.creator).toLowerCase();
-  const visibleCreators = creatorPrefix ? creatorOptions.filter((creator) => templateFilterOptionMatches(creator, creatorPrefix)) : creatorOptions;
-  const clubOptions = templateFilterSuggestions("club", options, state.lastTemplates);
-  const clubPrefix = clean(filters.club).toLowerCase();
-  const visibleClubs = clubPrefix ? clubOptions.filter((club) => templateFilterOptionMatches(club, clubPrefix)) : clubOptions;
-  return renderTemplateFiltersHtml({
-    filters,
-    options,
-    showAdminFilters,
-    scopes,
+  return renderTemplateFiltersViewHtml({
     activeScope: state.templateScope,
+    filters,
+    lastTemplates: state.lastTemplates,
+    options,
+    scopes: visibleTemplateScopes(),
     scopeLabel: (scope) => templateScopeMeta(scope).label,
-    visibleTags,
-    visibleCategories,
-    creatorOptions,
-    visibleCreators,
-    clubOptions,
-    visibleClubs,
+    showAdminFilters: canUseProgramAdminFilters(),
   });
 }
 
@@ -1692,7 +1647,7 @@ function renderTemplatePreviewModal() {
         }))
       : programDayGroupNodes(detail.dayGroups || []);
 
-  return renderTemplatePreviewModalHtml({
+  return renderTemplatePreviewModalViewHtml({
     currentUserRole: state.currentUser?.role,
     detail,
     groups,
@@ -1700,7 +1655,6 @@ function renderTemplatePreviewModal() {
     preview: state.templatePreview,
     programTagEditor: state.programTagEditor,
     renderNodeButton,
-    renderPlanMoreMenu,
     renderProgramDayCard,
     selected,
     templateOptions: state.templateOptions,
