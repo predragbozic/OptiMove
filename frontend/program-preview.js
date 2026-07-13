@@ -46,7 +46,7 @@ export function renderTemplatePreviewModalHtml(data) {
           </div>
         </div>
         ${selected && preview.settingsOpen ? renderTemplateMetadataForm(selected, templateOptions, programTagEditor) : ""}
-        ${selected && !preview.loading && !preview.error ? renderTemplateReviewPanel(selected, preview) : ""}
+        ${selected && !preview.loading && !preview.error ? renderTemplateReviewPanel(selected, preview, currentUserRole) : ""}
         <div class="program-preview-body">
           ${preview.loading ? `<div class="empty-state">Loading program...</div>` : preview.error ? `<div class="empty-state">${escapeHtml(preview.error)}</div>` : isMicrocycle
             ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -57,18 +57,28 @@ export function renderTemplatePreviewModalHtml(data) {
   `;
 }
 
-function renderTemplateReviewPanel(template, review) {
+function renderTemplateReviewPanel(template, review, currentUserRole) {
   const reviews = review.reviews || [];
+  const requiresApproval = currentUserRole === "athlete" && template.requires_approval === true;
+  const primaryLabel = review.submittingUse
+    ? "Saving..."
+    : review.requestSent
+      ? "Request sent"
+      : review.usedMarked
+        ? "Access active"
+        : requiresApproval
+          ? "Request access"
+          : "Get access";
   return `
     <section class="program-review-panel">
       <div class="program-review-summary">
         <div>
           <span class="eyebrow">Verified program review</span>
-          <p class="muted">Reviews are enabled after access is active and the program has been used.</p>
+          <p class="muted">${requiresApproval ? "Your coach must approve this program before it becomes active." : "Reviews are enabled after access is active and the program has been used."}</p>
         </div>
         <div class="program-review-actions">
-          <button class="plain-button compact-button" type="button" data-action="template-use" data-template-id="${escapeAttr(template.plan_id)}" ${review.submittingUse ? "disabled" : ""}>${review.submittingUse ? "Saving..." : review.usedMarked ? "Access active" : "Get access"}</button>
-          <button class="plain-button compact-button" type="button" data-action="template-review-toggle">${review.reviewOpen ? "Hide review" : "Leave review"}</button>
+          <button class="plain-button compact-button" type="button" data-action="template-use" data-template-id="${escapeAttr(template.plan_id)}" ${review.submittingUse || review.requestSent ? "disabled" : ""}>${primaryLabel}</button>
+          <button class="plain-button compact-button" type="button" data-action="template-review-toggle" ${review.requestSent ? "disabled" : ""}>${review.reviewOpen ? "Hide review" : "Leave review"}</button>
           <button class="plain-button compact-button" type="button" data-action="template-reviews-toggle">${review.reviewsOpen ? "Hide reviews" : `Reviews (${reviews.length})`}</button>
         </div>
       </div>

@@ -46,6 +46,13 @@ create table if not exists library.program_access (
 );
 
 alter table library.program_access
+  drop constraint if exists program_access_status_check;
+
+alter table library.program_access
+  add constraint program_access_status_check
+  check (status in ('requested', 'accessed', 'used', 'completed', 'revoked'));
+
+alter table library.program_access
   add column if not exists starts_at timestamptz not null default now(),
   add column if not exists expires_at timestamptz,
   add column if not exists source varchar(32),
@@ -60,6 +67,13 @@ create table if not exists library.program_usage_events (
   note text,
   created_at timestamptz not null default now()
 );
+
+alter table library.program_usage_events
+  drop constraint if exists program_usage_events_event_type_check;
+
+alter table library.program_usage_events
+  add constraint program_usage_events_event_type_check
+  check (event_type in ('requested', 'opened', 'used', 'completed'));
 
 alter table public.coach_profile_reviews
   add column if not exists is_verified boolean not null default false,

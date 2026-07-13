@@ -62,6 +62,7 @@ export const emptyTemplatePreview = (overrides = {}) => ({
   reviewsOpen: false,
   reviews: [],
   usedMarked: false,
+  requestSent: false,
   submittingUse: false,
   submittingReview: false,
   ...overrides,

@@ -188,16 +188,20 @@ export async function markTemplateUsed(planId, { renderTemplateLibrary }) {
   };
   renderTemplateLibrary(state.lastTemplates);
   try {
-    await api(`/api/templates/${encodeURIComponent(planId)}/use`, {
+    const response = await api(`/api/templates/${encodeURIComponent(planId)}/use`, {
       method: "POST",
       body: JSON.stringify({ note: "Marked as used from Program Library." }),
     });
+    const requested = response?.access?.status === "requested";
     state.templatePreview = {
       ...state.templatePreview,
       submittingUse: false,
-      usedMarked: true,
-      reviewOpen: true,
-      reviewMessage: "Access active. You can now leave a review after using this program.",
+      requestSent: requested,
+      usedMarked: !requested,
+      reviewOpen: !requested,
+      reviewMessage: requested
+        ? "Request sent. Your coach can approve this program before it becomes active."
+        : "Access active. You can now leave a review after using this program.",
       reviewError: "",
     };
   } catch (error) {

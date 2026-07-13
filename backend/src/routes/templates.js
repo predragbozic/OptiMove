@@ -587,28 +587,39 @@ async function markProgramUsed(user, planId, note) {
     [planId],
   );
   const license = plan.rows[0] || {};
+  const athleteAccess = await loadAthleteLibraryAccess(user);
+  const approvalRequired = Boolean(athleteAccess) && (license.requires_approval === true || athleteAccess.require_approval === true);
   const snapshot = licenseSnapshot(license);
   const accessType = accessTypeForLicense(license);
   const expiresAt = accessExpiresAt(license);
+  const nextStatus = approvalRequired ? "requested" : "used";
+  const eventType = approvalRequired ? "requested" : "used";
   const access = await query(
     `insert into library.program_access (
        plan_id, user_id, access_type, status, used_at, starts_at, expires_at, source, license_snapshot
      )
-     values ($1, $2, $3, 'used', now(), now(), $4, $5, $6::jsonb)
+     values ($1, $2, $3, $7, case when $7 = 'used' then now() else null end, now(), $4, $5, $6::jsonb)
      on conflict (plan_id, user_id, access_type)
-     do update set status = case when library.program_access.status = 'completed' then 'completed' else 'used' end,
-                   used_at = coalesce(library.program_access.used_at, now()),
+     do update set status = case
+                     when library.program_access.status = 'completed' then 'completed'
+                     when library.program_access.status in ('accessed', 'used') and excluded.status = 'requested' then library.program_access.status
+                     else excluded.status
+                   end,
+                   used_at = case
+                     when excluded.status = 'used' then coalesce(library.program_access.used_at, now())
+                     else library.program_access.used_at
+                   end,
                    expires_at = excluded.expires_at,
                    source = excluded.source,
                    license_snapshot = excluded.license_snapshot,
                    updated_at = now()
      returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
-    [planId, user.id, accessType, expiresAt, snapshot.accessModel, JSON.stringify(snapshot)],
+    [planId, user.id, accessType, expiresAt, snapshot.accessModel, JSON.stringify(snapshot), nextStatus],
   );
   await query(
     `insert into library.program_usage_events (program_access_id, user_id, event_type, note)
-     values ($1, $2, 'used', nullif(trim($3), ''))`,
-    [access.rows[0].id, user.id, note],
+     values ($1, $2, $3, nullif(trim($4), ''))`,
+    [access.rows[0].id, user.id, eventType, note],
   );
   return access.rows[0];
 }
