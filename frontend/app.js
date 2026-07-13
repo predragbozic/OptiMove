@@ -48,7 +48,6 @@ import {
 import { closeMedia, enterMediaFullscreen, handleFullscreenChange, openMedia } from "./media-modal.js";
 import {
   ensureTemplateScopeIsVisible,
-  renderAccessNav,
   renderLibraryNav,
   renderRailState,
   templateScopeMeta,
@@ -120,7 +119,6 @@ import {
   state,
 } from "./state.js";
 import {
-  addMonthsIso,
   clean,
   countLabel,
   debounce,
@@ -138,11 +136,11 @@ import {
   flattenDayGroups,
   groupItems,
   selectedWeeklyDay,
-  todayWeekIndex,
-  weekIndexForDate,
   weeklyCalendarDayMap,
   weeklyCalendarMonthRange,
 } from "./weekly-plan.js";
+import { handleWeeklyAction } from "./weekly-actions.js";
+import { renderUserControls } from "./user-controls.js";
 
 init();
 
@@ -523,16 +521,6 @@ function syncTemplateFilterSuggestions(input) {
   const values = templateFilterSuggestions(input.dataset.templateFilter, state.templateOptions, state.lastTemplates);
   const matches = prefix ? values.filter((value) => templateFilterOptionMatches(value, prefix)) : values;
   list.innerHTML = `<option value="All"></option>${matches.map((value) => `<option value="${escapeAttr(value)}"></option>`).join("")}`;
-}
-
-function renderUserControls() {
-  const authenticated = Boolean(state.currentUser);
-  if (els.signOut) els.signOut.hidden = !authenticated;
-  if (els.userRole) {
-    els.userRole.hidden = !authenticated;
-    els.userRole.textContent = authenticated ? roleLabel(state.currentUser) : "";
-  }
-  renderAccessNav();
 }
 
 async function signOut() {
@@ -1099,63 +1087,7 @@ async function handleContentClick(event) {
     return;
   }
   if (await handleOrganizationAction(action, { loadAthletes, renderOrganizationPanel })) return;
-  if (type === "week-prev" || type === "week-next") {
-    const delta = type === "week-prev" ? -1 : 1;
-    moveWeek(delta);
-    return;
-  }
-  if (type === "week-toggle") {
-    state.weekSelectorOpen = !state.weekSelectorOpen;
-    if (state.weekSelectorOpen) {
-      const weeks = state.lastWeeklyData?.weeks || [];
-      const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
-      state.weekCalendarMonth = monthStartIso(activeWeek?.weekStart || localDateIso());
-    }
-    renderWeeklyRoot(state.lastWeeklyData);
-    return;
-  }
-  if (type === "week-calendar-close") {
-    state.weekSelectorOpen = false;
-    renderWeeklyRoot(state.lastWeeklyData);
-    return;
-  }
-  if (type === "week-calendar-prev" || type === "week-calendar-next") {
-    const delta = type === "week-calendar-prev" ? -1 : 1;
-    state.weekCalendarMonth = addMonthsIso(state.weekCalendarMonth || localDateIso(), delta);
-    renderWeeklyRoot(state.lastWeeklyData);
-    return;
-  }
-  if (type === "week-today") {
-    const weeks = state.lastWeeklyData?.weeks || [];
-    state.selectedWeekIndex = todayWeekIndex(weeks);
-    state.weekCalendarMonth = monthStartIso(localDateIso());
-    state.selectedWeekDay = localDateIso();
-    state.pendingScrollDate = localDateIso();
-    state.navStack = [];
-    renderWeeklyRoot(state.lastWeeklyData);
-    return;
-  }
-  if (type === "week-select") {
-    state.selectedWeekIndex = Number(action.dataset.weekIndex) || 0;
-    state.selectedWeekDay = "";
-    state.navStack = [];
-    renderWeeklyRoot(state.lastWeeklyData);
-    return;
-  }
-  if (type === "week-day-select") {
-    const date = action.dataset.date || "";
-    const weeks = state.lastWeeklyData?.weeks || [];
-    const weekIndex = weekIndexForDate(weeks, date);
-    if (weekIndex < 0) return;
-    state.selectedWeekIndex = weekIndex;
-    state.selectedWeekDay = date;
-    state.pendingScrollDate = date;
-    state.weekSelectorOpen = false;
-    state.weekCalendarMonth = monthStartIso(date);
-    state.navStack = [];
-    renderWeeklyRoot(state.lastWeeklyData);
-    return;
-  }
+  if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
   if (type === "open-media") {
     openMedia(action.dataset.title || "Exercise media", action.dataset.image || "", action.dataset.video || "");
     return;
