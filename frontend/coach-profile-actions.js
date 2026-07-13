@@ -1,4 +1,6 @@
 import { api } from "./api.js";
+import { canManageCoachProfile } from "./access.js";
+import { openTemplatePreviewFromCoachProgram } from "./program-library-actions.js";
 import { state } from "./state.js";
 
 export async function loadCoaches({ setLoading, renderCoaches }) {
@@ -24,6 +26,52 @@ export async function openCoachProfile(profileId, { renderCoachContext }) {
     state.coaches = { ...state.coaches, error: error.message || "Could not load coach profile." };
   }
   renderCoachContext();
+}
+
+export function handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode }) {
+  const type = action.dataset.action;
+  if (type === "coach-program-open") {
+    const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
+    if (program?.plan_id) {
+      state.coaches = { ...state.coaches, selected: null, detail: null, contactOpen: false, error: "" };
+      void openTemplatePreviewFromCoachProgram(program, renderCurrentNode);
+    }
+    return true;
+  }
+  if (type === "coach-program-info") {
+    const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
+    if (program) {
+      state.programInfo = { open: true, program };
+      renderCoachContext();
+    }
+    return true;
+  }
+  if (type === "coach-programs-focus") {
+    const section = document.querySelector("[data-coach-programs]");
+    section?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return true;
+  }
+  if (type === "coach-open") {
+    void openCoachProfile(action.dataset.profileId, { renderCoachContext });
+    return true;
+  }
+  if (type === "coach-close") {
+    state.coaches = { ...state.coaches, selected: null, detail: null, editOpen: false, contactOpen: false, error: "" };
+    renderCoachContext();
+    return true;
+  }
+  if (type === "coach-edit-toggle") {
+    if (!canManageCoachProfile()) return true;
+    state.coaches.editOpen = !state.coaches.editOpen;
+    renderCoachContext();
+    return true;
+  }
+  if (type === "coach-contact-toggle") {
+    state.coaches.contactOpen = !state.coaches.contactOpen;
+    renderCoachContext();
+    return true;
+  }
+  return false;
 }
 
 export async function submitCoachProfileForm(form, { loadCoaches }) {

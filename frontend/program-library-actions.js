@@ -56,6 +56,89 @@ function normalizeCoachProgramAsTemplate(program) {
   };
 }
 
+export function handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary }) {
+  const type = action.dataset.action;
+  if (type === "template-open") {
+    void openTemplatePreview(action.dataset.templateId, () => renderTemplateLibrary(state.lastTemplates));
+    return true;
+  }
+  if (type === "template-info") {
+    const template = state.lastTemplates.find((row) => String(row.plan_id) === String(action.dataset.templateId));
+    if (template) {
+      state.programInfo = { open: true, program: template };
+      renderTemplateLibrary(state.lastTemplates);
+    }
+    return true;
+  }
+  if (type === "program-info-close") {
+    state.programInfo = { open: false, program: null };
+    if (state.activeTab === "coaches") renderCoachContext();
+    else renderTemplateLibrary(state.lastTemplates);
+    return true;
+  }
+  if (type === "template-scope") {
+    state.templateScope = action.dataset.scope || "my";
+    state.selectedTemplateId = null;
+    state.templatePreview = emptyTemplatePreview();
+    void loadTemplates();
+    return true;
+  }
+  if (type === "template-settings-toggle") {
+    state.templatePreview = { ...state.templatePreview, settingsOpen: !state.templatePreview.settingsOpen };
+    renderTemplateLibrary(state.lastTemplates);
+    return true;
+  }
+  if (type === "template-use") {
+    void markTemplateUsed(action.dataset.templateId, { renderTemplateLibrary });
+    return true;
+  }
+  if (type === "template-assign") {
+    const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(action.dataset.templateId));
+    if (!selected) return true;
+    state.builder.copyPlanId = selected.plan_id;
+    state.builder.copyPlanName = selected.plan_name || "Program";
+    state.builder.copyAthleteId = "";
+    state.builder.copyPlanType = "program";
+    state.builder.copyWeekStart = "";
+    renderTemplateLibrary(state.lastTemplates);
+    return true;
+  }
+  if (type === "template-review-toggle") {
+    state.templatePreview = {
+      ...state.templatePreview,
+      reviewOpen: !state.templatePreview.reviewOpen,
+      reviewError: "",
+      reviewMessage: "",
+    };
+    renderTemplateLibrary(state.lastTemplates);
+    return true;
+  }
+  if (type === "template-reviews-toggle") {
+    state.templatePreview = { ...state.templatePreview, reviewsOpen: !state.templatePreview.reviewsOpen };
+    renderTemplateLibrary(state.lastTemplates);
+    return true;
+  }
+  if (type === "template-close") {
+    state.templatePreview = emptyTemplatePreview();
+    if (state.activeTab === "coaches") renderCoachContext();
+    else renderTemplateLibrary(state.lastTemplates);
+    return true;
+  }
+  if (type === "program-tags-close") {
+    closeProgramTagEditor({ renderTemplateLibrary });
+    return true;
+  }
+  if (type === "program-tag-add") {
+    void addInlineProgramTag(action.dataset.planId, { renderTemplateLibrary });
+    return true;
+  }
+  if (type === "program-tag-remove") {
+    void removeProgramTag(action.dataset.planId, action.dataset.tagId, { renderTemplateLibrary });
+    return true;
+  }
+  return false;
+}
+
 export async function submitTemplateMetadataForm(form, { loadTemplates }) {
   const planId = form.dataset.planId || "";
   const error = form.querySelector(".builder-error");

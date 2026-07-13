@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { accessScopeLabel, canManageCoachProfile, isAthleteMode, roleLabel } from "./access.js";
+import { accessScopeLabel, isAthleteMode, roleLabel } from "./access.js";
 import {
   renderInviteAccept as renderInviteAcceptAction,
   renderLogin as renderLoginAction,
@@ -21,6 +21,7 @@ import { loadBuilderExercises, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder } from "./builder-view.js";
 import {
+  handleCoachProfileAction,
   loadCoaches as loadCoachesAction,
   openCoachProfile as openCoachProfileAction,
   submitCoachContactForm as submitCoachContactFormAction,
@@ -90,12 +91,7 @@ import {
   renderTemplateToolbarHtml,
 } from "./program-library-view.js";
 import {
-  addInlineProgramTag,
-  closeProgramTagEditor,
-  markTemplateUsed,
-  openTemplatePreview,
-  openTemplatePreviewFromCoachProgram,
-  removeProgramTag,
+  handleTemplateLibraryAction,
   submitProgramTagForm as submitProgramTagFormAction,
   submitTemplateMetadataForm as submitTemplateMetadataFormAction,
   submitTemplateReviewForm as submitTemplateReviewFormAction,
@@ -967,125 +963,8 @@ async function handleContentClick(event) {
     return;
   }
   if (await handleExerciseLibraryAction(action, { renderExercises, setLoading })) return;
-  if (type === "template-open") {
-    void openTemplatePreview(action.dataset.templateId, () => renderTemplateLibrary(state.lastTemplates));
-    return;
-  }
-  if (type === "coach-program-open") {
-    const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
-    if (program?.plan_id) {
-      state.coaches = { ...state.coaches, selected: null, detail: null, contactOpen: false, error: "" };
-      void openTemplatePreviewFromCoachProgram(program, renderCurrentNode);
-    }
-    return;
-  }
-  if (type === "coach-program-info") {
-    const program = (state.coaches.detail?.programs || []).find((row) => String(row.plan_id) === String(action.dataset.templateId));
-    if (program) {
-      state.programInfo = { open: true, program };
-      renderCoachContext();
-    }
-    return;
-  }
-  if (type === "template-info") {
-    const template = state.lastTemplates.find((row) => String(row.plan_id) === String(action.dataset.templateId));
-    if (template) {
-      state.programInfo = { open: true, program: template };
-      renderTemplateLibrary(state.lastTemplates);
-    }
-    return;
-  }
-  if (type === "program-info-close") {
-    state.programInfo = { open: false, program: null };
-    if (state.activeTab === "coaches") renderCoachContext();
-    else renderTemplateLibrary(state.lastTemplates);
-    return;
-  }
-  if (type === "template-scope") {
-    state.templateScope = action.dataset.scope || "my";
-    state.selectedTemplateId = null;
-    state.templatePreview = emptyTemplatePreview();
-    void loadTemplates();
-    return;
-  }
-  if (type === "template-settings-toggle") {
-    state.templatePreview = { ...state.templatePreview, settingsOpen: !state.templatePreview.settingsOpen };
-    renderTemplateLibrary(state.lastTemplates);
-    return;
-  }
-  if (type === "template-use") {
-    void markTemplateUsed(action.dataset.templateId, { renderTemplateLibrary });
-    return;
-  }
-  if (type === "template-assign") {
-    const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(action.dataset.templateId));
-    if (!selected) return;
-    state.builder.copyPlanId = selected.plan_id;
-    state.builder.copyPlanName = selected.plan_name || "Program";
-    state.builder.copyAthleteId = "";
-    state.builder.copyPlanType = "program";
-    state.builder.copyWeekStart = "";
-    renderTemplateLibrary(state.lastTemplates);
-    return;
-  }
-  if (type === "template-review-toggle") {
-    state.templatePreview = {
-      ...state.templatePreview,
-      reviewOpen: !state.templatePreview.reviewOpen,
-      reviewError: "",
-      reviewMessage: "",
-    };
-    renderTemplateLibrary(state.lastTemplates);
-    return;
-  }
-  if (type === "template-reviews-toggle") {
-    state.templatePreview = { ...state.templatePreview, reviewsOpen: !state.templatePreview.reviewsOpen };
-    renderTemplateLibrary(state.lastTemplates);
-    return;
-  }
-  if (type === "template-close") {
-    state.templatePreview = emptyTemplatePreview();
-    if (state.activeTab === "coaches") renderCoachContext();
-    else renderTemplateLibrary(state.lastTemplates);
-    return;
-  }
-  if (type === "coach-programs-focus") {
-    const section = document.querySelector("[data-coach-programs]");
-    section?.scrollIntoView({ behavior: "smooth", block: "start" });
-    return;
-  }
-  if (type === "coach-open") {
-    void openCoachProfile(action.dataset.profileId);
-    return;
-  }
-  if (type === "coach-close") {
-    state.coaches = { ...state.coaches, selected: null, detail: null, editOpen: false, contactOpen: false, error: "" };
-    renderCoachContext();
-    return;
-  }
-  if (type === "coach-edit-toggle") {
-    if (!canManageCoachProfile()) return;
-    state.coaches.editOpen = !state.coaches.editOpen;
-    renderCoachContext();
-    return;
-  }
-  if (type === "coach-contact-toggle") {
-    state.coaches.contactOpen = !state.coaches.contactOpen;
-    renderCoachContext();
-    return;
-  }
-  if (type === "program-tags-close") {
-    closeProgramTagEditor({ renderTemplateLibrary });
-    return;
-  }
-  if (type === "program-tag-add") {
-    void addInlineProgramTag(action.dataset.planId, { renderTemplateLibrary });
-    return;
-  }
-  if (type === "program-tag-remove") {
-    void removeProgramTag(action.dataset.planId, action.dataset.tagId, { renderTemplateLibrary });
-    return;
-  }
+  if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
+  if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleOrganizationAction(action, { loadAthletes, renderOrganizationPanel })) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
   if (type === "open-media") {
