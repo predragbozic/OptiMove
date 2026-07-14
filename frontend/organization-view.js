@@ -19,7 +19,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
         </div>
       </section>
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
-      ${renderSettingsNavHtml()}
+      ${renderSettingsNavHtml(data)}
       ${renderOrganizationActions(data)}
       ${renderOrganizationBrowser(data)}
       ${state.organizationEditor.open ? renderOrganizationEditModal(data) : ""}
@@ -121,7 +121,8 @@ export function renderOrganizationBrowser(data) {
         ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
       </div>
       <section class="organization-lists organization-lists-browser">
-        ${section === "overview" || section === "athletes" ? renderProgramAccessRequests(accessRequests) : ""}
+        ${section === "overview" || section === "requests" || section === "athletes" ? renderProgramAccessRequests(accessRequests) : ""}
+        ${section === "requests" ? renderProgramAccessHelp() : ""}
         ${section === "overview" || section === "users" ? renderOrganizationList("Users", users, "user") : ""}
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
@@ -132,11 +133,22 @@ export function renderOrganizationBrowser(data) {
   `;
 }
 
+function renderProgramAccessHelp() {
+  return `
+    <section class="panel organization-list-card organization-access-help">
+      <div class="organization-list-head">
+        <div><p class="eyebrow">How approval works</p><h3>Who should approve?</h3></div>
+      </div>
+      <p class="muted">A program request is approved by the coach, team coach, club admin, or platform admin who can manage that athlete. After approval, the athlete can open and use the program from their Program Library.</p>
+    </section>
+  `;
+}
+
 function renderProgramAccessRequests(rows) {
   return `
     <section class="panel organization-list-card organization-access-requests">
       <div class="organization-list-head">
-        <div><p class="eyebrow">Program access</p><h3>Pending requests</h3></div>
+        <div><p class="eyebrow">Program access</p><h3>Pending requests</h3><p class="muted">Approve or reject athlete requests to use programs.</p></div>
         <strong>${rows.length}</strong>
       </div>
       <div class="organization-list">

@@ -114,9 +114,11 @@ export function ensureTemplateScopeIsVisible() {
   if (scopes.length && !scopes.includes(state.templateScope)) state.templateScope = scopes[0];
 }
 
-export function renderSettingsNavHtml(section = state.organization.section || "overview") {
+export function renderSettingsNavHtml(data = {}, section = state.organization.section || "overview") {
+  const requestCount = Array.isArray(data.accessRequests) ? data.accessRequests.length : 0;
   const items = [
     ["overview", "Overview"],
+    ["requests", requestCount ? `Requests (${requestCount})` : "Requests"],
     ["clubs", "Clubs"],
     ["teams", "Teams"],
     ["athletes", "Athletes"],
