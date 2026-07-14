@@ -154,5 +154,18 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     await deleteOrganizationRow(action.dataset.orgType, action.dataset.orgId, { loadAthletes, renderOrganizationPanel });
     return true;
   }
+  if (type === "organization-access-approve" || type === "organization-access-reject") {
+    const accessId = action.dataset.accessId || "";
+    if (!accessId) return true;
+    const actionName = type === "organization-access-approve" ? "approve" : "reject";
+    action.disabled = true;
+    try {
+      await api(`/api/organization/program-access/${encodeURIComponent(accessId)}/${actionName}`, { method: "POST" });
+      await renderOrganizationPanel();
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
   return false;
 }

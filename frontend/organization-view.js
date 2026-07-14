@@ -98,6 +98,7 @@ export function renderOrganizationBrowser(data) {
   const teams = data.teams || [];
   const athletes = data.athletes || [];
   const users = data.users || [];
+  const accessRequests = data.accessRequests || [];
   const section = state.organization.section || "overview";
   const selectedClub = clubs.find((club) => String(club.id) === String(state.organization.selectedClubId));
   const selectedTeam = teams.find((team) => String(team.id) === String(state.organization.selectedTeamId));
@@ -120,6 +121,7 @@ export function renderOrganizationBrowser(data) {
         ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
       </div>
       <section class="organization-lists organization-lists-browser">
+        ${section === "overview" || section === "athletes" ? renderProgramAccessRequests(accessRequests) : ""}
         ${section === "overview" || section === "users" ? renderOrganizationList("Users", users, "user") : ""}
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
@@ -127,6 +129,44 @@ export function renderOrganizationBrowser(data) {
       </section>
       ${state.organizationInvite.open ? renderAthleteInviteModal(athletes) : ""}
     </section>
+  `;
+}
+
+function renderProgramAccessRequests(rows) {
+  return `
+    <section class="panel organization-list-card organization-access-requests">
+      <div class="organization-list-head">
+        <div><p class="eyebrow">Program access</p><h3>Pending requests</h3></div>
+        <strong>${rows.length}</strong>
+      </div>
+      <div class="organization-list">
+        ${rows.length ? rows.map(renderProgramAccessRequestRow).join("") : `<p class="muted">No pending program requests.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderProgramAccessRequestRow(row) {
+  const image = row.athlete_image_url || "";
+  const date = row.created_at ? new Date(row.created_at).toLocaleDateString("en-GB") : "";
+  return `
+    <article class="organization-row organization-request-row">
+      <span class="organization-table-athlete">
+        ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">AT</span>`}
+        <span>
+          <strong>${escapeHtml(row.athlete_name || "Athlete")}</strong>
+          <small>${escapeHtml([row.athlete_code ? `ID ${row.athlete_code}` : "", date].filter(Boolean).join(" - "))}</small>
+        </span>
+      </span>
+      <span>
+        <strong>${escapeHtml(row.program_name || "Program")}</strong>
+        <small>${escapeHtml(row.library_category || "General")}</small>
+      </span>
+      <span class="organization-row-actions">
+        <button class="text-action" type="button" data-action="organization-access-approve" data-access-id="${escapeAttr(row.id)}">Approve</button>
+        <button class="text-action danger-action" type="button" data-action="organization-access-reject" data-access-id="${escapeAttr(row.id)}">Reject</button>
+      </span>
+    </article>
   `;
 }
 

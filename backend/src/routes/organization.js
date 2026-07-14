@@ -8,11 +8,12 @@ const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    const [clubs, teams, athletes, users] = await Promise.all([
+    const [clubs, teams, athletes, users, accessRequests] = await Promise.all([
       loadClubs(req.user),
       loadTeams(req.user),
       loadManagedAthletes(req.user),
       loadUsers(req.user),
+      loadProgramAccessRequests(req.user),
     ]);
     res.json({
       scope: req.user?.role_hint || "coach",
@@ -24,6 +25,7 @@ router.get("/", async (req, res, next) => {
       teams,
       athletes,
       users,
+      accessRequests,
     });
   } catch (error) {
     next(error);
@@ -316,6 +318,45 @@ router.post("/athlete-invites", async (req, res, next) => {
   }
 });
 
+router.post("/program-access/:accessId/approve", async (req, res, next) => {
+  try {
+    const request = await loadProgramAccessRequest(req.params.accessId);
+    if (!request) return res.status(404).json({ error: "Access request not found." });
+    if (!(await canManageAthlete(req.user, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
+    const result = await query(
+      `update library.program_access
+       set status = 'accessed',
+           starts_at = coalesce(starts_at, now()),
+           updated_at = now()
+       where id = $1
+       returning id, status, updated_at`,
+      [req.params.accessId],
+    );
+    res.json({ access: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/program-access/:accessId/reject", async (req, res, next) => {
+  try {
+    const request = await loadProgramAccessRequest(req.params.accessId);
+    if (!request) return res.status(404).json({ error: "Access request not found." });
+    if (!(await canManageAthlete(req.user, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
+    const result = await query(
+      `update library.program_access
+       set status = 'revoked',
+           updated_at = now()
+       where id = $1
+       returning id, status, updated_at`,
+      [req.params.accessId],
+    );
+    res.json({ access: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.delete("/athletes/:athleteId", async (req, res, next) => {
   try {
     if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
@@ -542,6 +583,73 @@ async function loadUsers(user) {
     [user.id, isPlatformAdmin(user)],
   );
   return result.rows;
+}
+
+async function loadProgramAccessRequests(user) {
+  const result = await query(
+    `select distinct
+       pa.id,
+       pa.plan_id,
+       pa.user_id,
+       pa.access_type,
+       pa.status,
+       pa.created_at,
+       pa.updated_at,
+       coalesce(p.name, 'Program') as program_name,
+       p.library_category,
+       a.id as athlete_id,
+       a.athlete_id as athlete_code,
+       coalesce(a.display_name, a.full_name, a.athlete_id) as athlete_name,
+       a.image_url as athlete_image_url,
+       u.email as athlete_email
+     from library.program_access pa
+     join plans.plans p on p.id = pa.plan_id
+     join public.users u on u.id = pa.user_id
+     join public.athletes a on a.user_id = pa.user_id
+        or exists (
+          select 1
+          from public.user_athletes ua
+          where ua.user_id = pa.user_id
+            and ua.athlete_id = a.id
+            and ua.relationship_type = 'athlete'
+            and ua.is_active = true
+        )
+     where pa.status = 'requested'
+       and coalesce(a.is_active, true)
+     order by pa.created_at desc
+     limit 100`,
+  );
+  const visible = [];
+  for (const row of result.rows) {
+    if (await canManageAthlete(user, row.athlete_id)) visible.push(row);
+  }
+  return visible;
+}
+
+async function loadProgramAccessRequest(accessId) {
+  const result = await query(
+    `select distinct
+       pa.id,
+       pa.status,
+       pa.plan_id,
+       pa.user_id,
+       a.id as athlete_id
+     from library.program_access pa
+     join public.users u on u.id = pa.user_id
+     join public.athletes a on a.user_id = pa.user_id
+        or exists (
+          select 1
+          from public.user_athletes ua
+          where ua.user_id = pa.user_id
+            and ua.athlete_id = a.id
+            and ua.relationship_type = 'athlete'
+            and ua.is_active = true
+        )
+     where pa.id = $1
+     limit 1`,
+    [accessId],
+  );
+  return result.rows[0] || null;
 }
 
 async function loadManagedAthletes(user) {

@@ -343,6 +343,10 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   font-size: 12px;
 }
 
+.organization-request-row {
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+}
+
 .organization-avatar {
   width: 42px;
   height: 42px;
@@ -766,9 +770,17 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
     grid-template-columns: 38px minmax(0, 1fr);
   }
 
+  .organization-request-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .organization-row-actions {
     grid-column: 2;
     justify-content: flex-start;
+  }
+
+  .organization-request-row .organization-row-actions {
+    grid-column: 1;
   }
 
   .organization-list {
