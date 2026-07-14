@@ -5653,7 +5653,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .exercise-filter-field select { min-height: 34px; padding: 6px 7px; font-size: 16px; }
   .exercise-filter-toggle { min-height: 34px; padding: 6px 7px; font-size: 12px; }
   .builder-filter-strip { grid-template-columns: minmax(0, 1fr); }
-  .builder-exercise-results { max-height: min(27dvh, 220px); overflow-x: hidden; }
+  .builder-exercise-results { max-height: min(45dvh, 380px); overflow-x: hidden; }
   .builder-exercise-result { grid-template-columns: 46px minmax(0, 1fr) 48px; min-width: 0; align-items: center; gap: 8px; padding: 7px; }
   .builder-exercise-result > * { min-width: 0; }
   .builder-exercise-result strong, .builder-exercise-result small { overflow-wrap: anywhere; }
