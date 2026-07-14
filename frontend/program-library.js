@@ -101,6 +101,8 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   const accessStatus = templateAccessStatusLabel(template);
   const accessStatusCode = clean(template.user_access_status).toLowerCase();
   const actionLabel = templateAccessActionLabel(template, currentUser);
+  const isAthleteUser = clean(currentUser?.role).toLowerCase() === "athlete" || clean(currentUser?.accessScope).toLowerCase() === "athlete";
+  const pendingAccessCount = Number(template.pending_access_count || 0);
   return `
     <article class="program-library-card ${isSelected ? "is-selected" : ""}">
       <button class="program-library-info-button" type="button" data-action="template-info" data-template-id="${escapeAttr(template.plan_id)}" aria-label="Program information">i</button>
@@ -115,6 +117,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
         <span class="program-library-card-foot">
           <span class="item-badge">${escapeHtml(price)}</span>
           ${accessStatus ? `<span class="item-badge program-access-badge is-${escapeAttr(accessStatusCode)}">${escapeHtml(accessStatus)}</span>` : ""}
+          ${!isAthleteUser && pendingAccessCount > 0 ? `<span class="item-badge program-access-badge is-requested">${pendingAccessCount} ${pendingAccessCount === 1 ? "request" : "requests"}</span>` : ""}
           <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
           ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
           <span class="text-action">${escapeHtml(actionLabel)}</span>

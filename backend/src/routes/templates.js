@@ -47,6 +47,7 @@ router.get("/", async (req, res, next) => {
         user_access.access_type as user_access_type,
         user_access.used_at as user_access_used_at,
         user_access.expires_at as user_access_expires_at,
+        coalesce(max(access_requests.pending_count), 0)::int as pending_access_count,
         coalesce(
           jsonb_agg(distinct jsonb_build_object('id', t.id, 'name', t.name))
             filter (where t.id is not null),
@@ -89,6 +90,12 @@ router.get("/", async (req, res, next) => {
         pa.updated_at desc
         limit 1
       ) user_access on true
+      left join lateral (
+        select count(*)::int as pending_count
+        from library.program_access pa
+        where pa.plan_id = p.id
+          and pa.status = 'requested'
+      ) access_requests on true
       left join library.program_tags pt on pt.plan_id = p.id
       left join library.program_tag_definitions t on t.id = pt.tag_id and t.is_active = true
       where ps.plan_type = 'program'

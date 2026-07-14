@@ -48,7 +48,7 @@ export function renderTemplatePreviewModalHtml(data) {
         </div>
         ${selected && preview.settingsOpen ? renderTemplateMetadataForm(selected, templateOptions, programTagEditor) : ""}
         ${selected && preview.assignOpen && currentUserRole !== "athlete" ? renderTemplateAssignmentPanel(selected, preview, athletes || []) : ""}
-        ${selected && !preview.loading && !preview.error ? renderTemplateReviewPanel(selected, preview, currentUserRole) : ""}
+        ${selected && !preview.loading ? renderTemplateReviewPanel(selected, preview, currentUserRole) : ""}
         <div class="program-preview-body">
           ${preview.loading ? `<div class="empty-state">Loading program...</div>` : preview.error ? `<div class="empty-state">${escapeHtml(preview.error)}</div>` : isMicrocycle
             ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
