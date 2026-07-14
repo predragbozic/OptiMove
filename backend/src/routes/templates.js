@@ -43,6 +43,10 @@ router.get("/", async (req, res, next) => {
         coalesce(creator_clubs.club_names, '') as creator_club_names,
         reviews.average_rating,
         coalesce(reviews.review_count, 0)::int as review_count,
+        user_access.status as user_access_status,
+        user_access.access_type as user_access_type,
+        user_access.used_at as user_access_used_at,
+        user_access.expires_at as user_access_expires_at,
         coalesce(
           jsonb_agg(distinct jsonb_build_object('id', t.id, 'name', t.name))
             filter (where t.id is not null),
@@ -68,6 +72,23 @@ router.get("/", async (req, res, next) => {
         where pr.plan_id = p.id
           and pr.status = 'published'
       ) reviews on true
+      left join lateral (
+        select pa.status, pa.access_type, pa.used_at, pa.expires_at
+        from library.program_access pa
+        where pa.plan_id = p.id
+          and pa.user_id = $1
+          and pa.status <> 'revoked'
+          and (pa.expires_at is null or pa.expires_at > now())
+        order by case pa.status
+          when 'completed' then 4
+          when 'used' then 3
+          when 'accessed' then 2
+          when 'requested' then 1
+          else 0
+        end desc,
+        pa.updated_at desc
+        limit 1
+      ) user_access on true
       left join library.program_tags pt on pt.plan_id = p.id
       left join library.program_tag_definitions t on t.id = pt.tag_id and t.is_active = true
       where ps.plan_type = 'program'
@@ -113,7 +134,8 @@ router.get("/", async (req, res, next) => {
         ps.athlete_can_view_directly, ps.requires_approval,
         p.created_by_user_id, creator_profile.id, creator_profile.photo_url, creator_profile.headline,
         creator.display_name, creator.full_name, creator.email, creator_clubs.club_ids, creator_clubs.club_names,
-        reviews.average_rating, reviews.review_count
+        reviews.average_rating, reviews.review_count,
+        user_access.status, user_access.access_type, user_access.used_at, user_access.expires_at
       order by coalesce(ps.library_category, 'General'), ps.source_external_id, ps.program_order nulls last, ps.plan_name
       `,
       params,
@@ -592,8 +614,19 @@ async function markProgramUsed(user, planId, note) {
   const snapshot = licenseSnapshot(license);
   const accessType = accessTypeForLicense(license);
   const expiresAt = accessExpiresAt(license);
-  const nextStatus = approvalRequired ? "requested" : "used";
-  const eventType = approvalRequired ? "requested" : "used";
+  const existingAccess = await query(
+    `select status
+     from library.program_access
+     where plan_id = $1
+       and user_id = $2
+       and access_type = $3
+     order by updated_at desc
+     limit 1`,
+    [planId, user.id, accessType],
+  );
+  const hasApprovedAccess = ["accessed", "used", "completed"].includes(existingAccess.rows[0]?.status);
+  const nextStatus = approvalRequired && !hasApprovedAccess ? "requested" : "used";
+  const eventType = nextStatus === "requested" ? "requested" : "used";
   const access = await query(
     `insert into library.program_access (
        plan_id, user_id, access_type, status, used_at, starts_at, expires_at, source, license_snapshot

@@ -192,16 +192,23 @@ export async function markTemplateUsed(planId, { renderTemplateLibrary }) {
       method: "POST",
       body: JSON.stringify({ note: "Marked as used from Program Library." }),
     });
-    const requested = response?.access?.status === "requested";
+    const access = response?.access || {};
+    const accessStatus = clean(access.status).toLowerCase();
+    const requested = accessStatus === "requested";
+    const used = accessStatus === "used" || accessStatus === "completed";
+    const approved = accessStatus === "accessed";
+    updateTemplateAccess(planId, access);
     state.templatePreview = {
       ...state.templatePreview,
       submittingUse: false,
       requestSent: requested,
-      usedMarked: !requested,
-      reviewOpen: !requested,
+      usedMarked: used,
+      reviewOpen: used,
       reviewMessage: requested
         ? "Request sent. Your coach can approve this program before it becomes active."
-        : "Access active. You can now leave a review after using this program.",
+        : approved
+          ? "Access approved. Mark it as used when you start working with this program."
+          : "Access active. You can now leave a review after using this program.",
       reviewError: "",
     };
   } catch (error) {
@@ -213,6 +220,24 @@ export async function markTemplateUsed(planId, { renderTemplateLibrary }) {
     };
   }
   renderTemplateLibrary(state.lastTemplates);
+}
+
+function updateTemplateAccess(planId, access) {
+  const accessPatch = {
+    user_access_status: access.status || "",
+    user_access_type: access.access_type || "",
+    user_access_used_at: access.used_at || null,
+    user_access_expires_at: access.expires_at || null,
+  };
+  state.lastTemplates = (state.lastTemplates || []).map((template) => (
+    String(template.plan_id) === String(planId) ? { ...template, ...accessPatch } : template
+  ));
+  if (String(state.templatePreview?.detail?.plan_id) === String(planId)) {
+    state.templatePreview = {
+      ...state.templatePreview,
+      detail: { ...state.templatePreview.detail, ...accessPatch },
+    };
+  }
 }
 
 export async function submitTemplateReviewForm(form, { loadTemplates, renderTemplateLibrary }) {

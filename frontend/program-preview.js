@@ -1,5 +1,5 @@
 import { renderImage } from "./media.js";
-import { inferProgramCategory, programPriceLabel, ratingLabel, templateCategoryLabel } from "./program-library.js";
+import { inferProgramCategory, programPriceLabel, ratingLabel, templateAccessStatusLabel, templateCategoryLabel } from "./program-library.js";
 import { clean, escapeAttr, escapeHtml, programInitials, renderOption } from "./utils.js";
 
 export function renderTemplatePreviewModalHtml(data) {
@@ -59,26 +59,41 @@ export function renderTemplatePreviewModalHtml(data) {
 
 function renderTemplateReviewPanel(template, review, currentUserRole) {
   const reviews = review.reviews || [];
-  const requiresApproval = currentUserRole === "athlete" && template.requires_approval === true;
+  const accessStatus = clean(template.user_access_status).toLowerCase();
+  const isRequested = review.requestSent || accessStatus === "requested";
+  const isUsed = review.usedMarked || accessStatus === "used" || accessStatus === "completed";
+  const isApproved = accessStatus === "accessed";
+  const hasActiveAccess = isApproved || isUsed;
+  const requiresApproval = currentUserRole === "athlete" && template.requires_approval === true && !hasActiveAccess;
+  const statusLabel = templateAccessStatusLabel(template);
   const primaryLabel = review.submittingUse
     ? "Saving..."
-    : review.requestSent
+    : isRequested
       ? "Request sent"
-      : review.usedMarked
+      : isApproved
+        ? "Mark as used"
+        : isUsed
         ? "Access active"
         : requiresApproval
           ? "Request access"
           : "Get access";
+  const helperText = isRequested
+    ? "Your request is waiting for coach approval."
+    : isApproved
+      ? "Access is approved. Mark it as used when you start working with this program."
+      : requiresApproval
+        ? "Your coach must approve this program before it becomes active."
+        : "Reviews are enabled after access is active and the program has been used.";
   return `
     <section class="program-review-panel">
       <div class="program-review-summary">
         <div>
           <span class="eyebrow">Verified program review</span>
-          <p class="muted">${requiresApproval ? "Your coach must approve this program before it becomes active." : "Reviews are enabled after access is active and the program has been used."}</p>
+          <p class="muted">${escapeHtml(helperText)}${statusLabel ? ` <strong>${escapeHtml(statusLabel)}</strong>` : ""}</p>
         </div>
         <div class="program-review-actions">
-          <button class="plain-button compact-button" type="button" data-action="template-use" data-template-id="${escapeAttr(template.plan_id)}" ${review.submittingUse || review.requestSent ? "disabled" : ""}>${primaryLabel}</button>
-          <button class="plain-button compact-button" type="button" data-action="template-review-toggle" ${review.requestSent ? "disabled" : ""}>${review.reviewOpen ? "Hide review" : "Leave review"}</button>
+          <button class="plain-button compact-button" type="button" data-action="template-use" data-template-id="${escapeAttr(template.plan_id)}" ${review.submittingUse || isRequested || isUsed ? "disabled" : ""}>${primaryLabel}</button>
+          <button class="plain-button compact-button" type="button" data-action="template-review-toggle" ${isRequested || !isUsed ? "disabled" : ""}>${review.reviewOpen ? "Hide review" : "Leave review"}</button>
           <button class="plain-button compact-button" type="button" data-action="template-reviews-toggle">${review.reviewsOpen ? "Hide reviews" : `Reviews (${reviews.length})`}</button>
         </div>
       </div>
