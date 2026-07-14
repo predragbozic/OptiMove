@@ -120,11 +120,32 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
   if (type === "template-assign") {
     const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(action.dataset.templateId));
     if (!selected) return true;
-    state.builder.copyPlanId = selected.plan_id;
-    state.builder.copyPlanName = selected.plan_name || "Program";
-    state.builder.copyAthleteId = "";
-    state.builder.copyPlanType = "program";
-    state.builder.copyWeekStart = "";
+    state.templatePreview = {
+      ...state.templatePreview,
+      assignOpen: !state.templatePreview.assignOpen,
+      assignError: "",
+      assignMessage: "",
+      assignedAthleteIds: state.templatePreview.assignOpen ? [] : state.templatePreview.assignedAthleteIds,
+    };
+    renderTemplateLibrary(state.lastTemplates);
+    return true;
+  }
+  if (type === "template-assign-toggle-athlete") {
+    const athleteId = action.dataset.athleteId || "";
+    const selectedIds = new Set((state.templatePreview.assignedAthleteIds || []).map(String));
+    if (selectedIds.has(String(athleteId))) selectedIds.delete(String(athleteId));
+    else selectedIds.add(String(athleteId));
+    state.templatePreview = {
+      ...state.templatePreview,
+      assignError: "",
+      assignMessage: "",
+      assignedAthleteIds: [...selectedIds],
+    };
+    renderTemplateLibrary(state.lastTemplates);
+    return true;
+  }
+  if (type === "template-assign-submit") {
+    void assignTemplateToAthletes(action.dataset.templateId, { renderTemplateLibrary });
     renderTemplateLibrary(state.lastTemplates);
     return true;
   }
@@ -162,6 +183,49 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
     return true;
   }
   return false;
+}
+
+async function assignTemplateToAthletes(planId, { renderTemplateLibrary }) {
+  const athleteIds = state.templatePreview.assignedAthleteIds || [];
+  if (!planId || !athleteIds.length || state.templatePreview.assigning) return;
+  state.templatePreview = {
+    ...state.templatePreview,
+    assigning: true,
+    assignError: "",
+    assignMessage: "",
+  };
+  renderTemplateLibrary(state.lastTemplates);
+  try {
+    const response = await api(`/api/templates/${encodeURIComponent(planId)}/assignments`, {
+      method: "POST",
+      body: JSON.stringify({ athleteIds }),
+    });
+    const assignedCount = (response.assigned || []).length;
+    const skipped = response.skipped || [];
+    state.templatePreview = {
+      ...state.templatePreview,
+      assigning: false,
+      assignOpen: skipped.length > 0,
+      assignedAthleteIds: skipped.length ? athleteIds : [],
+      assignMessage: assignedCount
+        ? `Access granted to ${assignedCount} ${assignedCount === 1 ? "athlete" : "athletes"}.`
+        : "",
+      assignError: skipped.length
+        ? skipped.map((item) => `${item.athleteName || item.athleteId}: ${item.reason}`).join(" ")
+        : "",
+      accessRequests: (state.templatePreview.accessRequests || []).filter((request) => (
+        !(response.assigned || []).some((item) => String(item.athleteId) === String(request.athlete_id))
+      )),
+    };
+  } catch (error) {
+    state.templatePreview = {
+      ...state.templatePreview,
+      assigning: false,
+      assignError: error.message || "Could not assign this program.",
+      assignMessage: "",
+    };
+  }
+  renderTemplateLibrary(state.lastTemplates);
 }
 
 async function updateTemplateAccessRequest(accessId, actionName, { renderAfter }) {

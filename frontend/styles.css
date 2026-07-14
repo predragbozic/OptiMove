@@ -2275,6 +2275,76 @@ input:focus {
   gap: 8px;
 }
 
+.program-assignment-panel {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.program-assignment-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.program-assignment-athlete {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.program-assignment-athlete.is-selected {
+  border-color: rgba(31, 111, 104, 0.42);
+  background: rgba(31, 111, 104, 0.09);
+}
+
+.program-assignment-athlete-image,
+.program-assignment-athlete-fallback {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  object-fit: cover;
+  object-position: 50% 12%;
+  background: #eef2f6;
+}
+
+.program-assignment-athlete-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-weight: 950;
+}
+
+.program-assignment-athlete strong,
+.program-assignment-athlete small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-assignment-athlete small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.program-assignment-athlete b {
+  color: var(--accent);
+  font-size: 12px;
+}
+
 .program-access-request-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

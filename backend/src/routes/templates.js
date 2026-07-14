@@ -112,6 +112,10 @@ router.get("/", async (req, res, next) => {
               or (coalesce(p.library_scope, 'my') = 'marketplace' and $13::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
             )
           )
+          or (
+            $8::boolean
+            and user_access.status in ('requested', 'accessed', 'used', 'completed')
+          )
         )
         and ($3 = 'all' or coalesce(p.library_scope, 'my') = $3)
         and ($4 = '' or ps.plan_name ilike '%' || $4 || '%' or coalesce(ps.source_external_id, '') ilike '%' || $4 || '%')
@@ -410,6 +414,49 @@ router.get("/:planId/access-requests", async (req, res, next) => {
   }
 });
 
+router.post("/:planId/assignments", async (req, res, next) => {
+  try {
+    if (isAthlete(req.user)) return res.status(403).json({ error: "Coach access required." });
+    const plan = await loadAssignableTemplate(req.user, req.params.planId);
+    if (!plan) return res.status(404).json({ error: "Template not found." });
+    if (plan.can_assign_to_athlete === false) return res.status(403).json({ error: "This program cannot be assigned." });
+
+    const requestedIds = Array.isArray(req.body?.athleteIds) ? req.body.athleteIds.map(text).filter(Boolean) : [];
+    const athleteIds = [...new Set(requestedIds)];
+    if (!athleteIds.length) return res.status(400).json({ error: "Choose at least one athlete." });
+
+    const assigned = [];
+    const skipped = [];
+    for (const athleteId of athleteIds) {
+      const athlete = await loadAssignableAthlete(athleteId);
+      if (!athlete) {
+        skipped.push({ athleteId, reason: "Athlete not found." });
+        continue;
+      }
+      if (!(await canAccessAthlete(query, req.user, athlete.id))) {
+        skipped.push({ athleteId, athleteName: athlete.name, reason: "No access to this athlete." });
+        continue;
+      }
+      if (!athlete.user_id) {
+        skipped.push({ athleteId, athleteName: athlete.name, reason: "Athlete login is not enabled." });
+        continue;
+      }
+      const access = await assignProgramAccess(plan, athlete.user_id);
+      assigned.push({
+        athleteId: athlete.id,
+        athleteCode: athlete.athlete_id || athlete.source_external_id,
+        athleteName: athlete.name,
+        accessId: access.id,
+        status: access.status,
+      });
+    }
+
+    res.status(201).json({ assigned, skipped });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/:planId/tags", async (req, res, next) => {
   try {
     if (!(await canEditTemplate(req.user, req.params.planId))) {
@@ -634,6 +681,102 @@ async function canEditTemplate(user, planId) {
     [planId, user.id, canAccessAllAthletes(user)],
   );
   return Boolean(result.rows[0]);
+}
+
+async function loadAssignableTemplate(user, planId) {
+  const result = await query(
+    `select id,
+            access_model,
+            access_duration_days,
+            subscription_period,
+            is_free,
+            price_cents,
+            can_copy,
+            can_edit_copy,
+            can_assign_to_athlete,
+            athlete_can_view_directly,
+            requires_approval
+     from plans.plans p
+     where p.id = $1
+       and p.plan_type = 'program'
+       and p.is_template = true
+       and coalesce(p.is_active, true)
+       and ($3::boolean or p.created_by_user_id = $2 or p.visibility = 'public')
+     limit 1`,
+    [planId, user.id, canAccessAllAthletes(user)],
+  );
+  return result.rows[0] || null;
+}
+
+async function loadAssignableAthlete(athleteId) {
+  const result = await query(
+    `select id,
+            athlete_id,
+            source_external_id,
+            user_id,
+            coalesce(display_name, full_name, concat_ws(' ', first_name, last_name), athlete_id, source_external_id) as name
+     from public.athletes
+     where coalesce(is_active, true)
+       and (id::text = $1 or athlete_id = $1 or source_external_id = $1)
+     limit 1`,
+    [athleteId],
+  );
+  return result.rows[0] || null;
+}
+
+async function assignProgramAccess(plan, userId) {
+  const snapshot = licenseSnapshot(plan);
+  const expiresAt = accessExpiresAt(plan);
+  const existing = await query(
+    `select id
+     from library.program_access
+     where plan_id = $1
+       and user_id = $2
+       and status <> 'revoked'
+     order by case status
+       when 'requested' then 4
+       when 'accessed' then 3
+       when 'used' then 2
+       when 'completed' then 1
+       else 0
+     end desc,
+     updated_at desc
+     limit 1`,
+    [plan.id, userId],
+  );
+  if (existing.rows[0]?.id) {
+    const updated = await query(
+      `update library.program_access
+       set status = case when status = 'completed' then 'completed' else 'accessed' end,
+           starts_at = coalesce(starts_at, now()),
+           expires_at = $2,
+           source = 'coach_assignment',
+           license_snapshot = $3::jsonb,
+           accessed_at = now(),
+           updated_at = now()
+       where id = $1
+       returning id, plan_id, user_id, access_type, status, expires_at`,
+      [existing.rows[0].id, expiresAt, JSON.stringify(snapshot)],
+    );
+    return updated.rows[0];
+  }
+  const inserted = await query(
+    `insert into library.program_access (
+       plan_id, user_id, access_type, status, starts_at, expires_at, source, license_snapshot
+     )
+     values ($1, $2, 'coach_assigned', 'accessed', now(), $3, 'coach_assignment', $4::jsonb)
+     on conflict (plan_id, user_id, access_type)
+     do update set status = case when library.program_access.status = 'completed' then 'completed' else 'accessed' end,
+                   starts_at = coalesce(library.program_access.starts_at, now()),
+                   expires_at = excluded.expires_at,
+                   source = excluded.source,
+                   license_snapshot = excluded.license_snapshot,
+                   accessed_at = now(),
+                   updated_at = now()
+     returning id, plan_id, user_id, access_type, status, expires_at`,
+    [plan.id, userId, expiresAt, JSON.stringify(snapshot)],
+  );
+  return inserted.rows[0];
 }
 
 async function markProgramUsed(user, planId, note) {

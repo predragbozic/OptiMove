@@ -9,6 +9,7 @@ export function renderTemplatePreviewModalHtml(data) {
     groups,
     isMicrocycle,
     preview,
+    athletes,
     programTagEditor,
     renderNodeButton,
     renderPlanMoreMenu,
@@ -46,6 +47,7 @@ export function renderTemplatePreviewModalHtml(data) {
           </div>
         </div>
         ${selected && preview.settingsOpen ? renderTemplateMetadataForm(selected, templateOptions, programTagEditor) : ""}
+        ${selected && preview.assignOpen && currentUserRole !== "athlete" ? renderTemplateAssignmentPanel(selected, preview, athletes || []) : ""}
         ${selected && !preview.loading && !preview.error ? renderTemplateReviewPanel(selected, preview, currentUserRole) : ""}
         <div class="program-preview-body">
           ${preview.loading ? `<div class="empty-state">Loading program...</div>` : preview.error ? `<div class="empty-state">${escapeHtml(preview.error)}</div>` : isMicrocycle
@@ -54,6 +56,46 @@ export function renderTemplatePreviewModalHtml(data) {
         </div>
       </section>
     </div>
+  `;
+}
+
+function renderTemplateAssignmentPanel(template, preview, athletes) {
+  const selectedIds = new Set((preview.assignedAthleteIds || []).map(String));
+  const visibleAthletes = athletes || [];
+  return `
+    <section class="program-review-panel program-assignment-panel">
+      <div class="program-review-summary">
+        <div>
+          <span class="eyebrow">Assign program access</span>
+          <p class="muted">Grant this library program to selected athletes without creating an editable copy.</p>
+        </div>
+        <div class="program-review-actions">
+          <button class="plain-button compact-button" type="button" data-action="template-assign-submit" data-template-id="${escapeAttr(template.plan_id)}" ${preview.assigning || !selectedIds.size ? "disabled" : ""}>${preview.assigning ? "Assigning..." : "Grant access"}</button>
+        </div>
+      </div>
+      ${preview.assignMessage ? `<p class="builder-success">${escapeHtml(preview.assignMessage)}</p>` : ""}
+      ${preview.assignError ? `<p class="builder-error">${escapeHtml(preview.assignError)}</p>` : ""}
+      ${visibleAthletes.length ? `
+        <div class="program-assignment-list">
+          ${visibleAthletes.map((athlete) => renderTemplateAssignmentAthlete(athlete, selectedIds)).join("")}
+        </div>
+      ` : `<p class="muted">No athletes available for assignment.</p>`}
+    </section>
+  `;
+}
+
+function renderTemplateAssignmentAthlete(athlete, selectedIds) {
+  const athleteId = athlete.athlete_uuid || athlete.id || athlete.athlete_id || "";
+  const selected = selectedIds.has(String(athleteId));
+  const image = athlete.athlete_image_url || athlete.image_url || "";
+  const name = athlete.athlete || athlete.name || athlete.athlete_name || "Athlete";
+  const code = athlete.athlete_id || athlete.source_external_id || "";
+  return `
+    <button class="program-assignment-athlete ${selected ? "is-selected" : ""}" type="button" data-action="template-assign-toggle-athlete" data-athlete-id="${escapeAttr(athleteId)}">
+      ${image ? renderImage(image, "program-assignment-athlete-image") : `<span class="program-assignment-athlete-fallback">${escapeHtml(programInitials(name))}</span>`}
+      <span><strong>${escapeHtml(name)}</strong>${code ? `<small>ID ${escapeHtml(code)}</small>` : ""}</span>
+      <b>${selected ? "Selected" : "Select"}</b>
+    </button>
   `;
 }
 

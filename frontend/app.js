@@ -1352,6 +1352,7 @@ function renderTemplatePreviewModal() {
     groups,
     isMicrocycle,
     preview: state.templatePreview,
+    athletes: state.athletes,
     programTagEditor: state.programTagEditor,
     renderNodeButton,
     renderProgramDayCard,
