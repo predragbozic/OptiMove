@@ -636,8 +636,8 @@ async function markProgramUsed(user, planId, note) {
   const access = existing?.id
     ? await query(
       `update library.program_access
-       set status = $2,
-           used_at = case when $2 = 'used' then coalesce(used_at, now()) else used_at end,
+       set status = $2::varchar,
+           used_at = case when $2::text = 'used' then coalesce(used_at, now()) else used_at end,
            starts_at = coalesce(starts_at, now()),
            expires_at = $3,
            source = $4,
@@ -651,13 +651,13 @@ async function markProgramUsed(user, planId, note) {
       `insert into library.program_access (
          plan_id, user_id, access_type, status, used_at, starts_at, expires_at, source, license_snapshot
        )
-       values ($1, $2, $3, $7, case when $7 = 'used' then now() else null end, now(), $4, $5, $6::jsonb)
+       values ($1, $2, $3, $7::varchar, case when $7::text = 'used' then now() else null end, now(), $4, $5, $6::jsonb)
        returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
       [planId, user.id, accessType, expiresAt, snapshot.accessModel, JSON.stringify(snapshot), finalStatus],
     );
   await query(
     `insert into library.program_usage_events (program_access_id, user_id, event_type, note)
-     values ($1, $2, $3, nullif(trim($4), ''))`,
+     values ($1, $2, $3::varchar, nullif(trim($4::text), ''))`,
     [access.rows[0].id, user.id, eventType, note],
   );
   return access.rows[0];
