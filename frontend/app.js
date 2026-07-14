@@ -78,6 +78,7 @@ import {
   structureNodes as buildStructureNodes,
 } from "./program-structure.js";
 import {
+  applyTemplateAccessScope,
   applyTemplateClientFilters,
   renderProgramInfoModal,
   templateFilterOptionMatches,
@@ -1283,7 +1284,7 @@ function renderTemplateList(templates, selected, detail) {
 }
 function renderTemplateLibrary(templates) {
   const scope = templateScopeMeta();
-  const visibleTemplates = applyTemplateClientFilters(templates, state.templateFilters);
+  const visibleTemplates = visibleTemplateLibraryRows(templates);
   els.context.textContent = "Program library";
   els.title.textContent = scope.label;
   els.toolbar.innerHTML = "";
@@ -1301,12 +1302,17 @@ function renderTemplateLibrary(templates) {
 }
 
 function renderTemplateLibraryResults() {
-  const visibleTemplates = applyTemplateClientFilters(state.lastTemplates || [], state.templateFilters);
+  const visibleTemplates = visibleTemplateLibraryRows(state.lastTemplates || []);
   const count = document.querySelector("[data-template-count]");
   if (count) count.textContent = `${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}`;
   document.querySelector(".program-preview-overlay")?.remove();
   const target = document.querySelector("[data-template-results]");
   if (target) target.innerHTML = renderTemplateLibraryResultsOnlyHtml(visibleTemplates, state.selectedTemplateId);
+}
+
+function visibleTemplateLibraryRows(templates) {
+  const filtered = applyTemplateClientFilters(templates, state.templateFilters);
+  return applyTemplateAccessScope(filtered, state.templateScope, state.currentUser);
 }
 
 function canUseProgramAdminFilters() {

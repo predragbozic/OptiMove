@@ -61,6 +61,24 @@ export function templateAccessStatusLabel(template) {
   return "";
 }
 
+export function hasTemplateAccessStatus(template) {
+  return Boolean(templateAccessStatusLabel(template));
+}
+
+export function templateAccessActionLabel(template) {
+  const status = clean(template?.user_access_status).toLowerCase();
+  if (status === "requested") return "Request sent";
+  if (status === "accessed") return "Mark as used";
+  if (status === "used" || status === "completed") return "Access active";
+  return template?.requires_approval === true ? "Request access" : "Get access";
+}
+
+export function applyTemplateAccessScope(templates, scope, user) {
+  const accessScope = clean(user?.accessScope).toLowerCase();
+  if (accessScope !== "athlete" || scope !== "all") return templates;
+  return templates.filter(hasTemplateAccessStatus);
+}
+
 export function programInfoModel(program) {
   const tags = (program.tags || []).map((tag) => clean(tag.name)).filter(Boolean);
   return {
@@ -81,6 +99,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   const price = programPriceLabel(template);
   const accessStatus = templateAccessStatusLabel(template);
   const accessStatusCode = clean(template.user_access_status).toLowerCase();
+  const actionLabel = templateAccessActionLabel(template);
   return `
     <article class="program-library-card ${isSelected ? "is-selected" : ""}">
       <button class="program-library-info-button" type="button" data-action="template-info" data-template-id="${escapeAttr(template.plan_id)}" aria-label="Program information">i</button>
@@ -97,7 +116,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
           ${accessStatus ? `<span class="item-badge program-access-badge is-${escapeAttr(accessStatusCode)}">${escapeHtml(accessStatus)}</span>` : ""}
           <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
           ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
-          <span class="text-action">Preview</span>
+          <span class="text-action">${escapeHtml(actionLabel)}</span>
         </span>
       </button>
       ${creator ? `
