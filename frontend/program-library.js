@@ -65,7 +65,8 @@ export function hasTemplateAccessStatus(template) {
   return Boolean(templateAccessStatusLabel(template));
 }
 
-export function templateAccessActionLabel(template) {
+export function templateAccessActionLabel(template, user) {
+  if (clean(user?.role).toLowerCase() !== "athlete") return "Preview";
   const status = clean(template?.user_access_status).toLowerCase();
   if (status === "requested") return "Request sent";
   if (status === "accessed") return "Mark as used";
@@ -91,7 +92,7 @@ export function programInfoModel(program) {
   };
 }
 
-export function renderProgramLibraryCard(template, duplicateNames, selectedTemplateId) {
+export function renderProgramLibraryCard(template, duplicateNames, selectedTemplateId, currentUser) {
   const category = templateCategoryLabel(template);
   const creator = clean(template.creator_name);
   const creatorProfileId = clean(template.creator_profile_id);
@@ -99,7 +100,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   const price = programPriceLabel(template);
   const accessStatus = templateAccessStatusLabel(template);
   const accessStatusCode = clean(template.user_access_status).toLowerCase();
-  const actionLabel = templateAccessActionLabel(template);
+  const actionLabel = templateAccessActionLabel(template, currentUser);
   return `
     <article class="program-library-card ${isSelected ? "is-selected" : ""}">
       <button class="program-library-info-button" type="button" data-action="template-info" data-template-id="${escapeAttr(template.plan_id)}" aria-label="Program information">i</button>
@@ -129,7 +130,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   `;
 }
 
-export function renderTemplateLibraryResultsHtml(templates, selectedTemplateId) {
+export function renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser = null) {
   const duplicateNames = duplicateTemplateNames(templates);
   const shelves = groupTemplatesByCategory(templates);
   if (!templates.length) return `<div class="empty-state">No programs match these filters.</div>`;
@@ -140,7 +141,7 @@ export function renderTemplateLibraryResultsHtml(templates, selectedTemplateId) 
         <span>${shelf.templates.length} ${shelf.templates.length === 1 ? "program" : "programs"}</span>
       </div>
       <div class="program-library-row">
-        ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames, selectedTemplateId)).join("")}
+        ${shelf.templates.map((template) => renderProgramLibraryCard(template, duplicateNames, selectedTemplateId, currentUser)).join("")}
       </div>
     </section>
   `).join("");

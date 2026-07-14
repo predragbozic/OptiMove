@@ -69,7 +69,7 @@ export function renderTemplateLibraryPageHtml({
       </div>
       ${templateFiltersHtml}
       <div class="program-library-shelves" data-template-results>
-        ${renderTemplateLibraryResultsHtml(templates, selectedTemplateId)}
+        ${renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser)}
       </div>
     </section>
     ${templatePreviewHtml}
@@ -79,8 +79,8 @@ export function renderTemplateLibraryPageHtml({
   `;
 }
 
-export function renderTemplateLibraryResultsOnlyHtml(templates, selectedTemplateId) {
-  return renderTemplateLibraryResultsHtml(templates, selectedTemplateId);
+export function renderTemplateLibraryResultsOnlyHtml(templates, selectedTemplateId, currentUser = null) {
+  return renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser);
 }
 
 export function renderTemplateFiltersViewHtml({ activeScope, filters, lastTemplates, options, scopeLabel, scopes, showAdminFilters }) {

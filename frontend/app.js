@@ -1307,7 +1307,7 @@ function renderTemplateLibraryResults() {
   if (count) count.textContent = `${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}`;
   document.querySelector(".program-preview-overlay")?.remove();
   const target = document.querySelector("[data-template-results]");
-  if (target) target.innerHTML = renderTemplateLibraryResultsOnlyHtml(visibleTemplates, state.selectedTemplateId);
+  if (target) target.innerHTML = renderTemplateLibraryResultsOnlyHtml(visibleTemplates, state.selectedTemplateId, state.currentUser);
 }
 
 function visibleTemplateLibraryRows(templates) {
