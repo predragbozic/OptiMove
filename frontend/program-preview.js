@@ -93,7 +93,7 @@ function renderTemplateReviewPanel(template, review, currentUserRole) {
         </div>
         <div class="program-review-actions">
           <button class="plain-button compact-button" type="button" data-action="template-use" data-template-id="${escapeAttr(template.plan_id)}" ${review.submittingUse || isRequested || isUsed ? "disabled" : ""}>${primaryLabel}</button>
-          <button class="plain-button compact-button" type="button" data-action="template-review-toggle" ${isRequested || !isUsed ? "disabled" : ""}>${review.reviewOpen ? "Hide review" : "Leave review"}</button>
+          ${isUsed ? `<button class="plain-button compact-button" type="button" data-action="template-review-toggle">${review.reviewOpen ? "Hide review" : "Leave review"}</button>` : `<button class="plain-button compact-button" type="button" disabled>Review after use</button>`}
           <button class="plain-button compact-button" type="button" data-action="template-reviews-toggle">${review.reviewsOpen ? "Hide reviews" : `Reviews (${reviews.length})`}</button>
         </div>
       </div>

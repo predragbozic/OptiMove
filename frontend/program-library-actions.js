@@ -22,10 +22,14 @@ async function openTemplatePreviewWithRenderer(selected, renderAfter) {
   state.templatePreview = emptyTemplatePreview({ open: true, loading: true });
   renderAfter();
   try {
-    const [detail, reviewsData] = await Promise.all([
-      api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`),
-      api(`/api/templates/${encodeURIComponent(selected.plan_id)}/reviews`),
-    ]);
+    const detail = await api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`);
+    let reviewsData = { reviews: [] };
+    let reviewError = "";
+    try {
+      reviewsData = await api(`/api/templates/${encodeURIComponent(selected.plan_id)}/reviews`);
+    } catch (reviewsLoadError) {
+      reviewError = reviewsLoadError.message || "Could not load reviews.";
+    }
     state.templatePreview = emptyTemplatePreview({
       ...state.templatePreview,
       open: true,
@@ -33,6 +37,7 @@ async function openTemplatePreviewWithRenderer(selected, renderAfter) {
       detail,
       reviews: reviewsData.reviews || [],
       error: "",
+      reviewError,
     });
   } catch (error) {
     state.templatePreview = emptyTemplatePreview({ ...state.templatePreview, open: true, loading: false, detail: null, error: error.message || "Could not load program." });

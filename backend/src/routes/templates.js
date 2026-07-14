@@ -615,7 +615,7 @@ async function markProgramUsed(user, planId, note) {
   const accessType = accessTypeForLicense(license);
   const expiresAt = accessExpiresAt(license);
   const existingAccess = await query(
-    `select status
+    `select id, status
      from library.program_access
      where plan_id = $1
        and user_id = $2
@@ -627,28 +627,34 @@ async function markProgramUsed(user, planId, note) {
   const hasApprovedAccess = ["accessed", "used", "completed"].includes(existingAccess.rows[0]?.status);
   const nextStatus = approvalRequired && !hasApprovedAccess ? "requested" : "used";
   const eventType = nextStatus === "requested" ? "requested" : "used";
-  const access = await query(
-    `insert into library.program_access (
-       plan_id, user_id, access_type, status, used_at, starts_at, expires_at, source, license_snapshot
-     )
-     values ($1, $2, $3, $7, case when $7 = 'used' then now() else null end, now(), $4, $5, $6::jsonb)
-     on conflict (plan_id, user_id, access_type)
-     do update set status = case
-                     when library.program_access.status = 'completed' then 'completed'
-                     when library.program_access.status in ('accessed', 'used') and excluded.status = 'requested' then library.program_access.status
-                     else excluded.status
-                   end,
-                   used_at = case
-                     when excluded.status = 'used' then coalesce(library.program_access.used_at, now())
-                     else library.program_access.used_at
-                   end,
-                   expires_at = excluded.expires_at,
-                   source = excluded.source,
-                   license_snapshot = excluded.license_snapshot,
-                   updated_at = now()
-     returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
-    [planId, user.id, accessType, expiresAt, snapshot.accessModel, JSON.stringify(snapshot), nextStatus],
-  );
+  const existing = existingAccess.rows[0];
+  const finalStatus = existing?.status === "completed"
+    ? "completed"
+    : ["accessed", "used"].includes(existing?.status) && nextStatus === "requested"
+      ? existing.status
+      : nextStatus;
+  const access = existing?.id
+    ? await query(
+      `update library.program_access
+       set status = $2,
+           used_at = case when $2 = 'used' then coalesce(used_at, now()) else used_at end,
+           starts_at = coalesce(starts_at, now()),
+           expires_at = $3,
+           source = $4,
+           license_snapshot = $5::jsonb,
+           updated_at = now()
+       where id = $1
+       returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
+      [existing.id, finalStatus, expiresAt, snapshot.accessModel, JSON.stringify(snapshot)],
+    )
+    : await query(
+      `insert into library.program_access (
+         plan_id, user_id, access_type, status, used_at, starts_at, expires_at, source, license_snapshot
+       )
+       values ($1, $2, $3, $7, case when $7 = 'used' then now() else null end, now(), $4, $5, $6::jsonb)
+       returning id, plan_id, user_id, access_type, status, used_at, expires_at, source, license_snapshot`,
+      [planId, user.id, accessType, expiresAt, snapshot.accessModel, JSON.stringify(snapshot), finalStatus],
+    );
   await query(
     `insert into library.program_usage_events (program_access_id, user_id, event_type, note)
      values ($1, $2, $3, nullif(trim($4), ''))`,
