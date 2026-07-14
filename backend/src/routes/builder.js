@@ -89,6 +89,9 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
   try {
     const source = await getCopySource(req.user, req.params.planId);
     if (!source) return res.status(404).json({ error: "Program or template not found." });
+    if (source.is_template && source.can_copy === false && !canAccessAllAthletes(req.user) && String(source.created_by_user_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: "This template cannot be copied." });
+    }
     const targetAthleteExternalId = text(req.body?.athleteId);
     const targetAthlete = targetAthleteExternalId ? await findAthlete(targetAthleteExternalId) : null;
     if (targetAthleteExternalId && !targetAthlete) return res.status(404).json({ error: "Athlete not found." });
@@ -778,7 +781,7 @@ async function getEditablePlan(user, planId) {
 async function getCopySource(user, planId) {
   if (!(await canAccessPlan(query, user, planId))) return null;
   const result = await query(
-    `select id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days
+    `select id, created_by_user_id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days, can_copy, can_edit_copy
      from plans.plans
      where id = $1 and plan_type in ('program', 'weekly') and is_active = true`,
     [planId],

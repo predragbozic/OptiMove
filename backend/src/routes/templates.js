@@ -85,6 +85,7 @@ router.get("/", async (req, res, next) => {
           when 'used' then 3
           when 'accessed' then 2
           when 'requested' then 1
+          when 'rejected' then 1
           else 0
         end desc,
         pa.updated_at desc
@@ -121,7 +122,7 @@ router.get("/", async (req, res, next) => {
           )
           or (
             $8::boolean
-            and user_access.status in ('requested', 'accessed', 'used', 'completed')
+            and user_access.status in ('requested', 'rejected', 'accessed', 'used', 'completed')
           )
         )
         and ($3 = 'all' or coalesce(p.library_scope, 'my') = $3)
@@ -594,6 +595,22 @@ async function canUseTemplate(user, planId) {
     [planId, user.id, canAccessAllAthletes(user)],
   );
   if (result.rows[0]) return true;
+
+  const accessResult = await query(
+    `select 1
+     from library.program_access pa
+     join plans.plans p on p.id = pa.plan_id
+     where pa.plan_id = $1
+       and pa.user_id = $2
+       and pa.status in ('requested', 'rejected', 'accessed', 'used', 'completed')
+       and (pa.expires_at is null or pa.expires_at > now())
+       and p.plan_type = 'program'
+       and p.is_template = true
+       and coalesce(p.is_active, true)
+     limit 1`,
+    [planId, user.id],
+  );
+  if (accessResult.rows[0]) return true;
 
   const athleteAccess = await loadAthleteLibraryAccess(user);
   if (!athleteAccess) return false;

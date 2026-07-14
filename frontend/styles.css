@@ -3730,6 +3730,11 @@ input:focus {
   color: #047857;
 }
 
+.program-access-badge.is-rejected {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
 .program-access-badge.is-used,
 .program-access-badge.is-completed {
   background: #eef8f6;

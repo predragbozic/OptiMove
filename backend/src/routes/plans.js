@@ -31,7 +31,9 @@ router.get("/:planId/program", async (req, res, next) => {
   try {
     const summary = await query("select * from plans.v_plan_summary where plan_id = $1", [req.params.planId]);
     if (!summary.rows.length) return res.status(404).json({ error: "Plan not found" });
-    if (!(await canAccessPlan(query, req.user, req.params.planId))) return res.status(403).json({ error: "Forbidden" });
+    const canReadPlan = await canAccessPlan(query, req.user, req.params.planId);
+    const hasAccessRecord = await hasTemplateAccessRecord(req.user, summary.rows[0], req.params.planId);
+    if (!canReadPlan && !hasAccessRecord) return res.status(403).json({ error: "Forbidden" });
     if (await needsTemplateApproval(req.user, summary.rows[0], req.params.planId)) {
       return res.status(403).json({ error: "Program access requires coach approval." });
     }
@@ -86,6 +88,22 @@ async function needsTemplateApproval(user, summary, planId) {
     [user.id, summary?.requires_approval === true],
   );
   return approval.rows[0]?.approval_required === true;
+}
+
+async function hasTemplateAccessRecord(user, summary, planId) {
+  if (!isAthlete(user)) return false;
+  if (summary?.plan_type !== "program" || summary?.is_template !== true) return false;
+  const access = await query(
+    `select 1
+     from library.program_access
+     where plan_id = $1
+       and user_id = $2
+       and status in ('requested', 'rejected', 'accessed', 'used', 'completed')
+       and (expires_at is null or expires_at > now())
+     limit 1`,
+    [planId, user.id],
+  );
+  return access.rowCount > 0;
 }
 
 export default router;

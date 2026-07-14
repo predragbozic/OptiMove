@@ -104,6 +104,7 @@ function renderTemplateReviewPanel(template, review, currentUserRole) {
   const reviews = review.reviews || [];
   const accessStatus = clean(template.user_access_status).toLowerCase();
   const isRequested = review.requestSent || accessStatus === "requested";
+  const isRejected = accessStatus === "rejected";
   const isUsed = review.usedMarked || accessStatus === "used" || accessStatus === "completed";
   const isApproved = accessStatus === "accessed";
   const hasActiveAccess = isApproved || isUsed;
@@ -113,6 +114,8 @@ function renderTemplateReviewPanel(template, review, currentUserRole) {
     ? "Saving..."
     : isRequested
       ? "Request sent"
+      : isRejected
+        ? "Request again"
       : isApproved
         ? "Mark as used"
         : isUsed
@@ -122,6 +125,8 @@ function renderTemplateReviewPanel(template, review, currentUserRole) {
           : "Get access";
   const helperText = isRequested
     ? "Your request is waiting for coach approval."
+    : isRejected
+      ? "Your coach did not approve this program request. You can send a new request if needed."
     : isApproved
       ? "Access is approved. Mark it as used when you start working with this program."
       : requiresApproval

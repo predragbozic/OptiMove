@@ -55,6 +55,7 @@ export function ratingLabel(entity) {
 export function templateAccessStatusLabel(template) {
   const status = clean(template?.user_access_status).toLowerCase();
   if (status === "requested") return "Requested";
+  if (status === "rejected") return "Rejected";
   if (status === "accessed") return "Approved";
   if (status === "used") return "Used";
   if (status === "completed") return "Completed";
@@ -66,9 +67,11 @@ export function hasTemplateAccessStatus(template) {
 }
 
 export function templateAccessActionLabel(template, user) {
-  if (clean(user?.role).toLowerCase() !== "athlete") return "Preview";
+  const isAthleteUser = clean(user?.role).toLowerCase() === "athlete" || clean(user?.accessScope).toLowerCase() === "athlete";
+  if (!isAthleteUser) return "Preview";
   const status = clean(template?.user_access_status).toLowerCase();
   if (status === "requested") return "Request sent";
+  if (status === "rejected") return "Request again";
   if (status === "accessed") return "Mark as used";
   if (status === "used" || status === "completed") return "Access active";
   return template?.requires_approval === true ? "Request access" : "Get access";

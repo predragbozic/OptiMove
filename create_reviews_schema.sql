@@ -50,7 +50,7 @@ alter table library.program_access
 
 alter table library.program_access
   add constraint program_access_status_check
-  check (status in ('requested', 'accessed', 'used', 'completed', 'revoked'));
+  check (status in ('requested', 'accessed', 'used', 'completed', 'rejected', 'revoked'));
 
 alter table library.program_access
   add column if not exists starts_at timestamptz not null default now(),

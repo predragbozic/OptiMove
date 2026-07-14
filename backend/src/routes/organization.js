@@ -345,7 +345,7 @@ router.post("/program-access/:accessId/reject", async (req, res, next) => {
     if (!(await canManageAthlete(req.user, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
     const result = await query(
       `update library.program_access
-       set status = 'revoked',
+       set status = 'rejected',
            updated_at = now()
        where id = $1
        returning id, status, updated_at`,
