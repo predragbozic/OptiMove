@@ -25,10 +25,19 @@ async function openTemplatePreviewWithRenderer(selected, renderAfter) {
     const detail = await api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`);
     let reviewsData = { reviews: [] };
     let reviewError = "";
+    let accessRequestsData = { requests: [] };
+    let accessRequestError = "";
     try {
       reviewsData = await api(`/api/templates/${encodeURIComponent(selected.plan_id)}/reviews`);
     } catch (reviewsLoadError) {
       reviewError = reviewsLoadError.message || "Could not load reviews.";
+    }
+    if (String(state.currentUser?.accessScope || "").toLowerCase() !== "athlete") {
+      try {
+        accessRequestsData = await api(`/api/templates/${encodeURIComponent(selected.plan_id)}/access-requests`);
+      } catch (requestsLoadError) {
+        accessRequestError = requestsLoadError.message || "Could not load access requests.";
+      }
     }
     state.templatePreview = emptyTemplatePreview({
       ...state.templatePreview,
@@ -36,6 +45,8 @@ async function openTemplatePreviewWithRenderer(selected, renderAfter) {
       loading: false,
       detail,
       reviews: reviewsData.reviews || [],
+      accessRequests: accessRequestsData.requests || [],
+      accessRequestError,
       error: "",
       reviewError,
     });
@@ -97,6 +108,15 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
     void markTemplateUsed(action.dataset.templateId, { renderTemplateLibrary });
     return true;
   }
+  if (type === "template-access-approve" || type === "template-access-reject") {
+    void updateTemplateAccessRequest(action.dataset.accessId, type === "template-access-approve" ? "approve" : "reject", {
+      renderAfter: () => {
+        if (state.activeTab === "coaches") renderCoachContext();
+        else renderTemplateLibrary(state.lastTemplates);
+      },
+    });
+    return true;
+  }
   if (type === "template-assign") {
     const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(action.dataset.templateId));
     if (!selected) return true;
@@ -142,6 +162,34 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
     return true;
   }
   return false;
+}
+
+async function updateTemplateAccessRequest(accessId, actionName, { renderAfter }) {
+  if (!accessId || state.templatePreview.submittingAccessId) return;
+  state.templatePreview = {
+    ...state.templatePreview,
+    submittingAccessId: accessId,
+    accessRequestError: "",
+    reviewMessage: "",
+  };
+  renderAfter();
+  try {
+    await api(`/api/organization/program-access/${encodeURIComponent(accessId)}/${actionName}`, { method: "POST" });
+    state.templatePreview = {
+      ...state.templatePreview,
+      submittingAccessId: "",
+      accessRequests: (state.templatePreview.accessRequests || []).filter((request) => String(request.id) !== String(accessId)),
+      reviewMessage: actionName === "approve" ? "Program access approved." : "Program request rejected.",
+      accessRequestError: "",
+    };
+  } catch (error) {
+    state.templatePreview = {
+      ...state.templatePreview,
+      submittingAccessId: "",
+      accessRequestError: error.message || "Could not update access request.",
+    };
+  }
+  renderAfter();
 }
 
 export async function submitTemplateMetadataForm(form, { loadTemplates }) {

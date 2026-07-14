@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { query } from "../db.js";
-import { canAccessAllAthletes } from "../access.js";
+import { canAccessAllAthletes, canAccessAthlete, isAthlete } from "../access.js";
 
 const router = Router();
 
@@ -360,6 +360,51 @@ router.get("/:planId/reviews", async (req, res, next) => {
       [req.params.planId],
     );
     res.json({ reviews: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/:planId/access-requests", async (req, res, next) => {
+  try {
+    if (isAthlete(req.user)) return res.status(403).json({ error: "Coach access required." });
+    const result = await query(
+      `select distinct
+         pa.id,
+         pa.plan_id,
+         pa.user_id,
+         pa.access_type,
+         pa.status,
+         pa.created_at,
+         pa.updated_at,
+         a.id as athlete_id,
+         a.athlete_id as athlete_code,
+         coalesce(a.display_name, a.full_name, a.athlete_id) as athlete_name,
+         a.image_url as athlete_image_url,
+         u.email as athlete_email
+       from library.program_access pa
+       join public.users u on u.id = pa.user_id
+       join public.athletes a on a.user_id = pa.user_id
+          or exists (
+            select 1
+            from public.user_athletes ua
+            where ua.user_id = pa.user_id
+              and ua.athlete_id = a.id
+              and ua.relationship_type = 'athlete'
+              and ua.is_active = true
+          )
+       where pa.plan_id = $1
+         and pa.status = 'requested'
+         and coalesce(a.is_active, true)
+       order by pa.created_at desc
+       limit 100`,
+      [req.params.planId],
+    );
+    const requests = [];
+    for (const row of result.rows) {
+      if (await canAccessAthlete(query, req.user, row.athlete_id)) requests.push(row);
+    }
+    res.json({ requests });
   } catch (error) {
     next(error);
   }

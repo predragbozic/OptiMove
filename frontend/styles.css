@@ -2270,6 +2270,41 @@ input:focus {
   gap: 8px;
 }
 
+.program-access-request-list {
+  display: grid;
+  gap: 8px;
+}
+
+.program-access-request-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(31, 111, 104, 0.18);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.program-access-request-row strong,
+.program-access-request-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-access-request-row small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.program-access-request-row .danger-button {
+  color: #b42318;
+}
+
 .program-review-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2427,6 +2462,10 @@ input:focus {
   .program-review-actions .plain-button,
   .program-review-form .plain-button {
     width: 100%;
+  }
+
+  .program-access-request-row {
+    grid-template-columns: 1fr;
   }
 
   .program-tags-head {

@@ -58,6 +58,7 @@ export function renderTemplatePreviewModalHtml(data) {
 }
 
 function renderTemplateReviewPanel(template, review, currentUserRole) {
+  if (currentUserRole !== "athlete") return renderTemplateAccessRequestPanel(review);
   const reviews = review.reviews || [];
   const accessStatus = clean(template.user_access_status).toLowerCase();
   const isRequested = review.requestSent || accessStatus === "requested";
@@ -110,6 +111,49 @@ function renderTemplateReviewPanel(template, review, currentUserRole) {
       ` : ""}
       ${review.reviewsOpen ? renderTemplateReviewList(reviews) : ""}
     </section>
+  `;
+}
+
+function renderTemplateAccessRequestPanel(review) {
+  const requests = review.accessRequests || [];
+  return `
+    <section class="program-review-panel program-access-request-panel">
+      <div class="program-review-summary">
+        <div>
+          <span class="eyebrow">Program access</span>
+          <p class="muted">${requests.length ? "Athletes waiting for approval for this program." : "No pending athlete requests for this program."}</p>
+        </div>
+        <div class="program-review-actions">
+          <span class="item-badge">${escapeHtml(`${requests.length} pending`)}</span>
+          <button class="plain-button compact-button" type="button" data-action="template-reviews-toggle">${review.reviewsOpen ? "Hide reviews" : `Reviews (${(review.reviews || []).length})`}</button>
+        </div>
+      </div>
+      ${review.reviewMessage ? `<p class="builder-success">${escapeHtml(review.reviewMessage)}</p>` : ""}
+      ${review.accessRequestError ? `<p class="builder-error">${escapeHtml(review.accessRequestError)}</p>` : ""}
+      ${requests.length ? `
+        <div class="program-access-request-list">
+          ${requests.map((request) => renderTemplateAccessRequestRow(request, review.submittingAccessId)).join("")}
+        </div>
+      ` : ""}
+      ${review.reviewsOpen ? renderTemplateReviewList(review.reviews || []) : ""}
+    </section>
+  `;
+}
+
+function renderTemplateAccessRequestRow(request, submittingAccessId) {
+  const date = request.created_at ? new Date(request.created_at).toLocaleDateString("en-GB") : "";
+  const isSubmitting = String(submittingAccessId || "") === String(request.id);
+  return `
+    <article class="program-access-request-row">
+      <div>
+        <strong>${escapeHtml(request.athlete_name || "Athlete")}</strong>
+        <small>${escapeHtml([request.athlete_code ? `ID ${request.athlete_code}` : "", date].filter(Boolean).join(" - "))}</small>
+      </div>
+      <div class="program-review-actions">
+        <button class="plain-button compact-button" type="button" data-action="template-access-approve" data-access-id="${escapeAttr(request.id)}" ${isSubmitting ? "disabled" : ""}>${isSubmitting ? "Saving..." : "Approve"}</button>
+        <button class="plain-button compact-button danger-button" type="button" data-action="template-access-reject" data-access-id="${escapeAttr(request.id)}" ${isSubmitting ? "disabled" : ""}>Reject</button>
+      </div>
+    </article>
   `;
 }
 
