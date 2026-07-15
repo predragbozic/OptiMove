@@ -1,11 +1,13 @@
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderCoachDetailModalHtml } from "./coach-profiles.js";
+import { templateScopeMeta, visibleTemplateScopes } from "./navigation.js";
 import { renderProgramAccessRequests } from "./organization-view.js";
 import { renderPlanMoreMenu } from "./plan-actions-view.js";
 import {
   duplicateTemplateNames,
   programPriceLabel,
   renderProgramInfoModal,
+  renderProgramScopeTabsHtml,
   renderTemplateFiltersHtml,
   renderTemplateLibraryResultsHtml,
   templateCategoryLabel,
@@ -65,6 +67,7 @@ export function renderTemplateLibraryPageHtml({
 }) {
   const accessRequests = state.organization?.data?.accessRequests || [];
   const isAthleteUser = clean(currentUser?.role).toLowerCase() === "athlete" || clean(currentUser?.accessScope).toLowerCase() === "athlete";
+  const requestCount = accessRequests.filter((row) => row.status === "requested").length;
   const isRequestsSection = !isAthleteUser && state.programLibrarySection === "requests";
   if (isRequestsSection) {
     return `
@@ -75,6 +78,7 @@ export function renderTemplateLibraryPageHtml({
             <h3>Requests</h3>
           </div>
         </div>
+        ${renderProgramScopeTabsHtml({ scopes: visibleTemplateScopes(), activeScope: state.templateScope, scopeLabel: (scope) => templateScopeMeta(scope, currentUser).label, activeSection: "requests", requestCount, showRequests: true })}
         <div class="program-library-access-inbox">${renderProgramAccessRequests(accessRequests, { compact: true })}</div>
       </section>
       ${templatePreviewHtml}
@@ -104,7 +108,7 @@ export function renderTemplateLibraryResultsOnlyHtml(templates, selectedTemplate
   return renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser);
 }
 
-export function renderTemplateFiltersViewHtml({ activeScope, filters, lastTemplates, options, scopeLabel, scopes, showAdminFilters }) {
+export function renderTemplateFiltersViewHtml({ activeScope, filters, lastTemplates, options, scopeLabel, scopes, showAdminFilters, showRequests = false }) {
   const tagPrefix = clean(filters.tag).toLowerCase();
   const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => templateFilterOptionMatches(tag, tagPrefix)) : (options.tags || []);
   const categories = templateCategoryOptions(options, lastTemplates);
@@ -120,6 +124,9 @@ export function renderTemplateFiltersViewHtml({ activeScope, filters, lastTempla
     filters,
     options,
     showAdminFilters,
+    activeSection: state.programLibrarySection || "programs",
+    requestCount: (state.organization?.data?.accessRequests || []).filter((row) => row.status === "requested").length,
+    showRequests,
     scopes,
     activeScope,
     scopeLabel,

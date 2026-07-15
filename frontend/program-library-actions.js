@@ -93,7 +93,15 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
     return true;
   }
   if (type === "template-scope") {
+    state.programLibrarySection = "programs";
     state.templateScope = action.dataset.scope || "my";
+    state.selectedTemplateId = null;
+    state.templatePreview = emptyTemplatePreview();
+    void loadTemplates();
+    return true;
+  }
+  if (type === "program-library-section") {
+    state.programLibrarySection = action.dataset.programLibrarySection || "programs";
     state.selectedTemplateId = null;
     state.templatePreview = emptyTemplatePreview();
     void loadTemplates();

@@ -224,6 +224,9 @@ export function renderTemplateFiltersHtml(data) {
     scopes,
     activeScope,
     scopeLabel,
+    activeSection = "programs",
+    requestCount = 0,
+    showRequests = false,
     visibleTags,
     visibleCategories,
     creatorOptions,
@@ -232,9 +235,7 @@ export function renderTemplateFiltersHtml(data) {
     visibleClubs,
   } = data;
   return `
-    <div class="program-scope-tabs" role="group" aria-label="Program library scope">
-      ${scopes.map((scope) => renderTemplateScopeButton(scope, scopeLabel(scope), activeScope)).join("")}
-    </div>
+    ${renderProgramScopeTabsHtml({ scopes, activeScope, scopeLabel, activeSection, requestCount, showRequests })}
     <section class="program-filter-panel" aria-label="Program filters">
       <label class="search-field program-filter-search">
         <span>Search programs</span>
@@ -302,8 +303,22 @@ export function renderTemplateFiltersHtml(data) {
   `;
 }
 
-function renderTemplateScopeButton(value, label, activeScope) {
-  return `<button class="program-scope-button ${activeScope === value ? "is-active" : ""}" type="button" data-action="template-scope" data-scope="${escapeAttr(value)}">${escapeHtml(label)}</button>`;
+export function renderProgramScopeTabsHtml({ scopes = [], activeScope = "my", scopeLabel = (value) => value, activeSection = "programs", requestCount = 0, showRequests = false } = {}) {
+  return `
+    <div class="program-scope-tabs" role="group" aria-label="Program library scope">
+      ${showRequests ? renderProgramRequestsScopeButton(activeSection, requestCount) : ""}
+      ${scopes.map((scope) => renderTemplateScopeButton(scope, scopeLabel(scope), activeScope, activeSection)).join("")}
+    </div>
+  `;
+}
+
+function renderProgramRequestsScopeButton(activeSection, requestCount) {
+  const count = Number(requestCount || 0);
+  return `<button class="program-scope-button ${activeSection === "requests" ? "is-active" : ""}" type="button" data-action="program-library-section" data-program-library-section="requests">Requests${count ? ` (${count})` : ""}</button>`;
+}
+
+function renderTemplateScopeButton(value, label, activeScope, activeSection = "programs") {
+  return `<button class="program-scope-button ${activeSection === "programs" && activeScope === value ? "is-active" : ""}" type="button" data-action="template-scope" data-scope="${escapeAttr(value)}">${escapeHtml(label)}</button>`;
 }
 
 export function renderProgramInfoModal(programInfo) {

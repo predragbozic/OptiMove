@@ -1365,6 +1365,7 @@ function renderTemplateFilters() {
     scopes: visibleTemplateScopes(),
     scopeLabel: (scope) => templateScopeMeta(scope).label,
     showAdminFilters: canUseProgramAdminFilters(),
+    showRequests: !isAthleteMode(),
   });
 }
 

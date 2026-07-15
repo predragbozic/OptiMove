@@ -128,11 +128,13 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   }
   if (type === "organization-request-filter") {
     state.organization.requestStatus = action.dataset.requestStatus || "all";
+    state.organization.requestError = "";
     void renderAccessState({ refresh: false });
     return true;
   }
   if (type === "organization-request-athlete-filter") {
     state.organization.requestAthleteId = action.dataset.requestAthleteId || "all";
+    state.organization.requestError = "";
     void renderAccessState({ refresh: false });
     return true;
   }
@@ -173,9 +175,13 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     if (!accessId) return true;
     const actionName = type === "organization-access-approve" ? "approve" : "reject";
     action.disabled = true;
+    state.organization.requestError = "";
     try {
       await api(`/api/organization/program-access/${encodeURIComponent(accessId)}/${actionName}`, { method: "POST" });
       await refreshOrganizationData?.();
+      await renderAccessState({ refresh: false });
+    } catch (error) {
+      state.organization.requestError = error?.message || "Unable to update this request.";
       await renderAccessState({ refresh: false });
     } finally {
       action.disabled = false;
@@ -187,12 +193,17 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     const accessIds = (action.dataset.accessIds || "").split(",").map((id) => id.trim()).filter(Boolean);
     if (!["approve", "reject"].includes(actionName) || !accessIds.length) return true;
     action.disabled = true;
+    state.organization.requestError = "";
     try {
-      await api("/api/organization/program-access/bulk", {
+      const result = await api("/api/organization/program-access/bulk", {
         method: "POST",
         body: JSON.stringify({ action: actionName, accessIds }),
       });
+      if (!result?.updated?.length) state.organization.requestError = "No shown requests were changed.";
       await refreshOrganizationData?.();
+      await renderAccessState({ refresh: false });
+    } catch (error) {
+      state.organization.requestError = error?.message || "Unable to update shown requests.";
       await renderAccessState({ refresh: false });
     } finally {
       action.disabled = false;

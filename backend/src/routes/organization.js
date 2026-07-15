@@ -365,6 +365,7 @@ router.post("/program-access/bulk", async (req, res, next) => {
       );
       if (result.rows[0]) updated.push(result.rows[0]);
     }
+    if (!updated.length) return res.status(409).json({ error: "No shown pending requests could be updated." });
     res.json({ updated });
   } catch (error) {
     next(error);
