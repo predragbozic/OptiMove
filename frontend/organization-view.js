@@ -6,6 +6,7 @@ import { escapeAttr, escapeHtml } from "./utils.js";
 
 export function renderOrganizationPanelHtml({ currentUser, data, error, role, scope }) {
   const pendingRequests = (data.accessRequests || []).filter((request) => request.status === "requested").length;
+  if (state.organization.section === "requests") state.organization.section = "overview";
   return `
     <section class="content-section organization-view">
       <section class="panel organization-hero">
@@ -19,7 +20,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
           <strong>${escapeHtml(scope)}</strong>
         </div>
         ${pendingRequests ? `
-          <button class="organization-request-summary" type="button" data-action="organization-section" data-section="requests">
+          <button class="organization-request-summary" type="button" data-action="program-library-requests">
             <span>${pendingRequests}</span>
             <strong>${pendingRequests === 1 ? "program request" : "program requests"}</strong>
             <small>Review now</small>
@@ -106,7 +107,6 @@ export function renderOrganizationBrowser(data) {
   const teams = data.teams || [];
   const athletes = data.athletes || [];
   const users = data.users || [];
-  const accessRequests = data.accessRequests || [];
   const section = state.organization.section || "overview";
   const selectedClub = clubs.find((club) => String(club.id) === String(state.organization.selectedClubId));
   const selectedTeam = teams.find((team) => String(team.id) === String(state.organization.selectedTeamId));
@@ -129,8 +129,6 @@ export function renderOrganizationBrowser(data) {
         ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
       </div>
       <section class="organization-lists organization-lists-browser">
-        ${section === "overview" || section === "requests" || section === "athletes" ? renderProgramAccessRequests(accessRequests) : ""}
-        ${section === "requests" ? renderProgramAccessHelp() : ""}
         ${section === "overview" || section === "users" ? renderOrganizationList("Users", users, "user") : ""}
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
@@ -159,7 +157,6 @@ export function renderProgramAccessRequests(rows, { compact = false } = {}) {
   const visibleRows = athleteRows.filter((row) => programAccessFilterMatches(row, statusFilter));
   const pendingVisibleRows = visibleRows.filter((row) => row.status === "requested");
   const pendingRows = rows.filter((row) => row.status === "requested");
-  const athletes = programAccessAthleteOptions(rows);
   return `
     <section class="panel organization-list-card organization-access-requests ${compact ? "is-compact" : ""}">
       <div class="organization-list-head">
@@ -173,7 +170,7 @@ export function renderProgramAccessRequests(rows, { compact = false } = {}) {
         used: athleteRows.filter((row) => row.status === "used" || row.status === "completed").length,
         rejected: athleteRows.filter((row) => row.status === "rejected").length,
       })}
-      ${renderProgramAccessAthleteFilters(athleteFilter, athletes)}
+      ${renderProgramAccessActiveAthleteFilter(rows, athleteFilter)}
       ${pendingVisibleRows.length ? renderProgramAccessBulkActions(pendingVisibleRows) : ""}
       <div class="organization-list">
         ${visibleRows.length ? visibleRows.map(renderProgramAccessRequestRow).join("") : `<p class="muted">${rows.length ? "No requests match this filter." : "No program access activity yet."}</p>`}
@@ -182,33 +179,14 @@ export function renderProgramAccessRequests(rows, { compact = false } = {}) {
   `;
 }
 
-function programAccessAthleteOptions(rows) {
-  const options = new Map();
-  rows.forEach((row) => {
-    const id = String(row.athlete_id || row.user_id || "");
-    if (!id || options.has(id)) return;
-    options.set(id, {
-      id,
-      label: row.athlete_name || "Athlete",
-      count: rows.filter((entry) => String(entry.athlete_id || entry.user_id || "") === id).length,
-    });
-  });
-  return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
-}
-
-function renderProgramAccessAthleteFilters(activeAthleteId, athletes) {
-  if (!athletes.length) return "";
+function renderProgramAccessActiveAthleteFilter(rows, activeAthleteId) {
+  if (!activeAthleteId || activeAthleteId === "all") return "";
+  const activeRow = rows.find((row) => String(row.athlete_id || row.user_id || "") === String(activeAthleteId));
+  const label = activeRow?.athlete_name || "Selected athlete";
   return `
-    <div class="organization-request-filters organization-request-athlete-filters" role="group" aria-label="Athlete request filters">
-      <button class="${activeAthleteId === "all" ? "is-active" : ""}" type="button" data-action="organization-request-athlete-filter" data-request-athlete-id="all">
-        <span>All athletes</span>
-      </button>
-      ${athletes.map((athlete) => `
-        <button class="${athlete.id === activeAthleteId ? "is-active" : ""}" type="button" data-action="organization-request-athlete-filter" data-request-athlete-id="${escapeAttr(athlete.id)}">
-          <span>${escapeHtml(athlete.label)}</span>
-          <strong>${athlete.count}</strong>
-        </button>
-      `).join("")}
+    <div class="organization-request-active-filter">
+      <span>Showing ${escapeHtml(label)}</span>
+      <button class="text-action" type="button" data-action="organization-request-athlete-filter" data-request-athlete-id="all">Clear</button>
     </div>
   `;
 }
@@ -277,13 +255,13 @@ function renderProgramAccessRequestRow(row) {
   const isPending = status === "requested";
   return `
     <article class="organization-row organization-request-row is-${escapeAttr(status)}">
-      <span class="organization-table-athlete organization-request-athlete">
+      <button class="organization-table-athlete organization-request-athlete organization-request-athlete-button" type="button" data-action="organization-request-athlete-filter" data-request-athlete-id="${escapeAttr(row.athlete_id || row.user_id || "")}">
         ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">AT</span>`}
         <span>
           <strong>${escapeHtml(row.athlete_name || "Athlete")}</strong>
           <small>${escapeHtml([row.athlete_code ? `ID ${row.athlete_code}` : "", date].filter(Boolean).join(" - "))}</small>
         </span>
-      </span>
+      </button>
       <span class="organization-request-program">
         <small>${escapeHtml(programAccessStatusLabel(status))}${updated && updated !== date ? ` - ${escapeHtml(updated)}` : ""}</small>
         <strong>${escapeHtml(row.program_name || "Program")}</strong>

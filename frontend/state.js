@@ -113,6 +113,7 @@ export const createInitialState = () => ({
   athletesExpanded: false,
   railExpanded: false,
   activeTab: "weekly",
+  programLibrarySection: "programs",
   templateScope: "my",
   selectedProgramId: null,
   selectedTemplateId: null,

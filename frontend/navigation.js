@@ -60,16 +60,18 @@ export function renderLibraryNav() {
   document.querySelectorAll("[data-library-tab]").forEach((button) => {
     const tab = button.dataset.libraryTab;
     const scope = button.dataset.templateScope || "";
+    const programLibrarySection = button.dataset.programLibrarySection || "";
     const isHiddenScope = tab === "templates" && scope && button.classList.contains("sidebar-subnav-button") && !visibleTemplateScopes().includes(scope);
     button.hidden = isHiddenScope;
     const organizationSection = button.dataset.organizationSection || "";
     const isTemplateTab = tab === "templates" && state.activeTab === "templates";
-    const isTemplateScope = isTemplateTab && scope && scope === state.templateScope;
+    const isTemplateScope = isTemplateTab && scope && state.programLibrarySection !== "requests" && scope === state.templateScope;
+    const isProgramLibrarySection = isTemplateTab && programLibrarySection && programLibrarySection === state.programLibrarySection;
     const isTemplateMain = isTemplateTab && button.classList.contains("sidebar-nav-button");
     const isOrganizationTab = tab === "organization" && state.activeTab === "organization";
     const isOrganizationScope = isOrganizationTab && organizationSection && organizationSection === (state.organization.section || "overview");
     const isOrganizationMain = isOrganizationTab && button.classList.contains("sidebar-nav-button");
-    button.classList.toggle("is-active", isTemplateMain || isTemplateScope || isOrganizationMain || isOrganizationScope || (!scope && !organizationSection && tab === state.activeTab));
+    button.classList.toggle("is-active", isTemplateMain || isTemplateScope || isProgramLibrarySection || isOrganizationMain || isOrganizationScope || (!scope && !programLibrarySection && !organizationSection && tab === state.activeTab));
   });
   document.querySelectorAll("[data-sidebar-submenu]").forEach((submenu) => {
     const key = submenu.dataset.sidebarSubmenu;
@@ -115,10 +117,8 @@ export function ensureTemplateScopeIsVisible() {
 }
 
 export function renderSettingsNavHtml(data = {}, section = state.organization.section || "overview") {
-  const requestCount = Array.isArray(data.accessRequests) ? data.accessRequests.length : 0;
   const items = [
     ["overview", "Overview"],
-    ["requests", requestCount ? `Requests (${requestCount})` : "Requests"],
     ["clubs", "Clubs"],
     ["teams", "Teams"],
     ["athletes", "Athletes"],

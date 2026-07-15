@@ -189,9 +189,11 @@ function bindEvents() {
       if (state.activeTab !== button.dataset.libraryTab) pushAppHistory();
       state.activeTab = button.dataset.libraryTab;
       if (button.dataset.templateScope) {
+        state.programLibrarySection = "programs";
         state.templateScope = isAthleteMode() && button.classList.contains("sidebar-nav-button") ? "all" : button.dataset.templateScope;
         ensureTemplateScopeIsVisible();
       }
+      if (button.dataset.programLibrarySection) state.programLibrarySection = button.dataset.programLibrarySection;
       if (button.dataset.organizationSection) state.organization.section = button.dataset.organizationSection;
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
@@ -922,6 +924,13 @@ async function handleContentClick(event) {
   }
   if (type === "home") {
     goHome();
+    return;
+  }
+  if (type === "program-library-requests") {
+    state.activeTab = "templates";
+    state.programLibrarySection = "requests";
+    state.templatePreview = emptyTemplatePreview();
+    await loadTemplates();
     return;
   }
   if (type === "exercise-back") {
