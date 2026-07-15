@@ -85,9 +85,13 @@ export async function deleteOrganizationRow(type, id, { loadAthletes, renderOrga
   if (state.activeTab === "organization") await renderOrganizationPanel();
 }
 
-export async function handleOrganizationAction(action, { loadAthletes, renderOrganizationPanel }) {
+export async function handleOrganizationAction(action, { loadAthletes, renderOrganizationPanel, refreshOrganizationData, renderAfterOrganizationAccessChange }) {
   const type = action.dataset.action;
   if (!type?.startsWith("organization-")) return false;
+  const renderAccessState = async (options = {}) => {
+    if (renderAfterOrganizationAccessChange) await renderAfterOrganizationAccessChange(options);
+    else await renderOrganizationPanel(options);
+  };
   if (type === "organization-edit") {
     const row = findOrganizationRow(action.dataset.orgType, action.dataset.orgId);
     if (!row) return true;
@@ -124,7 +128,12 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   }
   if (type === "organization-request-filter") {
     state.organization.requestStatus = action.dataset.requestStatus || "all";
-    void renderOrganizationPanel({ refresh: false });
+    void renderAccessState({ refresh: false });
+    return true;
+  }
+  if (type === "organization-request-athlete-filter") {
+    state.organization.requestAthleteId = action.dataset.requestAthleteId || "all";
+    void renderAccessState({ refresh: false });
     return true;
   }
   if (type === "organization-edit-close") {
@@ -166,7 +175,25 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     action.disabled = true;
     try {
       await api(`/api/organization/program-access/${encodeURIComponent(accessId)}/${actionName}`, { method: "POST" });
-      await renderOrganizationPanel();
+      await refreshOrganizationData?.();
+      await renderAccessState({ refresh: false });
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
+  if (type === "organization-access-bulk") {
+    const actionName = action.dataset.accessAction || "";
+    const accessIds = (action.dataset.accessIds || "").split(",").map((id) => id.trim()).filter(Boolean);
+    if (!["approve", "reject"].includes(actionName) || !accessIds.length) return true;
+    action.disabled = true;
+    try {
+      await api("/api/organization/program-access/bulk", {
+        method: "POST",
+        body: JSON.stringify({ action: actionName, accessIds }),
+      });
+      await refreshOrganizationData?.();
+      await renderAccessState({ refresh: false });
     } finally {
       action.disabled = false;
     }

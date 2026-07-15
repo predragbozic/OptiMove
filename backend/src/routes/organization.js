@@ -338,6 +338,39 @@ router.post("/program-access/:accessId/approve", async (req, res, next) => {
   }
 });
 
+router.post("/program-access/bulk", async (req, res, next) => {
+  try {
+    const action = clean(req.body?.action);
+    const accessIds = Array.isArray(req.body?.accessIds) ? req.body.accessIds.map((id) => clean(id)).filter(Boolean) : [];
+    if (!["approve", "reject"].includes(action)) return res.status(400).json({ error: "Invalid access action." });
+    if (!accessIds.length) return res.status(400).json({ error: "Select at least one access request." });
+    if (accessIds.length > 100) return res.status(400).json({ error: "Too many requests selected." });
+
+    const nextStatus = action === "approve" ? "accessed" : "rejected";
+    const updated = [];
+    for (const accessId of accessIds) {
+      const request = await loadProgramAccessRequest(accessId);
+      if (!request) continue;
+      if (request.status !== "requested") continue;
+      if (!(await canManageAthlete(req.user, request.athlete_id))) continue;
+      const result = await query(
+        `update library.program_access
+         set status = $2,
+             starts_at = case when $2 = 'accessed' then coalesce(starts_at, now()) else starts_at end,
+             updated_at = now()
+         where id = $1
+           and status = 'requested'
+         returning id, status, updated_at`,
+        [accessId, nextStatus],
+      );
+      if (result.rows[0]) updated.push(result.rows[0]);
+    }
+    res.json({ updated });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/program-access/:accessId/reject", async (req, res, next) => {
   try {
     const request = await loadProgramAccessRequest(req.params.accessId);

@@ -865,6 +865,9 @@ async function loadPrograms() {
 }
 
 async function loadTemplates(options = {}) {
+  if (state.activeTab === "templates" && state.currentUser?.role !== "athlete") {
+    await refreshOrganizationData({ silent: true });
+  }
   return loadTemplatesData(programLibraryDataContext(), options);
 }
 
@@ -948,7 +951,12 @@ async function handleContentClick(event) {
   if (await handleExerciseLibraryAction(action, { renderExercises, setLoading })) return;
   if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
-  if (await handleOrganizationAction(action, { loadAthletes, renderOrganizationPanel })) return;
+  if (await handleOrganizationAction(action, {
+    loadAthletes,
+    refreshOrganizationData,
+    renderAfterOrganizationAccessChange,
+    renderOrganizationPanel,
+  })) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
   handleMediaAction(action);
 }
@@ -1024,6 +1032,24 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     role,
     scope,
   });
+}
+
+async function refreshOrganizationData({ silent = false } = {}) {
+  try {
+    state.organization.data = await api("/api/organization");
+    state.organization.error = "";
+  } catch (error) {
+    state.organization.error = error.message || "Could not load organization.";
+    if (!silent) throw error;
+  }
+}
+
+async function renderAfterOrganizationAccessChange({ refresh = false } = {}) {
+  if (refresh) await refreshOrganizationData({ silent: true });
+  if (state.activeTab === "organization") return renderOrganizationPanel({ refresh: false });
+  if (state.activeTab === "templates") return renderTemplateLibrary(state.lastTemplates || []);
+  if (state.activeTab === "athlete-library") return renderTemplateLibrary(state.lastTemplates || []);
+  return renderCurrentNode();
 }
 
 function renderAthleteList() {

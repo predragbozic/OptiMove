@@ -424,6 +424,10 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   gap: 8px;
 }
 
+.organization-request-athlete-filters {
+  padding-top: 2px;
+}
+
 .organization-request-filters button {
   min-height: 34px;
   display: inline-flex;
@@ -459,6 +463,31 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 .organization-request-filters button.is-active strong {
   background: #287e77;
   color: #fff;
+}
+
+.organization-request-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(31, 111, 104, .18);
+  border-radius: 8px;
+  background: #f0faf8;
+}
+
+.organization-request-bulk-actions span {
+  margin-right: auto;
+  color: #287e77;
+  font-weight: 900;
+}
+
+.program-library-access-inbox .organization-access-requests {
+  box-shadow: none;
+}
+
+.organization-access-requests.is-compact {
+  gap: 10px;
 }
 
 .organization-request-athlete {

@@ -1,5 +1,6 @@
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderCoachDetailModalHtml } from "./coach-profiles.js";
+import { renderProgramAccessRequests } from "./organization-view.js";
 import { renderPlanMoreMenu } from "./plan-actions-view.js";
 import {
   duplicateTemplateNames,
@@ -62,12 +63,16 @@ export function renderTemplateLibraryPageHtml({
   templateFiltersHtml,
   templatePreviewHtml,
 }) {
+  const accessRequests = state.organization?.data?.accessRequests || [];
+  const isAthleteUser = clean(currentUser?.role).toLowerCase() === "athlete" || clean(currentUser?.accessScope).toLowerCase() === "athlete";
+  const showAccessInbox = !isAthleteUser && (accessRequests.length || state.organization?.requestStatus !== "all" || state.organization?.requestAthleteId !== "all");
   return `
     <section class="content-section program-library-page">
       <div class="program-library-head">
         <p class="muted" data-template-count>${templates.length} ${templates.length === 1 ? "program" : "programs"}</p>
       </div>
       ${templateFiltersHtml}
+      ${showAccessInbox ? `<div class="program-library-access-inbox">${renderProgramAccessRequests(accessRequests, { compact: true })}</div>` : ""}
       <div class="program-library-shelves" data-template-results>
         ${renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser)}
       </div>

@@ -152,38 +152,76 @@ function renderProgramAccessHelp() {
   `;
 }
 
-function renderProgramAccessRequests(rows) {
-  const pendingRows = rows.filter((row) => row.status === "requested");
-  const activeRows = rows.filter((row) => ["accessed", "used", "completed"].includes(row.status));
-  const rejectedRows = rows.filter((row) => row.status === "rejected");
-  const athleteCount = new Set(rows.map((row) => String(row.athlete_id || row.user_id || ""))).size;
-  const programCount = new Set(rows.map((row) => String(row.plan_id || ""))).size;
+export function renderProgramAccessRequests(rows, { compact = false } = {}) {
   const statusFilter = state.organization.requestStatus || "all";
-  const visibleRows = rows.filter((row) => programAccessFilterMatches(row, statusFilter));
+  const athleteFilter = state.organization.requestAthleteId || "all";
+  const athleteRows = rows.filter((row) => programAccessAthleteMatches(row, athleteFilter));
+  const visibleRows = athleteRows.filter((row) => programAccessFilterMatches(row, statusFilter));
+  const pendingVisibleRows = visibleRows.filter((row) => row.status === "requested");
+  const pendingRows = rows.filter((row) => row.status === "requested");
+  const athletes = programAccessAthleteOptions(rows);
   return `
-    <section class="panel organization-list-card organization-access-requests">
+    <section class="panel organization-list-card organization-access-requests ${compact ? "is-compact" : ""}">
       <div class="organization-list-head">
-        <div><p class="eyebrow">Program access inbox</p><h3>Requests and access</h3><p class="muted">Approve new requests and review recent access decisions.</p></div>
-        <strong>${pendingRows.length}</strong>
-      </div>
-      <div class="organization-request-metrics" aria-label="Request summary">
-        <span><strong>${pendingRows.length}</strong><small>Pending</small></span>
-        <span><strong>${activeRows.length}</strong><small>Approved</small></span>
-        <span><strong>${rejectedRows.length}</strong><small>Rejected</small></span>
-        <span><strong>${athleteCount}</strong><small>Athletes</small></span>
-        <span><strong>${programCount}</strong><small>Programs</small></span>
+        <div><p class="eyebrow">Program access inbox</p><h3>Requests and access</h3><p class="muted">Approve requested programs and review recent access decisions.</p></div>
+        <strong>${pendingRows.length} pending</strong>
       </div>
       ${renderProgramAccessFilters(statusFilter, {
-        all: rows.length,
-        requested: pendingRows.length,
-        approved: activeRows.filter((row) => row.status === "accessed").length,
-        used: activeRows.filter((row) => row.status === "used" || row.status === "completed").length,
-        rejected: rejectedRows.length,
+        all: athleteRows.length,
+        requested: athleteRows.filter((row) => row.status === "requested").length,
+        approved: athleteRows.filter((row) => row.status === "accessed").length,
+        used: athleteRows.filter((row) => row.status === "used" || row.status === "completed").length,
+        rejected: athleteRows.filter((row) => row.status === "rejected").length,
       })}
+      ${renderProgramAccessAthleteFilters(athleteFilter, athletes)}
+      ${pendingVisibleRows.length ? renderProgramAccessBulkActions(pendingVisibleRows) : ""}
       <div class="organization-list">
         ${visibleRows.length ? visibleRows.map(renderProgramAccessRequestRow).join("") : `<p class="muted">${rows.length ? "No requests match this filter." : "No program access activity yet."}</p>`}
       </div>
     </section>
+  `;
+}
+
+function programAccessAthleteOptions(rows) {
+  const options = new Map();
+  rows.forEach((row) => {
+    const id = String(row.athlete_id || row.user_id || "");
+    if (!id || options.has(id)) return;
+    options.set(id, {
+      id,
+      label: row.athlete_name || "Athlete",
+      count: rows.filter((entry) => String(entry.athlete_id || entry.user_id || "") === id).length,
+    });
+  });
+  return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function renderProgramAccessAthleteFilters(activeAthleteId, athletes) {
+  if (!athletes.length) return "";
+  return `
+    <div class="organization-request-filters organization-request-athlete-filters" role="group" aria-label="Athlete request filters">
+      <button class="${activeAthleteId === "all" ? "is-active" : ""}" type="button" data-action="organization-request-athlete-filter" data-request-athlete-id="all">
+        <span>All athletes</span>
+      </button>
+      ${athletes.map((athlete) => `
+        <button class="${athlete.id === activeAthleteId ? "is-active" : ""}" type="button" data-action="organization-request-athlete-filter" data-request-athlete-id="${escapeAttr(athlete.id)}">
+          <span>${escapeHtml(athlete.label)}</span>
+          <strong>${athlete.count}</strong>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderProgramAccessBulkActions(pendingRows) {
+  const ids = pendingRows.map((row) => row.id).filter(Boolean).join(",");
+  const count = pendingRows.length;
+  return `
+    <div class="organization-request-bulk-actions">
+      <span>${count} ${count === 1 ? "visible request" : "visible requests"}</span>
+      <button class="plain-button compact-button" type="button" data-action="organization-access-bulk" data-access-action="approve" data-access-ids="${escapeAttr(ids)}">Approve all shown</button>
+      <button class="plain-button compact-button danger-button" type="button" data-action="organization-access-bulk" data-access-action="reject" data-access-ids="${escapeAttr(ids)}">Reject all shown</button>
+    </div>
   `;
 }
 
@@ -205,6 +243,11 @@ function renderProgramAccessFilters(activeFilter, counts) {
       `).join("")}
     </div>
   `;
+}
+
+function programAccessAthleteMatches(row, athleteId) {
+  if (!athleteId || athleteId === "all") return true;
+  return String(row.athlete_id || row.user_id || "") === String(athleteId);
 }
 
 function programAccessFilterMatches(row, filter) {
