@@ -587,7 +587,7 @@ async function loadUsers(user) {
 
 async function loadProgramAccessRequests(user) {
   const result = await query(
-    `select distinct
+    `select
        pa.id,
        pa.plan_id,
        pa.user_id,
@@ -605,15 +605,23 @@ async function loadProgramAccessRequests(user) {
      from library.program_access pa
      join plans.plans p on p.id = pa.plan_id
      join public.users u on u.id = pa.user_id
-     join public.athletes a on a.user_id = pa.user_id
-        or exists (
+     join lateral (
+       select athlete.*
+       from public.athletes athlete
+       where athlete.user_id = pa.user_id
+          or exists (
           select 1
           from public.user_athletes ua
           where ua.user_id = pa.user_id
-            and ua.athlete_id = a.id
+            and ua.athlete_id = athlete.id
             and ua.relationship_type = 'athlete'
             and ua.is_active = true
-        )
+          )
+       order by case when athlete.user_id = pa.user_id then 0 else 1 end,
+                athlete.updated_at desc nulls last,
+                athlete.created_at desc nulls last
+       limit 1
+     ) a on true
      where pa.status in ('requested', 'rejected', 'accessed', 'used', 'completed')
        and coalesce(a.is_active, true)
      order by

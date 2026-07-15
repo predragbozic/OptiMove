@@ -122,6 +122,11 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
+  if (type === "organization-request-filter") {
+    state.organization.requestStatus = action.dataset.requestStatus || "all";
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
   if (type === "organization-edit-close") {
     state.organizationEditor = { open: false, type: "", row: null };
     void renderOrganizationPanel();

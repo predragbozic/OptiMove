@@ -158,6 +158,8 @@ function renderProgramAccessRequests(rows) {
   const rejectedRows = rows.filter((row) => row.status === "rejected");
   const athleteCount = new Set(rows.map((row) => String(row.athlete_id || row.user_id || ""))).size;
   const programCount = new Set(rows.map((row) => String(row.plan_id || ""))).size;
+  const statusFilter = state.organization.requestStatus || "all";
+  const visibleRows = rows.filter((row) => programAccessFilterMatches(row, statusFilter));
   return `
     <section class="panel organization-list-card organization-access-requests">
       <div class="organization-list-head">
@@ -171,11 +173,47 @@ function renderProgramAccessRequests(rows) {
         <span><strong>${athleteCount}</strong><small>Athletes</small></span>
         <span><strong>${programCount}</strong><small>Programs</small></span>
       </div>
+      ${renderProgramAccessFilters(statusFilter, {
+        all: rows.length,
+        requested: pendingRows.length,
+        approved: activeRows.filter((row) => row.status === "accessed").length,
+        used: activeRows.filter((row) => row.status === "used" || row.status === "completed").length,
+        rejected: rejectedRows.length,
+      })}
       <div class="organization-list">
-        ${rows.length ? rows.map(renderProgramAccessRequestRow).join("") : `<p class="muted">No program access activity yet.</p>`}
+        ${visibleRows.length ? visibleRows.map(renderProgramAccessRequestRow).join("") : `<p class="muted">${rows.length ? "No requests match this filter." : "No program access activity yet."}</p>`}
       </div>
     </section>
   `;
+}
+
+function renderProgramAccessFilters(activeFilter, counts) {
+  const filters = [
+    ["all", "All", counts.all],
+    ["requested", "Pending", counts.requested],
+    ["approved", "Approved", counts.approved],
+    ["used", "Used", counts.used],
+    ["rejected", "Rejected", counts.rejected],
+  ];
+  return `
+    <div class="organization-request-filters" role="group" aria-label="Program access filters">
+      ${filters.map(([value, label, count]) => `
+        <button class="${value === activeFilter ? "is-active" : ""}" type="button" data-action="organization-request-filter" data-request-status="${escapeAttr(value)}">
+          <span>${escapeHtml(label)}</span>
+          <strong>${count}</strong>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function programAccessFilterMatches(row, filter) {
+  const status = row.status || "";
+  if (filter === "requested") return status === "requested";
+  if (filter === "approved") return status === "accessed";
+  if (filter === "used") return status === "used" || status === "completed";
+  if (filter === "rejected") return status === "rejected";
+  return true;
 }
 
 function programAccessStatusLabel(status) {
@@ -191,6 +229,7 @@ function programAccessStatusLabel(status) {
 function renderProgramAccessRequestRow(row) {
   const image = row.athlete_image_url || "";
   const date = row.created_at ? new Date(row.created_at).toLocaleDateString("en-GB") : "";
+  const updated = row.updated_at ? new Date(row.updated_at).toLocaleDateString("en-GB") : "";
   const status = row.status || "";
   const isPending = status === "requested";
   return `
@@ -203,7 +242,7 @@ function renderProgramAccessRequestRow(row) {
         </span>
       </span>
       <span class="organization-request-program">
-        <small>Requested program</small>
+        <small>${escapeHtml(programAccessStatusLabel(status))}${updated && updated !== date ? ` - ${escapeHtml(updated)}` : ""}</small>
         <strong>${escapeHtml(row.program_name || "Program")}</strong>
         <em>${escapeHtml(row.library_category || "General")}</em>
       </span>

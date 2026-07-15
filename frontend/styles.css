@@ -418,6 +418,49 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   text-transform: uppercase;
 }
 
+.organization-request-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.organization-request-filters button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.organization-request-filters button:hover,
+.organization-request-filters button.is-active {
+  border-color: rgba(31, 111, 104, .3);
+  background: #eef8f6;
+  color: #1f6f68;
+}
+
+.organization-request-filters strong {
+  min-width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #344054;
+  font-size: 12px;
+}
+
+.organization-request-filters button.is-active strong {
+  background: #287e77;
+  color: #fff;
+}
+
 .organization-request-athlete {
   min-width: 0;
 }
