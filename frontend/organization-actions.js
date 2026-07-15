@@ -200,6 +200,16 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
         body: JSON.stringify({ action: actionName, accessIds }),
       });
       if (!result?.updated?.length) state.organization.requestError = "No shown requests were changed.";
+      else {
+        const updates = new Map(result.updated.map((row) => [String(row.id), row]));
+        const accessRequests = state.organization?.data?.accessRequests || [];
+        state.organization.data = {
+          ...state.organization.data,
+          accessRequests: accessRequests.map((row) => (
+            updates.has(String(row.id)) ? { ...row, ...updates.get(String(row.id)) } : row
+          )),
+        };
+      }
       await refreshOrganizationData?.();
       await renderAccessState({ refresh: false });
     } catch (error) {
