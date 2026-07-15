@@ -1,4 +1,5 @@
 import { renderImage } from "./media.js";
+import { hasTemplateAccessStatus, isAthleteUser, templateAccessActionLabel, templateAccessStatusCode, templateAccessStatusLabel } from "./program-access-ui.js";
 import { clean, escapeAttr, escapeHtml, programInitials, renderOption } from "./utils.js";
 
 const PROGRAM_CATEGORY_DEFAULTS = ["General", "Rehabilitation", "Strength & power", "Speed & conditioning", "Movement prep", "Corrective & preventive", "Fitness & health", "Education"];
@@ -52,31 +53,6 @@ export function ratingLabel(entity) {
   return `${average.toFixed(average % 1 ? 1 : 0)} / 5 (${count})`;
 }
 
-export function templateAccessStatusLabel(template) {
-  const status = clean(template?.user_access_status).toLowerCase();
-  if (status === "requested") return "Requested";
-  if (status === "rejected") return "Rejected";
-  if (status === "accessed") return "Approved";
-  if (status === "used") return "Used";
-  if (status === "completed") return "Completed";
-  return "";
-}
-
-export function hasTemplateAccessStatus(template) {
-  return Boolean(templateAccessStatusLabel(template));
-}
-
-export function templateAccessActionLabel(template, user) {
-  const isAthleteUser = clean(user?.role).toLowerCase() === "athlete" || clean(user?.accessScope).toLowerCase() === "athlete";
-  if (!isAthleteUser) return "Preview";
-  const status = clean(template?.user_access_status).toLowerCase();
-  if (status === "requested") return "Request sent";
-  if (status === "rejected") return "Request again";
-  if (status === "accessed") return "Mark as used";
-  if (status === "used" || status === "completed") return "Access active";
-  return template?.requires_approval === true ? "Request access" : "Get access";
-}
-
 export function applyTemplateAccessScope(templates, scope, user) {
   const accessScope = clean(user?.accessScope).toLowerCase();
   if (accessScope !== "athlete" || scope !== "all") return templates;
@@ -102,9 +78,9 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   const isSelected = String(template.plan_id) === String(selectedTemplateId);
   const price = programPriceLabel(template);
   const accessStatus = templateAccessStatusLabel(template);
-  const accessStatusCode = clean(template.user_access_status).toLowerCase();
+  const accessStatusCode = templateAccessStatusCode(template);
   const actionLabel = templateAccessActionLabel(template, currentUser);
-  const isAthleteUser = clean(currentUser?.role).toLowerCase() === "athlete" || clean(currentUser?.accessScope).toLowerCase() === "athlete";
+  const athleteUser = isAthleteUser(currentUser);
   const pendingAccessCount = Number(template.pending_access_count || 0);
   return `
     <article class="program-library-card ${isSelected ? "is-selected" : ""}">
@@ -120,7 +96,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
         <span class="program-library-card-foot">
           <span class="item-badge">${escapeHtml(price)}</span>
           ${accessStatus ? `<span class="item-badge program-access-badge is-${escapeAttr(accessStatusCode)}">${escapeHtml(accessStatus)}</span>` : ""}
-          ${!isAthleteUser && pendingAccessCount > 0 ? `<span class="item-badge program-access-badge is-requested">${pendingAccessCount} ${pendingAccessCount === 1 ? "request" : "requests"}</span>` : ""}
+          ${!athleteUser && pendingAccessCount > 0 ? `<span class="item-badge program-access-badge is-requested">${pendingAccessCount} ${pendingAccessCount === 1 ? "request" : "requests"}</span>` : ""}
           <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
           ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
           <span class="text-action">${escapeHtml(actionLabel)}</span>

@@ -1,6 +1,16 @@
 import { Router } from "express";
 import { query } from "../db.js";
 import { canAccessAllAthletes, canAccessAthlete, isAthlete } from "../access.js";
+import {
+  accessExpiresAt,
+  accessTypeForLicense,
+  canEditTemplate,
+  canUseTemplate,
+  licenseSnapshot,
+  loadAthleteLibraryAccess,
+  requireUsedProgramAccess,
+  templateScopesForUser,
+} from "../programAccessPolicy.js";
 
 const router = Router();
 
@@ -12,7 +22,7 @@ router.get("/", async (req, res, next) => {
     const category = text(req.query.category);
     const tag = text(req.query.tag);
     const pricing = normalizeChoice(req.query.pricing, ["all", "free", "paid"], "all");
-    const athleteAccess = await loadAthleteLibraryAccess(req.user);
+    const athleteAccess = await loadAthleteLibraryAccess(query, req.user);
     const visibleScopes = templateScopesForUser(athleteAccess);
     const params = [
       req.user.id,
@@ -234,19 +244,7 @@ router.get("/options", async (req, res, next) => {
 router.patch("/:planId/metadata", async (req, res, next) => {
   try {
     const planId = req.params.planId;
-    const canEdit = await query(
-      `
-      select 1
-      from plans.plans p
-      where p.id = $1
-        and p.plan_type = 'program'
-        and p.is_template = true
-        and ($3::boolean or p.created_by_user_id = $2)
-      limit 1
-      `,
-      [planId, req.user.id, canAccessAllAthletes(req.user)],
-    );
-    if (!canEdit.rowCount) return res.status(404).json({ error: "Template not found." });
+    if (!(await canEditTemplate(query, req.user, planId))) return res.status(404).json({ error: "Template not found." });
 
     const scope = normalizeChoice(req.body?.libraryScope, ["workspace", "my", "club", "optimove", "marketplace"], "my");
     const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
@@ -312,7 +310,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
 
 router.get("/:planId/tags", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(req.user, req.params.planId))) {
+    if (!(await canUseTemplate(query, req.user, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     const [allTags, programTags] = await Promise.all([
@@ -351,7 +349,7 @@ router.get("/:planId/tags", async (req, res, next) => {
 
 router.get("/:planId/reviews", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(req.user, req.params.planId))) {
+    if (!(await canUseTemplate(query, req.user, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     const result = await query(
@@ -467,7 +465,7 @@ router.post("/:planId/assignments", async (req, res, next) => {
 
 router.post("/:planId/tags", async (req, res, next) => {
   try {
-    if (!(await canEditTemplate(req.user, req.params.planId))) {
+    if (!(await canEditTemplate(query, req.user, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     const name = text(req.body?.name);
@@ -502,7 +500,7 @@ router.post("/:planId/tags", async (req, res, next) => {
 
 router.delete("/:planId/tags/:tagId", async (req, res, next) => {
   try {
-    if (!(await canEditTemplate(req.user, req.params.planId))) {
+    if (!(await canEditTemplate(query, req.user, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     await query(
@@ -518,7 +516,7 @@ router.delete("/:planId/tags/:tagId", async (req, res, next) => {
 
 router.post("/:planId/use", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(req.user, req.params.planId))) {
+    if (!(await canUseTemplate(query, req.user, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     const access = await markProgramUsed(req.user, req.params.planId, text(req.body?.note));
@@ -530,10 +528,10 @@ router.post("/:planId/use", async (req, res, next) => {
 
 router.post("/:planId/reviews", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(req.user, req.params.planId))) {
+    if (!(await canUseTemplate(query, req.user, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
-    const access = await requireUsedProgramAccess(req.user, req.params.planId);
+    const access = await requireUsedProgramAccess(query, req.user, req.params.planId);
     if (!access) {
       return res.status(403).json({ error: "Use this program before leaving a review." });
     }
@@ -580,131 +578,6 @@ function slugify(value) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80) || `tag-${Date.now()}`;
-}
-
-async function canUseTemplate(user, planId) {
-  const result = await query(
-    `select 1
-     from plans.plans p
-     where p.id = $1
-       and p.plan_type = 'program'
-       and p.is_template = true
-       and coalesce(p.is_active, true)
-       and ($3::boolean or p.created_by_user_id = $2 or p.visibility = 'public')
-     limit 1`,
-    [planId, user.id, canAccessAllAthletes(user)],
-  );
-  if (result.rows[0]) return true;
-
-  const accessResult = await query(
-    `select 1
-     from library.program_access pa
-     join plans.plans p on p.id = pa.plan_id
-     where pa.plan_id = $1
-       and pa.user_id = $2
-       and pa.status in ('requested', 'rejected', 'accessed', 'used', 'completed')
-       and (pa.expires_at is null or pa.expires_at > now())
-       and p.plan_type = 'program'
-       and p.is_template = true
-       and coalesce(p.is_active, true)
-     limit 1`,
-    [planId, user.id],
-  );
-  if (accessResult.rows[0]) return true;
-
-  const athleteAccess = await loadAthleteLibraryAccess(user);
-  if (!athleteAccess) return false;
-  const athleteResult = await query(
-    `select 1
-     from plans.plans p
-     where p.id = $1
-       and p.plan_type = 'program'
-       and p.is_template = true
-       and coalesce(p.is_active, true)
-       and (not $7::boolean or coalesce(p.is_free, true))
-       and (
-         (coalesce(p.library_scope, 'my') = 'my' and $3::boolean and exists (
-           select 1
-           from public.user_athletes coach_rel
-           where coach_rel.athlete_id = $2
-             and coach_rel.user_id = p.created_by_user_id
-             and coach_rel.relationship_type = 'coach'
-             and coach_rel.is_active = true
-         ))
-         or (coalesce(p.library_scope, 'my') = 'club' and $4::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
-         or (coalesce(p.library_scope, 'my') = 'optimove' and $5::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
-         or (coalesce(p.library_scope, 'my') = 'marketplace' and $6::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
-       )
-     limit 1`,
-    [
-      planId,
-      athleteAccess.athlete_id,
-      athleteAccess.can_view_coach_library === true,
-      athleteAccess.can_view_club_library === true,
-      athleteAccess.can_view_optimove_library === true,
-      athleteAccess.can_view_marketplace === true,
-      athleteAccess.free_only !== false,
-    ],
-  );
-  return Boolean(athleteResult.rows[0]);
-}
-
-async function loadAthleteLibraryAccess(user) {
-  if (String(user?.role_hint || "").toLowerCase() !== "athlete") return null;
-  const result = await query(
-    `select
-       a.id as athlete_id,
-       coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
-       coalesce(ala.can_view_club_library, false) as can_view_club_library,
-       coalesce(ala.can_view_optimove_library, false) as can_view_optimove_library,
-       coalesce(ala.can_view_marketplace, false) as can_view_marketplace,
-       coalesce(ala.free_only, true) as free_only,
-       coalesce(ala.require_approval, true) as require_approval,
-       coalesce(ala.selected_programs_only, false) as selected_programs_only
-     from public.athletes a
-     left join public.athlete_library_access ala on ala.athlete_id = a.id
-     where coalesce(a.is_active, true)
-       and (
-         a.user_id = $1
-         or exists (
-           select 1
-           from public.user_athletes ua
-           where ua.user_id = $1
-             and ua.athlete_id = a.id
-             and ua.relationship_type = 'athlete'
-             and ua.is_active = true
-         )
-       )
-     order by a.created_at nulls last
-     limit 1`,
-    [user.id],
-  );
-  return result.rows[0] || null;
-}
-
-function templateScopesForUser(athleteAccess) {
-  if (!athleteAccess) return ["all", "workspace", "my", "club", "optimove", "marketplace"];
-  const scopes = [];
-  if (athleteAccess.can_view_coach_library === true) scopes.push("my");
-  if (athleteAccess.can_view_club_library === true) scopes.push("club");
-  if (athleteAccess.can_view_optimove_library === true) scopes.push("optimove");
-  if (athleteAccess.can_view_marketplace === true) scopes.push("marketplace");
-  return scopes.length ? ["all", ...scopes] : [];
-}
-
-async function canEditTemplate(user, planId) {
-  const result = await query(
-    `select 1
-     from plans.plans p
-     where p.id = $1
-       and p.plan_type = 'program'
-       and p.is_template = true
-       and coalesce(p.is_active, true)
-       and ($3::boolean or p.created_by_user_id = $2)
-     limit 1`,
-    [planId, user.id, canAccessAllAthletes(user)],
-  );
-  return Boolean(result.rows[0]);
 }
 
 async function loadAssignableTemplate(user, planId) {
@@ -821,7 +694,7 @@ async function markProgramUsed(user, planId, note) {
     [planId],
   );
   const license = plan.rows[0] || {};
-  const athleteAccess = await loadAthleteLibraryAccess(user);
+  const athleteAccess = await loadAthleteLibraryAccess(query, user);
   const approvalRequired = Boolean(athleteAccess) && (license.requires_approval === true || athleteAccess.require_approval === true);
   const snapshot = licenseSnapshot(license);
   const accessType = accessTypeForLicense(license);
@@ -875,21 +748,6 @@ async function markProgramUsed(user, planId, note) {
   return access.rows[0];
 }
 
-async function requireUsedProgramAccess(user, planId) {
-  const result = await query(
-    `select id, access_type, status, expires_at
-     from library.program_access
-     where plan_id = $1
-       and user_id = $2
-       and status in ('used', 'completed')
-       and (expires_at is null or expires_at > now())
-     order by used_at desc nulls last, updated_at desc
-     limit 1`,
-    [planId, user.id],
-  );
-  return result.rows[0] || null;
-}
-
 async function findOrCreateProgramTag(user, name) {
   const existing = await query(
     `select id, is_active
@@ -941,38 +799,6 @@ function booleanValue(value, fallback = false) {
   if (value === true || value === "true") return true;
   if (value === false || value === "false") return false;
   return fallback;
-}
-
-function positiveIntegerOrNull(value) {
-  const number = Number.parseInt(value, 10);
-  return Number.isInteger(number) && number > 0 ? number : null;
-}
-
-function accessExpiresAt(plan) {
-  const days = positiveIntegerOrNull(plan?.access_duration_days);
-  if (!days) return null;
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-}
-
-function accessTypeForLicense(plan) {
-  if (plan?.access_model === "assigned") return "assigned";
-  if (plan?.access_model === "subscription" || plan?.is_free === false) return "purchased";
-  return "downloaded";
-}
-
-function licenseSnapshot(plan) {
-  return {
-    accessModel: plan?.access_model || "free_forever",
-    accessDurationDays: plan?.access_duration_days || null,
-    subscriptionPeriod: plan?.subscription_period || null,
-    isFree: plan?.is_free !== false,
-    priceCents: plan?.price_cents || null,
-    canCopy: plan?.can_copy !== false,
-    canEditCopy: plan?.can_edit_copy !== false,
-    canAssignToAthlete: plan?.can_assign_to_athlete !== false,
-    athleteCanViewDirectly: plan?.athlete_can_view_directly === true,
-    requiresApproval: plan?.requires_approval === true,
-  };
 }
 
 export default router;

@@ -3,6 +3,7 @@ import { renderCoachDetailModalHtml } from "./coach-profiles.js";
 import { templateScopeMeta, visibleTemplateScopes } from "./navigation.js";
 import { renderProgramAccessRequests } from "./organization-view.js";
 import { renderPlanMoreMenu } from "./plan-actions-view.js";
+import { isAthleteUser } from "./program-access-ui.js";
 import {
   duplicateTemplateNames,
   programPriceLabel,
@@ -34,7 +35,7 @@ export function renderTemplateToolbarHtml(templates, selectedTemplateId) {
   `;
 }
 
-export function renderTemplateDetailHtml({ groups, isMicrocycle, renderNodeButton, renderProgramDayCard, selected, state }) {
+export function renderTemplateDetailHtml({ groups, isMicrocycle, renderNodeButton, renderProgramDayCard, selected, state: appState }) {
   return `
     <section class="content-section">
       <section class="panel">
@@ -51,7 +52,7 @@ export function renderTemplateDetailHtml({ groups, isMicrocycle, renderNodeButto
           : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
       </section>
     </section>
-    ${renderCopyPlanModal(state)}
+    ${renderCopyPlanModal(appState)}
   `;
 }
 
@@ -60,15 +61,15 @@ export function renderTemplateLibraryPageHtml({
   currentUser,
   programInfo,
   selectedTemplateId,
-  state,
+  state: appState = {},
   templates,
   templateFiltersHtml,
   templatePreviewHtml,
 }) {
-  const accessRequests = state.organization?.data?.accessRequests || [];
-  const isAthleteUser = clean(currentUser?.role).toLowerCase() === "athlete" || clean(currentUser?.accessScope).toLowerCase() === "athlete";
+  const accessRequests = appState.organization?.data?.accessRequests || [];
+  const athleteUser = isAthleteUser(currentUser);
   const requestCount = accessRequests.filter((row) => row.status === "requested").length;
-  const isRequestsSection = !isAthleteUser && state.programLibrarySection === "requests";
+  const isRequestsSection = !athleteUser && appState.programLibrarySection === "requests";
   if (isRequestsSection) {
     return `
       <section class="content-section program-library-page">
@@ -78,13 +79,13 @@ export function renderTemplateLibraryPageHtml({
             <h3>Requests</h3>
           </div>
         </div>
-        ${renderProgramScopeTabsHtml({ scopes: visibleTemplateScopes(), activeScope: state.templateScope, scopeLabel: (scope) => templateScopeMeta(scope, currentUser).label, activeSection: "requests", requestCount, showRequests: true })}
+        ${renderProgramScopeTabsHtml({ scopes: visibleTemplateScopes(), activeScope: appState.templateScope, scopeLabel: (scope) => templateScopeMeta(scope, currentUser).label, activeSection: "requests", requestCount, showRequests: true })}
         <div class="program-library-access-inbox">${renderProgramAccessRequests(accessRequests, { compact: true })}</div>
       </section>
       ${templatePreviewHtml}
       ${renderProgramInfoModal(programInfo)}
       ${renderCoachDetailModalHtml(coaches, currentUser)}
-      ${renderCopyPlanModal(state)}
+      ${renderCopyPlanModal(appState)}
     `;
   }
   return `
@@ -100,7 +101,7 @@ export function renderTemplateLibraryPageHtml({
     ${templatePreviewHtml}
     ${renderProgramInfoModal(programInfo)}
     ${renderCoachDetailModalHtml(coaches, currentUser)}
-    ${renderCopyPlanModal(state)}
+    ${renderCopyPlanModal(appState)}
   `;
 }
 
@@ -108,7 +109,18 @@ export function renderTemplateLibraryResultsOnlyHtml(templates, selectedTemplate
   return renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser);
 }
 
-export function renderTemplateFiltersViewHtml({ activeScope, filters, lastTemplates, options, scopeLabel, scopes, showAdminFilters, showRequests = false }) {
+export function renderTemplateFiltersViewHtml({
+  activeScope,
+  activeSection = "programs",
+  filters,
+  lastTemplates,
+  options,
+  requestCount = 0,
+  scopeLabel,
+  scopes,
+  showAdminFilters,
+  showRequests = false,
+}) {
   const tagPrefix = clean(filters.tag).toLowerCase();
   const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => templateFilterOptionMatches(tag, tagPrefix)) : (options.tags || []);
   const categories = templateCategoryOptions(options, lastTemplates);
@@ -124,8 +136,8 @@ export function renderTemplateFiltersViewHtml({ activeScope, filters, lastTempla
     filters,
     options,
     showAdminFilters,
-    activeSection: state.programLibrarySection || "programs",
-    requestCount: (state.organization?.data?.accessRequests || []).filter((row) => row.status === "requested").length,
+    activeSection,
+    requestCount,
     showRequests,
     scopes,
     activeScope,

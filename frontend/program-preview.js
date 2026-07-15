@@ -1,5 +1,6 @@
 import { renderImage } from "./media.js";
-import { inferProgramCategory, programPriceLabel, ratingLabel, templateAccessStatusLabel, templateCategoryLabel } from "./program-library.js";
+import { templateAccessActionLabel, templateAccessHelperText, templateAccessStatusCode, templateAccessStatusLabel } from "./program-access-ui.js";
+import { inferProgramCategory, programPriceLabel, ratingLabel, templateCategoryLabel } from "./program-library.js";
 import { clean, escapeAttr, escapeHtml, programInitials, renderOption } from "./utils.js";
 
 export function renderTemplatePreviewModalHtml(data) {
@@ -102,36 +103,13 @@ function renderTemplateAssignmentAthlete(athlete, selectedIds) {
 function renderTemplateReviewPanel(template, review, currentUserRole) {
   if (currentUserRole !== "athlete") return renderTemplateAccessRequestPanel(review);
   const reviews = review.reviews || [];
-  const accessStatus = clean(template.user_access_status).toLowerCase();
+  const accessStatus = templateAccessStatusCode(template);
   const isRequested = review.requestSent || accessStatus === "requested";
-  const isRejected = accessStatus === "rejected";
   const isUsed = review.usedMarked || accessStatus === "used" || accessStatus === "completed";
   const isApproved = accessStatus === "accessed";
-  const hasActiveAccess = isApproved || isUsed;
-  const requiresApproval = currentUserRole === "athlete" && template.requires_approval === true && !hasActiveAccess;
   const statusLabel = templateAccessStatusLabel(template);
-  const primaryLabel = review.submittingUse
-    ? "Saving..."
-    : isRequested
-      ? "Request sent"
-      : isRejected
-        ? "Request again"
-      : isApproved
-        ? "Mark as used"
-        : isUsed
-        ? "Access active"
-        : requiresApproval
-          ? "Request access"
-          : "Get access";
-  const helperText = isRequested
-    ? "Your request is waiting for coach approval."
-    : isRejected
-      ? "Your coach did not approve this program request. You can send a new request if needed."
-    : isApproved
-      ? "Access is approved. Mark it as used when you start working with this program."
-      : requiresApproval
-        ? "Your coach must approve this program before it becomes active."
-        : "Reviews are enabled after access is active and the program has been used.";
+  const primaryLabel = review.submittingUse ? "Saving..." : templateAccessActionLabel(template, { accessScope: "athlete" });
+  const helperText = templateAccessHelperText(template, review);
   return `
     <section class="program-review-panel">
       <div class="program-review-summary">

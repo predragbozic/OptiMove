@@ -1359,9 +1359,11 @@ function renderTemplateFilters() {
   const options = state.templateOptions || {};
   return renderTemplateFiltersViewHtml({
     activeScope: state.templateScope,
+    activeSection: state.programLibrarySection || "programs",
     filters,
     lastTemplates: state.lastTemplates,
     options,
+    requestCount: (state.organization?.data?.accessRequests || []).filter((row) => row.status === "requested").length,
     scopes: visibleTemplateScopes(),
     scopeLabel: (scope) => templateScopeMeta(scope).label,
     showAdminFilters: canUseProgramAdminFilters(),
