@@ -614,9 +614,19 @@ async function loadProgramAccessRequests(user) {
             and ua.relationship_type = 'athlete'
             and ua.is_active = true
         )
-     where pa.status = 'requested'
+     where pa.status in ('requested', 'rejected', 'accessed', 'used', 'completed')
        and coalesce(a.is_active, true)
-     order by pa.created_at desc
+     order by
+       case pa.status
+         when 'requested' then 0
+         when 'accessed' then 1
+         when 'used' then 2
+         when 'completed' then 3
+         when 'rejected' then 4
+         else 5
+       end,
+       pa.updated_at desc,
+       pa.created_at desc
      limit 100`,
   );
   const visible = [];

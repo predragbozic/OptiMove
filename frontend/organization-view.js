@@ -5,7 +5,7 @@ import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 export function renderOrganizationPanelHtml({ currentUser, data, error, role, scope }) {
-  const pendingRequests = Array.isArray(data.accessRequests) ? data.accessRequests.length : 0;
+  const pendingRequests = (data.accessRequests || []).filter((request) => request.status === "requested").length;
   return `
     <section class="content-section organization-view">
       <section class="panel organization-hero">
@@ -153,31 +153,48 @@ function renderProgramAccessHelp() {
 }
 
 function renderProgramAccessRequests(rows) {
+  const pendingRows = rows.filter((row) => row.status === "requested");
+  const activeRows = rows.filter((row) => ["accessed", "used", "completed"].includes(row.status));
+  const rejectedRows = rows.filter((row) => row.status === "rejected");
   const athleteCount = new Set(rows.map((row) => String(row.athlete_id || row.user_id || ""))).size;
   const programCount = new Set(rows.map((row) => String(row.plan_id || ""))).size;
   return `
     <section class="panel organization-list-card organization-access-requests">
       <div class="organization-list-head">
-        <div><p class="eyebrow">Program access inbox</p><h3>Pending requests</h3><p class="muted">Approve or reject athlete requests to use programs.</p></div>
-        <strong>${rows.length}</strong>
+        <div><p class="eyebrow">Program access inbox</p><h3>Requests and access</h3><p class="muted">Approve new requests and review recent access decisions.</p></div>
+        <strong>${pendingRows.length}</strong>
       </div>
       <div class="organization-request-metrics" aria-label="Request summary">
-        <span><strong>${rows.length}</strong><small>Requests</small></span>
+        <span><strong>${pendingRows.length}</strong><small>Pending</small></span>
+        <span><strong>${activeRows.length}</strong><small>Approved</small></span>
+        <span><strong>${rejectedRows.length}</strong><small>Rejected</small></span>
         <span><strong>${athleteCount}</strong><small>Athletes</small></span>
         <span><strong>${programCount}</strong><small>Programs</small></span>
       </div>
       <div class="organization-list">
-        ${rows.length ? rows.map(renderProgramAccessRequestRow).join("") : `<p class="muted">No pending program requests.</p>`}
+        ${rows.length ? rows.map(renderProgramAccessRequestRow).join("") : `<p class="muted">No program access activity yet.</p>`}
       </div>
     </section>
   `;
 }
 
+function programAccessStatusLabel(status) {
+  return {
+    requested: "Requested",
+    accessed: "Approved",
+    used: "Used",
+    completed: "Completed",
+    rejected: "Rejected",
+  }[status] || "Access";
+}
+
 function renderProgramAccessRequestRow(row) {
   const image = row.athlete_image_url || "";
   const date = row.created_at ? new Date(row.created_at).toLocaleDateString("en-GB") : "";
+  const status = row.status || "";
+  const isPending = status === "requested";
   return `
-    <article class="organization-row organization-request-row">
+    <article class="organization-row organization-request-row is-${escapeAttr(status)}">
       <span class="organization-table-athlete organization-request-athlete">
         ${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">AT</span>`}
         <span>
@@ -191,8 +208,11 @@ function renderProgramAccessRequestRow(row) {
         <em>${escapeHtml(row.library_category || "General")}</em>
       </span>
       <span class="organization-row-actions">
-        <button class="text-action" type="button" data-action="organization-access-approve" data-access-id="${escapeAttr(row.id)}">Approve</button>
-        <button class="text-action danger-action" type="button" data-action="organization-access-reject" data-access-id="${escapeAttr(row.id)}">Reject</button>
+        <span class="program-access-badge is-${escapeAttr(status)}">${escapeHtml(programAccessStatusLabel(status))}</span>
+        ${isPending ? `
+          <button class="text-action" type="button" data-action="organization-access-approve" data-access-id="${escapeAttr(row.id)}">Approve</button>
+          <button class="text-action danger-action" type="button" data-action="organization-access-reject" data-access-id="${escapeAttr(row.id)}">Reject</button>
+        ` : ""}
       </span>
     </article>
   `;

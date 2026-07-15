@@ -390,7 +390,7 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
 .organization-request-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -441,6 +441,20 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   font-size: 12px;
   font-style: normal;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.organization-request-row.is-rejected {
+  background: #fffafa;
+}
+
+.organization-request-row.is-accessed,
+.organization-request-row.is-used,
+.organization-request-row.is-completed {
+  background: #fbfffd;
+}
+
+.organization-request-row .program-access-badge {
   white-space: nowrap;
 }
 
