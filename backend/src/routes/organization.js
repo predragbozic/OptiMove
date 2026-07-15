@@ -346,7 +346,6 @@ router.post("/program-access/bulk", async (req, res, next) => {
     if (!accessIds.length) return res.status(400).json({ error: "Select at least one access request." });
     if (accessIds.length > 100) return res.status(400).json({ error: "Too many requests selected." });
 
-    const nextStatus = action === "approve" ? "accessed" : "rejected";
     const updated = [];
     const skipped = [];
 
@@ -366,14 +365,21 @@ router.post("/program-access/bulk", async (req, res, next) => {
       }
 
       const result = await query(
-        `update library.program_access
-         set status = $2,
-             starts_at = case when $2 = 'accessed' then coalesce(starts_at, now()) else starts_at end,
-             updated_at = now()
-         where id = $1
-           and status = 'requested'
-         returning id, status, updated_at`,
-        [accessId, nextStatus],
+        action === "approve"
+          ? `update library.program_access
+             set status = 'accessed',
+                 starts_at = coalesce(starts_at, now()),
+                 updated_at = now()
+             where id = $1
+               and status = 'requested'
+             returning id, status, updated_at`
+          : `update library.program_access
+             set status = 'rejected',
+                 updated_at = now()
+             where id = $1
+               and status = 'requested'
+             returning id, status, updated_at`,
+        [accessId],
       );
       if (result.rows[0]) updated.push(result.rows[0]);
       else skipped.push({ id: accessId, reason: "not_pending" });
