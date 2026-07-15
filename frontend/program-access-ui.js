@@ -26,6 +26,22 @@ export function hasActiveTemplateAccess(template) {
   return ["accessed", "used", "completed"].includes(templateAccessStatusCode(template));
 }
 
+export function templateAccessBadge(template, user) {
+  const status = templateAccessStatusCode(template);
+  const label = templateAccessStatusLabel(template);
+  const pendingCount = Number(template?.pending_access_count || 0);
+  if (isAthleteUser(user)) {
+    if (label) return { code: status, label };
+    if (template?.requires_approval === true) return { code: "locked", label: "Approval required" };
+    return { code: "available", label: "Available" };
+  }
+  if (pendingCount > 0) {
+    return { code: "requested", label: `${pendingCount} ${pendingCount === 1 ? "request" : "requests"}` };
+  }
+  if (template?.requires_approval === true) return { code: "locked", label: "Approval on" };
+  return null;
+}
+
 export function templateAccessActionLabel(template, user) {
   if (!isAthleteUser(user)) return "Preview";
   const status = templateAccessStatusCode(template);
@@ -47,5 +63,5 @@ export function templateAccessHelperText(template, review = {}) {
   if (isApproved) return "Access is approved. Mark it as used when you start working with this program.";
   if (isUsed) return "Access is active. You can leave a verified review for this program.";
   if (template?.requires_approval === true) return "Your coach must approve this program before it becomes active.";
-  return "Reviews are enabled after access is active and the program has been used.";
+  return "This program can be used by athletes, but it cannot be copied from the athlete view.";
 }

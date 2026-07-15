@@ -1385,7 +1385,7 @@ function renderTemplatePreviewModal() {
       : programDayGroupNodes(detail.dayGroups || []);
 
   return renderTemplatePreviewModalViewHtml({
-    currentUserRole: state.currentUser?.role,
+    currentUserRole: state.currentUser?.accessScope || state.currentUser?.role,
     detail,
     groups,
     isMicrocycle,

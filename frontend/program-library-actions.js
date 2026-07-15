@@ -254,6 +254,7 @@ async function updateTemplateAccessRequest(accessId, actionName, { renderAfter }
       reviewMessage: actionName === "approve" ? "Program access approved." : "Program request rejected.",
       accessRequestError: "",
     };
+    patchTemplatePendingRequestCount(state.selectedTemplateId, -1);
   } catch (error) {
     state.templatePreview = {
       ...state.templatePreview,
@@ -262,6 +263,15 @@ async function updateTemplateAccessRequest(accessId, actionName, { renderAfter }
     };
   }
   renderAfter();
+}
+
+function patchTemplatePendingRequestCount(planId, delta) {
+  if (!planId) return;
+  state.lastTemplates = (state.lastTemplates || []).map((template) => {
+    if (String(template.plan_id) !== String(planId)) return template;
+    const pending = Math.max(0, Number(template.pending_access_count || 0) + delta);
+    return { ...template, pending_access_count: pending };
+  });
 }
 
 export async function submitTemplateMetadataForm(form, { loadTemplates }) {

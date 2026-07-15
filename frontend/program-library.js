@@ -1,5 +1,5 @@
 import { renderImage } from "./media.js";
-import { hasTemplateAccessStatus, isAthleteUser, templateAccessActionLabel, templateAccessStatusCode, templateAccessStatusLabel } from "./program-access-ui.js";
+import { hasTemplateAccessStatus, templateAccessActionLabel, templateAccessBadge } from "./program-access-ui.js";
 import { clean, escapeAttr, escapeHtml, programInitials, renderOption } from "./utils.js";
 
 const PROGRAM_CATEGORY_DEFAULTS = ["General", "Rehabilitation", "Strength & power", "Speed & conditioning", "Movement prep", "Corrective & preventive", "Fitness & health", "Education"];
@@ -77,11 +77,8 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   const creatorProfileId = clean(template.creator_profile_id);
   const isSelected = String(template.plan_id) === String(selectedTemplateId);
   const price = programPriceLabel(template);
-  const accessStatus = templateAccessStatusLabel(template);
-  const accessStatusCode = templateAccessStatusCode(template);
   const actionLabel = templateAccessActionLabel(template, currentUser);
-  const athleteUser = isAthleteUser(currentUser);
-  const pendingAccessCount = Number(template.pending_access_count || 0);
+  const accessBadge = templateAccessBadge(template, currentUser);
   return `
     <article class="program-library-card ${isSelected ? "is-selected" : ""}">
       <button class="program-library-info-button" type="button" data-action="template-info" data-template-id="${escapeAttr(template.plan_id)}" aria-label="Program information">i</button>
@@ -95,8 +92,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
         </span>
         <span class="program-library-card-foot">
           <span class="item-badge">${escapeHtml(price)}</span>
-          ${accessStatus ? `<span class="item-badge program-access-badge is-${escapeAttr(accessStatusCode)}">${escapeHtml(accessStatus)}</span>` : ""}
-          ${!athleteUser && pendingAccessCount > 0 ? `<span class="item-badge program-access-badge is-requested">${pendingAccessCount} ${pendingAccessCount === 1 ? "request" : "requests"}</span>` : ""}
+          ${accessBadge ? `<span class="item-badge program-access-badge is-${escapeAttr(accessBadge.code)}">${escapeHtml(accessBadge.label)}</span>` : ""}
           <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
           ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
           <span class="text-action">${escapeHtml(actionLabel)}</span>

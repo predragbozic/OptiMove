@@ -42,8 +42,8 @@ export function renderTemplatePreviewModalHtml(data) {
             ${preview.loading ? `<span class="item-badge">Loading</span>` : ""}
             ${selected ? `<span class="item-badge">${escapeHtml(ratingLabel(selected))}</span>` : ""}
             ${selected && currentUserRole !== "athlete" && selected.can_assign_to_athlete !== false ? `<button class="plain-button compact-button" type="button" data-action="template-assign" data-template-id="${escapeAttr(selected.plan_id)}">Assign</button>` : ""}
-            ${selected ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${preview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}
-            ${selected ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
+            ${selected && currentUserRole !== "athlete" ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${preview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}
+            ${selected && currentUserRole !== "athlete" ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">x</span></button>
           </div>
         </div>

@@ -3935,6 +3935,16 @@ input:focus {
   color: #9a3412;
 }
 
+.program-access-badge.is-available {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.program-access-badge.is-locked {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
 .program-access-badge.is-accessed {
   background: #ecfdf5;
   color: #047857;
