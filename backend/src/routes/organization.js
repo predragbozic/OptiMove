@@ -347,40 +347,39 @@ router.post("/program-access/bulk", async (req, res, next) => {
     if (accessIds.length > 100) return res.status(400).json({ error: "Too many requests selected." });
 
     const nextStatus = action === "approve" ? "accessed" : "rejected";
-    const managedAthletes = await loadManagedAthletes(req.user);
-    const managedAthleteIds = managedAthletes.map((athlete) => athlete.id).filter(Boolean);
-    if (!managedAthleteIds.length) return res.status(403).json({ error: "No manageable athletes for these requests." });
+    const updated = [];
+    const skipped = [];
 
-    const result = await query(
-      `with selected_access as (
-         select distinct pa.id
-         from library.program_access pa
-         join public.users u on u.id = pa.user_id
-         join public.athletes a on a.user_id = pa.user_id
-            or exists (
-              select 1
-              from public.user_athletes ua
-              where ua.user_id = pa.user_id
-                and ua.athlete_id = a.id
-                and ua.relationship_type = 'athlete'
-                and ua.is_active = true
-            )
-         where pa.id = any($1::uuid[])
-           and pa.status = 'requested'
-           and a.id = any($3::uuid[])
-       )
-       update library.program_access pa
-       set status = $2,
-           starts_at = case when $2 = 'accessed' then coalesce(pa.starts_at, now()) else pa.starts_at end,
-           updated_at = now()
-       from selected_access
-       where pa.id = selected_access.id
-       returning pa.id, pa.status, pa.updated_at`,
-      [accessIds, nextStatus, managedAthleteIds],
-    );
-    const updated = result.rows;
-    if (!updated.length) return res.status(409).json({ error: "No shown pending requests could be updated." });
-    res.json({ updated });
+    for (const accessId of accessIds) {
+      const request = await loadProgramAccessRequest(accessId);
+      if (!request) {
+        skipped.push({ id: accessId, reason: "not_found" });
+        continue;
+      }
+      if (request.status !== "requested") {
+        skipped.push({ id: accessId, reason: "not_pending" });
+        continue;
+      }
+      if (!(await canManageAthlete(req.user, request.athlete_id))) {
+        skipped.push({ id: accessId, reason: "forbidden" });
+        continue;
+      }
+
+      const result = await query(
+        `update library.program_access
+         set status = $2,
+             starts_at = case when $2 = 'accessed' then coalesce(starts_at, now()) else starts_at end,
+             updated_at = now()
+         where id = $1
+           and status = 'requested'
+         returning id, status, updated_at`,
+        [accessId, nextStatus],
+      );
+      if (result.rows[0]) updated.push(result.rows[0]);
+      else skipped.push({ id: accessId, reason: "not_pending" });
+    }
+
+    res.json({ updated, skipped });
   } catch (error) {
     next(error);
   }
