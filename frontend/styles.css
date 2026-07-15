@@ -347,6 +347,103 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
 }
 
+.organization-request-summary {
+  min-width: 210px;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(40, 126, 119, 0.2);
+  border-radius: 8px;
+  background: #eef8f6;
+  color: #0f4f4a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.organization-request-summary span {
+  grid-row: 1 / 3;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #287e77;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.organization-request-summary strong,
+.organization-request-summary small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.organization-request-summary small {
+  color: #287e77;
+  font-weight: 800;
+}
+
+.organization-request-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.organization-request-metrics span {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.organization-request-metrics strong,
+.organization-request-metrics small {
+  display: block;
+}
+
+.organization-request-metrics strong {
+  font-size: 18px;
+}
+
+.organization-request-metrics small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.organization-request-athlete {
+  min-width: 0;
+}
+
+.organization-request-program {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.organization-request-program small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.organization-request-program em {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .organization-avatar {
   width: 42px;
   height: 42px;
@@ -5374,6 +5471,28 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 
   body:not(.athlete-mode):not(.login-mode) .workspace {
     padding: 10px 10px 18px;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .organization-request-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .organization-request-row .organization-row-actions {
+    justify-content: stretch;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .organization-request-row .organization-row-actions button {
+    flex: 1;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .organization-request-summary {
+    width: 100%;
+    min-width: 0;
+  }
+
+  body:not(.athlete-mode):not(.login-mode) .organization-request-metrics {
+    grid-template-columns: 1fr;
   }
 
   body:not(.athlete-mode):not(.login-mode) .topbar {
