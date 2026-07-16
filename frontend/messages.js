@@ -132,9 +132,8 @@ async function openConversation(id, { silent = false } = {}) {
 
 function renderMessagePanelHtml() {
   if (!state.currentUser) return "";
-  if (state.messages.selectedId) return renderConversationHtml();
   const rows = state.messages.rows || [];
-  const content = state.messages.loading
+  const listContent = state.messages.loading && !state.messages.selectedId
     ? `<p class="empty-note">Loading messages...</p>`
     : state.messages.error
       ? `<p class="form-error">${escapeHtml(state.messages.error)}</p>`
@@ -142,11 +141,18 @@ function renderMessagePanelHtml() {
         ? rows.map(renderConversationRow).join("")
         : `<p class="empty-note">No messages yet.</p>`;
   return `
-    <div class="notification-panel-head">
-      <strong>Messages</strong>
-      <span class="panel-status">${rows.length} thread${rows.length === 1 ? "" : "s"}</span>
+    <div class="message-inbox-layout">
+      <section class="message-inbox-list" aria-label="Conversations">
+        <div class="notification-panel-head message-inbox-head">
+          <strong>Messages</strong>
+          <span class="panel-status">${rows.length} thread${rows.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="message-list">${listContent}</div>
+      </section>
+      <section class="message-inbox-thread" aria-label="Conversation">
+        ${state.messages.selectedId ? renderConversationHtml() : renderConversationPlaceholder()}
+      </section>
     </div>
-    <div class="message-list">${content}</div>
   `;
 }
 
@@ -155,8 +161,9 @@ function renderConversationRow(row) {
   const unread = Number(row.unread_count || 0);
   const blocked = row.blocked_by_me || row.blocked_by_other;
   const date = row.last_message_created_at ? formatMessageDate(row.last_message_created_at) : "";
+  const selected = String(row.id || "") === String(state.messages.selectedId || "");
   return `
-    <button class="message-row${unread ? " is-unread" : ""}" data-action="message-open" data-conversation-id="${escapeAttr(row.id)}" type="button">
+    <button class="message-row${unread ? " is-unread" : ""}${selected ? " is-selected" : ""}" data-action="message-open" data-conversation-id="${escapeAttr(row.id)}" type="button">
       <span class="message-avatar">${escapeHtml(initials(names))}</span>
       <span class="message-row-main">
         <strong>${escapeHtml(names)}</strong>
@@ -187,7 +194,6 @@ function renderConversationHtml() {
         : `<p class="empty-note">No messages yet.</p>`;
   return `
     <div class="notification-panel-head message-thread-head">
-      <button class="plain-button compact-button" data-action="message-back" type="button">Back</button>
       <strong>${escapeHtml(title)}</strong>
       <button class="plain-button compact-button" data-action="${blockedByMe ? "message-unblock" : "message-block"}" type="button">
         ${blockedByMe ? "Unblock" : "Block"}
@@ -200,6 +206,15 @@ function renderConversationHtml() {
           <input name="body" type="text" placeholder="Write a message..." autocomplete="off">
           <button class="plain-button compact-button" type="submit">Send</button>
         </form>`}
+  `;
+}
+
+function renderConversationPlaceholder() {
+  return `
+    <div class="message-thread-placeholder">
+      <strong>Select a conversation</strong>
+      <p>Choose a person from the left to continue messaging.</p>
+    </div>
   `;
 }
 
