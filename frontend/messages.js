@@ -137,20 +137,32 @@ async function openConversation(id, { silent = false } = {}) {
 function renderMessagePanelHtml() {
   if (!state.currentUser) return "";
   const rows = state.messages.rows || [];
+  const search = String(state.messages.search || "").trim().toLowerCase();
+  const filteredRows = search
+    ? rows.filter((row) => {
+      const participants = (row.participants || []).map((participant) => `${participant.name || ""} ${participant.email || ""}`).join(" ");
+      const haystack = `${conversationNames(row)} ${participants} ${row.last_message || ""}`.toLowerCase();
+      return haystack.includes(search);
+    })
+    : rows;
   const listContent = state.messages.loading && !state.messages.selectedId
     ? `<p class="empty-note">Loading messages...</p>`
     : state.messages.error
       ? `<p class="form-error">${escapeHtml(state.messages.error)}</p>`
-      : rows.length
-        ? rows.map(renderConversationRow).join("")
-        : `<p class="empty-note">No messages yet.</p>`;
+      : filteredRows.length
+        ? filteredRows.map(renderConversationRow).join("")
+        : `<p class="empty-note">${search ? "No conversations match this search." : "No messages yet."}</p>`;
   return `
     <div class="message-inbox-layout">
       <section class="message-inbox-list" aria-label="Conversations">
         <div class="notification-panel-head message-inbox-head">
           <strong>Messages</strong>
-          <span class="panel-status">${rows.length} thread${rows.length === 1 ? "" : "s"}</span>
+          <span class="panel-status">${filteredRows.length}/${rows.length}</span>
         </div>
+        <label class="message-search">
+          <span>Search conversations</span>
+          <input data-message-search type="search" value="${escapeAttr(state.messages.search || "")}" placeholder="Name, email, or message">
+        </label>
         <div class="message-list">${listContent}</div>
       </section>
       <section class="message-inbox-thread" aria-label="Conversation">

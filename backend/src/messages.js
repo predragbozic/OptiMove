@@ -14,6 +14,57 @@ export async function ensureConversationForContactRequest(contactRequestId, acto
   if (!row || !row.sender_user_id || !row.coach_user_id) return null;
   if (row.conversation_id) return row.conversation_id;
 
+  const existing = await query(
+    `select c.id
+     from public.message_conversations c
+     join public.message_participants coach_mp
+       on coach_mp.conversation_id = c.id
+      and coach_mp.user_id = $1
+     join public.message_participants sender_mp
+       on sender_mp.conversation_id = c.id
+      and sender_mp.user_id = $2
+     where c.conversation_type = 'coach_contact'
+     order by c.last_message_at desc nulls last, c.updated_at desc
+     limit 1`,
+    [row.coach_user_id, row.sender_user_id],
+  );
+  if (existing.rows[0]?.id) {
+    const conversationId = existing.rows[0].id;
+    await query(
+      `update public.message_participants
+       set blocked_at = null,
+           blocked_by_user_id = null
+       where conversation_id = $1
+         and user_id in ($2, $3)`,
+      [conversationId, row.coach_user_id, row.sender_user_id],
+    );
+    await query(
+      `insert into public.messages (conversation_id, sender_user_id, body)
+       values ($1, $2, $3)`,
+      [conversationId, row.sender_user_id, row.message],
+    );
+    await query(
+      `update public.message_conversations
+       set last_message_at = now(),
+           updated_at = now()
+       where id = $1`,
+      [conversationId],
+    );
+    await query(
+      `update public.coach_contact_requests
+       set conversation_id = $2,
+           updated_at = now()
+       where id = $1`,
+      [row.id, conversationId],
+    );
+    emitRealtimeEventForUsers([row.coach_user_id, row.sender_user_id], "messages_changed", {
+      conversationId,
+      source: "coach_contact_request",
+      reused: true,
+    });
+    return conversationId;
+  }
+
   const conversation = await query(
     `insert into public.message_conversations (
        conversation_type, created_by_user_id, source_type, source_id, last_message_at

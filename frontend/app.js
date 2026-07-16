@@ -387,6 +387,20 @@ async function handleContentSubmit(event) {
 }
 
 function handleContentInput(event) {
+  const messageSearch = event.target.closest("[data-message-search]");
+  if (messageSearch) {
+    const cursor = messageSearch.selectionStart;
+    state.messages.search = messageSearch.value;
+    renderMessages();
+    requestAnimationFrame(() => {
+      const nextInput = els.messagePanel?.querySelector("[data-message-search]");
+      if (!nextInput) return;
+      nextInput.focus();
+      if (Number.isInteger(cursor)) nextInput.setSelectionRange(cursor, cursor);
+    });
+    return;
+  }
+
   const orgFilter = event.target.closest("[data-org-select-filter]");
   if (orgFilter) {
     handleOrganizationFilterInput(orgFilter);

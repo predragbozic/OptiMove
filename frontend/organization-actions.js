@@ -159,6 +159,13 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
+  if (type === "organization-toggle-athlete-access") {
+    state.organization.accessOpen = !state.organization.accessOpen;
+    state.organization.accessError = "";
+    state.organization.accessMessage = "";
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
   if (type === "organization-invite-athlete") {
     const row = findOrganizationRow("athlete", action.dataset.athleteId);
     if (!row) return true;

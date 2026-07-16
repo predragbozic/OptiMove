@@ -143,41 +143,117 @@ export function renderOrganizationBrowser(data) {
 function renderAthleteAccessQuickEdit(athletes) {
   const ids = athletes.map((athlete) => athlete.id).filter(Boolean).join(",");
   if (!athletes.length) return "";
+  const open = state.organization.accessOpen === true;
   return `
     <section class="panel organization-list-card athlete-access-manager">
       <div class="organization-list-head">
         <div>
           <p class="eyebrow">Access quick edit</p>
-          <h3>Shown athletes</h3>
-          <p class="muted">Apply common visibility rules to the athletes currently shown in this view. Use individual edit for precise exceptions.</p>
+          <h3>Access control</h3>
+          <p class="muted">Manage what the shown athletes can browse. Open this only when you need batch changes.</p>
         </div>
-        <strong>${athletes.length} shown</strong>
+        <div class="athlete-access-manager-head-actions">
+          <strong>${athletes.length} shown</strong>
+          <button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">${open ? "Close" : "Open access control"}</button>
+        </div>
       </div>
       ${state.organization.accessMessage ? `<p class="builder-success">${escapeHtml(state.organization.accessMessage)}</p>` : ""}
       ${state.organization.accessError ? `<p class="builder-error">${escapeHtml(state.organization.accessError)}</p>` : ""}
-      <div class="athlete-access-manager-actions">
-        ${renderBulkAccessButton(ids, "Coach library", { canViewCoachLibrary: true })}
-        ${renderBulkAccessButton(ids, "Club library", { canViewClubLibrary: true })}
-        ${renderBulkAccessButton(ids, "OptiMove library", { canViewOptimoveLibrary: true })}
-        ${renderBulkAccessButton(ids, "Marketplace", { canViewMarketplace: true })}
-        ${renderBulkAccessButton(ids, "Free only", { freeOnly: true })}
-        ${renderBulkAccessButton(ids, "Require approval", { requireApproval: true })}
-        ${renderBulkAccessButton(ids, "Coach profiles", { canViewCoachProfiles: true })}
-        ${renderBulkAccessButton(ids, "Public coaches", { canViewPublicCoachProfiles: true })}
-        ${renderBulkAccessButton(ids, "Coach exercise library", { canViewCoachExerciseLibrary: true })}
-      </div>
-      <div class="athlete-access-summary-list">
-        ${athletes.map(renderAthleteAccessSummaryRow).join("")}
-      </div>
+      ${open ? `
+        <div class="athlete-access-control-grid">
+          ${renderAccessControlGroup(ids, {
+            title: "Programs",
+            icon: "PL",
+            note: "Program Library visibility and request rules.",
+            actions: [
+              ["Coach library", "canViewCoachLibrary"],
+              ["Club library", "canViewClubLibrary"],
+              ["OptiMove", "canViewOptimoveLibrary"],
+              ["Marketplace", "canViewMarketplace"],
+              ["Free only", "freeOnly"],
+              ["Require approval", "requireApproval"],
+            ],
+          })}
+          ${renderAccessControlGroup(ids, {
+            title: "Coaches",
+            icon: "CO",
+            note: "Coach profile discovery and contact permissions.",
+            actions: [
+              ["Own coach profile", "canViewCoachProfiles"],
+              ["Club coaches", "canViewClubCoachProfiles"],
+              ["Public coaches", "canViewPublicCoachProfiles"],
+              ["Contact visible coaches", "canContactVisibleCoaches"],
+            ],
+          })}
+          ${renderAccessControlGroup(ids, {
+            title: "Exercises",
+            icon: "EX",
+            note: "Exercise Library access outside assigned plans.",
+            actions: [
+              ["Assigned exercises", "canViewAssignedExercises"],
+              ["Coach exercise library", "canViewCoachExerciseLibrary"],
+              ["Club exercise library", "canViewClubExerciseLibrary"],
+              ["OptiMove exercise library", "canViewOptimoveExerciseLibrary"],
+              ["Selected exercise groups", "canViewExerciseGroups"],
+            ],
+          })}
+        </div>
+        <div class="athlete-access-summary-list">
+          ${athletes.map(renderAthleteAccessSummaryRow).join("")}
+        </div>
+      ` : renderAthleteAccessClosedSummary(athletes)}
     </section>
   `;
 }
 
-function renderBulkAccessButton(ids, label, patch) {
+function renderAccessControlGroup(ids, { title, icon, note, actions }) {
   return `
-    <button class="plain-button compact-button" type="button" data-action="organization-athlete-access-bulk" data-athlete-ids="${escapeAttr(ids)}" data-access-patch="${escapeAttr(JSON.stringify(patch))}">
+    <article class="athlete-access-control-card">
+      <div class="athlete-access-control-card-head">
+        <span>${escapeHtml(icon)}</span>
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(note)}</p>
+        </div>
+      </div>
+      <div class="athlete-access-control-actions">
+        ${actions.map(([label, key]) => renderAccessActionRow(ids, label, key)).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderAccessActionRow(ids, label, key) {
+  return `
+    <div class="athlete-access-action-row">
+      <span>${escapeHtml(label)}</span>
+      <div>
+        ${renderBulkAccessButton(ids, "Allow", { [key]: true })}
+        ${renderBulkAccessButton(ids, "Block", { [key]: false }, true)}
+      </div>
+    </div>
+  `;
+}
+
+function renderBulkAccessButton(ids, label, patch, danger = false) {
+  return `
+    <button class="access-mini-button ${danger ? "is-block" : "is-allow"}" type="button" data-action="organization-athlete-access-bulk" data-athlete-ids="${escapeAttr(ids)}" data-access-patch="${escapeAttr(JSON.stringify(patch))}">
       ${escapeHtml(label)}
     </button>
+  `;
+}
+
+function renderAthleteAccessClosedSummary(athletes) {
+  const withMarketplace = athletes.filter((athlete) => athlete.can_view_marketplace === true).length;
+  const withPublicCoaches = athletes.filter((athlete) => athlete.can_view_public_coach_profiles === true).length;
+  const withCoachExercises = athletes.filter((athlete) => athlete.can_view_coach_exercise_library === true).length;
+  return `
+    <div class="athlete-access-closed-summary">
+      <span><strong>${athletes.length}</strong> athletes in view</span>
+      <span><strong>${withMarketplace}</strong> marketplace</span>
+      <span><strong>${withPublicCoaches}</strong> public coaches</span>
+      <span><strong>${withCoachExercises}</strong> coach exercises</span>
+    </div>
   `;
 }
 
