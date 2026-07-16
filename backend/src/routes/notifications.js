@@ -11,6 +11,7 @@ router.get("/", async (req, res, next) => {
         `select id, type, title, body, entity_type, entity_id, href, metadata, read_at, created_at
          from public.app_notifications
          where recipient_user_id = $1
+           and type <> 'message_received'
          order by created_at desc
          limit $2`,
         [req.user.id, limit],
@@ -19,6 +20,7 @@ router.get("/", async (req, res, next) => {
         `select count(*)::int as count
          from public.app_notifications
          where recipient_user_id = $1
+           and type <> 'message_received'
            and read_at is null`,
         [req.user.id],
       ),
@@ -52,6 +54,7 @@ router.post("/read-all", async (req, res, next) => {
       `update public.app_notifications
        set read_at = coalesce(read_at, now())
        where recipient_user_id = $1
+         and type <> 'message_received'
          and read_at is null
        returning id`,
       [req.user.id],
