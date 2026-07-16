@@ -35,6 +35,15 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
     payload.canViewClubLibrary = formData.has("canViewClubLibrary");
     payload.canViewOptimoveLibrary = formData.has("canViewOptimoveLibrary");
     payload.canViewMarketplace = formData.has("canViewMarketplace");
+    payload.canViewCoachProfiles = formData.has("canViewCoachProfiles");
+    payload.canViewClubCoachProfiles = formData.has("canViewClubCoachProfiles");
+    payload.canViewPublicCoachProfiles = formData.has("canViewPublicCoachProfiles");
+    payload.canContactVisibleCoaches = formData.has("canContactVisibleCoaches");
+    payload.canViewAssignedExercises = formData.has("canViewAssignedExercises");
+    payload.canViewCoachExerciseLibrary = formData.has("canViewCoachExerciseLibrary");
+    payload.canViewClubExerciseLibrary = formData.has("canViewClubExerciseLibrary");
+    payload.canViewOptimoveExerciseLibrary = formData.has("canViewOptimoveExerciseLibrary");
+    payload.canViewExerciseGroups = formData.has("canViewExerciseGroups");
     payload.freeOnly = formData.has("freeOnly");
     payload.requireApproval = formData.has("requireApproval");
   }
@@ -224,6 +233,34 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     } catch (error) {
       state.organization.requestError = error?.message || "Unable to update shown requests.";
       await renderAccessState({ refresh: false });
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
+  if (type === "organization-athlete-access-bulk") {
+    const athleteIds = (action.dataset.athleteIds || "").split(",").map((id) => id.trim()).filter(Boolean);
+    let patch = {};
+    try {
+      patch = JSON.parse(action.dataset.accessPatch || "{}");
+    } catch {
+      patch = {};
+    }
+    if (!athleteIds.length || !Object.keys(patch).length) return true;
+    action.disabled = true;
+    state.organization.accessError = "";
+    state.organization.accessMessage = "";
+    try {
+      const result = await api("/api/organization/athlete-library-access/bulk", {
+        method: "PUT",
+        body: JSON.stringify({ athleteIds, patch }),
+      });
+      state.organization.accessMessage = `Updated ${result?.updated?.length || 0} shown athletes.`;
+      await refreshOrganizationData?.();
+      await renderOrganizationPanel({ refresh: false });
+    } catch (error) {
+      state.organization.accessError = error?.message || "Unable to update athlete access.";
+      await renderOrganizationPanel({ refresh: false });
     } finally {
       action.disabled = false;
     }

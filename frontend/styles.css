@@ -610,6 +610,63 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   gap: 8px;
 }
 
+.athlete-access-manager {
+  margin-top: 14px;
+}
+
+.athlete-access-manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.athlete-access-summary-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.athlete-access-summary-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(220px, 1.4fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.athlete-access-summary-row strong,
+.athlete-access-summary-row span {
+  display: block;
+}
+
+.athlete-access-summary-row > div > span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.athlete-access-summary-row p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.athlete-access-summary-row p span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eef6f5;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .program-checkbox {
   display: flex;
   align-items: center;
@@ -1389,6 +1446,10 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
   }
 
   .athlete-access-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .athlete-access-summary-row {
     grid-template-columns: 1fr;
   }
 

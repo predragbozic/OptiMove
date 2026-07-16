@@ -221,44 +221,26 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
 router.put("/athletes/:athleteId/library-access", async (req, res, next) => {
   try {
     if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
-    const result = await query(
-      `insert into public.athlete_library_access (
-         athlete_id,
-         managed_by_user_id,
-         can_view_coach_library,
-         can_view_club_library,
-         can_view_optimove_library,
-         can_view_marketplace,
-         free_only,
-         require_approval,
-         selected_programs_only
-       )
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       on conflict (athlete_id) do update set
-         managed_by_user_id = excluded.managed_by_user_id,
-         can_view_coach_library = excluded.can_view_coach_library,
-         can_view_club_library = excluded.can_view_club_library,
-         can_view_optimove_library = excluded.can_view_optimove_library,
-         can_view_marketplace = excluded.can_view_marketplace,
-         free_only = excluded.free_only,
-         require_approval = excluded.require_approval,
-         selected_programs_only = excluded.selected_programs_only,
-         updated_at = now()
-       returning athlete_id, can_view_coach_library, can_view_club_library, can_view_optimove_library,
-         can_view_marketplace, free_only, require_approval, selected_programs_only`,
-      [
-        req.params.athleteId,
-        req.user.id,
-        bool(req.body?.canViewCoachLibrary, true),
-        bool(req.body?.canViewClubLibrary, false),
-        bool(req.body?.canViewOptimoveLibrary, false),
-        bool(req.body?.canViewMarketplace, false),
-        bool(req.body?.freeOnly, true),
-        bool(req.body?.requireApproval, true),
-        bool(req.body?.selectedProgramsOnly, false),
-      ],
-    );
-    res.json({ access: result.rows[0] });
+    const access = await saveAthleteLibraryAccess(req.params.athleteId, req.user.id, req.body || {});
+    res.json({ access });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put("/athlete-library-access/bulk", async (req, res, next) => {
+  try {
+    const athleteIds = Array.isArray(req.body?.athleteIds) ? req.body.athleteIds.map(clean).filter(Boolean) : [];
+    if (!athleteIds.length) return res.status(400).json({ error: "Choose at least one athlete." });
+    if (athleteIds.length > 200) return res.status(400).json({ error: "Too many athletes in one update." });
+
+    const patch = req.body?.patch && typeof req.body.patch === "object" ? req.body.patch : {};
+    const changed = [];
+    for (const athleteId of athleteIds) {
+      if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "One or more athletes are outside your access." });
+      changed.push(await saveAthleteLibraryAccess(athleteId, req.user.id, patch, { partial: true }));
+    }
+    res.json({ updated: changed });
   } catch (error) {
     next(error);
   }
@@ -757,6 +739,15 @@ async function loadManagedAthletes(user) {
        coalesce(ala.can_view_club_library, false) as can_view_club_library,
        coalesce(ala.can_view_optimove_library, false) as can_view_optimove_library,
        coalesce(ala.can_view_marketplace, false) as can_view_marketplace,
+       coalesce(ala.can_view_coach_profiles, true) as can_view_coach_profiles,
+       coalesce(ala.can_view_club_coach_profiles, false) as can_view_club_coach_profiles,
+       coalesce(ala.can_view_public_coach_profiles, false) as can_view_public_coach_profiles,
+       coalesce(ala.can_contact_visible_coaches, true) as can_contact_visible_coaches,
+       coalesce(ala.can_view_assigned_exercises, true) as can_view_assigned_exercises,
+       coalesce(ala.can_view_coach_exercise_library, false) as can_view_coach_exercise_library,
+       coalesce(ala.can_view_club_exercise_library, false) as can_view_club_exercise_library,
+       coalesce(ala.can_view_optimove_exercise_library, false) as can_view_optimove_exercise_library,
+       coalesce(ala.can_view_exercise_groups, false) as can_view_exercise_groups,
        coalesce(ala.free_only, true) as free_only,
        coalesce(ala.require_approval, true) as require_approval,
        coalesce(ala.selected_programs_only, false) as selected_programs_only
@@ -782,6 +773,81 @@ async function loadManagedAthletes(user) {
     [user.id, isPlatformAdmin(user)],
   );
   return result.rows;
+}
+
+async function saveAthleteLibraryAccess(athleteId, managedByUserId, body, { partial = false } = {}) {
+  const current = partial
+    ? (await query(`select * from public.athlete_library_access where athlete_id = $1 limit 1`, [athleteId])).rows[0] || {}
+    : {};
+  const value = (bodyKey, dbKey, fallback) => (partial && body[bodyKey] === undefined ? bool(current[dbKey], fallback) : bool(body[bodyKey], fallback));
+  const result = await query(
+    `insert into public.athlete_library_access (
+       athlete_id,
+       managed_by_user_id,
+       can_view_coach_library,
+       can_view_club_library,
+       can_view_optimove_library,
+       can_view_marketplace,
+       can_view_coach_profiles,
+       can_view_club_coach_profiles,
+       can_view_public_coach_profiles,
+       can_contact_visible_coaches,
+       can_view_assigned_exercises,
+       can_view_coach_exercise_library,
+       can_view_club_exercise_library,
+       can_view_optimove_exercise_library,
+       can_view_exercise_groups,
+       free_only,
+       require_approval,
+       selected_programs_only
+     )
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+     on conflict (athlete_id) do update set
+       managed_by_user_id = excluded.managed_by_user_id,
+       can_view_coach_library = excluded.can_view_coach_library,
+       can_view_club_library = excluded.can_view_club_library,
+       can_view_optimove_library = excluded.can_view_optimove_library,
+       can_view_marketplace = excluded.can_view_marketplace,
+       can_view_coach_profiles = excluded.can_view_coach_profiles,
+       can_view_club_coach_profiles = excluded.can_view_club_coach_profiles,
+       can_view_public_coach_profiles = excluded.can_view_public_coach_profiles,
+       can_contact_visible_coaches = excluded.can_contact_visible_coaches,
+       can_view_assigned_exercises = excluded.can_view_assigned_exercises,
+       can_view_coach_exercise_library = excluded.can_view_coach_exercise_library,
+       can_view_club_exercise_library = excluded.can_view_club_exercise_library,
+       can_view_optimove_exercise_library = excluded.can_view_optimove_exercise_library,
+       can_view_exercise_groups = excluded.can_view_exercise_groups,
+       free_only = excluded.free_only,
+       require_approval = excluded.require_approval,
+       selected_programs_only = excluded.selected_programs_only,
+       updated_at = now()
+     returning athlete_id, can_view_coach_library, can_view_club_library, can_view_optimove_library,
+       can_view_marketplace, can_view_coach_profiles, can_view_club_coach_profiles,
+       can_view_public_coach_profiles, can_contact_visible_coaches, can_view_assigned_exercises,
+       can_view_coach_exercise_library, can_view_club_exercise_library, can_view_optimove_exercise_library,
+       can_view_exercise_groups, free_only, require_approval, selected_programs_only`,
+    [
+      athleteId,
+      managedByUserId,
+      value("canViewCoachLibrary", "can_view_coach_library", true),
+      value("canViewClubLibrary", "can_view_club_library", false),
+      value("canViewOptimoveLibrary", "can_view_optimove_library", false),
+      value("canViewMarketplace", "can_view_marketplace", false),
+      value("canViewCoachProfiles", "can_view_coach_profiles", true),
+      value("canViewClubCoachProfiles", "can_view_club_coach_profiles", false),
+      value("canViewPublicCoachProfiles", "can_view_public_coach_profiles", false),
+      value("canContactVisibleCoaches", "can_contact_visible_coaches", true),
+      value("canViewAssignedExercises", "can_view_assigned_exercises", true),
+      value("canViewCoachExerciseLibrary", "can_view_coach_exercise_library", false),
+      value("canViewClubExerciseLibrary", "can_view_club_exercise_library", false),
+      value("canViewOptimoveExerciseLibrary", "can_view_optimove_exercise_library", false),
+      value("canViewExerciseGroups", "can_view_exercise_groups", false),
+      value("freeOnly", "free_only", true),
+      value("requireApproval", "require_approval", true),
+      value("selectedProgramsOnly", "selected_programs_only", false),
+    ],
+  );
+  return result.rows[0];
 }
 
 async function canManageAthlete(user, athleteId) {

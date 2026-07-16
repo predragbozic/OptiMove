@@ -134,8 +134,72 @@ export function renderOrganizationBrowser(data) {
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes" ? selectedTeam ? renderTeamAthleteTable(selectedTeam, visibleAthletes, athletes) : renderOrganizationList(selectedClub ? `Athletes - ${selectedClub.name}` : "Athletes", visibleAthletes, "athlete") : ""}
       </section>
+      ${section === "athletes" ? renderAthleteAccessQuickEdit(visibleAthletes) : ""}
       ${state.organizationInvite.open ? renderAthleteInviteModal(athletes) : ""}
     </section>
+  `;
+}
+
+function renderAthleteAccessQuickEdit(athletes) {
+  const ids = athletes.map((athlete) => athlete.id).filter(Boolean).join(",");
+  if (!athletes.length) return "";
+  return `
+    <section class="panel organization-list-card athlete-access-manager">
+      <div class="organization-list-head">
+        <div>
+          <p class="eyebrow">Access quick edit</p>
+          <h3>Shown athletes</h3>
+          <p class="muted">Apply common visibility rules to the athletes currently shown in this view. Use individual edit for precise exceptions.</p>
+        </div>
+        <strong>${athletes.length} shown</strong>
+      </div>
+      ${state.organization.accessMessage ? `<p class="builder-success">${escapeHtml(state.organization.accessMessage)}</p>` : ""}
+      ${state.organization.accessError ? `<p class="builder-error">${escapeHtml(state.organization.accessError)}</p>` : ""}
+      <div class="athlete-access-manager-actions">
+        ${renderBulkAccessButton(ids, "Coach library", { canViewCoachLibrary: true })}
+        ${renderBulkAccessButton(ids, "Club library", { canViewClubLibrary: true })}
+        ${renderBulkAccessButton(ids, "OptiMove library", { canViewOptimoveLibrary: true })}
+        ${renderBulkAccessButton(ids, "Marketplace", { canViewMarketplace: true })}
+        ${renderBulkAccessButton(ids, "Free only", { freeOnly: true })}
+        ${renderBulkAccessButton(ids, "Require approval", { requireApproval: true })}
+        ${renderBulkAccessButton(ids, "Coach profiles", { canViewCoachProfiles: true })}
+        ${renderBulkAccessButton(ids, "Public coaches", { canViewPublicCoachProfiles: true })}
+        ${renderBulkAccessButton(ids, "Coach exercise library", { canViewCoachExerciseLibrary: true })}
+      </div>
+      <div class="athlete-access-summary-list">
+        ${athletes.map(renderAthleteAccessSummaryRow).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderBulkAccessButton(ids, label, patch) {
+  return `
+    <button class="plain-button compact-button" type="button" data-action="organization-athlete-access-bulk" data-athlete-ids="${escapeAttr(ids)}" data-access-patch="${escapeAttr(JSON.stringify(patch))}">
+      ${escapeHtml(label)}
+    </button>
+  `;
+}
+
+function renderAthleteAccessSummaryRow(athlete) {
+  const enabled = [
+    athlete.can_view_coach_library !== false ? "Coach programs" : "",
+    athlete.can_view_club_library === true ? "Club programs" : "",
+    athlete.can_view_optimove_library === true ? "OptiMove" : "",
+    athlete.can_view_marketplace === true ? "Marketplace" : "",
+    athlete.can_view_coach_profiles !== false ? "Coach profiles" : "",
+    athlete.can_view_public_coach_profiles === true ? "Public coaches" : "",
+    athlete.can_view_coach_exercise_library === true ? "Coach exercises" : "",
+  ].filter(Boolean);
+  return `
+    <article class="athlete-access-summary-row">
+      <div>
+        <strong>${escapeHtml(athlete.name || "Athlete")}</strong>
+        <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "")}</span>
+      </div>
+      <p>${enabled.length ? enabled.map((label) => `<span>${escapeHtml(label)}</span>`).join("") : `<span>No browsing access</span>`}</p>
+      <button class="text-action" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}">Edit</button>
+    </article>
   `;
 }
 
@@ -558,6 +622,32 @@ function renderAthleteLibraryAccessForm(row) {
         ${renderAccessCheckbox("canViewClubLibrary", "Club library", row.can_view_club_library === true)}
         ${renderAccessCheckbox("canViewOptimoveLibrary", "OptiMove", row.can_view_optimove_library === true)}
         ${renderAccessCheckbox("canViewMarketplace", "Marketplace", row.can_view_marketplace === true)}
+      </div>
+      <div>
+        <h3>Visible coaches and staff</h3>
+        <p class="muted">Control which coach profiles this athlete can discover or contact. This also leaves room for future staff types such as medical or physio profiles.</p>
+      </div>
+      <div class="athlete-access-grid">
+        ${renderAccessCheckbox("canViewCoachProfiles", "Own coach profile", row.can_view_coach_profiles !== false)}
+        ${renderAccessCheckbox("canViewClubCoachProfiles", "Club coaches", row.can_view_club_coach_profiles === true)}
+        ${renderAccessCheckbox("canViewPublicCoachProfiles", "Public coaches", row.can_view_public_coach_profiles === true)}
+        ${renderAccessCheckbox("canContactVisibleCoaches", "Can contact visible coaches", row.can_contact_visible_coaches !== false)}
+      </div>
+      <div>
+        <h3>Visible exercise library</h3>
+        <p class="muted">Choose whether this athlete can browse exercise content beyond exercises already shown inside assigned plans.</p>
+      </div>
+      <div class="athlete-access-grid">
+        ${renderAccessCheckbox("canViewAssignedExercises", "Assigned exercises", row.can_view_assigned_exercises !== false)}
+        ${renderAccessCheckbox("canViewCoachExerciseLibrary", "Coach exercise library", row.can_view_coach_exercise_library === true)}
+        ${renderAccessCheckbox("canViewClubExerciseLibrary", "Club exercise library", row.can_view_club_exercise_library === true)}
+        ${renderAccessCheckbox("canViewOptimoveExerciseLibrary", "OptiMove exercise library", row.can_view_optimove_exercise_library === true)}
+        ${renderAccessCheckbox("canViewExerciseGroups", "Selected exercise groups", row.can_view_exercise_groups === true)}
+      </div>
+      <div>
+        <h3>Access rules</h3>
+      </div>
+      <div class="athlete-access-grid">
         ${renderAccessCheckbox("freeOnly", "Free programs only", row.free_only !== false)}
         ${renderAccessCheckbox("requireApproval", "Require approval", row.require_approval !== false)}
       </div>

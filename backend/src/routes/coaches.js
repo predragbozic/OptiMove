@@ -244,11 +244,31 @@ function coachListSql({ includeOrder = true } = {}) {
       where ucr.user_id = cp.user_id
         and ucr.is_active = true
     ) clubs on true
+    left join lateral (
+      select coalesce(ala.can_view_coach_profiles, true) as can_view_coach_profiles,
+             coalesce(ala.can_view_public_coach_profiles, false) as can_view_public_coach_profiles
+      from public.athletes viewer_athlete
+      left join public.athlete_library_access ala on ala.athlete_id = viewer_athlete.id
+      where coalesce(viewer_athlete.is_active, true)
+        and (
+          viewer_athlete.user_id = $1
+          or exists (
+            select 1
+            from public.user_athletes athlete_link
+            where athlete_link.athlete_id = viewer_athlete.id
+              and athlete_link.user_id = $1
+              and athlete_link.relationship_type = 'athlete'
+              and athlete_link.is_active = true
+          )
+        )
+      order by viewer_athlete.created_at nulls last
+      limit 1
+    ) viewer_access on true
     where cp.is_active = true
       and (
         cp.user_id = $1
         or $2::boolean
-        or (not $3::boolean and cp.visibility in ('public', 'marketplace'))
+        or (not $3::boolean and cp.visibility in ('public', 'marketplace') and coalesce(viewer_access.can_view_public_coach_profiles, true))
         or exists (
           select 1
           from public.athletes viewer_athlete
@@ -269,6 +289,7 @@ function coachListSql({ includeOrder = true } = {}) {
                   and athlete_link.is_active = true
               )
             )
+            and coalesce(viewer_access.can_view_coach_profiles, true)
         )
         or ($3::boolean and cp.visibility = 'club' and exists (
           select 1
