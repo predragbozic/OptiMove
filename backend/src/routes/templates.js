@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../db.js";
 import { canAccessAllAthletes, canAccessAthlete, isAthlete } from "../access.js";
+import { createNotification } from "../notifications.js";
 import {
   accessExpiresAt,
   accessTypeForLicense,
@@ -678,7 +679,10 @@ async function assignProgramAccess(plan, userId) {
 
 async function markProgramUsed(user, planId, note) {
   const plan = await query(
-    `select access_model,
+    `select id,
+            name,
+            created_by_user_id,
+            access_model,
             access_duration_days,
             subscription_period,
             is_free,
@@ -745,6 +749,19 @@ async function markProgramUsed(user, planId, note) {
      values ($1, $2, $3::varchar, nullif(trim($4::text), ''))`,
     [access.rows[0].id, user.id, eventType, note],
   );
+  if (finalStatus === "requested" && existing?.status !== "requested" && license.created_by_user_id && String(license.created_by_user_id) !== String(user.id)) {
+    await createNotification({
+      recipientUserId: license.created_by_user_id,
+      actorUserId: user.id,
+      type: "program_access_requested",
+      title: "Program access request",
+      body: `${user.display_name || user.full_name || user.email || "Athlete"} requested ${license.name || "a program"}.`,
+      entityType: "program_access",
+      entityId: access.rows[0].id,
+      href: "/app?tab=templates&section=requests",
+      metadata: { planId },
+    });
+  }
   return access.rows[0];
 }
 

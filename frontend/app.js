@@ -65,6 +65,12 @@ import {
   normalizeOrganizationSelection,
   renderOrganizationPanelHtml,
 } from "./organization-view.js";
+import {
+  closeNotificationsIfOutside,
+  handleNotificationAction,
+  loadNotifications,
+  renderNotifications,
+} from "./notifications.js";
 import { renderPlanMoreMenu } from "./plan-actions-view.js";
 import {
   btaNodes as buildBtaNodes,
@@ -156,11 +162,13 @@ async function init() {
     return;
   }
   renderUserControls();
+  renderNotifications();
   if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
     window.location.replace("/athlete");
     return;
   }
   ensureBackGuard();
+  void loadNotifications({ silent: true });
   await loadAthletes();
 }
 
@@ -327,6 +335,8 @@ async function handleContentSubmit(event) {
       state.currentUser = data.user;
       document.body.classList.remove("login-mode");
       renderUserControls();
+      renderNotifications();
+      void loadNotifications({ silent: true });
       if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
         window.location.replace("/athlete");
         return;
@@ -631,7 +641,7 @@ function goHome() {
   renderCurrentNode();
 }
 
-function handleGlobalClick(event) {
+async function handleGlobalClick(event) {
   const tab = event.target.closest("[data-tab]");
   if (tab) {
     const nextTab = tab.dataset.tab;
@@ -652,9 +662,14 @@ function handleGlobalClick(event) {
   }
 
   const action = event.target.closest("[data-action]");
-  if (!action) return;
+  if (!action) {
+    closeNotificationsIfOutside(event.target);
+    return;
+  }
+  if (await handleNotificationAction(action)) return;
   if (action.dataset.action === "close-media") closeMedia();
   if (action.dataset.action === "home") goHome();
+  closeNotificationsIfOutside(event.target);
 }
 
 function handleSwipeStart(event) {

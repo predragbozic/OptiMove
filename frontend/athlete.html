@@ -90,6 +90,13 @@
           </div>
           <div class="topbar-actions">
             <span class="user-role" id="userRole" hidden></span>
+            <div class="notification-menu">
+              <button class="plain-button notification-toggle" id="notificationToggle" data-action="notifications-toggle" type="button" hidden>
+                <span>Inbox</span>
+                <span class="notification-count" data-notification-count hidden>0</span>
+              </button>
+              <div class="notification-panel" id="notificationPanel" hidden></div>
+            </div>
             <button class="plain-button sign-out-button" id="signOutButton" type="button" hidden>Sign out</button>
             <div class="status-pill" id="apiStatus">Connecting</div>
           </div>

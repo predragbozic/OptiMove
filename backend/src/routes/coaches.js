@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../db.js";
 import { canAccessAllAthletes, isClubAdmin, isTeamCoach } from "../access.js";
+import { createNotification } from "../notifications.js";
 
 const router = Router();
 
@@ -96,11 +97,23 @@ router.post("/:profileId/contact", async (req, res, next) => {
     if (!profile || !profile.contact_enabled) return res.status(404).json({ error: "Coach profile not found." });
     const message = text(req.body?.message);
     if (!message) return res.status(400).json({ error: "Message is required." });
-    await query(
+    const inserted = await query(
       `insert into public.coach_contact_requests (coach_profile_id, sender_user_id, sender_name, sender_email, message)
-       values ($1, $2, $3, $4, $5)`,
+       values ($1, $2, $3, $4, $5)
+       returning id`,
       [profile.id, req.user?.id || null, text(req.body?.name) || req.user?.display_name || req.user?.full_name || req.user?.email, text(req.body?.email) || req.user?.email, message],
     );
+    await createNotification({
+      recipientUserId: profile.user_id,
+      actorUserId: req.user?.id || null,
+      type: "coach_contact_requested",
+      title: "New coach contact",
+      body: `${text(req.body?.name) || req.user?.display_name || req.user?.full_name || req.user?.email || "Someone"} sent you a message.`,
+      entityType: "coach_contact_request",
+      entityId: inserted.rows[0]?.id || null,
+      href: "/app?tab=coaches",
+      metadata: { coachProfileId: profile.id },
+    });
     res.status(201).json({ ok: true });
   } catch (error) {
     next(error);

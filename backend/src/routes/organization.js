@@ -3,6 +3,7 @@ import { Router } from "express";
 import { pool, query } from "../db.js";
 import { isClubAdmin, isPlatformAdmin, isTeamCoach } from "../access.js";
 import { hashPassword } from "../auth.js";
+import { createNotification } from "../notifications.js";
 
 const router = Router();
 
@@ -332,6 +333,7 @@ router.post("/program-access/:accessId/approve", async (req, res, next) => {
        returning id, status, updated_at`,
       [req.params.accessId],
     );
+    if (result.rows[0]) await notifyProgramAccessDecision(request, req.user, "approved");
     res.json({ access: result.rows[0] });
   } catch (error) {
     next(error);
@@ -381,7 +383,10 @@ router.post("/program-access/bulk", async (req, res, next) => {
              returning id, status, updated_at`,
         [accessId],
       );
-      if (result.rows[0]) updated.push(result.rows[0]);
+      if (result.rows[0]) {
+        updated.push(result.rows[0]);
+        await notifyProgramAccessDecision(request, req.user, action === "approve" ? "approved" : "rejected");
+      }
       else skipped.push({ id: accessId, reason: "not_pending" });
     }
 
@@ -404,6 +409,7 @@ router.post("/program-access/:accessId/reject", async (req, res, next) => {
        returning id, status, updated_at`,
       [req.params.accessId],
     );
+    if (result.rows[0]) await notifyProgramAccessDecision(request, req.user, "rejected");
     res.json({ access: result.rows[0] });
   } catch (error) {
     next(error);
@@ -704,8 +710,10 @@ async function loadProgramAccessRequest(accessId) {
        pa.status,
        pa.plan_id,
        pa.user_id,
+       coalesce(p.name, 'Program') as program_name,
        a.id as athlete_id
      from library.program_access pa
+     join plans.plans p on p.id = pa.plan_id
      join public.users u on u.id = pa.user_id
      join public.athletes a on a.user_id = pa.user_id
         or exists (
@@ -721,6 +729,22 @@ async function loadProgramAccessRequest(accessId) {
     [accessId],
   );
   return result.rows[0] || null;
+}
+
+async function notifyProgramAccessDecision(request, actor, decision) {
+  await createNotification({
+    recipientUserId: request.user_id,
+    actorUserId: actor?.id || null,
+    type: decision === "approved" ? "program_access_approved" : "program_access_rejected",
+    title: decision === "approved" ? "Program approved" : "Program request rejected",
+    body: decision === "approved"
+      ? `${request.program_name || "Program"} is now available.`
+      : `${request.program_name || "Program"} was not approved.`,
+    entityType: "program_access",
+    entityId: request.id,
+    href: "/athlete",
+    metadata: { planId: request.plan_id, status: decision },
+  });
 }
 
 async function loadManagedAthletes(user) {

@@ -16,5 +16,7 @@ export const els = {
   mediaTitle: document.querySelector("#mediaTitle"),
   mediaBody: document.querySelector("#mediaBody"),
   signOut: document.querySelector("#signOutButton"),
+  notificationToggle: document.querySelector("#notificationToggle"),
+  notificationPanel: document.querySelector("#notificationPanel"),
   userRole: document.querySelector("#userRole"),
 };

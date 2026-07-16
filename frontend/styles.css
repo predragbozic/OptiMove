@@ -80,6 +80,97 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 .user-role { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
 .sign-out-button { min-height: 34px; padding: 6px 10px; font-size: 13px; }
 
+.notification-menu {
+  position: relative;
+}
+
+.notification-toggle {
+  min-height: 34px;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.notification-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.notification-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 90;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(460px, calc(100vh - 120px));
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.notification-panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.notification-list {
+  display: grid;
+}
+
+.notification-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+}
+
+.notification-row.is-unread {
+  background: var(--accent-soft);
+}
+
+.notification-row strong,
+.notification-row small {
+  display: block;
+}
+
+.notification-row small,
+.notification-row time {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.compact-button {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 .organization-view {
   display: grid;
   gap: 14px;

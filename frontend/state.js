@@ -141,6 +141,7 @@ export const createInitialState = () => ({
   organizationEditor: { open: false, type: "", row: null },
   organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
+  notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
