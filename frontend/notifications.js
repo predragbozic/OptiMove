@@ -1,7 +1,8 @@
 import { api } from "./api.js";
 import { els } from "./dom.js";
+import { openMessageConversation } from "./messages.js";
 import { state } from "./state.js";
-import { escapeHtml } from "./utils.js";
+import { escapeAttr, escapeHtml } from "./utils.js";
 
 export async function loadNotifications({ silent = false } = {}) {
   if (!state.currentUser) return;
@@ -60,6 +61,30 @@ export async function handleNotificationAction(action) {
     renderNotifications();
     return true;
   }
+  if (type === "notification-accept-contact") {
+    const requestId = action.dataset.requestId;
+    const notificationId = action.dataset.notificationId;
+    if (!requestId) return true;
+    state.notifications.loading = true;
+    renderNotifications();
+    try {
+      const data = await api(`/api/coaches/contact-requests/${encodeURIComponent(requestId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "accepted" }),
+      });
+      if (notificationId) {
+        await api(`/api/notifications/${encodeURIComponent(notificationId)}/read`, { method: "POST", body: JSON.stringify({}) });
+      }
+      await loadNotifications({ silent: true });
+      if (data.conversationId) await openMessageConversation(data.conversationId);
+    } catch (error) {
+      state.notifications.error = error.message || "Could not accept contact request.";
+      renderNotifications();
+    } finally {
+      state.notifications.loading = false;
+    }
+    return true;
+  }
   return false;
 }
 
@@ -92,13 +117,21 @@ function renderNotificationPanelHtml() {
 function renderNotificationRow(row) {
   const unreadClass = row.read_at ? "" : " is-unread";
   const date = row.created_at ? new Date(row.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  const isCoachContact = row.type === "coach_contact_requested" && row.entity_type === "coach_contact_request" && row.entity_id;
   return `
-    <button class="notification-row${unreadClass}" data-action="notification-read" data-notification-id="${escapeHtml(row.id)}" type="button">
-      <span>
-        <strong>${escapeHtml(row.title || "Notification")}</strong>
-        ${row.body ? `<small>${escapeHtml(row.body)}</small>` : ""}
-      </span>
-      <time>${escapeHtml(date)}</time>
-    </button>
+    <article class="notification-row${unreadClass}">
+      <button class="notification-row-hit" data-action="notification-read" data-notification-id="${escapeAttr(row.id)}" type="button">
+        <span>
+          <strong>${escapeHtml(row.title || "Notification")}</strong>
+          ${row.body ? `<small>${escapeHtml(row.body)}</small>` : ""}
+        </span>
+        <time>${escapeHtml(date)}</time>
+      </button>
+      ${isCoachContact
+        ? `<div class="notification-actions">
+            <button class="plain-button compact-button" data-action="notification-accept-contact" data-request-id="${escapeAttr(row.entity_id)}" data-notification-id="${escapeAttr(row.id)}" type="button">Accept and open chat</button>
+          </div>`
+        : ""}
+    </article>
   `;
 }

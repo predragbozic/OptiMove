@@ -153,6 +153,8 @@ import {
 import { handleWeeklyAction } from "./weekly-actions.js";
 import { renderUserControls } from "./user-controls.js";
 
+let inboxPollId = null;
+
 init();
 
 async function init() {
@@ -178,6 +180,7 @@ async function init() {
   ensureBackGuard();
   void loadNotifications({ silent: true });
   void loadMessages({ silent: true });
+  startInboxPolling();
   await loadAthletes();
 }
 
@@ -349,6 +352,7 @@ async function handleContentSubmit(event) {
       renderMessages();
       void loadNotifications({ silent: true });
       void loadMessages({ silent: true });
+      startInboxPolling();
       if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
         window.location.replace("/athlete");
         return;
@@ -549,9 +553,25 @@ async function signOut() {
   try {
     await api("/api/auth/logout", { method: "POST" });
   } finally {
+    stopInboxPolling();
     state.currentUser = null;
     window.location.replace("/");
   }
+}
+
+function startInboxPolling() {
+  if (inboxPollId || !state.currentUser) return;
+  inboxPollId = window.setInterval(() => {
+    if (!state.currentUser || document.hidden) return;
+    void loadNotifications({ silent: true });
+    void loadMessages({ silent: true });
+  }, 25000);
+}
+
+function stopInboxPolling() {
+  if (!inboxPollId) return;
+  window.clearInterval(inboxPollId);
+  inboxPollId = null;
 }
 
 function toggleAthletesList() {

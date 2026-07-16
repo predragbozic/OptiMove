@@ -67,6 +67,14 @@ export async function handleMessageAction(action) {
   return false;
 }
 
+export async function openMessageConversation(id) {
+  if (!id) return;
+  state.messages.open = true;
+  if (state.notifications) state.notifications.open = false;
+  await loadMessages({ silent: true });
+  await openConversation(id);
+}
+
 export async function submitMessageForm(form) {
   const id = state.messages.selectedId;
   if (!id) return;

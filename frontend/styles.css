@@ -377,20 +377,26 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 }
 
 .notification-row {
+  display: block;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.notification-row.is-unread {
+  background: var(--accent-soft);
+}
+
+.notification-row-hit {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   width: 100%;
   padding: 12px;
   border: 0;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text);
+  background: transparent;
+  color: inherit;
   text-align: left;
-}
-
-.notification-row.is-unread {
-  background: var(--accent-soft);
 }
 
 .notification-row strong,
@@ -404,6 +410,12 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.notification-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 12px 12px;
 }
 
 .compact-button {

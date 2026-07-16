@@ -104,12 +104,13 @@ router.post("/:profileId/contact", async (req, res, next) => {
        returning id`,
       [profile.id, req.user?.id || null, text(req.body?.name) || req.user?.display_name || req.user?.full_name || req.user?.email, text(req.body?.email) || req.user?.email, message],
     );
+    const senderName = text(req.body?.name) || req.user?.display_name || req.user?.full_name || req.user?.email || "Someone";
     await createNotification({
       recipientUserId: profile.user_id,
       actorUserId: req.user?.id || null,
       type: "coach_contact_requested",
       title: "New coach contact",
-      body: `${text(req.body?.name) || req.user?.display_name || req.user?.full_name || req.user?.email || "Someone"} sent you a message.`,
+      body: `${senderName}: ${message.slice(0, 140)}${message.length > 140 ? "..." : ""}`,
       entityType: "coach_contact_request",
       entityId: inserted.rows[0]?.id || null,
       href: "/app?tab=coaches",
@@ -137,8 +138,9 @@ router.patch("/contact-requests/:requestId", async (req, res, next) => {
       [req.params.requestId, status, req.user.id, canAccessAllAthletes(req.user)],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Contact request not found." });
+    let conversationId = null;
     if (status === "accepted") {
-      const conversationId = await ensureConversationForContactRequest(result.rows[0].id, req.user.id);
+      conversationId = await ensureConversationForContactRequest(result.rows[0].id, req.user.id);
       if (conversationId) {
         await createNotification({
           recipientUserId: result.rows[0].sender_user_id,
@@ -153,7 +155,7 @@ router.patch("/contact-requests/:requestId", async (req, res, next) => {
         });
       }
     }
-    res.json({ contactRequest: result.rows[0] });
+    res.json({ contactRequest: result.rows[0], conversationId });
   } catch (error) {
     next(error);
   }
