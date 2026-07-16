@@ -66,6 +66,7 @@ import {
   handleOrganizationAction,
   handleOrganizationFilterInput,
   handleOrganizationSelectChange,
+  submitOrganizationAccessForm,
   submitOrganizationForm as submitOrganizationFormAction,
 } from "./organization-actions.js";
 import {
@@ -286,6 +287,13 @@ async function handleContentSubmit(event) {
   if (organizationForm) {
     event.preventDefault();
     await submitOrganizationFormAction(organizationForm, { loadAthletes, renderOrganizationPanel });
+    return;
+  }
+
+  const organizationAccessForm = event.target.closest("[data-organization-access-form]");
+  if (organizationAccessForm) {
+    event.preventDefault();
+    await submitOrganizationAccessForm(organizationAccessForm, { refreshOrganizationData, renderOrganizationPanel });
     return;
   }
 

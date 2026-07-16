@@ -71,6 +71,33 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
   }
 }
 
+export async function submitOrganizationAccessForm(form, { refreshOrganizationData, renderOrganizationPanel }) {
+  const button = form.querySelector("button[type='submit']");
+  const athleteIds = (form.dataset.athleteIds || "").split(",").map((id) => id.trim()).filter(Boolean);
+  const patch = {};
+  form.querySelectorAll("[data-athlete-access-key]").forEach((input) => {
+    patch[input.dataset.athleteAccessKey] = input.checked;
+  });
+  if (!athleteIds.length || !Object.keys(patch).length) return;
+  if (button) button.disabled = true;
+  state.organization.accessError = "";
+  state.organization.accessMessage = "";
+  try {
+    const result = await api("/api/organization/athlete-library-access/bulk", {
+      method: "PUT",
+      body: JSON.stringify({ athleteIds, patch }),
+    });
+    state.organization.accessMessage = `Updated ${result?.updated?.length || 0} shown athletes.`;
+    await refreshOrganizationData?.();
+    await renderOrganizationPanel({ refresh: false });
+  } catch (error) {
+    state.organization.accessError = error?.message || "Unable to update athlete access.";
+    await renderOrganizationPanel({ refresh: false });
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 export function handleOrganizationFilterInput(input) {
   return filterOrganizationSelect(input);
 }

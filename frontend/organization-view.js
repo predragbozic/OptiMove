@@ -126,7 +126,10 @@ export function renderOrganizationBrowser(data) {
           <h3>${escapeHtml(selectedTeam?.name || selectedClub?.name || "All accessible organization")}</h3>
           <p class="muted">${escapeHtml(selectedTeam ? `${visibleAthletes.length} athletes in team` : selectedClub ? `${visibleTeams.length} teams - ${visibleAthletes.length} athletes` : `${clubs.length} clubs - ${teams.length} teams - ${athletes.length} athletes`)}</p>
         </div>
-        ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
+        <div class="organization-browser-actions">
+          ${section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : ""}
+          ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
+        </div>
       </div>
       <section class="organization-lists organization-lists-browser">
         ${section === "overview" || section === "users" ? renderOrganizationList("Users", users, "user") : ""}
@@ -134,79 +137,89 @@ export function renderOrganizationBrowser(data) {
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes" ? selectedTeam ? renderTeamAthleteTable(selectedTeam, visibleAthletes, athletes) : renderOrganizationList(selectedClub ? `Athletes - ${selectedClub.name}` : "Athletes", visibleAthletes, "athlete") : ""}
       </section>
-      ${section === "athletes" ? renderAthleteAccessQuickEdit(visibleAthletes) : ""}
+      ${section === "athletes" && state.organization.accessOpen ? renderAthleteAccessModal(visibleAthletes) : ""}
       ${state.organizationInvite.open ? renderAthleteInviteModal(athletes) : ""}
     </section>
   `;
 }
 
-function renderAthleteAccessQuickEdit(athletes) {
+const accessControlGroups = [
+  {
+    title: "Program access",
+    icon: "PL",
+    note: "Choose which program libraries these athletes can browse.",
+    actions: [
+      ["Coach library", "canViewCoachLibrary", "can_view_coach_library", true],
+      ["Club library", "canViewClubLibrary", "can_view_club_library", false],
+      ["OptiMove", "canViewOptimoveLibrary", "can_view_optimove_library", false],
+      ["Marketplace", "canViewMarketplace", "can_view_marketplace", false],
+      ["Free programs only", "freeOnly", "free_only", true],
+      ["Require approval", "requireApproval", "require_approval", true],
+    ],
+  },
+  {
+    title: "Coach visibility",
+    icon: "CO",
+    note: "Control which coach profiles can be discovered or contacted.",
+    actions: [
+      ["Own coach profile", "canViewCoachProfiles", "can_view_coach_profiles", true],
+      ["Club coaches", "canViewClubCoachProfiles", "can_view_club_coach_profiles", false],
+      ["Public coaches", "canViewPublicCoachProfiles", "can_view_public_coach_profiles", false],
+      ["Contact visible coaches", "canContactVisibleCoaches", "can_contact_visible_coaches", false],
+    ],
+  },
+  {
+    title: "Exercise access",
+    icon: "EX",
+    note: "Set exercise browsing outside assigned plans.",
+    actions: [
+      ["Assigned exercises", "canViewAssignedExercises", "can_view_assigned_exercises", true],
+      ["Coach exercise library", "canViewCoachExerciseLibrary", "can_view_coach_exercise_library", false],
+      ["Club exercise library", "canViewClubExerciseLibrary", "can_view_club_exercise_library", false],
+      ["OptiMove exercise library", "canViewOptimoveExerciseLibrary", "can_view_optimove_exercise_library", false],
+      ["Selected exercise groups", "canViewExerciseGroups", "can_view_exercise_groups", false],
+    ],
+  },
+];
+
+function renderAthleteAccessModal(athletes) {
   const ids = athletes.map((athlete) => athlete.id).filter(Boolean).join(",");
   if (!athletes.length) return "";
-  const open = state.organization.accessOpen === true;
   return `
-    <section class="panel organization-list-card athlete-access-manager">
-      <div class="organization-list-head">
-        <div>
-          <p class="eyebrow">Access quick edit</p>
-          <h3>Access control</h3>
-          <p class="muted">Manage what the shown athletes can browse. Open this only when you need batch changes.</p>
+    <div class="athlete-access-modal-overlay" role="presentation">
+      <button class="athlete-access-modal-backdrop" type="button" data-action="organization-toggle-athlete-access" aria-label="Close access control"></button>
+      <section class="panel athlete-access-modal" role="dialog" aria-modal="true" aria-label="Athlete access control">
+        <div class="athlete-access-modal-head">
+          <div>
+            <p class="eyebrow">Athlete access</p>
+            <h3>Access control</h3>
+            <p class="muted">Apply one clean access profile to the athletes currently shown in this list.</p>
+          </div>
+          <button class="icon-button" type="button" data-action="organization-toggle-athlete-access" aria-label="Close">X</button>
         </div>
-        <div class="athlete-access-manager-head-actions">
-          <strong>${athletes.length} shown</strong>
-          <button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">${open ? "Close" : "Open access control"}</button>
+        <div class="athlete-access-count-strip">
+          ${renderAthleteAccessClosedSummary(athletes)}
         </div>
-      </div>
-      ${state.organization.accessMessage ? `<p class="builder-success">${escapeHtml(state.organization.accessMessage)}</p>` : ""}
-      ${state.organization.accessError ? `<p class="builder-error">${escapeHtml(state.organization.accessError)}</p>` : ""}
-      ${open ? `
-        <div class="athlete-access-control-grid">
-          ${renderAccessControlGroup(ids, {
-            title: "Programs",
-            icon: "PL",
-            note: "Program Library visibility and request rules.",
-            actions: [
-              ["Coach library", "canViewCoachLibrary"],
-              ["Club library", "canViewClubLibrary"],
-              ["OptiMove", "canViewOptimoveLibrary"],
-              ["Marketplace", "canViewMarketplace"],
-              ["Free only", "freeOnly"],
-              ["Require approval", "requireApproval"],
-            ],
-          })}
-          ${renderAccessControlGroup(ids, {
-            title: "Coaches",
-            icon: "CO",
-            note: "Coach profile discovery and contact permissions.",
-            actions: [
-              ["Own coach profile", "canViewCoachProfiles"],
-              ["Club coaches", "canViewClubCoachProfiles"],
-              ["Public coaches", "canViewPublicCoachProfiles"],
-              ["Contact visible coaches", "canContactVisibleCoaches"],
-            ],
-          })}
-          ${renderAccessControlGroup(ids, {
-            title: "Exercises",
-            icon: "EX",
-            note: "Exercise Library access outside assigned plans.",
-            actions: [
-              ["Assigned exercises", "canViewAssignedExercises"],
-              ["Coach exercise library", "canViewCoachExerciseLibrary"],
-              ["Club exercise library", "canViewClubExerciseLibrary"],
-              ["OptiMove exercise library", "canViewOptimoveExerciseLibrary"],
-              ["Selected exercise groups", "canViewExerciseGroups"],
-            ],
-          })}
-        </div>
+        ${state.organization.accessMessage ? `<p class="builder-success">${escapeHtml(state.organization.accessMessage)}</p>` : ""}
+        ${state.organization.accessError ? `<p class="builder-error">${escapeHtml(state.organization.accessError)}</p>` : ""}
+        <form data-organization-access-form data-athlete-ids="${escapeAttr(ids)}">
+          <div class="athlete-access-control-grid">
+            ${accessControlGroups.map((group) => renderAccessControlGroup(athletes, group)).join("")}
+          </div>
+          <div class="athlete-access-modal-actions">
+            <button class="plain-button" type="button" data-action="organization-toggle-athlete-access">Cancel</button>
+            <button class="primary-button" type="submit">Apply to shown athletes</button>
+          </div>
+        </form>
         <div class="athlete-access-summary-list">
           ${athletes.map(renderAthleteAccessSummaryRow).join("")}
         </div>
-      ` : renderAthleteAccessClosedSummary(athletes)}
-    </section>
+      </section>
+    </div>
   `;
 }
 
-function renderAccessControlGroup(ids, { title, icon, note, actions }) {
+function renderAccessControlGroup(athletes, { title, icon, note, actions }) {
   return `
     <article class="athlete-access-control-card">
       <div class="athlete-access-control-card-head">
@@ -217,30 +230,32 @@ function renderAccessControlGroup(ids, { title, icon, note, actions }) {
         </div>
       </div>
       <div class="athlete-access-control-actions">
-        ${actions.map(([label, key]) => renderAccessActionRow(ids, label, key)).join("")}
+        ${actions.map(([label, patchKey, rowKey, defaultValue]) => renderAccessToggleRow(athletes, label, patchKey, rowKey, defaultValue)).join("")}
       </div>
     </article>
   `;
 }
 
-function renderAccessActionRow(ids, label, key) {
+function renderAccessToggleRow(athletes, label, patchKey, rowKey, defaultValue = false) {
+  const enabled = athletes.filter((athlete) => readAthleteAccess(athlete, rowKey, defaultValue)).length;
+  const checked = enabled === athletes.length;
+  const stateText = enabled === athletes.length ? "All on" : enabled === 0 ? "Off" : `${enabled}/${athletes.length}`;
   return `
-    <div class="athlete-access-action-row">
-      <span>${escapeHtml(label)}</span>
-      <div>
-        ${renderBulkAccessButton(ids, "Allow", { [key]: true })}
-        ${renderBulkAccessButton(ids, "Block", { [key]: false }, true)}
-      </div>
-    </div>
+    <label class="athlete-access-toggle-row">
+      <input type="checkbox" data-athlete-access-key="${escapeAttr(patchKey)}" ${checked ? "checked" : ""}>
+      <span>
+        <strong>${escapeHtml(label)}</strong>
+        <small>${escapeHtml(stateText)}</small>
+      </span>
+    </label>
   `;
 }
 
-function renderBulkAccessButton(ids, label, patch, danger = false) {
-  return `
-    <button class="access-mini-button ${danger ? "is-block" : "is-allow"}" type="button" data-action="organization-athlete-access-bulk" data-athlete-ids="${escapeAttr(ids)}" data-access-patch="${escapeAttr(JSON.stringify(patch))}">
-      ${escapeHtml(label)}
-    </button>
-  `;
+function readAthleteAccess(athlete, rowKey, defaultValue = false) {
+  if (Object.prototype.hasOwnProperty.call(athlete, rowKey)) {
+    return defaultValue === true ? athlete[rowKey] !== false : athlete[rowKey] === true;
+  }
+  return defaultValue === true;
 }
 
 function renderAthleteAccessClosedSummary(athletes) {

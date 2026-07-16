@@ -647,6 +647,60 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   flex-wrap: wrap;
 }
 
+.athlete-access-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+}
+
+.athlete-access-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(12, 22, 31, 0.46);
+  cursor: pointer;
+}
+
+.athlete-access-modal {
+  position: relative;
+  z-index: 1;
+  width: min(1060px, calc(100vw - 32px));
+  max-height: min(820px, calc(100dvh - 36px));
+  overflow: auto;
+  box-shadow: 0 22px 70px rgba(14, 28, 37, 0.28);
+}
+
+.athlete-access-modal-head,
+.athlete-access-modal-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.athlete-access-modal-head {
+  margin-bottom: 14px;
+}
+
+.athlete-access-modal-head h3 {
+  margin: 2px 0 5px;
+}
+
+.athlete-access-count-strip {
+  margin-bottom: 14px;
+}
+
+.athlete-access-modal-actions {
+  align-items: center;
+  justify-content: flex-end;
+  margin: 14px 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
 .athlete-access-control-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(220px, 1fr));
@@ -698,55 +752,47 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   display: grid;
 }
 
-.athlete-access-action-row {
+.athlete-access-toggle-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 11px;
+  min-height: 54px;
   padding: 10px 12px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  cursor: pointer;
+  user-select: none;
 }
 
-.athlete-access-action-row:last-child {
+.athlete-access-toggle-row:last-child {
   border-bottom: 0;
 }
 
-.athlete-access-action-row > span {
-  font-weight: 800;
+.athlete-access-toggle-row:hover {
+  background: #f8fafc;
+}
+
+.athlete-access-toggle-row input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+.athlete-access-toggle-row strong,
+.athlete-access-toggle-row small {
+  display: block;
+}
+
+.athlete-access-toggle-row strong {
   color: var(--ink);
-}
-
-.athlete-access-action-row > div {
-  display: flex;
-  gap: 6px;
-}
-
-.access-mini-button {
-  min-height: 30px;
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: #fff;
-  color: var(--muted);
   font-weight: 900;
-  cursor: pointer;
 }
 
-.access-mini-button.is-allow {
-  border-color: rgba(15, 118, 110, 0.25);
-  background: #eef6f5;
-  color: #0f766e;
-}
-
-.access-mini-button.is-block {
-  border-color: rgba(185, 28, 28, 0.18);
-  background: #fff7f7;
-  color: #991b1b;
-}
-
-.access-mini-button:disabled {
-  opacity: 0.55;
-  cursor: wait;
+.athlete-access-toggle-row small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.77rem;
+  font-weight: 800;
 }
 
 .athlete-access-closed-summary {
@@ -861,6 +907,14 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
 .organization-browser-head h3 {
   margin: 2px 0;
+}
+
+.organization-browser-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .organization-lists-browser {
@@ -1605,16 +1659,20 @@ body:not(.athlete-mode):not(.login-mode) .athlete-list {
     grid-template-columns: 1fr;
   }
 
-  .athlete-access-action-row {
-    grid-template-columns: 1fr;
+  .athlete-access-modal-overlay {
+    align-items: end;
+    padding: 10px;
   }
 
-  .athlete-access-action-row > div {
+  .athlete-access-modal {
     width: 100%;
+    max-height: 88dvh;
   }
 
-  .access-mini-button {
-    flex: 1;
+  .athlete-access-modal-head,
+  .athlete-access-modal-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .athlete-access-summary-row {
