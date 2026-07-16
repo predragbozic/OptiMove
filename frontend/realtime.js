@@ -9,10 +9,10 @@ export function startRealtimeInbox() {
   realtimeSource = new EventSource("/api/realtime");
   realtimeSource.addEventListener("messages_changed", async (event) => {
     const payload = parseRealtimePayload(event);
-    await loadMessages({ silent: true });
     if (payload.conversationId && String(state.messages.selectedId || "") === String(payload.conversationId)) {
       await refreshSelectedConversation({ silent: true });
     }
+    await loadMessages({ silent: true });
   });
   realtimeSource.addEventListener("notifications_changed", () => {
     void loadNotifications({ silent: true });

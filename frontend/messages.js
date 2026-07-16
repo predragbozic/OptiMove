@@ -121,7 +121,11 @@ async function openConversation(id, { silent = false } = {}) {
     state.messages.detail = data;
     state.messages.error = "";
     const row = state.messages.rows.find((item) => item.id === id);
-    if (row) row.unread_count = 0;
+    if (row) {
+      const previousUnread = Number(row.unread_count || 0);
+      row.unread_count = 0;
+      state.messages.unreadCount = Math.max(0, Number(state.messages.unreadCount || 0) - previousUnread);
+    }
   } catch (error) {
     state.messages.error = error.message || "Could not load conversation.";
   } finally {

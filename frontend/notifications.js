@@ -64,6 +64,15 @@ export async function handleNotificationAction(action, handlers = {}) {
     await handlers.openProgramRequests?.();
     return true;
   }
+  if (type === "notification-open-conversation") {
+    const id = action.dataset.notificationId;
+    const conversationId = action.dataset.conversationId;
+    if (id) await markNotificationRead(id);
+    state.notifications.open = false;
+    renderNotifications();
+    if (conversationId) await openMessageConversation(conversationId);
+    return true;
+  }
   if (type === "notification-accept-contact") {
     const requestId = action.dataset.requestId;
     const notificationId = action.dataset.notificationId;
@@ -122,14 +131,20 @@ function renderNotificationRow(row) {
   const date = row.created_at ? new Date(row.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
   const isCoachContact = row.type === "coach_contact_requested" && row.entity_type === "coach_contact_request" && row.entity_id;
   const isProgramAccessRequest = row.type === "program_access_requested" && row.entity_type === "program_access";
-  const rowAction = isProgramAccessRequest ? "notification-open-program-requests" : "notification-read";
+  const isConversationNotification = row.entity_type === "message_conversation" && row.entity_id;
+  const rowAction = isProgramAccessRequest
+    ? "notification-open-program-requests"
+    : isConversationNotification
+      ? "notification-open-conversation"
+      : "notification-read";
   return `
     <article class="notification-row${unreadClass}">
-      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" type="button">
+      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" data-conversation-id="${escapeAttr(isConversationNotification ? row.entity_id : "")}" type="button">
         <span>
           <strong>${escapeHtml(row.title || "Notification")}</strong>
           ${row.body ? `<small>${escapeHtml(row.body)}</small>` : ""}
           ${isProgramAccessRequest ? `<small class="notification-hint">Open requests</small>` : ""}
+          ${isConversationNotification ? `<small class="notification-hint">Open conversation</small>` : ""}
         </span>
         <time>${escapeHtml(date)}</time>
       </button>
