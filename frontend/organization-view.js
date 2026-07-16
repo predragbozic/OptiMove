@@ -170,6 +170,7 @@ export function renderProgramAccessRequests(rows, { compact = false } = {}) {
         used: athleteRows.filter((row) => row.status === "used" || row.status === "completed").length,
         rejected: athleteRows.filter((row) => row.status === "rejected").length,
       })}
+      ${state.organization.requestMessage ? `<p class="builder-success">${escapeHtml(state.organization.requestMessage)}</p>` : ""}
       ${state.organization.requestError ? `<p class="builder-error">${escapeHtml(state.organization.requestError)}</p>` : ""}
       ${renderProgramAccessActiveAthleteFilter(rows, athleteFilter)}
       ${pendingVisibleRows.length ? renderProgramAccessBulkActions(pendingVisibleRows) : ""}

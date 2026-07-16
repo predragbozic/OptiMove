@@ -79,8 +79,9 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   const price = programPriceLabel(template);
   const actionLabel = templateAccessActionLabel(template, currentUser);
   const accessBadge = templateAccessBadge(template, currentUser);
+  const hasPendingRequests = Number(template.pending_access_count || 0) > 0;
   return `
-    <article class="program-library-card ${isSelected ? "is-selected" : ""}">
+    <article class="program-library-card ${isSelected ? "is-selected" : ""} ${hasPendingRequests ? "has-pending-requests" : ""}">
       <button class="program-library-info-button" type="button" data-action="template-info" data-template-id="${escapeAttr(template.plan_id)}" aria-label="Program information">i</button>
       <button class="program-library-card-hit" type="button" data-action="template-open" data-template-id="${escapeAttr(template.plan_id)}">
         <span class="program-library-card-media">

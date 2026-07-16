@@ -99,6 +99,10 @@ export function renderRailState() {
 }
 
 export function updateProgramLibraryNavLabels() {
+  const requestCount = (state.organization?.data?.accessRequests || []).filter((row) => row.status === "requested").length;
+  document.querySelectorAll('.sidebar-subnav-button[data-program-library-section="requests"]').forEach((button) => {
+    button.innerHTML = `Requests${requestCount ? ` <span class="sidebar-count">${escapeHtml(String(requestCount))}</span>` : ""}`;
+  });
   document.querySelectorAll(".sidebar-subnav-button[data-template-scope]").forEach((button) => {
     const label = templateScopeMeta(button.dataset.templateScope).label;
     if (label) button.textContent = label;

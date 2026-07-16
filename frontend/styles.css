@@ -801,6 +801,10 @@ body:not(.athlete-mode):not(.login-mode).rail-expanded .sidebar-submenu.is-open 
 
 body:not(.athlete-mode):not(.login-mode) .sidebar-subnav-button {
   min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 4px 8px;
   border: 0;
   border-radius: 6px;
@@ -812,6 +816,18 @@ body:not(.athlete-mode):not(.login-mode) .sidebar-subnav-button {
   line-height: 1.1;
   text-align: left;
   cursor: pointer;
+}
+
+.sidebar-count {
+  min-width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #e7fffb;
+  color: #0f4f49;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 body:not(.athlete-mode):not(.login-mode) .sidebar-subnav-button:hover,
@@ -2110,6 +2126,16 @@ input:focus {
   border-color: rgba(31, 122, 111, 0.36);
   box-shadow: var(--shadow);
   transform: translateY(-1px);
+}
+
+.program-library-card.has-pending-requests {
+  border-color: rgba(31, 122, 111, 0.45);
+  box-shadow: inset 0 0 0 2px rgba(31, 122, 111, 0.1), 0 10px 22px rgba(16, 24, 40, 0.08);
+}
+
+.program-library-card.has-pending-requests .program-library-card-media {
+  outline: 2px solid rgba(31, 122, 111, 0.24);
+  outline-offset: 2px;
 }
 
 .program-library-card-media {

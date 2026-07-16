@@ -129,12 +129,14 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   if (type === "organization-request-filter") {
     state.organization.requestStatus = action.dataset.requestStatus || "all";
     state.organization.requestError = "";
+    state.organization.requestMessage = "";
     void renderAccessState({ refresh: false });
     return true;
   }
   if (type === "organization-request-athlete-filter") {
     state.organization.requestAthleteId = action.dataset.requestAthleteId || "all";
     state.organization.requestError = "";
+    state.organization.requestMessage = "";
     void renderAccessState({ refresh: false });
     return true;
   }
@@ -176,8 +178,10 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     const actionName = type === "organization-access-approve" ? "approve" : "reject";
     action.disabled = true;
     state.organization.requestError = "";
+    state.organization.requestMessage = "";
     try {
       await api(`/api/organization/program-access/${encodeURIComponent(accessId)}/${actionName}`, { method: "POST" });
+      state.organization.requestMessage = actionName === "approve" ? "Program request approved." : "Program request rejected.";
       await refreshOrganizationData?.();
       await renderAccessState({ refresh: false });
     } catch (error) {
@@ -194,6 +198,7 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     if (!["approve", "reject"].includes(actionName) || !accessIds.length) return true;
     action.disabled = true;
     state.organization.requestError = "";
+    state.organization.requestMessage = "";
     try {
       const result = await api("/api/organization/program-access/bulk", {
         method: "POST",
@@ -201,6 +206,10 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
       });
       if (!result?.updated?.length) state.organization.requestError = "No shown requests were changed.";
       else {
+        const changed = result.updated.length;
+        state.organization.requestMessage = actionName === "approve"
+          ? `Approved ${changed} shown ${changed === 1 ? "request" : "requests"}.`
+          : `Rejected ${changed} shown ${changed === 1 ? "request" : "requests"}.`;
         const updates = new Map(result.updated.map((row) => [String(row.id), row]));
         const accessRequests = state.organization?.data?.accessRequests || [];
         state.organization.data = {
