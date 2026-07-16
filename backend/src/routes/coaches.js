@@ -2,6 +2,7 @@ import { Router } from "express";
 import { query } from "../db.js";
 import { canAccessAllAthletes, isClubAdmin, isTeamCoach } from "../access.js";
 import { createNotification } from "../notifications.js";
+import { ensureConversationForContactRequest } from "../messages.js";
 
 const router = Router();
 
@@ -132,10 +133,26 @@ router.patch("/contact-requests/:requestId", async (req, res, next) => {
        where ccr.id = $1
          and cp.id = ccr.coach_profile_id
          and (cp.user_id = $3 or $4::boolean)
-       returning ccr.id, ccr.status, ccr.updated_at`,
+       returning ccr.id, ccr.coach_profile_id, ccr.sender_user_id, ccr.status, ccr.updated_at`,
       [req.params.requestId, status, req.user.id, canAccessAllAthletes(req.user)],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Contact request not found." });
+    if (status === "accepted") {
+      const conversationId = await ensureConversationForContactRequest(result.rows[0].id, req.user.id);
+      if (conversationId) {
+        await createNotification({
+          recipientUserId: result.rows[0].sender_user_id,
+          actorUserId: req.user.id,
+          type: "coach_contact_accepted",
+          title: "Contact accepted",
+          body: "Your coach contact request was accepted. You can now continue in Messages.",
+          entityType: "message_conversation",
+          entityId: conversationId,
+          href: "/app?tab=messages",
+          metadata: { conversationId, coachProfileId: result.rows[0].coach_profile_id },
+        });
+      }
+    }
     res.json({ contactRequest: result.rows[0] });
   } catch (error) {
     next(error);

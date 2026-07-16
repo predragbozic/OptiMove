@@ -13,6 +13,7 @@ import builderRouter from "./routes/builder.js";
 import organizationRouter from "./routes/organization.js";
 import coachesRouter from "./routes/coaches.js";
 import notificationsRouter from "./routes/notifications.js";
+import messagesRouter from "./routes/messages.js";
 import { authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 
@@ -49,6 +50,7 @@ app.use("/api/builder", requireAuth, requireCoach, builderRouter);
 app.use("/api/organization", requireAuth, requireCoach, organizationRouter);
 app.use("/api/coaches", requireAuth, coachesRouter);
 app.use("/api/notifications", requireAuth, notificationsRouter);
+app.use("/api/messages", requireAuth, messagesRouter);
 
 app.use(express.static(frontendDir));
 app.get(["/", "/app", "/invite"], (_req, res) => {

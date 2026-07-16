@@ -51,7 +51,9 @@ import { closeMedia, handleFullscreenChange, handleMediaAction } from "./media-m
 import {
   closeMessagesIfOutside,
   handleMessageAction,
+  loadMessages,
   renderMessages,
+  submitMessageForm,
 } from "./messages.js";
 import {
   ensureTemplateScopeIsVisible,
@@ -175,6 +177,7 @@ async function init() {
   }
   ensureBackGuard();
   void loadNotifications({ silent: true });
+  void loadMessages({ silent: true });
   await loadAthletes();
 }
 
@@ -251,6 +254,7 @@ function bindEvents() {
   els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
   els.content.addEventListener("touchend", handleSwipeEnd, { passive: true });
   document.addEventListener("click", handleGlobalClick);
+  document.addEventListener("submit", handleGlobalSubmit);
   document.addEventListener("error", handleImageError, true);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeMedia();
@@ -344,6 +348,7 @@ async function handleContentSubmit(event) {
       renderNotifications();
       renderMessages();
       void loadNotifications({ silent: true });
+      void loadMessages({ silent: true });
       if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
         window.location.replace("/athlete");
         return;
@@ -678,7 +683,7 @@ async function handleGlobalClick(event) {
     renderMessages();
     return;
   }
-  if (handleMessageAction(action)) {
+  if (await handleMessageAction(action)) {
     renderNotifications();
     return;
   }
@@ -686,6 +691,13 @@ async function handleGlobalClick(event) {
   if (action.dataset.action === "home") goHome();
   closeNotificationsIfOutside(event.target);
   closeMessagesIfOutside(event.target);
+}
+
+async function handleGlobalSubmit(event) {
+  const messageForm = event.target.closest("[data-message-form]");
+  if (!messageForm) return;
+  event.preventDefault();
+  await submitMessageForm(messageForm);
 }
 
 function handleSwipeStart(event) {

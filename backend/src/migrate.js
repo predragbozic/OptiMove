@@ -12,6 +12,7 @@ const migrationPaths = [
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),
   path.resolve(__dirname, "../../create_reviews_schema.sql"),
   path.resolve(__dirname, "../../create_notifications_schema.sql"),
+  path.resolve(__dirname, "../../create_messages_schema.sql"),
   path.resolve(__dirname, "../../create_plan_read_views.sql"),
 ];
 
