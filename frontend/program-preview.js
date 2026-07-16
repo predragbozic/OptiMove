@@ -141,6 +141,7 @@ function renderTemplateReviewPanel(template, review, currentUserRole) {
 
 function renderTemplateAccessRequestPanel(review) {
   const requests = review.accessRequests || [];
+  const pendingIds = requests.map((request) => request.id).filter(Boolean).join(",");
   return `
     <section class="program-review-panel program-access-request-panel">
       <div class="program-review-summary">
@@ -150,6 +151,10 @@ function renderTemplateAccessRequestPanel(review) {
         </div>
         <div class="program-review-actions">
           <span class="item-badge">${escapeHtml(`${requests.length} pending`)}</span>
+          ${requests.length ? `
+            <button class="plain-button compact-button" type="button" data-action="template-access-bulk" data-access-action="approve" data-access-ids="${escapeAttr(pendingIds)}" ${review.submittingAccessBulk ? "disabled" : ""}>Approve all</button>
+            <button class="plain-button compact-button danger-button" type="button" data-action="template-access-bulk" data-access-action="reject" data-access-ids="${escapeAttr(pendingIds)}" ${review.submittingAccessBulk ? "disabled" : ""}>Reject all</button>
+          ` : ""}
           <button class="plain-button compact-button" type="button" data-action="template-reviews-toggle">${review.reviewsOpen ? "Hide reviews" : `Reviews (${(review.reviews || []).length})`}</button>
         </div>
       </div>

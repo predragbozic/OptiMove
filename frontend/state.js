@@ -64,6 +64,7 @@ export const emptyTemplatePreview = (overrides = {}) => ({
   accessRequests: [],
   accessRequestError: "",
   submittingAccessId: "",
+  submittingAccessBulk: false,
   assignOpen: false,
   assigning: false,
   assignError: "",

@@ -125,6 +125,15 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
     });
     return true;
   }
+  if (type === "template-access-bulk") {
+    void bulkUpdateTemplateAccessRequests(action.dataset.accessAction, action.dataset.accessIds, {
+      renderAfter: () => {
+        if (state.activeTab === "coaches") renderCoachContext();
+        else renderTemplateLibrary(state.lastTemplates);
+      },
+    });
+    return true;
+  }
   if (type === "template-assign") {
     const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(action.dataset.templateId));
     if (!selected) return true;
@@ -260,6 +269,45 @@ async function updateTemplateAccessRequest(accessId, actionName, { renderAfter }
       ...state.templatePreview,
       submittingAccessId: "",
       accessRequestError: error.message || "Could not update access request.",
+    };
+  }
+  renderAfter();
+}
+
+async function bulkUpdateTemplateAccessRequests(actionName, accessIdsText, { renderAfter }) {
+  const accessIds = String(accessIdsText || "").split(",").map((id) => id.trim()).filter(Boolean);
+  if (!["approve", "reject"].includes(actionName) || !accessIds.length || state.templatePreview.submittingAccessBulk) return;
+  state.templatePreview = {
+    ...state.templatePreview,
+    submittingAccessBulk: true,
+    accessRequestError: "",
+    reviewMessage: "",
+  };
+  renderAfter();
+  try {
+    const response = await api("/api/organization/program-access/bulk", {
+      method: "POST",
+      body: JSON.stringify({ action: actionName, accessIds }),
+    });
+    const updatedIds = new Set((response.updated || []).map((row) => String(row.id)));
+    const changed = updatedIds.size;
+    state.templatePreview = {
+      ...state.templatePreview,
+      submittingAccessBulk: false,
+      accessRequests: (state.templatePreview.accessRequests || []).filter((request) => !updatedIds.has(String(request.id))),
+      reviewMessage: changed
+        ? actionName === "approve"
+          ? `Approved ${changed} ${changed === 1 ? "request" : "requests"}.`
+          : `Rejected ${changed} ${changed === 1 ? "request" : "requests"}.`
+        : "No pending requests were changed.",
+      accessRequestError: "",
+    };
+    patchTemplatePendingRequestCount(state.selectedTemplateId, -changed);
+  } catch (error) {
+    state.templatePreview = {
+      ...state.templatePreview,
+      submittingAccessBulk: false,
+      accessRequestError: error.message || "Could not update access requests.",
     };
   }
   renderAfter();
