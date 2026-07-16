@@ -702,7 +702,7 @@ async function handleGlobalClick(event) {
     closeMessagesIfOutside(event.target);
     return;
   }
-  if (await handleNotificationAction(action)) {
+  if (await handleNotificationAction(action, { openProgramRequests })) {
     renderMessages();
     return;
   }
@@ -937,6 +937,18 @@ async function loadTemplates(options = {}) {
     await refreshOrganizationData({ silent: true });
   }
   return loadTemplatesData(programLibraryDataContext(), options);
+}
+
+async function openProgramRequests() {
+  state.activeTab = "templates";
+  state.programLibrarySection = "requests";
+  state.templatePreview = emptyTemplatePreview();
+  state.selectedTemplateId = null;
+  state.navStack = [];
+  state.athletesExpanded = false;
+  renderTabs();
+  renderLibraryNav();
+  await loadTemplates();
 }
 
 async function loadTemplateOptionsInBackground() {

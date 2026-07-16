@@ -33,7 +33,7 @@ export function renderNotifications() {
   els.notificationPanel.innerHTML = renderNotificationPanelHtml();
 }
 
-export async function handleNotificationAction(action) {
+export async function handleNotificationAction(action, handlers = {}) {
   const type = action?.dataset?.action || "";
   if (type === "notifications-toggle") {
     state.notifications.open = !state.notifications.open;
@@ -52,13 +52,16 @@ export async function handleNotificationAction(action) {
   if (type === "notification-read") {
     const id = action.dataset.notificationId;
     if (!id) return true;
-    await api(`/api/notifications/${encodeURIComponent(id)}/read`, { method: "POST", body: JSON.stringify({}) });
-    const row = state.notifications.rows.find((item) => item.id === id);
-    if (row && !row.read_at) {
-      row.read_at = new Date().toISOString();
-      state.notifications.unreadCount = Math.max(0, (state.notifications.unreadCount || 0) - 1);
-    }
+    await markNotificationRead(id);
     renderNotifications();
+    return true;
+  }
+  if (type === "notification-open-program-requests") {
+    const id = action.dataset.notificationId;
+    if (id) await markNotificationRead(id);
+    state.notifications.open = false;
+    renderNotifications();
+    await handlers.openProgramRequests?.();
     return true;
   }
   if (type === "notification-accept-contact") {
@@ -118,12 +121,15 @@ function renderNotificationRow(row) {
   const unreadClass = row.read_at ? "" : " is-unread";
   const date = row.created_at ? new Date(row.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
   const isCoachContact = row.type === "coach_contact_requested" && row.entity_type === "coach_contact_request" && row.entity_id;
+  const isProgramAccessRequest = row.type === "program_access_requested" && row.entity_type === "program_access";
+  const rowAction = isProgramAccessRequest ? "notification-open-program-requests" : "notification-read";
   return `
     <article class="notification-row${unreadClass}">
-      <button class="notification-row-hit" data-action="notification-read" data-notification-id="${escapeAttr(row.id)}" type="button">
+      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" type="button">
         <span>
           <strong>${escapeHtml(row.title || "Notification")}</strong>
           ${row.body ? `<small>${escapeHtml(row.body)}</small>` : ""}
+          ${isProgramAccessRequest ? `<small class="notification-hint">Open requests</small>` : ""}
         </span>
         <time>${escapeHtml(date)}</time>
       </button>
@@ -134,4 +140,13 @@ function renderNotificationRow(row) {
         : ""}
     </article>
   `;
+}
+
+async function markNotificationRead(id) {
+  await api(`/api/notifications/${encodeURIComponent(id)}/read`, { method: "POST", body: JSON.stringify({}) });
+  const row = state.notifications.rows.find((item) => item.id === id);
+  if (row && !row.read_at) {
+    row.read_at = new Date().toISOString();
+    state.notifications.unreadCount = Math.max(0, (state.notifications.unreadCount || 0) - 1);
+  }
 }
