@@ -75,6 +75,12 @@ export async function openMessageConversation(id) {
   await openConversation(id);
 }
 
+export async function refreshSelectedConversation({ silent = false } = {}) {
+  const id = state.messages.selectedId;
+  if (!id) return;
+  await openConversation(id, { silent });
+}
+
 export async function submitMessageForm(form) {
   const id = state.messages.selectedId;
   if (!id) return;
@@ -106,10 +112,10 @@ export function closeMessagesIfOutside(target) {
   renderMessages();
 }
 
-async function openConversation(id) {
+async function openConversation(id, { silent = false } = {}) {
   state.messages.selectedId = id;
-  state.messages.loading = true;
-  renderMessages();
+  state.messages.loading = !silent;
+  if (!silent) renderMessages();
   try {
     const data = await api(`/api/messages/${encodeURIComponent(id)}`);
     state.messages.detail = data;

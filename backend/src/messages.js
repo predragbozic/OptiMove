@@ -1,5 +1,5 @@
 import { query } from "./db.js";
-import { createNotification } from "./notifications.js";
+import { emitRealtimeEventForUsers } from "./realtime.js";
 
 export async function ensureConversationForContactRequest(contactRequestId, actorUserId = null) {
   const contact = await query(
@@ -41,6 +41,10 @@ export async function ensureConversationForContactRequest(contactRequestId, acto
      where id = $1`,
     [row.id, conversationId],
   );
+  emitRealtimeEventForUsers([row.coach_user_id, row.sender_user_id], "messages_changed", {
+    conversationId,
+    source: "coach_contact_request",
+  });
   return conversationId;
 }
 
@@ -100,26 +104,15 @@ export async function sendConversationMessage({ conversationId, senderUserId, bo
        and user_id = $2`,
     [conversationId, senderUserId],
   );
-  const recipients = await query(
-    `select mp.user_id,
-            coalesce(nullif(u.display_name, ''), nullif(u.full_name, ''), u.email, 'Someone') as sender_name
-     from public.message_participants mp
-     cross join public.users u
-     where mp.conversation_id = $1
-       and mp.user_id <> $2
-       and u.id = $2`,
-    [conversationId, senderUserId],
+  const participants = await query(
+    `select user_id
+     from public.message_participants
+     where conversation_id = $1`,
+    [conversationId],
   );
-  await Promise.all(recipients.rows.map((recipient) => createNotification({
-    recipientUserId: recipient.user_id,
-    actorUserId: senderUserId,
-    type: "message_received",
-    title: "New message",
-    body: `${recipient.sender_name} sent you a message.`,
-    entityType: "message_conversation",
-    entityId: conversationId,
-    href: "/app?tab=messages",
-    metadata: { conversationId },
-  })));
+  emitRealtimeEventForUsers(participants.rows.map((row) => row.user_id), "messages_changed", {
+    conversationId,
+    messageId: message.rows[0].id,
+  });
   return message.rows[0];
 }

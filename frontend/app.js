@@ -152,6 +152,7 @@ import {
 } from "./weekly-plan.js";
 import { handleWeeklyAction } from "./weekly-actions.js";
 import { renderUserControls } from "./user-controls.js";
+import { startRealtimeInbox, stopRealtimeInbox } from "./realtime.js";
 
 let inboxPollId = null;
 
@@ -180,6 +181,7 @@ async function init() {
   ensureBackGuard();
   void loadNotifications({ silent: true });
   void loadMessages({ silent: true });
+  startRealtimeInbox();
   startInboxPolling();
   await loadAthletes();
 }
@@ -564,14 +566,15 @@ function startInboxPolling() {
   inboxPollId = window.setInterval(() => {
     if (!state.currentUser || document.hidden) return;
     void loadNotifications({ silent: true });
-    void loadMessages({ silent: true });
   }, 25000);
 }
 
 function stopInboxPolling() {
-  if (!inboxPollId) return;
-  window.clearInterval(inboxPollId);
-  inboxPollId = null;
+  if (inboxPollId) {
+    window.clearInterval(inboxPollId);
+    inboxPollId = null;
+  }
+  stopRealtimeInbox();
 }
 
 function toggleAthletesList() {

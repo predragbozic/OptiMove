@@ -1,4 +1,5 @@
 import { query } from "./db.js";
+import { emitRealtimeEvent } from "./realtime.js";
 
 export async function createNotification({
   recipientUserId,
@@ -31,7 +32,14 @@ export async function createNotification({
         JSON.stringify(metadata || {}),
       ],
     );
-    return result.rows[0] || null;
+    const notification = result.rows[0] || null;
+    if (notification) {
+      emitRealtimeEvent(recipientUserId, "notifications_changed", {
+        notificationId: notification.id,
+        type: notification.type,
+      });
+    }
+    return notification;
   } catch (error) {
     console.error("Notification insert failed", error);
     return null;

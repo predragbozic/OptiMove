@@ -16,6 +16,7 @@ import notificationsRouter from "./routes/notifications.js";
 import messagesRouter from "./routes/messages.js";
 import { authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
+import { realtimeRouter } from "./realtime.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -51,6 +52,7 @@ app.use("/api/organization", requireAuth, requireCoach, organizationRouter);
 app.use("/api/coaches", requireAuth, coachesRouter);
 app.use("/api/notifications", requireAuth, notificationsRouter);
 app.use("/api/messages", requireAuth, messagesRouter);
+app.get("/api/realtime", requireAuth, realtimeRouter);
 
 app.use(express.static(frontendDir));
 app.get(["/", "/app", "/invite"], (_req, res) => {
