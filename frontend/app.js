@@ -49,6 +49,11 @@ import {
 } from "./media.js";
 import { closeMedia, handleFullscreenChange, handleMediaAction } from "./media-modal.js";
 import {
+  closeMessagesIfOutside,
+  handleMessageAction,
+  renderMessages,
+} from "./messages.js";
+import {
   ensureTemplateScopeIsVisible,
   renderLibraryNav,
   renderRailState,
@@ -163,6 +168,7 @@ async function init() {
   }
   renderUserControls();
   renderNotifications();
+  renderMessages();
   if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
     window.location.replace("/athlete");
     return;
@@ -336,6 +342,7 @@ async function handleContentSubmit(event) {
       document.body.classList.remove("login-mode");
       renderUserControls();
       renderNotifications();
+      renderMessages();
       void loadNotifications({ silent: true });
       if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
         window.location.replace("/athlete");
@@ -664,12 +671,21 @@ async function handleGlobalClick(event) {
   const action = event.target.closest("[data-action]");
   if (!action) {
     closeNotificationsIfOutside(event.target);
+    closeMessagesIfOutside(event.target);
     return;
   }
-  if (await handleNotificationAction(action)) return;
+  if (await handleNotificationAction(action)) {
+    renderMessages();
+    return;
+  }
+  if (handleMessageAction(action)) {
+    renderNotifications();
+    return;
+  }
   if (action.dataset.action === "close-media") closeMedia();
   if (action.dataset.action === "home") goHome();
   closeNotificationsIfOutside(event.target);
+  closeMessagesIfOutside(event.target);
 }
 
 function handleSwipeStart(event) {

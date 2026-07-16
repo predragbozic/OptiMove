@@ -140,12 +140,24 @@
             <span class="user-role" id="userRole" hidden></span>
             <div class="notification-menu">
               <button class="plain-button notification-toggle" id="notificationToggle" data-action="notifications-toggle" type="button" hidden>
-                <span>Inbox</span>
+                <span class="topbar-icon topbar-icon-bell" aria-hidden="true"></span>
+                <span class="topbar-action-label">Notifications</span>
                 <span class="notification-count" data-notification-count hidden>0</span>
               </button>
               <div class="notification-panel" id="notificationPanel" hidden></div>
             </div>
-            <button class="plain-button sign-out-button" id="signOutButton" type="button" hidden>Sign out</button>
+            <div class="message-menu">
+              <button class="plain-button message-toggle" id="messageToggle" data-action="messages-toggle" type="button" hidden>
+                <span class="topbar-icon topbar-icon-message" aria-hidden="true"></span>
+                <span class="topbar-action-label">Messages</span>
+                <span class="notification-count" data-message-count hidden>0</span>
+              </button>
+              <div class="message-panel" id="messagePanel" hidden></div>
+            </div>
+            <button class="plain-button sign-out-button" id="signOutButton" type="button" aria-label="Sign out" title="Sign out" hidden>
+              <span class="topbar-icon topbar-icon-exit" aria-hidden="true"></span>
+              <span class="topbar-action-label">Sign out</span>
+            </button>
             <div class="status-pill" id="apiStatus">Connecting</div>
           </div>
         </header>

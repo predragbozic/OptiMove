@@ -36,6 +36,7 @@ export async function handleNotificationAction(action) {
   const type = action?.dataset?.action || "";
   if (type === "notifications-toggle") {
     state.notifications.open = !state.notifications.open;
+    if (state.notifications.open && state.messages) state.messages.open = false;
     if (state.notifications.open) await loadNotifications({ silent: true });
     else renderNotifications();
     return true;

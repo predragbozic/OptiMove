@@ -80,15 +80,107 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 .user-role { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
 .sign-out-button { min-height: 34px; padding: 6px 10px; font-size: 13px; }
 
-.notification-menu {
+.notification-menu,
+.message-menu {
   position: relative;
 }
 
-.notification-toggle {
+.notification-toggle,
+.message-toggle,
+.sign-out-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 34px;
   gap: 8px;
   padding: 6px 10px;
   font-size: 13px;
+}
+
+.topbar-icon {
+  position: relative;
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+.topbar-icon-bell {
+  border: 2px solid currentColor;
+  border-bottom-width: 3px;
+  border-radius: 10px 10px 7px 7px;
+  transform: scaleX(0.82);
+}
+
+.topbar-icon-bell::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -5px;
+  width: 7px;
+  height: 5px;
+  border: 2px solid currentColor;
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  transform: translateX(-50%);
+}
+
+.topbar-icon-bell::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translateX(-50%) scaleX(1.22);
+}
+
+.topbar-icon-message {
+  border: 2px solid currentColor;
+  border-radius: 5px;
+}
+
+.topbar-icon-message::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  background: var(--surface);
+  transform: rotate(-45deg);
+}
+
+.topbar-icon-exit {
+  border: 2px solid currentColor;
+  border-right: 0;
+  border-radius: 4px 0 0 4px;
+}
+
+.topbar-icon-exit::before {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  width: 12px;
+  border-top: 2px solid currentColor;
+  transform: translateY(-50%);
+}
+
+.topbar-icon-exit::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  transform: translateY(-50%) rotate(45deg);
 }
 
 .notification-count {
@@ -104,7 +196,8 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   line-height: 1;
 }
 
-.notification-panel {
+.notification-panel,
+.message-panel {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
@@ -133,6 +226,22 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
 .notification-list {
   display: grid;
+}
+
+.message-panel-body {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.panel-status {
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .notification-row {
@@ -5189,6 +5298,30 @@ input:focus {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .notification-toggle,
+  .message-toggle,
+  .sign-out-button {
+    width: 38px;
+    min-width: 38px;
+    padding: 0;
+  }
+
+  .topbar-action-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .notification-panel,
+  .message-panel {
+    right: auto;
+    left: 0;
+    width: min(320px, calc(100vw - 76px));
   }
 
   body:not(.athlete-mode):not(.login-mode) .topbar {

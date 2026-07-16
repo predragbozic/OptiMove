@@ -18,5 +18,7 @@ export const els = {
   signOut: document.querySelector("#signOutButton"),
   notificationToggle: document.querySelector("#notificationToggle"),
   notificationPanel: document.querySelector("#notificationPanel"),
+  messageToggle: document.querySelector("#messageToggle"),
+  messagePanel: document.querySelector("#messagePanel"),
   userRole: document.querySelector("#userRole"),
 };
