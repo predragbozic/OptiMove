@@ -91,100 +91,72 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 34px;
-  gap: 8px;
-  padding: 6px 10px;
+  position: relative;
+  width: 40px;
+  min-width: 40px;
+  min-height: 38px;
+  gap: 0;
+  padding: 0;
   font-size: 13px;
+  color: #0f2028;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 1px 0 rgba(15, 32, 40, 0.04);
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+
+.notification-toggle:hover,
+.message-toggle:hover,
+.sign-out-button:hover,
+.notification-toggle[aria-expanded="true"],
+.message-toggle[aria-expanded="true"] {
+  background: #08384a;
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(8, 56, 74, 0.18);
+}
+
+.notification-toggle:active,
+.message-toggle:active,
+.sign-out-button:active {
+  transform: translateY(1px);
+}
+
+.notification-toggle .topbar-action-label,
+.message-toggle .topbar-action-label,
+.sign-out-button .topbar-action-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .topbar-icon {
   position: relative;
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
+  display: inline-flex;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 23px;
+  align-items: center;
+  justify-content: center;
 }
 
-.topbar-icon-bell {
-  border: 2px solid currentColor;
-  border-bottom-width: 3px;
-  border-radius: 10px 10px 7px 7px;
-  transform: scaleX(0.82);
-}
-
-.topbar-icon-bell::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: -5px;
-  width: 7px;
-  height: 5px;
-  border: 2px solid currentColor;
-  border-bottom: 0;
-  border-radius: 7px 7px 0 0;
-  transform: translateX(-50%);
-}
-
-.topbar-icon-bell::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -7px;
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: currentColor;
-  transform: translateX(-50%) scaleX(1.22);
-}
-
-.topbar-icon-message {
-  border: 2px solid currentColor;
-  border-radius: 5px;
-}
-
-.topbar-icon-message::after {
-  content: "";
-  position: absolute;
-  left: 3px;
-  bottom: -5px;
-  width: 8px;
-  height: 8px;
-  border-left: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  background: var(--surface);
-  transform: rotate(-45deg);
-}
-
-.topbar-icon-exit {
-  border: 2px solid currentColor;
-  border-right: 0;
-  border-radius: 4px 0 0 4px;
-}
-
-.topbar-icon-exit::before {
-  content: "";
-  position: absolute;
-  right: -1px;
-  top: 50%;
-  width: 12px;
-  border-top: 2px solid currentColor;
-  transform: translateY(-50%);
-}
-
-.topbar-icon-exit::after {
-  content: "";
-  position: absolute;
-  right: -2px;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  border-top: 2px solid currentColor;
-  border-right: 2px solid currentColor;
-  transform: translateY(-50%) rotate(45deg);
+.topbar-icon svg {
+  width: 23px;
+  height: 23px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .notification-count {
   display: inline-flex;
+  position: absolute;
+  top: -5px;
+  right: -5px;
   min-width: 20px;
   height: 20px;
   align-items: center;

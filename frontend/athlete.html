@@ -91,23 +91,40 @@
           <div class="topbar-actions">
             <span class="user-role" id="userRole" hidden></span>
             <div class="notification-menu">
-              <button class="plain-button notification-toggle" id="notificationToggle" data-action="notifications-toggle" type="button" hidden>
-                <span class="topbar-icon topbar-icon-bell" aria-hidden="true"></span>
+              <button class="plain-button notification-toggle" id="notificationToggle" data-action="notifications-toggle" type="button" aria-label="Notifications" title="Notifications" hidden>
+                <span class="topbar-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false">
+                    <path d="M18 9.5a6 6 0 0 0-12 0v3.8l-1.8 3.1a1 1 0 0 0 .9 1.5h13.8a1 1 0 0 0 .9-1.5L18 13.3V9.5Z"></path>
+                    <path d="M9.4 20a2.8 2.8 0 0 0 5.2 0"></path>
+                    <path d="M10 4.2a2.2 2.2 0 0 1 4 0"></path>
+                  </svg>
+                </span>
                 <span class="topbar-action-label">Notifications</span>
                 <span class="notification-count" data-notification-count hidden>0</span>
               </button>
               <div class="notification-panel" id="notificationPanel" hidden></div>
             </div>
             <div class="message-menu">
-              <button class="plain-button message-toggle" id="messageToggle" data-action="messages-toggle" type="button" hidden>
-                <span class="topbar-icon topbar-icon-message" aria-hidden="true"></span>
+              <button class="plain-button message-toggle" id="messageToggle" data-action="messages-toggle" type="button" aria-label="Messages" title="Messages" hidden>
+                <span class="topbar-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false">
+                    <path d="M7.2 6.2h8.6a4 4 0 0 1 4 4v2.2a4 4 0 0 1-4 4h-3.1l-4.3 3v-3H7.2a4 4 0 0 1-4-4v-2.2a4 4 0 0 1 4-4Z"></path>
+                    <path d="M8.8 4.2h5.5a4 4 0 0 1 4 4"></path>
+                  </svg>
+                </span>
                 <span class="topbar-action-label">Messages</span>
                 <span class="notification-count" data-message-count hidden>0</span>
               </button>
               <div class="message-panel" id="messagePanel" hidden></div>
             </div>
             <button class="plain-button sign-out-button" id="signOutButton" type="button" aria-label="Sign out" title="Sign out" hidden>
-              <span class="topbar-icon topbar-icon-exit" aria-hidden="true"></span>
+              <span class="topbar-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false">
+                  <path d="M9.5 5H6.8A2.8 2.8 0 0 0 4 7.8v8.4A2.8 2.8 0 0 0 6.8 19h2.7"></path>
+                  <path d="M13 8l4 4-4 4"></path>
+                  <path d="M17 12H8"></path>
+                </svg>
+              </span>
               <span class="topbar-action-label">Sign out</span>
             </button>
             <div class="status-pill" id="apiStatus">Connecting</div>
