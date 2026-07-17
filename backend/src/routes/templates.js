@@ -606,6 +606,11 @@ function dateTextOrNull(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : null;
 }
 
+function positiveIntegerOrNull(value) {
+  const parsed = Number.parseInt(text(value), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function normalizeChoice(value, allowed, fallback) {
   const normalized = text(value).toLowerCase();
   return allowed.includes(normalized) ? normalized : fallback;
