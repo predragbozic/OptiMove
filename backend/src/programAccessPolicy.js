@@ -145,7 +145,7 @@ export async function canUseTemplate(query, user, planId) {
        and coalesce(p.status, 'published') not in ('draft', 'archived')
        and coalesce(p.library_scope, 'my') <> 'workspace'
        and (
-         (coalesce(p.library_scope, 'my') = 'my' and $3::boolean and coalesce(p.athlete_can_view_directly, false) and exists (
+         (coalesce(p.library_scope, 'my') = 'my' and $3::boolean and exists (
            select 1
            from public.user_athletes coach_rel
            where coach_rel.athlete_id = $2
@@ -153,7 +153,7 @@ export async function canUseTemplate(query, user, planId) {
              and coach_rel.relationship_type = 'coach'
              and coach_rel.is_active = true
          ))
-         or (coalesce(p.library_scope, 'my') = 'team' and $4::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
+         or (coalesce(p.library_scope, 'my') = 'team' and $4::boolean and p.visibility in ('team', 'club', 'public') and exists (
            select 1
            from public.athletes team_athlete
            join public.user_team_roles creator_team

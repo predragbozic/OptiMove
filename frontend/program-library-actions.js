@@ -67,7 +67,7 @@ function normalizeCoachProgramAsTemplate(program) {
     price_cents: program.price_cents,
     average_rating: program.average_rating,
     review_count: program.review_count,
-    library_scope: program.library_scope || "coach",
+    library_scope: program.library_scope === "coach" ? "my" : (program.library_scope || "my"),
     tags: program.tags || [],
   };
 }

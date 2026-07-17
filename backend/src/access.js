@@ -116,7 +116,7 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
               and coalesce(p.status, 'published') not in ('draft', 'archived')
               and coalesce(p.library_scope, 'my') <> 'workspace'
               and (
-                (coalesce(p.library_scope, 'my') = 'my' and coalesce(ala.can_view_coach_library, true) and coalesce(p.athlete_can_view_directly, false) and exists (
+                (coalesce(p.library_scope, 'my') = 'my' and coalesce(ala.can_view_coach_library, true) and exists (
                   select 1
                   from public.user_athletes coach_rel
                   where coach_rel.athlete_id = viewer_athlete.id
@@ -124,7 +124,7 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
                     and coach_rel.relationship_type = 'coach'
                     and coach_rel.is_active = true
                 ))
-                or (coalesce(p.library_scope, 'my') = 'team' and coalesce(ala.can_view_team_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
+                or (coalesce(p.library_scope, 'my') = 'team' and coalesce(ala.can_view_team_library, false) and p.visibility in ('team', 'club', 'public') and exists (
                   select 1
                   from public.user_team_roles creator_team
                   where creator_team.team_id = viewer_athlete.team_id

@@ -51,6 +51,10 @@ alter table plans.plans
 alter table plans.plans
   drop constraint if exists plans_library_scope_check;
 
+update plans.plans
+  set library_scope = 'my'
+  where library_scope = 'coach';
+
 alter table plans.plans
   add constraint plans_library_scope_check
   check (library_scope in ('workspace', 'my', 'team', 'club', 'optimove', 'marketplace'));

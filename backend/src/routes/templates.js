@@ -129,7 +129,7 @@ router.get("/", async (req, res, next) => {
             and coalesce(ps.status, 'published') not in ('draft', 'archived')
             and coalesce(p.library_scope, 'my') <> 'workspace'
             and (
-              (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and coalesce(ps.athlete_can_view_directly, false) and exists (
+              (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and exists (
                 select 1
                 from public.user_athletes coach_rel
                 where coach_rel.athlete_id = $9
@@ -137,7 +137,7 @@ router.get("/", async (req, res, next) => {
                   and coach_rel.relationship_type = 'coach'
                   and coach_rel.is_active = true
               ))
-              or (coalesce(p.library_scope, 'my') = 'team' and $11::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
+              or (coalesce(p.library_scope, 'my') = 'team' and $11::boolean and p.visibility in ('team', 'club', 'public') and exists (
                 select 1
                 from public.athletes team_athlete
                 join public.user_team_roles creator_team
@@ -274,7 +274,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const planId = req.params.planId;
     if (!(await canEditTemplate(query, req.user, planId))) return res.status(404).json({ error: "Template not found." });
 
-    const scope = normalizeChoice(req.body?.libraryScope, ["workspace", "my", "team", "club", "optimove", "marketplace"], "my");
+    const scope = normalizeLibraryScope(req.body?.libraryScope);
     const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "team", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
@@ -596,6 +596,12 @@ function text(value) {
 function normalizeChoice(value, allowed, fallback) {
   const normalized = text(value).toLowerCase();
   return allowed.includes(normalized) ? normalized : fallback;
+}
+
+function normalizeLibraryScope(value) {
+  const normalized = text(value).toLowerCase();
+  if (normalized === "coach") return "my";
+  return normalizeChoice(normalized, ["workspace", "my", "team", "club", "optimove", "marketplace"], "my");
 }
 
 function slugify(value) {
