@@ -17,8 +17,8 @@ const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    const allowedScopes = new Set(["all", "workspace", "my", "club", "optimove", "marketplace"]);
-    const requestedScope = allowedScopes.has(String(req.query.scope || "")) ? String(req.query.scope) : "my";
+    const allowedScopes = new Set(["all", "my_programs", "workspace", "my", "club", "optimove", "marketplace"]);
+    const requestedScope = allowedScopes.has(String(req.query.scope || "")) ? String(req.query.scope) : "my_programs";
     const search = text(req.query.search);
     const category = text(req.query.category);
     const tag = text(req.query.tag);
@@ -136,7 +136,11 @@ router.get("/", async (req, res, next) => {
             and user_access.status in ('requested', 'rejected', 'accessed', 'used', 'completed')
           )
         )
-        and ($3 = 'all' or coalesce(p.library_scope, 'my') = $3)
+        and (
+          $3 = 'all'
+          or coalesce(p.library_scope, 'my') = $3
+          or ($3 = 'my_programs' and coalesce(p.library_scope, 'my') in ('workspace', 'my', 'club'))
+        )
         and ($4 = '' or ps.plan_name ilike '%' || $4 || '%' or coalesce(ps.source_external_id, '') ilike '%' || $4 || '%')
         and ($5 = '' or coalesce(ps.library_category, '') = $5)
         and ($6 = '' or exists (

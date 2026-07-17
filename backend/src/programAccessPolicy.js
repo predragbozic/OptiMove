@@ -43,13 +43,11 @@ export async function loadAthleteLibraryAccess(query, user) {
 }
 
 export function templateScopesForUser(athleteAccess) {
-  if (!athleteAccess) return ["all", "workspace", "my", "club", "optimove", "marketplace"];
-  const scopes = [];
-  if (athleteAccess.can_view_coach_library === true) scopes.push("my");
-  if (athleteAccess.can_view_club_library === true) scopes.push("club");
+  if (!athleteAccess) return ["my_programs", "optimove", "marketplace"];
+  const scopes = ["my_programs"];
   if (athleteAccess.can_view_optimove_library === true) scopes.push("optimove");
   if (athleteAccess.can_view_marketplace === true) scopes.push("marketplace");
-  return scopes.length ? ["all", ...scopes] : [];
+  return scopes;
 }
 
 export async function hasActiveProgramAccess(query, user, planId, statuses = ["accessed", "used", "completed"]) {

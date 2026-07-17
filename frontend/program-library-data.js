@@ -56,6 +56,6 @@ export async function loadTemplateOptionsInBackground({ renderTemplateLibraryRes
 
 export function templateSearchUrl() {
   const params = new URLSearchParams();
-  params.set("scope", state.templateScope || "my");
+  params.set("scope", state.templateScope || "my_programs");
   return `/api/templates?${params.toString()}`;
 }

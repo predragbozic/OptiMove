@@ -277,10 +277,15 @@ export function renderTemplateFiltersHtml(data) {
 }
 
 export function renderProgramScopeTabsHtml({ scopes = [], activeScope = "my", scopeLabel = (value) => value, activeSection = "programs", requestCount = 0, showRequests = false } = {}) {
+  const buttons = [];
+  scopes.forEach((scope) => {
+    buttons.push(renderTemplateScopeButton(scope, scopeLabel(scope), activeScope, activeSection));
+    if (showRequests && scope === "my_programs") buttons.push(renderProgramRequestsScopeButton(activeSection, requestCount));
+  });
+  if (showRequests && !scopes.includes("my_programs")) buttons.push(renderProgramRequestsScopeButton(activeSection, requestCount));
   return `
     <div class="program-scope-tabs" role="group" aria-label="Program library scope">
-      ${showRequests ? renderProgramRequestsScopeButton(activeSection, requestCount) : ""}
-      ${scopes.map((scope) => renderTemplateScopeButton(scope, scopeLabel(scope), activeScope, activeSection)).join("")}
+      ${buttons.join("")}
     </div>
   `;
 }

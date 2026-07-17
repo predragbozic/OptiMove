@@ -213,7 +213,7 @@ function bindEvents() {
       state.activeTab = button.dataset.libraryTab;
       if (button.dataset.templateScope) {
         state.programLibrarySection = "programs";
-        state.templateScope = isAthleteMode() && button.classList.contains("sidebar-nav-button") ? "all" : button.dataset.templateScope;
+        state.templateScope = button.dataset.templateScope;
         ensureTemplateScopeIsVisible();
       }
       if (button.dataset.programLibrarySection) state.programLibrarySection = button.dataset.programLibrarySection;
@@ -471,7 +471,7 @@ async function handleContentChange(event) {
 
   const templateFilter = event.target.closest("[data-template-filter]");
   if (templateFilter) {
-    if (templateFilter.dataset.templateFilter === "scope") state.templateScope = templateFilter.value || "my";
+    if (templateFilter.dataset.templateFilter === "scope") state.templateScope = templateFilter.value || "my_programs";
     else if (templateFilter.dataset.templateFilter === "freeOnly") state.templateFilters.pricing = templateFilter.checked ? "free" : "all";
     else state.templateFilters[templateFilter.dataset.templateFilter] = templateFilter.value;
     state.selectedTemplateId = null;
@@ -1213,7 +1213,7 @@ function renderAthleteSettings() {
 
 async function renderAthleteLibrary() {
   renderAthleteHeader({});
-  state.templateScope = state.templateScope === "workspace" ? "all" : state.templateScope;
+  state.templateScope = state.templateScope === "workspace" || state.templateScope === "all" ? "my_programs" : state.templateScope;
   await loadTemplates();
 }
 

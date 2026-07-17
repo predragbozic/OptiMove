@@ -7,25 +7,29 @@ export function templateScopeMeta(scope = state.templateScope, user = state.curr
   const access = String(user?.accessScope || "").toLowerCase();
   const isAthlete = isAthleteMode() || access === "athlete";
   const isPlatform = access === "platform";
-  const isClub = access === "club";
   const scopes = {
+    my_programs: {
+      label: "My Programs",
+      eyebrow: isAthlete ? "Allowed programs" : "Program workspace",
+      note: isAthlete ? "Programs assigned to you and programs your coach or organization made available." : "Your drafts, coach programs, and shared team or club programs in one working library.",
+    },
     all: {
       label: isAthlete ? "Allowed programs" : (isPlatform ? "All platform programs" : "All programs"),
       eyebrow: "Program library",
       note: isAthlete ? "Programs your coach or organization made available to you." : (isPlatform ? "All coach, club, OptiMove and marketplace programs visible to platform admins." : "All template programs available to your current account."),
     },
     my: {
-      label: isAthlete ? "Coach library" : (isPlatform ? "Admin workspace" : "My templates"),
+      label: isAthlete ? "Coach library" : (isPlatform ? "Admin workspace" : "My Programs"),
       eyebrow: isAthlete ? "Coach library" : (isPlatform ? "Private admin library" : "Private library"),
       note: isAthlete ? "Programs your coach allowed you to browse and use." : (isPlatform ? "Programs created inside your own platform admin workspace." : "Reusable programs and templates available in your current coach workspace."),
     },
     workspace: {
-      label: "Working materials",
+      label: "Drafts",
       eyebrow: "Private workspace",
       note: "Unfinished or reusable coach materials that only you can see and use while building programs.",
     },
     club: {
-      label: isClub || isPlatform ? "Club library" : "Club",
+      label: "Club programs",
       eyebrow: "Club library",
       note: isPlatform ? "Club-shared program libraries grouped by club ownership." : "Club-shared programs available to this workspace.",
     },
@@ -40,7 +44,7 @@ export function templateScopeMeta(scope = state.templateScope, user = state.curr
       note: "Free and paid public programs will appear here after marketplace access is added.",
     },
   };
-  return scopes[scope] || scopes.my;
+  return scopes[scope] || scopes.my_programs;
 }
 
 export function renderAccessNav() {

@@ -104,8 +104,8 @@ export const emptyBuilderState = (overrides = {}) => ({
   ...overrides,
 });
 
-export const TEMPLATE_SCOPES = ["all", "workspace", "my", "club", "optimove", "marketplace"];
-export const ATHLETE_TEMPLATE_SCOPES = ["all", "my", "club", "optimove", "marketplace"];
+export const TEMPLATE_SCOPES = ["my_programs", "optimove", "marketplace"];
+export const ATHLETE_TEMPLATE_SCOPES = ["my_programs", "optimove", "marketplace"];
 
 export const createInitialState = () => ({
   currentUser: null,
@@ -115,7 +115,7 @@ export const createInitialState = () => ({
   railExpanded: false,
   activeTab: "weekly",
   programLibrarySection: "programs",
-  templateScope: "my",
+  templateScope: "my_programs",
   selectedProgramId: null,
   selectedTemplateId: null,
   selectedWeekIndex: 0,

@@ -214,9 +214,9 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor)
     <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}">
       <div class="program-metadata-grid">
         <label class="search-field"><span>Library</span><select name="libraryScope">
-          ${renderOption("workspace", "Working materials", template.library_scope)}
-          ${renderOption("my", "My templates", template.library_scope || "my")}
-          ${renderOption("club", "Club", template.library_scope)}
+          ${renderOption("workspace", "Draft / working material", template.library_scope)}
+          ${renderOption("my", "My Programs", template.library_scope || "my")}
+          ${renderOption("club", "Club programs", template.library_scope)}
           ${renderOption("optimove", "OptiMove", template.library_scope)}
           ${renderOption("marketplace", "Marketplace", template.library_scope)}
         </select></label>

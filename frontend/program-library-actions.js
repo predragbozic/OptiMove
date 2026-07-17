@@ -94,7 +94,7 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
   }
   if (type === "template-scope") {
     state.programLibrarySection = "programs";
-    state.templateScope = action.dataset.scope || "my";
+    state.templateScope = action.dataset.scope || "my_programs";
     state.selectedTemplateId = null;
     state.templatePreview = emptyTemplatePreview();
     void loadTemplates();
