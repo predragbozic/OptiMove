@@ -315,6 +315,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
         booleanValue(req.body?.requiresApproval, false),
       ],
     );
+    if (!result.rows[0]) return res.status(404).json({ error: "Template not found." });
     res.json({ ok: true, planId: result.rows[0].id });
   } catch (error) {
     next(error);

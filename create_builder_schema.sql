@@ -20,6 +20,34 @@ alter table plans.plans
   add column if not exists owner_type varchar(32) not null default 'coach'
     check (owner_type in ('coach', 'team', 'club', 'optimove', 'marketplace'));
 
+do $$
+declare
+  constraint_to_drop text;
+begin
+  for constraint_to_drop in
+    select con.conname
+    from pg_constraint con
+    join pg_class rel on rel.oid = con.conrelid
+    join pg_namespace ns on ns.oid = rel.relnamespace
+    where ns.nspname = 'plans'
+      and rel.relname = 'plans'
+      and con.contype = 'c'
+      and exists (
+        select 1
+        from pg_attribute att
+        where att.attrelid = rel.oid
+          and att.attname in ('visibility', 'library_scope', 'owner_type')
+          and att.attnum = any(con.conkey)
+      )
+  loop
+    execute format('alter table plans.plans drop constraint if exists %I', constraint_to_drop);
+  end loop;
+end $$;
+
+alter table plans.plans
+  add constraint plans_visibility_check
+  check (visibility in ('private', 'team', 'club', 'public'));
+
 alter table plans.plans
   drop constraint if exists plans_library_scope_check;
 
