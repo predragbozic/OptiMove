@@ -122,6 +122,13 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
                     and coach_rel.relationship_type = 'coach'
                     and coach_rel.is_active = true
                 ))
+                or (coalesce(p.library_scope, 'my') = 'team' and coalesce(ala.can_view_team_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
+                  select 1
+                  from public.user_team_roles creator_team
+                  where creator_team.team_id = viewer_athlete.team_id
+                    and creator_team.user_id = p.created_by_user_id
+                    and creator_team.is_active = true
+                ))
                 or (coalesce(p.library_scope, 'my') = 'club' and coalesce(ala.can_view_club_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
                 or (coalesce(p.library_scope, 'my') = 'optimove' and coalesce(ala.can_view_optimove_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
                 or (coalesce(p.library_scope, 'my') = 'marketplace' and coalesce(ala.can_view_marketplace, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')

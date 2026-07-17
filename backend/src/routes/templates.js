@@ -36,6 +36,7 @@ router.get("/", async (req, res, next) => {
       Boolean(athleteAccess),
       athleteAccess?.athlete_id || null,
       athleteAccess?.can_view_coach_library === true,
+      athleteAccess?.can_view_team_library === true,
       athleteAccess?.can_view_club_library === true,
       athleteAccess?.can_view_optimove_library === true,
       athleteAccess?.can_view_marketplace === true,
@@ -124,7 +125,7 @@ router.get("/", async (req, res, next) => {
           (not $8::boolean and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public'))
           or (
             $8::boolean
-            and (not $14::boolean or coalesce(ps.is_free, true))
+            and (not $15::boolean or coalesce(ps.is_free, true))
             and (
               (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and exists (
                 select 1
@@ -134,9 +135,19 @@ router.get("/", async (req, res, next) => {
                   and coach_rel.relationship_type = 'coach'
                   and coach_rel.is_active = true
               ))
-              or (coalesce(p.library_scope, 'my') = 'club' and $11::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
-              or (coalesce(p.library_scope, 'my') = 'optimove' and $12::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
-              or (coalesce(p.library_scope, 'my') = 'marketplace' and $13::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
+              or (coalesce(p.library_scope, 'my') = 'team' and $11::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
+                select 1
+                from public.athletes team_athlete
+                join public.user_team_roles creator_team
+                  on creator_team.team_id = team_athlete.team_id
+                 and creator_team.user_id = p.created_by_user_id
+                 and creator_team.is_active = true
+                where team_athlete.id = $9
+                  and team_athlete.team_id is not null
+              ))
+              or (coalesce(p.library_scope, 'my') = 'club' and $12::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
+              or (coalesce(p.library_scope, 'my') = 'optimove' and $13::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
+              or (coalesce(p.library_scope, 'my') = 'marketplace' and $14::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
             )
           )
           or (

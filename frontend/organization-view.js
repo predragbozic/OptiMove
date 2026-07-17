@@ -151,6 +151,7 @@ const accessControlGroups = [
     note: "Choose which program libraries these athletes can browse.",
     actions: [
       ["Coach library", "canViewCoachLibrary", "can_view_coach_library", true],
+      ["Team library", "canViewTeamLibrary", "can_view_team_library", false],
       ["Club library", "canViewClubLibrary", "can_view_club_library", false],
       ["OptiMove", "canViewOptimoveLibrary", "can_view_optimove_library", false],
       ["Marketplace", "canViewMarketplace", "can_view_marketplace", false],
@@ -178,6 +179,7 @@ const accessControlGroups = [
     actions: [
       ["Assigned exercises", "canViewAssignedExercises", "can_view_assigned_exercises", true],
       ["Coach exercise library", "canViewCoachExerciseLibrary", "can_view_coach_exercise_library", false],
+      ["Team exercise library", "canViewTeamExerciseLibrary", "can_view_team_exercise_library", false],
       ["Club exercise library", "canViewClubExerciseLibrary", "can_view_club_exercise_library", false],
       ["OptiMove exercise library", "canViewOptimoveExerciseLibrary", "can_view_optimove_exercise_library", false],
       ["Selected exercise groups", "canViewExerciseGroups", "can_view_exercise_groups", false],
@@ -267,11 +269,13 @@ function readAthleteAccess(athlete, rowKey, defaultValue = false) {
 
 function renderAthleteAccessClosedSummary(athletes) {
   const withMarketplace = athletes.filter((athlete) => athlete.can_view_marketplace === true).length;
+  const withTeamLibrary = athletes.filter((athlete) => athlete.can_view_team_library === true).length;
   const withPublicCoaches = athletes.filter((athlete) => athlete.can_view_public_coach_profiles === true).length;
   const withCoachExercises = athletes.filter((athlete) => athlete.can_view_coach_exercise_library === true).length;
   return `
     <div class="athlete-access-closed-summary">
       <span><strong>${athletes.length}</strong> athletes in view</span>
+      <span><strong>${withTeamLibrary}</strong> team programs</span>
       <span><strong>${withMarketplace}</strong> marketplace</span>
       <span><strong>${withPublicCoaches}</strong> public coaches</span>
       <span><strong>${withCoachExercises}</strong> coach exercises</span>
@@ -282,12 +286,14 @@ function renderAthleteAccessClosedSummary(athletes) {
 function renderAthleteAccessSummaryRow(athlete) {
   const enabled = [
     athlete.can_view_coach_library !== false ? "Coach programs" : "",
+    athlete.can_view_team_library === true ? "Team programs" : "",
     athlete.can_view_club_library === true ? "Club programs" : "",
     athlete.can_view_optimove_library === true ? "OptiMove" : "",
     athlete.can_view_marketplace === true ? "Marketplace" : "",
     athlete.can_view_coach_profiles !== false ? "Coach profiles" : "",
     athlete.can_view_public_coach_profiles === true ? "Public coaches" : "",
     athlete.can_view_coach_exercise_library === true ? "Coach exercises" : "",
+    athlete.can_view_team_exercise_library === true ? "Team exercises" : "",
   ].filter(Boolean);
   return `
     <article class="athlete-access-summary-row">
@@ -717,6 +723,7 @@ function renderAthleteLibraryAccessForm(row) {
       </div>
       <div class="athlete-access-grid">
         ${renderAccessCheckbox("canViewCoachLibrary", "Coach library", row.can_view_coach_library !== false)}
+        ${renderAccessCheckbox("canViewTeamLibrary", "Team library", row.can_view_team_library === true)}
         ${renderAccessCheckbox("canViewClubLibrary", "Club library", row.can_view_club_library === true)}
         ${renderAccessCheckbox("canViewOptimoveLibrary", "OptiMove", row.can_view_optimove_library === true)}
         ${renderAccessCheckbox("canViewMarketplace", "Marketplace", row.can_view_marketplace === true)}
@@ -738,6 +745,7 @@ function renderAthleteLibraryAccessForm(row) {
       <div class="athlete-access-grid">
         ${renderAccessCheckbox("canViewAssignedExercises", "Assigned exercises", row.can_view_assigned_exercises !== false)}
         ${renderAccessCheckbox("canViewCoachExerciseLibrary", "Coach exercise library", row.can_view_coach_exercise_library === true)}
+        ${renderAccessCheckbox("canViewTeamExerciseLibrary", "Team exercise library", row.can_view_team_exercise_library === true)}
         ${renderAccessCheckbox("canViewClubExerciseLibrary", "Club exercise library", row.can_view_club_exercise_library === true)}
         ${renderAccessCheckbox("canViewOptimoveExerciseLibrary", "OptiMove exercise library", row.can_view_optimove_exercise_library === true)}
         ${renderAccessCheckbox("canViewExerciseGroups", "Selected exercise groups", row.can_view_exercise_groups === true)}

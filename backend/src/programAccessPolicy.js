@@ -6,6 +6,7 @@ export async function loadAthleteLibraryAccess(query, user) {
     `select
        a.id as athlete_id,
        coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
+       coalesce(ala.can_view_team_library, false) as can_view_team_library,
        coalesce(ala.can_view_club_library, false) as can_view_club_library,
        coalesce(ala.can_view_optimove_library, false) as can_view_optimove_library,
        coalesce(ala.can_view_marketplace, false) as can_view_marketplace,
@@ -15,6 +16,7 @@ export async function loadAthleteLibraryAccess(query, user) {
        coalesce(ala.can_contact_visible_coaches, true) as can_contact_visible_coaches,
        coalesce(ala.can_view_assigned_exercises, true) as can_view_assigned_exercises,
        coalesce(ala.can_view_coach_exercise_library, false) as can_view_coach_exercise_library,
+       coalesce(ala.can_view_team_exercise_library, false) as can_view_team_exercise_library,
        coalesce(ala.can_view_club_exercise_library, false) as can_view_club_exercise_library,
        coalesce(ala.can_view_optimove_exercise_library, false) as can_view_optimove_exercise_library,
        coalesce(ala.can_view_exercise_groups, false) as can_view_exercise_groups,
@@ -137,7 +139,7 @@ export async function canUseTemplate(query, user, planId) {
        and p.plan_type = 'program'
        and p.is_template = true
        and coalesce(p.is_active, true)
-       and (not $7::boolean or coalesce(p.is_free, true))
+       and (not $8::boolean or coalesce(p.is_free, true))
        and (
          (coalesce(p.library_scope, 'my') = 'my' and $3::boolean and exists (
            select 1
@@ -147,15 +149,26 @@ export async function canUseTemplate(query, user, planId) {
              and coach_rel.relationship_type = 'coach'
              and coach_rel.is_active = true
          ))
-         or (coalesce(p.library_scope, 'my') = 'club' and $4::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
-         or (coalesce(p.library_scope, 'my') = 'optimove' and $5::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
-         or (coalesce(p.library_scope, 'my') = 'marketplace' and $6::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
+         or (coalesce(p.library_scope, 'my') = 'team' and $4::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
+           select 1
+           from public.athletes team_athlete
+           join public.user_team_roles creator_team
+             on creator_team.team_id = team_athlete.team_id
+            and creator_team.user_id = p.created_by_user_id
+            and creator_team.is_active = true
+           where team_athlete.id = $2
+             and team_athlete.team_id is not null
+         ))
+         or (coalesce(p.library_scope, 'my') = 'club' and $5::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
+         or (coalesce(p.library_scope, 'my') = 'optimove' and $6::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
+         or (coalesce(p.library_scope, 'my') = 'marketplace' and $7::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
        )
      limit 1`,
     [
       planId,
       athleteAccess.athlete_id,
       athleteAccess.can_view_coach_library === true,
+      athleteAccess.can_view_team_library === true,
       athleteAccess.can_view_club_library === true,
       athleteAccess.can_view_optimove_library === true,
       athleteAccess.can_view_marketplace === true,
