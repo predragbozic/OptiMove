@@ -170,6 +170,19 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
     renderTemplateLibrary(state.lastTemplates);
     return true;
   }
+  if (type === "template-assign-toggle-all") {
+    const athleteIds = (state.athletes || []).map(assignmentAthleteId).filter(Boolean);
+    const selectedIds = new Set((state.templatePreview.assignedAthleteIds || []).map(String));
+    const allSelected = athleteIds.length > 0 && athleteIds.every((athleteId) => selectedIds.has(String(athleteId)));
+    state.templatePreview = {
+      ...state.templatePreview,
+      assignError: "",
+      assignMessage: "",
+      assignedAthleteIds: allSelected ? [] : athleteIds,
+    };
+    renderTemplateLibrary(state.lastTemplates);
+    return true;
+  }
   if (type === "template-assign-submit") {
     void assignTemplateToAthletes(action.dataset.templateId, { renderTemplateLibrary });
     renderTemplateLibrary(state.lastTemplates);
@@ -209,6 +222,10 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
     return true;
   }
   return false;
+}
+
+function assignmentAthleteId(athlete) {
+  return String(athlete?.athlete_uuid || athlete?.id || athlete?.athlete_id || "");
 }
 
 async function assignTemplateToAthletes(planId, { renderTemplateLibrary }) {

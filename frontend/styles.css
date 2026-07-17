@@ -3216,7 +3216,7 @@ input:focus {
 
 .program-assignment-athlete {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-columns: 22px 42px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-height: 58px;
@@ -3229,9 +3229,27 @@ input:focus {
   cursor: pointer;
 }
 
+.program-assignment-check {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(100, 116, 139, 0.45);
+  border-radius: 5px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1;
+}
+
 .program-assignment-athlete.is-selected {
   border-color: rgba(31, 111, 104, 0.42);
   background: rgba(31, 111, 104, 0.09);
+}
+
+.program-assignment-athlete.is-selected .program-assignment-check {
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
 .program-assignment-athlete-image,

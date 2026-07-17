@@ -63,6 +63,8 @@ export function renderTemplatePreviewModalHtml(data) {
 function renderTemplateAssignmentPanel(template, preview, athletes) {
   const selectedIds = new Set((preview.assignedAthleteIds || []).map(String));
   const visibleAthletes = athletes || [];
+  const visibleAthleteIds = visibleAthletes.map(assignmentAthleteId).filter(Boolean);
+  const allVisibleSelected = visibleAthleteIds.length > 0 && visibleAthleteIds.every((athleteId) => selectedIds.has(String(athleteId)));
   return `
     <section class="program-review-panel program-assignment-panel">
       <div class="program-review-summary">
@@ -71,6 +73,7 @@ function renderTemplateAssignmentPanel(template, preview, athletes) {
           <p class="muted">Grant this library program to selected athletes without creating an editable copy.</p>
         </div>
         <div class="program-review-actions">
+          <button class="plain-button compact-button" type="button" data-action="template-assign-toggle-all" ${preview.assigning || !visibleAthleteIds.length ? "disabled" : ""}>${allVisibleSelected ? "Uncheck all" : "Check all"}</button>
           <button class="plain-button compact-button" type="button" data-action="template-assign-submit" data-template-id="${escapeAttr(template.plan_id)}" ${preview.assigning || !selectedIds.size ? "disabled" : ""}>${preview.assigning ? "Assigning..." : "Grant access"}</button>
         </div>
       </div>
@@ -85,17 +88,21 @@ function renderTemplateAssignmentPanel(template, preview, athletes) {
   `;
 }
 
+function assignmentAthleteId(athlete) {
+  return String(athlete?.athlete_uuid || athlete?.id || athlete?.athlete_id || "");
+}
+
 function renderTemplateAssignmentAthlete(athlete, selectedIds) {
-  const athleteId = athlete.athlete_uuid || athlete.id || athlete.athlete_id || "";
+  const athleteId = assignmentAthleteId(athlete);
   const selected = selectedIds.has(String(athleteId));
   const image = athlete.athlete_image_url || athlete.image_url || "";
   const name = athlete.athlete || athlete.name || athlete.athlete_name || "Athlete";
   const code = athlete.athlete_id || athlete.source_external_id || "";
   return `
     <button class="program-assignment-athlete ${selected ? "is-selected" : ""}" type="button" data-action="template-assign-toggle-athlete" data-athlete-id="${escapeAttr(athleteId)}">
+      <span class="program-assignment-check" aria-hidden="true">${selected ? "✓" : ""}</span>
       ${image ? renderImage(image, "program-assignment-athlete-image") : `<span class="program-assignment-athlete-fallback">${escapeHtml(programInitials(name))}</span>`}
       <span><strong>${escapeHtml(name)}</strong>${code ? `<small>ID ${escapeHtml(code)}</small>` : ""}</span>
-      <b>${selected ? "Selected" : "Select"}</b>
     </button>
   `;
 }

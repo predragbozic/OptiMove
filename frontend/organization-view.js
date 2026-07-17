@@ -225,6 +225,7 @@ function renderAthleteAccessModal(athletes) {
 }
 
 function renderAccessControlGroup(athletes, { id, title, icon, note, actions }) {
+  const allChecked = isAccessGroupFullyChecked(athletes, actions);
   return `
     <article class="athlete-access-control-card">
       <div class="athlete-access-control-card-head">
@@ -235,14 +236,18 @@ function renderAccessControlGroup(athletes, { id, title, icon, note, actions }) 
         </div>
       </div>
       <div class="athlete-access-control-bulk">
-        <button class="text-action" type="button" data-action="organization-access-group-set" data-access-group="${escapeAttr(id)}" data-access-checked="true">Select all</button>
-        <button class="text-action" type="button" data-action="organization-access-group-set" data-access-group="${escapeAttr(id)}" data-access-checked="false">Clear</button>
+        <button class="text-action" type="button" data-action="organization-access-group-set" data-access-group="${escapeAttr(id)}" data-access-checked="${allChecked ? "false" : "true"}">${allChecked ? "Uncheck all" : "Check all"}</button>
       </div>
       <div class="athlete-access-control-actions">
         ${actions.map(([label, patchKey, rowKey, defaultValue]) => renderAccessToggleRow(athletes, id, label, patchKey, rowKey, defaultValue)).join("")}
       </div>
     </article>
   `;
+}
+
+function isAccessGroupFullyChecked(athletes, actions) {
+  if (!athletes.length || !actions.length) return false;
+  return actions.every(([, , rowKey, defaultValue]) => athletes.every((athlete) => readAthleteAccess(athlete, rowKey, defaultValue)));
 }
 
 function renderAccessToggleRow(athletes, groupId, label, patchKey, rowKey, defaultValue = false) {
