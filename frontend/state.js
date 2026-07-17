@@ -47,6 +47,7 @@ export const emptyTemplateFilters = () => ({
   club: "",
   ownerType: "",
   visibility: "",
+  lifecycle: "",
   pricing: "all",
 });
 

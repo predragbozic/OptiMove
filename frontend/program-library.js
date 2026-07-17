@@ -3,6 +3,14 @@ import { hasTemplateAccessStatus, templateAccessActionLabel, templateAccessBadge
 import { clean, escapeAttr, escapeHtml, programInitials, renderOption } from "./utils.js";
 
 const PROGRAM_CATEGORY_DEFAULTS = ["General", "Rehabilitation", "Strength & power", "Speed & conditioning", "Movement prep", "Corrective & preventive", "Fitness & health", "Education"];
+const PROGRAM_LIFECYCLE_OPTIONS = [
+  ["draft", "Draft"],
+  ["published_private", "Published private"],
+  ["assigned", "Assigned"],
+  ["team_shared", "Team shared"],
+  ["club_shared", "Club shared"],
+  ["archived", "Archived"],
+];
 
 export function duplicateTemplateNames(templates) {
   const counts = new Map();
@@ -46,6 +54,21 @@ export function programPriceLabel(template) {
   return "Free";
 }
 
+export function programLifecycle(template) {
+  const status = clean(template.status).toLowerCase();
+  const scope = clean(template.library_scope).toLowerCase();
+  const visibility = clean(template.visibility).toLowerCase();
+  const assignedCount = Number(template.assigned_count || 0);
+  const userAccessStatus = clean(template.user_access_status).toLowerCase();
+  if (status === "archived" || template.is_active === false) return { code: "archived", label: "Archived" };
+  if (status === "draft" || scope === "workspace") return { code: "draft", label: "Draft" };
+  if (assignedCount > 0 || ["accessed", "used", "completed"].includes(userAccessStatus)) return { code: "assigned", label: "Assigned" };
+  if (visibility === "team") return { code: "team_shared", label: "Team shared" };
+  if (visibility === "club") return { code: "club_shared", label: "Club shared" };
+  if (visibility === "private") return { code: "published_private", label: "Published private" };
+  return { code: "published_private", label: "Published private" };
+}
+
 export function ratingLabel(entity) {
   const count = Number(entity?.review_count || 0);
   if (!count) return "No reviews yet";
@@ -77,6 +100,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   const creatorProfileId = clean(template.creator_profile_id);
   const isSelected = String(template.plan_id) === String(selectedTemplateId);
   const price = programPriceLabel(template);
+  const lifecycle = programLifecycle(template);
   const actionLabel = templateAccessActionLabel(template, currentUser);
   const accessBadge = templateAccessBadge(template, currentUser);
   const hasPendingRequests = Number(template.pending_access_count || 0) > 0;
@@ -93,6 +117,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
         </span>
         <span class="program-library-card-foot">
           <span class="item-badge">${escapeHtml(price)}</span>
+          <span class="item-badge program-lifecycle-badge is-${escapeAttr(lifecycle.code)}">${escapeHtml(lifecycle.label)}</span>
           ${accessBadge ? `<span class="item-badge program-access-badge is-${escapeAttr(accessBadge.code)}">${escapeHtml(accessBadge.label)}</span>` : ""}
           <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
           ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
@@ -168,6 +193,7 @@ export function applyTemplateClientFilters(templates, filters) {
   const club = clean(filters.club).toLowerCase();
   const ownerType = clean(filters.ownerType).toLowerCase();
   const visibility = clean(filters.visibility).toLowerCase();
+  const lifecycle = clean(filters.lifecycle).toLowerCase();
   const pricing = clean(filters.pricing).toLowerCase();
   return templates.filter((template) => {
     if (search) {
@@ -183,6 +209,7 @@ export function applyTemplateClientFilters(templates, filters) {
     if (club && club !== "all" && !templateFilterOptionMatches(template.creator_club_names, club)) return false;
     if (ownerType && ownerType !== "all" && clean(template.owner_type).toLowerCase() !== ownerType) return false;
     if (visibility && visibility !== "all" && clean(template.visibility).toLowerCase() !== visibility) return false;
+    if (lifecycle && lifecycle !== "all" && programLifecycle(template).code !== lifecycle) return false;
     if (pricing === "free" && template.is_free === false) return false;
     if (pricing === "paid" && template.is_free !== false) return false;
     return true;
@@ -229,6 +256,13 @@ export function renderTemplateFiltersHtml(data) {
           <option value="All"></option>
           ${visibleTags.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
         </datalist>
+      </label>
+      <label class="search-field">
+        <span>Program status</span>
+        <select data-template-filter="lifecycle">
+          ${renderOption("all", "All statuses", filters.lifecycle || "all")}
+          ${PROGRAM_LIFECYCLE_OPTIONS.map(([value, label]) => renderOption(value, label, filters.lifecycle)).join("")}
+        </select>
       </label>
       ${showAdminFilters ? `
         <label class="search-field">

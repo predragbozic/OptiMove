@@ -4670,6 +4670,36 @@ input:focus {
   color: var(--brand-dark);
 }
 
+.program-lifecycle-badge.is-draft {
+  background: #f8fafc;
+  color: #475569;
+}
+
+.program-lifecycle-badge.is-published_private {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.program-lifecycle-badge.is-assigned {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.program-lifecycle-badge.is-team_shared {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.program-lifecycle-badge.is-club_shared {
+  background: #f0fdfa;
+  color: #0f766e;
+}
+
+.program-lifecycle-badge.is-archived {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
 .item-meta,
 .item-description,
 .muted {
