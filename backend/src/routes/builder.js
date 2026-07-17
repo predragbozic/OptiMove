@@ -79,7 +79,7 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
       const updated = await applyEditDraft(req.user, plan);
       return res.json(await buildDraft(updated));
     }
-    await query("update plans.plans set status = 'published', updated_at = now() where id = $1", [plan.id]);
+    await query("update plans.plans set status = 'active', updated_at = now() where id = $1", [plan.id]);
     res.json(await buildDraft(await getEditablePlan(req.user, plan.id)));
   } catch (error) { next(error); }
 });
@@ -505,7 +505,7 @@ async function applyEditDraft(user, draftPlan) {
            color = $5,
            visibility = $6,
            is_template = $7,
-           status = 'published',
+           status = 'active',
            updated_at = now()
        where id = $1`,
       [source.id, draftPlan.name, draftPlan.note, draftPlan.icon_url, draftPlan.color, draftPlan.visibility || "private", draftPlan.is_template],

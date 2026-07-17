@@ -113,7 +113,7 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
               )
               and coalesce(viewer_athlete.is_active, true)
               and (not coalesce(ala.free_only, true) or coalesce(p.is_free, true))
-              and coalesce(p.status, 'published') not in ('draft', 'archived')
+              and coalesce(p.status, 'active') not in ('draft', 'archived')
               and coalesce(p.library_scope, 'my') <> 'workspace'
               and (
                 (coalesce(p.library_scope, 'my') = 'my' and coalesce(ala.can_view_coach_library, true) and exists (

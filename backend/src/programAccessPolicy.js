@@ -124,7 +124,7 @@ export async function canUseTemplate(query, user, planId) {
        and p.plan_type = 'program'
        and p.is_template = true
        and coalesce(p.is_active, true)
-       and coalesce(p.status, 'published') not in ('draft', 'archived')
+       and coalesce(p.status, 'active') not in ('draft', 'archived')
        and coalesce(p.library_scope, 'my') <> 'workspace'
      limit 1`,
     [planId, user.id],
@@ -142,7 +142,7 @@ export async function canUseTemplate(query, user, planId) {
        and p.is_template = true
        and coalesce(p.is_active, true)
        and (not $8::boolean or coalesce(p.is_free, true))
-       and coalesce(p.status, 'published') not in ('draft', 'archived')
+       and coalesce(p.status, 'active') not in ('draft', 'archived')
        and coalesce(p.library_scope, 'my') <> 'workspace'
        and (
          (coalesce(p.library_scope, 'my') = 'my' and $3::boolean and exists (

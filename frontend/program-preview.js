@@ -210,10 +210,11 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor)
   const isFree = template.is_free !== false;
   const programGroup = template.library_category || inferProgramCategory(template) || "General";
   const accessModel = template.access_model || (isFree ? "free_forever" : "one_time_forever");
+  const programStatus = programStatusForForm(template.status);
   return `
     <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}">
       <div class="program-metadata-grid">
-        <label class="search-field"><span>Library</span><select name="libraryScope">
+        <label class="search-field"><span>Library shelf</span><select name="libraryScope">
           ${renderOption("workspace", "Draft / working material", template.library_scope)}
           ${renderOption("my", "My Programs", template.library_scope || "my")}
           ${renderOption("team", "Team programs", template.library_scope)}
@@ -222,13 +223,13 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor)
           ${renderOption("marketplace", "Marketplace", template.library_scope)}
         </select></label>
         <label class="search-field"><span>Program status</span><select name="programStatus">
-          ${renderOption("draft", "Draft", template.status || "draft")}
-          ${renderOption("published", "Published", template.status)}
-          ${renderOption("archived", "Archived", template.status)}
+          ${renderOption("draft", "Draft", programStatus)}
+          ${renderOption("active", "Published", programStatus)}
+          ${renderOption("archived", "Archived", programStatus)}
         </select></label>
         <label class="search-field"><span>Program group</span><input name="libraryCategory" list="program-settings-group-options" value="${escapeAttr(programGroup)}" placeholder="e.g. Rehabilitation"></label>
         <label class="search-field"><span>Cover image URL</span><input name="coverImageUrl" type="url" value="${escapeAttr(template.cover_image_url || "")}" placeholder="https://..."></label>
-        <label class="search-field"><span>Access</span><select name="visibility">
+        <label class="search-field"><span>Visibility</span><select name="visibility">
           ${renderOption("private", "Private", template.visibility || "private")}
           ${renderOption("team", "Team", template.visibility)}
           ${renderOption("club", "Club", template.visibility)}
@@ -313,4 +314,11 @@ function renderBooleanSelect(name, label, selected) {
       ${renderOption("false", "No", value)}
     </select></label>
   `;
+}
+
+function programStatusForForm(status) {
+  const normalized = clean(status).toLowerCase();
+  if (normalized === "published" || normalized === "active") return "active";
+  if (normalized === "archived") return "archived";
+  return "draft";
 }

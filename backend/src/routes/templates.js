@@ -126,7 +126,7 @@ router.get("/", async (req, res, next) => {
           or (
             $8::boolean
             and (not $15::boolean or coalesce(ps.is_free, true))
-            and coalesce(ps.status, 'published') not in ('draft', 'archived')
+            and coalesce(ps.status, 'active') not in ('draft', 'archived')
             and coalesce(p.library_scope, 'my') <> 'workspace'
             and (
               (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and exists (
@@ -154,7 +154,7 @@ router.get("/", async (req, res, next) => {
           )
           or (
             $8::boolean
-            and coalesce(ps.status, 'published') not in ('draft', 'archived')
+            and coalesce(ps.status, 'active') not in ('draft', 'archived')
             and coalesce(p.library_scope, 'my') <> 'workspace'
             and user_access.status in ('requested', 'rejected', 'accessed', 'used', 'completed')
           )
@@ -278,7 +278,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "team", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
-    const programStatus = normalizeChoice(req.body?.programStatus, ["draft", "published", "archived"], "draft");
+    const programStatus = normalizeProgramStatus(req.body?.programStatus);
     const libraryCategory = textOrNull(req.body?.libraryCategory);
     const coverImageUrl = textOrNull(req.body?.coverImageUrl);
     const availableUntil = dateTextOrNull(req.body?.availableUntil);
@@ -617,6 +617,12 @@ function positiveIntegerOrNull(value) {
 function normalizeChoice(value, allowed, fallback) {
   const normalized = text(value).toLowerCase();
   return allowed.includes(normalized) ? normalized : fallback;
+}
+
+function normalizeProgramStatus(value) {
+  const normalized = text(value).toLowerCase();
+  if (normalized === "published") return "active";
+  return normalizeChoice(normalized, ["draft", "active", "archived"], "draft");
 }
 
 function normalizeLibraryScope(value) {

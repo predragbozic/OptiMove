@@ -353,6 +353,7 @@ export async function submitTemplateMetadataForm(form, { loadTemplates }) {
         requiresApproval: formData.get("requiresApproval") === "true",
       }),
     });
+    state.templateFilters.lifecycle = "all";
     state.templatePreview = emptyTemplatePreview();
     state.selectedTemplateId = null;
     await loadTemplates();
