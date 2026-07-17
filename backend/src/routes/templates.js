@@ -126,8 +126,10 @@ router.get("/", async (req, res, next) => {
           or (
             $8::boolean
             and (not $15::boolean or coalesce(ps.is_free, true))
+            and coalesce(ps.status, 'published') not in ('draft', 'archived')
+            and coalesce(p.library_scope, 'my') <> 'workspace'
             and (
-              (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and exists (
+              (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and coalesce(ps.athlete_can_view_directly, false) and exists (
                 select 1
                 from public.user_athletes coach_rel
                 where coach_rel.athlete_id = $9
@@ -152,6 +154,8 @@ router.get("/", async (req, res, next) => {
           )
           or (
             $8::boolean
+            and coalesce(ps.status, 'published') not in ('draft', 'archived')
+            and coalesce(p.library_scope, 'my') <> 'workspace'
             and user_access.status in ('requested', 'rejected', 'accessed', 'used', 'completed')
           )
         )

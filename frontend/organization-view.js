@@ -198,7 +198,7 @@ function renderAthleteAccessModal(athletes) {
           <div>
             <p class="eyebrow">Athlete access</p>
             <h3>Access control</h3>
-            <p class="muted">Apply one clean access profile to the athletes currently shown in this list.</p>
+            <p class="muted">Choose what the shown athletes can browse, then save the access profile.</p>
           </div>
           <button class="icon-button" type="button" data-action="organization-toggle-athlete-access" aria-label="Close">X</button>
         </div>
@@ -213,7 +213,7 @@ function renderAthleteAccessModal(athletes) {
           </div>
           <div class="athlete-access-modal-actions">
             <button class="plain-button" type="button" data-action="organization-toggle-athlete-access">Cancel</button>
-            <button class="primary-button" type="submit">Apply to shown athletes</button>
+            <button class="primary-button" type="submit">Save access changes</button>
           </div>
         </form>
         <div class="athlete-access-summary-list">

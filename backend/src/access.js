@@ -90,7 +90,7 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
     left join public.athletes a on a.id = p.athlete_id
     where p.id = $1
       and (
-        p.visibility = 'public'
+        (p.visibility = 'public' and (not $3::boolean or not (p.plan_type = 'program' and p.is_template = true)))
         ${ownPlanStatus}
         or (a.id is not null and ${athleteAccessPredicate("a", "$2")})
         or (
@@ -113,8 +113,10 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
               )
               and coalesce(viewer_athlete.is_active, true)
               and (not coalesce(ala.free_only, true) or coalesce(p.is_free, true))
+              and coalesce(p.status, 'published') not in ('draft', 'archived')
+              and coalesce(p.library_scope, 'my') <> 'workspace'
               and (
-                (coalesce(p.library_scope, 'my') = 'my' and coalesce(ala.can_view_coach_library, true) and exists (
+                (coalesce(p.library_scope, 'my') = 'my' and coalesce(ala.can_view_coach_library, true) and coalesce(p.athlete_can_view_directly, false) and exists (
                   select 1
                   from public.user_athletes coach_rel
                   where coach_rel.athlete_id = viewer_athlete.id
@@ -138,7 +140,7 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
       )
     limit 1
     `,
-    [planId, user.id],
+    [planId, user.id, isAthlete(user)],
   );
   return result.rowCount > 0;
 }
