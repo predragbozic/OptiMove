@@ -145,6 +145,7 @@ export function renderOrganizationBrowser(data) {
 
 const accessControlGroups = [
   {
+    id: "program",
     title: "Program access",
     icon: "PL",
     note: "Choose which program libraries these athletes can browse.",
@@ -158,6 +159,7 @@ const accessControlGroups = [
     ],
   },
   {
+    id: "coach",
     title: "Coach visibility",
     icon: "CO",
     note: "Control which coach profiles can be discovered or contacted.",
@@ -169,6 +171,7 @@ const accessControlGroups = [
     ],
   },
   {
+    id: "exercise",
     title: "Exercise access",
     icon: "EX",
     note: "Set exercise browsing outside assigned plans.",
@@ -219,7 +222,7 @@ function renderAthleteAccessModal(athletes) {
   `;
 }
 
-function renderAccessControlGroup(athletes, { title, icon, note, actions }) {
+function renderAccessControlGroup(athletes, { id, title, icon, note, actions }) {
   return `
     <article class="athlete-access-control-card">
       <div class="athlete-access-control-card-head">
@@ -229,20 +232,24 @@ function renderAccessControlGroup(athletes, { title, icon, note, actions }) {
           <p>${escapeHtml(note)}</p>
         </div>
       </div>
+      <div class="athlete-access-control-bulk">
+        <button class="text-action" type="button" data-action="organization-access-group-set" data-access-group="${escapeAttr(id)}" data-access-checked="true">Select all</button>
+        <button class="text-action" type="button" data-action="organization-access-group-set" data-access-group="${escapeAttr(id)}" data-access-checked="false">Clear</button>
+      </div>
       <div class="athlete-access-control-actions">
-        ${actions.map(([label, patchKey, rowKey, defaultValue]) => renderAccessToggleRow(athletes, label, patchKey, rowKey, defaultValue)).join("")}
+        ${actions.map(([label, patchKey, rowKey, defaultValue]) => renderAccessToggleRow(athletes, id, label, patchKey, rowKey, defaultValue)).join("")}
       </div>
     </article>
   `;
 }
 
-function renderAccessToggleRow(athletes, label, patchKey, rowKey, defaultValue = false) {
+function renderAccessToggleRow(athletes, groupId, label, patchKey, rowKey, defaultValue = false) {
   const enabled = athletes.filter((athlete) => readAthleteAccess(athlete, rowKey, defaultValue)).length;
   const checked = enabled === athletes.length;
   const stateText = enabled === athletes.length ? "All on" : enabled === 0 ? "Off" : `${enabled}/${athletes.length}`;
   return `
     <label class="athlete-access-toggle-row">
-      <input type="checkbox" data-athlete-access-key="${escapeAttr(patchKey)}" ${checked ? "checked" : ""}>
+      <input type="checkbox" data-athlete-access-key="${escapeAttr(patchKey)}" data-athlete-access-group="${escapeAttr(groupId)}" ${checked ? "checked" : ""}>
       <span>
         <strong>${escapeHtml(label)}</strong>
         <small>${escapeHtml(stateText)}</small>

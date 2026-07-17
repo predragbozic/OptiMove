@@ -50,6 +50,7 @@ router.get("/", async (req, res, next) => {
          where mp.conversation_id = c.id
        ) participants on true
        where me.user_id = $1
+         and me.hidden_at is null
        order by coalesce(c.last_message_at, c.updated_at, c.created_at) desc`,
       [req.user.id],
     );
@@ -144,6 +145,24 @@ router.post("/:conversationId/block", async (req, res, next) => {
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Conversation not found." });
     res.json({ blocked: Boolean(result.rows[0].blocked_at) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/:conversationId/hide", async (req, res, next) => {
+  try {
+    const result = await query(
+      `update public.message_participants
+       set hidden_at = now(),
+           last_read_at = now()
+       where conversation_id = $1
+         and user_id = $2
+       returning conversation_id`,
+      [req.params.conversationId, req.user.id],
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Conversation not found." });
+    res.json({ hidden: true });
   } catch (error) {
     next(error);
   }

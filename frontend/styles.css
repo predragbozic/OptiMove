@@ -347,6 +347,12 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   white-space: nowrap;
 }
 
+.message-thread-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .message-thread {
   display: grid;
   gap: 8px;
@@ -722,6 +728,19 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
 .athlete-access-control-actions {
   display: grid;
+}
+
+.athlete-access-control-bulk {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  background: #f8fafc;
+}
+
+.athlete-access-control-bulk .text-action {
+  font-size: 0.78rem;
 }
 
 .athlete-access-toggle-row {
@@ -5789,9 +5808,13 @@ input:focus {
   }
 
   .message-panel {
-    width: calc(100vw - var(--rail-width) - 16px);
-    height: min(620px, calc(100vh - 112px));
-    max-height: min(620px, calc(100vh - 112px));
+    position: fixed;
+    top: 76px;
+    right: 10px;
+    left: calc(var(--rail-width) + 10px);
+    width: auto;
+    height: min(620px, calc(100dvh - 96px));
+    max-height: calc(100dvh - 96px);
   }
 
   .message-inbox-layout {

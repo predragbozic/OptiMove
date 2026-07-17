@@ -193,6 +193,16 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
+  if (type === "organization-access-group-set") {
+    const group = action.dataset.accessGroup || "";
+    const checked = action.dataset.accessChecked === "true";
+    const form = action.closest("[data-organization-access-form]");
+    if (!group || !form) return true;
+    form.querySelectorAll(`[data-athlete-access-group="${CSS.escape(group)}"]`).forEach((input) => {
+      input.checked = checked;
+    });
+    return true;
+  }
   if (type === "organization-invite-athlete") {
     const row = findOrganizationRow("athlete", action.dataset.athleteId);
     if (!row) return true;

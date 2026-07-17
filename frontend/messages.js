@@ -64,6 +64,17 @@ export async function handleMessageAction(action) {
     await loadMessages({ silent: true });
     return true;
   }
+  if (type === "message-hide") {
+    const id = state.messages.selectedId;
+    if (!id) return true;
+    if (!window.confirm("Hide this conversation from your inbox? New messages will bring it back.")) return true;
+    await api(`/api/messages/${encodeURIComponent(id)}/hide`, { method: "POST" });
+    state.messages.rows = (state.messages.rows || []).filter((row) => String(row.id) !== String(id));
+    state.messages.selectedId = "";
+    state.messages.detail = null;
+    await loadMessages({ silent: true });
+    return true;
+  }
   return false;
 }
 
@@ -211,9 +222,12 @@ function renderConversationHtml() {
   return `
     <div class="notification-panel-head message-thread-head">
       <strong>${escapeHtml(title)}</strong>
-      <button class="plain-button compact-button" data-action="${blockedByMe ? "message-unblock" : "message-block"}" type="button">
-        ${blockedByMe ? "Unblock" : "Block"}
-      </button>
+      <span class="message-thread-actions">
+        <button class="plain-button compact-button" data-action="message-hide" type="button">Hide</button>
+        <button class="plain-button compact-button" data-action="${blockedByMe ? "message-unblock" : "message-block"}" type="button">
+          ${blockedByMe ? "Unblock" : "Block"}
+        </button>
+      </span>
     </div>
     <div class="message-thread">${body}</div>
     ${blocked

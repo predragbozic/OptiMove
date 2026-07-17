@@ -22,6 +22,7 @@ create table if not exists public.message_participants (
   last_read_at timestamptz,
   blocked_at timestamptz,
   blocked_by_user_id uuid references public.users(id) on delete set null,
+  hidden_at timestamptz,
   joined_at timestamptz not null default now(),
   unique (conversation_id, user_id)
 );
@@ -37,6 +38,9 @@ create table if not exists public.messages (
 
 alter table public.coach_contact_requests
   add column if not exists conversation_id uuid references public.message_conversations(id) on delete set null;
+
+alter table public.message_participants
+  add column if not exists hidden_at timestamptz;
 
 alter table public.coach_contact_requests
   drop constraint if exists coach_contact_requests_status_check;

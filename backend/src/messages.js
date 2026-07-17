@@ -33,7 +33,8 @@ export async function ensureConversationForContactRequest(contactRequestId, acto
     await query(
       `update public.message_participants
        set blocked_at = null,
-           blocked_by_user_id = null
+           blocked_by_user_id = null,
+           hidden_at = null
        where conversation_id = $1
          and user_id in ($2, $3)`,
       [conversationId, row.coach_user_id, row.sender_user_id],
@@ -154,6 +155,12 @@ export async function sendConversationMessage({ conversationId, senderUserId, bo
      where conversation_id = $1
        and user_id = $2`,
     [conversationId, senderUserId],
+  );
+  await query(
+    `update public.message_participants
+     set hidden_at = null
+     where conversation_id = $1`,
+    [conversationId],
   );
   const participants = await query(
     `select user_id
