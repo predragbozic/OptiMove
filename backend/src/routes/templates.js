@@ -278,6 +278,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "team", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
+    const programStatus = normalizeChoice(req.body?.programStatus, ["draft", "published", "archived"], "draft");
     const libraryCategory = textOrNull(req.body?.libraryCategory);
     const coverImageUrl = textOrNull(req.body?.coverImageUrl);
     const availableUntil = dateTextOrNull(req.body?.availableUntil);
@@ -309,6 +310,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
           can_assign_to_athlete = $15,
           athlete_can_view_directly = $16,
           requires_approval = $17,
+          status = $18,
           updated_at = now()
       where id = $1
       returning id
@@ -331,6 +333,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
         booleanValue(req.body?.canAssignToAthlete, true),
         booleanValue(req.body?.athleteCanViewDirectly, false),
         booleanValue(req.body?.requiresApproval, false),
+        programStatus,
       ],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Template not found." });

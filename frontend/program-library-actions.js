@@ -335,6 +335,7 @@ export async function submitTemplateMetadataForm(form, { loadTemplates }) {
       method: "PATCH",
       body: JSON.stringify({
         libraryScope: formData.get("libraryScope"),
+        programStatus: formData.get("programStatus"),
         libraryCategory: formData.get("libraryCategory"),
         coverImageUrl: formData.get("coverImageUrl"),
         isFree: formData.get("isFree") === "true",

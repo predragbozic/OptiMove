@@ -221,6 +221,11 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor)
           ${renderOption("optimove", "OptiMove", template.library_scope)}
           ${renderOption("marketplace", "Marketplace", template.library_scope)}
         </select></label>
+        <label class="search-field"><span>Program status</span><select name="programStatus">
+          ${renderOption("draft", "Draft", template.status || "draft")}
+          ${renderOption("published", "Published", template.status)}
+          ${renderOption("archived", "Archived", template.status)}
+        </select></label>
         <label class="search-field"><span>Program group</span><input name="libraryCategory" list="program-settings-group-options" value="${escapeAttr(programGroup)}" placeholder="e.g. Rehabilitation"></label>
         <label class="search-field"><span>Cover image URL</span><input name="coverImageUrl" type="url" value="${escapeAttr(template.cover_image_url || "")}" placeholder="https://..."></label>
         <label class="search-field"><span>Access</span><select name="visibility">
