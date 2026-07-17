@@ -56,6 +56,13 @@ async function openTemplatePreviewWithRenderer(selected, renderAfter) {
   renderAfter();
 }
 
+async function refreshTemplateAccessRequests(planId) {
+  if (!planId || String(state.currentUser?.accessScope || "").toLowerCase() === "athlete") {
+    return { requests: [] };
+  }
+  return api(`/api/templates/${encodeURIComponent(planId)}/access-requests`);
+}
+
 function normalizeCoachProgramAsTemplate(program) {
   return {
     ...program,
@@ -219,6 +226,14 @@ async function assignTemplateToAthletes(planId, { renderTemplateLibrary }) {
       method: "POST",
       body: JSON.stringify({ athleteIds }),
     });
+    let accessRequests = state.templatePreview.accessRequests || [];
+    let accessRequestError = "";
+    try {
+      const accessData = await refreshTemplateAccessRequests(planId);
+      accessRequests = accessData.requests || [];
+    } catch (refreshError) {
+      accessRequestError = refreshError.message || "Access was changed, but the access list could not be refreshed.";
+    }
     const assignedCount = (response.assigned || []).length;
     const skipped = response.skipped || [];
     state.templatePreview = {
@@ -232,9 +247,8 @@ async function assignTemplateToAthletes(planId, { renderTemplateLibrary }) {
       assignError: skipped.length
         ? skipped.map((item) => `${item.athleteName || item.athleteId}: ${item.reason}`).join(" ")
         : "",
-      accessRequests: (state.templatePreview.accessRequests || []).filter((request) => (
-        !(response.assigned || []).some((item) => String(item.athleteId) === String(request.athlete_id))
-      )),
+      accessRequests,
+      accessRequestError,
     };
   } catch (error) {
     state.templatePreview = {
@@ -258,16 +272,24 @@ async function updateTemplateAccessRequest(accessId, actionName, { renderAfter }
   renderAfter();
   try {
     await api(`/api/organization/program-access/${encodeURIComponent(accessId)}/${actionName}`, { method: "POST" });
+    let accessRequests = (state.templatePreview.accessRequests || []).filter((request) => String(request.id) !== String(accessId));
+    let accessRequestError = "";
+    try {
+      const accessData = await refreshTemplateAccessRequests(state.selectedTemplateId);
+      accessRequests = accessData.requests || [];
+    } catch (refreshError) {
+      accessRequestError = refreshError.message || "Access was changed, but the access list could not be refreshed.";
+    }
     state.templatePreview = {
       ...state.templatePreview,
       submittingAccessId: "",
-      accessRequests: (state.templatePreview.accessRequests || []).filter((request) => String(request.id) !== String(accessId)),
+      accessRequests,
       reviewMessage: actionName === "approve"
         ? "Program access approved."
         : actionName === "revoke"
           ? "Program access removed."
           : "Program request rejected.",
-      accessRequestError: "",
+      accessRequestError,
     };
     if (actionName !== "revoke") patchTemplatePendingRequestCount(state.selectedTemplateId, -1);
   } catch (error) {
@@ -297,16 +319,24 @@ async function bulkUpdateTemplateAccessRequests(actionName, accessIdsText, { ren
     });
     const updatedIds = new Set((response.updated || []).map((row) => String(row.id)));
     const changed = updatedIds.size;
+    let accessRequests = (state.templatePreview.accessRequests || []).filter((request) => !updatedIds.has(String(request.id)));
+    let accessRequestError = "";
+    try {
+      const accessData = await refreshTemplateAccessRequests(state.selectedTemplateId);
+      accessRequests = accessData.requests || [];
+    } catch (refreshError) {
+      accessRequestError = refreshError.message || "Access was changed, but the access list could not be refreshed.";
+    }
     state.templatePreview = {
       ...state.templatePreview,
       submittingAccessBulk: false,
-      accessRequests: (state.templatePreview.accessRequests || []).filter((request) => !updatedIds.has(String(request.id))),
+      accessRequests,
       reviewMessage: changed
         ? actionName === "approve"
           ? `Approved ${changed} ${changed === 1 ? "request" : "requests"}.`
           : `Rejected ${changed} ${changed === 1 ? "request" : "requests"}.`
         : "No pending requests were changed.",
-      accessRequestError: "",
+      accessRequestError,
     };
     patchTemplatePendingRequestCount(state.selectedTemplateId, -changed);
   } catch (error) {

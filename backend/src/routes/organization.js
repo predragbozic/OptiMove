@@ -404,14 +404,12 @@ router.post("/program-access/:accessId/revoke", async (req, res, next) => {
     if (!request) return res.status(404).json({ error: "Program access not found." });
     if (!(await canManageAthlete(req.user, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
     const result = await query(
-      `update library.program_access
-       set status = 'revoked',
-           updated_at = now()
+      `delete from library.program_access
        where id = $1
        returning id, status, updated_at`,
       [req.params.accessId],
     );
-    res.json({ access: result.rows[0] });
+    res.json({ access: result.rows[0], removed: true });
   } catch (error) {
     next(error);
   }
