@@ -145,7 +145,7 @@ export async function canUseTemplate(query, user, planId) {
        and coalesce(p.status, 'active') not in ('draft', 'archived')
        and coalesce(p.library_scope, 'my') <> 'workspace'
        and (
-         (coalesce(p.library_scope, 'my') = 'my' and $3::boolean and exists (
+         (coalesce(p.library_scope, 'my') = 'my' and $3::boolean and coalesce(p.athlete_can_view_directly, false) and exists (
            select 1
            from public.user_athletes coach_rel
            where coach_rel.athlete_id = $2
@@ -153,7 +153,7 @@ export async function canUseTemplate(query, user, planId) {
              and coach_rel.relationship_type = 'coach'
              and coach_rel.is_active = true
          ))
-         or (coalesce(p.library_scope, 'my') = 'team' and $4::boolean and p.visibility in ('team', 'club', 'public') and exists (
+         or (coalesce(p.library_scope, 'my') = 'team' and $4::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
            select 1
            from public.athletes team_athlete
            join public.user_team_roles creator_team
@@ -163,7 +163,16 @@ export async function canUseTemplate(query, user, planId) {
            where team_athlete.id = $2
              and team_athlete.team_id is not null
          ))
-         or (coalesce(p.library_scope, 'my') = 'club' and $5::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
+         or (coalesce(p.library_scope, 'my') = 'club' and $5::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public') and exists (
+           select 1
+           from public.athletes club_athlete
+           left join public.teams athlete_team on athlete_team.id = club_athlete.team_id
+           join public.user_club_roles creator_club
+             on creator_club.user_id = p.created_by_user_id
+            and creator_club.is_active = true
+            and (creator_club.club_id = club_athlete.club_id or creator_club.club_id = athlete_team.club_id)
+           where club_athlete.id = $2
+         ))
          or (coalesce(p.library_scope, 'my') = 'optimove' and $6::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
          or (coalesce(p.library_scope, 'my') = 'marketplace' and $7::boolean and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
        )

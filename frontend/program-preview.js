@@ -47,7 +47,7 @@ export function renderTemplatePreviewModalHtml(data) {
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">x</span></button>
           </div>
         </div>
-        ${selected && preview.settingsOpen ? renderTemplateMetadataForm(selected, templateOptions, programTagEditor) : ""}
+        ${selected && preview.settingsOpen ? renderTemplateMetadataForm(selected, templateOptions, programTagEditor, currentUserRole) : ""}
         ${selected && preview.assignOpen && currentUserRole !== "athlete" ? renderTemplateAssignmentPanel(selected, preview, athletes || []) : ""}
         ${selected && !preview.loading ? renderTemplateReviewPanel(selected, preview, currentUserRole) : ""}
         <div class="program-preview-body">
@@ -141,17 +141,20 @@ function renderTemplateReviewPanel(template, review, currentUserRole) {
 
 function renderTemplateAccessRequestPanel(review) {
   const requests = review.accessRequests || [];
-  const pendingIds = requests.map((request) => request.id).filter(Boolean).join(",");
+  const pendingRequests = requests.filter((request) => templateAccessStatusCode(request) === "requested");
+  const activeRequests = requests.filter((request) => ["accessed", "used", "completed"].includes(templateAccessStatusCode(request)));
+  const pendingIds = pendingRequests.map((request) => request.id).filter(Boolean).join(",");
   return `
     <section class="program-review-panel program-access-request-panel">
       <div class="program-review-summary">
         <div>
           <span class="eyebrow">Program access</span>
-          <p class="muted">${requests.length ? "Athletes waiting for approval for this program." : "No pending athlete requests for this program."}</p>
+          <p class="muted">${requests.length ? "Review requested, approved, and rejected access for this program." : "No athlete access activity for this program."}</p>
         </div>
         <div class="program-review-actions">
-          <span class="item-badge">${escapeHtml(`${requests.length} pending`)}</span>
-          ${requests.length ? `
+          <span class="item-badge">${escapeHtml(`${pendingRequests.length} pending`)}</span>
+          <span class="item-badge">${escapeHtml(`${activeRequests.length} active`)}</span>
+          ${pendingRequests.length ? `
             <button class="plain-button compact-button" type="button" data-action="template-access-bulk" data-access-action="approve" data-access-ids="${escapeAttr(pendingIds)}" ${review.submittingAccessBulk ? "disabled" : ""}>Approve all</button>
             <button class="plain-button compact-button danger-button" type="button" data-action="template-access-bulk" data-access-action="reject" data-access-ids="${escapeAttr(pendingIds)}" ${review.submittingAccessBulk ? "disabled" : ""}>Reject all</button>
           ` : ""}
@@ -173,6 +176,9 @@ function renderTemplateAccessRequestPanel(review) {
 function renderTemplateAccessRequestRow(request, submittingAccessId) {
   const date = request.created_at ? new Date(request.created_at).toLocaleDateString("en-GB") : "";
   const isSubmitting = String(submittingAccessId || "") === String(request.id);
+  const statusCode = templateAccessStatusCode(request);
+  const isPending = statusCode === "requested";
+  const isActive = ["accessed", "used", "completed"].includes(statusCode);
   return `
     <article class="program-access-request-row">
       <div>
@@ -180,8 +186,12 @@ function renderTemplateAccessRequestRow(request, submittingAccessId) {
         <small>${escapeHtml([request.athlete_code ? `ID ${request.athlete_code}` : "", date].filter(Boolean).join(" - "))}</small>
       </div>
       <div class="program-review-actions">
-        <button class="plain-button compact-button" type="button" data-action="template-access-approve" data-access-id="${escapeAttr(request.id)}" ${isSubmitting ? "disabled" : ""}>${isSubmitting ? "Saving..." : "Approve"}</button>
-        <button class="plain-button compact-button danger-button" type="button" data-action="template-access-reject" data-access-id="${escapeAttr(request.id)}" ${isSubmitting ? "disabled" : ""}>Reject</button>
+        <span class="item-badge">${escapeHtml(templateAccessStatusLabel(request))}</span>
+        ${isPending ? `
+          <button class="plain-button compact-button" type="button" data-action="template-access-approve" data-access-id="${escapeAttr(request.id)}" ${isSubmitting ? "disabled" : ""}>${isSubmitting ? "Saving..." : "Approve"}</button>
+          <button class="plain-button compact-button danger-button" type="button" data-action="template-access-reject" data-access-id="${escapeAttr(request.id)}" ${isSubmitting ? "disabled" : ""}>Reject</button>
+        ` : ""}
+        ${isActive ? `<button class="plain-button compact-button danger-button" type="button" data-action="template-access-revoke" data-access-id="${escapeAttr(request.id)}" ${isSubmitting ? "disabled" : ""}>Remove access</button>` : ""}
       </div>
     </article>
   `;
@@ -205,22 +215,26 @@ function renderTemplateReviewList(reviews) {
   `;
 }
 
-function renderTemplateMetadataForm(template, templateOptions, programTagEditor) {
+function renderTemplateMetadataForm(template, templateOptions, programTagEditor, currentUserRole) {
   const price = template.price_cents ? Number(template.price_cents) / 100 : "";
   const isFree = template.is_free !== false;
   const programGroup = template.library_category || inferProgramCategory(template) || "General";
   const accessModel = template.access_model || (isFree ? "free_forever" : "one_time_forever");
   const programStatus = programStatusForForm(template.status);
+  const currentLibraryScope = clean(template.library_scope || "my").toLowerCase();
+  const allowedLibraryScopes = templateLibraryScopesForRole(currentUserRole);
+  const canEditCurrentScope = allowedLibraryScopes.some((scope) => scope.value === currentLibraryScope);
+  const selectedLibraryScope = canEditCurrentScope ? currentLibraryScope : "my";
+  const blockedShelfNotice = canEditCurrentScope ? "" : `
+    <p class="muted small">This program is currently in ${escapeHtml(labelForLibraryScope(currentLibraryScope))}. Save it to My Programs or ask an admin to edit that shelf.</p>
+  `;
+  const derivedOwner = ownerLabelForLibraryScope(template.library_scope || "my");
+  const derivedAudience = visibilityLabelForLibraryScope(template.library_scope || "my");
   return `
     <form class="program-metadata-form" data-template-metadata-form data-plan-id="${escapeAttr(template.plan_id)}">
       <div class="program-metadata-grid">
         <label class="search-field"><span>Library shelf</span><select name="libraryScope">
-          ${renderOption("workspace", "Draft / working material", template.library_scope)}
-          ${renderOption("my", "My Programs", template.library_scope || "my")}
-          ${renderOption("team", "Team programs", template.library_scope)}
-          ${renderOption("club", "Club programs", template.library_scope)}
-          ${renderOption("optimove", "OptiMove", template.library_scope)}
-          ${renderOption("marketplace", "Marketplace", template.library_scope)}
+          ${allowedLibraryScopes.map((scope) => renderOption(scope.value, scope.label, selectedLibraryScope)).join("")}
         </select></label>
         <label class="search-field"><span>Program status</span><select name="programStatus">
           ${renderOption("draft", "Draft", programStatus)}
@@ -229,19 +243,8 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor)
         </select></label>
         <label class="search-field"><span>Program group</span><input name="libraryCategory" list="program-settings-group-options" value="${escapeAttr(programGroup)}" placeholder="e.g. Rehabilitation"></label>
         <label class="search-field"><span>Cover image URL</span><input name="coverImageUrl" type="url" value="${escapeAttr(template.cover_image_url || "")}" placeholder="https://..."></label>
-        <label class="search-field"><span>Visibility</span><select name="visibility">
-          ${renderOption("private", "Private", template.visibility || "private")}
-          ${renderOption("team", "Team", template.visibility)}
-          ${renderOption("club", "Club", template.visibility)}
-          ${renderOption("public", "Public", template.visibility)}
-        </select></label>
-        <label class="search-field"><span>Owner</span><select name="ownerType">
-          ${renderOption("coach", "Coach", template.owner_type || "coach")}
-          ${renderOption("team", "Team", template.owner_type)}
-          ${renderOption("club", "Club", template.owner_type)}
-          ${renderOption("optimove", "OptiMove", template.owner_type)}
-          ${renderOption("marketplace", "Marketplace", template.owner_type)}
-        </select></label>
+        <label class="search-field"><span>Audience</span><input value="${escapeAttr(derivedAudience)}" readonly></label>
+        <label class="search-field"><span>Owner scope</span><input value="${escapeAttr(derivedOwner)}" readonly></label>
         <label class="search-field"><span>Pricing</span><select name="isFree">
           ${renderOption("true", "Free", isFree ? "true" : "false")}
           ${renderOption("false", "Paid", isFree ? "true" : "false")}
@@ -270,6 +273,7 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor)
       <datalist id="program-settings-group-options">
         ${(templateOptions?.categories || []).map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
       </datalist>
+      ${blockedShelfNotice}
       ${renderProgramInlineTags(template, templateOptions, programTagEditor)}
       <div class="program-metadata-actions">
         <p class="builder-error" aria-live="polite"></p>
@@ -277,6 +281,52 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor)
       </div>
     </form>
   `;
+}
+
+function templateLibraryScopesForRole(role) {
+  const normalizedRole = clean(role).toLowerCase();
+  const base = [
+    ["workspace", "Draft / working material"],
+    ["my", "My Programs"],
+  ];
+  const canUseTeam = ["team_coach", "team_trainer", "team_admin", "club_admin", "platform_admin", "admin"].includes(normalizedRole);
+  const canUseClub = ["club_admin", "platform_admin", "admin"].includes(normalizedRole);
+  const canUsePlatform = ["platform_admin", "admin"].includes(normalizedRole);
+  if (canUseTeam) base.push(["team", "Team programs"]);
+  if (canUseClub) base.push(["club", "Club programs"]);
+  if (canUsePlatform) {
+    base.push(["optimove", "OptiMove"]);
+    base.push(["marketplace", "Marketplace"]);
+  }
+  return base.map(([value, label]) => ({ value, label }));
+}
+
+function ownerLabelForLibraryScope(scope) {
+  const normalized = clean(scope).toLowerCase();
+  if (normalized === "team") return "Team";
+  if (normalized === "club") return "Club";
+  if (normalized === "optimove") return "OptiMove";
+  if (normalized === "marketplace") return "Marketplace";
+  return "Coach";
+}
+
+function visibilityLabelForLibraryScope(scope) {
+  const normalized = clean(scope).toLowerCase();
+  if (normalized === "team") return "Team visible";
+  if (normalized === "club") return "Club visible";
+  if (normalized === "optimove" || normalized === "marketplace") return "Platform visible";
+  return "Private";
+}
+
+function labelForLibraryScope(scope) {
+  return {
+    workspace: "Draft / working material",
+    my: "My Programs",
+    team: "Team programs",
+    club: "Club programs",
+    optimove: "OptiMove",
+    marketplace: "Marketplace",
+  }[scope] || scope;
 }
 
 function renderProgramInlineTags(template, templateOptions, programTagEditor) {

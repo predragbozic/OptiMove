@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { query } from "../db.js";
-import { canAccessAllAthletes, canAccessAthlete, isAthlete } from "../access.js";
+import { canAccessAllAthletes, canAccessAthlete, isAthlete, isClubAdmin, isPlatformAdmin, isTeamCoach } from "../access.js";
 import { createNotification } from "../notifications.js";
 import {
   accessExpiresAt,
@@ -129,7 +129,7 @@ router.get("/", async (req, res, next) => {
             and coalesce(ps.status, 'active') not in ('draft', 'archived')
             and coalesce(p.library_scope, 'my') <> 'workspace'
             and (
-              (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and exists (
+              (coalesce(p.library_scope, 'my') = 'my' and $10::boolean and coalesce(ps.athlete_can_view_directly, false) and exists (
                 select 1
                 from public.user_athletes coach_rel
                 where coach_rel.athlete_id = $9
@@ -137,7 +137,7 @@ router.get("/", async (req, res, next) => {
                   and coach_rel.relationship_type = 'coach'
                   and coach_rel.is_active = true
               ))
-              or (coalesce(p.library_scope, 'my') = 'team' and $11::boolean and p.visibility in ('team', 'club', 'public') and exists (
+              or (coalesce(p.library_scope, 'my') = 'team' and $11::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
                 select 1
                 from public.athletes team_athlete
                 join public.user_team_roles creator_team
@@ -147,7 +147,16 @@ router.get("/", async (req, res, next) => {
                 where team_athlete.id = $9
                   and team_athlete.team_id is not null
               ))
-              or (coalesce(p.library_scope, 'my') = 'club' and $12::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
+              or (coalesce(p.library_scope, 'my') = 'club' and $12::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('club', 'public') and exists (
+                select 1
+                from public.athletes club_athlete
+                left join public.teams athlete_team on athlete_team.id = club_athlete.team_id
+                join public.user_club_roles creator_club
+                  on creator_club.user_id = p.created_by_user_id
+                 and creator_club.is_active = true
+                 and (creator_club.club_id = club_athlete.club_id or creator_club.club_id = athlete_team.club_id)
+                where club_athlete.id = $9
+              ))
               or (coalesce(p.library_scope, 'my') = 'optimove' and $13::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
               or (coalesce(p.library_scope, 'my') = 'marketplace' and $14::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
             )
@@ -274,11 +283,16 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const planId = req.params.planId;
     if (!(await canEditTemplate(query, req.user, planId))) return res.status(404).json({ error: "Template not found." });
 
-    const scope = normalizeLibraryScope(req.body?.libraryScope);
-    const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "team", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
+    const requestedScope = normalizeLibraryScope(req.body?.libraryScope);
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
-    const programStatus = normalizeProgramStatus(req.body?.programStatus);
+    const requestedStatus = normalizeProgramStatus(req.body?.programStatus);
+    const metadataPolicy = await resolveProgramMetadataPolicy(req.user, {
+      scope: requestedScope,
+      status: requestedStatus,
+      athleteCanViewDirectly: booleanValue(req.body?.athleteCanViewDirectly, false),
+    });
+    if (!metadataPolicy.ok) return res.status(403).json({ error: metadataPolicy.error });
     const libraryCategory = textOrNull(req.body?.libraryCategory);
     const coverImageUrl = textOrNull(req.body?.coverImageUrl);
     const availableUntil = dateTextOrNull(req.body?.availableUntil);
@@ -317,23 +331,23 @@ router.patch("/:planId/metadata", async (req, res, next) => {
       `,
       [
         planId,
-        scope,
+        metadataPolicy.scope,
         libraryCategory,
         coverImageUrl,
         isFree,
         priceCents,
         availableUntil,
-        ownerType,
-        normalizeChoice(req.body?.visibility, ["private", "team", "club", "public"], "private"),
+        metadataPolicy.ownerType,
+        metadataPolicy.visibility,
         accessModel,
         accessDurationDays,
         subscriptionPeriod,
         booleanValue(req.body?.canCopy, true),
         booleanValue(req.body?.canEditCopy, true),
         booleanValue(req.body?.canAssignToAthlete, true),
-        booleanValue(req.body?.athleteCanViewDirectly, false),
+        metadataPolicy.athleteCanViewDirectly,
         booleanValue(req.body?.requiresApproval, false),
-        programStatus,
+        metadataPolicy.status,
       ],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Template not found." });
@@ -439,9 +453,19 @@ router.get("/:planId/access-requests", async (req, res, next) => {
               and ua.is_active = true
           )
        where pa.plan_id = $1
-         and pa.status = 'requested'
+         and pa.status in ('requested', 'accessed', 'used', 'completed', 'rejected')
          and coalesce(a.is_active, true)
-       order by pa.created_at desc
+       order by
+         case pa.status
+           when 'requested' then 0
+           when 'accessed' then 1
+           when 'used' then 2
+           when 'completed' then 3
+           when 'rejected' then 4
+           else 5
+         end,
+         pa.updated_at desc,
+         pa.created_at desc
        limit 100`,
       [req.params.planId],
     );
@@ -629,6 +653,78 @@ function normalizeLibraryScope(value) {
   const normalized = text(value).toLowerCase();
   if (normalized === "coach") return "my";
   return normalizeChoice(normalized, ["workspace", "my", "team", "club", "optimove", "marketplace"], "my");
+}
+
+async function resolveProgramMetadataPolicy(user, requested) {
+  const requestedScope = requested.scope || "my";
+  const requestedStatus = requested.status || "draft";
+  let scope = requestedStatus === "draft" ? "workspace" : requestedScope;
+  let status = requestedStatus;
+
+  if (scope === "workspace") status = "draft";
+  if (status === "draft") scope = "workspace";
+
+  const allowedScopes = await editableLibraryScopesForUser(user);
+  if (!allowedScopes.has(scope)) {
+    return {
+      ok: false,
+      error: `You cannot publish programs to ${labelForLibraryScope(scope)} from this workspace.`,
+    };
+  }
+
+  const inactive = status === "draft" || status === "archived";
+  const athleteCanViewDirectly = inactive ? false : requested.athleteCanViewDirectly === true;
+  return {
+    ok: true,
+    scope,
+    status,
+    athleteCanViewDirectly,
+    ownerType: ownerTypeForScope(scope),
+    visibility: visibilityForScope(scope),
+  };
+}
+
+async function editableLibraryScopesForUser(user) {
+  const scopes = new Set(["workspace", "my"]);
+  if (isPlatformAdmin(user)) return new Set(["workspace", "my", "team", "club", "optimove", "marketplace"]);
+  if (isClubAdmin(user)) {
+    scopes.add("team");
+    scopes.add("club");
+    return scopes;
+  }
+  if (isTeamCoach(user) || await userHasActiveTeam(user)) scopes.add("team");
+  return scopes;
+}
+
+async function userHasActiveTeam(user) {
+  if (!user?.id) return false;
+  const result = await query(
+    `select 1
+     from public.user_team_roles
+     where user_id = $1
+       and is_active = true
+     limit 1`,
+    [user.id],
+  );
+  return result.rowCount > 0;
+}
+
+function visibilityForScope(scope) {
+  if (scope === "team") return "team";
+  if (scope === "club") return "club";
+  if (scope === "optimove" || scope === "marketplace") return "public";
+  return "private";
+}
+
+function labelForLibraryScope(scope) {
+  return {
+    workspace: "Draft / working material",
+    my: "My Programs",
+    team: "Team programs",
+    club: "Club programs",
+    optimove: "OptiMove",
+    marketplace: "Marketplace",
+  }[scope] || scope;
 }
 
 function slugify(value) {

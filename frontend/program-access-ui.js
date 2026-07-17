@@ -5,7 +5,7 @@ export function isAthleteUser(user) {
 }
 
 export function templateAccessStatusCode(template) {
-  return clean(template?.user_access_status).toLowerCase();
+  return clean(template?.user_access_status || template?.status).toLowerCase();
 }
 
 export function templateAccessStatusLabel(template) {

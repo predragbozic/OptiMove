@@ -117,8 +117,9 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
     void markTemplateUsed(action.dataset.templateId, { renderTemplateLibrary });
     return true;
   }
-  if (type === "template-access-approve" || type === "template-access-reject") {
-    void updateTemplateAccessRequest(action.dataset.accessId, type === "template-access-approve" ? "approve" : "reject", {
+  if (type === "template-access-approve" || type === "template-access-reject" || type === "template-access-revoke") {
+    const accessAction = type === "template-access-approve" ? "approve" : type === "template-access-reject" ? "reject" : "revoke";
+    void updateTemplateAccessRequest(action.dataset.accessId, accessAction, {
       renderAfter: () => {
         if (state.activeTab === "coaches") renderCoachContext();
         else renderTemplateLibrary(state.lastTemplates);
@@ -261,10 +262,14 @@ async function updateTemplateAccessRequest(accessId, actionName, { renderAfter }
       ...state.templatePreview,
       submittingAccessId: "",
       accessRequests: (state.templatePreview.accessRequests || []).filter((request) => String(request.id) !== String(accessId)),
-      reviewMessage: actionName === "approve" ? "Program access approved." : "Program request rejected.",
+      reviewMessage: actionName === "approve"
+        ? "Program access approved."
+        : actionName === "revoke"
+          ? "Program access removed."
+          : "Program request rejected.",
       accessRequestError: "",
     };
-    patchTemplatePendingRequestCount(state.selectedTemplateId, -1);
+    if (actionName !== "revoke") patchTemplatePendingRequestCount(state.selectedTemplateId, -1);
   } catch (error) {
     state.templatePreview = {
       ...state.templatePreview,

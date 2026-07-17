@@ -116,7 +116,7 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
               and coalesce(p.status, 'active') not in ('draft', 'archived')
               and coalesce(p.library_scope, 'my') <> 'workspace'
               and (
-                (coalesce(p.library_scope, 'my') = 'my' and coalesce(ala.can_view_coach_library, true) and exists (
+                (coalesce(p.library_scope, 'my') = 'my' and coalesce(ala.can_view_coach_library, true) and coalesce(p.athlete_can_view_directly, false) and exists (
                   select 1
                   from public.user_athletes coach_rel
                   where coach_rel.athlete_id = viewer_athlete.id
@@ -124,14 +124,21 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
                     and coach_rel.relationship_type = 'coach'
                     and coach_rel.is_active = true
                 ))
-                or (coalesce(p.library_scope, 'my') = 'team' and coalesce(ala.can_view_team_library, false) and p.visibility in ('team', 'club', 'public') and exists (
+                or (coalesce(p.library_scope, 'my') = 'team' and coalesce(ala.can_view_team_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
                   select 1
                   from public.user_team_roles creator_team
                   where creator_team.team_id = viewer_athlete.team_id
                     and creator_team.user_id = p.created_by_user_id
                     and creator_team.is_active = true
                 ))
-                or (coalesce(p.library_scope, 'my') = 'club' and coalesce(ala.can_view_club_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public'))
+                or (coalesce(p.library_scope, 'my') = 'club' and coalesce(ala.can_view_club_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public') and exists (
+                  select 1
+                  from public.user_club_roles creator_club
+                  left join public.teams viewer_team on viewer_team.id = viewer_athlete.team_id
+                  where creator_club.user_id = p.created_by_user_id
+                    and creator_club.is_active = true
+                    and (creator_club.club_id = viewer_athlete.club_id or creator_club.club_id = viewer_team.club_id)
+                ))
                 or (coalesce(p.library_scope, 'my') = 'optimove' and coalesce(ala.can_view_optimove_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
                 or (coalesce(p.library_scope, 'my') = 'marketplace' and coalesce(ala.can_view_marketplace, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
               )

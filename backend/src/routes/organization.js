@@ -398,6 +398,25 @@ router.post("/program-access/:accessId/reject", async (req, res, next) => {
   }
 });
 
+router.post("/program-access/:accessId/revoke", async (req, res, next) => {
+  try {
+    const request = await loadProgramAccessRequest(req.params.accessId);
+    if (!request) return res.status(404).json({ error: "Program access not found." });
+    if (!(await canManageAthlete(req.user, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
+    const result = await query(
+      `update library.program_access
+       set status = 'revoked',
+           updated_at = now()
+       where id = $1
+       returning id, status, updated_at`,
+      [req.params.accessId],
+    );
+    res.json({ access: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.delete("/athletes/:athleteId", async (req, res, next) => {
   try {
     if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
