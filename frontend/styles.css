@@ -746,8 +746,43 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   background: #f8fafc;
 }
 
-.athlete-access-control-bulk .text-action {
-  font-size: 0.78rem;
+.checkbox-toggle-all {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: #fff;
+  cursor: pointer;
+}
+
+.checkbox-toggle-all span {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(100, 116, 139, 0.45);
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.checkbox-toggle-all.is-checked span {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.checkbox-toggle-all:hover {
+  border-color: rgba(31, 111, 104, 0.35);
+  background: rgba(31, 111, 104, 0.06);
+}
+
+.checkbox-toggle-all:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .athlete-access-toggle-row {

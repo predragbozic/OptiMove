@@ -236,7 +236,9 @@ function renderAccessControlGroup(athletes, { id, title, icon, note, actions }) 
         </div>
       </div>
       <div class="athlete-access-control-bulk">
-        <button class="text-action" type="button" data-action="organization-access-group-set" data-access-group="${escapeAttr(id)}" data-access-checked="${allChecked ? "false" : "true"}">${allChecked ? "Uncheck all" : "Check all"}</button>
+        <button class="checkbox-toggle-all ${allChecked ? "is-checked" : ""}" type="button" data-action="organization-access-group-set" data-access-group="${escapeAttr(id)}" data-access-checked="${allChecked ? "false" : "true"}" aria-label="${escapeAttr(allChecked ? `Uncheck all ${title}` : `Check all ${title}`)}">
+          <span aria-hidden="true">${allChecked ? "&#10003;" : ""}</span>
+        </button>
       </div>
       <div class="athlete-access-control-actions">
         ${actions.map(([label, patchKey, rowKey, defaultValue]) => renderAccessToggleRow(athletes, id, label, patchKey, rowKey, defaultValue)).join("")}

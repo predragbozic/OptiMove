@@ -73,7 +73,9 @@ function renderTemplateAssignmentPanel(template, preview, athletes) {
           <p class="muted">Grant this library program to selected athletes without creating an editable copy.</p>
         </div>
         <div class="program-review-actions">
-          <button class="plain-button compact-button" type="button" data-action="template-assign-toggle-all" ${preview.assigning || !visibleAthleteIds.length ? "disabled" : ""}>${allVisibleSelected ? "Uncheck all" : "Check all"}</button>
+          <button class="checkbox-toggle-all ${allVisibleSelected ? "is-checked" : ""}" type="button" data-action="template-assign-toggle-all" aria-label="${allVisibleSelected ? "Uncheck all athletes" : "Check all athletes"}" ${preview.assigning || !visibleAthleteIds.length ? "disabled" : ""}>
+            <span aria-hidden="true">${allVisibleSelected ? "&#10003;" : ""}</span>
+          </button>
           <button class="plain-button compact-button" type="button" data-action="template-assign-submit" data-template-id="${escapeAttr(template.plan_id)}" ${preview.assigning || !selectedIds.size ? "disabled" : ""}>${preview.assigning ? "Assigning..." : "Grant access"}</button>
         </div>
       </div>
@@ -100,7 +102,7 @@ function renderTemplateAssignmentAthlete(athlete, selectedIds) {
   const code = athlete.athlete_id || athlete.source_external_id || "";
   return `
     <button class="program-assignment-athlete ${selected ? "is-selected" : ""}" type="button" data-action="template-assign-toggle-athlete" data-athlete-id="${escapeAttr(athleteId)}">
-      <span class="program-assignment-check" aria-hidden="true">${selected ? "✓" : ""}</span>
+      <span class="program-assignment-check" aria-hidden="true">${selected ? "&#10003;" : ""}</span>
       ${image ? renderImage(image, "program-assignment-athlete-image") : `<span class="program-assignment-athlete-fallback">${escapeHtml(programInitials(name))}</span>`}
       <span><strong>${escapeHtml(name)}</strong>${code ? `<small>ID ${escapeHtml(code)}</small>` : ""}</span>
     </button>
