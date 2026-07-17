@@ -11,21 +11,28 @@ alter table plans.plans
 
 alter table plans.plans
   add column if not exists library_scope varchar(32) not null default 'my'
-    check (library_scope in ('workspace', 'my', 'club', 'optimove', 'marketplace')),
+    check (library_scope in ('workspace', 'my', 'team', 'club', 'optimove', 'marketplace')),
   add column if not exists library_category varchar(80),
   add column if not exists cover_image_url text,
   add column if not exists is_free boolean not null default true,
   add column if not exists price_cents integer,
   add column if not exists available_until date,
   add column if not exists owner_type varchar(32) not null default 'coach'
-    check (owner_type in ('coach', 'club', 'optimove', 'marketplace'));
+    check (owner_type in ('coach', 'team', 'club', 'optimove', 'marketplace'));
 
 alter table plans.plans
   drop constraint if exists plans_library_scope_check;
 
 alter table plans.plans
   add constraint plans_library_scope_check
-  check (library_scope in ('workspace', 'my', 'club', 'optimove', 'marketplace'));
+  check (library_scope in ('workspace', 'my', 'team', 'club', 'optimove', 'marketplace'));
+
+alter table plans.plans
+  drop constraint if exists plans_owner_type_check;
+
+alter table plans.plans
+  add constraint plans_owner_type_check
+  check (owner_type in ('coach', 'team', 'club', 'optimove', 'marketplace'));
 
 alter table plans.plans
   add column if not exists access_model varchar(32) not null default 'free_forever',

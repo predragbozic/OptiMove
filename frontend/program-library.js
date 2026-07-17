@@ -63,7 +63,7 @@ export function programLifecycle(template) {
   if (status === "archived" || template.is_active === false) return { code: "archived", label: "Archived" };
   if (status === "draft" || scope === "workspace") return { code: "draft", label: "Draft" };
   if (assignedCount > 0 || ["accessed", "used", "completed"].includes(userAccessStatus)) return { code: "assigned", label: "Assigned" };
-  if (visibility === "team") return { code: "team_shared", label: "Team shared" };
+  if (scope === "team" || visibility === "team") return { code: "team_shared", label: "Team shared" };
   if (visibility === "club") return { code: "club_shared", label: "Club shared" };
   if (visibility === "private") return { code: "published_private", label: "Published private" };
   return { code: "published_private", label: "Published private" };
@@ -234,6 +234,7 @@ export function renderTemplateFiltersHtml(data) {
     clubOptions,
     visibleClubs,
   } = data;
+  const showLifecycleFilter = activeScope === "my_programs";
   return `
     ${renderProgramScopeTabsHtml({ scopes, activeScope, scopeLabel, activeSection, requestCount, showRequests })}
     <section class="program-filter-panel" aria-label="Program filters">
@@ -257,13 +258,15 @@ export function renderTemplateFiltersHtml(data) {
           ${visibleTags.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
         </datalist>
       </label>
-      <label class="search-field">
-        <span>Program status</span>
-        <select data-template-filter="lifecycle">
-          ${renderOption("all", "All statuses", filters.lifecycle || "all")}
-          ${PROGRAM_LIFECYCLE_OPTIONS.map(([value, label]) => renderOption(value, label, filters.lifecycle)).join("")}
-        </select>
-      </label>
+      ${showLifecycleFilter ? `
+        <label class="search-field">
+          <span>Program status</span>
+          <select data-template-filter="lifecycle">
+            ${renderOption("all", "All statuses", filters.lifecycle || "all")}
+            ${PROGRAM_LIFECYCLE_OPTIONS.map(([value, label]) => renderOption(value, label, filters.lifecycle)).join("")}
+          </select>
+        </label>
+      ` : ""}
       ${showAdminFilters ? `
         <label class="search-field">
           <span>Coach</span>

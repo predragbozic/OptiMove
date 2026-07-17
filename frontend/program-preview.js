@@ -216,6 +216,7 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor)
         <label class="search-field"><span>Library</span><select name="libraryScope">
           ${renderOption("workspace", "Draft / working material", template.library_scope)}
           ${renderOption("my", "My Programs", template.library_scope || "my")}
+          ${renderOption("team", "Team programs", template.library_scope)}
           ${renderOption("club", "Club programs", template.library_scope)}
           ${renderOption("optimove", "OptiMove", template.library_scope)}
           ${renderOption("marketplace", "Marketplace", template.library_scope)}
@@ -230,6 +231,7 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor)
         </select></label>
         <label class="search-field"><span>Owner</span><select name="ownerType">
           ${renderOption("coach", "Coach", template.owner_type || "coach")}
+          ${renderOption("team", "Team", template.owner_type)}
           ${renderOption("club", "Club", template.owner_type)}
           ${renderOption("optimove", "OptiMove", template.owner_type)}
           ${renderOption("marketplace", "Marketplace", template.owner_type)}

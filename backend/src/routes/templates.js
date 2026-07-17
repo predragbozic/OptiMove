@@ -17,7 +17,7 @@ const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    const allowedScopes = new Set(["all", "my_programs", "workspace", "my", "club", "optimove", "marketplace"]);
+    const allowedScopes = new Set(["all", "my_programs", "workspace", "my", "team", "club", "optimove", "marketplace"]);
     const requestedScope = allowedScopes.has(String(req.query.scope || "")) ? String(req.query.scope) : "my_programs";
     const search = text(req.query.search);
     const category = text(req.query.category);
@@ -147,7 +147,7 @@ router.get("/", async (req, res, next) => {
         and (
           $3 = 'all'
           or coalesce(p.library_scope, 'my') = $3
-          or ($3 = 'my_programs' and coalesce(p.library_scope, 'my') in ('workspace', 'my', 'club'))
+          or ($3 = 'my_programs' and coalesce(p.library_scope, 'my') in ('workspace', 'my', 'team', 'club'))
         )
         and ($4 = '' or ps.plan_name ilike '%' || $4 || '%' or coalesce(ps.source_external_id, '') ilike '%' || $4 || '%')
         and ($5 = '' or coalesce(ps.library_category, '') = $5)
@@ -259,8 +259,8 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const planId = req.params.planId;
     if (!(await canEditTemplate(query, req.user, planId))) return res.status(404).json({ error: "Template not found." });
 
-    const scope = normalizeChoice(req.body?.libraryScope, ["workspace", "my", "club", "optimove", "marketplace"], "my");
-    const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
+    const scope = normalizeChoice(req.body?.libraryScope, ["workspace", "my", "team", "club", "optimove", "marketplace"], "my");
+    const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "team", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
     const accessModel = normalizeChoice(
@@ -818,6 +818,7 @@ async function findOrCreateProgramTag(user, name) {
 }
 
 function ownerTypeForScope(scope) {
+  if (scope === "team") return "team";
   if (scope === "club") return "club";
   if (scope === "optimove") return "optimove";
   if (scope === "marketplace") return "marketplace";

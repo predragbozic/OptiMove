@@ -214,6 +214,7 @@ function bindEvents() {
       if (button.dataset.templateScope) {
         state.programLibrarySection = "programs";
         state.templateScope = button.dataset.templateScope;
+        if (state.templateScope !== "my_programs") state.templateFilters.lifecycle = "all";
         ensureTemplateScopeIsVisible();
       }
       if (button.dataset.programLibrarySection) state.programLibrarySection = button.dataset.programLibrarySection;
@@ -471,7 +472,10 @@ async function handleContentChange(event) {
 
   const templateFilter = event.target.closest("[data-template-filter]");
   if (templateFilter) {
-    if (templateFilter.dataset.templateFilter === "scope") state.templateScope = templateFilter.value || "my_programs";
+    if (templateFilter.dataset.templateFilter === "scope") {
+      state.templateScope = templateFilter.value || "my_programs";
+      if (state.templateScope !== "my_programs") state.templateFilters.lifecycle = "all";
+    }
     else if (templateFilter.dataset.templateFilter === "freeOnly") state.templateFilters.pricing = templateFilter.checked ? "free" : "all";
     else state.templateFilters[templateFilter.dataset.templateFilter] = templateFilter.value;
     state.selectedTemplateId = null;
@@ -1446,7 +1450,10 @@ function renderTemplateLibraryResults() {
 }
 
 function visibleTemplateLibraryRows(templates) {
-  const filtered = applyTemplateClientFilters(templates, state.templateFilters);
+  const filters = state.templateScope === "my_programs"
+    ? state.templateFilters
+    : { ...state.templateFilters, lifecycle: "all" };
+  const filtered = applyTemplateClientFilters(templates, filters);
   return applyTemplateAccessScope(filtered, state.templateScope, state.currentUser);
 }
 
