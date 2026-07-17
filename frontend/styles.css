@@ -674,9 +674,16 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 .athlete-access-modal-actions {
   align-items: center;
   justify-content: flex-end;
-  margin: 14px 0;
-  padding-top: 12px;
+  position: sticky;
+  bottom: -1px;
+  z-index: 2;
+  margin: 14px -1px -1px;
+  padding: 12px;
   border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 -12px 28px rgba(14, 28, 37, 0.08);
+  backdrop-filter: blur(10px);
 }
 
 .athlete-access-control-grid {

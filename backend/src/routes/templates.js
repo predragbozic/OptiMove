@@ -278,6 +278,9 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const ownerType = normalizeChoice(req.body?.ownerType, ["coach", "team", "club", "optimove", "marketplace"], ownerTypeForScope(scope));
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
+    const libraryCategory = textOrNull(req.body?.libraryCategory);
+    const coverImageUrl = textOrNull(req.body?.coverImageUrl);
+    const availableUntil = dateTextOrNull(req.body?.availableUntil);
     const accessModel = normalizeChoice(
       req.body?.accessModel,
       ["free_forever", "one_time_forever", "time_limited", "subscription", "assigned", "trial"],
@@ -291,11 +294,11 @@ router.patch("/:planId/metadata", async (req, res, next) => {
       `
       update plans.plans
       set library_scope = $2,
-          library_category = nullif(trim($3), ''),
-          cover_image_url = nullif(trim($4), ''),
+          library_category = $3,
+          cover_image_url = $4,
           is_free = $5,
           price_cents = $6,
-          available_until = nullif($7, '')::date,
+          available_until = $7::date,
           owner_type = $8,
           visibility = $9,
           access_model = $10,
@@ -313,11 +316,11 @@ router.patch("/:planId/metadata", async (req, res, next) => {
       [
         planId,
         scope,
-        text(req.body?.libraryCategory),
-        text(req.body?.coverImageUrl),
+        libraryCategory,
+        coverImageUrl,
         isFree,
         priceCents,
-        text(req.body?.availableUntil),
+        availableUntil,
         ownerType,
         normalizeChoice(req.body?.visibility, ["private", "team", "club", "public"], "private"),
         accessModel,
@@ -591,6 +594,16 @@ router.post("/:planId/reviews", async (req, res, next) => {
 
 function text(value) {
   return String(value ?? "").trim();
+}
+
+function textOrNull(value) {
+  const normalized = text(value);
+  return normalized ? normalized : null;
+}
+
+function dateTextOrNull(value) {
+  const normalized = text(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : null;
 }
 
 function normalizeChoice(value, allowed, fallback) {
