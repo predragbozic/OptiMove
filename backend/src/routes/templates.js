@@ -434,6 +434,14 @@ router.get("/:planId/access-requests", async (req, res, next) => {
          pa.user_id,
          pa.access_type,
          pa.status,
+         case pa.status
+           when 'requested' then 0
+           when 'accessed' then 1
+           when 'used' then 2
+           when 'completed' then 3
+           when 'rejected' then 4
+           else 5
+         end as status_sort_order,
          pa.created_at,
          pa.updated_at,
          a.id as athlete_id,
@@ -456,14 +464,7 @@ router.get("/:planId/access-requests", async (req, res, next) => {
          and pa.status in ('requested', 'accessed', 'used', 'completed', 'rejected')
          and coalesce(a.is_active, true)
        order by
-         case pa.status
-           when 'requested' then 0
-           when 'accessed' then 1
-           when 'used' then 2
-           when 'completed' then 3
-           when 'rejected' then 4
-           else 5
-         end,
+         status_sort_order,
          pa.updated_at desc,
          pa.created_at desc
        limit 100`,
