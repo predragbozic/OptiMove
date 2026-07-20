@@ -20,6 +20,9 @@ alter table plans.plans
   add column if not exists owner_type varchar(32) not null default 'coach'
     check (owner_type in ('coach', 'team', 'club', 'optimove', 'marketplace'));
 
+alter table plans.plans
+  add column if not exists status varchar(32) not null default 'active';
+
 do $$
 declare
   constraint_to_drop text;
@@ -65,6 +68,25 @@ alter table plans.plans
 alter table plans.plans
   add constraint plans_owner_type_check
   check (owner_type in ('coach', 'team', 'club', 'optimove', 'marketplace'));
+
+alter table plans.plans
+  drop constraint if exists plans_status_check;
+
+update plans.plans
+  set status = case
+    when coalesce(status, '') = 'draft' then 'draft'
+    when coalesce(status, '') = 'archived' then 'archived'
+    when coalesce(status, '') in ('active', 'published', 'published_private', 'assigned', 'team_shared', 'club_shared') then 'active'
+    when coalesce(library_scope, 'my') = 'workspace' then 'draft'
+    else 'active'
+  end
+  where status is null
+     or status not in ('draft', 'active', 'archived')
+     or status in ('published', 'published_private', 'assigned', 'team_shared', 'club_shared');
+
+alter table plans.plans
+  add constraint plans_status_check
+  check (status in ('draft', 'active', 'archived'));
 
 alter table plans.plans
   add column if not exists access_model varchar(32) not null default 'free_forever',

@@ -116,6 +116,20 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
               and coalesce(p.status, 'active') not in ('draft', 'archived')
               and coalesce(p.library_scope, 'my') <> 'workspace'
               and (
+                exists (
+                  select 1
+                  from library.program_access active_access
+                  where active_access.plan_id = p.id
+                    and active_access.user_id = $2
+                    and active_access.status in ('accessed', 'used', 'completed')
+                    and (active_access.expires_at is null or active_access.expires_at > now())
+                )
+                or (
+                  not coalesce(p.requires_approval, false)
+                  and not coalesce(ala.require_approval, false)
+                )
+              )
+              and (
                 (coalesce(p.library_scope, 'my') = 'my' and coalesce(ala.can_view_coach_library, true) and coalesce(p.athlete_can_view_directly, false) and exists (
                   select 1
                   from public.user_athletes coach_rel
