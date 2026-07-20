@@ -2783,7 +2783,7 @@ input:focus {
 .program-library-row {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(220px, 260px);
+  grid-auto-columns: 230px;
   gap: 14px;
   min-width: 0;
   overflow-x: auto;
@@ -2794,7 +2794,9 @@ input:focus {
 
 .program-library-card {
   position: relative;
-  min-width: 0;
+  width: 230px;
+  min-width: 230px;
+  max-width: 230px;
   display: grid;
   grid-template-rows: auto auto;
   gap: 12px;
@@ -2927,9 +2929,65 @@ input:focus {
 
 .program-library-card-foot {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  align-content: flex-start;
+  gap: 6px;
+  min-height: 64px;
+}
+
+.program-library-meta-primary,
+.program-library-meta-secondary {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  gap: 5px;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+}
+
+.program-library-card-chip,
+.program-library-card-rating {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 22px;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.program-library-card-chip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.program-library-card-chip.is-editable {
+  cursor: pointer;
+}
+
+.program-library-card-chip.is-editable:hover,
+.program-library-card-chip.is-editable:focus {
+  border-color: rgba(31, 122, 111, 0.38);
+  background: rgba(31, 122, 111, 0.09);
+  color: var(--primary-dark);
+}
+
+.program-library-card-rating {
+  max-width: 118px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.program-library-card-action {
+  margin-top: 2px;
 }
 
 .program-library-creator,
@@ -3436,7 +3494,13 @@ input:focus {
 
 @media (max-width: 760px) {
   .program-library-row {
-    grid-auto-columns: minmax(210px, 78vw);
+    grid-auto-columns: 196px;
+  }
+
+  .program-library-card {
+    width: 196px;
+    min-width: 196px;
+    max-width: 196px;
   }
 
   .program-scope-tabs {
@@ -3466,6 +3530,23 @@ input:focus {
 
   .program-library-card-hit {
     grid-template-rows: 96px auto auto;
+  }
+
+  .program-library-card-title {
+    min-height: 38px;
+    font-size: 15px;
+  }
+
+  .program-library-card-foot {
+    min-height: 66px;
+    gap: 5px;
+  }
+
+  .program-library-card-chip,
+  .program-library-card-rating {
+    min-height: 21px;
+    padding: 3px 6px;
+    font-size: 10px;
   }
 
   .program-preview-overlay {

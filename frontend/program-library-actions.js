@@ -2,24 +2,25 @@ import { api } from "./api.js";
 import { emptyTemplatePreview, state } from "./state.js";
 import { clean } from "./utils.js";
 
-export async function openTemplatePreview(planId, renderAfter) {
+export async function openTemplatePreview(planId, renderAfter, options = {}) {
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(planId));
   if (!selected) return;
-  await openTemplatePreviewWithRenderer(selected, renderAfter);
+  await openTemplatePreviewWithRenderer(selected, renderAfter, options);
 }
 
-export async function openTemplatePreviewFromCoachProgram(program, renderAfter) {
+export async function openTemplatePreviewFromCoachProgram(program, renderAfter, options = {}) {
   if (!program?.plan_id) return;
   if (!state.lastTemplates.some((template) => String(template.plan_id) === String(program.plan_id))) {
     state.lastTemplates = [...state.lastTemplates, normalizeCoachProgramAsTemplate(program)];
   }
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(program.plan_id));
-  await openTemplatePreviewWithRenderer(selected, renderAfter);
+  await openTemplatePreviewWithRenderer(selected, renderAfter, options);
 }
 
-async function openTemplatePreviewWithRenderer(selected, renderAfter) {
+async function openTemplatePreviewWithRenderer(selected, renderAfter, options = {}) {
+  const settingsOpen = options.settingsOpen === true;
   state.selectedTemplateId = selected.plan_id;
-  state.templatePreview = emptyTemplatePreview({ open: true, loading: true });
+  state.templatePreview = emptyTemplatePreview({ open: true, loading: true, settingsOpen });
   renderAfter();
   try {
     const detail = await api(`/api/plans/${encodeURIComponent(selected.plan_id)}/program`);
@@ -43,6 +44,7 @@ async function openTemplatePreviewWithRenderer(selected, renderAfter) {
       ...state.templatePreview,
       open: true,
       loading: false,
+      settingsOpen: state.templatePreview.settingsOpen || settingsOpen,
       detail,
       reviews: reviewsData.reviews || [],
       accessRequests: accessRequestsData.requests || [],
@@ -51,7 +53,7 @@ async function openTemplatePreviewWithRenderer(selected, renderAfter) {
       reviewError,
     });
   } catch (error) {
-    state.templatePreview = emptyTemplatePreview({ ...state.templatePreview, open: true, loading: false, detail: null, error: error.message || "Could not load program." });
+    state.templatePreview = emptyTemplatePreview({ ...state.templatePreview, open: true, loading: false, settingsOpen: state.templatePreview.settingsOpen || settingsOpen, detail: null, error: error.message || "Could not load program." });
   }
   renderAfter();
 }
@@ -83,6 +85,10 @@ export function handleTemplateLibraryAction(action, { loadTemplates, renderCoach
   const type = action.dataset.action;
   if (type === "template-open") {
     void openTemplatePreview(action.dataset.templateId, () => renderTemplateLibrary(state.lastTemplates));
+    return true;
+  }
+  if (type === "template-settings-open") {
+    void openTemplatePreview(action.dataset.templateId, () => renderTemplateLibrary(state.lastTemplates), { settingsOpen: true });
     return true;
   }
   if (type === "template-info") {

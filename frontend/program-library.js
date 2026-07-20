@@ -76,6 +76,18 @@ export function ratingLabel(entity) {
   return `${average.toFixed(average % 1 ? 1 : 0)} / 5 (${count})`;
 }
 
+function canOpenProgramSettings(currentUser) {
+  return clean(currentUser?.accessScope).toLowerCase() !== "athlete";
+}
+
+function renderEditableProgramChip(label, template, canEdit, modifier = "") {
+  if (!label) return "";
+  const editAttrs = canEdit
+    ? ` data-action="template-settings-open" data-template-id="${escapeAttr(template.plan_id)}" title="Open library settings"`
+    : "";
+  return `<span class="program-library-card-chip ${modifier} ${canEdit ? "is-editable" : ""}"${editAttrs}>${escapeHtml(label)}</span>`;
+}
+
 export function applyTemplateAccessScope(templates, scope, user) {
   const accessScope = clean(user?.accessScope).toLowerCase();
   if (accessScope !== "athlete" || scope !== "all") return templates;
@@ -104,6 +116,9 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
   const actionLabel = templateAccessActionLabel(template, currentUser);
   const accessBadge = templateAccessBadge(template, currentUser);
   const hasPendingRequests = Number(template.pending_access_count || 0) > 0;
+  const canEditSettings = canOpenProgramSettings(currentUser);
+  const tags = template.tags || [];
+  const tagLabel = tags.length ? `${tags[0].name}${tags.length > 1 ? ` +${tags.length - 1}` : ""}` : "";
   return `
     <article class="program-library-card ${isSelected ? "is-selected" : ""} ${hasPendingRequests ? "has-pending-requests" : ""}">
       <button class="program-library-info-button" type="button" data-action="template-info" data-template-id="${escapeAttr(template.plan_id)}" aria-label="Program information">i</button>
@@ -116,12 +131,16 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
           <span class="program-library-card-sub">${escapeHtml(category)}</span>
         </span>
         <span class="program-library-card-foot">
-          <span class="item-badge">${escapeHtml(price)}</span>
-          <span class="item-badge program-lifecycle-badge is-${escapeAttr(lifecycle.code)}">${escapeHtml(lifecycle.label)}</span>
-          ${accessBadge ? `<span class="item-badge program-access-badge is-${escapeAttr(accessBadge.code)}">${escapeHtml(accessBadge.label)}</span>` : ""}
-          <span class="item-badge">${escapeHtml(ratingLabel(template))}</span>
-          ${(template.tags || []).length ? `<span class="item-badge">${escapeHtml(template.tags[0].name)}${template.tags.length > 1 ? ` +${template.tags.length - 1}` : ""}</span>` : ""}
-          <span class="text-action">${escapeHtml(actionLabel)}</span>
+          <span class="program-library-meta-primary">
+            ${renderEditableProgramChip(price, template, canEditSettings, "is-price")}
+            ${renderEditableProgramChip(lifecycle.label, template, canEditSettings, `program-lifecycle-badge is-${escapeAttr(lifecycle.code)}`)}
+            ${accessBadge ? renderEditableProgramChip(accessBadge.label, template, canEditSettings, `program-access-badge is-${escapeAttr(accessBadge.code)}`) : ""}
+          </span>
+          <span class="program-library-meta-secondary">
+            ${tagLabel ? renderEditableProgramChip(tagLabel, template, canEditSettings, "is-tag") : ""}
+            <span class="program-library-card-rating">${escapeHtml(ratingLabel(template))}</span>
+          </span>
+          <span class="text-action program-library-card-action">${escapeHtml(actionLabel)}</span>
         </span>
       </button>
       ${creator ? `
