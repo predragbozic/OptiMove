@@ -66,6 +66,7 @@ import {
   handleOrganizationAction,
   handleOrganizationFilterInput,
   handleOrganizationSelectChange,
+  syncOrganizationAccessGroupMaster,
   submitOrganizationAccessForm,
   submitOrganizationForm as submitOrganizationFormAction,
 } from "./organization-actions.js";
@@ -459,6 +460,12 @@ async function handleContentChange(event) {
   const organizationClubSelect = event.target.closest("[data-organization-club-select]");
   if (organizationClubSelect) {
     handleOrganizationSelectChange(organizationClubSelect.closest("form"));
+    return;
+  }
+
+  const athleteAccessInput = event.target.closest("[data-athlete-access-key]");
+  if (athleteAccessInput) {
+    syncOrganizationAccessGroupMaster(athleteAccessInput);
     return;
   }
 

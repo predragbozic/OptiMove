@@ -106,6 +106,13 @@ export function handleOrganizationSelectChange(select) {
   syncOrganizationTeamSelect(select);
 }
 
+export function syncOrganizationAccessGroupMaster(input) {
+  const form = input?.closest?.("[data-organization-access-form]");
+  const group = input?.dataset?.athleteAccessGroup || "";
+  if (!form || !group) return;
+  syncAccessGroupMaster(form, group);
+}
+
 export function findOrganizationRow(type, id) {
   const data = state.organization.data || {};
   const rows = type === "club" ? data.clubs : type === "team" ? data.teams : type === "athlete" ? data.athletes : [];
@@ -195,12 +202,15 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   }
   if (type === "organization-access-group-set") {
     const group = action.dataset.accessGroup || "";
-    const checked = action.dataset.accessChecked === "true";
     const form = action.closest("[data-organization-access-form]");
     if (!group || !form) return true;
-    form.querySelectorAll(`[data-athlete-access-group="${CSS.escape(group)}"]`).forEach((input) => {
+    const inputs = accessGroupInputs(form, group);
+    const allChecked = inputs.length > 0 && inputs.every((input) => input.checked);
+    const checked = !allChecked;
+    inputs.forEach((input) => {
       input.checked = checked;
     });
+    syncAccessGroupMaster(form, group);
     return true;
   }
   if (type === "organization-invite-athlete") {
@@ -311,4 +321,28 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     return true;
   }
   return false;
+}
+
+function accessGroupInputs(form, group) {
+  return Array.from(form.querySelectorAll(`[data-athlete-access-group="${selectorEscape(group)}"]`));
+}
+
+function syncAccessGroupMaster(form, group) {
+  const inputs = accessGroupInputs(form, group);
+  const master = form.querySelector(`[data-action="organization-access-group-set"][data-access-group="${selectorEscape(group)}"]`);
+  if (!master) return;
+  const checkedCount = inputs.filter((input) => input.checked).length;
+  const allChecked = inputs.length > 0 && checkedCount === inputs.length;
+  const mixedChecked = checkedCount > 0 && !allChecked;
+  master.dataset.accessChecked = allChecked ? "false" : "true";
+  master.classList.toggle("is-checked", allChecked);
+  master.classList.toggle("is-mixed", mixedChecked);
+  master.setAttribute("aria-pressed", allChecked ? "true" : "false");
+  master.setAttribute("aria-label", allChecked ? "Uncheck all" : "Check all");
+  const mark = master.querySelector("span");
+  if (mark) mark.innerHTML = allChecked ? "&#10003;" : mixedChecked ? "&minus;" : "";
+}
+
+function selectorEscape(value) {
+  return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : String(value).replace(/["\\]/g, "\\$&");
 }

@@ -207,7 +207,7 @@ function renderAthleteAccessModal(athletes) {
         </div>
         ${state.organization.accessMessage ? `<p class="builder-success">${escapeHtml(state.organization.accessMessage)}</p>` : ""}
         ${state.organization.accessError ? `<p class="builder-error">${escapeHtml(state.organization.accessError)}</p>` : ""}
-        <form data-organization-access-form data-athlete-ids="${escapeAttr(ids)}">
+        <form class="athlete-access-modal-form" data-organization-access-form data-athlete-ids="${escapeAttr(ids)}">
           <div class="athlete-access-control-grid">
             ${accessControlGroups.map((group) => renderAccessControlGroup(athletes, group)).join("")}
           </div>
@@ -225,7 +225,9 @@ function renderAthleteAccessModal(athletes) {
 }
 
 function renderAccessControlGroup(athletes, { id, title, icon, note, actions }) {
-  const allChecked = isAccessGroupFullyChecked(athletes, actions);
+  const checkedCount = accessGroupCheckedCount(athletes, actions);
+  const allChecked = actions.length > 0 && checkedCount === actions.length;
+  const mixedChecked = checkedCount > 0 && !allChecked;
   return `
     <article class="athlete-access-control-card">
       <div class="athlete-access-control-card-head">
@@ -236,8 +238,8 @@ function renderAccessControlGroup(athletes, { id, title, icon, note, actions }) 
         </div>
       </div>
       <div class="athlete-access-control-bulk">
-        <button class="checkbox-toggle-all ${allChecked ? "is-checked" : ""}" type="button" data-action="organization-access-group-set" data-access-group="${escapeAttr(id)}" data-access-checked="${allChecked ? "false" : "true"}" aria-label="${escapeAttr(allChecked ? `Uncheck all ${title}` : `Check all ${title}`)}">
-          <span aria-hidden="true">${allChecked ? "&#10003;" : ""}</span>
+        <button class="checkbox-toggle-all ${allChecked ? "is-checked" : ""} ${mixedChecked ? "is-mixed" : ""}" type="button" data-action="organization-access-group-set" data-access-group="${escapeAttr(id)}" data-access-checked="${allChecked ? "false" : "true"}" aria-pressed="${allChecked ? "true" : "false"}" aria-label="${escapeAttr(allChecked ? `Uncheck all ${title}` : `Check all ${title}`)}">
+          <span aria-hidden="true">${allChecked ? "&#10003;" : mixedChecked ? "&minus;" : ""}</span>
         </button>
       </div>
       <div class="athlete-access-control-actions">
@@ -247,9 +249,9 @@ function renderAccessControlGroup(athletes, { id, title, icon, note, actions }) 
   `;
 }
 
-function isAccessGroupFullyChecked(athletes, actions) {
-  if (!athletes.length || !actions.length) return false;
-  return actions.every(([, , rowKey, defaultValue]) => athletes.every((athlete) => readAthleteAccess(athlete, rowKey, defaultValue)));
+function accessGroupCheckedCount(athletes, actions) {
+  if (!athletes.length || !actions.length) return 0;
+  return actions.filter(([, , rowKey, defaultValue]) => athletes.every((athlete) => readAthleteAccess(athlete, rowKey, defaultValue))).length;
 }
 
 function renderAccessToggleRow(athletes, groupId, label, patchKey, rowKey, defaultValue = false) {

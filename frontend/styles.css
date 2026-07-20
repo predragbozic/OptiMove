@@ -649,6 +649,7 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   max-height: min(820px, calc(100dvh - 36px));
   overflow: auto;
   box-shadow: 0 22px 70px rgba(14, 28, 37, 0.28);
+  scrollbar-gutter: stable;
 }
 
 .athlete-access-modal-head,
@@ -686,11 +687,16 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   backdrop-filter: blur(10px);
 }
 
+.athlete-access-modal-form {
+  padding-bottom: 8px;
+}
+
 .athlete-access-control-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(220px, 1fr));
   gap: 12px;
   margin: 14px 0;
+  padding-bottom: 78px;
 }
 
 .athlete-access-control-card {
@@ -773,6 +779,12 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 .checkbox-toggle-all.is-checked span {
   border-color: var(--accent);
   background: var(--accent);
+}
+
+.checkbox-toggle-all.is-mixed span {
+  border-color: rgba(31, 111, 104, 0.55);
+  background: rgba(31, 111, 104, 0.12);
+  color: var(--accent);
 }
 
 .checkbox-toggle-all:hover {
