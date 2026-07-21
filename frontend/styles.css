@@ -6812,6 +6812,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-athlete-trigger strong, .builder-athlete-trigger small, .builder-athlete-option strong, .builder-athlete-option small { display: block; }
 .builder-athlete-trigger small, .builder-athlete-option small { margin-top: 3px; color: var(--muted, #667085); font-size: 12px; }
 .builder-athlete-trigger-icon, .builder-athlete-avatar { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; object-position: center top; background: #e7f5f2; display: grid; place-items: center; color: #287e77; font-weight: 800; }
+.builder-checkmark { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--line, #dfe4e8); display: grid; place-items: center; color: #287e77; font-weight: 900; background: #fff; }
+.builder-athlete-option.is-selected .builder-checkmark { border-color: #287e77; background: #287e77; color: #fff; }
 .builder-athlete-overlay, .builder-section-overlay { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; }
 .builder-athlete-backdrop, .builder-section-backdrop { position: absolute; inset: 0; border: 0; background: rgba(13, 27, 36, .46); cursor: default; }
 .builder-athlete-picker, .builder-section-panel { position: relative; z-index: 1; width: min(620px, 96vw); max-height: min(760px, 88dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
@@ -6820,6 +6822,19 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-copy-plan-modal .builder-athlete-options { max-height: 300px; }
 .builder-copy-plan-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
 .builder-copy-plan-footer .muted { margin: 0; font-size: 12px; }
+.builder-batch-switcher { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid #dce6ea; border-radius: 8px; background: #fff; box-shadow: 0 10px 28px rgba(15, 23, 42, .06); }
+.builder-batch-switcher p, .builder-batch-switcher small { margin: 0; }
+.builder-batch-switcher strong { display: block; font-size: 16px; }
+.builder-batch-summary { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.builder-batch-controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; flex-wrap: wrap; }
+.builder-batch-mode { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.builder-batch-sync { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 13px; font-weight: 800; white-space: nowrap; }
+.builder-batch-sync input { width: 16px; height: 16px; margin: 0; accent-color: #287e77; }
+.builder-batch-mode small { color: #667085; font-size: 12px; }
+.builder-batch-buttons { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.builder-batch-pills { display: flex; gap: 6px; max-width: min(420px, 42vw); overflow-x: auto; padding: 2px; }
+.builder-batch-pill { flex: 0 0 auto; width: 34px; height: 34px; border: 1px solid #dce6ea; border-radius: 999px; background: #f7fafb; color: #344054; font-weight: 800; cursor: pointer; }
+.builder-batch-pill.is-active { border-color: #287e77; background: #287e77; color: #fff; }
 .builder-section-panel { width: min(900px, 96vw); }
 .builder-section-panel-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 18px; }
 .builder-section-panel-head h3 { margin: 2px 0 4px; }
@@ -6971,6 +6986,11 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-details-row { grid-template-columns: 1fr; }
   .builder-program-bar, .builder-block-creator { display: grid; grid-template-columns: 1fr; }
   .builder-program-actions { padding-top: 0; }
+  .builder-batch-switcher { align-items: stretch; flex-direction: column; gap: 10px; }
+  .builder-batch-controls, .builder-batch-mode { justify-content: flex-start; }
+  .builder-batch-sync { width: 100%; justify-content: center; box-sizing: border-box; }
+  .builder-batch-buttons { justify-content: space-between; }
+  .builder-batch-pills { max-width: 100%; }
   .builder-source-actions { align-items: flex-end; flex-direction: column; gap: 6px; }
   .builder-copy-plan-footer { align-items: stretch; flex-direction: column; }
   .builder-copy-plan-footer .plain-button { width: 100%; }
@@ -7025,5 +7045,67 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 @media (max-width: 760px) {
   .week-nav-panel {
     grid-template-columns: 42px minmax(0, 1fr) 70px 42px auto;
+  }
+}
+
+/* Mobile navigation: hamburger + corner sheet, replacing the icon rail below 760px. */
+.mobile-nav-toggle {
+  display: none;
+}
+
+.mobile-nav-backdrop {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  body:not(.login-mode) .mobile-nav-toggle {
+    display: grid;
+    place-items: center;
+  }
+
+  body:not(.login-mode) #railToggle {
+    display: none;
+  }
+
+  body:not(.login-mode) .app-shell {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body:not(.login-mode) .sidebar {
+    position: fixed !important;
+    top: 64px !important;
+    left: 10px !important;
+    right: auto !important;
+    bottom: auto !important;
+    z-index: 60 !important;
+    width: min(280px, 84vw) !important;
+    height: auto !important;
+    max-height: min(70dvh, 520px) !important;
+    overflow: auto !important;
+    border-radius: 12px !important;
+    box-shadow: 0 18px 44px rgba(10, 20, 28, 0.32) !important;
+    opacity: 0 !important;
+    transform: translateY(-8px) scale(0.97) !important;
+    transform-origin: top left !important;
+    pointer-events: none !important;
+    transition: opacity 140ms ease, transform 140ms ease !important;
+  }
+
+  body.mobile-nav-open:not(.login-mode) .sidebar {
+    opacity: 1 !important;
+    transform: translateY(0) scale(1) !important;
+    pointer-events: auto !important;
+  }
+
+  body.mobile-nav-open:not(.login-mode) .mobile-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(10, 20, 28, 0.28);
+  }
+
+  body:not(.login-mode) .sidebar .athlete-list {
+    max-height: 40dvh;
   }
 }

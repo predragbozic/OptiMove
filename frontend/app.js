@@ -58,6 +58,7 @@ import {
 import {
   ensureTemplateScopeIsVisible,
   renderLibraryNav,
+  renderMobileNavState,
   renderRailState,
   templateScopeMeta,
   visibleTemplateScopes,
@@ -192,6 +193,8 @@ function bindEvents() {
   els.athleteSearch?.addEventListener("input", renderAthleteList);
   els.athletesToggle?.addEventListener("click", toggleAthletesList);
   els.railToggle?.addEventListener("click", toggleRail);
+  els.mobileNavToggle?.addEventListener("click", toggleMobileNav);
+  els.mobileNavBackdrop?.addEventListener("click", closeMobileNav);
   els.signOut?.addEventListener("click", signOut);
   els.calendarToggle?.addEventListener("click", openWeeklyCalendarFromRail);
   els.tabs.forEach((tab) => {
@@ -628,11 +631,23 @@ function toggleRail() {
   renderRailState();
 }
 
+function toggleMobileNav() {
+  state.mobileNavOpen = !state.mobileNavOpen;
+  renderMobileNavState();
+}
+
+function closeMobileNav() {
+  if (!state.mobileNavOpen) return;
+  state.mobileNavOpen = false;
+  renderMobileNavState();
+}
+
 function collapseRailAfterNav() {
   if (state.railExpanded && !window.matchMedia("(min-width: 900px)").matches) {
     state.railExpanded = false;
     renderRailState();
   }
+  closeMobileNav();
 }
 
 function openWeeklyCalendarFromRail() {

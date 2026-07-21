@@ -102,6 +102,12 @@ export function renderRailState() {
   els.railToggle?.setAttribute("aria-label", state.railExpanded ? "Collapse navigation" : "Expand navigation");
 }
 
+export function renderMobileNavState() {
+  document.body.classList.toggle("mobile-nav-open", state.mobileNavOpen);
+  els.mobileNavToggle?.setAttribute("aria-expanded", String(state.mobileNavOpen));
+  els.mobileNavToggle?.setAttribute("aria-label", state.mobileNavOpen ? "Close menu" : "Open menu");
+}
+
 export function updateProgramLibraryNavLabels() {
   const requestCount = (state.organization?.data?.accessRequests || []).filter((row) => row.status === "requested").length;
   document.querySelectorAll('.sidebar-subnav-button[data-program-library-section="requests"]').forEach((button) => {

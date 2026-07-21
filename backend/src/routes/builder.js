@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 
@@ -13,55 +14,61 @@ router.get("/plans/:planId", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.post("/plans/:planId/sync-batch", async (req, res, next) => {
+  try {
+    const plan = await requirePlan(req.user, req.params.planId, res);
+    if (!plan) return;
+    if (plan.builder_batch_id && !plan.is_edit_draft) await syncBatchFromPlan(plan, req.user);
+    const freshPlan = await getEditablePlan(req.user, plan.id);
+    res.json(await buildDraft(freshPlan || plan));
+  } catch (error) { next(error); }
+});
+
 router.post("/plans", async (req, res, next) => {
   let client;
   try {
     const requestedName = text(req.body?.name);
-    const athleteExternalId = text(req.body?.athleteId);
+    const athleteExternalIds = requestedAthleteIds(req.body);
     const planType = text(req.body?.planType) === "weekly" ? "weekly" : "program";
     const weekStart = planType === "weekly" ? normalizedWeekStart(req.body?.weekStart) : null;
-    // An unassigned program draft is the reusable-template workflow. Weekly
-    // plans are always assigned to one athlete and one calendar week.
-    const isTemplate = planType === "program" && !athleteExternalId;
     if (planType === "program" && !requestedName) return res.status(400).json({ error: "Program name is required." });
-    if (planType === "weekly" && !athleteExternalId) return res.status(400).json({ error: "Choose an athlete for a weekly plan." });
+    if (planType === "weekly" && !athleteExternalIds.length) return res.status(400).json({ error: "Choose at least one athlete for a weekly plan." });
     if (planType === "weekly" && !weekStart) return res.status(400).json({ error: "Choose a valid date for the weekly plan." });
     const name = requestedName || `Weekly plan ${weekStart}`;
-    const athlete = athleteExternalId ? await findAthlete(athleteExternalId) : null;
-    if (athleteExternalId && !athlete) return res.status(404).json({ error: "Athlete not found." });
+    const { athletes, missing } = await findRequestedAthletes(athleteExternalIds);
+    if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
+    const targets = athletes.length ? athletes : [null];
+    const batchId = targets.length > 1 ? randomUUID() : null;
+    const createdIds = [];
     client = await pool.connect();
     await client.query("begin");
     if (planType === "weekly") {
-      const existing = await client.query(
-        `select p.id, p.created_by_user_id, p.source_type, p.status, count(pd.id)::int as day_count
-         from plans.plans p left join plans.plan_days pd on pd.plan_id = p.id
-         where p.plan_type = 'weekly' and p.athlete_id = $1 and p.week_start = $2
-           and coalesce(p.is_active, true)
-           and not coalesce(p.is_edit_draft, false)
-         group by p.id, p.created_by_user_id, p.source_type, p.status
-         limit 1`,
-        [athlete.id, weekStart],
-      );
-      const existingPlan = existing.rows[0];
-      if (existingPlan?.day_count === 0 && existingPlan.source_type === "builder" && existingPlan.status === "draft" && String(existingPlan.created_by_user_id) === String(req.user.id)) {
-        await client.query("delete from plans.plans where id = $1", [existingPlan.id]);
-      } else if (existingPlan) {
+      const conflicts = [];
+      for (const target of targets) {
+        const conflict = await ensureWeeklySlot(client, req.user.id, target, weekStart);
+        if (conflict) conflicts.push(conflict);
+      }
+      if (conflicts.length) {
         await client.query("rollback");
         client.release();
         client = null;
-        return res.status(409).json({ error: "This athlete already has a weekly plan for that week." });
+        return res.status(409).json({ error: conflicts.join(" ") });
       }
     }
-    const created = await client.query(
-      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, week_start)
-       values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, 'draft', 'builder', $9) returning id`,
-      [planType, req.user.id, athlete?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), isTemplate, weekStart],
-    );
-    if (planType === "weekly") await createWeeklyDays(client, created.rows[0].id, weekStart);
+    for (const target of targets) {
+      const isTemplate = planType === "program" && !target;
+      const created = await client.query(
+        `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, week_start, builder_batch_id)
+         values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, 'draft', 'builder', $9, $10) returning id`,
+        [planType, req.user.id, target?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), isTemplate, weekStart, batchId],
+      );
+      createdIds.push(created.rows[0].id);
+      if (planType === "weekly") await createWeeklyDays(client, created.rows[0].id, weekStart);
+    }
     await client.query("commit");
     client.release();
     client = null;
-    res.status(201).json(await buildDraft(await getEditablePlan(req.user, created.rows[0].id)));
+    res.status(201).json(await buildDraft(await getEditablePlan(req.user, createdIds[0])));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -79,7 +86,25 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
       const updated = await applyEditDraft(req.user, plan);
       return res.json(await buildDraft(updated));
     }
-    await query("update plans.plans set status = 'active', updated_at = now() where id = $1", [plan.id]);
+    const shouldSyncBatch = wantsBatchSync(req, plan);
+    if (shouldSyncBatch) await syncBatchFromPlan(plan, req.user);
+    const emptyDraft = await removeEmptyDraftOnSubmit(req.user, plan, req);
+    if (emptyDraft) return res.json(emptyDraft);
+    if (shouldSyncBatch) {
+      await query(
+        `update plans.plans
+         set status = 'active', updated_at = now()
+         where builder_batch_id = $1
+           and created_by_user_id = $2
+           and source_type = 'builder'
+           and status = 'draft'
+           and coalesce(is_active, true)
+           and not coalesce(is_edit_draft, false)`,
+        [plan.builder_batch_id, req.user.id],
+      );
+    } else {
+      await query("update plans.plans set status = 'active', updated_at = now() where id = $1", [plan.id]);
+    }
     res.json(await buildDraft(await getEditablePlan(req.user, plan.id)));
   } catch (error) { next(error); }
 });
@@ -92,35 +117,42 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     if (source.is_template && source.can_copy === false && !canAccessAllAthletes(req.user) && String(source.created_by_user_id) !== String(req.user.id)) {
       return res.status(403).json({ error: "This template cannot be copied." });
     }
-    const targetAthleteExternalId = text(req.body?.athleteId);
-    const targetAthlete = targetAthleteExternalId ? await findAthlete(targetAthleteExternalId) : null;
-    if (targetAthleteExternalId && !targetAthlete) return res.status(404).json({ error: "Athlete not found." });
+    const targetAthleteExternalIds = requestedAthleteIds(req.body);
+    const { athletes: targetAthletes, missing } = await findRequestedAthletes(targetAthleteExternalIds);
+    if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
     const targetWeekStart = source.plan_type === "weekly" ? normalizedWeekStart(req.body?.weekStart) : null;
-    if (source.plan_type === "weekly" && !targetAthlete) return res.status(400).json({ error: "Choose an athlete for a weekly plan copy." });
+    if (source.plan_type === "weekly" && !targetAthletes.length) return res.status(400).json({ error: "Choose at least one athlete for a weekly plan copy." });
     if (source.plan_type === "weekly" && !targetWeekStart) return res.status(400).json({ error: "Choose the target week for this copy." });
-    const isTemplate = source.plan_type === "program" && !targetAthlete;
+    const targets = targetAthletes.length ? targetAthletes : [null];
+    const batchId = targets.length > 1 ? randomUUID() : null;
+    const createdIds = [];
     client = await pool.connect();
     await client.query("begin");
     if (source.plan_type === "weekly") {
-      const existing = await client.query(
-        "select 1 from plans.plans where plan_type = 'weekly' and athlete_id = $1 and week_start = $2 and coalesce(is_active, true) and not coalesce(is_edit_draft, false) limit 1",
-        [targetAthlete.id, targetWeekStart],
-      );
-      if (existing.rowCount) {
+      const conflicts = [];
+      for (const target of targets) {
+        const conflict = await ensureWeeklySlot(client, req.user.id, target, targetWeekStart);
+        if (conflict) conflicts.push(conflict);
+      }
+      if (conflicts.length) {
         await client.query("rollback");
         client.release();
         client = null;
-        return res.status(409).json({ error: "This athlete already has a weekly plan for that week." });
+        return res.status(409).json({ error: conflicts.join(" ") });
       }
     }
-    const created = await client.query(
-      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days, week_start)
-       values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, 'draft', 'builder', $9, $10, $11)
-       returning id`,
-      [source.plan_type, req.user.id, targetAthlete?.id || null, `${source.name || "Program"} copy`, source.note, source.icon_url, source.color, isTemplate, source.start_date, source.duration_days, targetWeekStart],
-    );
-    if (source.plan_type === "weekly") await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
-    else await copyProgramTree(client, source.id, created.rows[0].id);
+    for (const target of targets) {
+      const isTemplate = source.plan_type === "program" && !target;
+      const created = await client.query(
+        `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days, week_start, builder_batch_id)
+         values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, 'draft', 'builder', $9, $10, $11, $12)
+         returning id`,
+        [source.plan_type, req.user.id, target?.id || null, `${source.name || "Program"} copy`, source.note, source.icon_url, source.color, isTemplate, source.start_date, source.duration_days, targetWeekStart, batchId],
+      );
+      createdIds.push(created.rows[0].id);
+      if (source.plan_type === "weekly") await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
+      else await copyProgramTree(client, source.id, created.rows[0].id);
+    }
     await client.query(
       `insert into library.program_access (plan_id, user_id, access_type, status, related_plan_id)
        values ($1, $2, 'copied', 'accessed', $3)
@@ -129,12 +161,12 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
                      status = case when library.program_access.status = 'revoked' then 'accessed' else library.program_access.status end,
                      accessed_at = now(),
                      updated_at = now()`,
-      [source.id, req.user.id, created.rows[0].id],
+      [source.id, req.user.id, createdIds[0]],
     );
     await client.query("commit");
     client.release();
     client = null;
-    res.status(201).json(await buildDraft(await getEditablePlan(req.user, created.rows[0].id)));
+    res.status(201).json(await buildDraft(await getEditablePlan(req.user, createdIds[0])));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -174,13 +206,13 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
       `insert into plans.plans (
         plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility,
         is_template, status, source_type, start_date, duration_days, week_start,
-        is_active, is_edit_draft, edit_source_plan_id
+        is_active, is_edit_draft, edit_source_plan_id, builder_batch_id
       )
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', 'builder_edit_draft', $10, $11, $12, false, true, $13)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', 'builder_edit_draft', $10, $11, $12, false, true, $13, $14)
        returning id`,
       [
         plan.plan_type, req.user.id, plan.athlete_uuid || null, plan.name, plan.note, plan.icon_url, plan.color,
-        plan.visibility || "private", plan.is_template, plan.start_date, plan.duration_days, plan.week_start, plan.id,
+        plan.visibility || "private", plan.is_template, plan.start_date, plan.duration_days, plan.week_start, plan.id, plan.builder_batch_id || null,
       ],
     );
     if (plan.plan_type === "weekly") await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start);
@@ -220,7 +252,7 @@ router.post("/plans/:planId/blocks", async (req, res, next) => {
        values ($1, $2, $3, $4, $5, $6)`,
       [plan.id, next, next, text(req.body?.name) || `Block ${next}`, text(req.body?.type) || "session", nullableText(req.body?.note)],
     );
-    res.status(201).json(await buildDraft(plan));
+    return respondWithDraft(req, res, req.user, plan, { status: 201 });
   } catch (error) { next(error); }
 });
 
@@ -230,7 +262,7 @@ router.delete("/blocks/:blockId", async (req, res, next) => {
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plan days cannot be deleted." });
     await deleteBlockTree(block.id);
-    res.json(await buildDraft(block.plan));
+    return respondWithDraft(req, res, req.user, block.plan);
   } catch (error) { next(error); }
 });
 
@@ -242,7 +274,7 @@ router.patch("/blocks/:blockId", async (req, res, next) => {
       "update plans.plan_days set block_name = $2, day_note = $3, updated_at = now() where id = $1",
       [block.id, nullableText(req.body?.name), nullableText(req.body?.note)],
     );
-    res.json(await buildDraft(block.plan));
+    return respondWithDraft(req, res, req.user, block.plan);
   } catch (error) { next(error); }
 });
 
@@ -255,7 +287,7 @@ router.post("/blocks/:blockId/sessions", async (req, res, next) => {
       `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, $2, $3, $4)`,
       [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), phaseValue(req.body?.bta, ["B", "T", "A"]), order],
     );
-    res.status(201).json(await buildDraft(block.plan));
+    return respondWithDraft(req, res, req.user, block.plan, { status: 201 });
   } catch (error) { next(error); }
 });
 
@@ -264,7 +296,7 @@ router.delete("/sessions/:sessionId", async (req, res, next) => {
     const session = await getEditableSession(req.user, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
     await deleteSessionTree(session.id);
-    res.json(await buildDraft(session.plan));
+    return respondWithDraft(req, res, req.user, session.plan);
   } catch (error) { next(error); }
 });
 
@@ -286,7 +318,7 @@ router.post("/sessions/:sessionId/nodes", async (req, res, next) => {
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [session.id, parentId, nodeType, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl), nullableText(req.body?.shortNote), nullableText(req.body?.note), order],
     );
-    res.status(201).json(await buildDraft(session.plan));
+    return respondWithDraft(req, res, req.user, session.plan, { status: 201 });
   } catch (error) { next(error); }
 });
 
@@ -295,7 +327,7 @@ router.delete("/nodes/:nodeId", async (req, res, next) => {
     const node = await getEditableNode(req.user, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     await deleteNodeTree(node.id);
-    res.json(await buildDraft(node.plan));
+    return respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
 });
 
@@ -318,7 +350,7 @@ router.post("/nodes/:nodeId/move", async (req, res, next) => {
       [node.plan_session_id, node.parent_id, node.node_order],
     );
     const neighbor = neighborResult.rows[0];
-    if (!neighbor) return res.json(await buildDraft(node.plan));
+    if (!neighbor) return respondWithDraft(req, res, req.user, node.plan);
     await query(
       `update plans.plan_nodes
    set node_order = case when id = $1 then $2::numeric when id = $3 then $4::numeric end,
@@ -326,7 +358,7 @@ router.post("/nodes/:nodeId/move", async (req, res, next) => {
        where id in ($1, $3)`,
       [node.id, neighbor.node_order, neighbor.id, node.node_order],
     );
-    res.json(await buildDraft(node.plan));
+    return respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
 });
 
@@ -352,7 +384,7 @@ router.post("/nodes/:nodeId/exercises", async (req, res, next) => {
         exercise.image_url, exercise.video_url, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order,
         node.node_type === "section" ? node.name : null, node.node_type === "section" ? node.node_order : null],
     );
-    res.status(201).json(await buildDraft(node.plan));
+    return respondWithDraft(req, res, req.user, node.plan, { status: 201 });
   } catch (error) { next(error); }
 });
 
@@ -377,7 +409,7 @@ router.post("/nodes/:nodeId/custom-exercise", async (req, res, next) => {
       [node.plan_session_id, node.id, exercise.id, exercise.name, exercise.instruction, exercise.image_url, exercise.video_url,
         nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order, node.name, node.node_order],
     );
-    res.status(201).json(await buildDraft(node.plan));
+    return respondWithDraft(req, res, req.user, node.plan, { status: 201 });
   } catch (error) { next(error); }
 });
 
@@ -392,7 +424,7 @@ router.post("/nodes/:nodeId/copy", async (req, res, next) => {
       return res.status(400).json({ error: "Choose a compatible target for this copied structure." });
     }
     await copyNodeTree(source.id, targetSession.id, targetParentId);
-    res.status(201).json(await buildDraft(targetSession.plan));
+    return respondWithDraft(req, res, req.user, targetSession.plan, { status: 201 });
   } catch (error) { next(error); }
 });
 
@@ -404,7 +436,7 @@ router.patch("/items/:itemId", async (req, res, next) => {
       `update plans.plan_items set sets = $2, reps = $3, load = $4, description = $5, updated_at = now() where id = $1`,
       [item.id, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), nullableText(req.body?.description)],
     );
-    res.json(await buildDraft(item.plan));
+    return respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
 });
 
@@ -421,12 +453,12 @@ router.post("/items/:itemId/move", async (req, res, next) => {
       [item.plan_node_id, item.item_order],
     );
     const neighbor = neighborResult.rows[0];
-    if (!neighbor) return res.json(await buildDraft(item.plan));
+    if (!neighbor) return respondWithDraft(req, res, req.user, item.plan);
     await query(
       `update plans.plan_items set item_order = case when id = $1 then $2 when id = $3 then $4 end, updated_at = now() where id in ($1, $3)`,
       [item.id, neighbor.item_order, neighbor.id, item.item_order],
     );
-    res.json(await buildDraft(item.plan));
+    return respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
 });
 
@@ -435,7 +467,7 @@ router.delete("/items/:itemId", async (req, res, next) => {
     const item = await getEditableItem(req.user, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
     await query("delete from plans.plan_items where id = $1", [item.id]);
-    res.json(await buildDraft(item.plan));
+    return respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
 });
 
@@ -483,9 +515,136 @@ async function buildDraft(plan) {
       status: plan.status,
       isEditDraft: Boolean(plan.is_edit_draft),
       editSourcePlanId: plan.edit_source_plan_id || "",
+      batchId: plan.builder_batch_id || "",
     },
     blocks: [...blocks.values()],
+    batch: await loadBuilderBatch(plan),
   };
+}
+
+function wantsBatchSync(req, plan) {
+  return Boolean(
+    !plan?.is_edit_draft &&
+    (req.body?.syncBatch === true || req.body?.syncBatch === "true" || req.query?.syncBatch === "1"),
+  );
+}
+
+async function respondWithDraft(req, res, user, plan, options = {}) {
+  const currentPlan = await getEditablePlan(user, plan.id);
+  const targetPlan = currentPlan || plan;
+  if (wantsBatchSync(req, targetPlan)) await syncBatchFromPlan(targetPlan, user);
+  const freshPlan = await getEditablePlan(user, targetPlan.id);
+  const draft = await buildDraft(freshPlan || targetPlan);
+  if (options.status) return res.status(options.status).json(draft);
+  return res.json(draft);
+}
+
+async function removeEmptyDraftOnSubmit(user, plan, req) {
+  if (plan.is_edit_draft || plan.source_type !== "builder" || plan.status !== "draft") return null;
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const targets = wantsBatchSync(req, plan) && plan.builder_batch_id
+      ? await client.query(
+        `select id
+         from plans.plans
+         where builder_batch_id = $1
+           and created_by_user_id = $2
+           and source_type = 'builder'
+           and status = 'draft'
+           and coalesce(is_active, true)
+           and not coalesce(is_edit_draft, false)`,
+        [plan.builder_batch_id, user.id],
+      )
+      : { rows: [{ id: plan.id }] };
+    const deletedIds = [];
+    for (const target of targets.rows) {
+      const hasContent = plan.plan_type === "weekly"
+        ? await planHasWeeklyTrainingContentWithClient(client, target.id)
+        : await planHasBuilderContentWithClient(client, target.id);
+      if (hasContent) continue;
+      await deletePlanTreeWithClient(client, target.id);
+      deletedIds.push(target.id);
+    }
+    await client.query("commit");
+    if (!deletedIds.includes(plan.id)) return null;
+    return {
+      deleted: true,
+      empty: true,
+      planId: plan.id,
+      deletedIds,
+      message: "Empty draft was not saved.",
+    };
+  } catch (error) {
+    try { await client.query("rollback"); } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function syncBatchFromPlan(sourcePlan, user) {
+  if (!sourcePlan?.id || sourcePlan.is_edit_draft) return;
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const source = await client.query(
+      `select id, builder_batch_id, created_by_user_id, plan_type, week_start, name, note, icon_url, color, start_date, duration_days
+       from plans.plans
+       where id = $1
+         and created_by_user_id = $2
+         and coalesce(is_active, true)
+         and not coalesce(is_edit_draft, false)`,
+      [sourcePlan.id, user.id],
+    );
+    const sourceRow = source.rows[0];
+    if (!sourceRow?.builder_batch_id) {
+      await client.query("rollback");
+      return;
+    }
+    const siblings = await client.query(
+      `select id, plan_type, week_start
+       from plans.plans
+       where builder_batch_id = $1
+         and id <> $2
+         and created_by_user_id = $3
+         and coalesce(is_active, true)
+         and not coalesce(is_edit_draft, false)
+         and coalesce(status, 'draft') <> 'archived'
+       order by created_at`,
+      [sourceRow.builder_batch_id, sourceRow.id, user.id],
+    );
+    for (const sibling of siblings.rows) {
+      if (sourceRow.plan_type === "weekly") {
+        await copyWeeklyPlanTree(client, sourceRow.id, sibling.id, sibling.week_start || sourceRow.week_start);
+      } else {
+        const blocks = await client.query(
+          "select id from plans.plan_days where plan_id = $1 order by block_order nulls last, block_index",
+          [sibling.id],
+        );
+        for (const block of blocks.rows) await deleteBlockTreeWithClient(client, block.id);
+        await copyProgramTree(client, sourceRow.id, sibling.id);
+      }
+      await client.query(
+        `update plans.plans
+         set name = $2,
+             note = $3,
+             icon_url = $4,
+             color = $5,
+             start_date = $6,
+             duration_days = $7,
+             updated_at = now()
+         where id = $1`,
+        [sibling.id, sourceRow.name, sourceRow.note, sourceRow.icon_url, sourceRow.color, sourceRow.start_date, sourceRow.duration_days],
+      );
+    }
+    await client.query("commit");
+  } catch (error) {
+    try { await client.query("rollback"); } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function applyEditDraft(user, draftPlan) {
@@ -555,19 +714,60 @@ async function copyProgramTree(client, sourcePlanId, targetPlanId) {
 }
 
 async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeekStart) {
+  const existingTargetDays = await client.query("select id from plans.plan_days where plan_id = $1", [targetPlanId]);
+  for (const targetDay of existingTargetDays.rows) await deleteBlockTreeWithClient(client, targetDay.id);
   await createWeeklyDays(client, targetPlanId, targetWeekStart);
   const sourceDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [sourcePlanId]);
   const targetDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [targetPlanId]);
-  for (let index = 0; index < sourceDays.rows.length; index += 1) {
-    const sourceDay = sourceDays.rows[index];
-    const targetDay = targetDays.rows[index];
-    if (!targetDay) continue;
+  const targetByDay = new Map(targetDays.rows.map((day) => [weeklyDayKey(day), day]));
+  for (const sourceDay of sourceDays.rows) {
+    const targetKey = weeklyDayKey(sourceDay);
+    let targetDay = targetByDay.get(targetKey);
+    if (!targetDay) {
+      const created = await client.query(
+        `insert into plans.plan_days (plan_id, date, day_note, day_order, block_index, block_name, block_type, block_order)
+         values ($1, $2::date + ($3::integer - 1), $4, $3, $5, $6, $7, $8)
+         returning *`,
+        [
+          targetPlanId,
+          targetWeekStart,
+          sourceDay.day_order,
+          sourceDay.day_note,
+          sourceDay.block_index,
+          sourceDay.block_name,
+          sourceDay.block_type,
+          sourceDay.block_order,
+        ],
+      );
+      targetDay = created.rows[0];
+      targetByDay.set(targetKey, targetDay);
+    }
     await client.query(
-      "update plans.plan_days set block_name = $2, block_type = $3, day_note = $4, updated_at = now() where id = $1",
-      [targetDay.id, sourceDay.block_name, sourceDay.block_type, sourceDay.day_note],
+      `update plans.plan_days
+       set date = $2::date + ($3::integer - 1),
+           block_name = $4,
+           block_type = $5,
+           day_note = $6,
+           block_order = $7,
+           updated_at = now()
+       where id = $1`,
+      [
+        targetDay.id,
+        targetWeekStart,
+        sourceDay.day_order,
+        sourceDay.block_name,
+        sourceDay.block_type,
+        sourceDay.day_note,
+        sourceDay.block_order,
+      ],
     );
+    await deleteDayContentWithClient(client, targetDay.id);
     await copyDaySessions(client, sourceDay.id, targetDay.id);
   }
+}
+
+function weeklyDayKey(day) {
+  return `${Number(day.day_order) || 0}:${Number(day.block_index) || 0}`;
 }
 
 async function copyDaySessions(client, sourceDayId, targetDayId) {
@@ -729,13 +929,73 @@ async function deleteBlockTree(blockId) {
 }
 
 async function deleteBlockTreeWithClient(client, blockId) {
-  const sessions = await client.query("select id from plans.plan_sessions where plan_day_id = $1", [blockId]);
+  await deleteDayContentWithClient(client, blockId);
+  await client.query("delete from plans.plan_days where id = $1", [blockId]);
+}
+
+async function deleteDayContentWithClient(client, dayId) {
+  const sessions = await client.query("select id from plans.plan_sessions where plan_day_id = $1", [dayId]);
   for (const session of sessions.rows) {
     await client.query("delete from plans.plan_items where plan_session_id = $1", [session.id]);
     await client.query("delete from plans.plan_nodes where plan_session_id = $1", [session.id]);
     await client.query("delete from plans.plan_sessions where id = $1", [session.id]);
   }
-  await client.query("delete from plans.plan_days where id = $1", [blockId]);
+}
+
+async function deletePlanTreeWithClient(client, planId) {
+  const blocks = await client.query("select id from plans.plan_days where plan_id = $1", [planId]);
+  for (const block of blocks.rows) await deleteBlockTreeWithClient(client, block.id);
+  await client.query("delete from plans.plans where id = $1", [planId]);
+}
+
+async function planHasBuilderContentWithClient(client, planId) {
+  const result = await client.query(
+    `select exists (
+       select 1
+       from plans.plan_nodes pn
+       join plans.plan_sessions ps on ps.id = pn.plan_session_id
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       where pd.plan_id = $1
+     ) or exists (
+       select 1
+       from plans.plan_items pi
+       join plans.plan_sessions ps on ps.id = pi.plan_session_id
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       where pd.plan_id = $1
+     ) or exists (
+       select 1
+       from plans.plan_days pd
+       join plans.plans p on p.id = pd.plan_id
+       where pd.plan_id = $1
+         and (
+           nullif(trim(coalesce(pd.day_note, '')), '') is not null
+           or nullif(trim(coalesce(pd.block_name, '')), '') is not null
+           or (p.plan_type <> 'weekly' and coalesce(pd.block_type, 'session') <> 'session')
+         )
+     ) as has_content`,
+    [planId],
+  );
+  return result.rows[0]?.has_content === true;
+}
+
+async function planHasWeeklyTrainingContentWithClient(client, planId) {
+  const result = await client.query(
+    `select exists (
+       select 1
+       from plans.plan_nodes pn
+       join plans.plan_sessions ps on ps.id = pn.plan_session_id
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       where pd.plan_id = $1
+     ) or exists (
+       select 1
+       from plans.plan_items pi
+       join plans.plan_sessions ps on ps.id = pi.plan_session_id
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       where pd.plan_id = $1
+     ) as has_content`,
+    [planId],
+  );
+  return result.rows[0]?.has_content === true;
 }
 
 async function deleteSessionTree(sessionId) {
@@ -759,6 +1019,7 @@ async function getEditablePlan(user, planId) {
   const result = await query(
     `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.visibility, p.is_template, p.status,
             p.source_type, p.start_date, p.duration_days, p.athlete_id as athlete_uuid, p.is_edit_draft, p.edit_source_plan_id,
+            p.builder_batch_id,
             a.athlete_id, a.source_external_id as athlete_source_external_id,
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
@@ -822,6 +1083,79 @@ async function getEditableItem(user, itemId) {
 async function findAthlete(externalId) {
   const result = await query("select id from public.athletes where athlete_id = $1 or source_external_id = $1 limit 1", [externalId]);
   return result.rows[0] || null;
+}
+
+function requestedAthleteIds(body) {
+  const ids = Array.isArray(body?.athleteIds) ? body.athleteIds : [];
+  const withFallback = [...ids, body?.athleteId].map(text).filter(Boolean);
+  return [...new Set(withFallback)];
+}
+
+async function findRequestedAthletes(externalIds) {
+  const athletes = [];
+  const missing = [];
+  for (const externalId of externalIds) {
+    const athlete = await findAthlete(externalId);
+    if (athlete) athletes.push({ ...athlete, externalId });
+    else missing.push(externalId);
+  }
+  return { athletes, missing };
+}
+
+async function ensureWeeklySlot(client, userId, athlete, weekStart) {
+  if (!athlete?.id) return "Choose an athlete for a weekly plan.";
+  const existing = await client.query(
+    `select p.id, p.created_by_user_id, p.source_type, p.status
+     from plans.plans p
+     where p.plan_type = 'weekly' and p.athlete_id = $1 and p.week_start = $2
+       and coalesce(p.is_active, true)
+       and not coalesce(p.is_edit_draft, false)
+     order by p.created_at`,
+    [athlete.id, weekStart],
+  );
+
+  for (const existingPlan of existing.rows) {
+    if (
+      existingPlan.source_type === "builder"
+      && String(existingPlan.created_by_user_id) === String(userId)
+    ) {
+      const hasContent = await planHasWeeklyTrainingContentWithClient(client, existingPlan.id);
+      if (!hasContent) {
+        await deletePlanTreeWithClient(client, existingPlan.id);
+        continue;
+      }
+    }
+    return `Athlete ${athlete.externalId || athlete.id} already has a weekly plan for that week.`;
+  }
+  return "";
+}
+
+async function loadBuilderBatch(plan) {
+  if (!plan.builder_batch_id) return null;
+  const result = await query(
+    `select p.id, p.name, p.plan_type, p.week_start, p.status,
+            a.athlete_id, a.source_external_id as athlete_source_external_id,
+            coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name
+     from plans.plans p
+     left join public.athletes a on a.id = p.athlete_id
+     where p.builder_batch_id = $1
+       and coalesce(p.is_active, true)
+       and not coalesce(p.is_edit_draft, false)
+     order by coalesce(a.athlete_id::text, a.source_external_id, p.name), p.created_at`,
+    [plan.builder_batch_id],
+  );
+  return {
+    id: plan.builder_batch_id,
+    plans: result.rows.map((row) => ({
+      id: row.id,
+      name: row.name || "",
+      planType: row.plan_type,
+      weekStart: row.week_start || "",
+      status: row.status || "",
+      athleteId: row.athlete_source_external_id || row.athlete_id || "",
+      athleteName: row.athlete_name || "Reusable template",
+    })),
+  };
 }
 
 async function isNodeInSession(nodeId, sessionId) {

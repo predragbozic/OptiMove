@@ -6,6 +6,8 @@ export const els = {
   athleteSearch: document.querySelector("#athleteSearch"),
   athletesToggle: document.querySelector("#athletesToggle"),
   railToggle: document.querySelector("#railToggle"),
+  mobileNavToggle: document.querySelector("#mobileNavToggle"),
+  mobileNavBackdrop: document.querySelector("#mobileNavBackdrop"),
   calendarToggle: document.querySelector("#calendarToggle"),
   tabs: document.querySelectorAll(".tab"),
   libraryTabs: document.querySelectorAll("[data-library-tab]"),

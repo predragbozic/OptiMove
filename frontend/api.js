@@ -12,7 +12,10 @@ export async function api(path, options = {}) {
       const errorData = await response.json();
       message = errorData.error || errorData.message || message;
     } catch {}
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    error.path = path;
+    throw error;
   }
   return response.json();
 }

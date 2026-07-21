@@ -123,9 +123,16 @@ alter table plans.plans
   add column if not exists edit_source_plan_id uuid references plans.plans(id) on delete cascade,
   add column if not exists is_edit_draft boolean not null default false;
 
+alter table plans.plans
+  add column if not exists builder_batch_id uuid;
+
 create index if not exists plans_edit_source_idx
   on plans.plans (edit_source_plan_id)
   where is_edit_draft = true;
+
+create index if not exists plans_builder_batch_idx
+  on plans.plans (builder_batch_id)
+  where builder_batch_id is not null;
 
 create table if not exists plans.plan_nodes (
   id uuid primary key default gen_random_uuid(),

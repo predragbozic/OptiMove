@@ -43,15 +43,61 @@ function builderStructureContext() {
   };
 }
 
+function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
+  if (!batchPlans.length || currentIndex < 0) return "";
+  const current = batchPlans[currentIndex];
+  const previous = batchPlans[currentIndex - 1];
+  const next = batchPlans[currentIndex + 1];
+  const syncChecked = state.builder.batchSync ? "checked" : "";
+  return `
+    <section class="builder-batch-switcher" aria-label="Batch athlete plans">
+      <div class="builder-batch-summary">
+        <p class="eyebrow">Group builder</p>
+        <strong>${escapeHtml(current?.athleteName || current?.name || "Current copy")}</strong>
+        <small>${currentIndex + 1} / ${batchPlans.length}</small>
+      </div>
+      <div class="builder-batch-controls">
+        <div class="builder-batch-buttons">
+          <button class="plain-button icon-button" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(previous?.id || "")}" ${previous ? "" : "disabled"} aria-label="Previous athlete"><span class="button-icon">&lt;</span></button>
+          <div class="builder-batch-pills">
+            ${batchPlans.map((plan, index) => `
+              <button class="builder-batch-pill ${index === currentIndex ? "is-active" : ""}" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(plan.id)}" title="${escapeAttr(plan.athleteName || plan.name || "Program copy")}">
+                ${escapeHtml(initialsFor(plan.athleteName || plan.name || String(index + 1)))}
+              </button>
+            `).join("")}
+          </div>
+          <button class="plain-button icon-button" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(next?.id || "")}" ${next ? "" : "disabled"} aria-label="Next athlete"><span class="button-icon">&gt;</span></button>
+        </div>
+        <div class="builder-batch-mode">
+          <label class="builder-batch-sync">
+            <input type="checkbox" data-action="builder-toggle-batch-sync" ${syncChecked}>
+            <span>Apply changes to all athletes</span>
+          </label>
+          <small>Turn off before fine-tuning only this athlete.</small>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 export function renderBuilder() {
   const draft = state.builder.draft;
   els.context.textContent = "Program builder";
   els.title.textContent = draft ? draft.plan.name : "New program";
   els.toolbar.innerHTML = "";
   if (!draft) {
-    const assignedAthlete = state.athletes.find((athlete) => String(athlete.athlete_id) === String(state.builder.createAthleteId));
+    const selectedAthleteIds = new Set((state.builder.createAthleteIds || []).map(String));
+    const assignedAthletes = state.athletes.filter((athlete) => selectedAthleteIds.has(String(athlete.athlete_id)));
+    const assignedAthlete = assignedAthletes[0];
+    const selectedCount = assignedAthletes.length;
     const isWeekly = state.builder.planType === "weekly";
     const weekStart = state.builder.weekStart || weekMondayIso(localDateIso());
+    const athleteTitle = selectedCount > 1
+      ? `${selectedCount} athletes selected`
+      : assignedAthlete?.athlete || (isWeekly ? "Choose athlete" : "Choose athlete or template");
+    const athleteSubtitle = selectedCount > 1
+      ? "Build once for all selected athletes, then fine-tune each copy."
+      : assignedAthlete ? `ID ${assignedAthlete.athlete_id}` : "";
     els.content.innerHTML = `
       <section class="content-section builder-start">
         <section class="panel builder-setup-card">
@@ -71,7 +117,7 @@ export function renderBuilder() {
             <input type="hidden" name="athleteId" value="${escapeAttr(state.builder.createAthleteId)}">
             ${isWeekly ? `<label class="search-field builder-week-start"><span>Any date in the planned week</span><input name="weekStart" data-builder-week-start type="date" value="${escapeAttr(weekStart)}" required><small>The weekly plan will begin on Monday ${escapeHtml(formatDate(weekStart))}.</small></label>` : ""}
             <div class="builder-assignment-row"><span class="builder-field-label">Athlete</span><button class="builder-athlete-trigger" type="button" data-action="builder-open-athlete-picker">
-              ${assignedAthlete?.athlete_image_url || assignedAthlete?.image_url ? renderImage(assignedAthlete.athlete_image_url || assignedAthlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${assignedAthlete ? escapeHtml(initialsFor(assignedAthlete.athlete)) : "+"}</span>`}<span><strong>${escapeHtml(assignedAthlete?.athlete || (isWeekly ? "Choose athlete" : "Choose athlete or template"))}</strong>${assignedAthlete ? `<small>ID ${escapeHtml(assignedAthlete.athlete_id)}</small>` : ""}</span><span class="button-icon">></span>
+              ${assignedAthlete?.athlete_image_url || assignedAthlete?.image_url ? renderImage(assignedAthlete.athlete_image_url || assignedAthlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${assignedAthlete ? escapeHtml(initialsFor(assignedAthlete.athlete)) : "+"}</span>`}<span><strong>${escapeHtml(athleteTitle)}</strong>${athleteSubtitle ? `<small>${escapeHtml(athleteSubtitle)}</small>` : ""}</span><span class="button-icon">></span>
             </button></div>
             ${state.builder.showNote ? `<label class="search-field"><span>Program note</span><textarea name="note" rows="2" placeholder="Optional coaching note"></textarea></label>` : `<button class="text-action builder-note-toggle" type="button" data-action="builder-toggle-note">Add note</button>`}
             <p class="builder-private-note">${isWeekly ? "Weekly plans are always assigned to the selected athlete." : "Private to your coach account until sharing and publishing are configured."}</p>
@@ -89,15 +135,19 @@ export function renderBuilder() {
   const selectedNode = findBuilderNode(draft, state.builder.selectedNodeId);
   const isWeekly = draft.plan.planType === "weekly";
   const isEditDraft = Boolean(draft.plan.isEditDraft);
-  const closeLabel = isEditDraft ? "Cancel changes" : "Close editor";
+  const closeLabel = isEditDraft ? "Cancel changes" : "Save draft and close";
   const saveLabel = isEditDraft ? "Apply changes" : "Save and finish";
   const structureContext = builderStructureContext();
+  const batchPlans = Array.isArray(draft.batch?.plans) ? draft.batch.plans : [];
+  const batchIndex = batchPlans.findIndex((plan) => String(plan.id) === String(draft.plan.id));
+  const hasBatch = batchPlans.length > 1 && batchIndex >= 0;
   els.content.innerHTML = `
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
         <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? `Weekly plan - ${formatDate(draft.plan.weekStart)}` : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><h3>${escapeHtml(draft.plan.name)}</h3><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
-        <div class="builder-program-actions"><span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span><button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="${isEditDraft ? "Discard this edit draft and keep the original unchanged." : "Close the editor. Autosaved changes remain."}">${closeLabel}</button>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">${saveLabel}</button>` : `<span class="builder-finished-label">Saved</span>`}${isEditDraft ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button>`}</div>
+        <div class="builder-program-actions"><span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span><button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="${isEditDraft ? "Discard this edit draft and keep the original unchanged." : "Close the editor. Autosaved draft remains and can be reopened later."}">${closeLabel}</button>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">${saveLabel}</button>` : `<span class="builder-finished-label">Saved</span>`}${isEditDraft ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-plan">Delete</button>`}</div>
       </header>
+      ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : ""}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       ${isWeekly ? "" : `<section class="builder-block-creator">
         <div><p class="eyebrow">Program structure</p><strong>Add a day or block</strong></div>
