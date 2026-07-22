@@ -17,7 +17,7 @@ import {
   handleBuilderWorkspaceAction,
   submitBuilderForm as submitBuilderFormAction,
 } from "./builder-actions.js";
-import { loadBuilderExercises, refreshBuilderDraft } from "./builder-data.js";
+import { loadBuilderDrafts, loadBuilderExercises, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder } from "./builder-view.js";
 import {
@@ -1534,6 +1534,7 @@ async function loadBuilder() {
   els.toolbar.innerHTML = "";
   if (!state.builder.draft) {
     renderBuilder();
+    void loadBuilderDrafts().catch(renderBuilderError);
     return;
   }
   setLoading("Loading draft program...");
@@ -1549,7 +1550,7 @@ function renderCopyPlanSource() {
 }
 
 async function handleBuilderAction(action) {
-  if (await handleBuilderPlanAction(action, { renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises })) return;
+  if (await handleBuilderPlanAction(action, { renderBuilder, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
   if (await handleBuilderWorkspaceAction(action, { renderBuilder })) return;
   if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft })) return;
   if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderError, refreshBuilderDraft })) return;

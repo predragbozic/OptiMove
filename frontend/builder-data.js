@@ -18,3 +18,15 @@ export async function refreshBuilderDraft() {
   state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(state.builder.draft.plan.id)}`);
   renderBuilder();
 }
+
+export async function loadBuilderDrafts() {
+  if (state.builder.draft) return;
+  state.builder.draftsLoading = true;
+  try {
+    const data = await api("/api/builder/drafts");
+    state.builder.drafts = data.drafts || [];
+  } finally {
+    state.builder.draftsLoading = false;
+  }
+  renderBuilder();
+}

@@ -6,6 +6,44 @@ import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
 
+router.get("/drafts", async (req, res, next) => {
+  try {
+    const result = await query(
+      `select
+         coalesce(p.builder_batch_id::text, p.id::text) as group_key,
+         p.plan_type,
+         p.week_start,
+         max(p.name) as name,
+         bool_or(p.is_template) as is_template,
+         max(p.updated_at) as updated_at,
+         array_agg(p.id::text order by p.created_at) as plan_ids,
+         array_agg(coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) order by p.created_at) as athlete_names
+       from plans.plans p
+       left join public.athletes a on a.id = p.athlete_id
+       where p.created_by_user_id = $1
+         and p.source_type = 'builder'
+         and p.status = 'draft'
+         and coalesce(p.is_active, true)
+         and not coalesce(p.is_edit_draft, false)
+       group by group_key, p.plan_type, p.week_start
+       order by max(p.updated_at) desc`,
+      [req.user.id],
+    );
+    const drafts = result.rows.map((row) => ({
+      groupKey: row.group_key,
+      openPlanId: row.plan_ids[0],
+      planIds: row.plan_ids,
+      planType: row.plan_type,
+      weekStart: row.week_start || "",
+      name: row.name,
+      isTemplate: row.is_template,
+      updatedAt: row.updated_at,
+      athleteNames: (row.athlete_names || []).filter(Boolean),
+    }));
+    res.json({ drafts });
+  } catch (error) { next(error); }
+});
+
 router.get("/plans/:planId", async (req, res, next) => {
   try {
     const plan = await getEditablePlan(req.user, req.params.planId);

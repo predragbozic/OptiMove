@@ -5,6 +5,8 @@ export function renderBuilderAthletePicker(state) {
   const selectedIds = new Set((state.builder.createAthleteIds || []).map(String));
   const selectedCount = selectedIds.size;
   const isWeekly = state.builder.planType === "weekly";
+  const athleteIds = (state.athletes || []).map((athlete) => String(athlete.athlete_id)).filter(Boolean);
+  const allSelected = athleteIds.length > 0 && athleteIds.every((id) => selectedIds.has(id));
   return `
     <div class="builder-athlete-overlay">
       <button class="builder-athlete-backdrop" type="button" data-action="builder-close-athlete-picker" aria-label="Close athlete picker"></button>
@@ -20,7 +22,13 @@ export function renderBuilderAthletePicker(state) {
         ${isWeekly ? "" : `<button class="builder-athlete-option ${selectedCount ? "" : "is-selected"}" type="button" data-action="builder-select-athlete" data-athlete-id="">
           <span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Not assigned to an athlete</small></span>
         </button>`}
-        <div class="builder-athlete-options">
+        <div class="builder-athlete-select-all">
+          <button class="checkbox-toggle-all ${allSelected ? "is-checked" : ""}" type="button" data-action="builder-toggle-select-all-athletes" aria-label="${allSelected ? "Uncheck all athletes" : "Check all athletes"}" ${athleteIds.length ? "" : "disabled"}>
+            <span aria-hidden="true">${allSelected ? "&#10003;" : ""}</span>
+          </button>
+          <span class="muted">Select all athletes</span>
+        </div>
+        <div class="builder-athlete-options" data-builder-athlete-list>
           ${state.athletes.map((athlete) => {
             const isSelected = selectedIds.has(String(athlete.athlete_id));
             return `

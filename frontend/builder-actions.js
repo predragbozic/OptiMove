@@ -3,6 +3,14 @@ import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
 
+function renderBuilderPreservingAthleteListScroll(handlers) {
+  const list = document.querySelector("[data-builder-athlete-list]");
+  const scrollTop = list?.scrollTop || 0;
+  handlers.renderBuilder();
+  const nextList = document.querySelector("[data-builder-athlete-list]");
+  if (nextList) nextList.scrollTop = scrollTop;
+}
+
 function resetBuilderCopyState() {
   state.builder.copyPlanId = "";
   state.builder.copyPlanName = "";
@@ -65,20 +73,6 @@ function forgetBatchPlan(planId) {
   const batch = state.builder.draft?.batch;
   if (!batch?.plans) return;
   batch.plans = batch.plans.filter((plan) => String(plan.id) !== String(planId));
-}
-
-async function syncCurrentBuilderBatchIfNeeded() {
-  const planId = state.builder.draft?.plan?.id;
-  if (!planId || !shouldSyncBuilderBatch()) return;
-  try {
-    setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(planId)}/sync-batch`, { method: "POST" }));
-  } catch (error) {
-    if (isNotFoundError(error)) {
-      forgetBatchPlan(planId);
-      return;
-    }
-    throw error;
-  }
 }
 
 async function exitBuilderToPlanContext(plan, handlers) {
@@ -198,12 +192,78 @@ export async function handleBuilderPlanAction(action, handlers) {
     }
     return true;
   }
+  if (type === "builder-open-draft") {
+    const planId = action.dataset.planId || "";
+    if (!planId) return true;
+    action.disabled = true;
+    try {
+      setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(planId)}`));
+      state.builder.selectedSessionId = "";
+      state.builder.selectedNodeId = "";
+      state.builder.exerciseQuery = "";
+      await handlers.loadBuilderExercises();
+    } catch (error) {
+      action.disabled = false;
+      throw error;
+    }
+    return true;
+  }
+  if (type === "builder-discard-draft") {
+    const planIds = (action.dataset.planIds || "").split(",").filter(Boolean);
+    if (!planIds.length) return true;
+    const confirmLabel = planIds.length > 1 ? "this draft for all selected athletes" : "this draft";
+    if (!window.confirm(`Discard ${confirmLabel}? This cannot be undone.`)) return true;
+    action.disabled = true;
+    for (const id of planIds) {
+      await api(`/api/builder/plans/${encodeURIComponent(id)}`, { method: "DELETE" });
+    }
+    state.builder.selectedDraftKeys = [];
+    await handlers.loadBuilderDrafts();
+    return true;
+  }
+  if (type === "builder-toggle-drafts-panel") {
+    state.builder.draftsOpen = !state.builder.draftsOpen;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-toggle-select-draft") {
+    const groupKey = action.dataset.groupKey || "";
+    if (!groupKey) return true;
+    const current = new Set(state.builder.selectedDraftKeys || []);
+    if (current.has(groupKey)) current.delete(groupKey);
+    else current.add(groupKey);
+    state.builder.selectedDraftKeys = [...current];
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-toggle-select-all-drafts") {
+    const groupKeys = (state.builder.drafts || []).map((item) => item.groupKey).filter(Boolean);
+    const selected = new Set(state.builder.selectedDraftKeys || []);
+    const allSelected = groupKeys.length > 0 && groupKeys.every((key) => selected.has(key));
+    state.builder.selectedDraftKeys = allSelected ? [] : groupKeys;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-discard-selected-drafts") {
+    const selected = new Set(state.builder.selectedDraftKeys || []);
+    const selectedDrafts = (state.builder.drafts || []).filter((item) => selected.has(item.groupKey));
+    if (!selectedDrafts.length) return true;
+    if (!window.confirm(`Discard ${selectedDrafts.length} selected draft${selectedDrafts.length === 1 ? "" : "s"}? This cannot be undone.`)) return true;
+    action.disabled = true;
+    for (const item of selectedDrafts) {
+      for (const id of item.planIds || []) {
+        await api(`/api/builder/plans/${encodeURIComponent(id)}`, { method: "DELETE" });
+      }
+    }
+    state.builder.selectedDraftKeys = [];
+    await handlers.loadBuilderDrafts();
+    return true;
+  }
   if (type === "builder-open-batch-plan") {
     const planId = action.dataset.planId || "";
     if (!planId || String(state.builder.draft?.plan?.id) === String(planId)) return true;
     action.disabled = true;
     try {
-      await syncCurrentBuilderBatchIfNeeded();
       const batchPlans = state.builder.draft?.batch?.plans || [];
       if (batchPlans.length && !batchPlans.some((plan) => String(plan.id) === String(planId))) {
         action.disabled = false;
@@ -308,7 +368,6 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
       }));
       state.builder.selectedSessionId = action.dataset.sessionId || "";
       state.builder.selectedNodeId = "";
-      await syncCurrentBuilderBatchIfNeeded();
       handlers.renderBuilder();
     } catch (error) {
       action.disabled = false;
@@ -323,7 +382,6 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({ direction: action.dataset.direction || "" })),
       }));
-      await syncCurrentBuilderBatchIfNeeded();
       handlers.renderBuilder();
     } catch (error) {
       action.disabled = false;
@@ -364,7 +422,16 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
       state.builder.createAthleteIds = [...current];
       state.builder.createAthleteId = state.builder.createAthleteIds[0] || "";
     }
-    handlers.renderBuilder();
+    renderBuilderPreservingAthleteListScroll(handlers);
+    return true;
+  }
+  if (type === "builder-toggle-select-all-athletes") {
+    const athleteIds = (state.athletes || []).map((athlete) => String(athlete.athlete_id)).filter(Boolean);
+    const selectedIds = new Set((state.builder.createAthleteIds || []).map(String));
+    const allSelected = athleteIds.length > 0 && athleteIds.every((id) => selectedIds.has(id));
+    state.builder.createAthleteIds = allSelected ? [] : athleteIds;
+    state.builder.createAthleteId = state.builder.createAthleteIds[0] || "";
+    renderBuilderPreservingAthleteListScroll(handlers);
     return true;
   }
   if (type === "builder-confirm-athlete-picker") {
@@ -418,7 +485,6 @@ export async function handleBuilderDraftAction(action, handlers) {
     if (!draft) return true;
     action.disabled = true;
     try {
-      await syncCurrentBuilderBatchIfNeeded();
       const currentDraft = state.builder.draft || draft;
       const result = await api(`/api/builder/plans/${encodeURIComponent(currentDraft.plan.id)}/submit`, {
         method: "POST",
@@ -502,7 +568,6 @@ export async function handleBuilderItemAction(action, handlers) {
           load: panel?.querySelector("[name='load']")?.value || "",
         })),
       }));
-      await syncCurrentBuilderBatchIfNeeded();
       handlers.renderBuilder();
     } catch (error) {
       handlers.renderBuilderError(error);
@@ -521,7 +586,6 @@ export async function handleBuilderItemAction(action, handlers) {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({ direction: action.dataset.direction })),
       }));
-      await syncCurrentBuilderBatchIfNeeded();
       handlers.renderBuilder();
     } catch (error) {
       await handlers.refreshBuilderDraft();
@@ -595,6 +659,5 @@ export async function submitBuilderForm(form, handlers) {
   if (mode === "update-item") {
     setBuilderDraft(await api(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
-  await syncCurrentBuilderBatchIfNeeded();
   handlers.renderBuilder();
 }

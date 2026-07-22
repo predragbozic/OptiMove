@@ -6817,6 +6817,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-athlete-overlay, .builder-section-overlay { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; }
 .builder-athlete-backdrop, .builder-section-backdrop { position: absolute; inset: 0; border: 0; background: rgba(13, 27, 36, .46); cursor: default; }
 .builder-athlete-picker, .builder-section-panel { position: relative; z-index: 1; width: min(620px, 96vw); max-height: min(760px, 88dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
+.builder-athlete-select-all { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .builder-athlete-options { display: grid; gap: 8px; max-height: 430px; overflow: auto; margin-top: 10px; padding-right: 2px; }
 .builder-athlete-picker .builder-athlete-option { margin-top: 12px; }
 .builder-copy-plan-modal .builder-athlete-options { max-height: 300px; }
@@ -6898,7 +6899,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-info-button { width: 32px; min-width: 32px; height: 32px; min-height: 32px; margin-left: auto; }
 .builder-add-session { width: 100%; margin-top: 10px; }
 .builder-layout { grid-template-columns: minmax(310px, .78fr) minmax(480px, 1.22fr); gap: 14px; }
-.builder-layout { grid-template-columns: minmax(0, 720px); }
+.builder-layout { grid-template-columns: minmax(0, min(1100px, 100%)); }
 .builder-outline, .builder-workbench { min-height: 540px; }
 .builder-workbench { padding: 18px; }
 .builder-section-panel { width: auto; max-height: none; overflow: visible; box-shadow: none; }
@@ -7074,8 +7075,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   body:not(.login-mode) .sidebar {
     position: fixed !important;
     top: 64px !important;
-    left: 10px !important;
-    right: auto !important;
+    left: auto !important;
+    right: 10px !important;
     bottom: auto !important;
     z-index: 60 !important;
     width: min(280px, 84vw) !important;
@@ -7083,10 +7084,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     max-height: min(70dvh, 520px) !important;
     overflow: auto !important;
     border-radius: 12px !important;
+    background: #ffffff !important;
+    border: 1px solid rgba(15, 23, 32, 0.08) !important;
     box-shadow: 0 18px 44px rgba(10, 20, 28, 0.32) !important;
     opacity: 0 !important;
     transform: translateY(-8px) scale(0.97) !important;
-    transform-origin: top left !important;
+    transform-origin: top right !important;
     pointer-events: none !important;
     transition: opacity 140ms ease, transform 140ms ease !important;
   }
@@ -7108,4 +7111,152 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   body:not(.login-mode) .sidebar .athlete-list {
     max-height: 40dvh;
   }
+
+  /* Inside the open popup, show full labeled rows (like a normal menu list) instead of the collapsed icon-only rail. */
+  body.mobile-nav-open:not(.login-mode) .sidebar-primary,
+  body.mobile-nav-open:not(.login-mode) .sidebar-section {
+    grid-auto-rows: auto !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    justify-content: stretch !important;
+    justify-items: stretch !important;
+  }
+
+  body.mobile-nav-open:not(.login-mode) .sidebar-submenu {
+    grid-template-columns: minmax(0, 1fr) !important;
+    justify-items: stretch !important;
+    width: 100% !important;
+    justify-self: stretch !important;
+  }
+
+  body.mobile-nav-open:not(.login-mode) .brand-title,
+  body.mobile-nav-open:not(.login-mode) .sidebar-nav-button {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 46px !important;
+    grid-template-columns: 22px 1fr !important;
+    justify-items: start !important;
+    justify-content: flex-start !important;
+    padding: 10px 12px !important;
+    gap: 12px !important;
+  }
+
+  body.mobile-nav-open:not(.login-mode) .rail-button span {
+    display: inline !important;
+    font-size: 14px !important;
+  }
+
+  body.mobile-nav-open:not(.login-mode) .rail-icon {
+    width: 20px !important;
+    height: 20px !important;
+  }
+
+  body.mobile-nav-open:not(.login-mode) .brand-name {
+    display: block !important;
+    color: #20242a !important;
+  }
+
+  /* White popup needs dark text/icons instead of the rail's light-on-dark palette. */
+  body.mobile-nav-open:not(.login-mode) .brand-title,
+  body.mobile-nav-open:not(.login-mode) .sidebar-nav-button {
+    color: #20242a !important;
+  }
+
+  body.mobile-nav-open:not(.login-mode) .brand-title[aria-expanded="true"],
+  body.mobile-nav-open:not(.login-mode) .sidebar-nav-button.is-active {
+    color: #ffffff !important;
+  }
+
+  body.mobile-nav-open.athlete-mode:not(.login-mode) .sidebar-nav-button {
+    color: #20242a !important;
+  }
+
+  body.mobile-nav-open.athlete-mode:not(.login-mode) .sidebar-nav-button:hover,
+  body.mobile-nav-open.athlete-mode:not(.login-mode) .sidebar-nav-button.is-active {
+    color: #ffffff !important;
+  }
+
+  body.mobile-nav-open:not(.login-mode) .sidebar .search-field span,
+  body.mobile-nav-open:not(.login-mode) .sidebar .search-field input {
+    color: #20242a !important;
+  }
+}
+
+/* Builder: unfinished drafts list on the "create new" landing screen. */
+.builder-drafts-panel {
+  margin-bottom: 16px;
+}
+
+.builder-drafts-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.builder-draft-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #dfe4ea);
+  border-radius: 8px;
+  background: var(--surface-soft, #f7f8fa);
+}
+
+.builder-draft-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.builder-draft-info strong {
+  font-size: 14px;
+}
+
+.builder-draft-info small {
+  color: var(--muted, #667085);
+  font-size: 12px;
+}
+
+.builder-draft-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.builder-drafts-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.builder-drafts-toggle span:first-child {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.builder-drafts-toggle strong {
+  font-size: 15px;
+}
+
+.builder-drafts-body {
+  margin-top: 12px;
+}
+
+.builder-drafts-bulk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
 }
