@@ -1,7 +1,7 @@
 import { renderImage } from "./media.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
-export function renderCustomExerciseModal(section) {
+export function renderCustomExerciseModal(section, dose = {}) {
   return `
     <div class="builder-modal-overlay">
       <button class="builder-modal-backdrop" type="button" data-action="builder-close-custom-exercise" aria-label="Close custom exercise"></button>
@@ -10,7 +10,7 @@ export function renderCustomExerciseModal(section) {
         <form class="builder-custom-exercise-form" data-builder-form="add-custom-exercise" data-node-id="${escapeAttr(section.id)}">
           <label class="search-field"><span>Exercise name</span><input name="name" required placeholder="e.g. Tempo running - custom"></label>
           <label class="search-field"><span>Instruction</span><textarea name="instruction" rows="3" placeholder="Coaching instruction"></textarea></label>
-          <div class="builder-dose-inputs"><label><span>Sets</span><input name="sets" placeholder="3"></label><label><span>Reps</span><input name="reps" placeholder="8"></label><label><span>Load</span><input name="load" placeholder="Optional"></label></div>
+          <div class="builder-dose-inputs"><label><span>Sets</span><input name="sets" placeholder="3" value="${escapeAttr(dose.sets || "")}"></label><label><span>Reps</span><input name="reps" placeholder="8" value="${escapeAttr(dose.reps || "")}"></label><label><span>Load</span><input name="load" placeholder="Optional" value="${escapeAttr(dose.load || "")}"></label></div>
           <label class="search-field"><span>Image URL</span><input name="imageUrl" type="url" placeholder="https://..."></label>
           <label class="search-field"><span>Video URL</span><input name="videoUrl" type="url" placeholder="https://..."></label>
           <p class="builder-upload-note">File upload will be added when Supabase Storage is connected.</p>

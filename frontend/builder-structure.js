@@ -1,3 +1,4 @@
+import { renderImage } from "./media.js";
 import { formatDate, weekDayName, escapeAttr, escapeHtml } from "./utils.js";
 
 export function renderBuilderSessionModal(blockId) {
@@ -29,6 +30,54 @@ export function renderBuilderStructureModal(session, selectedNode, context) {
   `;
 }
 
+const ALL_NODE_TYPES = ["domain", "category", "section"];
+
+function validChildTypes(parentType) {
+  if (parentType === "domain") return ["category", "section"];
+  if (parentType === "category") return ["section"];
+  if (parentType === "section") return [];
+  return ALL_NODE_TYPES;
+}
+
+function renderBuilderAddTriggers(session, parentId, validTypes, context) {
+  if (!validTypes.length) return "";
+  return `
+    <div class="builder-add-node-triggers" role="group" aria-label="Add to ${escapeAttr(context.sessionLabel(session))}">
+      ${validTypes.map((type) => `
+        <button class="builder-add-node-trigger" type="button" data-action="builder-start-inline-add" data-session-id="${escapeAttr(session.id)}" data-parent-id="${escapeAttr(parentId)}" data-node-type="${type}" title="Add ${escapeAttr(context.exerciseNodeLabel(type))}" aria-label="Add ${escapeAttr(context.exerciseNodeLabel(type))}">
+          <span class="builder-node-level builder-node-level-${type}">
+            <i class="builder-pyramid-top ${type === "section" ? "is-active" : ""}"></i>
+            <i class="builder-pyramid-middle ${type === "category" ? "is-active" : ""}"></i>
+            <i class="builder-pyramid-base ${type === "domain" ? "is-active" : ""}"></i>
+          </span>
+          <span class="builder-add-node-plus" aria-hidden="true">+</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderBuilderInlineAddForm(session, parentId, context) {
+  const type = ALL_NODE_TYPES.includes(context.inlineAddType) ? context.inlineAddType : "domain";
+  const label = context.exerciseNodeLabel(type);
+  return `
+    <form class="builder-node-form builder-inline-add-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
+      <div class="builder-node-form-head"><strong>Add ${escapeHtml(label)}</strong><button class="text-action" type="button" data-action="builder-cancel-inline-add">Cancel</button></div>
+      <input type="hidden" name="parentId" value="${escapeAttr(parentId)}">
+      <input type="hidden" name="nodeType" value="${escapeAttr(type)}">
+      <input name="name" placeholder="${escapeAttr(label)} name" required>
+      <input name="color" type="color" value="#287e77" aria-label="Node color">
+      <select name="iconUrl" aria-label="Node icon">${context.builderIconOptions()}</select>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Add ${escapeHtml(label)}</button>
+    </form>
+  `;
+}
+
+function isInlineAddHere(session, parentId, context) {
+  return context.inlineAddOpen && context.inlineAddSessionId === session.id && context.inlineAddParentId === parentId;
+}
+
 export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly = false, context) {
   const defaultDayName = isWeekly ? weekDayName(block.date) : "";
   const blockTitle = isWeekly ? block.name || defaultDayName : block.name || `Block ${block.index}`;
@@ -40,12 +89,36 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
         ${block.sessions.length ? block.sessions.map((session) => `
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             <span>${escapeHtml(context.sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span>
-          </button><div class="builder-session-actions">${renderNodePasteButton(session.id, "", "session", context)}<button class="text-action" type="button" data-action="builder-add-structure" data-session-id="${escapeAttr(session.id)}">Add session parts</button><button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
+          </button><div class="builder-session-actions">${renderNodePasteButton(session.id, "", "session", context)}${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}<button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
+          ${isInlineAddHere(session, "", context) ? renderBuilderInlineAddForm(session, "", context) : ""}
           ${renderBuilderNodeTree(session, "", selectedNodeId, context)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}
       </div>
       <button class="plain-button builder-add-session" type="button" data-action="builder-open-session-modal" data-block-id="${escapeAttr(block.id)}">Add session</button>
     </article>
+  `;
+}
+
+function renderSectionPreviewTrigger(node, context) {
+  const isOpen = context.previewSectionId === node.id;
+  return `
+    <button class="builder-section-preview-trigger" type="button" data-action="builder-toggle-section-preview" data-node-id="${escapeAttr(node.id)}" aria-label="Preview exercises in ${escapeAttr(node.name)}" aria-expanded="${isOpen ? "true" : "false"}">
+      <svg viewBox="0 0 24 24" class="rail-icon" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="9" cy="10" r="1.4"></circle><path d="M5 17l4.3-4.3a1.4 1.4 0 0 1 2 0L15 16.5"></path><path d="M13.5 15l1.3-1.3a1.4 1.4 0 0 1 2 0L19.5 16.5"></path></svg>
+    </button>
+  `;
+}
+
+function renderSectionPreviewPopover(node, context) {
+  const isOpen = context.previewSectionId === node.id;
+  const items = node.items || [];
+  return `
+    <div class="builder-section-preview-popover ${isOpen ? "is-open" : ""}">
+      ${items.length ? items.slice(0, 8).map((item) => `
+        <span class="builder-section-preview-thumb" title="${escapeAttr(item.title || "Exercise")}">
+          ${item.imageUrl ? renderImage(item.imageUrl, "builder-section-preview-image") : `<span class="builder-section-preview-fallback">${escapeHtml((item.title || "?").slice(0, 1).toUpperCase())}</span>`}
+        </span>
+      `).join("") : `<span class="muted builder-section-preview-empty">No exercises yet</span>`}
+    </div>
   `;
 }
 
@@ -57,9 +130,13 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId, context) {
         <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
           <span class="builder-node-name"><span class="builder-node-icon">${context.builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${context.builderNodeMarker(node.type)}${node.type === "section" ? context.builderExerciseCountDots(node.items.length) : ""}</small>
         </button>
+        ${node.type === "section" ? renderSectionPreviewTrigger(node, context) : ""}
         ${renderBuilderNodeMoveActions(node, true, session.id, context)}
       </div>
+      ${node.type === "section" ? renderSectionPreviewPopover(node, context) : ""}
       ${renderNodePasteButton(session.id, node.id, node.type, context)}
+      ${renderBuilderAddTriggers(session, node.id, validChildTypes(node.type), context)}
+      ${isInlineAddHere(session, node.id, context) ? renderBuilderInlineAddForm(session, node.id, context) : ""}
       ${renderBuilderNodeTree(session, node.id, selectedNodeId, context)}
     </div>
   `).join("");

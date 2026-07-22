@@ -4,6 +4,8 @@ import {
   renderCustomExerciseModal,
 } from "./builder-exercises.js";
 import {
+  filterIconSvg,
+  QUICK_FILTER_KEYS,
   renderExerciseFilterControls,
   renderExerciseQuickFilters,
   renderExerciseTagModal,
@@ -12,7 +14,7 @@ import { EXERCISE_FILTERS } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
 function activeExerciseSelectFilterCount(filters) {
-  return EXERCISE_FILTERS.filter((filter) => filters[filter.key]).length;
+  return EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key) && filters[filter.key]).length;
 }
 
 function renderBuilderSectionPanel(state, selectedNode) {
@@ -25,13 +27,16 @@ function renderBuilderSectionPanel(state, selectedNode) {
         <section class="builder-section-library">
           <div class="builder-panel-label">Exercise library</div>
           <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
-          ${renderExerciseQuickFilters(state.builder.exerciseFilters, "data-builder-exercise-filter")}
-          <details class="builder-exercise-filters" ${selectFilterCount ? "open" : ""}>
-            <summary>More filters${selectFilterCount ? ` (${selectFilterCount})` : ""}</summary>
-            <div class="exercise-filter-strip builder-filter-strip">
-              ${renderExerciseFilterControls(state.builder.exerciseFilters, state.exerciseSearch.options, "builder-selects")}
-            </div>
-          </details>
+          ${renderExerciseQuickFilters(state.builder.exerciseFilters, state.exerciseSearch.options, "data-builder-exercise-filter", `
+            <details class="builder-exercise-filters" ${selectFilterCount ? "open" : ""}>
+              <summary class="exercise-filter-toggle-icon" aria-label="More filters${selectFilterCount ? ` (${selectFilterCount} active)` : ""}" title="More filters">
+                ${filterIconSvg()}${selectFilterCount ? `<span class="filter-count-badge">${selectFilterCount}</span>` : ""}
+              </summary>
+              <div class="exercise-filter-strip builder-filter-strip">
+                ${renderExerciseFilterControls(state.builder.exerciseFilters, state.exerciseSearch.options, "builder-selects")}
+              </div>
+            </details>
+          `)}
           <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
           <div class="builder-dose-inputs builder-quick-dose">
             <label><span>Sets</span><input data-builder-new-dose name="sets" placeholder="3"></label>
@@ -47,7 +52,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
           ${renderBuilderItems(selectedNode) || `<div class="empty">Choose exercises from the library to build this section.</div>`}
         </section>
       </div>
-      ${state.builder.customExerciseOpen ? renderCustomExerciseModal(selectedNode) : ""}
+      ${state.builder.customExerciseOpen ? renderCustomExerciseModal(selectedNode, state.builder.customExerciseDose) : ""}
       ${state.tagEditor.open ? renderExerciseTagModal(state.tagEditor) : ""}
     </div>
   `;

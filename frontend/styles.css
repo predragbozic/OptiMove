@@ -6757,7 +6757,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-session-form { display: grid; grid-template-columns: 1fr 1.4fr 38px; gap: 8px; }
 .builder-session-form .builder-error { grid-column: 1 / -1; }
 .builder-session-form select, .builder-node-form select, .builder-node-form input, .builder-dose-inputs input { min-width: 0; border: 1px solid var(--line, #dfe4e8); border-radius: 5px; padding: 8px; font: inherit; }
-.builder-node { margin: 6px 0 0 14px; padding-left: 10px; border-left: 1px solid #dce4e6; }
+.builder-node { margin: 6px 0 0 22px; padding-left: 12px; border-left: 1px solid #dce4e6; }
 .builder-node-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
 .builder-node-button { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-radius: 5px; }
 .builder-node-domain > .builder-node-button { border-left: 3px solid #5a8dee; }
@@ -7259,4 +7259,285 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
+}
+
+/* Exercise filters: icon-only "more filters" disclosure trigger. */
+.exercise-filter-toggle-icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  min-height: 38px;
+  border: 1px solid var(--line, #dfe4ea);
+  border-radius: 5px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text, #20242a);
+  align-self: stretch;
+}
+
+.exercise-filter-toggle-icon::-webkit-details-marker {
+  display: none;
+}
+
+.exercise-filter-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.filter-count-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent, #1f6f68);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.exercise-quick-filters {
+  align-items: center;
+}
+
+@media (max-width: 560px) {
+  /* Show just-added exercises above the search/results, scrollable sideways,
+     so adding an exercise gives immediate visible feedback on mobile. */
+  .builder-section-added {
+    order: -1 !important;
+    padding: 0 0 14px !important;
+    border-left: 0 !important;
+    border-top: 0 !important;
+    border-bottom: 1px solid var(--line, #dfe4e8) !important;
+  }
+
+  .builder-section-added .builder-items {
+    display: flex !important;
+    gap: 10px !important;
+    overflow-x: auto !important;
+    margin-top: 10px !important;
+    padding-bottom: 4px !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .builder-section-added .builder-item {
+    flex: 0 0 230px;
+    min-width: 230px;
+  }
+}
+
+/* Uniform filter field width so "Tag" (long option text) doesn't grow wider than "Purpose". */
+.exercise-filter-field {
+  flex: 0 0 140px;
+  width: 140px;
+}
+
+.exercise-filter-field select {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (min-width: 561px) {
+  .exercise-filter-strip {
+    grid-template-columns: repeat(auto-fill, 140px);
+  }
+}
+
+
+@media (max-width: 560px) {
+  /* Section editor header: stack title above actions instead of squeezing
+     the title into a sliver next to three buttons. */
+  .builder-section-panel-head {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .builder-section-panel-head .muted {
+    display: none;
+  }
+
+  .builder-section-editor-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .exercise-filter-field {
+    flex-basis: calc(50% - 4px);
+    width: auto;
+  }
+}
+
+/* Inline top-level add-node form (triggered by the pyramid buttons), no type select needed. */
+.builder-inline-add-form {
+  grid-template-columns: minmax(0, 1fr) 44px 118px auto;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--line, #dfe4e8);
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.builder-add-node-triggers {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.builder-add-node-trigger {
+  position: relative;
+  display: inline-flex;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.builder-add-node-trigger .builder-node-level {
+  transition: transform 120ms ease;
+}
+
+.builder-add-node-trigger:hover .builder-node-level,
+.builder-add-node-trigger:active .builder-node-level {
+  transform: translateY(-1px);
+}
+
+.builder-add-node-plus {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--accent, #1f6f68);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+@media (max-width: 560px) {
+  .builder-inline-add-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* When the "more filters" disclosure is open, force it onto its own full-width
+   row below the quick filters, instead of staying confined to its narrow
+   flex-item column (which made the expanded selects look disconnected/offset). */
+.builder-exercise-filters {
+  flex: 0 0 auto;
+}
+
+.builder-exercise-filters[open] {
+  flex-basis: 100%;
+  order: 10;
+}
+
+/* Keep the current session's name + add-buttons visible while scrolling
+   through a long tree of domains/categories/sections underneath it. */
+.builder-session-row {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  padding: 8px 6px;
+  margin: 0 -6px;
+  background: var(--surface, #fff);
+  border-radius: 6px;
+}
+
+@media (max-width: 560px) {
+  .builder-session-row {
+    top: -1px;
+  }
+}
+
+/* Section exercise preview: hover on desktop, tap on touch devices.
+   Positioned relative to .builder-node (the popover's actual parent),
+   not .builder-node-row (only its sibling) so it anchors correctly. */
+.builder-node {
+  position: relative;
+}
+
+.builder-section-preview-trigger {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  border: 1px solid var(--line, #dfe4ea);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--muted, #667085);
+  cursor: pointer;
+}
+
+.builder-section-preview-trigger .rail-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.builder-section-preview-popover {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 6;
+  margin-top: 4px;
+  padding: 8px;
+  gap: 6px;
+  max-width: min(320px, 90vw);
+  flex-wrap: wrap;
+  border: 1px solid var(--line, #dfe4ea);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .14);
+}
+
+.builder-section-preview-popover.is-open {
+  display: flex;
+}
+
+@media (hover: hover) {
+  .builder-node-row:hover + .builder-section-preview-popover {
+    display: flex;
+  }
+}
+
+.builder-section-preview-thumb {
+  display: block;
+  width: 42px;
+  height: 42px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #eef2f4;
+}
+
+.builder-section-preview-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.builder-section-preview-fallback {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--muted, #667085);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.builder-section-preview-empty {
+  font-size: 12px;
+  padding: 4px;
 }

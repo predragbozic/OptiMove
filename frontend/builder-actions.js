@@ -332,6 +332,12 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     return true;
   }
   if (type === "builder-open-custom-exercise") {
+    const doseInputs = document.querySelectorAll("[data-builder-new-dose]");
+    const dose = { sets: "", reps: "", load: "" };
+    doseInputs.forEach((input) => {
+      if (input.name in dose) dose[input.name] = input.value;
+    });
+    state.builder.customExerciseDose = dose;
     state.builder.customExerciseOpen = true;
     handlers.renderBuilder();
     return true;
@@ -449,11 +455,25 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     handlers.renderBuilder();
     return true;
   }
-  if (type === "builder-add-structure") {
-    state.builder.selectedSessionId = action.dataset.sessionId || "";
-    state.builder.selectedNodeId = "";
-    state.builder.addNodeOpen = true;
-    state.builder.structureModalOpen = true;
+  if (type === "builder-start-inline-add") {
+    state.builder.inlineAddSessionId = action.dataset.sessionId || "";
+    state.builder.inlineAddParentId = action.dataset.parentId || "";
+    state.builder.inlineAddType = action.dataset.nodeType || "domain";
+    state.builder.inlineAddOpen = true;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-cancel-inline-add") {
+    state.builder.inlineAddOpen = false;
+    state.builder.inlineAddType = "";
+    state.builder.inlineAddSessionId = "";
+    state.builder.inlineAddParentId = "";
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-toggle-section-preview") {
+    const nodeId = action.dataset.nodeId || "";
+    state.builder.previewSectionId = state.builder.previewSectionId === nodeId ? "" : nodeId;
     handlers.renderBuilder();
     return true;
   }
@@ -463,6 +483,10 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     state.builder.sectionPickerOpen = false;
     state.builder.addNodeOpen = false;
     state.builder.structureModalOpen = false;
+    state.builder.inlineAddOpen = false;
+    state.builder.inlineAddType = "";
+    state.builder.inlineAddSessionId = "";
+    state.builder.inlineAddParentId = "";
     handlers.renderBuilder();
     return true;
   }
@@ -472,6 +496,10 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     state.builder.sectionPickerOpen = findBuilderNode(state.builder.draft, state.builder.selectedNodeId)?.type === "section";
     state.builder.addNodeOpen = true;
     state.builder.structureModalOpen = !state.builder.sectionPickerOpen;
+    state.builder.inlineAddOpen = false;
+    state.builder.inlineAddType = "";
+    state.builder.inlineAddSessionId = "";
+    state.builder.inlineAddParentId = "";
     handlers.renderBuilder();
     return true;
   }
@@ -556,6 +584,7 @@ export async function handleBuilderItemAction(action, handlers) {
   if (type === "builder-pick-exercise") {
     const section = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
     const panel = action.closest(".builder-section-panel");
+    const doseInput = (name) => panel?.querySelector(`[data-builder-new-dose][name="${name}"]`);
     if (!section || section.type !== "section") return true;
     action.disabled = true;
     try {
@@ -563,9 +592,9 @@ export async function handleBuilderItemAction(action, handlers) {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({
           exerciseId: action.dataset.exerciseId || "",
-          sets: panel?.querySelector("[name='sets']")?.value || "",
-          reps: panel?.querySelector("[name='reps']")?.value || "",
-          load: panel?.querySelector("[name='load']")?.value || "",
+          sets: doseInput("sets")?.value || "",
+          reps: doseInput("reps")?.value || "",
+          load: doseInput("load")?.value || "",
         })),
       }));
       handlers.renderBuilder();
@@ -647,6 +676,10 @@ export async function submitBuilderForm(form, handlers) {
     const added = session?.nodes.at(-1);
     state.builder.selectedSessionId = form.dataset.sessionId;
     state.builder.selectedNodeId = added?.id || "";
+    state.builder.inlineAddOpen = false;
+    state.builder.inlineAddType = "";
+    state.builder.inlineAddSessionId = "";
+    state.builder.inlineAddParentId = "";
   }
   if (mode === "add-exercise") {
     if (!data.exerciseId) return;

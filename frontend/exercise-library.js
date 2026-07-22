@@ -2,21 +2,36 @@ import { renderMediaThumb } from "./media.js";
 import { EXERCISE_FILTERS } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
+export const QUICK_FILTER_KEYS = new Set(["purpose", "tag"]);
+
+export function filterIconSvg() {
+  return `
+    <svg class="rail-icon exercise-filter-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 6h18"></path><circle cx="9" cy="6" r="2.3"></circle>
+      <path d="M3 12h18"></path><circle cx="15" cy="12" r="2.3"></circle>
+      <path d="M3 18h18"></path><circle cx="8" cy="18" r="2.3"></circle>
+    </svg>
+  `;
+}
+
 export function renderExerciseFilterControls(values, options, mode = "library") {
   const attr = mode.startsWith("builder") ? "data-builder-exercise-filter" : "data-exercise-filter";
   const includeToggles = mode !== "builder-selects";
   return `
-    ${EXERCISE_FILTERS.map((filter) => renderExerciseFilterSelect(filter, values[filter.key], options[filter.optionsKey], attr)).join("")}
+    ${EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key)).map((filter) => renderExerciseFilterSelect(filter, values[filter.key], options[filter.optionsKey], attr)).join("")}
     ${includeToggles ? renderExerciseFilterToggle("favorite", "Favorites", values.favorite, attr) : ""}
     ${includeToggles ? renderExerciseFilterToggle("marked", "Marked", values.marked, attr) : ""}
   `;
 }
 
-export function renderExerciseQuickFilters(values, attr) {
+export function renderExerciseQuickFilters(values, options, attr, moreFiltersHtml = "") {
+  const quickSelects = EXERCISE_FILTERS.filter((filter) => QUICK_FILTER_KEYS.has(filter.key));
   return `
     <div class="exercise-quick-filters">
+      ${quickSelects.map((filter) => renderExerciseFilterSelect(filter, values[filter.key], options[filter.optionsKey], attr)).join("")}
       ${renderExerciseFilterToggle("favorite", "Favorites", values.favorite, attr)}
       ${renderExerciseFilterToggle("marked", "Marked", values.marked, attr)}
+      ${moreFiltersHtml}
     </div>
   `;
 }

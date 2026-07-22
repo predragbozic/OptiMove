@@ -3,21 +3,33 @@ import { loadBuilderExercises } from "./builder-data.js";
 import { renderBuilder } from "./builder-view.js";
 import { els } from "./dom.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
-import { renderExerciseFilterControls } from "./exercise-library.js";
-import { emptyExerciseOptions, state } from "./state.js";
+import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters } from "./exercise-library.js";
+import { emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
 import { debounce } from "./utils.js";
+
+function activeExerciseSelectFilterCount(filters) {
+  return EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key) && filters[filter.key]).length;
+}
 
 export async function loadExercises(handlers) {
   state.navStack = [];
   await loadExerciseFilterOptions();
+  const selectFilterCount = activeExerciseSelectFilterCount(state.exerciseSearch.filters);
   els.toolbar.innerHTML = `
     <label class="search-field exercise-search-field">
       <span>Exercise search</span>
       <input id="exerciseSearch" type="search" placeholder="Name or code" value="">
     </label>
-    <div class="exercise-filter-strip">
-      ${renderExerciseFilterControls(state.exerciseSearch.filters, state.exerciseSearch.options)}
-    </div>
+    ${renderExerciseQuickFilters(state.exerciseSearch.filters, state.exerciseSearch.options, "data-exercise-filter", `
+      <details class="builder-exercise-filters" ${selectFilterCount ? "open" : ""}>
+        <summary class="exercise-filter-toggle-icon" aria-label="More filters${selectFilterCount ? ` (${selectFilterCount} active)` : ""}" title="More filters">
+          ${filterIconSvg()}${selectFilterCount ? `<span class="filter-count-badge">${selectFilterCount}</span>` : ""}
+        </summary>
+        <div class="exercise-filter-strip">
+          ${renderExerciseFilterControls(state.exerciseSearch.filters, state.exerciseSearch.options)}
+        </div>
+      </details>
+    `)}
   `;
   const input = document.querySelector("#exerciseSearch");
   input.addEventListener("input", debounce(() => {

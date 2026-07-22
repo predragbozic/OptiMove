@@ -107,8 +107,14 @@ export const emptyBuilderState = (overrides = {}) => ({
   addNodeOpen: false,
   sessionModalBlockId: "",
   structureModalOpen: false,
+  inlineAddOpen: false,
+  inlineAddType: "",
+  inlineAddSessionId: "",
+  inlineAddParentId: "",
+  previewSectionId: "",
   infoOpen: "",
   customExerciseOpen: false,
+  customExerciseDose: { sets: "", reps: "", load: "" },
   ...overrides,
 });
 
