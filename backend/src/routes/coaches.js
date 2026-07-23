@@ -35,9 +35,10 @@ router.patch("/me", async (req, res, next) => {
            specialties = nullif(trim($4), ''),
            photo_url = nullif(trim($5), ''),
            cover_image_url = nullif(trim($6), ''),
-           contact_email = nullif(trim($7), ''),
-           contact_enabled = $8,
-           visibility = $9,
+           video_url = nullif(trim($7), ''),
+           contact_email = nullif(trim($8), ''),
+           contact_enabled = $9,
+           visibility = $10,
            updated_at = now()
        where id = $1`,
       [
@@ -47,6 +48,7 @@ router.patch("/me", async (req, res, next) => {
         text(req.body?.specialties),
         text(req.body?.photoUrl),
         text(req.body?.coverImageUrl),
+        text(req.body?.videoUrl),
         text(req.body?.contactEmail),
         req.body?.contactEnabled !== false && req.body?.contactEnabled !== "false",
         visibility,
@@ -206,6 +208,7 @@ function coachListSql({ includeOrder = true } = {}) {
       cp.specialties,
       cp.photo_url,
       cp.cover_image_url,
+      cp.video_url,
       cp.contact_enabled,
       cp.visibility,
       coalesce(tags.tags, '[]'::jsonb) as tags,
@@ -217,7 +220,7 @@ function coachListSql({ includeOrder = true } = {}) {
     from public.coach_profiles cp
     join public.users u on u.id = cp.user_id
     left join lateral (
-      select jsonb_agg(jsonb_build_object('id', cpt.id, 'name', cpt.name) order by cpt.name) as tags
+      select jsonb_agg(jsonb_build_object('id', cpt.id, 'name', cpt.name) order by cpt.created_at) as tags
       from public.coach_profile_tags cpt
       where cpt.coach_profile_id = cp.id
     ) tags on true

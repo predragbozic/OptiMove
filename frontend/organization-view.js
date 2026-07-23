@@ -1,6 +1,7 @@
 import { renderImage } from "./media.js";
 import { renderSettingsNavHtml } from "./navigation.js";
 import { renderFilterableSelect } from "./organization-select.js";
+import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -29,9 +30,11 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
       </section>
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
-      ${renderOrganizationActions(data)}
-      ${renderOrganizationBrowser(data)}
-      ${state.organizationEditor.open ? renderOrganizationEditModal(data) : ""}
+      ${state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : `
+        ${renderOrganizationActions(data)}
+        ${renderOrganizationBrowser(data)}
+        ${state.organizationEditor.open ? renderOrganizationEditModal(data) : ""}
+      `}
     </section>
   `;
 }

@@ -6,6 +6,7 @@ create table if not exists public.coach_profiles (
   specialties text,
   photo_url text,
   cover_image_url text,
+  video_url text,
   contact_email text,
   contact_enabled boolean not null default true,
   visibility varchar(32) not null default 'private'
@@ -37,6 +38,9 @@ create table if not exists public.coach_contact_requests (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.coach_profiles
+  add column if not exists video_url text;
 
 create index if not exists coach_profiles_visibility_idx
   on public.coach_profiles (visibility, is_active);

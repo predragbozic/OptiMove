@@ -4,7 +4,12 @@ import { query } from "../db.js";
 const router = Router();
 
 const exerciseScope = "e.is_active = true and (e.owner_scope = 'system' or e.owner_user_id = $1)";
-const libraryScope = "(owner_scope = 'system' or owner_user_id = $1)";
+const libraryScope = `(
+  owner_scope = 'system'
+  or owner_user_id = $1
+  or (owner_scope = 'club' and owner_club_id in (select club_id from public.user_club_roles where user_id = $1 and is_active = true))
+  or (owner_scope = 'team' and owner_team_id in (select team_id from public.user_team_roles where user_id = $1 and is_active = true))
+)`;
 
 function slugify(value) {
   return String(value || "")
@@ -27,21 +32,25 @@ async function exerciseExistsForUser(userId, exerciseId) {
   return Boolean(result.rows[0]);
 }
 
+function libraryScopeWithHidden(table, kind) {
+  return `${libraryScope} and not exists (select 1 from library.filter_hidden h where h.kind = '${kind}' and h.item_id = library.${table}.id and h.user_id = $1)`;
+}
+
 const optionQueries = {
   purposes: `
     select distinct name
     from library.domains
-    where is_active = true and ${libraryScope}
+    where is_active = true and ${libraryScopeWithHidden("domains", "domain")}
     order by name`,
   qualities: `
     select distinct name
     from library.categories
-    where is_active = true and ${libraryScope}
+    where is_active = true and ${libraryScopeWithHidden("categories", "category")}
     order by name`,
   groups: `
     select distinct name
     from library.sections
-    where is_active = true and ${libraryScope}
+    where is_active = true and ${libraryScopeWithHidden("sections", "section")}
     order by name`,
   bodyParts: `
     select distinct bp.name
@@ -77,12 +86,12 @@ const optionQueries = {
   attractors: `
     select distinct name
     from library.attractors
-    where is_active = true and ${libraryScope}
+    where is_active = true and ${libraryScopeWithHidden("attractors", "attractor")}
     order by name`,
   tags: `
     select distinct name
     from library.tags
-    where is_active = true and ${libraryScope}
+    where is_active = true and ${libraryScopeWithHidden("tags", "tag")}
     order by name`,
 };
 

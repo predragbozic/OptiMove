@@ -282,6 +282,7 @@ function renderTemplateMetadataForm(template, templateOptions, programTagEditor,
       <datalist id="program-settings-group-options">
         ${(templateOptions?.categories || []).map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
       </datalist>
+      <label class="search-field"><span>Description</span><textarea name="description" rows="3" placeholder="What is this program about? Shown to coaches and athletes in the program information popup.">${escapeHtml(template.description || "")}</textarea></label>
       ${blockedShelfNotice}
       ${renderProgramInlineTags(template, templateOptions, programTagEditor)}
       <div class="program-metadata-actions">

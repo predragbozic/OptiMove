@@ -396,6 +396,7 @@ export async function submitTemplateMetadataForm(form, { loadTemplates }) {
         programStatus: formData.get("programStatus"),
         libraryCategory: formData.get("libraryCategory"),
         coverImageUrl: formData.get("coverImageUrl"),
+        description: formData.get("description"),
         isFree: formData.get("isFree") === "true",
         priceCents: Math.round(Number(formData.get("price") || 0) * 100),
         availableUntil: formData.get("availableUntil"),

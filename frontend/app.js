@@ -17,7 +17,7 @@ import {
   handleBuilderWorkspaceAction,
   submitBuilderForm as submitBuilderFormAction,
 } from "./builder-actions.js";
-import { loadBuilderDrafts, loadBuilderExercises, refreshBuilderDraft } from "./builder-data.js";
+import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder } from "./builder-view.js";
 import {
@@ -28,6 +28,7 @@ import {
   submitCoachProfileForm as submitCoachProfileFormAction,
 } from "./coach-profile-actions.js";
 import { renderCoachesHtml } from "./coach-profiles.js";
+import { renderCoachHomeHtml } from "./coach-home.js";
 import { els } from "./dom.js";
 import {
   handleExerciseDetailAction,
@@ -75,6 +76,11 @@ import {
   normalizeOrganizationSelection,
   renderOrganizationPanelHtml,
 } from "./organization-view.js";
+import {
+  handleTaxonomyAction,
+  loadTaxonomyData,
+  submitTaxonomyForm,
+} from "./taxonomy-actions.js";
 import {
   closeNotificationsIfOutside,
   handleNotificationAction,
@@ -181,6 +187,7 @@ async function init() {
     window.location.replace("/athlete");
     return;
   }
+  if (state.activeTab === "weekly" && !state.selectedAthleteId) state.activeTab = "coach-home";
   ensureBackGuard();
   void loadNotifications({ silent: true });
   void loadMessages({ silent: true });
@@ -302,6 +309,13 @@ async function handleContentSubmit(event) {
     return;
   }
 
+  const taxonomyForm = event.target.closest("[data-taxonomy-form]");
+  if (taxonomyForm) {
+    event.preventDefault();
+    await submitTaxonomyForm(taxonomyForm, { renderOrganizationPanel });
+    return;
+  }
+
   const tagForm = event.target.closest("[data-exercise-tag-form]");
   if (tagForm) {
     event.preventDefault();
@@ -399,6 +413,22 @@ async function handleContentSubmit(event) {
   }
 }
 
+function applyBuilderNodePresetMatch(nameInput) {
+  const form = nameInput.closest("form");
+  if (!form) return;
+  const nodeType = form.querySelector('[name="nodeType"]')?.value || "";
+  const typedName = nameInput.value.trim().toLowerCase();
+  if (!typedName) return;
+  const preset = (state.builder.nodePresets || []).find(
+    (candidate) => candidate.node_type === nodeType && candidate.name.trim().toLowerCase() === typedName,
+  );
+  if (!preset) return;
+  const colorInput = form.querySelector('[name="color"]');
+  const iconInput = form.querySelector('[name="iconUrl"]');
+  if (colorInput && preset.color) colorInput.value = preset.color;
+  if (iconInput) iconInput.value = preset.icon_url || "";
+}
+
 function handleContentInput(event) {
   const messageSearch = event.target.closest("[data-message-search]");
   if (messageSearch) {
@@ -417,6 +447,12 @@ function handleContentInput(event) {
   const orgFilter = event.target.closest("[data-org-select-filter]");
   if (orgFilter) {
     handleOrganizationFilterInput(orgFilter);
+    return;
+  }
+
+  const presetNameInput = event.target.closest("[data-builder-preset-name-input]");
+  if (presetNameInput) {
+    applyBuilderNodePresetMatch(presetNameInput);
     return;
   }
 
@@ -760,6 +796,30 @@ async function handleGlobalClick(event) {
   }
   if (action.dataset.action === "close-media") closeMedia();
   if (action.dataset.action === "home") goHome();
+  if (action.dataset.action === "brand-home") {
+    if (document.body.classList.contains("athlete-mode")) {
+      goHome();
+    } else if (state.activeTab !== "coach-home") {
+      pushAppHistory();
+      state.activeTab = "coach-home";
+      state.selectedProgramId = null;
+      state.selectedTemplateId = null;
+      state.navStack = [];
+      collapseRailAfterNav();
+      renderTabs();
+      renderLibraryNav();
+      await loadActiveTab();
+    }
+  }
+  if (action.dataset.action === "sidebar-submenu-toggle") {
+    const key = action.dataset.submenuKey || "";
+    if (key) {
+      const submenuEl = document.querySelector(`[data-sidebar-submenu="${key}"]`);
+      const currentlyOpen = submenuEl?.classList.contains("is-open");
+      state.sidebarSubmenuOpen[key] = !currentlyOpen;
+      renderLibraryNav();
+    }
+  }
   closeNotificationsIfOutside(event.target);
   closeMessagesIfOutside(event.target);
 }
@@ -935,6 +995,7 @@ async function loadActiveTab() {
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();
   if (state.activeTab === "organization") return renderOrganizationPanel();
+  if (state.activeTab === "coach-home") return loadCoachHome();
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
   if (state.activeTab === "templates") return loadTemplates();
@@ -948,6 +1009,20 @@ async function loadCoaches() {
   els.title.textContent = "Coaches";
   els.toolbar.innerHTML = "";
   return loadCoachesAction({ setLoading, renderCoaches });
+}
+
+async function loadCoachHome() {
+  state.navStack = [];
+  els.context.textContent = "Overview";
+  els.title.textContent = "Home";
+  els.toolbar.innerHTML = "";
+  setLoading("Loading today's overview...");
+  try {
+    const data = await api("/api/athletes/today");
+    els.content.innerHTML = renderCoachHomeHtml({ rows: data.rows || [], error: "" });
+  } catch (error) {
+    els.content.innerHTML = renderCoachHomeHtml({ rows: [], error: error.message || "Could not load today's overview." });
+  }
 }
 
 async function loadWeekly() {
@@ -1052,6 +1127,21 @@ async function handleContentClick(event) {
     goHome();
     return;
   }
+  if (type === "coach-home-open-athlete") {
+    state.selectedAthleteId = action.dataset.athleteId;
+    state.athletesExpanded = false;
+    state.activeTab = "weekly";
+    state.selectedProgramId = null;
+    state.selectedTemplateId = null;
+    state.navStack = [];
+    state.openWeekCalendarOnLoad = false;
+    collapseRailAfterNav();
+    renderAthleteList();
+    renderTabs();
+    renderLibraryNav();
+    await loadWeekly();
+    return;
+  }
   if (type === "program-library-requests") {
     state.activeTab = "templates";
     state.programLibrarySection = "requests";
@@ -1092,6 +1182,7 @@ async function handleContentClick(event) {
     renderAfterOrganizationAccessChange,
     renderOrganizationPanel,
   })) return;
+  if (await handleTaxonomyAction(action, { renderOrganizationPanel })) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
   handleMediaAction(action);
 }
@@ -1154,6 +1245,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
       state.organization.error = error.message || "Could not load organization.";
       state.organization.data = null;
     }
+  }
+
+  if (state.organization.section === "presets" && !state.taxonomy.loaded) {
+    await loadTaxonomyData();
   }
 
   const data = state.organization.data || { clubs: [], teams: [], athletes: [], users: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true, canCreateUser: true };
@@ -1532,6 +1627,7 @@ async function loadBuilder() {
   els.context.textContent = "Program builder";
   els.title.textContent = "Build a program";
   els.toolbar.innerHTML = "";
+  void loadBuilderNodePresets().catch(() => {});
   if (!state.builder.draft) {
     renderBuilder();
     void loadBuilderDrafts().catch(renderBuilderError);

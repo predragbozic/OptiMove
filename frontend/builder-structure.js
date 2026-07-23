@@ -60,18 +60,30 @@ function renderBuilderAddTriggers(session, parentId, validTypes, context) {
 function renderBuilderInlineAddForm(session, parentId, context) {
   const type = ALL_NODE_TYPES.includes(context.inlineAddType) ? context.inlineAddType : "domain";
   const label = context.exerciseNodeLabel(type);
+  const presets = (context.builderNodePresets || []).filter((preset) => preset.node_type === type);
+  const listId = `builder-preset-names-${type}`;
   return `
     <form class="builder-node-form builder-inline-add-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
       <div class="builder-node-form-head"><strong>Add ${escapeHtml(label)}</strong><button class="text-action" type="button" data-action="builder-cancel-inline-add">Cancel</button></div>
       <input type="hidden" name="parentId" value="${escapeAttr(parentId)}">
       <input type="hidden" name="nodeType" value="${escapeAttr(type)}">
-      <input name="name" placeholder="${escapeAttr(label)} name" required>
+      <input name="name" list="${escapeAttr(listId)}" placeholder="${escapeAttr(label)} name" required autocomplete="off" data-builder-preset-name-input>
+      <datalist id="${escapeAttr(listId)}">
+        ${presets.map((preset) => `<option value="${escapeAttr(preset.name)}"></option>`).join("")}
+      </datalist>
       <input name="color" type="color" value="#287e77" aria-label="Node color">
-      <select name="iconUrl" aria-label="Node icon">${context.builderIconOptions()}</select>
+      <input name="iconUrl" type="url" placeholder="Icon URL (optional)" aria-label="Node icon URL">
       <p class="builder-error" aria-live="polite"></p>
       <button class="plain-button" type="submit">Add ${escapeHtml(label)}</button>
     </form>
   `;
+}
+
+function renderBuilderNodeIcon(iconUrl, context) {
+  if (iconUrl && /^https?:\/\//i.test(iconUrl)) {
+    return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="">`;
+  }
+  return context.builderIconGlyph(iconUrl);
 }
 
 function isInlineAddHere(session, parentId, context) {
@@ -128,7 +140,7 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId, context) {
     <div class="builder-node builder-node-${escapeAttr(node.type)}">
       <div class="builder-node-row">
         <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
-          <span class="builder-node-name"><span class="builder-node-icon">${context.builderIconGlyph(node.iconUrl)}</span>${escapeHtml(node.name)}</span><small>${context.builderNodeMarker(node.type)}${node.type === "section" ? context.builderExerciseCountDots(node.items.length) : ""}</small>
+          <span class="builder-node-name"><span class="builder-node-icon">${renderBuilderNodeIcon(node.iconUrl, context)}</span>${escapeHtml(node.name)}</span><small>${context.builderNodeMarker(node.type)}${node.type === "section" ? context.builderExerciseCountDots(node.items.length) : ""}</small>
         </button>
         ${node.type === "section" ? renderSectionPreviewTrigger(node, context) : ""}
         ${renderBuilderNodeMoveActions(node, true, session.id, context)}
@@ -152,14 +164,18 @@ function renderBuilderStructureEditor(session, selectedNode, context) {
       <button class="plain-button builder-open-section" type="button" data-action="builder-open-section-panel">Open section exercise editor</button>
     `;
   }
+  const presets = context.builderNodePresets || [];
   return `
     <form class="builder-node-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
       <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions">${renderBuilderNodeMoveActions(selectedNode, false, "", context)}<button class="text-action" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy ${escapeHtml(selectedNode.type)}</button>${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type, context)}<button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button></span>` : ""}</div>
       <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
       <select name="nodeType">${context.nodeTypeOptions(selectedNode?.type)}</select>
-      <input name="name" placeholder="${selectedNode?.type === "domain" ? "Category or section name" : selectedNode?.type === "category" ? "Section name" : "Domain, category or section name"}" required>
+      <input name="name" list="builder-preset-names-all" placeholder="${selectedNode?.type === "domain" ? "Category or section name" : selectedNode?.type === "category" ? "Section name" : "Domain, category or section name"}" required autocomplete="off" data-builder-preset-name-input>
+      <datalist id="builder-preset-names-all">
+        ${presets.map((preset) => `<option value="${escapeAttr(preset.name)}"></option>`).join("")}
+      </datalist>
       <input name="color" type="color" value="#287e77" aria-label="Node color">
-      <select name="iconUrl" aria-label="Node icon">${context.builderIconOptions()}</select>
+      <input name="iconUrl" type="url" placeholder="Icon URL (optional)" aria-label="Node icon URL">
       <p class="builder-error" aria-live="polite"></p>
       <button class="plain-button" type="submit">Add</button>
     </form>

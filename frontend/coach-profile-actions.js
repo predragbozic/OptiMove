@@ -88,6 +88,7 @@ export async function submitCoachProfileForm(form, { loadCoaches }) {
         specialties: formData.get("specialties"),
         photoUrl: formData.get("photoUrl"),
         coverImageUrl: formData.get("coverImageUrl"),
+        videoUrl: formData.get("videoUrl"),
         contactEmail: formData.get("contactEmail"),
         visibility: formData.get("visibility"),
         tags: formData.get("tags"),

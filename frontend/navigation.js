@@ -79,10 +79,10 @@ export function renderLibraryNav() {
   });
   document.querySelectorAll("[data-sidebar-submenu]").forEach((submenu) => {
     const key = submenu.dataset.sidebarSubmenu;
-    submenu.classList.toggle("is-open",
-      (key === "program-library" && state.activeTab === "templates") ||
-      (key === "settings" && state.activeTab === "organization"),
-    );
+    const autoOpen = (key === "program-library" && state.activeTab === "templates") ||
+      (key === "settings" && state.activeTab === "organization");
+    const manualOpen = state.sidebarSubmenuOpen[key];
+    submenu.classList.toggle("is-open", manualOpen === undefined ? autoOpen : manualOpen);
   });
   updateProgramLibraryNavLabels();
   document.querySelectorAll("[data-athlete-tab]").forEach((button) => {
@@ -137,6 +137,7 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     ["teams", "Teams"],
     ["athletes", "Athletes"],
     ["users", "Users"],
+    ["presets", "Tags & Presets"],
   ];
   return `
     <nav class="settings-tabs" aria-label="Settings sections">

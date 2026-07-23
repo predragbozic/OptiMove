@@ -76,6 +76,7 @@ function renderCoachProfileForm(profile, currentUser) {
         <label class="search-field"><span>Specialties</span><input name="specialties" value="${escapeAttr(profile?.specialties || "")}" placeholder="Speed, strength, rehab"></label>
         <label class="search-field"><span>Photo URL</span><input name="photoUrl" value="${escapeAttr(profile?.photo_url || "")}" placeholder="https://..."></label>
         <label class="search-field"><span>Cover image URL</span><input name="coverImageUrl" value="${escapeAttr(profile?.cover_image_url || "")}" placeholder="https://..."></label>
+        <label class="search-field"><span>Intro video URL</span><input name="videoUrl" value="${escapeAttr(profile?.video_url || "")}" placeholder="https://youtube.com/..."></label>
         <label class="search-field"><span>Contact email</span><input name="contactEmail" value="${escapeAttr(profile?.contact_email || currentUser?.email || "")}"></label>
         <label class="search-field"><span>Visibility</span><select name="visibility">
           ${renderOption("private", "Private", profile?.visibility || "private")}
@@ -126,16 +127,18 @@ export function renderCoachDetailModalHtml(coaches, currentUser) {
     <div class="program-preview-overlay">
       <button class="program-preview-backdrop" type="button" data-action="coach-close" aria-label="Close coach profile"></button>
       <section class="program-preview-modal coach-profile-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(profile.name || "Coach profile")}">
+        ${profile.cover_image_url ? `<div class="coach-profile-cover">${renderImage(profile.cover_image_url, "coach-profile-cover-image")}</div>` : ""}
         <div class="program-preview-head coach-profile-head">
           <div class="coach-profile-title">
             ${profile.photo_url ? renderImage(profile.photo_url, "coach-profile-photo") : `<span class="coach-card-initials">${escapeHtml(programInitials(profile.name || "Coach"))}</span>`}
             <div>
               <p class="eyebrow">${escapeHtml(profile.visibility || "profile")}</p>
               <h3>${escapeHtml(profile.name || "Coach")}</h3>
-              <p class="muted">${escapeHtml(profile.headline || profile.specialties || "")}</p>
+              ${profile.headline ? `<p class="muted">${escapeHtml(profile.headline)}</p>` : ""}
             </div>
           </div>
           <div class="builder-source-actions">
+            ${profile.video_url ? `<button class="plain-button compact-button" type="button" data-action="open-media" data-title="${escapeAttr(profile.name || "Coach")} - Intro" data-image="${escapeAttr(profile.photo_url || "")}" data-video="${escapeAttr(profile.video_url)}">Watch intro</button>` : ""}
             ${programs.length ? `<button class="plain-button compact-button" type="button" data-action="coach-programs-focus">View programs</button>` : ""}
             ${profile.contact_enabled ? `<button class="plain-button compact-button" type="button" data-action="coach-contact-toggle">${coaches.contactOpen ? "Close contact" : "Contact coach"}</button>` : ""}
             <button class="plain-button icon-button" type="button" data-action="coach-close" aria-label="Close"><span class="button-icon">x</span></button>
@@ -143,7 +146,8 @@ export function renderCoachDetailModalHtml(coaches, currentUser) {
         </div>
         <div class="coach-profile-body">
           <section class="coach-profile-summary">
-            <p>${escapeHtml(profile.bio || "No profile description yet.")}</p>
+            <p class="coach-profile-bio">${escapeHtml(profile.bio || "No profile description yet.")}</p>
+            ${profile.specialties ? `<p class="coach-profile-specialties"><strong>Specialties:</strong> ${escapeHtml(profile.specialties)}</p>` : ""}
             <p class="rating-line">${escapeHtml(ratingLabel(profile))}</p>
             <div class="coach-tag-row">${(profile.tags || []).map((tag) => `<span>${escapeHtml(tag.name || tag)}</span>`).join("")}</div>
             ${profile.club_names ? `<p class="muted">${escapeHtml(profile.club_names)}</p>` : ""}

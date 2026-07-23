@@ -49,6 +49,54 @@ router.get("/", async (req, res, next) => {
   }
 });
 
+router.get("/today", async (req, res, next) => {
+  try {
+    const filter = athleteListAccessFilter(req.user, "a");
+    const result = await query(`
+      select
+        a.id as athlete_uuid,
+        a.athlete_id,
+        a.source_external_id as athlete_source_external_id,
+        coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
+        a.image_url as athlete_image_url,
+        coalesce(today.session_count, 0) as session_count,
+        coalesce(today.item_count, 0) as item_count,
+        today.plan_id,
+        today.plan_name
+      from public.athletes a
+      left join (
+        select
+          athlete_uuid,
+          count(distinct plan_session_id) as session_count,
+          count(distinct plan_item_id) filter (where plan_item_id is not null) as item_count,
+          (array_agg(plan_id order by plan_id))[1] as plan_id,
+          (array_agg(plan_name order by plan_id))[1] as plan_name
+        from plans.v_weekly_plan_items
+        where date = current_date
+        group by athlete_uuid
+      ) today on today.athlete_uuid = a.id
+      where coalesce(a.is_active, true)
+        ${filter.sql}
+      order by (today.session_count is null or today.session_count = 0) asc, athlete_name
+    `, filter.params);
+    res.json({
+      rows: result.rows.map((row) => ({
+        athleteUuid: row.athlete_uuid,
+        athleteId: row.athlete_source_external_id || row.athlete_id,
+        athlete: row.athlete_name,
+        athleteImageUrl: row.athlete_image_url || "",
+        planId: row.plan_id || null,
+        planName: row.plan_name || "",
+        sessionCount: Number(row.session_count || 0),
+        itemCount: Number(row.item_count || 0),
+        hasTrainingToday: Number(row.session_count || 0) > 0,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/:athleteId/plans", async (req, res, next) => {
   try {
     const athleteId = req.params.athleteId;

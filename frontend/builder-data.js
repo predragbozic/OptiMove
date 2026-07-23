@@ -19,6 +19,12 @@ export async function refreshBuilderDraft() {
   renderBuilder();
 }
 
+export async function loadBuilderNodePresets() {
+  if (state.builder.nodePresets.length) return;
+  const data = await api("/api/taxonomy/node-presets");
+  state.builder.nodePresets = data.presets || [];
+}
+
 export async function loadBuilderDrafts() {
   if (state.builder.draft) return;
   state.builder.draftsLoading = true;

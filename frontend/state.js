@@ -115,6 +115,7 @@ export const emptyBuilderState = (overrides = {}) => ({
   infoOpen: "",
   customExerciseOpen: false,
   customExerciseDose: { sets: "", reps: "", load: "" },
+  nodePresets: [],
   ...overrides,
 });
 
@@ -128,6 +129,7 @@ export const createInitialState = () => ({
   athletesExpanded: false,
   railExpanded: false,
   mobileNavOpen: false,
+  sidebarSubmenuOpen: {},
   activeTab: "weekly",
   programLibrarySection: "programs",
   templateScope: "my_programs",
@@ -155,6 +157,14 @@ export const createInitialState = () => ({
   organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", assignOpen: false, accessOpen: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },
   organizationEditor: { open: false, type: "", row: null },
   organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
+  taxonomy: {
+    loaded: false,
+    error: "",
+    nodePresets: [],
+    templateTags: [],
+    libraryRows: { domain: [], category: [], section: [], tag: [], attractor: [] },
+    addOpenKind: "",
+  },
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
   messages: { open: false, rows: [], unreadCount: 0, selectedId: "", detail: null, loading: false, error: "", search: "" },

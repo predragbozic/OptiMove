@@ -47,6 +47,7 @@ function builderStructureContext() {
     inlineAddSessionId: state.builder.inlineAddSessionId,
     inlineAddParentId: state.builder.inlineAddParentId,
     previewSectionId: state.builder.previewSectionId,
+    builderNodePresets: state.builder.nodePresets || [],
   };
 }
 

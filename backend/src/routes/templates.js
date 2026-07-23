@@ -45,6 +45,7 @@ router.get("/", async (req, res, next) => {
     const result = await query(
       `
       select ps.*,
+        p.note as description,
         p.created_by_user_id,
         creator_profile.id as creator_profile_id,
         creator_profile.photo_url as creator_photo_url,
@@ -191,7 +192,7 @@ router.get("/", async (req, res, next) => {
         ps.library_scope, ps.library_category, ps.cover_image_url, ps.is_free, ps.price_cents, ps.available_until, ps.owner_type, ps.visibility,
         ps.access_model, ps.access_duration_days, ps.subscription_period, ps.can_copy, ps.can_edit_copy, ps.can_assign_to_athlete,
         ps.athlete_can_view_directly, ps.requires_approval,
-        p.created_by_user_id, creator_profile.id, creator_profile.photo_url, creator_profile.headline,
+        p.note, p.created_by_user_id, creator_profile.id, creator_profile.photo_url, creator_profile.headline,
         creator.display_name, creator.full_name, creator.email, creator_clubs.club_ids, creator_clubs.club_names,
         reviews.average_rating, reviews.review_count,
         user_access.status, user_access.access_type, user_access.used_at, user_access.expires_at
@@ -295,6 +296,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     if (!metadataPolicy.ok) return res.status(403).json({ error: metadataPolicy.error });
     const libraryCategory = textOrNull(req.body?.libraryCategory);
     const coverImageUrl = textOrNull(req.body?.coverImageUrl);
+    const description = textOrNull(req.body?.description);
     const availableUntil = dateTextOrNull(req.body?.availableUntil);
     const accessModel = normalizeChoice(
       req.body?.accessModel,
@@ -325,6 +327,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
           athlete_can_view_directly = $16,
           requires_approval = $17,
           status = $18,
+          note = $19,
           updated_at = now()
       where id = $1
       returning id
@@ -348,6 +351,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
         metadataPolicy.athleteCanViewDirectly,
         booleanValue(req.body?.requiresApproval, false),
         metadataPolicy.status,
+        description,
       ],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Template not found." });
@@ -367,15 +371,23 @@ router.get("/:planId/tags", async (req, res, next) => {
         `select id, name
          from library.program_tag_definitions
          where is_active = true
-           and exists (
-             select 1
-             from library.program_tags pt
-             join plans.plans p on p.id = pt.plan_id
-             where pt.tag_id = library.program_tag_definitions.id
-               and p.plan_type = 'program'
-               and p.is_template = true
-               and coalesce(p.is_active, true)
-               and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+           and (
+             exists (
+               select 1
+               from library.program_tags pt
+               join plans.plans p on p.id = pt.plan_id
+               where pt.tag_id = library.program_tag_definitions.id
+                 and p.plan_type = 'program'
+                 and p.is_template = true
+                 and coalesce(p.is_active, true)
+                 and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+             )
+             or (
+               (owner_scope = 'system' and not exists (select 1 from library.program_tag_hidden h where h.tag_id = library.program_tag_definitions.id and h.user_id = $1))
+               or (owner_scope = 'club' and owner_club_id in (select club_id from public.user_club_roles where user_id = $1 and is_active = true))
+               or (owner_scope = 'team' and owner_team_id in (select team_id from public.user_team_roles where user_id = $1 and is_active = true))
+               or (owner_scope = 'user' and owner_user_id = $1)
+             )
            )
          order by name`,
         [req.user.id, canAccessAllAthletes(req.user)],
