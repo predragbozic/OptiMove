@@ -7128,9 +7128,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     right: 10px !important;
     bottom: auto !important;
     z-index: 60 !important;
-    width: min(280px, 84vw) !important;
+    width: min(320px, 90vw) !important;
     height: auto !important;
-    max-height: min(70dvh, 520px) !important;
+    max-height: min(78dvh, 560px) !important;
     overflow: auto !important;
     border-radius: 12px !important;
     background: #ffffff !important;
@@ -7321,14 +7321,22 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     display: none !important;
   }
 
-  body.mobile-nav-open.athletes-drawer-open:not(.login-mode) .sidebar > .search-field,
-  body.mobile-nav-open.athletes-drawer-open:not(.login-mode) .athlete-list {
+  body.mobile-nav-open.athletes-drawer-open:not(.login-mode) .sidebar > .search-field {
     display: block !important;
+  }
+
+  /* .athlete-list is a single-column grid list in its default (non-media)
+     rule; forcing it to display:block here squashed every athlete-button
+     row onto one line, which is why the panel showed nothing but a
+     horizontal scrollbar instead of a vertical list of names. */
+  body.mobile-nav-open.athletes-drawer-open:not(.login-mode) .athlete-list {
+    display: grid !important;
   }
 
   body.mobile-nav-open:not(.login-mode) .athlete-list {
     max-height: 40dvh !important;
-    overflow: auto !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
   }
 
   body.mobile-nav-open:not(.login-mode) .sidebar .search-field span,
