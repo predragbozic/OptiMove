@@ -1,5 +1,5 @@
 import { state } from "./state.js";
-import { addMonthsIso, localDateIso, monthStartIso } from "./utils.js";
+import { addMonthsIso, localDateIso, monthStartIso, weekMondayIso } from "./utils.js";
 import { todayWeekIndex, weekIndexForDate } from "./weekly-plan.js";
 
 export function handleWeeklyAction(action, { moveWeek, renderWeeklyRoot }) {
@@ -32,6 +32,7 @@ export function handleWeeklyAction(action, { moveWeek, renderWeeklyRoot }) {
     const today = localDateIso();
     const weeks = state.lastWeeklyData?.weeks || [];
     state.selectedWeekIndex = todayWeekIndex(weeks);
+    state.viewedWeekStart = weekMondayIso(today);
     state.weekCalendarMonth = monthStartIso(today);
     state.selectedWeekDay = today;
     state.pendingScrollDate = today;
@@ -41,6 +42,7 @@ export function handleWeeklyAction(action, { moveWeek, renderWeeklyRoot }) {
   }
   if (type === "week-select") {
     state.selectedWeekIndex = Number(action.dataset.weekIndex) || 0;
+    state.viewedWeekStart = (state.lastWeeklyData?.weeks || [])[state.selectedWeekIndex]?.weekStart || "";
     state.selectedWeekDay = "";
     state.navStack = [];
     renderWeeklyRoot(state.lastWeeklyData);
@@ -52,6 +54,7 @@ export function handleWeeklyAction(action, { moveWeek, renderWeeklyRoot }) {
     const weekIndex = weekIndexForDate(weeks, date);
     if (weekIndex < 0) return true;
     state.selectedWeekIndex = weekIndex;
+    state.viewedWeekStart = weeks[weekIndex]?.weekStart || "";
     state.selectedWeekDay = date;
     state.pendingScrollDate = date;
     state.weekSelectorOpen = false;

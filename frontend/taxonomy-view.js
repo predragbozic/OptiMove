@@ -111,14 +111,20 @@ function renderChipAddForm(kind, placeholder, showColor, data) {
   `;
 }
 
-export function renderPastelSwatches(name, selected) {
+export function renderPastelSwatches(name, selected, { allowCustom = false } = {}) {
   const value = selected || PASTEL_COLORS[0];
+  const isCustom = allowCustom && !PASTEL_COLORS.some((color) => color.toLowerCase() === value.toLowerCase());
   return `
     <div class="pastel-palette" data-pastel-target="${escapeAttr(name)}">
       <input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(value)}">
       ${PASTEL_COLORS.map((color) => `
-        <button type="button" class="pastel-swatch ${color.toLowerCase() === value.toLowerCase() ? "is-selected" : ""}" style="background:${color}" data-action="taxonomy-pick-color" data-color="${color}" aria-label="Pick color ${color}"></button>
+        <button type="button" class="pastel-swatch ${!isCustom && color.toLowerCase() === value.toLowerCase() ? "is-selected" : ""}" style="background:${color}" data-action="taxonomy-pick-color" data-color="${color}" aria-label="Pick color ${color}"></button>
       `).join("")}
+      ${allowCustom ? `
+        <label class="pastel-swatch pastel-swatch-custom ${isCustom ? "is-selected" : ""}" style="${isCustom ? `background:${escapeAttr(value)}` : ""}" title="Custom color">
+          <input type="color" value="${escapeAttr(isCustom ? value : "#287e77")}" data-pastel-custom-color aria-label="Pick a custom color">
+        </label>
+      ` : ""}
     </div>
   `;
 }

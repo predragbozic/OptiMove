@@ -126,22 +126,20 @@ export function renderWeeklyRootHtml({
   copyPlanModal,
   makeNode,
   renderPlanMoreMenu,
-  selectedWeekIndex,
   weekSelectorMarkup,
-  weeks,
 }) {
   const weekRange = `${formatDate(activeWeek.weekStart)} - ${formatDate(activeWeek.weekEnd)}`;
   return `
     <div class="content-section">
       <div class="week-nav-wrap">
       <section class="week-nav-panel">
-        <button class="plain-button week-arrow-button" data-action="week-prev" ${selectedWeekIndex <= 0 ? "disabled" : ""} aria-label="Previous week">‹</button>
+        <button class="plain-button week-arrow-button" data-action="week-prev" aria-label="Previous week">‹</button>
         <button class="week-title-button" type="button" data-action="week-toggle" aria-expanded="${Boolean(weekSelectorMarkup)}" aria-label="Choose weekly plan date">
           <strong>${escapeHtml(weekRange)}</strong>
         </button>
         <button class="plain-button week-today-button" data-action="week-today">Today</button>
-        <button class="plain-button week-arrow-button" data-action="week-next" ${selectedWeekIndex >= weeks.length - 1 ? "disabled" : ""} aria-label="Next week">›</button>
-        ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : ""}
+        <button class="plain-button week-arrow-button" data-action="week-next" aria-label="Next week">›</button>
+        ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : `<button class="plain-button compact-button" type="button" data-action="weekly-create-plan">Create weekly plan</button>`}
       </section>
       ${weekSelectorMarkup}
       </div>

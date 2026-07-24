@@ -316,13 +316,35 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     handlers.renderBuilder();
     return true;
   }
-  if (type === "builder-open-session-modal") {
-    state.builder.sessionModalBlockId = action.dataset.blockId || "";
+  if (type === "builder-toggle-session-quick-add") {
+    const blockId = action.dataset.blockId || "";
+    state.builder.sessionQuickAdd = state.builder.sessionQuickAdd.blockId === blockId
+      ? { blockId: "", amPm: "", bta: "" }
+      : { blockId, amPm: "", bta: "" };
     handlers.renderBuilder();
     return true;
   }
-  if (type === "builder-close-session-modal") {
-    state.builder.sessionModalBlockId = "";
+  if (type === "builder-pick-session-am-pm") {
+    const value = action.dataset.value || "";
+    state.builder.sessionQuickAdd.amPm = state.builder.sessionQuickAdd.amPm === value ? "" : value;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-pick-session-bta") {
+    const value = action.dataset.value || "";
+    state.builder.sessionQuickAdd.bta = state.builder.sessionQuickAdd.bta === value ? "" : value;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-quick-add-session") {
+    const blockId = action.dataset.blockId || "";
+    const { amPm, bta } = state.builder.sessionQuickAdd;
+    const payload = withBatchSyncPayload({ amPm, bta });
+    const draft = setBuilderDraft(await api(`/api/builder/blocks/${encodeURIComponent(blockId)}/sessions`, { method: "POST", body: JSON.stringify(payload) }));
+    const updatedBlock = draft?.blocks.find((block) => block.id === blockId);
+    state.builder.selectedSessionId = updatedBlock?.sessions.at(-1)?.id || state.builder.selectedSessionId;
+    state.builder.selectedNodeId = "";
+    state.builder.sessionQuickAdd = { blockId: "", amPm: "", bta: "" };
     handlers.renderBuilder();
     return true;
   }
@@ -468,6 +490,11 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     state.builder.inlineAddType = "";
     state.builder.inlineAddSessionId = "";
     state.builder.inlineAddParentId = "";
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-toggle-add-block") {
+    state.builder.blockAddOpen = !state.builder.blockAddOpen;
     handlers.renderBuilder();
     return true;
   }
@@ -658,17 +685,16 @@ export async function submitBuilderForm(form, handlers) {
   if (!draft) return;
   if (mode === "add-block") {
     setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}/blocks`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    state.builder.blockAddOpen = false;
   }
   if (mode === "update-block") {
     setBuilderDraft(await api(`/api/builder/blocks/${encodeURIComponent(form.dataset.blockId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
-  if (mode === "add-session") {
-    setBuilderDraft(await api(`/api/builder/blocks/${encodeURIComponent(form.dataset.blockId)}/sessions`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
-    const lastBlock = state.builder.draft.blocks.find((block) => block.id === form.dataset.blockId);
-    state.builder.selectedSessionId = lastBlock?.sessions.at(-1)?.id || state.builder.selectedSessionId;
-    state.builder.selectedNodeId = "";
-    state.builder.sessionModalBlockId = "";
-    state.builder.structureModalOpen = false;
+  if (mode === "update-plan") {
+    setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
+  }
+  if (mode === "update-node") {
+    setBuilderDraft(await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   if (mode === "add-node") {
     setBuilderDraft(await api(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}/nodes`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));

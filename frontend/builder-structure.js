@@ -1,19 +1,68 @@
 import { renderImage } from "./media.js";
+import { PASTEL_COLORS, renderPastelSwatches } from "./taxonomy-view.js";
 import { formatDate, weekDayName, escapeAttr, escapeHtml } from "./utils.js";
 
-export function renderBuilderSessionModal(blockId) {
+const ICON_CHECK = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 12l5 5L20 6"></path></svg>`;
+const ICON_X = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>`;
+const ICON_COPY = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>`;
+const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>`;
+const ICON_PASTE = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"></rect><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"></path><path d="M9 12h6M9 16h6"></path></svg>`;
+
+function renderConfirmIconButton({ type = "submit", action = "", dataAttrs = "", label = "Add" } = {}) {
+  return `<button class="plain-button builder-icon-action builder-confirm-icon" type="${type}" ${action ? `data-action="${escapeAttr(action)}"` : ""} ${dataAttrs} aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_CHECK}</button>`;
+}
+
+function renderCancelIconButton({ action, dataAttrs = "", label = "Cancel" }) {
+  return `<button class="plain-button builder-icon-action builder-cancel-icon" type="button" data-action="${escapeAttr(action)}" ${dataAttrs} aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_X}</button>`;
+}
+
+export function renderCopyNodeIconButton(nodeId, label) {
+  return `<button class="plain-button builder-icon-action builder-copy-icon" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(nodeId)}" aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_COPY}</button>`;
+}
+
+export function renderDeleteIconButton(action, dataAttrs, label) {
+  return `<button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="${escapeAttr(action)}" ${dataAttrs} aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_TRASH}</button>`;
+}
+
+const SESSION_TIME_PICKS = [
+  { label: "AM", value: "AM" },
+  { label: "PM", value: "PM" },
+];
+const SESSION_PHASE_PICKS = [
+  { label: "Before training", value: "B" },
+  { label: "Training", value: "T" },
+  { label: "After training", value: "A" },
+];
+
+function renderSessionQuickAdd(block, context) {
+  const quickAdd = context.sessionQuickAdd || {};
+  const isOpen = quickAdd.blockId === block.id;
+  if (!isOpen) {
+    return `<button class="builder-add-session-trigger" type="button" data-action="builder-toggle-session-quick-add" data-block-id="${escapeAttr(block.id)}" aria-label="Add session"><span aria-hidden="true">+</span></button>`;
+  }
+  const renderGroup = (picks, field) => picks.map((pick) => {
+    const isActive = quickAdd[field] === pick.value;
+    return `
+      <button class="chip ${isActive ? "is-active" : ""}" type="button" data-action="builder-pick-session-${field === "amPm" ? "am-pm" : "bta"}" data-block-id="${escapeAttr(block.id)}" data-value="${escapeAttr(pick.value)}">
+        ${isActive ? `<span class="builder-chip-check" aria-hidden="true">&#10003;</span>` : ""}${escapeHtml(pick.label)}
+      </button>
+    `;
+  }).join("");
   return `
-    <div class="builder-modal-overlay">
-      <button class="builder-modal-backdrop" type="button" data-action="builder-close-session-modal" aria-label="Close add session"></button>
-      <section class="panel builder-compact-modal" role="dialog" aria-modal="true" aria-label="Add session">
-        <div class="builder-modal-head"><div><p class="eyebrow">Day and session structure</p><h3>Add session</h3><p class="muted">Both fields are optional. Use them only when the day needs a time or training phase.</p></div><button class="plain-button icon-button" type="button" data-action="builder-close-session-modal" aria-label="Close"><span class="button-icon">x</span></button></div>
-        <form class="builder-session-modal-form" data-builder-form="add-session" data-block-id="${escapeAttr(blockId)}">
-          <label class="search-field"><span>Time of day</span><select name="amPm"><option value="">No AM/PM</option><option>AM</option><option>PM</option></select></label>
-          <label class="search-field"><span>Training phase</span><select name="bta"><option value="">No phase</option><option value="B">Before training</option><option value="T">Training</option><option value="A">After training</option></select></label>
-          <p class="builder-error" aria-live="polite"></p>
-          <button class="plain-button" type="submit">Add session</button>
-        </form>
-      </section>
+    <div class="builder-session-quick-add">
+      <p class="builder-quick-add-title">New session - pick what applies</p>
+      <div class="builder-session-quick-add-group">
+        <span class="builder-quick-add-label">Time of day</span>
+        <div class="builder-session-quick-add-row">${renderGroup(SESSION_TIME_PICKS, "amPm")}</div>
+      </div>
+      <div class="builder-session-quick-add-group">
+        <span class="builder-quick-add-label">Training phase</span>
+        <div class="builder-session-quick-add-row">${renderGroup(SESSION_PHASE_PICKS, "bta")}</div>
+      </div>
+      <div class="builder-session-quick-add-actions">
+        ${renderConfirmIconButton({ type: "button", action: "builder-quick-add-session", dataAttrs: `data-block-id="${escapeAttr(block.id)}"`, label: "Add session" })}
+        ${renderCancelIconButton({ action: "builder-toggle-session-quick-add", dataAttrs: `data-block-id="${escapeAttr(block.id)}"`, label: "Cancel" })}
+      </div>
     </div>
   `;
 }
@@ -64,17 +113,20 @@ function renderBuilderInlineAddForm(session, parentId, context) {
   const listId = `builder-preset-names-${type}`;
   return `
     <form class="builder-node-form builder-inline-add-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
-      <div class="builder-node-form-head"><strong>Add ${escapeHtml(label)}</strong><button class="text-action" type="button" data-action="builder-cancel-inline-add">Cancel</button></div>
+      <div class="builder-node-form-head"><strong>Add ${escapeHtml(label)}</strong></div>
       <input type="hidden" name="parentId" value="${escapeAttr(parentId)}">
       <input type="hidden" name="nodeType" value="${escapeAttr(type)}">
-      <input name="name" list="${escapeAttr(listId)}" placeholder="${escapeAttr(label)} name" required autocomplete="off" data-builder-preset-name-input>
+      <input class="builder-text-input" name="name" list="${escapeAttr(listId)}" placeholder="${escapeAttr(label)} name" required autocomplete="off" data-builder-preset-name-input>
       <datalist id="${escapeAttr(listId)}">
         ${presets.map((preset) => `<option value="${escapeAttr(preset.name)}"></option>`).join("")}
       </datalist>
-      <input name="color" type="color" value="#287e77" aria-label="Node color">
-      <input name="iconUrl" type="url" placeholder="Icon URL (optional)" aria-label="Node icon URL">
+      ${renderPastelSwatches("color", PASTEL_COLORS[0], { allowCustom: true })}
+      <input class="builder-text-input" name="iconUrl" type="url" placeholder="Icon URL (optional)" aria-label="Node icon URL">
       <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Add ${escapeHtml(label)}</button>
+      <div class="builder-inline-add-actions">
+        ${renderConfirmIconButton({ label: `Add ${label}` })}
+        ${renderCancelIconButton({ action: "builder-cancel-inline-add", label: "Cancel" })}
+      </div>
     </form>
   `;
 }
@@ -93,21 +145,55 @@ function isInlineAddHere(session, parentId, context) {
 export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly = false, context) {
   const defaultDayName = isWeekly ? weekDayName(block.date) : "";
   const blockTitle = isWeekly ? block.name || defaultDayName : block.name || `Block ${block.index}`;
+  const kicker = isWeekly ? defaultDayName : `Block ${block.index}`;
+  const secondary = isWeekly ? (block.date ? formatDate(block.date) : "") : (block.note || "");
   return `
     <article class="builder-block">
-      <div class="builder-block-head"><div><strong>${escapeHtml(blockTitle)}</strong>${block.date ? `<span>${escapeHtml(formatDate(block.date))}</span>` : block.note ? `<span>${escapeHtml(block.note)}</span>` : ""}</div>${isWeekly ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-block" data-block-id="${escapeAttr(block.id)}">Delete</button>`}</div>
-      ${isWeekly ? `<form class="builder-day-label-form" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><label class="search-field"><span>Day label</span><input name="name" value="${escapeAttr(block.name || "")}" placeholder="e.g. MD-1, Match day"></label><small>Optional: leave empty to show ${escapeHtml(defaultDayName)}.</small></form>` : ""}
+      <div class="builder-block-head">
+        <div class="builder-block-head-text">
+          ${kicker ? `<span class="builder-block-kicker">${escapeHtml(kicker)}</span>` : ""}
+          ${isWeekly
+            ? `<form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="e.g. MD-1, Match day" aria-label="Day label"></form>`
+            : `<strong>${escapeHtml(blockTitle)}</strong>`}
+          ${secondary ? `<span class="builder-block-secondary">${escapeHtml(secondary)}</span>` : ""}
+        </div>
+        ${isWeekly ? "" : renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}
+      </div>
       <div class="builder-sessions">
         ${block.sessions.length ? block.sessions.map((session) => `
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             <span>${escapeHtml(context.sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span>
-          </button><div class="builder-session-actions">${renderNodePasteButton(session.id, "", "session", context)}${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}<button class="text-action danger-action" type="button" data-action="builder-delete-session" data-session-id="${escapeAttr(session.id)}">Delete</button></div></div>
+          </button><div class="builder-session-actions">${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div></div>
           ${isInlineAddHere(session, "", context) ? renderBuilderInlineAddForm(session, "", context) : ""}
           ${renderBuilderNodeTree(session, "", selectedNodeId, context)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}
       </div>
-      <button class="plain-button builder-add-session" type="button" data-action="builder-open-session-modal" data-block-id="${escapeAttr(block.id)}">Add session</button>
+      ${renderSessionQuickAdd(block, context)}
     </article>
+  `;
+}
+
+export function renderBuilderAddBlockCard(context) {
+  if (!context.blockAddOpen) {
+    return `
+      <button class="builder-add-block-card" type="button" data-action="builder-toggle-add-block" aria-label="Add block">
+        <span class="builder-add-block-plus" aria-hidden="true">+</span>
+        <span>Add block</span>
+      </button>
+    `;
+  }
+  return `
+    <form class="builder-add-block-card is-open" data-builder-form="add-block">
+      <div class="builder-block-head-text">
+        <span class="builder-block-kicker">New block</span>
+        <input class="builder-text-input" name="name" placeholder="Day 1, MD-2, or Block name" autofocus>
+      </div>
+      <p class="builder-error" aria-live="polite"></p>
+      <div class="builder-add-block-actions">
+        ${renderConfirmIconButton({ label: "Add block" })}
+        ${renderCancelIconButton({ action: "builder-toggle-add-block", label: "Cancel" })}
+      </div>
+    </form>
   `;
 }
 
@@ -136,48 +222,71 @@ function renderSectionPreviewPopover(node, context) {
 
 function renderBuilderNodeTree(session, parentId, selectedNodeId, context) {
   const nodes = session.nodes.filter((node) => node.parentId === parentId);
+  const parentType = parentId ? (session.nodes.find((candidate) => candidate.id === parentId)?.type || "session") : "session";
   return nodes.map((node) => `
     <div class="builder-node builder-node-${escapeAttr(node.type)}">
       <div class="builder-node-row">
         <button class="builder-node-button ${node.id === selectedNodeId ? "is-active" : ""}" data-action="builder-select-node" data-node-id="${escapeAttr(node.id)}" data-session-id="${escapeAttr(session.id)}" style="${node.color ? `--builder-node-color:${escapeAttr(node.color)}` : ""}">
-          <span class="builder-node-name"><span class="builder-node-icon">${renderBuilderNodeIcon(node.iconUrl, context)}</span>${escapeHtml(node.name)}</span><small>${context.builderNodeMarker(node.type)}${node.type === "section" ? context.builderExerciseCountDots(node.items.length) : ""}</small>
+          <span class="builder-node-name"><span class="builder-node-icon">${renderBuilderNodeIcon(node.iconUrl, context)}</span><span class="builder-node-name-text">${escapeHtml(node.name)}</span></span><small>${context.builderNodeMarker(node.type)}${node.type === "section" ? context.builderExerciseCountDots(node.items.length) : ""}</small>
         </button>
+      </div>
+      <div class="builder-node-row-actions">
         ${node.type === "section" ? renderSectionPreviewTrigger(node, context) : ""}
+        ${renderBuilderAddTriggers(session, node.id, validChildTypes(node.type), context)}
         ${renderBuilderNodeMoveActions(node, true, session.id, context)}
+        ${renderCopyNodeIconButton(node.id, `Copy ${node.type}`)}
+        ${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(node.id)}"`, `Delete ${node.type}`)}
+        ${node.type === "section"
+          ? renderNodePasteButton(session.id, parentId, parentType, context, "Paste as sibling here")
+          : renderNodePasteButton(session.id, node.id, node.type, context)}
       </div>
       ${node.type === "section" ? renderSectionPreviewPopover(node, context) : ""}
-      ${renderNodePasteButton(session.id, node.id, node.type, context)}
-      ${renderBuilderAddTriggers(session, node.id, validChildTypes(node.type), context)}
       ${isInlineAddHere(session, node.id, context) ? renderBuilderInlineAddForm(session, node.id, context) : ""}
       ${renderBuilderNodeTree(session, node.id, selectedNodeId, context)}
     </div>
   `).join("");
 }
 
+export function renderNodeEditForm(node, label) {
+  return `
+    <form class="builder-node-form builder-node-edit-form" data-builder-form="update-node" data-builder-autosave data-node-id="${escapeAttr(node.id)}">
+      <div class="builder-node-form-head"><strong>Editing ${escapeHtml(label)}</strong></div>
+      <input class="builder-text-input" name="name" value="${escapeAttr(node.name || "")}" placeholder="Name" aria-label="${escapeAttr(label)} name">
+      ${renderPastelSwatches("color", node.color || PASTEL_COLORS[0], { allowCustom: true })}
+      <input class="builder-text-input" name="iconUrl" type="url" value="${escapeAttr(node.iconUrl || "")}" placeholder="Icon URL (optional)" aria-label="${escapeAttr(label)} icon URL">
+    </form>
+  `;
+}
+
 function renderBuilderStructureEditor(session, selectedNode, context) {
   if (selectedNode?.type === "section") {
     return `
       <div class="builder-selected-section">
-        <div><p class="eyebrow">Selected section</p><strong>${escapeHtml(selectedNode.name)}</strong><p class="muted">Sections contain exercises and cannot contain another structural level.</p></div>
-        <div class="builder-section-editor-actions">${renderBuilderNodeMoveActions(selectedNode, false, "", context)}<button class="plain-button" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete section</button></div>
+        <div>
+          <p class="eyebrow">Selected section</p>
+          ${renderNodeEditForm(selectedNode, context.exerciseNodeLabel(selectedNode.type))}
+          <p class="muted">Sections contain exercises and cannot contain another structural level.</p>
+        </div>
+        <div class="builder-section-editor-actions">${renderBuilderNodeMoveActions(selectedNode, false, "", context)}${renderCopyNodeIconButton(selectedNode.id, "Copy section")}${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, "Delete section")}</div>
       </div>
       <button class="plain-button builder-open-section" type="button" data-action="builder-open-section-panel">Open section exercise editor</button>
     `;
   }
   const presets = context.builderNodePresets || [];
   return `
+    ${selectedNode ? renderNodeEditForm(selectedNode, context.exerciseNodeLabel(selectedNode.type)) : ""}
     <form class="builder-node-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
-      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions">${renderBuilderNodeMoveActions(selectedNode, false, "", context)}<button class="text-action" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy ${escapeHtml(selectedNode.type)}</button>${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type, context)}<button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete ${escapeHtml(selectedNode.type)}</button></span>` : ""}</div>
+      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions">${renderBuilderNodeMoveActions(selectedNode, false, "", context)}${renderCopyNodeIconButton(selectedNode.id, `Copy ${selectedNode.type}`)}${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type, context)}${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, `Delete ${selectedNode.type}`)}</span>` : ""}</div>
       <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
-      <select name="nodeType">${context.nodeTypeOptions(selectedNode?.type)}</select>
-      <input name="name" list="builder-preset-names-all" placeholder="${selectedNode?.type === "domain" ? "Category or section name" : selectedNode?.type === "category" ? "Section name" : "Domain, category or section name"}" required autocomplete="off" data-builder-preset-name-input>
+      <select class="builder-text-input" name="nodeType">${context.nodeTypeOptions(selectedNode?.type)}</select>
+      <input class="builder-text-input" name="name" list="builder-preset-names-all" placeholder="${selectedNode?.type === "domain" ? "Category or section name" : selectedNode?.type === "category" ? "Section name" : "Domain, category or section name"}" required autocomplete="off" data-builder-preset-name-input>
       <datalist id="builder-preset-names-all">
         ${presets.map((preset) => `<option value="${escapeAttr(preset.name)}"></option>`).join("")}
       </datalist>
-      <input name="color" type="color" value="#287e77" aria-label="Node color">
-      <input name="iconUrl" type="url" placeholder="Icon URL (optional)" aria-label="Node icon URL">
+      ${renderPastelSwatches("color", PASTEL_COLORS[0], { allowCustom: true })}
+      <input class="builder-text-input" name="iconUrl" type="url" placeholder="Icon URL (optional)" aria-label="Node icon URL">
       <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Add</button>
+      ${renderConfirmIconButton({ label: "Add" })}
     </form>
     ${selectedNode ? `
       <div class="empty">${selectedNode.type === "domain" ? "Add a category or section below this domain." : "Add a section below this category."}</div>
@@ -185,10 +294,11 @@ function renderBuilderStructureEditor(session, selectedNode, context) {
   `;
 }
 
-function renderNodePasteButton(sessionId, parentId, parentType, context) {
+function renderNodePasteButton(sessionId, parentId, parentType, context, label) {
   const clipboard = context.clipboard;
   if (!clipboard?.type || !context.canPasteNodeType(clipboard.type, parentType)) return "";
-  return `<button class="text-action builder-paste-node" type="button" data-action="builder-paste-node" data-session-id="${escapeAttr(sessionId)}" data-parent-id="${escapeAttr(parentId)}">Paste ${escapeHtml(clipboard.type)}</button>`;
+  const title = label || `Paste ${clipboard.type}`;
+  return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-node" data-session-id="${escapeAttr(sessionId)}" data-parent-id="${escapeAttr(parentId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
 }
 
 function renderBuilderNodeMoveActions(node, compact = false, sessionId = "", context) {

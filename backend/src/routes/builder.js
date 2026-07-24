@@ -52,6 +52,16 @@ router.get("/plans/:planId", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.patch("/plans/:planId", async (req, res, next) => {
+  try {
+    const plan = await requirePlan(req.user, req.params.planId, res);
+    if (!plan) return;
+    const name = text(req.body?.name) || (plan.plan_type === "weekly" ? `Weekly plan ${plan.week_start}` : plan.name);
+    await query("update plans.plans set name = $2, updated_at = now() where id = $1", [plan.id, name]);
+    return respondWithDraft(req, res, req.user, plan);
+  } catch (error) { next(error); }
+});
+
 router.post("/plans/:planId/sync-batch", async (req, res, next) => {
   try {
     const plan = await requirePlan(req.user, req.params.planId, res);
@@ -365,6 +375,19 @@ router.delete("/nodes/:nodeId", async (req, res, next) => {
     const node = await getEditableNode(req.user, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     await deleteNodeTree(node.id);
+    return respondWithDraft(req, res, req.user, node.plan);
+  } catch (error) { next(error); }
+});
+
+router.patch("/nodes/:nodeId", async (req, res, next) => {
+  try {
+    const node = await getEditableNode(req.user, req.params.nodeId);
+    if (!node) return res.status(404).json({ error: "Program node not found" });
+    const name = text(req.body?.name) || node.name;
+    await query(
+      "update plans.plan_nodes set name = $2, color = $3, icon_url = $4, updated_at = now() where id = $1",
+      [node.id, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl)],
+    );
     return respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
 });

@@ -134,11 +134,13 @@ import {
   renderWeekCalendarDayHtml,
 } from "./program-view.js";
 import {
+  emptyBuilderState,
   emptyTemplateFilters,
   emptyTemplatePreview,
   state,
 } from "./state.js";
 import {
+  addDaysIso,
   clean,
   countLabel,
   debounce,
@@ -536,6 +538,23 @@ async function handleContentChange(event) {
     if (priceInput) {
       priceInput.disabled = metadataPricing.value === "true";
       if (priceInput.disabled) priceInput.value = "";
+    }
+    return;
+  }
+
+  const pastelCustom = event.target.closest("[data-pastel-custom-color]");
+  if (pastelCustom) {
+    const palette = pastelCustom.closest("[data-pastel-target]");
+    const hidden = palette?.querySelector('input[type="hidden"]');
+    if (hidden) {
+      hidden.value = pastelCustom.value;
+      hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    palette?.querySelectorAll(".pastel-swatch").forEach((swatch) => swatch.classList.remove("is-selected"));
+    const customSwatch = pastelCustom.closest(".pastel-swatch-custom");
+    if (customSwatch) {
+      customSwatch.classList.add("is-selected");
+      customSwatch.style.background = pastelCustom.value;
     }
     return;
   }
@@ -1142,6 +1161,32 @@ async function handleContentClick(event) {
     await loadWeekly();
     return;
   }
+  if (type === "weekly-create-plan") {
+    const athleteId = state.selectedAthleteId;
+    const weekStart = state.viewedWeekStart || weekMondayIso(localDateIso());
+    state.activeTab = "builder";
+    state.navStack = [];
+    renderTabs();
+    renderLibraryNav();
+    setLoading("Creating weekly plan...");
+    try {
+      const created = await api("/api/builder/plans", {
+        method: "POST",
+        body: JSON.stringify({
+          planType: "weekly",
+          athleteIds: athleteId ? [athleteId] : [],
+          weekStart,
+        }),
+      });
+      state.builder = emptyBuilderState({ planType: "weekly", weekStart, draft: created });
+      await loadBuilder();
+    } catch (error) {
+      state.builder = emptyBuilderState({ planType: "weekly", weekStart });
+      renderBuilder();
+      renderBuilderError(error);
+    }
+    return;
+  }
   if (type === "program-library-requests") {
     state.activeTab = "templates";
     state.programLibrarySection = "requests";
@@ -1204,10 +1249,8 @@ function renderCurrentNode() {
 
 function moveWeek(delta) {
   const weeks = state.lastWeeklyData?.weeks || [];
-  if (!weeks.length) return;
-  const nextIndex = Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex + delta));
-  if (nextIndex === state.selectedWeekIndex) return;
-  state.selectedWeekIndex = nextIndex;
+  const currentStart = state.viewedWeekStart || weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))]?.weekStart || weekMondayIso(localDateIso());
+  state.viewedWeekStart = addDaysIso(currentStart, delta * 7);
   state.navStack = [];
   renderWeeklyRoot(state.lastWeeklyData);
 }
@@ -1338,11 +1381,23 @@ async function renderAthleteLibrary() {
   await loadTemplates();
 }
 
+function buildBlankWeek(weekStart) {
+  const days = [];
+  for (let offset = 0; offset < 7; offset += 1) {
+    days.push({ date: addDaysIso(weekStart, offset), slots: {}, dayNote: "" });
+  }
+  return { weekStart, weekEnd: addDaysIso(weekStart, 6), days, planId: null };
+}
+
 function renderWeeklyRoot(data) {
   renderLibraryNav();
   const weeks = data?.weeks || [];
-  if (!weeks.length) return renderEmpty("This athlete has no weekly plans.");
-  const activeWeek = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))] || weeks[0];
+  const fallbackStart = weeks[Math.max(0, Math.min(weeks.length - 1, state.selectedWeekIndex))]?.weekStart || weekMondayIso(localDateIso());
+  const viewedStart = state.viewedWeekStart || fallbackStart;
+  const matchedIndex = weeks.findIndex((week) => week.weekStart === viewedStart);
+  if (matchedIndex >= 0) state.selectedWeekIndex = matchedIndex;
+  state.viewedWeekStart = viewedStart;
+  const activeWeek = matchedIndex >= 0 ? weeks[matchedIndex] : buildBlankWeek(viewedStart);
   const weekSelectorMarkup = state.weekSelectorOpen ? renderWeekCalendarPicker(weeks, activeWeek) : "";
 
   els.content.innerHTML = renderWeeklyRootHtml({
@@ -1350,9 +1405,7 @@ function renderWeeklyRoot(data) {
     copyPlanModal: renderCopyPlanModal(state),
     makeNode,
     renderPlanMoreMenu,
-    selectedWeekIndex: state.selectedWeekIndex,
     weekSelectorMarkup,
-    weeks,
   });
   if (state.pendingScrollDate) {
     const date = state.pendingScrollDate;
@@ -1817,6 +1870,7 @@ function setLoading(text) {
 function renderEmpty(message) {
   els.content.innerHTML = `<div class="empty">${escapeHtml(message)}</div>`;
 }
+
 
 function renderError(error) {
   els.content.innerHTML = `<div class="error">${escapeHtml(error.message || String(error))}</div>`;

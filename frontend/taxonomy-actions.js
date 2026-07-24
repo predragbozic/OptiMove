@@ -65,7 +65,10 @@ export async function handleTaxonomyAction(action, { renderOrganizationPanel }) 
   if (type === "taxonomy-pick-color") {
     const palette = action.closest("[data-pastel-target]");
     const hidden = palette?.querySelector('input[type="hidden"]');
-    if (hidden) hidden.value = action.dataset.color || "";
+    if (hidden) {
+      hidden.value = action.dataset.color || "";
+      hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     palette?.querySelectorAll(".pastel-swatch").forEach((swatch) => {
       swatch.classList.toggle("is-selected", swatch === action);
     });

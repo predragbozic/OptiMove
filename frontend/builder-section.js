@@ -1,8 +1,10 @@
+import { exerciseNodeLabel } from "./builder-helpers.js";
 import {
   renderBuilderExerciseResult,
   renderBuilderItems,
   renderCustomExerciseModal,
 } from "./builder-exercises.js";
+import { renderCopyNodeIconButton, renderDeleteIconButton, renderNodeEditForm } from "./builder-structure.js";
 import {
   filterIconSvg,
   QUICK_FILTER_KEYS,
@@ -11,7 +13,7 @@ import {
   renderExerciseTagModal,
 } from "./exercise-library.js";
 import { EXERCISE_FILTERS } from "./state.js";
-import { escapeAttr, escapeHtml } from "./utils.js";
+import { escapeAttr } from "./utils.js";
 
 function activeExerciseSelectFilterCount(filters) {
   return EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key) && filters[filter.key]).length;
@@ -22,7 +24,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
   const selectFilterCount = activeExerciseSelectFilterCount(state.builder.exerciseFilters);
   return `
     <div class="builder-section-panel" aria-label="Section exercise editor">
-      <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p><h3>${escapeHtml(selectedNode.name)}</h3><p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions"><button class="plain-button" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(selectedNode.id)}">Copy section</button><button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button><button class="text-action danger-action" type="button" data-action="builder-delete-node" data-node-id="${escapeAttr(selectedNode.id)}">Delete</button></div></div>
+      <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p>${renderNodeEditForm(selectedNode, exerciseNodeLabel("section"))}<p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions">${renderCopyNodeIconButton(selectedNode.id, "Copy section")}<button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button>${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, "Delete section")}</div></div>
       <div class="builder-section-grid">
         <section class="builder-section-library">
           <div class="builder-panel-label">Exercise library</div>
