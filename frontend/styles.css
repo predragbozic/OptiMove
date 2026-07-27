@@ -4436,7 +4436,17 @@ input:focus {
 .plan-exercise-open {
   align-content: start;
   min-width: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.exercise-list.is-single .exercise-item {
+  height: auto;
+}
+
+.exercise-list.is-single .item-description {
+  max-height: none;
+  overflow: visible;
 }
 
 .exercise-media {
