@@ -172,6 +172,7 @@ init();
 async function init() {
   bindEvents();
   state.railExpanded = window.matchMedia("(min-width: 900px)").matches;
+  state.exerciseLayout = window.matchMedia("(max-width: 760px)").matches ? "vertical" : "horizontal";
   renderRailState();
   if (window.location.pathname === "/invite") {
     await renderInviteAcceptAction({ renderUserControls, setStatus });

@@ -4440,13 +4440,30 @@ input:focus {
   overflow-x: hidden;
 }
 
-.exercise-list.is-single .exercise-item {
-  height: auto;
+.exercise-list.is-single .exercise-item:not(.exercise-item-vertical) {
+  height: 320px;
+  grid-template-columns: minmax(120px, 42%) minmax(0, 1fr);
+  grid-template-rows: none;
+  align-items: stretch;
 }
 
-.exercise-list.is-single .item-description {
+.exercise-list.is-single .exercise-item:not(.exercise-item-vertical) .exercise-media {
+  height: 100%;
+  aspect-ratio: unset;
+}
+
+.exercise-list.is-single .exercise-item:not(.exercise-item-vertical) .plan-exercise-open {
+  height: 100%;
+}
+
+.exercise-list.is-single .exercise-item:not(.exercise-item-vertical) .item-description {
   max-height: none;
   overflow: visible;
+}
+
+.exercise-list.is-single.is-vertical .item-description {
+  max-height: 220px;
+  overflow: auto;
 }
 
 .exercise-media {
