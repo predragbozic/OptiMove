@@ -6829,6 +6829,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 }
 .builder-session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .builder-session-actions { display: flex; align-items: center; gap: 8px; }
+.builder-session-time-inline { min-width: 0; }
+.builder-session-time-input { width: 84px; min-height: 24px; padding: 2px 4px; font-size: 12px; color: var(--muted, #667085); }
+.builder-session-time-input:focus { color: var(--text, #20242a); }
 .builder-session span:last-child, .builder-node-button small { color: var(--muted, #667085); font-size: 12px; font-weight: 600; }
 .builder-session span:last-child { text-transform: none; letter-spacing: normal; }
 .builder-node-button.is-active { border-color: #287e77; background: #e7f5f2; }
@@ -6843,7 +6846,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-text-input:hover { border-color: #b9c0c9; }
 .builder-text-input:focus { outline: none; border-color: #287e77; box-shadow: 0 0 0 3px rgba(31, 111, 104, .12); }
 .builder-text-input::placeholder { color: var(--muted, #667085); opacity: 1; }
-.builder-node { min-width: 0; margin: 6px 0 0 12px; padding-left: 8px; border-left: 1px solid #dce4e6; }
+.builder-node { min-width: 0; margin: 6px 0 0 20px; padding-left: 12px; border-left: 1px solid #dce4e6; }
 .builder-sessions { min-width: 0; }
 .builder-node-row { display: flex; align-items: center; gap: 6px; max-width: 100%; }
 .builder-node-row-actions {
@@ -6880,6 +6883,10 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-icon-action.builder-paste-icon:hover { background: #f3f5f6; }
 .builder-node-form > button[type="submit"] { justify-self: end; }
 .builder-node-edit-form { padding: 10px; border: 1px solid var(--line, #dfe4e8); border-radius: 6px; background: #fbfcfd; margin: 6px 0; }
+.builder-node-edit-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 2px 0 8px; }
+.builder-node-edit-name { font-weight: 800; font-size: 15px; overflow-wrap: anywhere; }
+.builder-section-panel-head .builder-node-edit-name { font-size: 20px; }
+.builder-section-panel-head .builder-node-edit-heading { margin: 0 0 4px; }
 .builder-node-row-actions .builder-icon-action,
 .builder-node-row-actions .builder-node-move-icon {
   width: 24px; height: 24px; min-width: 24px; min-height: 24px;
@@ -7126,8 +7133,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-copy-plan-footer { align-items: stretch; flex-direction: column; }
   .builder-copy-plan-footer .plain-button { width: 100%; }
   .builder-copy-hint { align-items: flex-start; flex-direction: column; }
-  .builder-block-grid { flex-direction: column; overflow-x: visible; }
-  .builder-block, .builder-add-block-card { width: 100%; }
+  .builder-block { flex: 0 0 82vw; width: 82vw; }
+  .builder-add-block-card { flex: 0 0 220px; width: 220px; }
   .builder-section-overlay { z-index: 950; padding: 8px; align-items: end; }
   .builder-section-modal { width: min(560px, 100%); min-height: 0; max-height: 92dvh; padding: 14px; border-radius: 8px; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; }
   .builder-section-modal .builder-section-panel { min-width: 0; }
@@ -7330,6 +7337,14 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     color: #ffffff !important;
   }
 
+  /* "Athletes" expanding is a drawer toggle, not a screen selection — give it
+     a lighter tint instead of the solid accent fill reserved for the actual
+     current tab, otherwise both look "selected" at once and read as a bug. */
+  body.mobile-nav-open:not(.login-mode) .brand-title[aria-expanded="true"] {
+    background: rgba(31, 111, 104, 0.12) !important;
+    color: var(--accent) !important;
+  }
+
   body.mobile-nav-open:not(.login-mode) .sidebar-subnav-button,
   body.mobile-nav-open:not(.login-mode) .sidebar-submenu-toggle {
     color: #20242a !important;
@@ -7417,6 +7432,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 
   body.mobile-nav-open:not(.login-mode) .athlete-list {
     max-height: 40dvh !important;
+    min-height: 0 !important;
+    flex-shrink: 0 !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
   }
@@ -7906,6 +7923,46 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.pastel-palette-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pastel-palette-collapsed {
+  align-items: center;
+}
+
+.pastel-palette-collapsed .pastel-palette-options {
+  display: none;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.pastel-palette-collapsed.is-open .pastel-palette-options {
+  display: flex;
+}
+
+.pastel-current-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--line, #dfe4e8);
+  cursor: pointer;
+  padding: 0;
+  background-color: #fff;
+}
+
+.pastel-current-swatch.is-empty {
+  background-image:
+    linear-gradient(45deg, #e5e9ec 25%, transparent 25%),
+    linear-gradient(-45deg, #e5e9ec 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e5e9ec 75%),
+    linear-gradient(-45deg, transparent 75%, #e5e9ec 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
 }
 
 .pastel-swatch {

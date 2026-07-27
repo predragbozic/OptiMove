@@ -332,10 +332,22 @@ router.post("/blocks/:blockId/sessions", async (req, res, next) => {
     if (!block) return res.status(404).json({ error: "Program block not found" });
     const order = await nextOrder("plans.plan_sessions", "plan_day_id", block.id, "session_order");
     await query(
-      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, $2, $3, $4)`,
-      [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), phaseValue(req.body?.bta, ["B", "T", "A"]), order],
+      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order) values ($1, $2, $3, $4, $5)`,
+      [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), phaseValue(req.body?.bta, ["B", "T", "A"]), sessionTimeValue(req.body?.time), order],
     );
     return respondWithDraft(req, res, req.user, block.plan, { status: 201 });
+  } catch (error) { next(error); }
+});
+
+router.patch("/sessions/:sessionId", async (req, res, next) => {
+  try {
+    const session = await getEditableSession(req.user, req.params.sessionId);
+    if (!session) return res.status(404).json({ error: "Program session not found" });
+    await query(
+      "update plans.plan_sessions set session_time = $2, updated_at = now() where id = $1",
+      [session.id, sessionTimeValue(req.body?.time)],
+    );
+    return respondWithDraft(req, res, req.user, session.plan);
   } catch (error) { next(error); }
 });
 
@@ -535,7 +547,7 @@ router.delete("/items/:itemId", async (req, res, next) => {
 async function buildDraft(plan) {
   const result = await query(
     `select pd.id as block_id, pd.block_index, pd.block_name, pd.block_type, pd.date, pd.day_order, pd.day_note,
-            ps.id as session_id, ps.am_pm, ps.bta, ps.session_order,
+            ps.id as session_id, ps.am_pm, ps.bta, ps.session_time, ps.session_order,
             pn.id as node_id, pn.parent_id, pn.node_type, pn.name as node_name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order,
             pi.id as item_id, pi.exercise_id, pi.title, pi.description, pi.image_url, pi.video_url, pi.sets, pi.reps, pi.load, pi.item_order
      from plans.plan_days pd
@@ -551,7 +563,7 @@ async function buildDraft(plan) {
     const block = blocks.get(row.block_id);
     if (!row.session_id) return;
     let session = block.sessions.find((value) => value.id === row.session_id);
-    if (!session) { session = { id: row.session_id, amPm: row.am_pm || "", bta: row.bta || "", nodes: [] }; block.sessions.push(session); }
+    if (!session) { session = { id: row.session_id, amPm: row.am_pm || "", bta: row.bta || "", time: row.session_time ? String(row.session_time).slice(0, 5) : "", nodes: [] }; block.sessions.push(session); }
     if (!row.node_id) return;
     let node = session.nodes.find((value) => value.id === row.node_id);
     if (!node) {
@@ -1270,5 +1282,6 @@ function normalizedWeekStart(value) {
 function text(value) { return String(value || "").trim(); }
 function nullableText(value) { return text(value) || null; }
 function phaseValue(value, allowed) { const clean = text(value).toUpperCase(); return allowed.includes(clean) ? clean : null; }
+function sessionTimeValue(value) { return /^\d{2}:\d{2}$/.test(text(value)) ? text(value) : null; }
 
 export default router;

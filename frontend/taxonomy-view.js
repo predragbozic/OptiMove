@@ -111,20 +111,34 @@ function renderChipAddForm(kind, placeholder, showColor, data) {
   `;
 }
 
-export function renderPastelSwatches(name, selected, { allowCustom = false } = {}) {
-  const value = selected || PASTEL_COLORS[0];
-  const isCustom = allowCustom && !PASTEL_COLORS.some((color) => color.toLowerCase() === value.toLowerCase());
-  return `
-    <div class="pastel-palette" data-pastel-target="${escapeAttr(name)}">
-      <input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(value)}">
+export function renderPastelSwatches(name, selected, { allowCustom = false, collapsed = false } = {}) {
+  const value = selected || "";
+  const isCustom = Boolean(value) && allowCustom && !PASTEL_COLORS.some((color) => color.toLowerCase() === value.toLowerCase());
+  const options = `
+    <div class="pastel-palette-options">
       ${PASTEL_COLORS.map((color) => `
-        <button type="button" class="pastel-swatch ${!isCustom && color.toLowerCase() === value.toLowerCase() ? "is-selected" : ""}" style="background:${color}" data-action="taxonomy-pick-color" data-color="${color}" aria-label="Pick color ${color}"></button>
+        <button type="button" class="pastel-swatch ${!isCustom && value && color.toLowerCase() === value.toLowerCase() ? "is-selected" : ""}" style="background:${color}" data-action="taxonomy-pick-color" data-color="${color}" aria-label="Pick color ${color}"></button>
       `).join("")}
       ${allowCustom ? `
         <label class="pastel-swatch pastel-swatch-custom ${isCustom ? "is-selected" : ""}" style="${isCustom ? `background:${escapeAttr(value)}` : ""}" title="Custom color">
           <input type="color" value="${escapeAttr(isCustom ? value : "#287e77")}" data-pastel-custom-color aria-label="Pick a custom color">
         </label>
       ` : ""}
+    </div>
+  `;
+  if (!collapsed) {
+    return `
+      <div class="pastel-palette" data-pastel-target="${escapeAttr(name)}">
+        <input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(value)}">
+        ${options}
+      </div>
+    `;
+  }
+  return `
+    <div class="pastel-palette pastel-palette-collapsed" data-pastel-target="${escapeAttr(name)}">
+      <input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(value)}">
+      <button type="button" class="pastel-current-swatch ${value ? "" : "is-empty"}" style="${value ? `background:${escapeAttr(value)}` : ""}" data-action="taxonomy-toggle-palette" aria-label="${value ? "Change color" : "Choose a color"}" title="${value ? "Change color" : "Choose a color"}"></button>
+      ${options}
     </div>
   `;
 }

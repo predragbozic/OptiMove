@@ -319,8 +319,8 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   if (type === "builder-toggle-session-quick-add") {
     const blockId = action.dataset.blockId || "";
     state.builder.sessionQuickAdd = state.builder.sessionQuickAdd.blockId === blockId
-      ? { blockId: "", amPm: "", bta: "" }
-      : { blockId, amPm: "", bta: "" };
+      ? { blockId: "", amPm: "", bta: "", time: "" }
+      : { blockId, amPm: "", bta: "", time: "" };
     handlers.renderBuilder();
     return true;
   }
@@ -338,13 +338,13 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   }
   if (type === "builder-quick-add-session") {
     const blockId = action.dataset.blockId || "";
-    const { amPm, bta } = state.builder.sessionQuickAdd;
-    const payload = withBatchSyncPayload({ amPm, bta });
+    const { amPm, bta, time } = state.builder.sessionQuickAdd;
+    const payload = withBatchSyncPayload({ amPm, bta, time });
     const draft = setBuilderDraft(await api(`/api/builder/blocks/${encodeURIComponent(blockId)}/sessions`, { method: "POST", body: JSON.stringify(payload) }));
     const updatedBlock = draft?.blocks.find((block) => block.id === blockId);
     state.builder.selectedSessionId = updatedBlock?.sessions.at(-1)?.id || state.builder.selectedSessionId;
     state.builder.selectedNodeId = "";
-    state.builder.sessionQuickAdd = { blockId: "", amPm: "", bta: "" };
+    state.builder.sessionQuickAdd = { blockId: "", amPm: "", bta: "", time: "" };
     handlers.renderBuilder();
     return true;
   }
@@ -501,6 +501,12 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   if (type === "builder-toggle-section-preview") {
     const nodeId = action.dataset.nodeId || "";
     state.builder.previewSectionId = state.builder.previewSectionId === nodeId ? "" : nodeId;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-toggle-node-edit") {
+    const nodeId = action.dataset.nodeId || "";
+    state.builder.editNodeOpen = state.builder.editNodeOpen === nodeId ? "" : nodeId;
     handlers.renderBuilder();
     return true;
   }
@@ -695,6 +701,9 @@ export async function submitBuilderForm(form, handlers) {
   }
   if (mode === "update-node") {
     setBuilderDraft(await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
+  }
+  if (mode === "update-session") {
+    setBuilderDraft(await api(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   if (mode === "add-node") {
     setBuilderDraft(await api(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}/nodes`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));

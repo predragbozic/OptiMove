@@ -21,6 +21,7 @@ export function toPlanItem(row) {
     dayNote: row.day_note || "",
     amPm: row.am_pm || "",
     bta: row.bta || "",
+    sessionTime: row.session_time ? String(row.session_time).slice(0, 5) : "",
     athlete_id: row.athlete_source_external_id || row.athlete_id || "",
     athlete: row.athlete_name || "",
     athlete_image_url: row.athlete_image_url || "",

@@ -62,16 +62,27 @@ export async function handleTaxonomyAction(action, { renderOrganizationPanel }) 
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
+  if (type === "taxonomy-toggle-palette") {
+    action.closest(".pastel-palette-collapsed")?.classList.toggle("is-open");
+    return true;
+  }
   if (type === "taxonomy-pick-color") {
     const palette = action.closest("[data-pastel-target]");
     const hidden = palette?.querySelector('input[type="hidden"]');
+    const color = action.dataset.color || "";
     if (hidden) {
-      hidden.value = action.dataset.color || "";
+      hidden.value = color;
       hidden.dispatchEvent(new Event("change", { bubbles: true }));
     }
     palette?.querySelectorAll(".pastel-swatch").forEach((swatch) => {
       swatch.classList.toggle("is-selected", swatch === action);
     });
+    const currentSwatch = palette?.querySelector(".pastel-current-swatch");
+    if (currentSwatch) {
+      currentSwatch.style.background = color;
+      currentSwatch.classList.toggle("is-empty", !color);
+    }
+    palette?.classList.remove("is-open");
     return true;
   }
   if (type === "taxonomy-remove") {

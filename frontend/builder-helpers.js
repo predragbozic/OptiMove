@@ -48,5 +48,6 @@ export function findBuilderNode(draft, id) {
 }
 
 export function sessionLabel(session) {
-  return [session.amPm, { B: "Before training", T: "Training", A: "After training" }[session.bta] || ""].filter(Boolean).join(" / ") || "Session";
+  const label = [session.amPm, { B: "Before training", T: "Training", A: "After training" }[session.bta] || ""].filter(Boolean).join(" / ") || "Session";
+  return session.time ? `${session.time} · ${label}` : label;
 }

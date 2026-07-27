@@ -14,6 +14,7 @@ const migrationPaths = [
   path.resolve(__dirname, "../../create_notifications_schema.sql"),
   path.resolve(__dirname, "../../create_messages_schema.sql"),
   path.resolve(__dirname, "../../create_plan_read_views.sql"),
+  path.resolve(__dirname, "../../alter_plan_sessions_schedule.sql"),
 ];
 
 try {

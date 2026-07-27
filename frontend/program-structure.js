@@ -38,6 +38,16 @@ export function nextNodes(node, makeNode) {
   return structureNodes(node.items, makeNode);
 }
 
+function sessionTimeLabel(items) {
+  const withTime = items.find((item) => item.sessionTime);
+  return withTime ? withTime.sessionTime : "";
+}
+
+function withTimePrefix(label, items) {
+  const time = sessionTimeLabel(items);
+  return time ? `${time} · ${label}` : label;
+}
+
 export function btaNodes(items, makeNode) {
   const order = ["B", "T", "A", ""];
   const labels = { B: "Before training", T: "Training", A: "After training", "": "Session" };
@@ -45,7 +55,7 @@ export function btaNodes(items, makeNode) {
     .map((keyValue) => {
       const filtered = items.filter((item) => (item.bta || "") === keyValue);
       if (!filtered.length) return null;
-      return makeNode("bta", labels[keyValue], filtered, {
+      return makeNode("bta", withTimePrefix(labels[keyValue], filtered), filtered, {
         subtitle: countLabel(filtered),
         color: keyValue === "B" ? "#487b65" : keyValue === "T" ? "#1f6f68" : keyValue === "A" ? "#9a6a3a" : "#667085",
       });

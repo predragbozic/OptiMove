@@ -108,7 +108,8 @@ select
   e.id as exercise_id,
   e.exercise_code,
   e.name as library_exercise_name,
-  pi.source_row_ref
+  pi.source_row_ref,
+  ps.session_time
 from plans.plans p
 join public.athletes a on a.id = p.athlete_id
 join plans.plan_days pd on pd.plan_id = p.id
@@ -189,7 +190,8 @@ select
   e.id as exercise_id,
   e.exercise_code,
   e.name as library_exercise_name,
-  pi.source_row_ref
+  pi.source_row_ref,
+  ps.session_time
 from plans.plans p
 left join public.athletes a on a.id = p.athlete_id
 join plans.plan_days pd on pd.plan_id = p.id

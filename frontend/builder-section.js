@@ -24,7 +24,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
   const selectFilterCount = activeExerciseSelectFilterCount(state.builder.exerciseFilters);
   return `
     <div class="builder-section-panel" aria-label="Section exercise editor">
-      <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p>${renderNodeEditForm(selectedNode, exerciseNodeLabel("section"))}<p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions">${renderCopyNodeIconButton(selectedNode.id, "Copy section")}<button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button>${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, "Delete section")}</div></div>
+      <div class="builder-section-panel-head"><div><p class="eyebrow">Exercise section editor</p>${renderNodeEditForm(selectedNode, exerciseNodeLabel("section"), state.builder.editNodeOpen === selectedNode.id)}<p class="muted">Search the library and add exercises to this section.</p></div><div class="builder-section-editor-actions">${renderCopyNodeIconButton(selectedNode.id, "Copy section")}<button class="plain-button" type="button" data-action="builder-finish-section">Finish section</button>${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, "Delete section")}</div></div>
       <div class="builder-section-grid">
         <section class="builder-section-library">
           <div class="builder-panel-label">Exercise library</div>

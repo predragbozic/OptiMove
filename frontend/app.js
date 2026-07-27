@@ -190,6 +190,7 @@ async function init() {
     return;
   }
   if (state.activeTab === "weekly" && !state.selectedAthleteId) state.activeTab = "coach-home";
+  if (isAthleteMode() && state.activeTab === "weekly") state.openWeekCalendarOnLoad = true;
   ensureBackGuard();
   void loadNotifications({ silent: true });
   void loadMessages({ silent: true });
@@ -556,6 +557,18 @@ async function handleContentChange(event) {
       customSwatch.classList.add("is-selected");
       customSwatch.style.background = pastelCustom.value;
     }
+    const currentSwatch = palette?.querySelector(".pastel-current-swatch");
+    if (currentSwatch) {
+      currentSwatch.style.background = pastelCustom.value;
+      currentSwatch.classList.remove("is-empty");
+    }
+    palette?.classList.remove("is-open");
+    return;
+  }
+
+  const quickAddTime = event.target.closest("[data-builder-quick-add-time]");
+  if (quickAddTime) {
+    state.builder.sessionQuickAdd.time = quickAddTime.value;
     return;
   }
 
@@ -837,6 +850,9 @@ async function handleGlobalClick(event) {
       const currentlyOpen = submenuEl?.classList.contains("is-open");
       state.sidebarSubmenuOpen[key] = !currentlyOpen;
       renderLibraryNav();
+      if (!currentlyOpen && document.body.classList.contains("mobile-nav-open")) {
+        submenuEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
     }
   }
   closeNotificationsIfOutside(event.target);

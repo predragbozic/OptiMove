@@ -47,6 +47,7 @@ function builderStructureContext() {
     inlineAddSessionId: state.builder.inlineAddSessionId,
     inlineAddParentId: state.builder.inlineAddParentId,
     previewSectionId: state.builder.previewSectionId,
+    editNodeOpen: state.builder.editNodeOpen,
     builderNodePresets: state.builder.nodePresets || [],
     blockAddOpen: state.builder.blockAddOpen,
     sessionQuickAdd: state.builder.sessionQuickAdd,
