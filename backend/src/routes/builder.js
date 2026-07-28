@@ -447,15 +447,24 @@ router.post("/nodes/:nodeId/exercises", async (req, res, next) => {
     const exercise = exerciseResult.rows[0];
     if (!exercise) return res.status(404).json({ error: "Exercise not found." });
     const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order");
+    const ancestry = await getNodeAncestryMeta(node);
     await query(
       `insert into plans.plan_items (
         plan_session_id, plan_node_id, item_type, exercise_id, title, description, image_url, video_url,
-        sets, reps, load, item_order, exercise_order, section_name, section_order
-      ) values ($1, $2, 'exercise', $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13)`,
+        sets, reps, load, item_order, exercise_order,
+        domain_name, domain_color, domain_icon_url, domain_short_note, domain_note, domain_order,
+        category_name, category_color, category_icon_url, category_short_note, category_note, category_order,
+        section_name, section_color, section_icon_url, section_short_note, section_note, section_order
+      ) values ($1, $2, 'exercise', $3, $4, $5, $6, $7, $8, $9, $10, $11, $11,
+        $12, $13, $14, $15, $16, $17,
+        $18, $19, $20, $21, $22, $23,
+        $24, $25, $26, $27, $28, $29)`,
       [node.plan_session_id, node.id, exercise.id, exercise.name,
         text(exercise.instruction) || text(exercise.execution_notes) || text(exercise.aim) || null,
         exercise.image_url, exercise.video_url, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order,
-        node.node_type === "section" ? node.name : null, node.node_type === "section" ? node.node_order : null],
+        ancestry.domain?.name || null, ancestry.domain?.color || null, ancestry.domain?.icon_url || null, ancestry.domain?.short_note || null, ancestry.domain?.note || null, ancestry.domain?.node_order ?? null,
+        ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
+        ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
     return respondWithDraft(req, res, req.user, node.plan, { status: 201 });
   } catch (error) { next(error); }
@@ -476,11 +485,23 @@ router.post("/nodes/:nodeId/custom-exercise", async (req, res, next) => {
     );
     const exercise = created.rows[0];
     const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order");
+    const ancestry = await getNodeAncestryMeta(node);
     await query(
-      `insert into plans.plan_items (plan_session_id, plan_node_id, item_type, exercise_id, title, description, image_url, video_url, sets, reps, load, item_order, exercise_order, section_name, section_order)
-       values ($1, $2, 'exercise', $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13)`,
+      `insert into plans.plan_items (
+        plan_session_id, plan_node_id, item_type, exercise_id, title, description, image_url, video_url,
+        sets, reps, load, item_order, exercise_order,
+        domain_name, domain_color, domain_icon_url, domain_short_note, domain_note, domain_order,
+        category_name, category_color, category_icon_url, category_short_note, category_note, category_order,
+        section_name, section_color, section_icon_url, section_short_note, section_note, section_order
+      ) values ($1, $2, 'exercise', $3, $4, $5, $6, $7, $8, $9, $10, $11, $11,
+        $12, $13, $14, $15, $16, $17,
+        $18, $19, $20, $21, $22, $23,
+        $24, $25, $26, $27, $28, $29)`,
       [node.plan_session_id, node.id, exercise.id, exercise.name, exercise.instruction, exercise.image_url, exercise.video_url,
-        nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order, node.name, node.node_order],
+        nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order,
+        ancestry.domain?.name || null, ancestry.domain?.color || null, ancestry.domain?.icon_url || null, ancestry.domain?.short_note || null, ancestry.domain?.note || null, ancestry.domain?.node_order ?? null,
+        ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
+        ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
     return respondWithDraft(req, res, req.user, node.plan, { status: 201 });
   } catch (error) { next(error); }
@@ -982,13 +1003,28 @@ async function copyNodeTree(sourceId, targetSessionId, targetParentId) {
     [targetSessionId, targetParentId, source.node_type, source.name, source.color, source.icon_url, source.short_note, source.note, order],
   );
   const newNodeId = created.rows[0].id;
+  const ancestry = await getNodeAncestryMeta({
+    node_type: source.node_type, parent_id: targetParentId, name: source.name,
+    color: source.color, icon_url: source.icon_url, short_note: source.short_note, note: source.note, node_order: order,
+  });
   const sourceItems = await query("select * from plans.plan_items where plan_node_id = $1 order by item_order", [sourceId]);
   for (const item of sourceItems.rows) {
     const itemOrder = await nextOrder("plans.plan_items", "plan_session_id", targetSessionId, "item_order");
     await query(
-      `insert into plans.plan_items (plan_session_id, plan_node_id, item_type, exercise_id, title, description, short_note, note, image_url, video_url, sets, reps, load, item_order, exercise_order)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)`,
-      [targetSessionId, newNodeId, item.item_type, item.exercise_id, item.title, item.description, item.short_note, item.note, item.image_url, item.video_url, item.sets, item.reps, item.load, itemOrder],
+      `insert into plans.plan_items (
+        plan_session_id, plan_node_id, item_type, exercise_id, title, description, short_note, note, image_url, video_url,
+        sets, reps, load, item_order, exercise_order,
+        domain_name, domain_color, domain_icon_url, domain_short_note, domain_note, domain_order,
+        category_name, category_color, category_icon_url, category_short_note, category_note, category_order,
+        section_name, section_color, section_icon_url, section_short_note, section_note, section_order
+      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,
+        $15,$16,$17,$18,$19,$20,
+        $21,$22,$23,$24,$25,$26,
+        $27,$28,$29,$30,$31,$32)`,
+      [targetSessionId, newNodeId, item.item_type, item.exercise_id, item.title, item.description, item.short_note, item.note, item.image_url, item.video_url, item.sets, item.reps, item.load, itemOrder,
+        ancestry.domain?.name || null, ancestry.domain?.color || null, ancestry.domain?.icon_url || null, ancestry.domain?.short_note || null, ancestry.domain?.note || null, ancestry.domain?.node_order ?? null,
+        ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
+        ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
   }
   const children = await query("select id from plans.plan_nodes where parent_id = $1 order by node_order", [sourceId]);
@@ -1130,9 +1166,26 @@ async function getEditableSession(user, sessionId) {
 }
 
 async function getEditableNode(user, nodeId) {
-  const result = await query("select pn.id, pn.plan_session_id, pn.parent_id, pn.node_type, pn.name, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1", [nodeId]);
+  const result = await query("select pn.id, pn.plan_session_id, pn.parent_id, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1", [nodeId]);
   const row = result.rows[0]; if (!row) return null;
   const plan = await getEditablePlan(user, row.plan_id); return plan ? { ...row, plan } : null;
+}
+
+async function getNodeAncestryMeta(node) {
+  const chain = { section: null, category: null, domain: null };
+  let current = node;
+  while (current) {
+    if (current.node_type === "section" || current.node_type === "category" || current.node_type === "domain") {
+      chain[current.node_type] = current;
+    }
+    if (!current.parent_id) break;
+    const parentResult = await query(
+      "select id, parent_id, node_type, name, color, icon_url, short_note, note, node_order from plans.plan_nodes where id = $1",
+      [current.parent_id],
+    );
+    current = parentResult.rows[0] || null;
+  }
+  return chain;
 }
 
 async function getEditableItem(user, itemId) {
