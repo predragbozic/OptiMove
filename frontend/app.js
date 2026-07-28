@@ -460,6 +460,19 @@ function handleContentInput(event) {
     return;
   }
 
+  const exerciseFilterSearch = event.target.closest("[data-exercise-filter-search]");
+  if (exerciseFilterSearch) {
+    const field = exerciseFilterSearch.closest(".exercise-filter-field");
+    const hidden = field?.querySelector('input[type="hidden"]');
+    if (hidden) {
+      const term = exerciseFilterSearch.value.trim();
+      const matched = term && Array.from(exerciseFilterSearch.list?.options || []).some((option) => option.value === term);
+      hidden.value = matched ? term : "";
+      hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return;
+  }
+
   const copyWeekStartInput = event.target.closest("[data-builder-copy-week-start]");
   if (copyWeekStartInput) {
     state.builder.copyWeekStart = copyWeekStartInput.value;

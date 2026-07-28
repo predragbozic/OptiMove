@@ -6923,7 +6923,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-dose-inputs label { display: grid; gap: 4px; font-size: 12px; color: var(--muted, #667085); font-weight: 700; }
 .exercise-filter-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: stretch; min-width: min(100%, 620px); }
 .exercise-filter-field { margin: 0; min-width: 0; }
-.exercise-filter-field select { width: 100%; min-height: 38px; border: 1px solid var(--line, #dfe4e8); border-radius: 5px; padding: 8px 32px 8px 8px; background: #fff; font: inherit; text-overflow: ellipsis; }
+.exercise-filter-field select,
+.exercise-filter-field input[type="search"] { width: 100%; min-height: 38px; border: 1px solid var(--line, #dfe4e8); border-radius: 5px; padding: 8px 32px 8px 8px; background: #fff; font: inherit; text-overflow: ellipsis; }
 .exercise-filter-toggle { width: 100%; min-height: 38px; display: inline-flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid var(--line, #dfe4e8); border-radius: 5px; background: #fff; color: var(--text, #20242a); font-size: 13px; font-weight: 800; }
 .exercise-filter-toggle input { width: 16px; height: 16px; accent-color: #287e77; }
 .exercise-quick-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 10px; }
@@ -7170,7 +7171,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-section-added { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--line, #dfe4e8); }
   .exercise-filter-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
   .exercise-filter-field span { font-size: 10px; }
-  .exercise-filter-field select { min-height: 34px; padding: 6px 7px; font-size: 16px; }
+  .exercise-filter-field select,
+  .exercise-filter-field input[type="search"] { min-height: 34px; padding: 6px 7px; font-size: 16px; }
   .exercise-filter-toggle { min-height: 34px; padding: 6px 7px; font-size: 12px; }
   .builder-filter-strip { grid-template-columns: minmax(0, 1fr); }
   .builder-exercise-results { max-height: min(45dvh, 380px); overflow-x: hidden; }
@@ -7626,7 +7628,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   width: 140px;
 }
 
-.exercise-filter-field select {
+.exercise-filter-field select,
+.exercise-filter-field input[type="search"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

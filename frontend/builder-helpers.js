@@ -20,11 +20,6 @@ export function canPasteNodeType(nodeType, parentType) {
   return parentType === "category" && nodeType === "section";
 }
 
-export function nodeTypeOptions(parentType = "") {
-  const allowed = parentType === "domain" ? ["category", "section"] : parentType === "category" ? ["section"] : parentType === "section" ? [] : ["domain", "category", "section"];
-  return allowed.map((type) => `<option value="${type}">${exerciseNodeLabel(type)}</option>`).join("") || `<option value="section">Exercise section</option>`;
-}
-
 export function exerciseNodeLabel(type) {
   return ({ domain: "Exercise domain", category: "Exercise category", section: "Exercise section" })[type] || type;
 }

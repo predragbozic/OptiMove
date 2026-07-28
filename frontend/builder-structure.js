@@ -252,15 +252,20 @@ function renderBuilderNodeTree(session, parentId, selectedNodeId, context) {
   `).join("");
 }
 
-export function renderNodeEditForm(node, label, isOpen = false) {
+export function renderNodeEditForm(node, label, isOpen = false, presets = []) {
   const toggleButton = `<button class="plain-button builder-icon-action" type="button" data-action="builder-toggle-node-edit" data-node-id="${escapeAttr(node.id)}" aria-label="${isOpen ? "Done editing" : `Edit ${escapeAttr(label)} name, color and icon`}" title="${isOpen ? "Done" : "Edit name, color, icon"}">${isOpen ? ICON_CHECK : ICON_PENCIL}</button>`;
   if (!isOpen) {
     return `<div class="builder-node-edit-heading"><span class="builder-node-edit-name">${escapeHtml(node.name)}</span>${toggleButton}</div>`;
   }
+  const typePresets = presets.filter((preset) => preset.node_type === node.type);
+  const listId = `builder-edit-preset-names-${escapeAttr(node.id)}`;
   return `
     <form class="builder-node-form builder-node-edit-form" data-builder-form="update-node" data-builder-autosave data-node-id="${escapeAttr(node.id)}">
       <div class="builder-node-form-head"><strong>Editing ${escapeHtml(label)}</strong>${toggleButton}</div>
-      <input class="builder-text-input" name="name" value="${escapeAttr(node.name || "")}" placeholder="Name" aria-label="${escapeAttr(label)} name">
+      <input class="builder-text-input" name="name" list="${listId}" value="${escapeAttr(node.name || "")}" placeholder="Name" aria-label="${escapeAttr(label)} name" autocomplete="off">
+      <datalist id="${listId}">
+        ${typePresets.map((preset) => `<option value="${escapeAttr(preset.name)}"></option>`).join("")}
+      </datalist>
       ${renderPastelSwatches("color", node.color || "", { allowCustom: true, collapsed: true })}
       <input class="builder-text-input" name="iconUrl" type="url" value="${escapeAttr(node.iconUrl || "")}" placeholder="Icon URL (optional)" aria-label="${escapeAttr(label)} icon URL">
     </form>
@@ -268,38 +273,27 @@ export function renderNodeEditForm(node, label, isOpen = false) {
 }
 
 function renderBuilderStructureEditor(session, selectedNode, context) {
-  if (selectedNode?.type === "section") {
-    return `
-      <div class="builder-selected-section">
-        <div>
-          <p class="eyebrow">Selected section</p>
-          ${renderNodeEditForm(selectedNode, context.exerciseNodeLabel(selectedNode.type), context.editNodeOpen === selectedNode.id)}
-          <p class="muted">Sections contain exercises and cannot contain another structural level.</p>
-        </div>
-        <div class="builder-section-editor-actions">${renderBuilderNodeMoveActions(selectedNode, false, "", context)}${renderCopyNodeIconButton(selectedNode.id, "Copy section")}${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, "Delete section")}</div>
-      </div>
-      <button class="plain-button builder-open-section" type="button" data-action="builder-open-section-panel">Open section exercise editor</button>
-    `;
-  }
   const presets = context.builderNodePresets || [];
+  if (!selectedNode) {
+    return `<div class="empty">Use the + buttons in the tree to add a domain, category, or section.</div>`;
+  }
+  const isSection = selectedNode.type === "section";
+  const label = context.exerciseNodeLabel(selectedNode.type);
+  const hint = isSection
+    ? "Sections contain exercises and cannot contain another structural level."
+    : selectedNode.type === "domain"
+      ? "Use the + buttons in the tree to add a category or section below this domain."
+      : "Use the + buttons in the tree to add a section below this category.";
   return `
-    ${selectedNode ? renderNodeEditForm(selectedNode, context.exerciseNodeLabel(selectedNode.type), context.editNodeOpen === selectedNode.id) : ""}
-    <form class="builder-node-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
-      <div class="builder-node-form-head"><strong>${selectedNode ? `Add below ${escapeHtml(selectedNode.name)}` : "Add first level"}</strong>${selectedNode ? `<span class="builder-node-form-actions">${renderBuilderNodeMoveActions(selectedNode, false, "", context)}${renderCopyNodeIconButton(selectedNode.id, `Copy ${selectedNode.type}`)}${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type, context)}${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, `Delete ${selectedNode.type}`)}</span>` : ""}</div>
-      <input type="hidden" name="parentId" value="${escapeAttr(selectedNode?.id || "")}">
-      <select class="builder-text-input" name="nodeType">${context.nodeTypeOptions(selectedNode?.type)}</select>
-      <input class="builder-text-input" name="name" list="builder-preset-names-all" placeholder="${selectedNode?.type === "domain" ? "Category or section name" : selectedNode?.type === "category" ? "Section name" : "Domain, category or section name"}" required autocomplete="off" data-builder-preset-name-input>
-      <datalist id="builder-preset-names-all">
-        ${presets.map((preset) => `<option value="${escapeAttr(preset.name)}"></option>`).join("")}
-      </datalist>
-      ${renderPastelSwatches("color", "", { allowCustom: true, collapsed: true })}
-      <input class="builder-text-input" name="iconUrl" type="url" placeholder="Icon URL (optional)" aria-label="Node icon URL">
-      <p class="builder-error" aria-live="polite"></p>
-      ${renderConfirmIconButton({ label: "Add" })}
-    </form>
-    ${selectedNode ? `
-      <div class="empty">${selectedNode.type === "domain" ? "Add a category or section below this domain." : "Add a section below this category."}</div>
-    ` : `<div class="empty">Create or select a domain, category or section before adding exercises.</div>`}
+    <div class="builder-selected-section">
+      <div>
+        <p class="eyebrow">Selected ${escapeHtml(label)}</p>
+        ${renderNodeEditForm(selectedNode, label, context.editNodeOpen === selectedNode.id, presets)}
+        <p class="muted">${escapeHtml(hint)}</p>
+      </div>
+      <div class="builder-section-editor-actions">${renderBuilderNodeMoveActions(selectedNode, false, "", context)}${renderCopyNodeIconButton(selectedNode.id, `Copy ${selectedNode.type}`)}${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type, context)}${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, `Delete ${selectedNode.type}`)}</div>
+    </div>
+    ${isSection ? `<button class="plain-button builder-open-section" type="button" data-action="builder-open-section-panel">Open section exercise editor</button>` : ""}
   `;
 }
 

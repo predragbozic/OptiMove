@@ -7,7 +7,6 @@ import {
   exerciseNodeLabel,
   findBuilderNode,
   findBuilderSession,
-  nodeTypeOptions,
   sessionLabel,
 } from "./builder-helpers.js";
 import { renderBuilderAthletePicker, renderBuilderInfoModal } from "./builder-modals.js";
@@ -39,7 +38,6 @@ function builderStructureContext() {
     clipboard: state.builder.clipboard,
     exerciseNodeLabel,
     findBuilderSession: (id) => findBuilderSession(state.builder.draft, id),
-    nodeTypeOptions,
     selectedSessionId: state.builder.selectedSessionId,
     sessionLabel,
     inlineAddOpen: state.builder.inlineAddOpen,

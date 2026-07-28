@@ -67,13 +67,16 @@ export function renderExerciseLibraryHtml(data) {
 
 function renderExerciseFilterSelect(filter, value, options, attr) {
   if (!options?.length) return "";
+  const listId = `exercise-filter-options-${filter.key}`;
+  const currentValue = value && options.includes(value) ? value : "";
   return `
     <label class="search-field exercise-filter-field">
       <span>${escapeHtml(filter.label)}</span>
-      <select ${attr}="${escapeAttr(filter.key)}">
-        <option value="">All</option>
-        ${options.map((option) => `<option value="${escapeAttr(option)}" ${option === value ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
-      </select>
+      <input type="search" list="${escapeAttr(listId)}" placeholder="All" autocomplete="off" value="${escapeAttr(currentValue)}" data-exercise-filter-search>
+      <input type="hidden" ${attr}="${escapeAttr(filter.key)}" value="${escapeAttr(currentValue)}">
+      <datalist id="${escapeAttr(listId)}">
+        ${options.map((option) => `<option value="${escapeAttr(option)}"></option>`).join("")}
+      </datalist>
     </label>
   `;
 }
