@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { loadBuilderNodePresets } from "./builder-data.js";
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
@@ -118,6 +119,7 @@ export async function handleBuilderPlanAction(action, handlers) {
       state.navStack = [];
       handlers.renderTabs();
       handlers.renderLibraryNav();
+      void loadBuilderNodePresets().catch(() => {});
       await handlers.loadBuilderExercises();
     } catch (error) {
       action.disabled = false;
@@ -179,6 +181,7 @@ export async function handleBuilderPlanAction(action, handlers) {
       state.navStack = [];
       handlers.renderTabs();
       handlers.renderLibraryNav();
+      void loadBuilderNodePresets().catch(() => {});
       await handlers.loadBuilderExercises();
     } catch (error) {
       action.disabled = false;
@@ -201,6 +204,7 @@ export async function handleBuilderPlanAction(action, handlers) {
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
+      void loadBuilderNodePresets().catch(() => {});
       await handlers.loadBuilderExercises();
     } catch (error) {
       action.disabled = false;
