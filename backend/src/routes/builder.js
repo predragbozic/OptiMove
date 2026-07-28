@@ -1025,12 +1025,6 @@ async function planHasBuilderContentWithClient(client, planId) {
   const result = await client.query(
     `select exists (
        select 1
-       from plans.plan_nodes pn
-       join plans.plan_sessions ps on ps.id = pn.plan_session_id
-       join plans.plan_days pd on pd.id = ps.plan_day_id
-       where pd.plan_id = $1
-     ) or exists (
-       select 1
        from plans.plan_items pi
        join plans.plan_sessions ps on ps.id = pi.plan_session_id
        join plans.plan_days pd on pd.id = ps.plan_day_id
@@ -1054,12 +1048,6 @@ async function planHasBuilderContentWithClient(client, planId) {
 async function planHasWeeklyTrainingContentWithClient(client, planId) {
   const result = await client.query(
     `select exists (
-       select 1
-       from plans.plan_nodes pn
-       join plans.plan_sessions ps on ps.id = pn.plan_session_id
-       join plans.plan_days pd on pd.id = ps.plan_day_id
-       where pd.plan_id = $1
-     ) or exists (
        select 1
        from plans.plan_items pi
        join plans.plan_sessions ps on ps.id = pi.plan_session_id
