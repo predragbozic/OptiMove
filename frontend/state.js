@@ -1,3 +1,5 @@
+import { emptyExerciseEditor } from "./exercise-editor.js";
+
 export const EXERCISE_FILTERS = [
   { key: "purpose", label: "Purpose", optionsKey: "purposes" },
   { key: "quality", label: "Quality / modality", optionsKey: "qualities" },
@@ -155,6 +157,7 @@ export const createInitialState = () => ({
   markedExerciseIds: new Set(),
   markedExercises: new Map(),
   tagEditor: { open: false, exerciseId: "", exerciseName: "", tags: [], options: [], error: "" },
+  exerciseEditor: emptyExerciseEditor(),
   programTagEditor: { open: false, planId: "", programName: "", tags: [], options: [], error: "" },
   programInfo: { open: false, program: null },
   organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", assignOpen: false, accessOpen: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },

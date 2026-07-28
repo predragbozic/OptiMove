@@ -96,6 +96,7 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
   const title = clean(item.title || item.name || "Exercise");
   const image = item.image || item.image_url || "";
   const video = item.video || item.video_url || "";
+  const exerciseId = item.id || item.exercise_id || "";
   const hierarchy = [item.domain, item.category, item.section].filter(Boolean).join(" / ");
   const doseRows = [
     ...exerciseDoseRows(item),
@@ -120,6 +121,7 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
             <h3>${escapeHtml(title)}</h3>
             ${hierarchy ? `<div class="breadcrumb">${escapeHtml(hierarchy)}</div>` : ""}
           </div>
+          ${exerciseId ? `<button class="plain-button compact-button" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exerciseId)}">Edit</button>` : ""}
         </div>
 
         <div class="exercise-detail-layout">

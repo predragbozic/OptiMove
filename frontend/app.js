@@ -46,6 +46,12 @@ import {
   renderExerciseLibraryHtml,
 } from "./exercise-library.js";
 import {
+  handleExerciseEditorAction,
+  handleExerciseEditorInput,
+  openExerciseEditor,
+  renderExerciseEditorHtml,
+} from "./exercise-editor.js";
+import {
   parseImageFallbacks,
 } from "./media.js";
 import { closeMedia, handleFullscreenChange, handleMediaAction } from "./media-modal.js";
@@ -500,6 +506,8 @@ function handleContentInput(event) {
     debounceTemplateResultRender();
     return;
   }
+  if (handleExerciseEditorInput(state, event)) return;
+
   const input = event.target.closest("[data-builder-exercise-search]");
   if (!input) return;
   state.builder.exerciseQuery = input.value;
@@ -1249,6 +1257,15 @@ async function handleContentClick(event) {
     renderExerciseDetail,
   })) return;
   if (await handleExerciseLibraryAction(action, { renderExercises, setLoading })) return;
+  if (type === "exercise-edit-open") {
+    void openExerciseEditor(state, exerciseEditorHandlers, action.dataset.exerciseId || "");
+    return;
+  }
+  if (type === "exercise-add-open") {
+    void openExerciseEditor(state, exerciseEditorHandlers, "");
+    return;
+  }
+  if (await handleExerciseEditorAction(state, exerciseEditorHandlers, action)) return;
   if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleOrganizationAction(action, {
@@ -1776,6 +1793,20 @@ function renderExerciseDetail(item, itemId = state.exerciseDetail.currentId) {
   els.content.insertAdjacentHTML("beforeend", markup);
   setExerciseOverlayBackgroundInert(true);
 }
+
+function renderExerciseEditorOverlay() {
+  els.content.querySelector(".exercise-editor-overlay")?.remove();
+  if (!state.exerciseEditor.open) return;
+  els.content.insertAdjacentHTML("beforeend", renderExerciseEditorHtml(state.exerciseEditor, state.exerciseSearch.options));
+}
+
+const exerciseEditorHandlers = {
+  rerender: renderExerciseEditorOverlay,
+  refreshAfterSave: async () => {
+    if (state.activeTab === "exercises") await loadExercises({ renderExercises, setLoading });
+    else if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
+  },
+};
 
 function makeNode(type, label, items, options = {}) {
   return createNode(type, label, items, options);

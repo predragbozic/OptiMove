@@ -52,6 +52,7 @@ export function renderExerciseLibraryHtml(data) {
       <span class="muted">${exercises.length} exercises shown</span>
       ${search.term ? `<span class="item-badge">${escapeHtml(search.term)}</span>` : ""}
       ${activeExerciseFilterLabels(search.filters).map((label) => `<span class="item-badge">${escapeHtml(label)}</span>`).join("")}
+      <button class="plain-button compact-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
     </div>
     <div class="exercise-grid">
       ${exercises.map((exercise, index) => renderExerciseLibraryCard(exercise, itemIds[index], markedExerciseIds)).join("")}
@@ -111,6 +112,7 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds) {
         <button class="text-action" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Unfavorite" : "Favorite"}</button>
         <button class="text-action" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Unmark" : "Mark"}</button>
         <button class="text-action" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(exercise.name || "Exercise")}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
+        <button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>
       </div>
       ${tags.length ? `<div class="exercise-tag-list">${tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag.name)}</span>`).join("")}${tags.length > 4 ? `<span>+${tags.length - 4}</span>` : ""}</div>` : ""}
     </article>
