@@ -196,8 +196,12 @@ async function init() {
     window.location.replace("/athlete");
     return;
   }
-  if (state.activeTab === "weekly" && !state.selectedAthleteId) state.activeTab = "coach-home";
-  if (isAthleteMode() && state.activeTab === "weekly") state.openWeekCalendarOnLoad = true;
+  if (isAthleteMode()) {
+    if (state.activeTab === "coach-home") state.activeTab = "weekly";
+    if (state.activeTab === "weekly") state.openWeekCalendarOnLoad = true;
+  } else if (state.activeTab === "weekly" && !state.selectedAthleteId) {
+    state.activeTab = "coach-home";
+  }
   ensureBackGuard();
   void loadNotifications({ silent: true });
   void loadMessages({ silent: true });
@@ -811,6 +815,15 @@ function handleImageError(event) {
 
 function goHome() {
   state.navStack = [];
+  if (isAthleteMode()) {
+    state.activeTab = "weekly";
+    state.selectedProgramId = null;
+    state.selectedTemplateId = null;
+    renderTabs();
+    renderLibraryNav();
+    void loadActiveTab();
+    return;
+  }
   renderCurrentNode();
 }
 
@@ -1047,6 +1060,7 @@ async function loadAthletes() {
 }
 
 async function loadActiveTab() {
+  if (isAthleteMode() && state.activeTab === "coach-home") state.activeTab = "weekly";
   renderTabs();
   renderLibraryNav();
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
@@ -1200,6 +1214,7 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "weekly-create-plan") {
+    if (isAthleteMode() || state.currentUser?.role === "athlete") return;
     const athleteId = state.selectedAthleteId;
     const weekStart = state.viewedWeekStart || weekMondayIso(localDateIso());
     state.activeTab = "builder";

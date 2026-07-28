@@ -1,4 +1,5 @@
 import { renderImage } from "./media.js";
+import { isAthleteMode } from "./access.js";
 import { btaNodes, sessionNodes, structureNodes } from "./program-structure.js";
 import {
   allSlotItems,
@@ -139,7 +140,7 @@ export function renderWeeklyRootHtml({
         </button>
         <button class="plain-button week-today-button" data-action="week-today">Today</button>
         <button class="plain-button week-arrow-button" data-action="week-next" aria-label="Next week">›</button>
-        ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : `<button class="plain-button compact-button" type="button" data-action="weekly-create-plan">Create weekly plan</button>`}
+        ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : isAthleteMode() ? "" : `<button class="plain-button compact-button" type="button" data-action="weekly-create-plan">Create weekly plan</button>`}
       </section>
       ${weekSelectorMarkup}
       </div>
