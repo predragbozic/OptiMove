@@ -884,23 +884,102 @@ async function copyDaySessions(client, sourceDayId, targetDayId) {
 
 async function copyLegacySession(client, sourceSessionId, targetSessionId) {
   const items = await client.query("select * from plans.plan_items where plan_session_id = $1 order by item_order", [sourceSessionId]);
-  const nodes = new Map();
-  for (const item of items.rows) {
-    let parentId = null;
+  if (!items.rows.length) return;
+  const { nodesToInsert, itemSectionTempId } = planLegacyNodeTree(items.rows);
+  const tempIdToRealId = await insertLegacyNodesBatch(client, targetSessionId, nodesToInsert);
+  const values = [];
+  const params = [];
+  let column = 0;
+  items.rows.forEach((item) => {
+    const sectionId = tempIdToRealId.get(itemSectionTempId.get(item.id));
+    const row = [
+      targetSessionId, sectionId, item.item_type, item.exercise_id, item.title, item.description, item.short_note, item.note, item.image_url, item.video_url,
+      item.sets, item.reps, item.load, item.item_order, item.exercise_order, item.source_row_ref,
+      item.domain_name, item.category_name, item.section_name, item.domain_color, item.category_color, item.section_color,
+      item.domain_icon_url, item.category_icon_url, item.section_icon_url, item.domain_short_note, item.category_short_note, item.section_short_note,
+      item.domain_note, item.category_note, item.section_note, item.domain_order, item.category_order, item.section_order,
+    ];
+    values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
+    params.push(...row);
+  });
+  await client.query(
+    `insert into plans.plan_items (
+      plan_session_id, plan_node_id, item_type, exercise_id, title, description, short_note, note, image_url, video_url,
+      sets, reps, load, item_order, exercise_order, source_row_ref,
+      domain_name, category_name, section_name, domain_color, category_color, section_color,
+      domain_icon_url, category_icon_url, section_icon_url, domain_short_note, category_short_note, section_short_note,
+      domain_note, category_note, section_note, domain_order, category_order, section_order
+    ) values ${values.join(", ")}`,
+    params,
+  );
+}
+
+// Builds the domain/category/section node tree implied by a flat list of legacy
+// (import-sourced) plan_items in one in-memory pass, so the caller can create every
+// node with a single batched insert instead of one round-trip per item.
+function planLegacyNodeTree(items) {
+  const nodesToInsert = [];
+  const orderCounters = new Map();
+  const keyToTempId = new Map();
+  const itemSectionTempId = new Map();
+
+  function ensureNode(parentTempId, type, name, color, iconUrl, shortNote, note) {
+    const key = `${parentTempId || "root"}:${type}:${name}`;
+    if (keyToTempId.has(key)) return keyToTempId.get(key);
+    const counterKey = parentTempId || "root";
+    const order = (orderCounters.get(counterKey) || 0) + 1;
+    orderCounters.set(counterKey, order);
+    const tempId = `t${nodesToInsert.length}`;
+    nodesToInsert.push({ tempId, parentTempId: parentTempId || null, type, name, color, iconUrl, shortNote, note, order });
+    keyToTempId.set(key, tempId);
+    return tempId;
+  }
+
+  for (const item of items) {
+    let parentTempId = null;
     if (item.domain_name) {
-      parentId = await ensureLegacyNode(client, nodes, targetSessionId, null, "domain", item.domain_name, item.domain_color, item.domain_icon_url, item.domain_short_note, item.domain_note);
+      parentTempId = ensureNode(null, "domain", item.domain_name, item.domain_color, item.domain_icon_url, item.domain_short_note, item.domain_note);
     }
     if (item.category_name) {
-      parentId = await ensureLegacyNode(client, nodes, targetSessionId, parentId, "category", item.category_name, item.category_color, item.category_icon_url, item.category_short_note, item.category_note);
+      parentTempId = ensureNode(parentTempId, "category", item.category_name, item.category_color, item.category_icon_url, item.category_short_note, item.category_note);
     }
     const sectionName = item.section_name || item.category_name || item.domain_name || "General";
     const sectionColor = item.section_name ? item.section_color : item.category_name ? item.category_color : item.domain_color;
     const sectionIcon = item.section_name ? item.section_icon_url : item.category_name ? item.category_icon_url : item.domain_icon_url;
     const sectionShortNote = item.section_name ? item.section_short_note : item.category_name ? item.category_short_note : item.domain_short_note;
     const sectionNote = item.section_name ? item.section_note : item.category_name ? item.category_note : item.domain_note;
-    const sectionId = await ensureLegacyNode(client, nodes, targetSessionId, parentId, "section", sectionName, sectionColor, sectionIcon, sectionShortNote, sectionNote);
-    await copyPlanItem(client, item, targetSessionId, sectionId);
+    const sectionTempId = ensureNode(parentTempId, "section", sectionName, sectionColor, sectionIcon, sectionShortNote, sectionNote);
+    itemSectionTempId.set(item.id, sectionTempId);
   }
+
+  return { nodesToInsert, itemSectionTempId };
+}
+
+// Inserts a planned legacy node tree (see planLegacyNodeTree) in at most 3 batched
+// round-trips (domain, then category, then section), resolving each level's
+// parent_id from the previous level's real ids before inserting the next.
+async function insertLegacyNodesBatch(client, sessionId, nodesToInsert) {
+  const tempIdToRealId = new Map();
+  for (const type of ["domain", "category", "section"]) {
+    const batch = nodesToInsert.filter((node) => node.type === type);
+    if (!batch.length) continue;
+    const values = [];
+    const params = [];
+    let column = 0;
+    batch.forEach((node) => {
+      const parentRealId = node.parentTempId ? tempIdToRealId.get(node.parentTempId) : null;
+      const row = [sessionId, parentRealId, node.type, node.name, node.color, node.iconUrl, node.shortNote, node.note, node.order];
+      values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
+      params.push(...row);
+    });
+    const created = await client.query(
+      `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
+       values ${values.join(", ")} returning id`,
+      params,
+    );
+    batch.forEach((node, index) => tempIdToRealId.set(node.tempId, created.rows[index].id));
+  }
+  return tempIdToRealId;
 }
 
 // Imported plans store their original grouping on each item. The first direct
@@ -916,38 +995,25 @@ async function materializeLegacyPlan(client, planId) {
   );
   for (const session of sessions.rows) {
     const items = await client.query("select * from plans.plan_items where plan_session_id = $1 order by item_order", [session.id]);
-    const nodes = new Map();
-    for (const item of items.rows) {
-      let parentId = null;
-      if (item.domain_name) {
-        parentId = await ensureLegacyNode(client, nodes, session.id, null, "domain", item.domain_name, item.domain_color, item.domain_icon_url, item.domain_short_note, item.domain_note);
-      }
-      if (item.category_name) {
-        parentId = await ensureLegacyNode(client, nodes, session.id, parentId, "category", item.category_name, item.category_color, item.category_icon_url, item.category_short_note, item.category_note);
-      }
-      const sectionName = item.section_name || item.category_name || item.domain_name || "General";
-      const sectionColor = item.section_name ? item.section_color : item.category_name ? item.category_color : item.domain_color;
-      const sectionIcon = item.section_name ? item.section_icon_url : item.category_name ? item.category_icon_url : item.domain_icon_url;
-      const sectionShortNote = item.section_name ? item.section_short_note : item.category_name ? item.category_short_note : item.domain_short_note;
-      const sectionNote = item.section_name ? item.section_note : item.category_name ? item.category_note : item.domain_note;
-      const sectionId = await ensureLegacyNode(client, nodes, session.id, parentId, "section", sectionName, sectionColor, sectionIcon, sectionShortNote, sectionNote);
-      await client.query("update plans.plan_items set plan_node_id = $2, updated_at = now() where id = $1", [item.id, sectionId]);
-    }
+    if (!items.rows.length) continue;
+    const { nodesToInsert, itemSectionTempId } = planLegacyNodeTree(items.rows);
+    const tempIdToRealId = await insertLegacyNodesBatch(client, session.id, nodesToInsert);
+    const values = [];
+    const params = [];
+    let column = 0;
+    items.rows.forEach((item) => {
+      const sectionId = tempIdToRealId.get(itemSectionTempId.get(item.id));
+      values.push(`($${++column}, $${++column})`);
+      params.push(item.id, sectionId);
+    });
+    await client.query(
+      `update plans.plan_items as pi
+       set plan_node_id = v.node_id::uuid, updated_at = now()
+       from (values ${values.join(", ")}) as v(item_id, node_id)
+       where pi.id = v.item_id::uuid`,
+      params,
+    );
   }
-}
-
-async function ensureLegacyNode(client, nodes, sessionId, parentId, type, name, color, iconUrl, shortNote, note) {
-  const key = `${parentId || "root"}:${type}:${name}`;
-  if (nodes.has(key)) return nodes.get(key);
-  const order = await nextNodeOrderWithClient(client, sessionId, parentId);
-  const created = await client.query(
-    `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
-    [sessionId, parentId, type, name, color, iconUrl, shortNote, note, order],
-  );
-  const id = created.rows[0].id;
-  nodes.set(key, id);
-  return id;
 }
 
 async function copyNodeTreeWithClient(client, sourceId, targetSessionId, targetParentId) {
