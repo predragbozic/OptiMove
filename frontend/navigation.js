@@ -87,10 +87,9 @@ export function renderLibraryNav() {
   updateProgramLibraryNavLabels();
   document.querySelectorAll("[data-athlete-tab]").forEach((button) => {
     const tab = button.dataset.athleteTab || "";
-    const isCalendar = tab === "calendar" && state.activeTab === "weekly" && state.weekSelectorOpen;
-    const isWeeklyPlan = tab === "weekly" && state.activeTab === "weekly" && !state.weekSelectorOpen;
-    const isDirectTab = tab !== "weekly" && tab !== "calendar" && tab === state.activeTab;
-    button.classList.toggle("is-active", isWeeklyPlan || isCalendar || isDirectTab);
+    const isCalendar = tab === "calendar" && state.activeTab === "weekly";
+    const isDirectTab = tab !== "calendar" && tab === state.activeTab;
+    button.classList.toggle("is-active", isCalendar || isDirectTab);
   });
   document.querySelector("#athletesToggle")?.classList.toggle("is-active", state.athletesExpanded);
   document.querySelector("#calendarToggle")?.classList.toggle("is-active", state.activeTab === "weekly" && state.weekSelectorOpen);
