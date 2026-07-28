@@ -28,13 +28,21 @@ function nullableText(value) { return text(value) || null; }
 async function getOrCreateLookup(table, name, userId, extra = {}) {
   const clean = text(name);
   if (!clean) return null;
+  // library.domains/body_parts/movement_patterns/places/complexity_levels/starting_positions/
+  // attractors/tags all carry a *global* unique constraint on name and/or slug (not scoped by
+  // owner), so the existence check has to ignore owner_scope entirely -- matching only within
+  // the caller's own scope would miss a value owned by someone else and then try to insert a
+  // duplicate, which violates the unique index and 500s.
   const existing = await query(
-    `select id from library.${table}
-     where is_active = true and lower(name) = lower($2) and (owner_scope = 'system' or owner_user_id = $1)
-     limit 1`,
-    [userId, clean],
+    `select id, is_active from library.${table} where lower(name) = lower($1) limit 1`,
+    [clean],
   );
-  if (existing.rows[0]) return existing.rows[0].id;
+  if (existing.rows[0]) {
+    if (!existing.rows[0].is_active) {
+      await query(`update library.${table} set is_active = true, updated_at = now() where id = $1`, [existing.rows[0].id]);
+    }
+    return existing.rows[0].id;
+  }
   const extraKeys = Object.keys(extra);
   const extraCols = extraKeys.map((key) => `, ${key}`).join("");
   const extraParams = extraKeys.map((key, index) => `, $${index + 4}`).join("");
