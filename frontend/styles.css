@@ -6464,7 +6464,6 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 
 .week-title-button {
   order: initial;
-  pointer-events: none;
 }
 
 .week-nav-panel > .plain-button {

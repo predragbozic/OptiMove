@@ -105,7 +105,7 @@ function renderChipAddForm(kind, placeholder, showColor, data) {
         ${clubOptions.length ? renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, value: clubOptions.length === 1 ? clubOptions[0].value : "", placeholder: "Type club name" }) : ""}
         <button class="plain-button compact-button" type="submit">Add</button>
       </div>
-      ${showColor ? renderPastelSwatches("color", PASTEL_COLORS[0]) : ""}
+      ${showColor ? renderPastelSwatches("color", PASTEL_COLORS[0], { allowCustom: true }) : ""}
       <p class="builder-error" aria-live="polite"></p>
     </form>
   `;
@@ -184,7 +184,7 @@ function renderNodePresetAddForm(type, data) {
         ${clubOptions.length ? renderFilterableSelect({ name: "clubId", label: "Club", options: clubOptions, value: clubOptions.length === 1 ? clubOptions[0].value : "", placeholder: "Type club name" }) : ""}
         <button class="plain-button compact-button" type="submit">Add</button>
       </div>
-      ${renderPastelSwatches("color", PASTEL_COLORS[0])}
+      ${renderPastelSwatches("color", PASTEL_COLORS[0], { allowCustom: true })}
       <p class="builder-error" aria-live="polite"></p>
     </form>
   `;
