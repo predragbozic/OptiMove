@@ -7809,7 +7809,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 }
 
 @media (hover: hover) {
-  .builder-node-row:hover + .builder-section-preview-popover {
+  .builder-node-row:hover ~ .builder-section-preview-popover,
+  .builder-section-preview-popover:hover {
     display: flex;
   }
 }
