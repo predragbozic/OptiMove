@@ -55,16 +55,30 @@ async function getOrCreateLookup(table, name, userId, extra = {}) {
   return inserted.rows[0].id;
 }
 
-async function syncJunction(table, fkColumn, exerciseId, ids, { withOrder = true } = {}) {
-  await query(`delete from library.${table} where exercise_id = $1`, [exerciseId]);
+async function syncJunction(table, fkColumn, lookupTable, exerciseId, ids, userId, { withOrder = true } = {}) {
+  // Only clear links to values *this user can see* (system-wide or their own); a link to
+  // another user's private value (e.g. a tag only they created) stays untouched even though
+  // it never showed up in their own edit form, so we don't silently delete someone else's data.
+  await query(
+    `delete from library.${table} j
+     using library.${lookupTable} l
+     where j.exercise_id = $1 and j.${fkColumn} = l.id
+       and (l.owner_scope = 'system' or l.owner_user_id = $2)`,
+    [exerciseId, userId],
+  );
   for (let index = 0; index < ids.length; index += 1) {
     if (withOrder) {
       await query(
-        `insert into library.${table} (exercise_id, ${fkColumn}, is_primary, sort_order) values ($1, $2, $3, $4)`,
+        `insert into library.${table} (exercise_id, ${fkColumn}, is_primary, sort_order)
+         values ($1, $2, $3, $4)
+         on conflict do nothing`,
         [exerciseId, ids[index], index === 0, index],
       );
     } else {
-      await query(`insert into library.${table} (exercise_id, ${fkColumn}) values ($1, $2)`, [exerciseId, ids[index]]);
+      await query(
+        `insert into library.${table} (exercise_id, ${fkColumn}) values ($1, $2) on conflict do nothing`,
+        [exerciseId, ids[index]],
+      );
     }
   }
 }
@@ -298,12 +312,12 @@ async function loadExerciseDetail(userId, exerciseId) {
     select
       e.id, e.exercise_code, e.name, e.aim, e.execution_notes, e.instruction, e.video_url, e.image_url,
       p.name as place, c.name as complexity, sp.name as starting_position, a.name as attractor,
-      coalesce((select json_agg(d.name order by d.name) from library.exercise_domains ed join library.domains d on d.id = ed.domain_id where ed.exercise_id = e.id), '[]'::json) as purposes,
-      coalesce((select json_agg(cat.name order by cat.name) from library.exercise_categories ec join library.categories cat on cat.id = ec.category_id where ec.exercise_id = e.id), '[]'::json) as qualities,
-      coalesce((select json_agg(s.name order by s.name) from library.exercise_sections es join library.sections s on s.id = es.section_id where es.exercise_id = e.id), '[]'::json) as groups,
-      coalesce((select json_agg(bp.name order by bp.name) from library.exercise_body_parts ebp join library.body_parts bp on bp.id = ebp.body_part_id where ebp.exercise_id = e.id), '[]'::json) as body_parts,
-      coalesce((select json_agg(mp.name order by mp.name) from library.exercise_movement_patterns emp join library.movement_patterns mp on mp.id = emp.movement_pattern_id where emp.exercise_id = e.id), '[]'::json) as movement_patterns,
-      coalesce((select json_agg(t.name order by t.name) from library.exercise_tags et join library.tags t on t.id = et.tag_id where et.exercise_id = e.id), '[]'::json) as tags
+      coalesce((select json_agg(d.name order by d.name) from library.exercise_domains ed join library.domains d on d.id = ed.domain_id where ed.exercise_id = e.id and (d.owner_scope = 'system' or d.owner_user_id = $1)), '[]'::json) as purposes,
+      coalesce((select json_agg(cat.name order by cat.name) from library.exercise_categories ec join library.categories cat on cat.id = ec.category_id where ec.exercise_id = e.id and (cat.owner_scope = 'system' or cat.owner_user_id = $1)), '[]'::json) as qualities,
+      coalesce((select json_agg(s.name order by s.name) from library.exercise_sections es join library.sections s on s.id = es.section_id where es.exercise_id = e.id and (s.owner_scope = 'system' or s.owner_user_id = $1)), '[]'::json) as groups,
+      coalesce((select json_agg(bp.name order by bp.name) from library.exercise_body_parts ebp join library.body_parts bp on bp.id = ebp.body_part_id where ebp.exercise_id = e.id and (bp.owner_scope = 'system' or bp.owner_user_id = $1)), '[]'::json) as body_parts,
+      coalesce((select json_agg(mp.name order by mp.name) from library.exercise_movement_patterns emp join library.movement_patterns mp on mp.id = emp.movement_pattern_id where emp.exercise_id = e.id and (mp.owner_scope = 'system' or mp.owner_user_id = $1)), '[]'::json) as movement_patterns,
+      coalesce((select json_agg(t.name order by t.name) from library.exercise_tags et join library.tags t on t.id = et.tag_id where et.exercise_id = e.id and (t.owner_scope = 'system' or t.owner_user_id = $1)), '[]'::json) as tags
     from library.exercises e
     left join library.places p on p.id = e.place_id
     left join library.complexity_levels c on c.id = e.complexity_level_id
@@ -389,12 +403,12 @@ async function upsertExercise(req, res, exerciseId) {
   const movementPatternIds = await Promise.all(splitNames(body.movementPatterns).map((value) => getOrCreateLookup("movement_patterns", value, userId)));
   const tagIds = await Promise.all(splitNames(body.tags).map((value) => getOrCreateLookup("tags", value, userId)));
 
-  await syncJunction("exercise_domains", "domain_id", finalId, domainIds.filter(Boolean));
-  await syncJunction("exercise_categories", "category_id", finalId, categoryIds.filter(Boolean));
-  await syncJunction("exercise_sections", "section_id", finalId, sectionIds.filter(Boolean));
-  await syncJunction("exercise_body_parts", "body_part_id", finalId, bodyPartIds.filter(Boolean));
-  await syncJunction("exercise_movement_patterns", "movement_pattern_id", finalId, movementPatternIds.filter(Boolean));
-  await syncJunction("exercise_tags", "tag_id", finalId, tagIds.filter(Boolean), { withOrder: false });
+  await syncJunction("exercise_domains", "domain_id", "domains", finalId, domainIds.filter(Boolean), userId);
+  await syncJunction("exercise_categories", "category_id", "categories", finalId, categoryIds.filter(Boolean), userId);
+  await syncJunction("exercise_sections", "section_id", "sections", finalId, sectionIds.filter(Boolean), userId);
+  await syncJunction("exercise_body_parts", "body_part_id", "body_parts", finalId, bodyPartIds.filter(Boolean), userId);
+  await syncJunction("exercise_movement_patterns", "movement_pattern_id", "movement_patterns", finalId, movementPatternIds.filter(Boolean), userId);
+  await syncJunction("exercise_tags", "tag_id", "tags", finalId, tagIds.filter(Boolean), userId, { withOrder: false });
 
   const detail = await loadExerciseDetail(userId, finalId);
   res.status(exerciseId ? 200 : 201).json({
