@@ -7712,8 +7712,24 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   }
 
   .builder-section-editor-actions {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     width: 100%;
+    gap: 6px;
+  }
+
+  .builder-section-editor-actions .builder-copy-icon,
+  .builder-section-editor-actions .builder-delete-icon {
+    flex: 0 0 auto;
+  }
+
+  .builder-section-cancel-button,
+  .builder-section-finish-button {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 7px 8px;
+    gap: 4px;
+    font-size: 13px;
+    justify-content: center;
   }
 
   .exercise-filter-field {
@@ -7754,6 +7770,26 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .exercise-quick-filters-row-more .builder-custom-exercise-button {
     flex: 1 1 auto;
     margin: 0;
+  }
+
+  /* While typing/filtering in the exercise library (not while editing an
+     already-added exercise's dose fields), collapse the section header and
+     the added-exercises strip so the results list gets as much of the space
+     above the keyboard as possible. Everything reappears on blur. */
+  .builder-section-panel:has(.builder-section-library:focus-within) .builder-section-panel-head,
+  .builder-section-panel:has(.builder-section-library:focus-within) .builder-section-added {
+    display: none;
+  }
+
+  .builder-section-panel:has(.builder-section-library:focus-within) .builder-panel-label {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    padding-top: 10px;
+    margin: -14px -14px 12px;
+    padding-left: 14px;
+    padding-right: 14px;
+    background: var(--surface, #fff);
   }
 }
 
