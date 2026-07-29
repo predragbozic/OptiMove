@@ -171,13 +171,14 @@ router.post("/athletes", async (req, res, next) => {
     if (!fullName) return res.status(400).json({ error: "Athlete name is required." });
 
     const generatedId = athleteId || await nextAthleteId();
+    const { firstName, lastName } = splitFullName(fullName);
     const result = await query(
       `insert into public.athletes (
-         athlete_id, source_external_id, full_name, display_name, image_url, user_id, club_id, team_id, is_active
+         athlete_id, source_external_id, first_name, last_name, full_name, display_name, image_url, user_id, club_id, team_id, is_active
        )
-       values ($1, $2, $3, $3, $4, $5, $6, $7, true)
+       values ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, true)
        returning id, athlete_id, source_external_id, full_name, display_name, image_url, club_id, team_id`,
-      [generatedId, athleteId || generatedId, fullName, clean(req.body?.imageUrl), req.user.id, clubId, teamId],
+      [generatedId, athleteId || generatedId, firstName, lastName, fullName, clean(req.body?.imageUrl), req.user.id, clubId, teamId],
     );
     await query(
       `insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active)
@@ -198,18 +199,21 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
     const athleteId = clean(req.body?.athleteId);
     const { clubId, teamId } = await resolveAthleteClubTeam(req.user, clean(req.body?.clubId), clean(req.body?.teamId));
     if (!fullName) return res.status(400).json({ error: "Athlete name is required." });
+    const { firstName, lastName } = splitFullName(fullName);
     const result = await query(
       `update public.athletes
        set athlete_id = coalesce(nullif($2, ''), athlete_id),
            source_external_id = coalesce(nullif($2, ''), source_external_id),
-           full_name = $3,
-           display_name = $3,
-           image_url = $4,
-           club_id = $5,
-           team_id = $6
+           first_name = $3,
+           last_name = $4,
+           full_name = $5,
+           display_name = $5,
+           image_url = $6,
+           club_id = $7,
+           team_id = $8
        where id = $1
        returning id, athlete_id, source_external_id, full_name, display_name, image_url, club_id, team_id`,
-      [req.params.athleteId, athleteId, fullName, clean(req.body?.imageUrl), clubId, teamId],
+      [req.params.athleteId, athleteId, firstName, lastName, fullName, clean(req.body?.imageUrl), clubId, teamId],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Athlete not found." });
     res.json({ athlete: result.rows[0] });
@@ -971,6 +975,17 @@ async function nextAthleteId() {
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+// public.athletes.first_name/last_name are NOT NULL, but the app only ever
+// displays/edits a single full name field -- split it just enough to satisfy
+// the columns (nothing else in the app writes or meaningfully reads them).
+function splitFullName(fullName) {
+  const parts = clean(fullName).split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || fullName,
+    lastName: parts.slice(1).join(" "),
+  };
 }
 
 function bool(value, fallback = false) {
