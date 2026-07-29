@@ -283,6 +283,7 @@ function bindEvents() {
   els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("input", handleContentInput);
   els.content.addEventListener("change", handleContentChange);
+  els.content.addEventListener("focusin", handleContentFocusIn);
   els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
   els.content.addEventListener("touchend", handleSwipeEnd, { passive: true });
   document.addEventListener("click", handleGlobalClick);
@@ -441,6 +442,15 @@ function applyBuilderNodePresetMatch(nameInput) {
   const iconInput = form.querySelector('[name="iconUrl"]');
   if (colorInput && preset.color) colorInput.value = preset.color;
   if (iconInput) iconInput.value = preset.icon_url || "";
+}
+
+const FOCUS_SCROLL_TOP_SELECTOR = "[data-builder-exercise-search], .builder-quick-dose input, .builder-section-library .exercise-filter-field select, .builder-section-library .exercise-filter-field input";
+
+function handleContentFocusIn(event) {
+  if (window.innerWidth > 560) return;
+  const field = event.target.closest?.(FOCUS_SCROLL_TOP_SELECTOR);
+  if (!field) return;
+  requestAnimationFrame(() => field.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
 function handleContentInput(event) {
