@@ -514,6 +514,28 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     handlers.renderBuilder();
     return true;
   }
+  if (type === "builder-copy-block") {
+    const blockId = action.dataset.blockId || "";
+    const block = (state.builder.draft?.blocks || []).find((candidate) => candidate.id === blockId);
+    if (!block) return true;
+    state.builder.clipboard = { type: "block", blockId: block.id, name: block.name || `Block ${block.index}` };
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-paste-block") {
+    const clipboard = state.builder.clipboard;
+    if (!clipboard || clipboard.type !== "block") return true;
+    action.disabled = true;
+    try {
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/blocks/${encodeURIComponent(clipboard.blockId)}/copy`, { method: "POST" }));
+      state.builder.blockAddOpen = false;
+      handlers.renderBuilder();
+    } catch (error) {
+      action.disabled = false;
+      handlers.renderBuilderError(error);
+    }
+    return true;
+  }
   if (type === "builder-toggle-section-preview") {
     const nodeId = action.dataset.nodeId || "";
     state.builder.previewSectionId = state.builder.previewSectionId === nodeId ? "" : nodeId;

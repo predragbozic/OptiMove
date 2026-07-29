@@ -21,6 +21,10 @@ export function renderCopyNodeIconButton(nodeId, label) {
   return `<button class="plain-button builder-icon-action builder-copy-icon" type="button" data-action="builder-copy-node" data-node-id="${escapeAttr(nodeId)}" aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_COPY}</button>`;
 }
 
+function renderCopyBlockIconButton(blockId) {
+  return `<button class="plain-button builder-icon-action builder-copy-icon" type="button" data-action="builder-copy-block" data-block-id="${escapeAttr(blockId)}" aria-label="Copy block" title="Copy block">${ICON_COPY}</button>`;
+}
+
 export function renderDeleteIconButton(action, dataAttrs, label) {
   return `<button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="${escapeAttr(action)}" ${dataAttrs} aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_TRASH}</button>`;
 }
@@ -161,7 +165,7 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
           <form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="${escapeAttr(namePlaceholder)}" aria-label="${escapeAttr(nameLabel)}"></form>
           ${secondary ? `<span class="builder-block-secondary">${escapeHtml(secondary)}</span>` : ""}
         </div>
-        ${isWeekly ? "" : renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}
+        ${isWeekly ? "" : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
       </div>
       <div class="builder-sessions">
         ${block.sessions.length ? block.sessions.map((session) => `
@@ -184,6 +188,12 @@ export function renderBuilderAddBlockCard(context) {
         <span class="builder-add-block-plus" aria-hidden="true">+</span>
         <span>Add block</span>
       </button>
+      ${context.clipboard?.type === "block" ? `
+        <button class="builder-add-block-card builder-paste-block-card" type="button" data-action="builder-paste-block" aria-label="Paste block: ${escapeAttr(context.clipboard.name || "Block")}">
+          ${ICON_PASTE}
+          <span>Paste "${escapeHtml(context.clipboard.name || "Block")}"</span>
+        </button>
+      ` : ""}
     `;
   }
   return `

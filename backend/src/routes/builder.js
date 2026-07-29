@@ -314,6 +314,52 @@ router.delete("/blocks/:blockId", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.post("/blocks/:blockId/copy", async (req, res, next) => {
+  let client;
+  try {
+    const block = await getEditableBlock(req.user, req.params.blockId);
+    if (!block) return res.status(404).json({ error: "Program block not found" });
+    if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
+    const source = await query("select * from plans.plan_days where id = $1", [block.id]);
+    const sourceDay = source.rows[0];
+    if (!sourceDay) return res.status(404).json({ error: "Program block not found" });
+    const nextBlockOrder = await nextOrder("plans.plan_days", "plan_id", block.plan.id, "block_order");
+    client = await pool.connect();
+    await client.query("begin");
+    const created = await client.query(
+      `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
+       values ($1, $2, $3, $4, $5, $6) returning id`,
+      [block.plan.id, nextBlockOrder, nextBlockOrder, sourceDay.block_name ? `${sourceDay.block_name} copy` : null, sourceDay.block_type, sourceDay.day_note],
+    );
+    const newBlockId = created.rows[0].id;
+    const sourceSessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [block.id]);
+    for (const session of sourceSessions.rows) {
+      const createdSession = await client.query(
+        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order) values ($1, $2, $3, $4, $5) returning id",
+        [newBlockId, session.am_pm, session.bta, session.session_time, session.session_order],
+      );
+      const nodes = await client.query("select * from plans.plan_nodes where plan_session_id = $1 order by node_order", [session.id]);
+      if (nodes.rowCount) {
+        for (const root of nodes.rows.filter((node) => !node.parent_id)) {
+          await copyNodeTreeWithClient(client, root.id, createdSession.rows[0].id, null);
+        }
+      } else {
+        await copyLegacySession(client, session.id, createdSession.rows[0].id);
+      }
+    }
+    await client.query("commit");
+    client.release();
+    client = null;
+    return respondWithDraft(req, res, req.user, block.plan, { status: 201 });
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+      client.release();
+    }
+    next(error);
+  }
+});
+
 router.patch("/blocks/:blockId", async (req, res, next) => {
   try {
     const block = await getEditableBlock(req.user, req.params.blockId);

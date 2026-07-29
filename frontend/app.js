@@ -1745,7 +1745,7 @@ function renderCopyPlanSource() {
 
 async function handleBuilderAction(action) {
   if (await handleBuilderPlanAction(action, { renderBuilder, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
-  if (await handleBuilderWorkspaceAction(action, { renderBuilder })) return;
+  if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderError })) return;
   if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft })) return;
   if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderError, refreshBuilderDraft })) return;
 }

@@ -6830,6 +6830,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-block-head-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .builder-block-kicker { order: -1; color: var(--muted, #667085); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .02em; }
 .builder-block-secondary { color: var(--muted, #667085); font-size: 12px; }
+.builder-block-head-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.builder-paste-block-card .builder-icon-svg { width: 22px; height: 22px; }
 .builder-add-block-card {
   flex: 0 0 220px; width: 220px; min-height: 96px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
