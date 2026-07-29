@@ -147,7 +147,32 @@ function renderBuilderDraftsPanel() {
   `;
 }
 
+const BUILDER_SCROLL_SELECTORS = [".builder-section-modal", ".builder-exercise-results"];
+
+function captureBuilderScrollState() {
+  return BUILDER_SCROLL_SELECTORS.map((selector) => {
+    const el = els.content.querySelector(selector);
+    return { selector, top: el ? el.scrollTop : null };
+  });
+}
+
+function restoreBuilderScrollState(captured) {
+  requestAnimationFrame(() => {
+    captured.forEach(({ selector, top }) => {
+      if (top === null) return;
+      const el = els.content.querySelector(selector);
+      if (el) el.scrollTop = top;
+    });
+  });
+}
+
 export function renderBuilder() {
+  const scrollState = captureBuilderScrollState();
+  renderBuilderInner();
+  restoreBuilderScrollState(scrollState);
+}
+
+function renderBuilderInner() {
   const draft = state.builder.draft;
   const draftBatchPlans = Array.isArray(draft?.batch?.plans) ? draft.batch.plans : [];
   els.context.textContent = "Program builder";
@@ -217,9 +242,7 @@ export function renderBuilder() {
   els.content.innerHTML = `
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
-        <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p>${isWeekly
-          ? `<form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="e.g. Match week" aria-label="Weekly plan name"></form>`
-          : `<h3>${escapeHtml(draft.plan.name)}</h3>`}<p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
+        <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}"></form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
         <div class="builder-program-actions"><span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span><button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="${isEditDraft ? "Discard this edit draft and keep the original unchanged." : "Every change saves automatically. This just closes the editor — find the draft again later from where you started it."}">${closeLabel}</button>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">${saveLabel}</button>` : `<span class="builder-finished-label">Saved</span>`}${isEditDraft ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-plan" title="Permanently discard this draft and everything in it.">Discard draft</button>`}</div>
       </header>
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : ""}

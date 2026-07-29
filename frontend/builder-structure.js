@@ -149,17 +149,16 @@ function isInlineAddHere(session, parentId, context) {
 
 export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly = false, context) {
   const defaultDayName = isWeekly ? weekDayName(block.date) : "";
-  const blockTitle = isWeekly ? block.name || defaultDayName : block.name || `Block ${block.index}`;
   const kicker = isWeekly ? defaultDayName : `Block ${block.index}`;
   const secondary = isWeekly ? (block.date ? formatDate(block.date) : "") : (block.note || "");
+  const namePlaceholder = isWeekly ? "e.g. MD-1, Match day" : `Block ${block.index}`;
+  const nameLabel = isWeekly ? "Day label" : "Block name";
   return `
     <article class="builder-block">
       <div class="builder-block-head">
         <div class="builder-block-head-text">
           ${kicker ? `<span class="builder-block-kicker">${escapeHtml(kicker)}</span>` : ""}
-          ${isWeekly
-            ? `<form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="e.g. MD-1, Match day" aria-label="Day label"></form>`
-            : `<strong>${escapeHtml(blockTitle)}</strong>`}
+          <form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="${escapeAttr(namePlaceholder)}" aria-label="${escapeAttr(nameLabel)}"></form>
           ${secondary ? `<span class="builder-block-secondary">${escapeHtml(secondary)}</span>` : ""}
         </div>
         ${isWeekly ? "" : renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}

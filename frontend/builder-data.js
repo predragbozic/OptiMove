@@ -3,11 +3,15 @@ import { renderBuilder } from "./builder-view.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
 import { state } from "./state.js";
 
+let builderExerciseRequestId = 0;
+
 export async function loadBuilderExercises(options = {}) {
   if (state.activeTab !== "builder") return;
+  const requestId = ++builderExerciseRequestId;
   await loadExerciseFilterOptions();
   const query = state.builder.exerciseQuery.trim();
   const data = await api(exerciseSearchUrl(query, 18, state.builder.exerciseFilters));
+  if (requestId !== builderExerciseRequestId) return;
   state.builder.exercises = applyClientExerciseFilters(data.exercises || [], state.builder.exerciseFilters);
   renderBuilder();
   options.afterRender?.();
