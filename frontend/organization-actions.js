@@ -62,6 +62,7 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
     }
     form.reset();
     state.organizationEditor = { open: false, type: "", row: null };
+    if (["club", "team", "athlete", "user"].includes(type)) state.organization.addFormOpen = false;
     await loadAthletes();
     if (state.activeTab === "organization") await renderOrganizationPanel();
   } catch (submitError) {
@@ -166,6 +167,12 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   }
   if (type === "organization-section") {
     state.organization.section = action.dataset.section || "overview";
+    state.organization.addFormOpen = false;
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-toggle-add-form") {
+    state.organization.addFormOpen = !state.organization.addFormOpen;
     void renderOrganizationPanel({ refresh: false });
     return true;
   }

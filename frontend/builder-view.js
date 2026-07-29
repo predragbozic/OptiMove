@@ -14,6 +14,7 @@ import { renderBuilderAthletePicker, renderBuilderInfoModal } from "./builder-mo
 import { renderBuilderSectionOverlay } from "./builder-section.js";
 import {
   ICON_CHECK,
+  ICON_TRASH,
   ICON_X,
   renderBuilderAddBlockCard,
   renderBuilderBlock,
@@ -280,7 +281,6 @@ function renderBuilderInner() {
   const selectedNode = findBuilderNode(draft, state.builder.selectedNodeId);
   const isWeekly = draft.plan.planType === "weekly";
   const isEditDraft = Boolean(draft.plan.isEditDraft);
-  const closeLabel = isEditDraft ? "Cancel" : "Close";
   const saveLabel = isEditDraft ? "Apply changes" : "Save and finish";
   const structureContext = builderStructureContext();
   const batchPlans = Array.isArray(draft.batch?.plans) ? draft.batch.plans : [];
@@ -290,7 +290,14 @@ function renderBuilderInner() {
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
         <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}"></form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
-        <div class="builder-program-actions"><span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span><button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="${isEditDraft ? "Discard this edit draft and keep the original unchanged." : "Every change saves automatically. This just closes the editor — find the draft again later from where you started it."}">${ICON_X}<span>${closeLabel}</span></button>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">${ICON_CHECK}<span>${saveLabel}</span></button>` : `<span class="builder-finished-label">Saved</span>`}${isEditDraft ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-plan" title="Permanently discard this draft and everything in it.">Discard draft</button>`}</div>
+        <div class="builder-program-actions">
+          <span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span>
+          ${isEditDraft
+            ? `<button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="Discard this edit draft and keep the original unchanged.">${ICON_X}<span>Cancel</span></button>`
+            : `<span class="builder-saved-indicator" title="Every change saves automatically."><svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M5 4h11l3 3v13H5V4z"></path><path d="M8 4v5h8V4"></path><path d="M7 14h10v6H7z"></path></svg><span>Saved</span></span><button class="plain-button icon-button builder-exit-button" type="button" data-action="builder-cancel" aria-label="Exit editor" title="Exit — find this draft again later from where you started it.">${ICON_X}</button>`}
+          ${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">${ICON_CHECK}<span>${saveLabel}</span></button>` : `<span class="builder-finished-label">Saved</span>`}
+          ${isEditDraft ? "" : `<button class="plain-button icon-button danger-action" type="button" data-action="builder-delete-plan" aria-label="Discard draft" title="Permanently discard this draft and everything in it.">${ICON_TRASH}</button>`}
+        </div>
       </header>
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : ""}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}

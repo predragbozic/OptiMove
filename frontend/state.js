@@ -82,7 +82,7 @@ export const emptyTemplatePreview = (overrides = {}) => ({
 
 export const emptyBuilderState = (overrides = {}) => ({
   draft: null,
-  planType: "program",
+  planType: "weekly",
   weekStart: "",
   selectedSessionId: "",
   selectedNodeId: "",
@@ -160,7 +160,7 @@ export const createInitialState = () => ({
   exerciseEditor: emptyExerciseEditor(),
   programTagEditor: { open: false, planId: "", programName: "", tags: [], options: [], error: "" },
   programInfo: { open: false, program: null },
-  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", assignOpen: false, accessOpen: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },
+  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", addFormOpen: false, assignOpen: false, accessOpen: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },
   organizationEditor: { open: false, type: "", row: null },
   organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
   taxonomy: {

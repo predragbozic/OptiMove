@@ -8,7 +8,7 @@ import { escapeAttr, escapeHtml } from "./utils.js";
 // Same figure as the sidebar's "Athletes" nav icon, with a plus badge added
 // (matching the document+plus "New" icon used for weekly plans) instead of
 // a generic stock "add person" icon.
-const ICON_ADD_ATHLETE = `
+export const ICON_ADD_ATHLETE = `
   <svg viewBox="0 0 24 24" class="rail-icon" aria-hidden="true">
     <path d="M14 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-3A3.5 3.5 0 0 0 4 17.5V19"></path>
     <circle cx="9" cy="7" r="3"></circle>
@@ -18,6 +18,45 @@ const ICON_ADD_ATHLETE = `
 `;
 const ICON_PENCIL = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z"></path><path d="M13 7l4 4"></path></svg>`;
 const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>`;
+
+// Club badge/shield with a small ball at its center, matching the reference
+// "SPORT CLUB" ribbon-badge image, plus the same white-on-fill plus badge
+// used elsewhere for "add" triggers.
+const ICON_ADD_CLUB = `
+  <svg viewBox="0 0 24 24" class="rail-icon" aria-hidden="true">
+    <path d="M9 3h6v3.2l3 1.4v4.4c0 4-2.8 7-6 8.3-3.2-1.3-6-4.3-6-8.3V7.6l3-1.4V3z"></path>
+    <circle cx="12" cy="10.5" r="2"></circle>
+    <circle cx="18" cy="18" r="4.5" fill="currentColor"></circle>
+    <path d="M18 15.8v4.4M15.8 18h4.4" stroke="var(--surface, #fff)" stroke-width="1.4" stroke-linecap="round"></path>
+  </svg>
+`;
+
+// Three overlapping figures (team roster), plus the same plus badge.
+const ICON_ADD_TEAM = `
+  <svg viewBox="0 0 24 24" class="rail-icon" aria-hidden="true">
+    <circle cx="4.5" cy="7.5" r="1.8"></circle>
+    <path d="M4.5 10.3c-1.6 0-2.9 1.2-2.9 2.7v1.3h5.8v-1.3c0-1.5-1.3-2.7-2.9-2.7z"></path>
+    <circle cx="12.5" cy="6" r="2.1"></circle>
+    <path d="M12.5 9c-2 0-3.7 1.5-3.7 3.4v2.1h7.4v-2.1c0-1.9-1.7-3.4-3.7-3.4z"></path>
+    <circle cx="4.5" cy="7.5" r="1.8" fill="none"></circle>
+    <circle cx="18" cy="18" r="4.5" fill="currentColor"></circle>
+    <path d="M18 15.8v4.4M15.8 18h4.4" stroke="var(--surface, #fff)" stroke-width="1.4" stroke-linecap="round"></path>
+  </svg>
+`;
+
+// Person figure combined with two small badges: a plus (add) and a pencil
+// (edit) - this section hides both "add user" and "assign role" forms
+// behind one trigger, so the icon needs to read as "add and edit".
+const ICON_MANAGE_USERS = `
+  <svg viewBox="0 0 24 24" class="rail-icon" aria-hidden="true">
+    <path d="M11.5 18v-1.2a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3V18"></path>
+    <circle cx="7.2" cy="6.8" r="2.6"></circle>
+    <circle cx="17.5" cy="7.5" r="3.8" fill="currentColor"></circle>
+    <path d="M17.5 5.6v3.8M15.6 7.5h3.8" stroke="var(--surface, #fff)" stroke-width="1.3" stroke-linecap="round"></path>
+    <circle cx="17.5" cy="18" r="3.8" fill="currentColor"></circle>
+    <path d="M15.7 19.3l3.1-3.1M15.4 19.6l.3-1.6 1-1 1.6-.3-1 1.6z" fill="var(--surface, #fff)" stroke="var(--surface, #fff)" stroke-width="0.4" stroke-linejoin="round"></path>
+  </svg>
+`;
 
 export function renderOrganizationPanelHtml({ currentUser, data, error, role, scope }) {
   const pendingRequests = (data.accessRequests || []).filter((request) => request.status === "requested").length;
@@ -53,16 +92,26 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
   `;
 }
 
+const organizationAddFormConfig = {
+  clubs: (data) => (data.canCreateClub ? { icon: ICON_ADD_CLUB, label: "Add club", render: () => renderOrganizationClubForm() } : null),
+  teams: (data) => (data.canCreateTeam ? { icon: ICON_ADD_TEAM, label: "Add team", render: () => renderOrganizationTeamForm(data.clubs) } : null),
+  athletes: (data) => (data.canCreateAthlete ? { icon: ICON_ADD_ATHLETE, label: "Add athlete", render: () => renderOrganizationAthleteForm(data.clubs, data.teams) } : null),
+  users: (data) => (data.canCreateUser || (data.users || []).length
+    ? { icon: ICON_MANAGE_USERS, label: "Add or manage users", render: () => `${data.canCreateUser ? renderOrganizationUserForm() : ""}${renderOrganizationRoleForms(data)}` }
+    : null),
+};
+
 export function renderOrganizationActions(data) {
   const section = state.organization.section || "overview";
-  const actions = {
-    overview: "",
-    clubs: data.canCreateClub ? renderOrganizationClubForm() : "",
-    teams: data.canCreateTeam ? renderOrganizationTeamForm(data.clubs) : "",
-    athletes: data.canCreateAthlete ? renderOrganizationAthleteForm(data.clubs, data.teams) : "",
-    users: `${data.canCreateUser ? renderOrganizationUserForm() : ""}${renderOrganizationRoleForms(data)}`,
-  }[section] || "";
-  return actions ? `<section class="organization-actions">${actions}</section>` : "";
+  const config = organizationAddFormConfig[section]?.(data);
+  if (!config) return "";
+  const isOpen = state.organization.addFormOpen;
+  return `
+    <section class="organization-actions">
+      <button class="plain-button icon-button organization-add-toggle ${isOpen ? "is-open" : ""}" type="button" data-action="organization-toggle-add-form" aria-expanded="${isOpen}" aria-label="${escapeAttr(config.label)}" title="${escapeAttr(config.label)}">${config.icon}</button>
+      ${isOpen ? config.render() : ""}
+    </section>
+  `;
 }
 
 function renderOrganizationUserForm() {
@@ -604,7 +653,7 @@ function renderOrganizationAthleteForm(clubs, teams) {
         ${renderFilterableSelect({ name: "teamId", label: "Team", options: teamOptions, placeholder: "Type team name", includeEmpty: "No team", extraSelectAttrs: "data-organization-team-select" })}
       </div>
       <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button icon-button" type="submit" aria-label="Add athlete" title="Add athlete">${ICON_ADD_ATHLETE}</button>
+      <button class="plain-button" type="submit">Add athlete</button>
     </form>
   `;
 }

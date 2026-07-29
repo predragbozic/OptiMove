@@ -738,7 +738,7 @@ export async function submitBuilderForm(form, handlers) {
     state.builder.sectionPickerOpen = false;
     state.builder.createAthleteId = "";
     state.builder.createAthleteIds = [];
-    state.builder.planType = "program";
+    state.builder.planType = "weekly";
     state.builder.weekStart = "";
     state.builder.addNodeOpen = false;
     await handlers.loadBuilderExercises();

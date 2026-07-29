@@ -1,3 +1,4 @@
+import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { renderImage } from "./media.js";
 import { escapeAttr, escapeHtml, initialsFor, localDateIso, weekMondayIso } from "./utils.js";
 
@@ -17,7 +18,10 @@ export function renderBuilderAthletePicker(state) {
             <h3>${isWeekly ? "Choose athletes" : "Choose athletes or template"}</h3>
             <p class="muted">${isWeekly ? "A separate weekly plan will be created for each selected athlete." : "Select one or more athletes, or keep this as a reusable template."}</p>
           </div>
-          <button class="plain-button icon-button" type="button" data-action="builder-close-athlete-picker" aria-label="Close athlete picker"><span class="button-icon">x</span></button>
+          <div class="builder-athlete-picker-head-actions">
+            <button class="plain-button icon-button builder-athlete-picker-cancel" type="button" data-action="builder-close-athlete-picker" aria-label="Cancel" title="Cancel">${ICON_X}</button>
+            <button class="plain-button icon-button builder-athlete-picker-continue" type="button" data-action="builder-confirm-athlete-picker" aria-label="Continue" title="Continue" ${isWeekly && !selectedCount ? "disabled" : ""}>${ICON_CHECK}</button>
+          </div>
         </div>
         ${isWeekly ? "" : `<button class="builder-athlete-option ${selectedCount ? "" : "is-selected"}" type="button" data-action="builder-select-athlete" data-athlete-id="">
           <span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Not assigned to an athlete</small></span>
@@ -42,7 +46,6 @@ export function renderBuilderAthletePicker(state) {
         </div>
         <div class="builder-copy-plan-footer">
           <span class="muted">${selectedCount ? `${selectedCount} athlete${selectedCount === 1 ? "" : "s"} selected` : isWeekly ? "Choose at least one athlete" : "Reusable template"}</span>
-          <button class="plain-button" type="button" data-action="builder-confirm-athlete-picker" ${isWeekly && !selectedCount ? "disabled" : ""}>Continue</button>
         </div>
       </section>
     </div>

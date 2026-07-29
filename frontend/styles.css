@@ -2420,6 +2420,30 @@ input:focus {
   gap: 6px;
 }
 
+.organization-add-toggle {
+  justify-self: start;
+  width: 52px;
+  height: 52px;
+  min-width: 52px;
+  min-height: 52px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--line-strong, #d7dee0);
+  box-shadow: 0 1px 3px rgba(16, 24, 32, 0.08);
+  color: #1f6f68;
+}
+
+.organization-add-toggle .rail-icon {
+  width: 30px;
+  height: 30px;
+}
+
+.organization-add-toggle:hover,
+.organization-add-toggle.is-open {
+  background: var(--surface-soft, #eef2f4);
+  border-color: #1f6f68;
+}
+
 .button-icon {
   min-width: 16px;
   display: inline-grid;
@@ -2449,6 +2473,29 @@ input:focus {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+.athlete-toolbar-add-button {
+  align-self: center;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--line-strong, #d7dee0);
+  box-shadow: 0 1px 3px rgba(16, 24, 32, 0.08);
+  color: #1f6f68;
+}
+
+.athlete-toolbar-add-button .rail-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.athlete-toolbar-add-button:hover {
+  background: var(--surface-soft, #eef2f4);
+  border-color: #1f6f68;
 }
 
 .athlete-mode .athlete-toolbar-row {
@@ -4007,17 +4054,6 @@ input:focus {
   }
 }
 
-@media (max-width: 760px) {
-  body:not(.athlete-mode):not(.login-mode) .week-nav-panel {
-    grid-template-columns: 44px minmax(0, 1fr) 44px 44px;
-  }
-
-  body:not(.athlete-mode):not(.login-mode) .week-nav-panel .plan-more-menu {
-    grid-column: 4;
-    grid-row: 2;
-    justify-self: end;
-  }
-}
 
 /* Compact weekly date picker, opened as a small floating panel above the week. */
 .week-nav-wrap { position: relative; z-index: 10; }
@@ -4059,11 +4095,6 @@ input:focus {
 .week-calendar-day { font-size: 11px; }
 
 @media (max-width: 760px) {
-  body:not(.athlete-mode):not(.login-mode) .week-nav-panel {
-    grid-template-columns: 38px minmax(0, 1fr) 38px 38px;
-  }
-  body:not(.athlete-mode):not(.login-mode) .week-nav-panel .week-today-button { grid-column: 2; }
-  body:not(.athlete-mode):not(.login-mode) .week-nav-panel .week-arrow-button:last-of-type { grid-column: 3; }
   .week-calendar-picker {
     left: 0;
     width: min(304px, calc(100vw - var(--rail-width) - 24px));
@@ -6736,40 +6767,6 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     gap: 10px;
   }
 
-  body:not(.athlete-mode):not(.login-mode) .week-nav-panel {
-    grid-template-columns: 44px minmax(0, 1fr) 44px;
-    gap: 8px;
-    padding: 8px;
-  }
-
-  body:not(.athlete-mode):not(.login-mode) .week-title-button {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    min-height: 44px;
-    padding: 7px 10px;
-  }
-
-  body:not(.athlete-mode):not(.login-mode) .week-title-button strong {
-    width: 100%;
-    font-size: 17px;
-    line-height: 1.15;
-    white-space: normal;
-  }
-
-  body:not(.athlete-mode):not(.login-mode) .week-arrow-button {
-    grid-row: 2;
-    min-width: 44px;
-    width: 44px;
-    min-height: 40px;
-    font-size: 25px;
-  }
-
-  body:not(.athlete-mode):not(.login-mode) .week-today-button {
-    grid-row: 2;
-    min-height: 40px;
-    font-size: 13px;
-  }
-
   body:not(.athlete-mode):not(.login-mode) .calendar-grid {
     grid-template-columns: none;
     grid-auto-flow: column;
@@ -6999,6 +6996,13 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-athlete-select-all { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .builder-athlete-options { display: grid; gap: 8px; max-height: 430px; overflow: auto; margin-top: 10px; padding-right: 2px; }
 .builder-athlete-picker .builder-athlete-option { margin-top: 12px; }
+.builder-athlete-picker-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.builder-athlete-picker-cancel, .builder-athlete-picker-continue { width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 50%; }
+.builder-athlete-picker-cancel { color: #c0392b; border-color: #e3b3ac; }
+.builder-athlete-picker-cancel:hover { background: #fbeceb; }
+.builder-athlete-picker-continue { color: #2e9e4f; border-color: #b6dcc0; }
+.builder-athlete-picker-continue:hover { background: #eaf7ee; }
+.builder-athlete-picker-continue:disabled { color: var(--muted, #667085); border-color: var(--line, #dfe4e8); opacity: .6; cursor: not-allowed; }
 .builder-copy-plan-modal .builder-athlete-options { max-height: 300px; }
 .builder-copy-plan-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
 .builder-copy-plan-footer .muted { margin: 0; font-size: 12px; }
@@ -7082,6 +7086,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-cancel-button, .builder-finish-button { display: flex; align-items: center; gap: 6px; }
 .builder-finish-button .builder-icon-svg { color: #2e9e4f; }
 .builder-finished-label { color: #287e77; font-size: 13px; font-weight: 800; }
+.builder-saved-indicator { display: flex; align-items: center; gap: 5px; color: #287e77; font-size: 13px; font-weight: 700; }
+.builder-saved-indicator .builder-icon-svg { color: #287e77; }
+.builder-exit-button { width: 32px; min-width: 32px; height: 32px; min-height: 32px; padding: 0; }
 .builder-info-button { width: 32px; min-width: 32px; height: 32px; min-height: 32px; margin-left: auto; }
 .builder-outline-info-buttons { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .builder-outline-info-buttons .builder-info-button { margin-left: 0; }

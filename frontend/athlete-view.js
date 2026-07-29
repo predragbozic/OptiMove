@@ -1,4 +1,5 @@
 import { renderImage } from "./media.js";
+import { ICON_ADD_ATHLETE } from "./organization-view.js";
 import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
 
 function avatarMarkup(athlete) {
@@ -52,6 +53,7 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
         </button>
         <button class="tab" data-tab="programs">Specific programs</button>
       </nav>
+      ${!isAthleteMode ? `<button class="plain-button icon-button athlete-toolbar-add-button" type="button" data-action="home-add-athlete" aria-label="Add athlete" title="Add athlete">${ICON_ADD_ATHLETE}</button>` : ""}
     </div>
   `;
 }

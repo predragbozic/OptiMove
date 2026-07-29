@@ -243,7 +243,10 @@ function bindEvents() {
         ensureTemplateScopeIsVisible();
       }
       if (button.dataset.programLibrarySection) state.programLibrarySection = button.dataset.programLibrarySection;
-      if (button.dataset.organizationSection) state.organization.section = button.dataset.organizationSection;
+      if (button.dataset.organizationSection) {
+        state.organization.section = button.dataset.organizationSection;
+        state.organization.addFormOpen = false;
+      }
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
       state.navStack = [];
@@ -870,6 +873,23 @@ async function handleGlobalClick(event) {
       renderLibraryNav();
       await loadActiveTab();
     }
+  }
+  if (action.dataset.action === "home-add-athlete") {
+    if (state.activeTab !== "organization") pushAppHistory();
+    state.activeTab = "organization";
+    state.organization.section = "athletes";
+    state.organization.addFormOpen = true;
+    state.selectedProgramId = null;
+    state.selectedTemplateId = null;
+    state.navStack = [];
+    state.athletesExpanded = false;
+    state.weekSelectorOpen = false;
+    state.openWeekCalendarOnLoad = false;
+    collapseRailAfterNav();
+    renderAthleteListState();
+    renderTabs();
+    renderLibraryNav();
+    await loadActiveTab();
   }
   if (action.dataset.action === "sidebar-submenu-toggle") {
     const key = action.dataset.submenuKey || "";
