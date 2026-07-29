@@ -598,7 +598,7 @@ router.post("/items/:itemId/move", async (req, res, next) => {
     const neighbor = neighborResult.rows[0];
     if (!neighbor) return respondWithDraft(req, res, req.user, item.plan);
     await query(
-      `update plans.plan_items set item_order = case when id = $1 then $2 when id = $3 then $4 end, updated_at = now() where id in ($1, $3)`,
+      `update plans.plan_items set item_order = case when id = $1 then $2::numeric when id = $3 then $4::numeric end, updated_at = now() where id in ($1, $3)`,
       [item.id, neighbor.item_order, neighbor.id, item.item_order],
     );
     return respondWithDraft(req, res, req.user, item.plan);
