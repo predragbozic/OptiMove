@@ -5,6 +5,20 @@ import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
+// Same figure as the sidebar's "Athletes" nav icon, with a plus badge added
+// (matching the document+plus "New" icon used for weekly plans) instead of
+// a generic stock "add person" icon.
+const ICON_ADD_ATHLETE = `
+  <svg viewBox="0 0 24 24" class="rail-icon" aria-hidden="true">
+    <path d="M14 19v-1.5a3.5 3.5 0 0 0-3.5-3.5h-3A3.5 3.5 0 0 0 4 17.5V19"></path>
+    <circle cx="9" cy="7" r="3"></circle>
+    <circle cx="18" cy="18" r="4.5" fill="currentColor"></circle>
+    <path d="M18 15.8v4.4M15.8 18h4.4" stroke="var(--surface, #fff)" stroke-width="1.4" stroke-linecap="round"></path>
+  </svg>
+`;
+const ICON_PENCIL = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z"></path><path d="M13 7l4 4"></path></svg>`;
+const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>`;
+
 export function renderOrganizationPanelHtml({ currentUser, data, error, role, scope }) {
   const pendingRequests = (data.accessRequests || []).filter((request) => request.status === "requested").length;
   if (state.organization.section === "requests") state.organization.section = "overview";
@@ -100,7 +114,7 @@ function renderOrganizationSelectableRow(row, type, selectedId) {
       <button class="organization-row-main" type="button" data-action="organization-select-${escapeAttr(type)}" data-${escapeAttr(type)}-id="${escapeAttr(row.id)}">
         ${renderOrganizationRowContent(row, type)}
       </button>
-      <span class="organization-row-actions"><button class="text-action" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}">Edit</button><button class="text-action danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}">Delete</button></span>
+      <span class="organization-row-actions"><button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button><button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Delete" title="Delete">${ICON_TRASH}</button></span>
     </article>
   `;
 }
@@ -314,7 +328,7 @@ function renderAthleteAccessSummaryRow(athlete) {
         <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "")}</span>
       </div>
       <p>${enabled.length ? enabled.map((label) => `<span>${escapeHtml(label)}</span>`).join("") : `<span>No browsing access</span>`}</p>
-      <button class="text-action" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}">Edit</button>
+      <button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>
     </article>
   `;
 }
@@ -506,7 +520,7 @@ function renderTeamAthleteRow(athlete) {
       <span>${athlete.user_id ? "Enabled" : "No login"}</span>
       <span class="organization-row-actions">
         <button class="text-action" type="button" data-action="organization-invite-athlete" data-athlete-id="${escapeAttr(athlete.id)}">Invite</button>
-        <button class="text-action" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}">Edit</button>
+        <button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>
       </span>
     </div>
   `;
@@ -590,7 +604,7 @@ function renderOrganizationAthleteForm(clubs, teams) {
         ${renderFilterableSelect({ name: "teamId", label: "Team", options: teamOptions, placeholder: "Type team name", includeEmpty: "No team", extraSelectAttrs: "data-organization-team-select" })}
       </div>
       <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit">Add athlete</button>
+      <button class="plain-button icon-button" type="submit" aria-label="Add athlete" title="Add athlete">${ICON_ADD_ATHLETE}</button>
     </form>
   `;
 }
@@ -640,10 +654,14 @@ function renderOrganizationList(title, rows, type) {
 }
 
 function renderOrganizationRowV2(row, type) {
+  const canEdit = type !== "user";
   return `
     <article class="organization-row">
       ${renderOrganizationRowContent(row, type)}
-      ${type === "user" ? "" : `<span class="organization-row-actions"><button class="text-action" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}">Edit</button><button class="text-action danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}">Delete</button></span>`}
+      <span class="organization-row-actions">
+        ${canEdit ? `<button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>` : ""}
+        <button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Delete" title="Delete">${ICON_TRASH}</button>
+      </span>
     </article>
   `;
 }

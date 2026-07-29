@@ -120,7 +120,7 @@ export function findOrganizationRow(type, id) {
 }
 
 export async function deleteOrganizationRow(type, id, { loadAthletes, renderOrganizationPanel }) {
-  const labels = { club: "club", team: "team", athlete: "athlete" };
+  const labels = { club: "club", team: "team", athlete: "athlete", user: "user" };
   if (!id || !labels[type]) return;
   if (!window.confirm(`Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`)) return;
   await api(`/api/organization/${type}s/${encodeURIComponent(id)}`, { method: "DELETE" });

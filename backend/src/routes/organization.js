@@ -56,6 +56,23 @@ router.post("/users", async (req, res, next) => {
   }
 });
 
+router.delete("/users/:userId", async (req, res, next) => {
+  try {
+    if (req.params.userId === req.user.id) return res.status(400).json({ error: "You cannot delete your own account." });
+    const result = await query(
+      `update public.users
+       set is_active = false, updated_at = now()
+       where id = $1 and (created_by_user_id = $2 or $3::boolean)
+       returning id`,
+      [req.params.userId, req.user.id, isPlatformAdmin(req.user)],
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "User not found or outside your access." });
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/clubs", async (req, res, next) => {
   try {
     if (!isPlatformAdmin(req.user)) return res.status(403).json({ error: "Only platform admin can create clubs." });
@@ -171,7 +188,7 @@ router.post("/athletes", async (req, res, next) => {
     if (!fullName) return res.status(400).json({ error: "Athlete name is required." });
 
     const generatedId = athleteId || await nextAthleteId();
-    const { firstName, lastName } = splitFullName(fullName);
+    const { firstName, lastName } = splitName(fullName);
     const result = await query(
       `insert into public.athletes (
          athlete_id, source_external_id, first_name, last_name, full_name, display_name, image_url, user_id, club_id, team_id, is_active
@@ -199,7 +216,7 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
     const athleteId = clean(req.body?.athleteId);
     const { clubId, teamId } = await resolveAthleteClubTeam(req.user, clean(req.body?.clubId), clean(req.body?.teamId));
     if (!fullName) return res.status(400).json({ error: "Athlete name is required." });
-    const { firstName, lastName } = splitFullName(fullName);
+    const { firstName, lastName } = splitName(fullName);
     const result = await query(
       `update public.athletes
        set athlete_id = coalesce(nullif($2, ''), athlete_id),
@@ -977,17 +994,6 @@ function clean(value) {
   return String(value || "").trim();
 }
 
-// public.athletes.first_name/last_name are NOT NULL, but the app only ever
-// displays/edits a single full name field -- split it just enough to satisfy
-// the columns (nothing else in the app writes or meaningfully reads them).
-function splitFullName(fullName) {
-  const parts = clean(fullName).split(/\s+/).filter(Boolean);
-  return {
-    firstName: parts[0] || fullName,
-    lastName: parts.slice(1).join(" "),
-  };
-}
-
 function bool(value, fallback = false) {
   if (value === true || value === "true" || value === "on" || value === "1") return true;
   if (value === false || value === "false" || value === "0" || value === "") return false;
@@ -1009,7 +1015,7 @@ function splitName(value) {
   const parts = clean(value).split(/\s+/).filter(Boolean);
   return {
     firstName: parts[0] || "User",
-    lastName: parts.slice(1).join(" ") || null,
+    lastName: parts.slice(1).join(" "),
   };
 }
 
