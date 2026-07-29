@@ -9,6 +9,7 @@ import {
   findBuilderSession,
   sessionLabel,
 } from "./builder-helpers.js";
+import { renderBuilderItems } from "./builder-exercises.js";
 import { renderBuilderAthletePicker, renderBuilderInfoModal } from "./builder-modals.js";
 import { renderBuilderSectionOverlay } from "./builder-section.js";
 import {
@@ -170,6 +171,50 @@ export function renderBuilder() {
   const scrollState = captureBuilderScrollState();
   renderBuilderInner();
   restoreBuilderScrollState(scrollState);
+}
+
+// Dose/instruction edits, move up/down, and delete only change which exercises are
+// in the currently open section and their order -- nothing else on screen needs to
+// change. Patching just this panel (instead of the full renderBuilder(), which
+// replaces the entire screen) means the search input, scroll position, and any
+// other field the coach is mid-edit in are never touched by these actions.
+// Returns false (caller should fall back to renderBuilder()) if the section editor
+// isn't currently open.
+export function renderBuilderSectionItems() {
+  const selectedNode = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
+  const container = els.content.querySelector(".builder-section-added");
+  if (!container || !selectedNode || selectedNode.type !== "section") return false;
+
+  // A Tab between sibling fields on the same item (e.g. Sets -> Reps) moves focus
+  // to the next field synchronously, before this async save even starts -- so by
+  // the time we patch the DOM, the field the coach just tabbed into is already
+  // focused. Capture and restore it (and the modal's scroll) around the patch so
+  // neither gets stolen out from under them.
+  const scrollEl = els.content.querySelector(".builder-section-modal");
+  const scrollTop = scrollEl ? scrollEl.scrollTop : null;
+  const active = document.activeElement;
+  const activeForm = active?.closest?.(".builder-item");
+  const focusState = activeForm && container.contains(activeForm)
+    ? { itemId: activeForm.dataset.itemId, fieldName: active.getAttribute("name"), start: active.selectionStart, end: active.selectionEnd }
+    : null;
+
+  container.innerHTML = `
+    <div class="builder-panel-label">Added to section <span>${selectedNode.items.length}</span></div>
+    ${renderBuilderItems(selectedNode) || `<div class="empty">Choose exercises from the library to build this section.</div>`}
+  `;
+
+  if (scrollEl && scrollTop !== null) scrollEl.scrollTop = scrollTop;
+  if (focusState) {
+    const nextForm = container.querySelector(`.builder-item[data-item-id="${CSS.escape(focusState.itemId)}"]`);
+    const nextField = nextForm?.querySelector(`[name="${CSS.escape(focusState.fieldName)}"]`);
+    if (nextField) {
+      nextField.focus({ preventScroll: true });
+      if (typeof nextField.setSelectionRange === "function" && focusState.start !== null) {
+        try { nextField.setSelectionRange(focusState.start, focusState.end); } catch {}
+      }
+    }
+  }
+  return true;
 }
 
 function renderBuilderInner() {

@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { renderBuilderExerciseResult } from "./builder-exercises.js";
-import { renderBuilder } from "./builder-view.js";
+import { renderBuilder, renderBuilderSectionItems } from "./builder-view.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
 import { state } from "./state.js";
 
@@ -28,9 +28,10 @@ export async function loadBuilderExercises(options = {}) {
   options.afterRender?.();
 }
 
-export async function refreshBuilderDraft() {
+export async function refreshBuilderDraft(options = {}) {
   if (!state.builder.draft) return;
   state.builder.draft = await api(`/api/builder/plans/${encodeURIComponent(state.builder.draft.plan.id)}`);
+  if (options.sectionItemsOnly && renderBuilderSectionItems()) return;
   renderBuilder();
 }
 

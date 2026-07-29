@@ -19,7 +19,7 @@ import {
 } from "./builder-actions.js";
 import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
-import { renderBuilder } from "./builder-view.js";
+import { renderBuilder, renderBuilderSectionItems } from "./builder-view.js";
 import {
   handleCoachProfileAction,
   loadCoaches as loadCoachesAction,
@@ -418,7 +418,7 @@ async function handleContentSubmit(event) {
   if (error) error.textContent = "";
   if (submitButton) submitButton.disabled = true;
   try {
-    await submitBuilderFormAction(builderForm, { loadBuilderExercises, renderBuilder });
+    await submitBuilderFormAction(builderForm, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems });
   } catch (builderError) {
     if (error) error.textContent = builderError.message || "Could not save this change.";
     else renderBuilderError(builderError);
@@ -601,7 +601,7 @@ async function handleContentChange(event) {
   const form = event.target.closest("[data-builder-autosave]");
   if (!form || !event.target.matches("input, textarea")) return;
   try {
-    await submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder });
+    await submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems });
   } catch (error) {
     renderBuilderError(error);
   }
@@ -610,8 +610,12 @@ async function handleContentChange(event) {
 let builderSearchTimer = null;
 function debounceBuilderSearch() {
   clearTimeout(builderSearchTimer);
-  const focus = captureBuilderExerciseSearchFocus();
-  builderSearchTimer = setTimeout(() => loadBuilderExercises({ afterRender: () => restoreBuilderExerciseSearchFocus(focus) }), 250);
+  // loadBuilderExercises() now patches only the results list and never touches the
+  // search input itself, so there is nothing to restore focus/selection for here
+  // anymore -- doing so anyway would fight the user's own cursor position with a
+  // stale (pre-fetch) offset, which is what used to make it look like typed letters
+  // landed mid-word.
+  builderSearchTimer = setTimeout(() => loadBuilderExercises(), 250);
 }
 
 let templateSearchTimer = null;
@@ -641,27 +645,6 @@ function restoreTemplateFilterFocus(focus) {
   requestAnimationFrame(() => {
     const escapedFilter = window.CSS?.escape ? CSS.escape(focus.filter) : String(focus.filter).replace(/"/g, '\\"');
     const input = document.querySelector(`input[data-template-filter="${escapedFilter}"]`);
-    if (!input) return;
-    input.focus({ preventScroll: true });
-    if (typeof input.setSelectionRange === "function" && focus.start !== null && focus.end !== null) {
-      input.setSelectionRange(focus.start, focus.end);
-    }
-  });
-}
-
-function captureBuilderExerciseSearchFocus() {
-  const active = document.activeElement;
-  if (!active?.matches?.("[data-builder-exercise-search]")) return null;
-  return {
-    start: active.selectionStart,
-    end: active.selectionEnd,
-  };
-}
-
-function restoreBuilderExerciseSearchFocus(focus) {
-  if (!focus) return;
-  requestAnimationFrame(() => {
-    const input = document.querySelector("[data-builder-exercise-search]");
     if (!input) return;
     input.focus({ preventScroll: true });
     if (typeof input.setSelectionRange === "function" && focus.start !== null && focus.end !== null) {
@@ -1764,7 +1747,7 @@ async function handleBuilderAction(action) {
   if (await handleBuilderPlanAction(action, { renderBuilder, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
   if (await handleBuilderWorkspaceAction(action, { renderBuilder })) return;
   if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft })) return;
-  if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderError, refreshBuilderDraft })) return;
+  if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderError, refreshBuilderDraft })) return;
 }
 
 function renderBuilderError(error) {

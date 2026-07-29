@@ -646,7 +646,7 @@ export async function handleBuilderItemAction(action, handlers) {
           load: doseInput("load")?.value || "",
         })),
       }));
-      handlers.renderBuilder();
+      if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
     } catch (error) {
       handlers.renderBuilderError(error);
     }
@@ -658,13 +658,13 @@ export async function handleBuilderItemAction(action, handlers) {
     const targetIndex = currentIndex + (action.dataset.direction === "up" ? -1 : 1);
     if (!node || currentIndex < 0 || targetIndex < 0 || targetIndex >= node.items.length) return true;
     [node.items[currentIndex], node.items[targetIndex]] = [node.items[targetIndex], node.items[currentIndex]];
-    handlers.renderBuilder();
+    if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
     try {
       setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}/move`, {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({ direction: action.dataset.direction })),
       }));
-      handlers.renderBuilder();
+      if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
     } catch (error) {
       await handlers.refreshBuilderDraft();
       throw error;
@@ -674,7 +674,7 @@ export async function handleBuilderItemAction(action, handlers) {
   if (type === "builder-delete-item") {
     if (!window.confirm("Remove this exercise from the program?")) return true;
     await api(withBatchSyncUrl(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`), { method: "DELETE" });
-    await handlers.refreshBuilderDraft();
+    await handlers.refreshBuilderDraft({ sectionItemsOnly: true });
     return true;
   }
   return false;
@@ -742,6 +742,7 @@ export async function submitBuilderForm(form, handlers) {
   }
   if (mode === "update-item") {
     setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    if (handlers.renderBuilderSectionItems?.()) return;
   }
   handlers.renderBuilder();
 }
