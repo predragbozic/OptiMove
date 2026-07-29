@@ -62,6 +62,18 @@ function withBatchSyncPayload(payload = {}) {
   return shouldSyncBuilderBatch() ? { ...payload, syncBatch: true } : payload;
 }
 
+// Builder mutations (rename, move, dose/instruction edits, ...) all replace the
+// whole draft with whatever the server returns. If two of these are in flight at
+// once, their responses can land out of order and the older one silently reverts
+// the newer edit. Running them through a single queue keeps requests -- and their
+// responses -- in submission order, so nothing gets clobbered.
+let builderMutationQueue = Promise.resolve();
+function queuedBuilderApi(url, options) {
+  const result = builderMutationQueue.then(() => api(url, options));
+  builderMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 function withBatchSyncUrl(url) {
   return shouldSyncBuilderBatch() ? `${url}${url.includes("?") ? "&" : "?"}syncBatch=1` : url;
 }
@@ -109,7 +121,7 @@ export async function handleBuilderPlanAction(action, handlers) {
     const isBatchPlanSwitch = batchPlans.some((plan) => String(plan.id) === String(planId));
     action.disabled = true;
     try {
-      setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(planId)}/edit`, { method: "POST" }), {
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}/edit`, { method: "POST" }), {
         preserveBatch: isBatchPlanSwitch,
       });
       state.builder.selectedSessionId = "";
@@ -169,7 +181,7 @@ export async function handleBuilderPlanAction(action, handlers) {
       const athleteIds = state.builder.copyAthleteIds?.length
         ? state.builder.copyAthleteIds
         : (state.builder.copyAthleteId ? [state.builder.copyAthleteId] : []);
-      setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(state.builder.copyPlanId)}/duplicate`, {
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(state.builder.copyPlanId)}/duplicate`, {
         method: "POST",
         body: JSON.stringify({ athleteId: athleteIds[0] || "", athleteIds, weekStart: state.builder.copyWeekStart }),
       }), { preserveBatch: false });
@@ -200,7 +212,7 @@ export async function handleBuilderPlanAction(action, handlers) {
     if (!planId) return true;
     action.disabled = true;
     try {
-      setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(planId)}`));
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}`));
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
@@ -275,7 +287,7 @@ export async function handleBuilderPlanAction(action, handlers) {
         handlers.renderBuilder();
         return true;
       }
-      setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(planId)}`));
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}`));
       state.builder.error = "";
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
@@ -344,7 +356,7 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     const blockId = action.dataset.blockId || "";
     const { amPm, bta, time } = state.builder.sessionQuickAdd;
     const payload = withBatchSyncPayload({ amPm, bta, time });
-    const draft = setBuilderDraft(await api(`/api/builder/blocks/${encodeURIComponent(blockId)}/sessions`, { method: "POST", body: JSON.stringify(payload) }));
+    const draft = setBuilderDraft(await queuedBuilderApi(`/api/builder/blocks/${encodeURIComponent(blockId)}/sessions`, { method: "POST", body: JSON.stringify(payload) }));
     const updatedBlock = draft?.blocks.find((block) => block.id === blockId);
     state.builder.selectedSessionId = updatedBlock?.sessions.at(-1)?.id || state.builder.selectedSessionId;
     state.builder.selectedNodeId = "";
@@ -394,7 +406,7 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     if (!clipboard) return true;
     action.disabled = true;
     try {
-      setBuilderDraft(await api(`/api/builder/nodes/${encodeURIComponent(clipboard.nodeId)}/copy`, {
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(clipboard.nodeId)}/copy`, {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({ targetSessionId: action.dataset.sessionId, targetParentId: action.dataset.parentId || "" })),
       }));
@@ -410,7 +422,7 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   if (type === "builder-move-node") {
     action.disabled = true;
     try {
-      setBuilderDraft(await api(`/api/builder/nodes/${encodeURIComponent(action.dataset.nodeId || "")}/move`, {
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(action.dataset.nodeId || "")}/move`, {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({ direction: action.dataset.direction || "" })),
       }));
@@ -625,7 +637,7 @@ export async function handleBuilderItemAction(action, handlers) {
     if (!section || section.type !== "section") return true;
     action.disabled = true;
     try {
-      setBuilderDraft(await api(`/api/builder/nodes/${encodeURIComponent(section.id)}/exercises`, {
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(section.id)}/exercises`, {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({
           exerciseId: action.dataset.exerciseId || "",
@@ -648,7 +660,7 @@ export async function handleBuilderItemAction(action, handlers) {
     [node.items[currentIndex], node.items[targetIndex]] = [node.items[targetIndex], node.items[currentIndex]];
     handlers.renderBuilder();
     try {
-      setBuilderDraft(await api(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}/move`, {
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}/move`, {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({ direction: action.dataset.direction })),
       }));
@@ -694,23 +706,23 @@ export async function submitBuilderForm(form, handlers) {
   }
   if (!draft) return;
   if (mode === "add-block") {
-    setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}/blocks`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}/blocks`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
     state.builder.blockAddOpen = false;
   }
   if (mode === "update-block") {
-    setBuilderDraft(await api(`/api/builder/blocks/${encodeURIComponent(form.dataset.blockId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/blocks/${encodeURIComponent(form.dataset.blockId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   if (mode === "update-plan") {
-    setBuilderDraft(await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   if (mode === "update-node") {
-    setBuilderDraft(await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   if (mode === "update-session") {
-    setBuilderDraft(await api(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   if (mode === "add-node") {
-    setBuilderDraft(await api(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}/nodes`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}/nodes`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
     const session = findBuilderSession(state.builder.draft, form.dataset.sessionId);
     const added = session?.nodes.at(-1);
     state.builder.selectedSessionId = form.dataset.sessionId;
@@ -722,14 +734,14 @@ export async function submitBuilderForm(form, handlers) {
   }
   if (mode === "add-exercise") {
     if (!data.exerciseId) return;
-    setBuilderDraft(await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/exercises`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/exercises`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   if (mode === "add-custom-exercise") {
-    setBuilderDraft(await api(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/custom-exercise`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/custom-exercise`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
     state.builder.customExerciseOpen = false;
   }
   if (mode === "update-item") {
-    setBuilderDraft(await api(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   handlers.renderBuilder();
 }

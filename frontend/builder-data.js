@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { renderBuilderExerciseResult } from "./builder-exercises.js";
 import { renderBuilder } from "./builder-view.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
 import { state } from "./state.js";
@@ -13,7 +14,17 @@ export async function loadBuilderExercises(options = {}) {
   const data = await api(exerciseSearchUrl(query, 18, state.builder.exerciseFilters));
   if (requestId !== builderExerciseRequestId) return;
   state.builder.exercises = applyClientExerciseFilters(data.exercises || [], state.builder.exerciseFilters);
-  renderBuilder();
+  // A results-only refresh (instead of the full renderBuilder()) so typing in the
+  // search box never touches the search input itself or any other in-progress edit
+  // (sets/reps/instruction, scroll position) elsewhere on the same screen.
+  const resultsContainer = document.querySelector(".builder-exercise-results");
+  if (resultsContainer && !options.forceFullRender) {
+    resultsContainer.innerHTML = state.builder.exercises
+      .map((exercise) => renderBuilderExerciseResult(exercise, state.markedExerciseIds))
+      .join("") || `<div class="empty">No matching exercises.</div>`;
+  } else {
+    renderBuilder();
+  }
   options.afterRender?.();
 }
 
