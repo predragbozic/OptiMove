@@ -61,7 +61,15 @@ app.use("/api/notifications", requireAuth, notificationsRouter);
 app.use("/api/messages", requireAuth, messagesRouter);
 app.get("/api/realtime", requireAuth, realtimeRouter);
 
-app.use(express.static(frontendDir));
+// This is a plain ES-modules frontend with no build step: script imports (e.g.
+// "./builder-view.js") carry no cache-busting hash, and browsers cache compiled
+// ES modules more aggressively than typical HTTP caching -- a stale module can
+// keep getting reused across reloads (even hard reloads) independent of the HTML
+// page. Force revalidation on every request so a deploy is never masked by a
+// cached JS/CSS file.
+app.use(express.static(frontendDir, {
+  setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),
+}));
 app.get(["/", "/app", "/invite"], (_req, res) => {
   res.sendFile(path.join(frontendDir, "index.html"));
 });
