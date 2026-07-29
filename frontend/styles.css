@@ -3878,6 +3878,10 @@ input:focus {
   color: #a3acb8;
 }
 
+.week-calendar-day:hover {
+  background: var(--surface-soft, #eef2f4);
+}
+
 .week-calendar-day.has-items {
   border-color: transparent;
   background: transparent;
@@ -7253,6 +7257,29 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 @media (max-width: 760px) {
   .week-nav-panel {
     grid-template-columns: 42px minmax(0, 1fr) 70px 42px auto;
+  }
+}
+
+.week-new-plan-button {
+  width: 40px;
+  min-width: 40px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  justify-self: end;
+}
+
+@media (max-width: 400px) {
+  /* Narrow phones: the week range text needs the room more than "Today"
+     needs its full label -- shrink Today's column and padding instead of
+     letting the date range get clipped. */
+  .week-nav-panel {
+    grid-template-columns: 38px minmax(0, 1fr) 54px 38px auto;
+  }
+
+  .week-nav-panel .week-today-button {
+    padding: 0 4px;
+    font-size: 12px;
   }
 }
 

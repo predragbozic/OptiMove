@@ -15,6 +15,16 @@ import {
   truncate,
 } from "./utils.js";
 
+const ICON_NEW_PLAN = `
+  <svg viewBox="0 0 24 24" class="rail-icon" aria-hidden="true">
+    <path d="M6 3.5h8l4 4v11a1.5 1.5 0 0 1-1.5 1.5h-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+    <path d="M6 3.5A1.5 1.5 0 0 0 4.5 5v14A1.5 1.5 0 0 0 6 20.5h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+    <path d="M8.5 9h6M8.5 12.5h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+    <circle cx="17.5" cy="17.5" r="4.5" fill="currentColor"></circle>
+    <path d="M17.5 15.3v4.4M15.3 17.5h4.4" stroke="var(--surface, #fff)" stroke-width="1.4" stroke-linecap="round"></path>
+  </svg>
+`;
+
 export function renderWeekCalendarDayHtml(day, selectedDate) {
   const classes = [
     "week-calendar-day",
@@ -27,11 +37,9 @@ export function renderWeekCalendarDayHtml(day, selectedDate) {
     <span class="week-calendar-day-number">${escapeHtml(String(day.dayNumber))}</span>
     ${day.hasItems ? `<span class="week-calendar-dot"></span><span class="week-calendar-count">${day.itemCount}</span>` : ""}
   `;
-  if (!day.hasItems) {
-    return `<span class="${classes}" aria-label="${escapeAttr(day.date)}">${content}</span>`;
-  }
+  const label = day.hasItems ? `${formatDate(day.date)}, ${day.itemCount} items` : formatDate(day.date);
   return `
-    <button class="${classes}" data-action="week-day-select" data-date="${escapeAttr(day.date)}" aria-label="${escapeAttr(`${formatDate(day.date)}, ${day.itemCount} items`)}">
+    <button class="${classes}" data-action="week-day-select" data-date="${escapeAttr(day.date)}" aria-label="${escapeAttr(label)}">
       ${content}
     </button>
   `;
@@ -141,7 +149,7 @@ export function renderWeeklyRootHtml({
         </button>
         <button class="plain-button week-today-button" data-action="week-today">Today</button>
         <button class="plain-button week-arrow-button" data-action="week-next" aria-label="Next week">›</button>
-        ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : isAthleteMode() ? "" : `<button class="plain-button compact-button" type="button" data-action="weekly-create-plan">Create weekly plan</button>`}
+        ${activeWeek.planId ? renderPlanMoreMenu(activeWeek.planId, "weekly") : isAthleteMode() ? "" : `<button class="plain-button icon-button week-new-plan-button" type="button" data-action="weekly-create-plan" aria-label="Create weekly plan" title="Create weekly plan">${ICON_NEW_PLAN}</button>`}
       </section>
       ${weekSelectorMarkup}
       </div>

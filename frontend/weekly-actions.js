@@ -50,11 +50,15 @@ export function handleWeeklyAction(action, { moveWeek, renderWeeklyRoot }) {
   }
   if (type === "week-day-select") {
     const date = action.dataset.date || "";
+    if (!date) return true;
     const weeks = state.lastWeeklyData?.weeks || [];
     const weekIndex = weekIndexForDate(weeks, date);
-    if (weekIndex < 0) return true;
-    state.selectedWeekIndex = weekIndex;
-    state.viewedWeekStart = weeks[weekIndex]?.weekStart || "";
+    // A tapped day may fall in a week with no plan at all yet (never loaded
+    // into `weeks`), so derive the target week directly from the date --
+    // same pattern "week-today" already relies on -- instead of bailing out
+    // when the lookup comes back empty.
+    state.selectedWeekIndex = weekIndex >= 0 ? weekIndex : 0;
+    state.viewedWeekStart = weekMondayIso(date);
     state.selectedWeekDay = date;
     state.pendingScrollDate = date;
     state.weekSelectorOpen = false;
