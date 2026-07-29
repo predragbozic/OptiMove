@@ -117,9 +117,13 @@ export function dayGroupNodesFromItems(items, makeNode) {
 }
 
 export function groupNodes(items, type, makeNode) {
-  return groupBy(items, (item) => clean(item[type]) || "GENERAL").map((group) => {
+  // Group by the node's real id when the item carries one, not just its name --
+  // two different nodes that happen to share a name (e.g. two sections both
+  // named "Warming up") must stay separate instead of visually merging.
+  return groupBy(items, (item) => item[`${type}_node_id`] || `name:${clean(item[type]) || "GENERAL"}`).map((group) => {
     const meta = group.items.find(Boolean) || {};
-    return makeNode(type, group.label, group.items, {
+    const label = clean(meta[type]) || "GENERAL";
+    return makeNode(type, label, group.items, {
       subtitle: countLabel(group.items),
       color: meta[`${type}_color`] || "",
       icon: meta[`${type}_icon_url`] || "",

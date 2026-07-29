@@ -400,9 +400,58 @@ router.patch("/nodes/:nodeId", async (req, res, next) => {
       "update plans.plan_nodes set name = $2, color = $3, icon_url = $4, updated_at = now() where id = $1",
       [node.id, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl)],
     );
+    await syncSessionItemSnapshots(node.plan_session_id);
     return respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
 });
+
+// Refreshes the denormalized domain_/category_/section_ name+color+icon snapshot
+// columns on every plan_item in a session from the current plan_nodes tree, so a
+// rename doesn't leave already-linked exercises displaying the old name/color/icon.
+async function syncSessionItemSnapshots(sessionId) {
+  await query(
+    `with recursive node_chain as (
+       select id, parent_id, node_type, name, color, icon_url, short_note, note, id as leaf_id
+       from plans.plan_nodes
+       where plan_session_id = $1
+       union all
+       select pn.id, pn.parent_id, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, nc.leaf_id
+       from plans.plan_nodes pn
+       join node_chain nc on pn.id = nc.parent_id
+     ),
+     ancestry as (
+       select leaf_id,
+         max(case when node_type = 'domain' then name end) as domain_name,
+         max(case when node_type = 'domain' then color end) as domain_color,
+         max(case when node_type = 'domain' then icon_url end) as domain_icon_url,
+         max(case when node_type = 'domain' then short_note end) as domain_short_note,
+         max(case when node_type = 'domain' then note end) as domain_note,
+         max(case when node_type = 'category' then name end) as category_name,
+         max(case when node_type = 'category' then color end) as category_color,
+         max(case when node_type = 'category' then icon_url end) as category_icon_url,
+         max(case when node_type = 'category' then short_note end) as category_short_note,
+         max(case when node_type = 'category' then note end) as category_note,
+         max(case when node_type = 'section' then name end) as section_name,
+         max(case when node_type = 'section' then color end) as section_color,
+         max(case when node_type = 'section' then icon_url end) as section_icon_url,
+         max(case when node_type = 'section' then short_note end) as section_short_note,
+         max(case when node_type = 'section' then note end) as section_note
+       from node_chain
+       group by leaf_id
+     )
+     update plans.plan_items pi
+     set domain_name = a.domain_name, domain_color = a.domain_color, domain_icon_url = a.domain_icon_url,
+         domain_short_note = a.domain_short_note, domain_note = a.domain_note,
+         category_name = a.category_name, category_color = a.category_color, category_icon_url = a.category_icon_url,
+         category_short_note = a.category_short_note, category_note = a.category_note,
+         section_name = a.section_name, section_color = a.section_color, section_icon_url = a.section_icon_url,
+         section_short_note = a.section_short_note, section_note = a.section_note,
+         updated_at = now()
+     from ancestry a
+     where pi.plan_node_id = a.leaf_id and pi.plan_session_id = $1`,
+    [sessionId],
+  );
+}
 
 router.post("/nodes/:nodeId/move", async (req, res, next) => {
   try {

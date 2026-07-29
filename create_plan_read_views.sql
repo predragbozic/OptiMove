@@ -57,6 +57,27 @@ group by
   p.id,
   a.id;
 
+-- Walks each plan_item's plan_node_id up the plan_nodes tree (section -> category ->
+-- domain) so readers can group/identify domain/category/section by their real node id
+-- instead of by the denormalized text name. Two different nodes that happen to share a
+-- name (e.g. two sections both called "Warming up") must never visually merge.
+create or replace view plans.v_plan_item_node_ancestry as
+with recursive node_chain as (
+  select id, parent_id, node_type, id as leaf_id
+  from plans.plan_nodes
+  union all
+  select pn.id, pn.parent_id, pn.node_type, nc.leaf_id
+  from plans.plan_nodes pn
+  join node_chain nc on pn.id = nc.parent_id
+)
+select
+  leaf_id as plan_node_id,
+  max(case when node_type = 'domain' then id::text end)::uuid as domain_node_id,
+  max(case when node_type = 'category' then id::text end)::uuid as category_node_id,
+  max(case when node_type = 'section' then id::text end)::uuid as section_node_id
+from node_chain
+group by leaf_id;
+
 create or replace view plans.v_weekly_plan_items as
 select
   p.id as plan_id,
@@ -109,13 +130,18 @@ select
   e.exercise_code,
   e.name as library_exercise_name,
   pi.source_row_ref,
-  ps.session_time
+  ps.session_time,
+  pi.plan_node_id,
+  na.domain_node_id,
+  na.category_node_id,
+  na.section_node_id
 from plans.plans p
 join public.athletes a on a.id = p.athlete_id
 join plans.plan_days pd on pd.plan_id = p.id
 join plans.plan_sessions ps on ps.plan_day_id = pd.id
 join plans.plan_items pi on pi.plan_session_id = ps.id
 left join library.exercises e on e.id = pi.exercise_id
+left join plans.v_plan_item_node_ancestry na on na.plan_node_id = pi.plan_node_id
 where p.plan_type = 'weekly'
   and coalesce(p.is_active, true)
   and not coalesce(p.is_edit_draft, false)
@@ -191,13 +217,18 @@ select
   e.exercise_code,
   e.name as library_exercise_name,
   pi.source_row_ref,
-  ps.session_time
+  ps.session_time,
+  pi.plan_node_id,
+  na.domain_node_id,
+  na.category_node_id,
+  na.section_node_id
 from plans.plans p
 left join public.athletes a on a.id = p.athlete_id
 join plans.plan_days pd on pd.plan_id = p.id
 join plans.plan_sessions ps on ps.plan_day_id = pd.id
 join plans.plan_items pi on pi.plan_session_id = ps.id
 left join library.exercises e on e.id = pi.exercise_id
+left join plans.v_plan_item_node_ancestry na on na.plan_node_id = pi.plan_node_id
 where p.plan_type = 'program'
   and coalesce(p.is_active, true)
   and not coalesce(p.is_edit_draft, false)
