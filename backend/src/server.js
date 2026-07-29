@@ -36,7 +36,12 @@ app.use(authMiddleware);
 app.get("/api/health", async (_req, res, next) => {
   try {
     const result = await pool.query("select now() as now");
-    res.json({ ok: true, dbTime: result.rows[0].now });
+    res.json({
+      ok: true,
+      dbTime: result.rows[0].now,
+      commit: process.env.RENDER_GIT_COMMIT || null,
+      deployedAt: process.env.RENDER_DEPLOY_CREATED_AT || null,
+    });
   } catch (error) {
     next(error);
   }
