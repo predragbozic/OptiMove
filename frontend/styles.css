@@ -7805,6 +7805,14 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-section-panel:has(input[data-builder-exercise-search]:focus) .builder-quick-dose {
     display: none;
   }
+
+  /* The modal normally sits bottom-anchored (a sheet) on mobile, so even
+     with the header/filters/dose collapsed above, the search field could
+     still land mid-screen rather than at the very top. Snap the modal to
+     the top of the screen while any exercise-library control has focus. */
+  .builder-section-overlay:has(.builder-section-library:focus-within) {
+    align-items: start;
+  }
 }
 
 /* Inline top-level add-node form (triggered by the pyramid buttons), no type select needed. */
