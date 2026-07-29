@@ -13,6 +13,8 @@ import { renderBuilderItems } from "./builder-exercises.js";
 import { renderBuilderAthletePicker, renderBuilderInfoModal } from "./builder-modals.js";
 import { renderBuilderSectionOverlay } from "./builder-section.js";
 import {
+  ICON_CHECK,
+  ICON_X,
   renderBuilderAddBlockCard,
   renderBuilderBlock,
   renderBuilderStructureModal,
@@ -278,7 +280,7 @@ function renderBuilderInner() {
   const selectedNode = findBuilderNode(draft, state.builder.selectedNodeId);
   const isWeekly = draft.plan.planType === "weekly";
   const isEditDraft = Boolean(draft.plan.isEditDraft);
-  const closeLabel = isEditDraft ? "Cancel changes" : "Close";
+  const closeLabel = isEditDraft ? "Cancel" : "Close";
   const saveLabel = isEditDraft ? "Apply changes" : "Save and finish";
   const structureContext = builderStructureContext();
   const batchPlans = Array.isArray(draft.batch?.plans) ? draft.batch.plans : [];
@@ -288,7 +290,7 @@ function renderBuilderInner() {
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
         <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}"></form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
-        <div class="builder-program-actions"><span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span><button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="${isEditDraft ? "Discard this edit draft and keep the original unchanged." : "Every change saves automatically. This just closes the editor — find the draft again later from where you started it."}">${closeLabel}</button>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">${saveLabel}</button>` : `<span class="builder-finished-label">Saved</span>`}${isEditDraft ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-plan" title="Permanently discard this draft and everything in it.">Discard draft</button>`}</div>
+        <div class="builder-program-actions"><span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span><button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="${isEditDraft ? "Discard this edit draft and keep the original unchanged." : "Every change saves automatically. This just closes the editor — find the draft again later from where you started it."}">${ICON_X}<span>${closeLabel}</span></button>${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">${ICON_CHECK}<span>${saveLabel}</span></button>` : `<span class="builder-finished-label">Saved</span>`}${isEditDraft ? "" : `<button class="text-action danger-action" type="button" data-action="builder-delete-plan" title="Permanently discard this draft and everything in it.">Discard draft</button>`}</div>
       </header>
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : ""}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}

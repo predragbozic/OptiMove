@@ -2,8 +2,8 @@ import { renderImage } from "./media.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import { formatDate, weekDayName, escapeAttr, escapeHtml } from "./utils.js";
 
-const ICON_CHECK = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 12l5 5L20 6"></path></svg>`;
-const ICON_X = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>`;
+export const ICON_CHECK = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 12l5 5L20 6"></path></svg>`;
+export const ICON_X = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>`;
 const ICON_COPY = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>`;
 const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>`;
 const ICON_PASTE = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"></rect><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"></path><path d="M9 12h6M9 16h6"></path></svg>`;
@@ -131,6 +131,8 @@ function renderBuilderInlineAddForm(session, parentId, context) {
       </datalist>
       ${renderPastelSwatches("color", "", { allowCustom: true, collapsed: true })}
       <input class="builder-text-input" name="iconUrl" type="url" placeholder="Icon URL (optional)" aria-label="Node icon URL">
+      <input class="builder-text-input" name="shortNote" maxlength="60" placeholder="Short note (optional, shown on the calendar)" aria-label="Short note">
+      <textarea class="builder-text-input" name="note" rows="2" placeholder="Note (optional, shown when you open this ${escapeAttr(label.toLowerCase())})" aria-label="Note"></textarea>
       <p class="builder-error" aria-live="polite"></p>
       <div class="builder-inline-add-actions">
         ${renderConfirmIconButton({ label: `Add ${label}` })}
@@ -277,6 +279,8 @@ export function renderNodeEditForm(node, label, isOpen = false, presets = []) {
       </datalist>
       ${renderPastelSwatches("color", node.color || "", { allowCustom: true, collapsed: true })}
       <input class="builder-text-input" name="iconUrl" type="url" value="${escapeAttr(node.iconUrl || "")}" placeholder="Icon URL (optional)" aria-label="${escapeAttr(label)} icon URL">
+      <input class="builder-text-input" name="shortNote" maxlength="60" value="${escapeAttr(node.shortNote || "")}" placeholder="Short note (optional, shown on the calendar)" aria-label="${escapeAttr(label)} short note">
+      <textarea class="builder-text-input" name="note" rows="2" placeholder="Note (optional, shown when you open this ${escapeAttr(label.toLowerCase())})" aria-label="${escapeAttr(label)} note">${escapeHtml(node.note || "")}</textarea>
     </form>
   `;
 }
@@ -298,6 +302,7 @@ function renderBuilderStructureEditor(session, selectedNode, context) {
       <div>
         <p class="eyebrow">Selected ${escapeHtml(label)}</p>
         ${renderNodeEditForm(selectedNode, label, context.editNodeOpen === selectedNode.id, presets)}
+        ${context.editNodeOpen !== selectedNode.id && selectedNode.note ? `<p class="builder-node-note">${escapeHtml(selectedNode.note)}</p>` : ""}
         <p class="muted">${escapeHtml(hint)}</p>
       </div>
       <div class="builder-section-editor-actions">${renderBuilderNodeMoveActions(selectedNode, false, "", context)}${renderCopyNodeIconButton(selectedNode.id, `Copy ${selectedNode.type}`)}${renderNodePasteButton(session.id, selectedNode.id, selectedNode.type, context)}${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, `Delete ${selectedNode.type}`)}</div>

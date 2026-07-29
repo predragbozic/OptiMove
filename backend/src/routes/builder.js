@@ -442,9 +442,11 @@ router.patch("/nodes/:nodeId", async (req, res, next) => {
     const node = await getEditableNode(req.user, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     const name = text(req.body?.name) || node.name;
+    const shortNote = req.body?.shortNote === undefined ? node.short_note : nullableText(req.body.shortNote);
+    const note = req.body?.note === undefined ? node.note : nullableText(req.body.note);
     await query(
-      "update plans.plan_nodes set name = $2, color = $3, icon_url = $4, updated_at = now() where id = $1",
-      [node.id, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl)],
+      "update plans.plan_nodes set name = $2, color = $3, icon_url = $4, short_note = $5, note = $6, updated_at = now() where id = $1",
+      [node.id, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl), shortNote, note],
     );
     await syncSessionItemSnapshots(node.plan_session_id);
     return respondWithDraft(req, res, req.user, node.plan);

@@ -12,6 +12,7 @@ import {
   formatDayMonth,
   formatWeekday,
   localDateIso,
+  truncate,
 } from "./utils.js";
 
 export function renderWeekCalendarDayHtml(day, selectedDate) {
@@ -93,7 +94,7 @@ export function renderCalendarBtaGroupHtml(node, makeNode) {
 
 export function renderCalendarEventHtml(node) {
   if (!node.items.length) return "";
-  const shortNote = node.shortNote || node.note || "";
+  const shortNote = truncate(node.shortNote || node.note || "", 40);
   return `
     <button class="calendar-event" data-action="node" data-node-id="${escapeAttr(node.id)}" style="${node.color ? `--node-color:${escapeAttr(node.color)}` : ""}">
       <span class="calendar-event-head">

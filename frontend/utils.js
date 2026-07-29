@@ -85,6 +85,11 @@ export function clean(value) {
   return String(value || "").trim();
 }
 
+export function truncate(value, maxLength) {
+  const text = clean(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
+}
+
 export function initialsFor(name) {
   return String(name || "?")
     .split(/\s+/)

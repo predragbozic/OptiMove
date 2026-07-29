@@ -3956,6 +3956,9 @@ input:focus {
 }
 
 .plan-more-menu-popover button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 9px 10px;
   border: 0;
   border-radius: 6px;
@@ -3966,6 +3969,12 @@ input:focus {
   font-weight: 750;
   text-align: left;
   cursor: pointer;
+}
+
+.plan-more-menu-popover button .builder-icon-svg {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
 }
 
 .plan-more-menu-popover button:hover {
@@ -6924,6 +6933,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-node-edit-form { padding: 10px; border: 1px solid var(--line, #dfe4e8); border-radius: 6px; background: #fbfcfd; margin: 6px 0; }
 .builder-node-edit-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 2px 0 8px; }
 .builder-node-edit-name { font-weight: 800; font-size: 15px; overflow-wrap: anywhere; }
+.builder-node-note { margin: 0 0 8px; padding: 8px 10px; border-radius: 6px; background: #f4f6f7; color: var(--text, #20242a); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .builder-section-panel-head .builder-node-edit-name { font-size: 20px; }
 .builder-section-panel-head .builder-node-edit-heading { margin: 0 0 4px; }
 .builder-node-row-actions .builder-icon-action,
@@ -7060,6 +7070,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-source-actions .plain-button { min-height: 34px; padding: 6px 10px; font-size: 13px; }
 .builder-copy-hint { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid #b9d8d4; border-radius: 6px; background: #eef8f6; color: #1f6f68; font-size: 13px; }
 .builder-finish-button { min-height: 36px; padding: 7px 12px; }
+.builder-cancel-button, .builder-finish-button { display: flex; align-items: center; gap: 6px; }
+.builder-finish-button .builder-icon-svg { color: #2e9e4f; }
 .builder-finished-label { color: #287e77; font-size: 13px; font-weight: 800; }
 .builder-info-button { width: 32px; min-width: 32px; height: 32px; min-height: 32px; margin-left: auto; }
 .builder-outline-info-buttons { display: flex; align-items: center; gap: 6px; margin-left: auto; }
@@ -7087,6 +7099,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-section-modal .builder-section-panel { padding: 2px; }
 .builder-section-panel-head { padding-bottom: 14px; border-bottom: 1px solid var(--line, #dfe4e8); }
 .builder-section-editor-actions { display: flex; align-items: center; gap: 12px; }
+.builder-section-cancel-button, .builder-section-finish-button { display: flex; align-items: center; gap: 6px; }
+.builder-section-finish-button .builder-icon-svg { color: #2e9e4f; }
 .builder-section-grid { display: grid; grid-template-columns: minmax(240px, .82fr) minmax(290px, 1.18fr); gap: 16px; }
 .builder-section-library, .builder-section-added { min-width: 0; }
 .builder-section-added { padding-left: 16px; border-left: 1px solid var(--line, #dfe4e8); }
