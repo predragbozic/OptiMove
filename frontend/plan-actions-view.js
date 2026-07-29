@@ -15,9 +15,9 @@ export function renderPlanMoreMenu(planId, objectType) {
     <details class="plan-more-menu">
       <summary class="${summaryClass}" aria-label="${objectLabel} actions" title="${objectLabel} actions">${summaryContent}</summary>
       <div class="plan-more-menu-popover">
-        <button type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(planId)}">${ICON_PENCIL}<span>Edit ${objectLabel}</span></button>
-        <button type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(planId)}" data-plan-type="${isWeekly ? "weekly" : "program"}">${ICON_COPY}<span>Edit copy</span></button>
-        <button class="danger-action" type="button" data-action="builder-delete-source-plan" data-plan-id="${escapeAttr(planId)}" data-object-label="${objectLabel}">${ICON_TRASH}<span>Delete ${objectLabel}</span></button>
+        <button type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(planId)}">${ICON_PENCIL}<span>Edit</span></button>
+        <button type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(planId)}" data-plan-type="${isWeekly ? "weekly" : "program"}">${ICON_COPY}<span>Copy</span></button>
+        <button class="danger-action" type="button" data-action="builder-delete-source-plan" data-plan-id="${escapeAttr(planId)}" data-object-label="${objectLabel}">${ICON_TRASH}<span>Delete</span></button>
       </div>
     </details>
   `;

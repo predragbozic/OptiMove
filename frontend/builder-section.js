@@ -38,8 +38,8 @@ function renderBuilderSectionPanel(state, selectedNode) {
                 ${renderExerciseFilterControls(state.builder.exerciseFilters, state.exerciseSearch.options, "builder-selects")}
               </div>
             </details>
+            <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
           `)}
-          <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
           <div class="builder-dose-inputs builder-quick-dose">
             <label><span>Sets</span><input data-builder-new-dose name="sets" placeholder="3"></label>
             <label><span>Reps</span><input data-builder-new-dose name="reps" placeholder="8"></label>

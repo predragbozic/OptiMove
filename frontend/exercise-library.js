@@ -4,6 +4,9 @@ import { escapeAttr, escapeHtml } from "./utils.js";
 
 export const QUICK_FILTER_KEYS = new Set(["purpose", "tag"]);
 
+const ICON_STAR = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.9z"></path></svg>`;
+const ICON_BOOKMARK = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hidden="true"><path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4-7 4V4.5a1 1 0 0 1 1-1z"></path></svg>`;
+
 export function filterIconSvg() {
   return `
     <svg class="rail-icon exercise-filter-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -28,10 +31,14 @@ export function renderExerciseQuickFilters(values, options, attr, moreFiltersHtm
   const quickSelects = EXERCISE_FILTERS.filter((filter) => QUICK_FILTER_KEYS.has(filter.key));
   return `
     <div class="exercise-quick-filters">
-      ${quickSelects.map((filter) => renderExerciseFilterSelect(filter, values[filter.key], options[filter.optionsKey], attr)).join("")}
-      ${renderExerciseFilterToggle("favorite", "Favorites", values.favorite, attr)}
-      ${renderExerciseFilterToggle("marked", "Marked", values.marked, attr)}
-      ${moreFiltersHtml}
+      <div class="exercise-quick-filters-row exercise-quick-filters-row-main">
+        ${quickSelects.map((filter) => renderExerciseFilterSelect(filter, values[filter.key], options[filter.optionsKey], attr)).join("")}
+        ${renderExerciseFilterToggle("favorite", "Favorites", values.favorite, attr)}
+        ${renderExerciseFilterToggle("marked", "Marked", values.marked, attr)}
+      </div>
+      <div class="exercise-quick-filters-row exercise-quick-filters-row-more">
+        ${moreFiltersHtml}
+      </div>
     </div>
   `;
 }
@@ -83,10 +90,11 @@ function renderExerciseFilterSelect(filter, value, options, attr) {
 }
 
 function renderExerciseFilterToggle(key, label, checked, attr) {
+  const icon = key === "favorite" ? ICON_STAR : key === "marked" ? ICON_BOOKMARK : "";
   return `
-    <label class="exercise-filter-toggle">
+    <label class="exercise-filter-toggle" title="${escapeAttr(label)}">
       <input type="checkbox" ${attr}="${escapeAttr(key)}" ${checked ? "checked" : ""}>
-      <span>${escapeHtml(label)}</span>
+      ${icon}<span>${escapeHtml(label)}</span>
     </label>
   `;
 }

@@ -6959,8 +6959,13 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-exercise-result small { color: var(--muted, #667085); margin-top: 3px; }
 .builder-exercise-result-text { min-width: 0; }
 .builder-exercise-result-text strong { overflow: hidden; text-overflow: ellipsis; }
-.builder-exercise-mini-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 11px; }
+.builder-exercise-mini-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; font-size: 11px; }
 .builder-exercise-mini-actions .text-action { font-size: 11px; }
+.builder-mini-toggle { width: 24px; height: 24px; min-width: 24px; min-height: 24px; color: #aab4bc; }
+.builder-mini-toggle.is-favorite { color: #f5b400; }
+.builder-mini-toggle.is-favorite .builder-icon-svg { fill: #f5b400; }
+.builder-mini-toggle.is-marked { color: #1f6f68; }
+.builder-mini-toggle.is-marked .builder-icon-svg { fill: #1f6f68; }
 .builder-exercise-preview { width: 52px; height: 42px; min-width: 52px; padding: 0; border: 0; border-radius: 4px; background: #f2f4f7; cursor: pointer; overflow: hidden; }
 .builder-exercise-preview-empty { display: grid; place-items: center; cursor: default; }
 .builder-exercise-thumb { width: 52px; height: 42px; object-fit: cover; border-radius: 4px; background: #f2f4f7; }
@@ -7119,6 +7124,16 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-item-head .text-action { margin-top: 4px; font-size: 12px; }
 .builder-item-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .builder-item-actions button[disabled] { color: #aab4bc; cursor: default; }
+.builder-item-actions .builder-icon-action[disabled] { opacity: .4; cursor: default; }
+.builder-item-move-up .builder-icon-svg { transform: rotate(0deg); }
+.builder-item-move-down .builder-icon-svg { transform: rotate(180deg); }
+
+@media (max-width: 560px) {
+  /* Added exercises scroll horizontally on mobile, so "up/down" reads as
+     "earlier/later in the row" -- point the arrows left/right to match. */
+  .builder-item-move-up .builder-icon-svg { transform: rotate(-90deg); }
+  .builder-item-move-down .builder-icon-svg { transform: rotate(90deg); }
+}
 .builder-added-exercise-image, .builder-added-exercise-fallback { width: 68px; height: 52px; border-radius: 5px; object-fit: cover; background: #eef2f4; }
 .builder-added-exercise-media { width: 68px; height: 52px; padding: 0; border: 0; border-radius: 5px; background: #eef2f4; cursor: pointer; overflow: hidden; }
 .builder-added-exercise-media .builder-added-exercise-image { display: block; }
@@ -7622,6 +7637,22 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   align-items: center;
 }
 
+.exercise-quick-filters-row { display: contents; }
+.exercise-toggle-icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; flex: 0 0 auto; }
+.exercise-filter-toggle:has(input[name="favorite"]) .exercise-toggle-icon,
+.exercise-filter-toggle input[data-exercise-filter="favorite"] ~ .exercise-toggle-icon,
+.exercise-filter-toggle input[data-builder-exercise-filter="favorite"] ~ .exercise-toggle-icon {
+  color: #d99a1f;
+}
+.exercise-filter-toggle input:checked[data-exercise-filter="favorite"] ~ .exercise-toggle-icon,
+.exercise-filter-toggle input:checked[data-builder-exercise-filter="favorite"] ~ .exercise-toggle-icon {
+  fill: #f5b400; stroke: #d99a1f;
+}
+.exercise-filter-toggle input:checked[data-exercise-filter="marked"] ~ .exercise-toggle-icon,
+.exercise-filter-toggle input:checked[data-builder-exercise-filter="marked"] ~ .exercise-toggle-icon {
+  fill: #1f6f68; stroke: #1f6f68; color: #1f6f68;
+}
+
 @media (max-width: 560px) {
   /* Show just-added exercises above the search/results, scrollable sideways,
      so adding an exercise gives immediate visible feedback on mobile. */
@@ -7688,6 +7719,41 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .exercise-filter-field {
     flex-basis: calc(50% - 4px);
     width: auto;
+  }
+
+  /* Purpose/Tag/Favorites/Marked on one compact row, Filter+Add custom on the
+     next -- keeps the exercise results below as visible as possible. */
+  .exercise-quick-filters-row {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 6px;
+  }
+
+  .exercise-quick-filters-row-main .exercise-filter-field {
+    flex: 1 1 0;
+    width: auto;
+  }
+
+  .exercise-quick-filters-row-main .exercise-filter-toggle {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 38px;
+    padding: 8px;
+    justify-content: center;
+  }
+
+  .exercise-quick-filters-row-main .exercise-filter-toggle span {
+    display: none;
+  }
+
+  .exercise-quick-filters-row-more {
+    align-items: stretch;
+  }
+
+  .exercise-quick-filters-row-more .builder-custom-exercise-button {
+    flex: 1 1 auto;
+    margin: 0;
   }
 }
 
