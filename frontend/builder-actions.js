@@ -4,6 +4,23 @@ import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
 
+// After adding an exercise, jump straight to it in the "Added to section" strip
+// instead of leaving the coach to scroll/search for it themselves. Blurring first
+// matters on mobile: the added-items strip is hidden by CSS while focus stays
+// inside the exercise library, so without this it would try to scroll to a
+// panel that's still display:none.
+function scrollToLastAddedItem(nodeId) {
+  const node = findBuilderNode(state.builder.draft, nodeId);
+  const lastItem = node?.items?.at(-1);
+  if (!lastItem) return;
+  const active = document.activeElement;
+  if (active?.closest?.(".builder-section-library")) active.blur();
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`.builder-section-added [data-item-id="${CSS.escape(lastItem.id)}"]`);
+    el?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  });
+}
+
 function renderBuilderPreservingAthleteListScroll(handlers) {
   const list = document.querySelector("[data-builder-athlete-list]");
   const scrollTop = list?.scrollTop || 0;
@@ -669,6 +686,7 @@ export async function handleBuilderItemAction(action, handlers) {
         })),
       }));
       if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
+      scrollToLastAddedItem(section.id);
     } catch (error) {
       handlers.renderBuilderError(error);
     }
@@ -757,10 +775,12 @@ export async function submitBuilderForm(form, handlers) {
   if (mode === "add-exercise") {
     if (!data.exerciseId) return;
     setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/exercises`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
+    scrollToLastAddedItem(form.dataset.nodeId);
   }
   if (mode === "add-custom-exercise") {
     setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/custom-exercise`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
     state.builder.customExerciseOpen = false;
+    scrollToLastAddedItem(form.dataset.nodeId);
   }
   if (mode === "update-item") {
     setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));

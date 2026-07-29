@@ -7791,6 +7791,20 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     padding-right: 14px;
     background: var(--surface, #fff);
   }
+
+  /* Typing in the search box or a quick-dose field: also hide the filters
+     row (neither field lives inside it, so it's always safe to hide) to
+     leave even more room for the results below. */
+  .builder-section-panel:has(input[data-builder-exercise-search]:focus) .exercise-quick-filters,
+  .builder-section-panel:has(input[data-builder-new-dose]:focus) .exercise-quick-filters {
+    display: none;
+  }
+
+  /* Typing in the search box specifically: the quick-dose row isn't needed
+     yet either (nothing to give a dose to until an exercise is picked). */
+  .builder-section-panel:has(input[data-builder-exercise-search]:focus) .builder-quick-dose {
+    display: none;
+  }
 }
 
 /* Inline top-level add-node form (triggered by the pyramid buttons), no type select needed. */
