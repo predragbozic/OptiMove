@@ -116,7 +116,6 @@ export function renderOrganizationActions(data) {
 
 function renderOrganizationUserForm() {
   const roles = [
-    ["athlete", "Athlete login"],
     ["coach", "Independent coach"],
     ["team_coach", "Team coach"],
     ["club_admin", "Club admin"],
@@ -560,13 +559,23 @@ function renderTeamAthleteTable(team, teamAthletes, allAthletes) {
   `;
 }
 
+function renderAthleteLoginToggle(athlete) {
+  if (!athlete.user_id) return `<span class="athlete-login-status is-none" title="No login yet">No login</span>`;
+  const active = athlete.login_active === true;
+  return `
+    <button class="athlete-login-toggle ${active ? "is-active" : "is-disabled"}" type="button" data-action="organization-toggle-athlete-login" data-athlete-id="${escapeAttr(athlete.id)}" data-current-active="${active ? "true" : "false"}" title="${active ? "Click to disable this login" : "Click to enable this login"}">
+      ${active ? "Active" : "Disabled"}
+    </button>
+  `;
+}
+
 function renderTeamAthleteRow(athlete) {
   const image = athlete.image_url || "";
   return `
     <div class="organization-table-row" role="row">
       <span class="organization-table-athlete">${image ? renderImage(image, "organization-avatar") : `<span class="organization-avatar">AT</span>`}<strong>${escapeHtml(athlete.name || "Athlete")}</strong></span>
       <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "-")}</span>
-      <span>${athlete.user_id ? "Enabled" : "No login"}</span>
+      <span>${renderAthleteLoginToggle(athlete)}</span>
       <span class="organization-row-actions">
         <button class="text-action" type="button" data-action="organization-invite-athlete" data-athlete-id="${escapeAttr(athlete.id)}">Invite</button>
         <button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>
@@ -708,6 +717,7 @@ function renderOrganizationRowV2(row, type) {
     <article class="organization-row">
       ${renderOrganizationRowContent(row, type)}
       <span class="organization-row-actions">
+        ${type === "athlete" ? renderAthleteLoginToggle(row) : ""}
         ${canEdit ? `<button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>` : ""}
         <button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Delete" title="Delete">${ICON_TRASH}</button>
       </span>
@@ -718,7 +728,7 @@ function renderOrganizationRowV2(row, type) {
 function renderOrganizationRowContent(row, type) {
   const title = row.name || row.full_name || row.display_name || row.athlete_id || "Untitled";
   const subtitle = type === "athlete"
-    ? [row.athlete_id || row.source_external_id, row.team_name, row.club_name, row.user_id ? "login enabled" : ""].filter(Boolean).join(" - ")
+    ? [row.athlete_id || row.source_external_id, row.team_name, row.club_name].filter(Boolean).join(" - ")
     : type === "user"
       ? [row.email, row.role_hint].filter(Boolean).join(" - ")
       : [row.short_name, row.club_name, row.city, row.country].filter(Boolean).join(" - ");

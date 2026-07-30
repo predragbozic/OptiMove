@@ -21,7 +21,7 @@ router.get("/", async (req, res, next) => {
       canCreateClub: isPlatformAdmin(req.user),
       canCreateTeam: isPlatformAdmin(req.user) || isClubAdmin(req.user),
       canCreateAthlete: true,
-      canCreateUser: true,
+      canCreateUser: isPlatformAdmin(req.user) || isClubAdmin(req.user),
       clubs,
       teams,
       athletes,
@@ -450,6 +450,32 @@ router.delete("/athletes/:athleteId", async (req, res, next) => {
   }
 });
 
+router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
+  try {
+    if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    const active = Boolean(req.body?.active);
+    const athlete = await query(
+      `select a.user_id, u.role_hint
+       from public.athletes a
+       left join public.users u on u.id = a.user_id
+       where a.id = $1
+       limit 1`,
+      [req.params.athleteId],
+    );
+    if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
+    if (!athlete.rows[0].user_id || athlete.rows[0].role_hint !== "athlete") {
+      return res.status(400).json({ error: "This athlete has no login to update." });
+    }
+    const result = await query(
+      `update public.users set is_active = $2, updated_at = now() where id = $1 returning id, is_active`,
+      [athlete.rows[0].user_id, active],
+    );
+    res.json({ ok: true, active: result.rows[0]?.is_active });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/club-roles", async (req, res, next) => {
   try {
     const userId = clean(req.body?.userId);
@@ -684,6 +710,7 @@ async function loadUsers(user) {
     `select distinct u.id, u.email, coalesce(u.display_name, u.full_name, u.email) as name, u.role_hint
      from public.users u
      where u.is_active = true
+       and u.role_hint <> 'athlete'
        and (
          $2::boolean
          or u.id = $1
@@ -818,6 +845,7 @@ async function loadManagedAthletes(user) {
        a.id, a.athlete_id, a.source_external_id,
        coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as name,
        a.image_url, a.club_id, c.name as club_name, a.team_id, t.name as team_name, a.user_id,
+       case when a.user_id is null then null else coalesce(u.is_active, false) end as login_active,
        coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
        coalesce(ala.can_view_team_library, false) as can_view_team_library,
        coalesce(ala.can_view_club_library, false) as can_view_club_library,
@@ -839,6 +867,7 @@ async function loadManagedAthletes(user) {
      from public.athletes a
      left join public.clubs c on c.id = a.club_id
      left join public.teams t on t.id = a.team_id
+     left join public.users u on u.id = a.user_id and u.role_hint = 'athlete'
      left join public.athlete_library_access ala on ala.athlete_id = a.id
      where coalesce(a.is_active, true)
        and (

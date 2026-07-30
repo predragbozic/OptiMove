@@ -242,6 +242,25 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     await deleteOrganizationRow(action.dataset.orgType, action.dataset.orgId, { loadAthletes, renderOrganizationPanel });
     return true;
   }
+  if (type === "organization-toggle-athlete-login") {
+    const athleteId = action.dataset.athleteId;
+    const nextActive = action.dataset.currentActive !== "true";
+    if (!athleteId) return true;
+    action.disabled = true;
+    try {
+      await api(`/api/organization/athletes/${encodeURIComponent(athleteId)}/login-status`, {
+        method: "PUT",
+        body: JSON.stringify({ active: nextActive }),
+      });
+      await loadAthletes();
+      if (state.activeTab === "organization") await renderOrganizationPanel();
+    } catch (error) {
+      window.alert(error?.message || "Could not update login status.");
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
   if (type === "organization-access-approve" || type === "organization-access-reject") {
     const accessId = action.dataset.accessId || "";
     if (!accessId) return true;

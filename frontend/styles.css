@@ -4912,6 +4912,46 @@ input:focus {
   font-weight: 800;
 }
 
+.athlete-login-status,
+.athlete-login-toggle {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.athlete-login-status.is-none {
+  background: #edf1f5;
+  color: var(--muted);
+}
+
+.athlete-login-toggle {
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.athlete-login-toggle.is-active {
+  background: #eaf7ee;
+  color: #2e9e4f;
+  border-color: #b6dcc0;
+}
+
+.athlete-login-toggle.is-active:hover {
+  background: #dcf1e2;
+}
+
+.athlete-login-toggle.is-disabled {
+  background: #fbeceb;
+  color: #a23b3b;
+  border-color: #e3b3ac;
+}
+
+.athlete-login-toggle.is-disabled:hover {
+  background: #f7dedb;
+}
+
 .program-access-badge.is-requested {
   background: #fff7ed;
   color: #9a3412;
