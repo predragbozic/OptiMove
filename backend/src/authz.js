@@ -50,8 +50,12 @@ export async function loadAuthorizationContext(user) {
     ),
     // Real signal for "is this account an athlete", independent of role_hint -
     // this is what lets the same account be both athlete and coach at once.
+    // Deliberately NOT filtered on the athlete profile's is_active: archiving
+    // a roster profile (or deactivating a coach relationship) must never
+    // revoke the athlete's own login/workspace - only club/team-scoped data
+    // access is gated on active membership, checked separately elsewhere.
     query(
-      `select id from public.athletes where user_id = $1 and coalesce(is_active, true) limit 1`,
+      `select id from public.athletes where user_id = $1 limit 1`,
       [user.id],
     ),
   ]);

@@ -155,11 +155,10 @@ router.post("/invites/:token/accept", async (req, res, next) => {
     await client.query("begin");
     const inviteResult = await client.query(
       `
-      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id, u.role_hint as athlete_user_role_hint,
+      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id,
              coalesce(a.display_name, a.full_name, a.athlete_id, i.email) as athlete_name
       from public.athlete_invites i
       join public.athletes a on a.id = i.athlete_id
-      left join public.users u on u.id = a.user_id
       where i.token_hash = $1
         and i.accepted_at is null
         and i.expires_at > now()
@@ -174,10 +173,14 @@ router.post("/invites/:token/accept", async (req, res, next) => {
       return res.status(404).json({ error: "Invite is invalid or expired." });
     }
 
-    // Only trust an existing link if it actually points to an athlete-role account.
-    // A link to a coach/admin account is bad data (e.g. from a past bug) and must
-    // never be renamed - treat it as unset instead.
-    const linkedAthleteUserId = invite.athlete_user_role_hint === "athlete" ? invite.athlete_user_id : null;
+    // Trust athletes.user_id directly - it's the athlete's own real FK link,
+    // not role_hint, so a multi-role account (e.g. role_hint="coach" who is
+    // also, genuinely, this athlete) is correctly recognized as already
+    // linked. This used to also require role_hint="athlete", which broke
+    // exactly that multi-role case; the historical bug that once let this
+    // column point at an unrelated staff account (POST /athletes writing the
+    // wrong column) is fixed at its source, so the raw FK is trustworthy.
+    const linkedAthleteUserId = invite.athlete_user_id || null;
     if (linkedAthleteUserId) {
       // This athlete already has a login. The public accept form must never be
       // able to change that account's email or password, no matter what email
@@ -249,10 +252,9 @@ router.post("/invites/:token/link", async (req, res, next) => {
     await client.query("begin");
     const inviteResult = await client.query(
       `
-      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id, u.role_hint as athlete_user_role_hint
+      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id
       from public.athlete_invites i
       join public.athletes a on a.id = i.athlete_id
-      left join public.users u on u.id = a.user_id
       where i.token_hash = $1
         and i.accepted_at is null
         and i.expires_at > now()
@@ -270,7 +272,10 @@ router.post("/invites/:token/link", async (req, res, next) => {
       await client.query("rollback");
       return res.status(403).json({ error: "This invite was sent to a different email address." });
     }
-    const linkedAthleteUserId = invite.athlete_user_role_hint === "athlete" ? invite.athlete_user_id : null;
+    // See the note in /accept above: trust athletes.user_id directly (not
+    // role_hint), so a multi-role account is correctly recognized as already
+    // linked.
+    const linkedAthleteUserId = invite.athlete_user_id || null;
     if (linkedAthleteUserId && String(linkedAthleteUserId) !== String(req.user.id)) {
       await client.query("rollback");
       return res.status(409).json({ error: "This athlete profile is already linked to a different account." });

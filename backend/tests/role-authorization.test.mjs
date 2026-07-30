@@ -262,3 +262,89 @@ test("12. deactivating a scoped role immediately revokes the matching access", a
   const after1 = await api(`/api/organization/athletes/${athlete}`, { method: "PUT", cookie: cookieFor(token), body: { fullName: "Should Fail Now" } });
   assert.equal(after1.status, 403, "access must be revoked immediately once the scoped role is deactivated");
 });
+
+test("13. an account with role_hint='athlete' plus a real club_admin scope can edit its own club", async () => {
+  const club = await makeClub(`Multi Club Own ${Date.now()}`);
+  const user = await makeUser({ email: `multi-club-own-${Date.now()}@test.local`, roleHint: "athlete" });
+  await makeAthlete({ userId: user.id });
+  await grantClubRole(user.id, club);
+  const token = await createSession(user.id);
+
+  const res = await api(`/api/organization/clubs/${club}`, { method: "PUT", cookie: cookieFor(token), body: { name: "Renamed Own Club" } });
+  assert.equal(res.status, 200, "role_hint='athlete' must not block real club_admin scope");
+});
+
+test("14. an account with role_hint='athlete' plus club_admin scope cannot edit a different club", async () => {
+  const ownClub = await makeClub(`Multi Club Own2 ${Date.now()}`);
+  const otherClub = await makeClub(`Multi Club Other ${Date.now()}`);
+  const user = await makeUser({ email: `multi-club-other-${Date.now()}@test.local`, roleHint: "athlete" });
+  await makeAthlete({ userId: user.id });
+  await grantClubRole(user.id, ownClub);
+  const token = await createSession(user.id);
+
+  const res = await api(`/api/organization/clubs/${otherClub}`, { method: "PUT", cookie: cookieFor(token), body: { name: "Should Not Work" } });
+  assert.equal(res.status, 403);
+});
+
+test("15. a legacy role_hint='club_admin' account with no scoped user_club_roles row cannot manage any club", async () => {
+  const club = await makeClub(`Legacy NoScope Club ${Date.now()}`);
+  const user = await makeUser({ email: `legacy-no-scope-${Date.now()}@test.local`, roleHint: "club_admin" });
+  const token = await createSession(user.id);
+
+  const res = await api(`/api/organization/clubs/${club}`, { method: "PUT", cookie: cookieFor(token), body: { name: "Should Fail" } });
+  assert.equal(res.status, 403, "role_hint alone must never grant club management without a real user_club_roles row");
+});
+
+test("17. an archived athlete profile keeps athleteWorkspace=true, and is flagged inactive (not hidden) in the coach's list", async () => {
+  const athleteUser = await makeUser({ email: `archived-workspace-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athlete = await makeAthlete({ userId: athleteUser.id });
+  const coach = await makeUser({ email: `archived-workspace-coach-${Date.now()}@test.local`, roleHint: "coach" });
+  await grantCoachAthleteLink(coach.id, athlete);
+
+  const coachToken = await createSession(coach.id);
+  const before1 = await api("/api/organization", { cookie: cookieFor(coachToken) });
+  const beforeRow = before1.body.athletes.find((a) => a.id === athlete);
+  assert.ok(beforeRow, "coach should see the athlete while active");
+  assert.equal(beforeRow.is_active, true);
+
+  const archiveRes = await api(`/api/organization/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(coachToken) });
+  assert.equal(archiveRes.status, 200);
+
+  const athleteToken = await createSession(athleteUser.id);
+  const meRes = await api("/api/auth/me", { cookie: cookieFor(athleteToken) });
+  assert.equal(meRes.body.user.capabilities.athleteWorkspace, true, "archiving the profile must not remove athlete login/workspace capability");
+
+  // The Settings "Show archived" list needs archived rows returned (they're
+  // just flagged, not hidden) - the frontend does the active/archived split.
+  const after1 = await api("/api/organization", { cookie: cookieFor(coachToken) });
+  const afterRow = after1.body.athletes.find((a) => a.id === athlete);
+  assert.ok(afterRow, "the archived athlete should still be returned, flagged as inactive");
+  assert.equal(afterRow.is_active, false);
+});
+
+test("18. a generic role_hint='user' account is never presented as a coach via /auth/me", async () => {
+  const user = await makeUser({ email: `generic-not-coach-${Date.now()}@test.local`, roleHint: "user" });
+  const token = await createSession(user.id);
+
+  const res = await api("/api/auth/me", { cookie: cookieFor(token) });
+  assert.equal(res.status, 200);
+  assert.notEqual(res.body.user.role, "coach", "public role must not present a generic user as a coach");
+  assert.equal(res.body.user.capabilities.coachWorkspace, false);
+});
+
+test("19. an athlete's login-status toggle works from athletes.user_id directly, not role_hint='athlete'", async () => {
+  const admin = await makeUser({ email: `toggle-admin-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  // role_hint is "coach" here on purpose - this account is genuinely both a
+  // coach AND (via athletes.user_id below) this specific athlete.
+  const multiRoleUser = await makeUser({ email: `toggle-multirole-${Date.now()}@test.local`, roleHint: "coach" });
+  const athlete = await makeAthlete({ userId: multiRoleUser.id });
+  const adminToken = await createSession(admin.id);
+
+  const res = await api(`/api/organization/athletes/${athlete}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(adminToken),
+    body: { active: false },
+  });
+  assert.equal(res.status, 200, "a multi-role account's login must be toggleable via athletes.user_id, not role_hint");
+  assert.equal(res.body.active, false);
+});
