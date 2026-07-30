@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import athletesRouter from "./routes/athletes.js";
 import authRouter from "./routes/auth.js";
@@ -90,6 +90,11 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`Optimove backend listening on http://localhost:${port}`);
-});
+const isMainModule = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMainModule) {
+  app.listen(port, () => {
+    console.log(`Optimove backend listening on http://localhost:${port}`);
+  });
+}
+
+export { app };

@@ -83,8 +83,9 @@ router.post("/plans", async (req, res, next) => {
     if (planType === "weekly" && !athleteExternalIds.length) return res.status(400).json({ error: "Choose at least one athlete for a weekly plan." });
     if (planType === "weekly" && !weekStart) return res.status(400).json({ error: "Choose a valid date for the weekly plan." });
     const name = requestedName || `Weekly plan ${weekStart}`;
-    const { athletes, missing } = await findRequestedAthletes(athleteExternalIds);
+    const { athletes, missing, archived } = await findRequestedAthletes(athleteExternalIds);
     if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
+    if (archived.length) return res.status(400).json({ error: `Athlete is archived, restore them first: ${archived.join(", ")}` });
     const targets = athletes.length ? athletes : [null];
     const batchId = targets.length > 1 ? randomUUID() : null;
     const createdIds = [];
@@ -166,8 +167,9 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
       return res.status(403).json({ error: "This template cannot be copied." });
     }
     const targetAthleteExternalIds = requestedAthleteIds(req.body);
-    const { athletes: targetAthletes, missing } = await findRequestedAthletes(targetAthleteExternalIds);
+    const { athletes: targetAthletes, missing, archived } = await findRequestedAthletes(targetAthleteExternalIds);
     if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
+    if (archived.length) return res.status(400).json({ error: `Athlete is archived, restore them first: ${archived.join(", ")}` });
     const targetWeekStart = source.plan_type === "weekly" ? normalizedWeekStart(req.body?.weekStart) : null;
     if (source.plan_type === "weekly" && !targetAthletes.length) return res.status(400).json({ error: "Choose at least one athlete for a weekly plan copy." });
     if (source.plan_type === "weekly" && !targetWeekStart) return res.status(400).json({ error: "Choose the target week for this copy." });
@@ -1358,7 +1360,10 @@ async function getEditableItem(user, itemId) {
 }
 
 async function findAthlete(externalId) {
-  const result = await query("select id from public.athletes where athlete_id = $1 or source_external_id = $1 limit 1", [externalId]);
+  const result = await query(
+    "select id, coalesce(is_active, true) as is_active from public.athletes where athlete_id = $1 or source_external_id = $1 limit 1",
+    [externalId],
+  );
   return result.rows[0] || null;
 }
 
@@ -1371,12 +1376,14 @@ function requestedAthleteIds(body) {
 async function findRequestedAthletes(externalIds) {
   const athletes = [];
   const missing = [];
+  const archived = [];
   for (const externalId of externalIds) {
     const athlete = await findAthlete(externalId);
-    if (athlete) athletes.push({ ...athlete, externalId });
-    else missing.push(externalId);
+    if (!athlete) missing.push(externalId);
+    else if (!athlete.is_active) archived.push(externalId);
+    else athletes.push({ ...athlete, externalId });
   }
-  return { athletes, missing };
+  return { athletes, missing, archived };
 }
 
 async function ensureWeeklySlot(client, userId, athlete, weekStart) {

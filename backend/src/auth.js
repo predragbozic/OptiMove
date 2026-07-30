@@ -77,6 +77,11 @@ export async function destroySession(token) {
   await query("delete from public.auth_sessions where token_hash = $1", [hashSessionToken(token)]);
 }
 
+export async function destroySessionsForUser(userId) {
+  if (!userId) return;
+  await query("delete from public.auth_sessions where user_id = $1", [userId]);
+}
+
 export async function getSessionUser(token) {
   if (!token) return null;
   const result = await query(

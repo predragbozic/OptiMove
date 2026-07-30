@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../db.js";
 import { isClubAdmin, isPlatformAdmin, isTeamCoach } from "../access.js";
-import { hashPassword } from "../auth.js";
+import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
 
 const router = Router();
@@ -67,6 +67,7 @@ router.delete("/users/:userId", async (req, res, next) => {
       [req.params.userId, req.user.id, isPlatformAdmin(req.user)],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "User not found or outside your access." });
+    await destroySessionsForUser(result.rows[0].id);
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -484,6 +485,7 @@ router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
       `update public.users set is_active = $2, updated_at = now() where id = $1 returning id, is_active`,
       [athlete.rows[0].user_id, active],
     );
+    if (!active) await destroySessionsForUser(athlete.rows[0].user_id);
     res.json({ ok: true, active: result.rows[0]?.is_active });
   } catch (error) {
     next(error);
