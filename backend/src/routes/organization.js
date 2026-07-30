@@ -5,6 +5,7 @@ import {
   canManageClub as authzCanManageClub,
   canManageTeamById as authzCanManageTeam,
   isPlatformAdministrator,
+  loadAuthorizationContext,
 } from "../authz.js";
 import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
@@ -490,11 +491,35 @@ router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
     if (!athlete.rows[0].user_id) {
       return res.status(400).json({ error: "This athlete has no login to update." });
     }
+
+    const targetUserId = athlete.rows[0].user_id;
+    const targetUser = await query(`select id, role_hint from public.users where id = $1 limit 1`, [targetUserId]);
+    if (!targetUser.rows[0]) return res.status(400).json({ error: "This athlete has no login to update." });
+
+    // This control toggles users.is_active - a GLOBAL account flag, not
+    // something scoped to "athlete access". If the linked account also holds
+    // any real coach/admin capability (platform, club, team, or independent
+    // coach - regardless of who is making this request, including a
+    // platform admin), flipping it here would silently kill their staff
+    // access too. That is never this endpoint's job; a dedicated, audited
+    // account-suspension tool is the right place for that later.
+    const targetAuthz = await loadAuthorizationContext(targetUser.rows[0]);
+    const targetHasStaffCapability = targetAuthz.platformRoles.length > 0
+      || targetAuthz.clubRoles.length > 0
+      || targetAuthz.teamRoles.length > 0
+      || targetAuthz.isIndependentCoach;
+    if (targetHasStaffCapability) {
+      return res.status(409).json({
+        error: "MULTI_ROLE_ACCOUNT",
+        message: "This user also has coach or administrator access. Their whole account cannot be disabled from the athlete login control.",
+      });
+    }
+
     const result = await query(
       `update public.users set is_active = $2, updated_at = now() where id = $1 returning id, is_active`,
-      [athlete.rows[0].user_id, active],
+      [targetUserId, active],
     );
-    if (!active) await destroySessionsForUser(athlete.rows[0].user_id);
+    if (!active) await destroySessionsForUser(targetUserId);
     res.json({ ok: true, active: result.rows[0]?.is_active });
   } catch (error) {
     next(error);
@@ -840,6 +865,22 @@ async function loadManagedAthletes(req) {
        coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as name,
        a.image_url, coalesce(a.is_active, true) as is_active, a.club_id, c.name as club_name, a.team_id, t.name as team_name, a.user_id,
        case when a.user_id is null then null else coalesce(u.is_active, false) end as login_active,
+       -- True when the linked account also holds any real staff/coach/admin
+       -- capability, so the frontend can show a locked "multi-role" state
+       -- instead of a plain toggle (see PUT /athletes/:id/login-status,
+       -- which independently re-checks this server-side regardless of what
+       -- the client renders). Role_hint list here mirrors access.js's
+       -- PLATFORM_ROLES + CLUB_ROLES + TEAM_ROLES + COACH_ROLES sets.
+       case when a.user_id is null then false else (
+         coalesce(u.role_hint, '') in (
+           'admin', 'platform_admin', 'general_admin',
+           'club_admin', 'club_manager',
+           'team_admin', 'team_coach', 'team_trainer',
+           'coach', 'independent_coach', 'fitness_coach', 'trainer'
+         )
+         or exists (select 1 from public.user_club_roles ucr4 where ucr4.user_id = a.user_id and ucr4.is_active = true)
+         or exists (select 1 from public.user_team_roles utr4 where utr4.user_id = a.user_id and utr4.is_active = true)
+       ) end as login_is_multi_role,
        coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
        coalesce(ala.can_view_team_library, false) as can_view_team_library,
        coalesce(ala.can_view_club_library, false) as can_view_club_library,

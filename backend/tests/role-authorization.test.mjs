@@ -334,10 +334,12 @@ test("18. a generic role_hint='user' account is never presented as a coach via /
 
 test("19. an athlete's login-status toggle works from athletes.user_id directly, not role_hint='athlete'", async () => {
   const admin = await makeUser({ email: `toggle-admin-${Date.now()}@test.local`, roleHint: "platform_admin" });
-  // role_hint is "coach" here on purpose - this account is genuinely both a
-  // coach AND (via athletes.user_id below) this specific athlete.
-  const multiRoleUser = await makeUser({ email: `toggle-multirole-${Date.now()}@test.local`, roleHint: "coach" });
-  const athlete = await makeAthlete({ userId: multiRoleUser.id });
+  // role_hint is the generic "user" here on purpose (not literally "athlete",
+  // and not a coach-ish value either - no staff capability follows from it)
+  // - this proves the toggle recognizes the link via athletes.user_id itself,
+  // without also tripping the multi-role guard added in test 20+ below.
+  const genericLinkedUser = await makeUser({ email: `toggle-generic-${Date.now()}@test.local`, roleHint: "user" });
+  const athlete = await makeAthlete({ userId: genericLinkedUser.id });
   const adminToken = await createSession(admin.id);
 
   const res = await api(`/api/organization/athletes/${athlete}/login-status`, {
@@ -345,6 +347,111 @@ test("19. an athlete's login-status toggle works from athletes.user_id directly,
     cookie: cookieFor(adminToken),
     body: { active: false },
   });
-  assert.equal(res.status, 200, "a multi-role account's login must be toggleable via athletes.user_id, not role_hint");
+  assert.equal(res.status, 200, "the toggle must work via athletes.user_id even though role_hint isn't literally 'athlete'");
   assert.equal(res.body.active, false);
+});
+
+test("20. a coach cannot deactivate a multi-role athlete+coach account via the athlete login toggle", async () => {
+  // The target is genuinely both an athlete and an independent coach.
+  const target = await makeUser({ email: `guard-athlete-coach-${Date.now()}@test.local`, roleHint: "coach" });
+  const athlete = await makeAthlete({ userId: target.id });
+  const actor = await makeUser({ email: `guard-actor-coach-${Date.now()}@test.local`, roleHint: "coach" });
+  await grantCoachAthleteLink(actor.id, athlete);
+  const actorToken = await createSession(actor.id);
+
+  const res = await api(`/api/organization/athletes/${athlete}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(actorToken),
+    body: { active: false },
+  });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, "MULTI_ROLE_ACCOUNT");
+
+  const targetAfter = await query(`select is_active from public.users where id = $1`, [target.id]);
+  assert.equal(targetAfter.rows[0].is_active, true, "the multi-role account's is_active must be untouched");
+});
+
+test("21. a club admin cannot deactivate a multi-role athlete+club_admin account via the athlete login toggle", async () => {
+  const club = await makeClub(`Guard Club ${Date.now()}`);
+  const target = await makeUser({ email: `guard-athlete-clubadmin-${Date.now()}@test.local`, roleHint: "club_admin" });
+  await grantClubRole(target.id, club);
+  const athlete = await makeAthlete({ userId: target.id, clubId: club });
+
+  const actor = await makeUser({ email: `guard-actor-clubadmin-${Date.now()}@test.local`, roleHint: "club_admin" });
+  await grantClubRole(actor.id, club);
+  const actorToken = await createSession(actor.id);
+
+  const res = await api(`/api/organization/athletes/${athlete}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(actorToken),
+    body: { active: false },
+  });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, "MULTI_ROLE_ACCOUNT");
+
+  const targetAfter = await query(`select is_active from public.users where id = $1`, [target.id]);
+  assert.equal(targetAfter.rows[0].is_active, true, "the multi-role account's is_active must be untouched");
+});
+
+test("22. an athlete-only account can still be deactivated through the toggle", async () => {
+  const admin = await makeUser({ email: `guard-admin-athleteonly-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const target = await makeUser({ email: `guard-athleteonly-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athlete = await makeAthlete({ userId: target.id });
+  const adminToken = await createSession(admin.id);
+
+  const res = await api(`/api/organization/athletes/${athlete}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(adminToken),
+    body: { active: false },
+  });
+  assert.equal(res.status, 200, "an athlete with no other roles must still be toggleable");
+  assert.equal(res.body.active, false);
+});
+
+test("23. deactivating an athlete-only account deletes all of its sessions", async () => {
+  const admin = await makeUser({ email: `guard-admin-sessions-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const target = await makeUser({ email: `guard-athleteonly-sessions-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athlete = await makeAthlete({ userId: target.id });
+  await createSession(target.id);
+  const before = await query(`select count(*)::int as c from public.auth_sessions where user_id = $1`, [target.id]);
+  assert.equal(before.rows[0].c, 1);
+
+  const adminToken = await createSession(admin.id);
+  const res = await api(`/api/organization/athletes/${athlete}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(adminToken),
+    body: { active: false },
+  });
+  assert.equal(res.status, 200);
+
+  const after = await query(`select count(*)::int as c from public.auth_sessions where user_id = $1`, [target.id]);
+  assert.equal(after.rows[0].c, 0, "disabling an athlete-only account must revoke its sessions");
+});
+
+test("24. a rejected multi-role deactivation attempt changes neither is_active nor sessions", async () => {
+  const target = await makeUser({ email: `guard-rejected-${Date.now()}@test.local`, roleHint: "coach" });
+  const athlete = await makeAthlete({ userId: target.id });
+  const targetSessionToken = await createSession(target.id);
+  const before = await query(`select count(*)::int as c from public.auth_sessions where user_id = $1`, [target.id]);
+  assert.equal(before.rows[0].c, 1);
+
+  const actor = await makeUser({ email: `guard-rejected-actor-${Date.now()}@test.local`, roleHint: "coach" });
+  await grantCoachAthleteLink(actor.id, athlete);
+  const actorToken = await createSession(actor.id);
+
+  const res = await api(`/api/organization/athletes/${athlete}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(actorToken),
+    body: { active: false },
+  });
+  assert.equal(res.status, 409);
+
+  const targetAfter = await query(`select is_active from public.users where id = $1`, [target.id]);
+  assert.equal(targetAfter.rows[0].is_active, true, "is_active must be untouched after a rejected attempt");
+
+  const after = await query(`select count(*)::int as c from public.auth_sessions where user_id = $1`, [target.id]);
+  assert.equal(after.rows[0].c, 1, "sessions must not be revoked after a rejected attempt");
+
+  const meRes = await api("/api/auth/me", { cookie: cookieFor(targetSessionToken) });
+  assert.notEqual(meRes.body.user, null, "the target's own session must still work after the rejected attempt");
 });
