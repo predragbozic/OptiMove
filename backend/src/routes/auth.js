@@ -112,10 +112,11 @@ router.post("/invites/:token/accept", async (req, res, next) => {
     const tokenHash = hashInviteToken(req.params.token);
     const inviteResult = await query(
       `
-      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id,
+      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id, u.role_hint as athlete_user_role_hint,
              coalesce(a.display_name, a.full_name, a.athlete_id, i.email) as athlete_name
       from public.athlete_invites i
       join public.athletes a on a.id = i.athlete_id
+      left join public.users u on u.id = a.user_id
       where i.token_hash = $1
         and i.accepted_at is null
         and i.expires_at > now()
@@ -127,13 +128,17 @@ router.post("/invites/:token/accept", async (req, res, next) => {
     if (!invite) return res.status(404).json({ error: "Invite is invalid or expired." });
     const nameParts = splitName(invite.athlete_name || invite.email);
     const passwordHash = hashPassword(password);
+    // Only trust an existing link if it actually points to an athlete-role account.
+    // A link to a coach/admin account is bad data (e.g. from a past bug) and must
+    // never be renamed or have its password overwritten - treat it as unset instead.
+    const linkedAthleteUserId = invite.athlete_user_role_hint === "athlete" ? invite.athlete_user_id : null;
 
     let user;
-    if (invite.athlete_user_id) {
+    if (linkedAthleteUserId) {
       // Athlete already has a login: rename/reset that same account instead of
       // creating a second user row and leaving the old one as an orphan.
       const emailOwner = await query(`select id from public.users where lower(email) = lower($1) limit 1`, [invite.email]);
-      if (emailOwner.rows[0] && String(emailOwner.rows[0].id) !== String(invite.athlete_user_id)) {
+      if (emailOwner.rows[0] && String(emailOwner.rows[0].id) !== String(linkedAthleteUserId)) {
         return res.status(409).json({ error: "This email is already in use by another account." });
       }
       const updated = await query(
@@ -145,7 +150,7 @@ router.post("/invites/:token/accept", async (req, res, next) => {
              updated_at = now()
          where id = $1
          returning id, email, full_name, display_name, role_hint`,
-        [invite.athlete_user_id, invite.email, passwordHash],
+        [linkedAthleteUserId, invite.email, passwordHash],
       );
       user = updated.rows[0];
     } else {

@@ -191,7 +191,7 @@ router.post("/athletes", async (req, res, next) => {
     const { firstName, lastName } = splitName(fullName);
     const result = await query(
       `insert into public.athletes (
-         athlete_id, source_external_id, first_name, last_name, full_name, display_name, image_url, user_id, club_id, team_id, is_active
+         athlete_id, source_external_id, first_name, last_name, full_name, display_name, image_url, created_by_user_id, club_id, team_id, is_active
        )
        values ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, true)
        returning id, athlete_id, source_external_id, full_name, display_name, image_url, club_id, team_id`,
@@ -498,12 +498,19 @@ router.post("/athlete-logins", async (req, res, next) => {
     if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters." });
     const athlete = await query(
-      `select id, user_id, coalesce(display_name, full_name, athlete_id) as name from public.athletes where id = $1 limit 1`,
+      `select a.id, a.user_id, coalesce(a.display_name, a.full_name, a.athlete_id) as name, u.role_hint as linked_role_hint
+       from public.athletes a
+       left join public.users u on u.id = a.user_id
+       where a.id = $1
+       limit 1`,
       [athleteId],
     );
     if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
     const nameParts = splitName(athlete.rows[0].name || email);
-    const currentUserId = athlete.rows[0].user_id;
+    // Only trust an existing link if it actually points to an athlete-role account.
+    // A link to a coach/admin account is bad data (e.g. from a past bug) and must
+    // never be renamed or have its password overwritten - treat it as unset instead.
+    const currentUserId = athlete.rows[0].linked_role_hint === "athlete" ? athlete.rows[0].user_id : null;
     await client.query("begin");
 
     if (currentUserId) {
