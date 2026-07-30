@@ -8,6 +8,7 @@ import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession } from "../src/auth.js";
+import { canUseTemplate } from "../src/programAccessPolicy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationPath = path.resolve(__dirname, "../../migrations/20260801_athlete_memberships.sql");
@@ -18,6 +19,7 @@ const cleanupUserIds = new Set();
 const cleanupAthleteIds = new Set();
 const cleanupClubIds = new Set();
 const cleanupTeamIds = new Set();
+const cleanupPlanIds = new Set();
 
 before(async () => {
   server = http.createServer(app);
@@ -27,7 +29,9 @@ before(async () => {
 
 after(async () => {
   // Deleting athletes/clubs/teams cascades to athlete_memberships,
-  // user_athletes, and plans.plans rows created for these tests.
+  // user_athletes, and plans.plans rows created for these tests. Template
+  // plans (athlete_id is null) need their own explicit cleanup.
+  if (cleanupPlanIds.size) await query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]]);
   if (cleanupAthleteIds.size) await query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]]);
   if (cleanupTeamIds.size) await query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]);
   if (cleanupClubIds.size) await query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]);
@@ -148,6 +152,15 @@ async function isActiveUser(userId) {
   return result.rows[0]?.is_active;
 }
 
+async function membershipRowCount(athleteId, { clubId, teamId, membershipType }) {
+  const result = await query(
+    `select count(*)::int as c from public.athlete_memberships
+     where athlete_id = $1 and membership_type = $2 and club_id = $3 and team_id is not distinct from $4`,
+    [athleteId, membershipType, clubId, teamId ?? null],
+  );
+  return result.rows[0].c;
+}
+
 test("1. a private coach archives their own relationship and no longer sees the athlete on their active list", async () => {
   const coach = await makeUser({ email: `own-coach-${Date.now()}@test.local`, roleHint: "coach" });
   const athlete = await makeAthlete();
@@ -161,7 +174,9 @@ test("1. a private coach archives their own relationship and no longer sees the 
   assert.equal(archiveRes.status, 200);
 
   const after1 = await api("/api/organization", { cookie: cookieFor(token) });
-  assert.ok(!after1.body.athletes.some((a) => a.id === athlete), "coach should no longer see the athlete on their active list");
+  const afterRow = after1.body.athletes.find((a) => a.id === athlete);
+  assert.equal(afterRow?.has_my_active_coach_relationship, false, "the relationship must no longer read as active");
+  assert.equal(afterRow?.has_my_archived_coach_relationship, true, "the athlete must still surface under Show archived so it can be restored");
 });
 
 test("2. a second private coach still sees the same athlete after the first coach archives their own relationship", async () => {
@@ -486,4 +501,276 @@ test("18. an athlete with two active clubs, a team in each, and two private coac
   );
   assert.equal(coach2LinkAfter.rows[0].is_active, true, "coach 2's relationship must still be untouched");
   assert.equal(await isActiveUser(athleteUser.id), true, "login must remain active throughout");
+});
+
+test("19. archiving a team membership removes it from active but keeps it visible for restore by the managing team coach", async () => {
+  const club = await makeClub(`Show Archived Team Club ${Date.now()}`);
+  const team = await makeTeam(club, "Show Archived Team");
+  const athlete = await makeAthlete();
+  await addTeamMembership(athlete, club, team);
+  const coach = await makeUser({ email: `show-archived-team-${Date.now()}@test.local`, roleHint: "team_coach" });
+  await grantTeamRole(coach.id, team);
+  const token = await createSession(coach.id);
+
+  const before1 = await api("/api/organization", { cookie: cookieFor(token) });
+  assert.ok(before1.body.athletes.some((a) => a.id === athlete), "team coach should see the athlete while active");
+
+  await api(`/api/organization/teams/${team}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+
+  const afterArchive = await api("/api/organization", { cookie: cookieFor(token) });
+  const archivedRow = afterArchive.body.athletes.find((a) => a.id === athlete);
+  assert.ok(archivedRow, "the athlete must still be returned so Show archived can render it");
+  const archivedMembership = (archivedRow.memberships || []).find((m) => m.membershipType === "team" && String(m.teamId) === String(team));
+  assert.equal(archivedMembership?.status, "archived");
+
+  const restoreRes = await api(`/api/organization/teams/${team}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(restoreRes.status, 200, "the frontend-supported restore flow must work");
+
+  const afterRestore = await api("/api/organization", { cookie: cookieFor(token) });
+  const restoredRow = afterRestore.body.athletes.find((a) => a.id === athlete);
+  const restoredMembership = (restoredRow.memberships || []).find((m) => m.membershipType === "team" && String(m.teamId) === String(team));
+  assert.equal(restoredMembership?.status, "active");
+});
+
+test("20. archiving a club membership removes it from active but keeps it visible for restore by the managing club admin", async () => {
+  const club = await makeClub(`Show Archived Club ${Date.now()}`);
+  const athlete = await makeAthlete();
+  await addClubMembership(athlete, club);
+  const admin = await makeUser({ email: `show-archived-club-${Date.now()}@test.local`, roleHint: "club_admin" });
+  await grantClubRole(admin.id, club);
+  const token = await createSession(admin.id);
+
+  const before1 = await api("/api/organization", { cookie: cookieFor(token) });
+  assert.ok(before1.body.athletes.some((a) => a.id === athlete));
+
+  await api(`/api/organization/clubs/${club}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+
+  const afterArchive = await api("/api/organization", { cookie: cookieFor(token) });
+  const archivedRow = afterArchive.body.athletes.find((a) => a.id === athlete);
+  assert.ok(archivedRow, "the athlete must still be returned so Show archived can render it");
+  const archivedMembership = (archivedRow.memberships || []).find((m) => m.membershipType === "club" && String(m.clubId) === String(club));
+  assert.equal(archivedMembership?.status, "archived");
+
+  const restoreRes = await api(`/api/organization/clubs/${club}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(restoreRes.status, 200);
+
+  const afterRestore = await api("/api/organization", { cookie: cookieFor(token) });
+  const restoredRow = afterRestore.body.athletes.find((a) => a.id === athlete);
+  const restoredMembership = (restoredRow.memberships || []).find((m) => m.membershipType === "club" && String(m.clubId) === String(club));
+  assert.equal(restoredMembership?.status, "active");
+});
+
+test("21. an archive -> reactivate -> archive -> restore cycle never creates a duplicate team membership row", async () => {
+  const club = await makeClub(`Cycle Team Club ${Date.now()}`);
+  const team = await makeTeam(club, "Cycle Team");
+  const athlete = await makeAthlete();
+  await addTeamMembership(athlete, club, team);
+  const admin = await makeUser({ email: `cycle-team-admin-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const token = await createSession(admin.id);
+
+  await api(`/api/organization/teams/${team}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: team, membershipType: "team" }), 1);
+
+  // Reactivate via the real production "assign to team" endpoint.
+  const reassign = await api(`/api/organization/teams/${team}/athletes`, { method: "POST", cookie: cookieFor(token), body: { athleteId: athlete } });
+  assert.equal(reassign.status, 200);
+  assert.equal(await membershipStatus(athlete, { clubId: club, teamId: team, membershipType: "team" }), "active");
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: team, membershipType: "team" }), 1, "reactivating must reuse the same row, not insert a new one");
+
+  await api(`/api/organization/teams/${team}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: team, membershipType: "team" }), 1);
+
+  const restoreRes = await api(`/api/organization/teams/${team}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(restoreRes.status, 200);
+  assert.equal(await membershipStatus(athlete, { clubId: club, teamId: team, membershipType: "team" }), "active");
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: team, membershipType: "team" }), 1, "the full cycle must never produce a second row");
+});
+
+test("22. an archive -> reactivate -> archive -> restore cycle never creates a duplicate club membership row", async () => {
+  const club = await makeClub(`Cycle Club ${Date.now()}`);
+  const athlete = await makeAthlete();
+  await addClubMembership(athlete, club);
+  const admin = await makeUser({ email: `cycle-club-admin-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const token = await createSession(admin.id);
+
+  await api(`/api/organization/clubs/${club}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: null, membershipType: "club" }), 1);
+
+  // Reactivate via the real production "edit athlete" endpoint.
+  const editRes = await api(`/api/organization/athletes/${athlete}`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { fullName: "Membership Test", clubId: club },
+  });
+  assert.equal(editRes.status, 200);
+  assert.equal(await membershipStatus(athlete, { clubId: club, teamId: null, membershipType: "club" }), "active");
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: null, membershipType: "club" }), 1, "reactivating must reuse the same row, not insert a new one");
+
+  await api(`/api/organization/clubs/${club}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: null, membershipType: "club" }), 1);
+
+  const restoreRes = await api(`/api/organization/clubs/${club}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(restoreRes.status, 200);
+  assert.equal(await membershipStatus(athlete, { clubId: club, teamId: null, membershipType: "club" }), "active");
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: null, membershipType: "club" }), 1);
+});
+
+test("23. restoring a team membership twice is idempotent and never duplicates the row", async () => {
+  const club = await makeClub(`Dup Restore Team Club ${Date.now()}`);
+  const team = await makeTeam(club, "Dup Restore Team");
+  const athlete = await makeAthlete();
+  await addTeamMembership(athlete, club, team);
+  const admin = await makeUser({ email: `dup-restore-team-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const token = await createSession(admin.id);
+
+  await api(`/api/organization/teams/${team}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+
+  const first = await api(`/api/organization/teams/${team}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(first.status, 200);
+  const second = await api(`/api/organization/teams/${team}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(second.status, 200, "a second restore call must not error");
+  assert.equal(second.body.alreadyActive, true);
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: team, membershipType: "team" }), 1);
+});
+
+test("24. restoring a team membership that was never archived is idempotent and never duplicates the row", async () => {
+  const club = await makeClub(`Never Archived Team Club ${Date.now()}`);
+  const team = await makeTeam(club, "Never Archived Team");
+  const athlete = await makeAthlete();
+  await addTeamMembership(athlete, club, team);
+  const admin = await makeUser({ email: `never-archived-team-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const token = await createSession(admin.id);
+
+  const res = await api(`/api/organization/teams/${team}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.alreadyActive, true);
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: team, membershipType: "team" }), 1);
+});
+
+test("25. restoring a club membership twice is idempotent and never duplicates the row", async () => {
+  const club = await makeClub(`Dup Restore Club ${Date.now()}`);
+  const athlete = await makeAthlete();
+  await addClubMembership(athlete, club);
+  const admin = await makeUser({ email: `dup-restore-club-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const token = await createSession(admin.id);
+
+  await api(`/api/organization/clubs/${club}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+
+  const first = await api(`/api/organization/clubs/${club}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(first.status, 200);
+  const second = await api(`/api/organization/clubs/${club}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(second.status, 200, "a second restore call must not error");
+  assert.equal(second.body.alreadyActive, true);
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: null, membershipType: "club" }), 1);
+});
+
+test("26. restoring a club membership that was never archived is idempotent and never duplicates the row", async () => {
+  const club = await makeClub(`Never Archived Club ${Date.now()}`);
+  const athlete = await makeAthlete();
+  await addClubMembership(athlete, club);
+  const admin = await makeUser({ email: `never-archived-club-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const token = await createSession(admin.id);
+
+  const res = await api(`/api/organization/clubs/${club}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.alreadyActive, true);
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: null, membershipType: "club" }), 1);
+});
+
+test("27. two concurrent restore requests for the same team membership never produce a duplicate active row", async () => {
+  const club = await makeClub(`Concurrent Restore Club ${Date.now()}`);
+  const team = await makeTeam(club, "Concurrent Restore Team");
+  const athlete = await makeAthlete();
+  await addTeamMembership(athlete, club, team);
+  const admin = await makeUser({ email: `concurrent-restore-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const token = await createSession(admin.id);
+
+  await api(`/api/organization/teams/${team}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+
+  const [r1, r2] = await Promise.all([
+    api(`/api/organization/teams/${team}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) }),
+    api(`/api/organization/teams/${team}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) }),
+  ]);
+  assert.ok([r1.status, r2.status].every((status) => status === 200), "neither concurrent restore call should error");
+  assert.equal(await membershipRowCount(athlete, { clubId: club, teamId: team, membershipType: "team" }), 1, "concurrent restores must never create a duplicate row");
+  assert.equal(await membershipStatus(athlete, { clubId: club, teamId: team, membershipType: "team" }), "active");
+});
+
+test("28. an athlete active in two scopes sees content from both, and archiving one membership removes only that scope's access", async () => {
+  const clubA = await makeClub(`Scope Club A ${Date.now()}`);
+  const teamA = await makeTeam(clubA, "Scope Team A");
+  const clubB = await makeClub(`Scope Club B ${Date.now()}`);
+  const athleteUser = await makeUser({ email: `scope-athlete-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athlete = await makeAthlete({ userId: athleteUser.id });
+  await addTeamMembership(athlete, clubA, teamA);
+  await addClubMembership(athlete, clubB);
+
+  await query(
+    `insert into public.athlete_library_access (athlete_id, can_view_team_library, can_view_club_library)
+     values ($1, true, true)
+     on conflict (athlete_id) do update set can_view_team_library = true, can_view_club_library = true`,
+    [athlete],
+  );
+
+  const teamCoachA = await makeUser({ email: `scope-teamcoach-a-${Date.now()}@test.local`, roleHint: "team_coach" });
+  await grantTeamRole(teamCoachA.id, teamA);
+  const clubAdminB = await makeUser({ email: `scope-clubadmin-b-${Date.now()}@test.local`, roleHint: "club_admin" });
+  await grantClubRole(clubAdminB.id, clubB);
+
+  const planTeam = await query(
+    `insert into plans.plans (plan_type, created_by_user_id, name, is_template, library_scope, visibility, athlete_can_view_directly, is_free, status)
+     values ('program', $1, 'Team Scoped Template', true, 'team', 'team', true, true, 'active')
+     returning id`,
+    [teamCoachA.id],
+  );
+  cleanupPlanIds.add(planTeam.rows[0].id);
+  const planClub = await query(
+    `insert into plans.plans (plan_type, created_by_user_id, name, is_template, library_scope, visibility, athlete_can_view_directly, is_free, status)
+     values ('program', $1, 'Club Scoped Template', true, 'club', 'club', true, true, 'active')
+     returning id`,
+    [clubAdminB.id],
+  );
+  cleanupPlanIds.add(planClub.rows[0].id);
+
+  const athleteViewer = { id: athleteUser.id, role_hint: "athlete" };
+  assert.equal(await canUseTemplate(query, athleteViewer, planTeam.rows[0].id), true, "the athlete's active team membership must unlock the team-scoped template");
+  assert.equal(await canUseTemplate(query, athleteViewer, planClub.rows[0].id), true, "the athlete's active club membership must unlock the club-scoped template");
+
+  const admin = await makeUser({ email: `scope-platform-admin-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const adminToken = await createSession(admin.id);
+  await api(`/api/organization/teams/${teamA}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(adminToken) });
+
+  assert.equal(await canUseTemplate(query, athleteViewer, planTeam.rows[0].id), false, "archiving the team membership must remove access to the team-scoped template");
+  assert.equal(await canUseTemplate(query, athleteViewer, planClub.rows[0].id), true, "the untouched club membership must still unlock the club-scoped template");
+});
+
+test("29. archiving the whole profile changes neither the login, sessions, nor any individual relationship", async () => {
+  const club = await makeClub(`Profile Archive Club ${Date.now()}`);
+  const team = await makeTeam(club, "Profile Archive Team");
+  const athleteUser = await makeUser({ email: `profile-archive-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athlete = await makeAthlete({ userId: athleteUser.id });
+  await addTeamMembership(athlete, club, team);
+  const coach = await makeUser({ email: `profile-archive-coach-${Date.now()}@test.local`, roleHint: "coach" });
+  await grantCoachAthleteLink(coach.id, athlete);
+  await createSession(athleteUser.id);
+  assert.equal(await sessionCountFor(athleteUser.id), 1);
+
+  const admin = await makeUser({ email: `profile-archive-admin-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  const adminToken = await createSession(admin.id);
+
+  const res = await api(`/api/organization/athletes/${athlete}/archive-profile`, { method: "DELETE", cookie: cookieFor(adminToken) });
+  assert.equal(res.status, 200);
+
+  const profile = await query(`select is_active from public.athletes where id = $1`, [athlete]);
+  assert.equal(profile.rows[0].is_active, false, "the profile itself must be archived");
+
+  assert.equal(await isActiveUser(athleteUser.id), true, "archiving the profile must not disable the login");
+  assert.equal(await sessionCountFor(athleteUser.id), 1, "archiving the profile must not delete sessions");
+  assert.equal(await membershipStatus(athlete, { clubId: club, teamId: team, membershipType: "team" }), "active", "archiving the profile must not touch the team membership");
+  assert.equal(await membershipStatus(athlete, { clubId: club, teamId: null, membershipType: "club" }), "active", "archiving the profile must not touch the club membership");
+  const coachLink = await query(
+    `select is_active from public.user_athletes where user_id = $1 and athlete_id = $2 and relationship_type = 'coach'`,
+    [coach.id, athlete],
+  );
+  assert.equal(coachLink.rows[0].is_active, true, "archiving the profile must not touch the private-coach relationship");
 });

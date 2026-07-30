@@ -280,7 +280,7 @@ function renderArchivedProfileRow(row) {
   return `
     <article class="organization-row is-archived">
       <span class="organization-avatar">${escapeHtml((row.athlete_id || "AT").slice(0, 2).toUpperCase())}</span>
-      <span><strong>${escapeHtml(title)}</strong><small>Whole sporting profile archived - login is also disabled</small></span>
+      <span><strong>${escapeHtml(title)}</strong><small>Whole sporting profile archived - login and relationships are untouched</small></span>
       <span class="organization-row-actions">
         <button class="plain-button compact-button" type="button" data-action="organization-restore-profile" data-athlete-id="${escapeAttr(row.id)}">Restore profile</button>
       </span>
@@ -887,7 +887,7 @@ function renderAthleteArchiveActions(row, isPlatformAdmin) {
     actions.push(`<button class="plain-button icon-button" type="button" data-action="organization-archive-coach-relationship" data-athlete-id="${escapeAttr(row.id)}" aria-label="Archive from my athletes" title="Archive from my athletes - ends only YOUR private-coach relationship. Login, history, and any other relationships are kept, and you can restore it later.">${ICON_ARCHIVE}</button>`);
   }
   if (isPlatformAdmin) {
-    actions.push(`<button class="plain-button icon-button danger-action" type="button" data-action="organization-archive-profile" data-athlete-id="${escapeAttr(row.id)}" aria-label="Archive profile" title="Archive the WHOLE sporting profile (platform admin only) - also disables login. This ends every relationship, not just one.">${ICON_TRASH}</button>`);
+    actions.push(`<button class="plain-button icon-button danger-action" type="button" data-action="organization-archive-profile" data-athlete-id="${escapeAttr(row.id)}" aria-label="Archive profile" title="Archive the WHOLE sporting profile (platform admin only) - hides it from active lists platform-wide. This does NOT disable their login, delete sessions, or end any coach/team/club relationship - those are separate actions.">${ICON_TRASH}</button>`);
   }
   return actions.join("");
 }

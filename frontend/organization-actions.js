@@ -335,7 +335,7 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     try {
       await archiveAthleteRelationship(
         `/api/organization/athletes/${encodeURIComponent(athleteId)}/archive-profile`,
-        "Archive this athlete's WHOLE sporting profile? This also disables their login, and ends every relationship - not just one. This is different from ending a single coach/team/club relationship. This can be restored later.",
+        "Archive this athlete's WHOLE sporting profile? This hides it from active lists platform-wide. It does NOT disable their login, delete sessions, or end any coach/team/club relationship - use the specific relationship actions for that. This can be restored later.",
         { loadAthletes, renderOrganizationPanel },
       );
     } catch (error) {

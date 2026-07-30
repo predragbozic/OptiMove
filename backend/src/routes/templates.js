@@ -138,25 +138,32 @@ router.get("/", async (req, res, next) => {
                   and coach_rel.relationship_type = 'coach'
                   and coach_rel.is_active = true
               ))
+              -- Keyed off the viewer athlete's ACTIVE athlete_memberships
+              -- rows, not the legacy athletes.club_id/team_id pointer - an
+              -- athlete can hold several active team/club memberships at
+              -- once, and an archived one must never keep unlocking a scope
+              -- it no longer belongs to.
               or (coalesce(p.library_scope, 'my') = 'team' and $11::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
                 select 1
-                from public.athletes team_athlete
+                from public.athlete_memberships viewer_team_membership
                 join public.user_team_roles creator_team
-                  on creator_team.team_id = team_athlete.team_id
+                  on creator_team.team_id = viewer_team_membership.team_id
                  and creator_team.user_id = p.created_by_user_id
                  and creator_team.is_active = true
-                where team_athlete.id = $9
-                  and team_athlete.team_id is not null
+                where viewer_team_membership.athlete_id = $9
+                  and viewer_team_membership.membership_type = 'team'
+                  and viewer_team_membership.status = 'active'
               ))
               or (coalesce(p.library_scope, 'my') = 'club' and $12::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility in ('club', 'public') and exists (
                 select 1
-                from public.athletes club_athlete
-                left join public.teams athlete_team on athlete_team.id = club_athlete.team_id
+                from public.athlete_memberships viewer_club_membership
                 join public.user_club_roles creator_club
-                  on creator_club.user_id = p.created_by_user_id
+                  on creator_club.club_id = viewer_club_membership.club_id
+                 and creator_club.user_id = p.created_by_user_id
                  and creator_club.is_active = true
-                 and (creator_club.club_id = club_athlete.club_id or creator_club.club_id = athlete_team.club_id)
-                where club_athlete.id = $9
+                where viewer_club_membership.athlete_id = $9
+                  and viewer_club_membership.membership_type = 'club'
+                  and viewer_club_membership.status = 'active'
               ))
               or (coalesce(p.library_scope, 'my') = 'optimove' and $13::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
               or (coalesce(p.library_scope, 'my') = 'marketplace' and $14::boolean and coalesce(ps.athlete_can_view_directly, false) and p.visibility = 'public')
