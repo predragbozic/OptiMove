@@ -15,7 +15,7 @@ import coachesRouter from "./routes/coaches.js";
 import notificationsRouter from "./routes/notifications.js";
 import messagesRouter from "./routes/messages.js";
 import taxonomyRouter from "./routes/taxonomy.js";
-import { authMiddleware, requireAuth, requireCoach } from "./auth.js";
+import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
 
@@ -32,6 +32,7 @@ const corsOrigins = (process.env.CORS_ORIGIN || "")
 app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
 app.use(express.json());
 app.use(authMiddleware);
+app.use(attachAuthorizationContext);
 
 app.get("/api/health", async (_req, res, next) => {
   try {

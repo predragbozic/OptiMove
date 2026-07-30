@@ -13,9 +13,35 @@ import { accessScope, publicRole } from "../access.js";
 
 const router = Router();
 
-router.get("/me", async (req, res) => {
-  if (!req.user) return res.json({ user: null });
-  res.json({ user: publicUser(req.user) });
+router.get("/me", async (req, res, next) => {
+  try {
+    if (!req.user) return res.json({ user: null });
+    const authz = req.authz || {};
+    const clubRoles = authz.clubRoles || [];
+    const teamRoles = authz.teamRoles || [];
+    const clubIds = clubRoles.map((r) => r.clubId);
+    const teamIds = teamRoles.map((r) => r.teamId);
+    const [clubsResult, teamsResult] = await Promise.all([
+      clubIds.length ? query(`select id, name from public.clubs where id = any($1::uuid[])`, [clubIds]) : { rows: [] },
+      teamIds.length ? query(`select id, name from public.teams where id = any($1::uuid[])`, [teamIds]) : { rows: [] },
+    ]);
+    const clubNameById = new Map(clubsResult.rows.map((c) => [String(c.id), c.name]));
+    const teamNameById = new Map(teamsResult.rows.map((t) => [String(t.id), t.name]));
+
+    res.json({
+      user: {
+        ...publicUser(req.user),
+        // Capability flags and scoped roles for the future multi-workspace
+        // UI - role_hint above still picks the initial screen, but any real
+        // permission decision must come from these, not from role_hint.
+        capabilities: authz.capabilities || {},
+        clubs: clubRoles.map((r) => ({ id: r.clubId, name: clubNameById.get(String(r.clubId)) || null, role: r.role })),
+        teams: teamRoles.map((r) => ({ id: r.teamId, name: teamNameById.get(String(r.teamId)) || null, role: r.role })),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.put("/me/credentials", async (req, res, next) => {

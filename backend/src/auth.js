@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { query } from "./db.js";
-import { isCoachUser } from "./access.js";
+import { computeCapabilities, loadAuthorizationContext } from "./authz.js";
 
 const COOKIE_NAME = "optimove_session";
 const SESSION_DAYS = 14;
@@ -109,13 +109,32 @@ export async function authMiddleware(req, _res, next) {
   }
 }
 
+// Loads the user's real roles/scopes once per request (a no-op when there is
+// no logged-in user) so every permission check downstream reads from
+// req.authz instead of re-deriving capability from users.role_hint or
+// re-querying user_club_roles/user_team_roles per check.
+export async function attachAuthorizationContext(req, _res, next) {
+  try {
+    req.authz = await loadAuthorizationContext(req.user);
+    req.authz.capabilities = computeCapabilities(req.authz);
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
 export function requireAuth(req, res, next) {
   if (req.user) return next();
   res.status(401).json({ error: "Unauthorized" });
 }
 
+// Gates the coach workspace (builder/organization/exercises/taxonomy). This
+// used to check isCoachUser(req.user), a flat role_hint test that (a) wrongly
+// treated the generic "user" role_hint as coach-eligible and (b) couldn't
+// reflect real scoped club/team/athlete relationships. req.authz is loaded by
+// attachAuthorizationContext and reflects the account's actual roles.
 export function requireCoach(req, res, next) {
-  if (isCoachUser(req.user)) return next();
+  if (req.authz?.capabilities?.coachWorkspace) return next();
   res.status(403).json({ error: "Forbidden" });
 }
 
