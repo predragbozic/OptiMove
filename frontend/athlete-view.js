@@ -58,20 +58,16 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
   `;
 }
 
-export function renderAthleteSettingsHtml(athlete) {
+export function renderAthleteSettingsHtml(athlete, currentUser) {
   return `
     <section class="content-section athlete-simple-view">
       <section class="panel athlete-settings-card">
         <div>
           <p class="eyebrow">Profile</p>
           <h3>${escapeHtml(athlete?.athlete || "Athlete profile")}</h3>
-          <p class="muted">Your coach controls program assignment. Profile editing and password change will live here.</p>
+          <p class="muted">Your coach controls program assignment. Personal data and notifications will live here.</p>
         </div>
         <div class="athlete-setting-list">
-          <article>
-            <strong>Account</strong>
-            <span>Email and password management.</span>
-          </article>
           <article>
             <strong>Personal data</strong>
             <span>Photo, contact details, and basic profile information.</span>
@@ -81,6 +77,21 @@ export function renderAthleteSettingsHtml(athlete) {
             <span>Future reminders for programs, wellness, and testing.</span>
           </article>
         </div>
+      </section>
+      <section class="panel athlete-settings-card">
+        <div>
+          <p class="eyebrow">Account</p>
+          <h3>Login and password</h3>
+          <p class="muted">Change the email or password you use to sign in. Confirm with your current password.</p>
+        </div>
+        <form class="organization-form" data-account-form="credentials">
+          <label class="search-field"><span>Email</span><input name="email" type="email" placeholder="${escapeAttr(currentUser?.email || "you@example.com")}" autocomplete="off"></label>
+          <label class="search-field"><span>New password (optional)</span><input name="newPassword" type="password" placeholder="Leave blank to keep current password" autocomplete="new-password"></label>
+          <label class="search-field"><span>Current password</span><input name="currentPassword" type="password" required placeholder="Confirm with your current password" autocomplete="current-password"></label>
+          <p class="builder-error" aria-live="polite"></p>
+          <p class="builder-success" aria-live="polite"></p>
+          <button class="plain-button" type="submit">Save changes</button>
+        </form>
       </section>
     </section>
   `;

@@ -18,6 +18,39 @@ router.get("/me", async (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
 
+router.put("/me/credentials", async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    const currentPassword = String(req.body?.currentPassword || "");
+    const nextEmail = req.body?.email !== undefined ? String(req.body.email).trim().toLowerCase() : "";
+    const nextPassword = req.body?.newPassword !== undefined ? String(req.body.newPassword) : "";
+    if (!currentPassword) return res.status(400).json({ error: "Enter your current password to confirm this change." });
+    if (!nextEmail && !nextPassword) return res.status(400).json({ error: "Enter a new email or a new password." });
+    if (nextPassword && nextPassword.length < 8) return res.status(400).json({ error: "New password must be at least 8 characters." });
+
+    const current = await query(
+      `select id, email, password_hash from public.users where id = $1 limit 1`,
+      [req.user.id],
+    );
+    const user = current.rows[0];
+    if (!user || !verifyPassword(currentPassword, user.password_hash)) {
+      return res.status(401).json({ error: "Current password is incorrect." });
+    }
+
+    const email = nextEmail || user.email;
+    const passwordHash = nextPassword ? hashPassword(nextPassword) : user.password_hash;
+    const updated = await query(
+      `update public.users set email = $2, password_hash = $3, updated_at = now() where id = $1
+       returning id, email, full_name, display_name, role_hint`,
+      [user.id, email, passwordHash],
+    );
+    res.json({ user: publicUser(updated.rows[0]) });
+  } catch (error) {
+    if (error?.code === "23505") return res.status(409).json({ error: "This email is already in use by another account." });
+    next(error);
+  }
+});
+
 router.post("/login", async (req, res, next) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
@@ -79,7 +112,7 @@ router.post("/invites/:token/accept", async (req, res, next) => {
     const tokenHash = hashInviteToken(req.params.token);
     const inviteResult = await query(
       `
-      select i.id, i.email, i.athlete_id,
+      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id,
              coalesce(a.display_name, a.full_name, a.athlete_id, i.email) as athlete_name
       from public.athlete_invites i
       join public.athletes a on a.id = i.athlete_id
@@ -93,20 +126,44 @@ router.post("/invites/:token/accept", async (req, res, next) => {
     const invite = inviteResult.rows[0];
     if (!invite) return res.status(404).json({ error: "Invite is invalid or expired." });
     const nameParts = splitName(invite.athlete_name || invite.email);
-    const userResult = await query(
-      `
-      insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, is_active)
-      values ($1, $2, $3, $4, $5, $5, 'athlete', true)
-      on conflict (email) do update
-        set password_hash = excluded.password_hash,
-            role_hint = 'athlete',
-            is_active = true,
-            updated_at = now()
-      returning id, email, full_name, display_name, role_hint
-      `,
-      [invite.email, nameParts.firstName, nameParts.lastName, hashPassword(password), invite.athlete_name],
-    );
-    const user = userResult.rows[0];
+    const passwordHash = hashPassword(password);
+
+    let user;
+    if (invite.athlete_user_id) {
+      // Athlete already has a login: rename/reset that same account instead of
+      // creating a second user row and leaving the old one as an orphan.
+      const emailOwner = await query(`select id from public.users where lower(email) = lower($1) limit 1`, [invite.email]);
+      if (emailOwner.rows[0] && String(emailOwner.rows[0].id) !== String(invite.athlete_user_id)) {
+        return res.status(409).json({ error: "This email is already in use by another account." });
+      }
+      const updated = await query(
+        `update public.users
+         set email = $2,
+             password_hash = $3,
+             role_hint = 'athlete',
+             is_active = true,
+             updated_at = now()
+         where id = $1
+         returning id, email, full_name, display_name, role_hint`,
+        [invite.athlete_user_id, invite.email, passwordHash],
+      );
+      user = updated.rows[0];
+    } else {
+      const inserted = await query(
+        `
+        insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, is_active)
+        values ($1, $2, $3, $4, $5, $5, 'athlete', true)
+        on conflict (email) do update
+          set password_hash = excluded.password_hash,
+              role_hint = 'athlete',
+              is_active = true,
+              updated_at = now()
+        returning id, email, full_name, display_name, role_hint
+        `,
+        [invite.email, nameParts.firstName, nameParts.lastName, passwordHash, invite.athlete_name],
+      );
+      user = inserted.rows[0];
+    }
     await query(`update public.athletes set user_id = $2 where id = $1`, [invite.athlete_id, user.id]);
     await query(
       `insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active)
@@ -155,7 +212,7 @@ function splitName(value) {
   const parts = String(value || "").trim().split(/\s+/).filter(Boolean);
   return {
     firstName: parts[0] || "Athlete",
-    lastName: parts.slice(1).join(" ") || null,
+    lastName: parts.slice(1).join(" "),
   };
 }
 

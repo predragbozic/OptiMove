@@ -414,6 +414,36 @@ async function handleContentSubmit(event) {
     return;
   }
 
+  const credentialsForm = event.target.closest("[data-account-form='credentials']");
+  if (credentialsForm) {
+    event.preventDefault();
+    const formData = new FormData(credentialsForm);
+    const error = credentialsForm.querySelector(".builder-error");
+    const success = credentialsForm.querySelector(".builder-success");
+    if (error) error.textContent = "";
+    if (success) success.textContent = "";
+    const button = credentialsForm.querySelector("button[type='submit']");
+    if (button) button.disabled = true;
+    const email = String(formData.get("email") || "").trim();
+    const newPassword = String(formData.get("newPassword") || "");
+    const currentPassword = String(formData.get("currentPassword") || "");
+    try {
+      const data = await api("/api/auth/me/credentials", {
+        method: "PUT",
+        body: JSON.stringify({ email: email || undefined, newPassword: newPassword || undefined, currentPassword }),
+      });
+      state.currentUser = data.user;
+      credentialsForm.reset();
+      if (success) success.textContent = "Saved.";
+      renderUserControls();
+    } catch (submitError) {
+      if (error) error.textContent = submitError.message || "Could not save changes.";
+    } finally {
+      if (button) button.disabled = false;
+    }
+    return;
+  }
+
   const builderForm = event.target.closest("[data-builder-form]");
   if (!builderForm) return;
   event.preventDefault();
@@ -1447,7 +1477,7 @@ function renderAthleteSettings() {
   renderAthleteHeader({});
   els.context.textContent = "Athlete settings";
   els.title.textContent = "Settings";
-  els.content.innerHTML = renderAthleteSettingsHtml(athlete);
+  els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser);
 }
 
 async function renderAthleteLibrary() {

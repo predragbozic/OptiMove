@@ -126,8 +126,8 @@ function renderOrganizationUserForm() {
     <form class="panel organization-form" data-organization-form="user">
       <div><p class="eyebrow">Access</p><h3>Add user account</h3></div>
       <label class="search-field"><span>Full name</span><input name="fullName" placeholder="Name"></label>
-      <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="name@example.com"></label>
-      <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters"></label>
+      <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="example@example.com" autocomplete="off"></label>
+      <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters" autocomplete="new-password"></label>
       <label class="search-field"><span>Role</span><select name="roleHint">${roles.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>
       <p class="builder-error" aria-live="polite"></p>
       <button class="plain-button" type="submit">Add user</button>
@@ -588,7 +588,7 @@ function renderAthleteInviteModal(athletes) {
         </div>
         <form class="organization-form" data-organization-form="athleteInvite">
           <input type="hidden" name="athleteId" value="${escapeAttr(athlete.id)}">
-          <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="athlete@example.com"></label>
+          <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="example@example.com" autocomplete="off"></label>
           <p class="builder-error" aria-live="polite">${escapeHtml(state.organizationInvite.error || "")}</p>
           <button class="plain-button" type="submit">Create invite email</button>
         </form>
@@ -683,8 +683,8 @@ function renderOrganizationRoleForms(data) {
     <form class="panel organization-form" data-organization-form="athleteLogin">
       <div><p class="eyebrow">Athlete app</p><h3>Manual athlete login</h3><p class="muted">For normal onboarding, use Invite on the athlete row so the athlete sets their own password.</p></div>
       ${renderFilterableSelect({ name: "athleteId", label: "Athlete", options: athleteOptions, required: true, placeholder: "Type athlete name or ID" })}
-      <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="athlete@example.com"></label>
-      <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters"></label>
+      <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="example@example.com" autocomplete="off"></label>
+      <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters" autocomplete="new-password"></label>
       <p class="builder-error" aria-live="polite"></p>
       <button class="plain-button" type="submit" ${(data.athletes || []).length ? "" : "disabled"}>Create login</button>
     </form>

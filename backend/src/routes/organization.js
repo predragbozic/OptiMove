@@ -498,12 +498,50 @@ router.post("/athlete-logins", async (req, res, next) => {
     if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters." });
     const athlete = await query(
-      `select id, coalesce(display_name, full_name, athlete_id) as name from public.athletes where id = $1 limit 1`,
+      `select id, user_id, coalesce(display_name, full_name, athlete_id) as name from public.athletes where id = $1 limit 1`,
       [athleteId],
     );
     if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
     const nameParts = splitName(athlete.rows[0].name || email);
+    const currentUserId = athlete.rows[0].user_id;
     await client.query("begin");
+
+    if (currentUserId) {
+      // Athlete already has a login: rename/reset that same account instead of
+      // creating a second user row and leaving the old one as an orphan.
+      const emailOwner = await client.query(
+        `select id from public.users where lower(email) = lower($1) limit 1`,
+        [email],
+      );
+      if (emailOwner.rows[0] && String(emailOwner.rows[0].id) !== String(currentUserId)) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "This email is already in use by another account." });
+      }
+      const updated = await client.query(
+        `update public.users
+         set email = $2,
+             first_name = coalesce(first_name, $3),
+             last_name = coalesce(last_name, $4),
+             full_name = coalesce(full_name, $5),
+             display_name = coalesce(display_name, $5),
+             password_hash = $6,
+             role_hint = 'athlete',
+             is_active = true,
+             updated_at = now()
+         where id = $1
+         returning id, email`,
+        [currentUserId, email, nameParts.firstName, nameParts.lastName, athlete.rows[0].name, hashPassword(password)],
+      );
+      await client.query(
+        `insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active)
+         values ($1, $2, 'athlete', true)
+         on conflict (user_id, athlete_id, relationship_type) do update set is_active = true, updated_at = now()`,
+        [currentUserId, athleteId],
+      );
+      await client.query("commit");
+      return res.status(201).json({ user: updated.rows[0] });
+    }
+
     const existing = await client.query(
       `select u.id, u.email, u.role_hint, a.id as linked_athlete_id
        from public.users u
