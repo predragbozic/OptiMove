@@ -23,29 +23,42 @@ export function isTeamCoach(user) {
   return TEAM_ROLES.has(normalizeRole(user?.role_hint));
 }
 
+// Deliberately does NOT include role === "user" (the generic default role_hint
+// must never imply coach access on its own) and does not exclude athletes
+// (role_hint alone can't tell whether an account also holds real coach
+// capability - see authz.js for the actual multi-role-aware check used by
+// requireCoach).
 export function isCoachUser(user) {
   const role = normalizeRole(user?.role_hint);
-  return Boolean(user) && !isAthlete(user) && (
-    PLATFORM_ROLES.has(role) || CLUB_ROLES.has(role) || TEAM_ROLES.has(role) || COACH_ROLES.has(role) || role === "user"
+  return Boolean(user) && (
+    PLATFORM_ROLES.has(role) || CLUB_ROLES.has(role) || TEAM_ROLES.has(role) || COACH_ROLES.has(role)
   );
 }
 
+// Deliberately does NOT map role_hint "user" (the generic default) to
+// "coach" - a generic account must present as what it is, not as a coach it
+// then gets 403'd for. Anything unrecognized falls through to the raw role
+// string rather than being guessed as a coach.
 export function publicRole(user) {
   const role = normalizeRole(user?.role_hint);
   if (PLATFORM_ROLES.has(role)) return "platform_admin";
   if (CLUB_ROLES.has(role)) return "club_admin";
   if (TEAM_ROLES.has(role)) return "team_coach";
-  if (COACH_ROLES.has(role) || role === "user") return "coach";
+  if (COACH_ROLES.has(role)) return "coach";
   if (role === "athlete") return "athlete";
   return role;
 }
 
+// Same principle: only a recognized coach-ish role_hint reports "coach" -
+// the generic "user" default (or any other unrecognized value) reports
+// "user" instead of silently inheriting coach scope.
 export function accessScope(user) {
   if (isPlatformAdmin(user)) return "platform";
   if (isClubAdmin(user)) return "club";
   if (isTeamCoach(user)) return "team";
   if (isAthlete(user)) return "athlete";
-  return "coach";
+  if (isCoachUser(user)) return "coach";
+  return "user";
 }
 
 export function canAccessAllAthletes(user) {

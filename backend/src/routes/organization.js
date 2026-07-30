@@ -1,7 +1,12 @@
 import crypto from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../db.js";
-import { isClubAdmin, isPlatformAdmin, isTeamCoach } from "../access.js";
+import {
+  canManageClub as authzCanManageClub,
+  canManageTeamById as authzCanManageTeam,
+  isPlatformAdministrator,
+  loadAuthorizationContext,
+} from "../authz.js";
 import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
 
@@ -10,18 +15,18 @@ const router = Router();
 router.get("/", async (req, res, next) => {
   try {
     const [clubs, teams, athletes, users, accessRequests] = await Promise.all([
-      loadClubs(req.user),
-      loadTeams(req.user),
-      loadManagedAthletes(req.user),
-      loadUsers(req.user),
+      loadClubs(req),
+      loadTeams(req),
+      loadManagedAthletes(req),
+      loadUsers(req),
       loadProgramAccessRequests(req.user),
     ]);
     res.json({
       scope: req.user?.role_hint || "coach",
-      canCreateClub: isPlatformAdmin(req.user),
-      canCreateTeam: isPlatformAdmin(req.user) || isClubAdmin(req.user),
+      canCreateClub: isPlatformAdministrator(req.authz),
+      canCreateTeam: isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0,
       canCreateAthlete: true,
-      canCreateUser: isPlatformAdmin(req.user) || isClubAdmin(req.user),
+      canCreateUser: isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0,
       clubs,
       teams,
       athletes,
@@ -35,10 +40,16 @@ router.get("/", async (req, res, next) => {
 
 router.post("/users", async (req, res, next) => {
   try {
+    // Frontend hides this form from anyone without club/platform scope, but
+    // that's a UI convenience, not enforcement - the real restriction has to
+    // live here too.
+    if (!isPlatformAdministrator(req.authz) && req.authz.clubRoles.length === 0) {
+      return res.status(403).json({ error: "Only a platform admin or club admin can create user accounts." });
+    }
     const email = clean(req.body?.email).toLowerCase();
     const fullName = clean(req.body?.fullName);
     const password = String(req.body?.password || "");
-    const roleHint = allowedUserRole(req.user, clean(req.body?.roleHint) || "athlete");
+    const roleHint = allowedUserRole(req.authz, clean(req.body?.roleHint) || "athlete");
     if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
     if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters." });
     const nameParts = splitName(fullName || email);
@@ -64,7 +75,7 @@ router.delete("/users/:userId", async (req, res, next) => {
        set is_active = false, updated_at = now()
        where id = $1 and (created_by_user_id = $2 or $3::boolean)
        returning id`,
-      [req.params.userId, req.user.id, isPlatformAdmin(req.user)],
+      [req.params.userId, req.user.id, isPlatformAdministrator(req.authz)],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "User not found or outside your access." });
     await destroySessionsForUser(result.rows[0].id);
@@ -76,7 +87,7 @@ router.delete("/users/:userId", async (req, res, next) => {
 
 router.post("/clubs", async (req, res, next) => {
   try {
-    if (!isPlatformAdmin(req.user)) return res.status(403).json({ error: "Only platform admin can create clubs." });
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only platform admin can create clubs." });
     const name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Club name is required." });
     const result = await query(
@@ -93,8 +104,7 @@ router.post("/clubs", async (req, res, next) => {
 
 router.put("/clubs/:clubId", async (req, res, next) => {
   try {
-    if (!isPlatformAdmin(req.user) && !isClubAdmin(req.user)) return res.status(403).json({ error: "Forbidden" });
-    if (!(await canManageClub(req.user, req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    if (!(await canManageClub(req, req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
     const name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Club name is required." });
     const result = await query(
@@ -113,7 +123,7 @@ router.put("/clubs/:clubId", async (req, res, next) => {
 
 router.delete("/clubs/:clubId", async (req, res, next) => {
   try {
-    if (!isPlatformAdmin(req.user)) return res.status(403).json({ error: "Only platform admin can delete clubs." });
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only platform admin can delete clubs." });
     const result = await query(
       `update public.clubs set is_active = false, updated_at = now() where id = $1 returning id`,
       [req.params.clubId],
@@ -127,12 +137,12 @@ router.delete("/clubs/:clubId", async (req, res, next) => {
 
 router.post("/teams", async (req, res, next) => {
   try {
-    if (!(isPlatformAdmin(req.user) || isClubAdmin(req.user))) return res.status(403).json({ error: "Only club admin can create teams." });
+    if (!(isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0)) return res.status(403).json({ error: "Only club admin can create teams." });
     const name = clean(req.body?.name);
     const clubId = clean(req.body?.clubId);
     if (!name) return res.status(400).json({ error: "Team name is required." });
     if (!clubId) return res.status(400).json({ error: "Club is required." });
-    if (!(await canManageClub(req.user, clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    if (!(await canManageClub(req, clubId))) return res.status(403).json({ error: "Club is outside your access." });
     const result = await query(
       `insert into public.teams (club_id, name, short_name, logo_url, is_active)
        values ($1, $2, $3, $4, true)
@@ -147,12 +157,12 @@ router.post("/teams", async (req, res, next) => {
 
 router.put("/teams/:teamId", async (req, res, next) => {
   try {
-    if (!(await canManageTeam(req.user, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
     const name = clean(req.body?.name);
     const clubId = clean(req.body?.clubId);
     if (!name) return res.status(400).json({ error: "Team name is required." });
     if (!clubId) return res.status(400).json({ error: "Club is required." });
-    if (!(await canManageClub(req.user, clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    if (!(await canManageClub(req, clubId))) return res.status(403).json({ error: "Club is outside your access." });
     const result = await query(
       `update public.teams
        set club_id = $2, name = $3, short_name = $4, logo_url = $5, updated_at = now()
@@ -169,7 +179,7 @@ router.put("/teams/:teamId", async (req, res, next) => {
 
 router.delete("/teams/:teamId", async (req, res, next) => {
   try {
-    if (!(await canManageTeam(req.user, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
     const result = await query(
       `update public.teams set is_active = false, updated_at = now() where id = $1 returning id`,
       [req.params.teamId],
@@ -212,7 +222,7 @@ router.post("/athletes", async (req, res, next) => {
 
 router.put("/athletes/:athleteId", async (req, res, next) => {
   try {
-    if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     const fullName = clean(req.body?.fullName);
     const athleteId = clean(req.body?.athleteId);
     const { clubId, teamId } = await resolveAthleteClubTeam(req.user, clean(req.body?.clubId), clean(req.body?.teamId));
@@ -242,7 +252,7 @@ router.put("/athletes/:athleteId", async (req, res, next) => {
 
 router.put("/athletes/:athleteId/library-access", async (req, res, next) => {
   try {
-    if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     const access = await saveAthleteLibraryAccess(req.params.athleteId, req.user.id, req.body || {});
     res.json({ access });
   } catch (error) {
@@ -259,7 +269,7 @@ router.put("/athlete-library-access/bulk", async (req, res, next) => {
     const patch = req.body?.patch && typeof req.body.patch === "object" ? req.body.patch : {};
     const changed = [];
     for (const athleteId of athleteIds) {
-      if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "One or more athletes are outside your access." });
+      if (!(await canManageAthlete(req, athleteId))) return res.status(403).json({ error: "One or more athletes are outside your access." });
       changed.push(await saveAthleteLibraryAccess(athleteId, req.user.id, patch, { partial: true }));
     }
     res.json({ updated: changed });
@@ -273,8 +283,8 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
     const teamId = clean(req.params.teamId);
     const athleteId = clean(req.body?.athleteId);
     if (!teamId || !athleteId) return res.status(400).json({ error: "Team and athlete are required." });
-    if (!(await canManageTeam(req.user, teamId))) return res.status(403).json({ error: "Team is outside your access." });
-    if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageTeam(req, teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!(await canManageAthlete(req, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     const team = await query(`select id, club_id from public.teams where id = $1 and coalesce(is_active, true) limit 1`, [teamId]);
     if (!team.rows[0]) return res.status(404).json({ error: "Team not found." });
     const result = await query(
@@ -296,7 +306,7 @@ router.post("/athlete-invites", async (req, res, next) => {
     const athleteId = clean(req.body?.athleteId);
     const email = clean(req.body?.email).toLowerCase();
     if (!athleteId || !email) return res.status(400).json({ error: "Athlete and email are required." });
-    if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     const athlete = await query(
       `select id, coalesce(display_name, full_name, athlete_id) as name from public.athletes where id = $1 and coalesce(is_active, true) limit 1`,
       [athleteId],
@@ -327,7 +337,7 @@ router.post("/program-access/:accessId/approve", async (req, res, next) => {
   try {
     const request = await loadProgramAccessRequest(req.params.accessId);
     if (!request) return res.status(404).json({ error: "Access request not found." });
-    if (!(await canManageAthlete(req.user, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
     const result = await query(
       `update library.program_access
        set status = 'accessed',
@@ -365,7 +375,7 @@ router.post("/program-access/bulk", async (req, res, next) => {
         skipped.push({ id: accessId, reason: "not_pending" });
         continue;
       }
-      if (!(await canManageAthlete(req.user, request.athlete_id))) {
+      if (!(await canManageAthlete(req, request.athlete_id))) {
         skipped.push({ id: accessId, reason: "forbidden" });
         continue;
       }
@@ -404,7 +414,7 @@ router.post("/program-access/:accessId/reject", async (req, res, next) => {
   try {
     const request = await loadProgramAccessRequest(req.params.accessId);
     if (!request) return res.status(404).json({ error: "Access request not found." });
-    if (!(await canManageAthlete(req.user, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
     const result = await query(
       `update library.program_access
        set status = 'rejected',
@@ -424,7 +434,7 @@ router.post("/program-access/:accessId/revoke", async (req, res, next) => {
   try {
     const request = await loadProgramAccessRequest(req.params.accessId);
     if (!request) return res.status(404).json({ error: "Program access not found." });
-    if (!(await canManageAthlete(req.user, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, request.athlete_id))) return res.status(403).json({ error: "Athlete is outside your access." });
     const result = await query(
       `delete from library.program_access
        where id = $1
@@ -439,7 +449,7 @@ router.post("/program-access/:accessId/revoke", async (req, res, next) => {
 
 router.delete("/athletes/:athleteId", async (req, res, next) => {
   try {
-    if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     const result = await query(
       `update public.athletes set is_active = false where id = $1 returning id`,
       [req.params.athleteId],
@@ -453,7 +463,7 @@ router.delete("/athletes/:athleteId", async (req, res, next) => {
 
 router.put("/athletes/:athleteId/restore", async (req, res, next) => {
   try {
-    if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     const result = await query(
       `update public.athletes set is_active = true where id = $1 returning id`,
       [req.params.athleteId],
@@ -467,25 +477,49 @@ router.put("/athletes/:athleteId/restore", async (req, res, next) => {
 
 router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
   try {
-    if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     const active = Boolean(req.body?.active);
+    // Whether this athlete "has a login" comes from athletes.user_id itself,
+    // not the linked account's role_hint - a multi-role account (e.g.
+    // role_hint="coach" who is also, genuinely, this athlete) must still be
+    // recognized.
     const athlete = await query(
-      `select a.user_id, u.role_hint
-       from public.athletes a
-       left join public.users u on u.id = a.user_id
-       where a.id = $1
-       limit 1`,
+      `select a.user_id from public.athletes a where a.id = $1 limit 1`,
       [req.params.athleteId],
     );
     if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
-    if (!athlete.rows[0].user_id || athlete.rows[0].role_hint !== "athlete") {
+    if (!athlete.rows[0].user_id) {
       return res.status(400).json({ error: "This athlete has no login to update." });
     }
+
+    const targetUserId = athlete.rows[0].user_id;
+    const targetUser = await query(`select id, role_hint from public.users where id = $1 limit 1`, [targetUserId]);
+    if (!targetUser.rows[0]) return res.status(400).json({ error: "This athlete has no login to update." });
+
+    // This control toggles users.is_active - a GLOBAL account flag, not
+    // something scoped to "athlete access". If the linked account also holds
+    // any real coach/admin capability (platform, club, team, or independent
+    // coach - regardless of who is making this request, including a
+    // platform admin), flipping it here would silently kill their staff
+    // access too. That is never this endpoint's job; a dedicated, audited
+    // account-suspension tool is the right place for that later.
+    const targetAuthz = await loadAuthorizationContext(targetUser.rows[0]);
+    const targetHasStaffCapability = targetAuthz.platformRoles.length > 0
+      || targetAuthz.clubRoles.length > 0
+      || targetAuthz.teamRoles.length > 0
+      || targetAuthz.isIndependentCoach;
+    if (targetHasStaffCapability) {
+      return res.status(409).json({
+        error: "MULTI_ROLE_ACCOUNT",
+        message: "This user also has coach or administrator access. Their whole account cannot be disabled from the athlete login control.",
+      });
+    }
+
     const result = await query(
       `update public.users set is_active = $2, updated_at = now() where id = $1 returning id, is_active`,
-      [athlete.rows[0].user_id, active],
+      [targetUserId, active],
     );
-    if (!active) await destroySessionsForUser(athlete.rows[0].user_id);
+    if (!active) await destroySessionsForUser(targetUserId);
     res.json({ ok: true, active: result.rows[0]?.is_active });
   } catch (error) {
     next(error);
@@ -497,7 +531,7 @@ router.post("/club-roles", async (req, res, next) => {
     const userId = clean(req.body?.userId);
     const clubId = clean(req.body?.clubId);
     if (!userId || !clubId) return res.status(400).json({ error: "User and club are required." });
-    if (!(await canManageClub(req.user, clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    if (!(await canManageClub(req, clubId))) return res.status(403).json({ error: "Club is outside your access." });
     const result = await query(
       `insert into public.user_club_roles (user_id, club_id, role, is_active)
        values ($1, $2, 'club_admin', true)
@@ -516,7 +550,7 @@ router.post("/team-roles", async (req, res, next) => {
     const userId = clean(req.body?.userId);
     const teamId = clean(req.body?.teamId);
     if (!userId || !teamId) return res.status(400).json({ error: "User and team are required." });
-    if (!(await canManageTeam(req.user, teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!(await canManageTeam(req, teamId))) return res.status(403).json({ error: "Team is outside your access." });
     const result = await query(
       `insert into public.user_team_roles (user_id, team_id, role, is_active)
        values ($1, $2, 'team_coach', true)
@@ -543,23 +577,22 @@ router.post("/athlete-logins", async (req, res, next) => {
     const email = clean(req.body?.email).toLowerCase();
     const password = String(req.body?.password || "");
     if (!athleteId || !email || !password) return res.status(400).json({ error: "Athlete, email, and password are required." });
-    if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!(await canManageAthlete(req, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters." });
 
     const athlete = await query(
-      `select a.id, a.user_id, coalesce(a.display_name, a.full_name, a.athlete_id) as name, u.role_hint as linked_role_hint
+      `select a.id, a.user_id, coalesce(a.display_name, a.full_name, a.athlete_id) as name
        from public.athletes a
-       left join public.users u on u.id = a.user_id
        where a.id = $1
        limit 1`,
       [athleteId],
     );
     if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
 
-    // Only trust an existing link if it actually points to an athlete-role account.
-    // A link to a coach/admin account is bad data (e.g. from a past bug) and is
-    // treated as unset - it never blocks or resets anything here.
-    const currentUserId = athlete.rows[0].linked_role_hint === "athlete" ? athlete.rows[0].user_id : null;
+    // Trust athletes.user_id directly (not the linked account's role_hint),
+    // so a multi-role account (e.g. role_hint="coach" who is also, genuinely,
+    // this athlete) is still recognized as already linked.
+    const currentUserId = athlete.rows[0].user_id || null;
     if (currentUserId) {
       return res.status(409).json({
         error: "This athlete already has a login. This form can no longer reset an existing password - they need to log in directly, or use a dedicated password reset process.",
@@ -606,8 +639,14 @@ router.post("/athlete-logins", async (req, res, next) => {
   }
 });
 
-async function loadClubs(user) {
-  if (isPlatformAdmin(user)) {
+// Branches on the user's REAL scoped roles (req.authz), not role_hint - a
+// role_hint of "athlete" must not hide clubs/teams this account genuinely
+// administers via an actual user_club_roles/user_team_roles row, and a
+// role_hint that merely says "club_admin" with no such row must not see
+// every club either.
+async function loadClubs(req) {
+  const authz = req.authz;
+  if (isPlatformAdministrator(authz)) {
     const result = await query(
       `select id, name, short_name, logo_url, city, country
        from public.clubs
@@ -616,18 +655,18 @@ async function loadClubs(user) {
     );
     return result.rows;
   }
-  if (isClubAdmin(user)) {
+  if (authz.clubRoles.length) {
     const result = await query(
       `select c.id, c.name, c.short_name, c.logo_url, c.city, c.country
        from public.user_club_roles ucr
        join public.clubs c on c.id = ucr.club_id
        where ucr.user_id = $1 and ucr.is_active = true and coalesce(c.is_active, true)
        order by c.name`,
-      [user.id],
+      [req.user.id],
     );
     return result.rows;
   }
-  if (isTeamCoach(user)) {
+  if (authz.teamRoles.length) {
     const result = await query(
       `select distinct c.id, c.name, c.short_name, c.logo_url, c.city, c.country
        from public.user_team_roles utr
@@ -635,15 +674,16 @@ async function loadClubs(user) {
        join public.clubs c on c.id = t.club_id
        where utr.user_id = $1 and utr.is_active = true and coalesce(c.is_active, true)
        order by c.name`,
-      [user.id],
+      [req.user.id],
     );
     return result.rows;
   }
   return [];
 }
 
-async function loadTeams(user) {
-  if (isPlatformAdmin(user)) {
+async function loadTeams(req) {
+  const authz = req.authz;
+  if (isPlatformAdministrator(authz)) {
     const result = await query(
       `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name
        from public.teams t
@@ -653,7 +693,7 @@ async function loadTeams(user) {
     );
     return result.rows;
   }
-  if (isClubAdmin(user)) {
+  if (authz.clubRoles.length) {
     const result = await query(
       `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name
        from public.user_club_roles ucr
@@ -661,11 +701,11 @@ async function loadTeams(user) {
        left join public.clubs c on c.id = t.club_id
        where ucr.user_id = $1 and ucr.is_active = true and coalesce(t.is_active, true)
        order by c.name nulls last, t.name`,
-      [user.id],
+      [req.user.id],
     );
     return result.rows;
   }
-  if (isTeamCoach(user)) {
+  if (authz.teamRoles.length) {
     const result = await query(
       `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name
        from public.user_team_roles utr
@@ -673,19 +713,23 @@ async function loadTeams(user) {
        left join public.clubs c on c.id = t.club_id
        where utr.user_id = $1 and utr.is_active = true and coalesce(t.is_active, true)
        order by c.name nulls last, t.name`,
-      [user.id],
+      [req.user.id],
     );
     return result.rows;
   }
   return [];
 }
 
-async function loadUsers(user) {
+async function loadUsers(req) {
   const result = await query(
     `select distinct u.id, u.email, coalesce(u.display_name, u.full_name, u.email) as name, u.role_hint
      from public.users u
      where u.is_active = true
-       and u.role_hint <> 'athlete'
+       and (
+         u.role_hint <> 'athlete'
+         or exists (select 1 from public.user_club_roles ucr2 where ucr2.user_id = u.id and ucr2.is_active = true)
+         or exists (select 1 from public.user_team_roles utr2 where utr2.user_id = u.id and utr2.is_active = true)
+       )
        and (
          $2::boolean
          or u.id = $1
@@ -706,7 +750,7 @@ async function loadUsers(user) {
          )
        )
      order by name`,
-    [user.id, isPlatformAdmin(user)],
+    [req.user.id, isPlatformAdministrator(req.authz)],
   );
   return result.rows;
 }
@@ -814,13 +858,29 @@ async function notifyProgramAccessDecision(request, actor, decision) {
   });
 }
 
-async function loadManagedAthletes(user) {
+async function loadManagedAthletes(req) {
   const result = await query(
     `select
        a.id, a.athlete_id, a.source_external_id,
        coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as name,
        a.image_url, coalesce(a.is_active, true) as is_active, a.club_id, c.name as club_name, a.team_id, t.name as team_name, a.user_id,
        case when a.user_id is null then null else coalesce(u.is_active, false) end as login_active,
+       -- True when the linked account also holds any real staff/coach/admin
+       -- capability, so the frontend can show a locked "multi-role" state
+       -- instead of a plain toggle (see PUT /athletes/:id/login-status,
+       -- which independently re-checks this server-side regardless of what
+       -- the client renders). Role_hint list here mirrors access.js's
+       -- PLATFORM_ROLES + CLUB_ROLES + TEAM_ROLES + COACH_ROLES sets.
+       case when a.user_id is null then false else (
+         coalesce(u.role_hint, '') in (
+           'admin', 'platform_admin', 'general_admin',
+           'club_admin', 'club_manager',
+           'team_admin', 'team_coach', 'team_trainer',
+           'coach', 'independent_coach', 'fitness_coach', 'trainer'
+         )
+         or exists (select 1 from public.user_club_roles ucr4 where ucr4.user_id = a.user_id and ucr4.is_active = true)
+         or exists (select 1 from public.user_team_roles utr4 where utr4.user_id = a.user_id and utr4.is_active = true)
+       ) end as login_is_multi_role,
        coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
        coalesce(ala.can_view_team_library, false) as can_view_team_library,
        coalesce(ala.can_view_club_library, false) as can_view_club_library,
@@ -842,7 +902,7 @@ async function loadManagedAthletes(user) {
      from public.athletes a
      left join public.clubs c on c.id = a.club_id
      left join public.teams t on t.id = a.team_id
-     left join public.users u on u.id = a.user_id and u.role_hint = 'athlete'
+     left join public.users u on u.id = a.user_id
      left join public.athlete_library_access ala on ala.athlete_id = a.id
      where (
          $2::boolean
@@ -858,7 +918,7 @@ async function loadManagedAthletes(user) {
        )
      order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::int nulls last,
               name`,
-    [user.id, isPlatformAdmin(user)],
+    [req.user.id, isPlatformAdministrator(req.authz)],
   );
   return result.rows;
 }
@@ -944,8 +1004,12 @@ async function saveAthleteLibraryAccess(athleteId, managedByUserId, body, { part
   return result.rows[0];
 }
 
-async function canManageAthlete(user, athleteId) {
-  if (isPlatformAdmin(user)) return true;
+// Platform/club/team scope comes from req.authz (loaded once per request by
+// attachAuthorizationContext) - no re-querying user_club_roles/user_team_roles
+// here. Athlete-level access still needs one targeted query since a specific
+// athlete's own club/team isn't preloaded for every request.
+async function canManageAthlete(req, athleteId) {
+  if (isPlatformAdministrator(req.authz)) return true;
   const result = await query(
     `select 1
      from public.athletes a
@@ -962,35 +1026,19 @@ async function canManageAthlete(user, athleteId) {
          )
        )
      limit 1`,
-    [user.id, athleteId],
+    [req.user.id, athleteId],
   );
   return result.rowCount > 0;
 }
 
-async function canManageClub(user, clubId) {
-  if (isPlatformAdmin(user)) return true;
-  const result = await query(
-    `select 1 from public.user_club_roles where user_id = $1 and club_id = $2 and is_active = true limit 1`,
-    [user.id, clubId],
-  );
-  return result.rowCount > 0;
+function canManageClub(req, clubId) {
+  return authzCanManageClub(req.authz, clubId);
 }
 
-async function canManageTeam(user, teamId) {
-  if (isPlatformAdmin(user)) return true;
-  const result = await query(
-    `select 1
-     from public.teams t
-     where t.id = $2
-       and (
-         exists (select 1 from public.user_team_roles utr where utr.user_id = $1 and utr.team_id = t.id and utr.is_active = true)
-         or exists (select 1 from public.user_club_roles ucr where ucr.user_id = $1 and ucr.club_id = t.club_id and ucr.is_active = true)
-       )
-     limit 1`,
-    [user.id, teamId],
-  );
-  return result.rowCount > 0;
+function canManageTeam(req, teamId) {
+  return authzCanManageTeam(req.authz, teamId);
 }
+
 
 async function resolveAthleteClubTeam(user, requestedClubId, requestedTeamId) {
   let clubId = clean(requestedClubId) || null;
@@ -1021,12 +1069,17 @@ async function resolveAthleteClubTeam(user, requestedClubId, requestedTeamId) {
   return { clubId: team.club_id, teamId: team.id };
 }
 
-function allowedUserRole(currentUser, requestedRole) {
+// Only a platform admin can ever hand out role_hint="platform_admin" here -
+// a club admin's allowed set deliberately excludes it, and this is now keyed
+// off req.authz's real scoped roles rather than the role_hint string, so a
+// role_hint that merely SAYS "club_admin" with no actual user_club_roles row
+// gets no more than the generic-user default.
+function allowedUserRole(authz, requestedRole) {
   const role = clean(requestedRole).toLowerCase();
   const platformRoles = new Set(["platform_admin", "club_admin", "team_coach", "coach", "athlete"]);
   const clubRoles = new Set(["club_admin", "team_coach", "coach", "athlete"]);
-  if (isPlatformAdmin(currentUser)) return platformRoles.has(role) ? role : "coach";
-  if (isClubAdmin(currentUser)) return clubRoles.has(role) ? role : "team_coach";
+  if (isPlatformAdministrator(authz)) return platformRoles.has(role) ? role : "coach";
+  if (authz.clubRoles.length > 0) return clubRoles.has(role) ? role : "team_coach";
   return "athlete";
 }
 

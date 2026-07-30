@@ -13,9 +13,35 @@ import { accessScope, publicRole } from "../access.js";
 
 const router = Router();
 
-router.get("/me", async (req, res) => {
-  if (!req.user) return res.json({ user: null });
-  res.json({ user: publicUser(req.user) });
+router.get("/me", async (req, res, next) => {
+  try {
+    if (!req.user) return res.json({ user: null });
+    const authz = req.authz || {};
+    const clubRoles = authz.clubRoles || [];
+    const teamRoles = authz.teamRoles || [];
+    const clubIds = clubRoles.map((r) => r.clubId);
+    const teamIds = teamRoles.map((r) => r.teamId);
+    const [clubsResult, teamsResult] = await Promise.all([
+      clubIds.length ? query(`select id, name from public.clubs where id = any($1::uuid[])`, [clubIds]) : { rows: [] },
+      teamIds.length ? query(`select id, name from public.teams where id = any($1::uuid[])`, [teamIds]) : { rows: [] },
+    ]);
+    const clubNameById = new Map(clubsResult.rows.map((c) => [String(c.id), c.name]));
+    const teamNameById = new Map(teamsResult.rows.map((t) => [String(t.id), t.name]));
+
+    res.json({
+      user: {
+        ...publicUser(req.user),
+        // Capability flags and scoped roles for the future multi-workspace
+        // UI - role_hint above still picks the initial screen, but any real
+        // permission decision must come from these, not from role_hint.
+        capabilities: authz.capabilities || {},
+        clubs: clubRoles.map((r) => ({ id: r.clubId, name: clubNameById.get(String(r.clubId)) || null, role: r.role })),
+        teams: teamRoles.map((r) => ({ id: r.teamId, name: teamNameById.get(String(r.teamId)) || null, role: r.role })),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.put("/me/credentials", async (req, res, next) => {
@@ -129,11 +155,10 @@ router.post("/invites/:token/accept", async (req, res, next) => {
     await client.query("begin");
     const inviteResult = await client.query(
       `
-      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id, u.role_hint as athlete_user_role_hint,
+      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id,
              coalesce(a.display_name, a.full_name, a.athlete_id, i.email) as athlete_name
       from public.athlete_invites i
       join public.athletes a on a.id = i.athlete_id
-      left join public.users u on u.id = a.user_id
       where i.token_hash = $1
         and i.accepted_at is null
         and i.expires_at > now()
@@ -148,10 +173,14 @@ router.post("/invites/:token/accept", async (req, res, next) => {
       return res.status(404).json({ error: "Invite is invalid or expired." });
     }
 
-    // Only trust an existing link if it actually points to an athlete-role account.
-    // A link to a coach/admin account is bad data (e.g. from a past bug) and must
-    // never be renamed - treat it as unset instead.
-    const linkedAthleteUserId = invite.athlete_user_role_hint === "athlete" ? invite.athlete_user_id : null;
+    // Trust athletes.user_id directly - it's the athlete's own real FK link,
+    // not role_hint, so a multi-role account (e.g. role_hint="coach" who is
+    // also, genuinely, this athlete) is correctly recognized as already
+    // linked. This used to also require role_hint="athlete", which broke
+    // exactly that multi-role case; the historical bug that once let this
+    // column point at an unrelated staff account (POST /athletes writing the
+    // wrong column) is fixed at its source, so the raw FK is trustworthy.
+    const linkedAthleteUserId = invite.athlete_user_id || null;
     if (linkedAthleteUserId) {
       // This athlete already has a login. The public accept form must never be
       // able to change that account's email or password, no matter what email
@@ -223,10 +252,9 @@ router.post("/invites/:token/link", async (req, res, next) => {
     await client.query("begin");
     const inviteResult = await client.query(
       `
-      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id, u.role_hint as athlete_user_role_hint
+      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id
       from public.athlete_invites i
       join public.athletes a on a.id = i.athlete_id
-      left join public.users u on u.id = a.user_id
       where i.token_hash = $1
         and i.accepted_at is null
         and i.expires_at > now()
@@ -244,7 +272,10 @@ router.post("/invites/:token/link", async (req, res, next) => {
       await client.query("rollback");
       return res.status(403).json({ error: "This invite was sent to a different email address." });
     }
-    const linkedAthleteUserId = invite.athlete_user_role_hint === "athlete" ? invite.athlete_user_id : null;
+    // See the note in /accept above: trust athletes.user_id directly (not
+    // role_hint), so a multi-role account is correctly recognized as already
+    // linked.
+    const linkedAthleteUserId = invite.athlete_user_id || null;
     if (linkedAthleteUserId && String(linkedAthleteUserId) !== String(req.user.id)) {
       await client.query("rollback");
       return res.status(409).json({ error: "This athlete profile is already linked to a different account." });

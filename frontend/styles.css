@@ -4932,6 +4932,13 @@ input:focus {
   color: var(--muted);
 }
 
+.athlete-login-status.is-multi-role {
+  background: #eef2fb;
+  color: #3b5bab;
+  border: 1px solid #c4d0f0;
+  cursor: help;
+}
+
 .athlete-login-toggle {
   border: 1px solid transparent;
   cursor: pointer;

@@ -590,6 +590,12 @@ function renderTeamAthleteTable(team, teamAthletes, allAthletes) {
 
 function renderAthleteLoginToggle(athlete) {
   if (!athlete.user_id) return `<span class="athlete-login-status is-none" title="No login yet">No login</span>`;
+  // This account also holds real coach/admin capability - disabling it here
+  // would kill their staff access too, which this control must never do (the
+  // backend independently refuses this regardless of what's rendered here).
+  if (athlete.login_is_multi_role) {
+    return `<span class="athlete-login-status is-multi-role" title="This login also has coach or administrator access - it can't be disabled from here.">Multi-role account</span>`;
+  }
   const active = athlete.login_active === true;
   return `
     <button class="athlete-login-toggle ${active ? "is-active" : "is-disabled"}" type="button" data-action="organization-toggle-athlete-login" data-athlete-id="${escapeAttr(athlete.id)}" data-current-active="${active ? "true" : "false"}" title="${active ? "Click to disable this login" : "Click to enable this login"}">
