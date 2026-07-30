@@ -241,3 +241,113 @@ const admin = await makeUser({ email: `admin3-${Date.now()}@test.local`, roleHin
   const userAfterRestore = await getUser(athleteUser.email);
   assert.equal(userAfterRestore.is_active, false, "restore must not silently re-enable the login");
 });
+
+test("8. public /accept never changes an already-linked athlete's account, even for a fresh, unused invite email", async () => {
+  const originalEmail = `already-linked-${Date.now()}@test.local`;
+  const athleteUser = await makeUser({ email: originalEmail, roleHint: "athlete", passwordHash: "original-hash-unchanged" });
+  const athlete = await makeAthlete({ userId: athleteUser.id });
+  const freshEmail = `brand-new-invite-${Date.now()}@test.local`;
+  cleanupUserEmails.add(freshEmail);
+  const token = await makeInvite({ athleteId: athlete.id, email: freshEmail });
+
+  const res = await api(`/api/auth/invites/${token}/accept`, { method: "POST", body: { password: "attackerchosen123" } });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.requiresLogin, true);
+
+  const userAfter = await getUser(originalEmail);
+  assert.equal(userAfter.email.toLowerCase(), originalEmail.toLowerCase(), "email must be unchanged");
+  assert.equal(userAfter.password_hash, "original-hash-unchanged", "password must be unchanged");
+  assert.equal(userAfter.role_hint, "athlete", "role must be unchanged");
+  assert.equal(userAfter.is_active, true, "active status must be unchanged");
+
+  const athleteAfter = await getAthlete(athlete.id);
+  assert.equal(athleteAfter.user_id, athleteUser.id, "the athlete must still point at the original account");
+
+  const freshEmailUser = await getUser(freshEmail);
+  assert.equal(freshEmailUser, null, "no new account should have been created for the unused invite email either");
+});
+
+test("9. manual athlete login with an existing (unlinked) athlete account's email does not change its password", async () => {
+  const admin = await makeUser({ email: `admin4-${Date.now()}@test.local`, roleHint: "platform_admin", passwordHash: hashPassword("adminpass123") });
+  const existingAthleteEmail = `existing-orphan-${Date.now()}@test.local`;
+  await makeUser({ email: existingAthleteEmail, roleHint: "athlete", passwordHash: "orphan-hash-unchanged" });
+  const targetAthlete = await makeAthlete(); // a different, unrelated athlete profile with no login yet
+  const adminToken = await createSession(admin.id);
+
+  const res = await api("/api/organization/athlete-logins", {
+    method: "POST",
+    cookie: sessionCookieFor(adminToken),
+    body: { athleteId: targetAthlete.id, email: existingAthleteEmail, password: "coachchosen123" },
+  });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.requiresLogin, true);
+
+  const userAfter = await getUser(existingAthleteEmail);
+  assert.equal(userAfter.password_hash, "orphan-hash-unchanged", "existing athlete account's password must be untouched");
+
+  const targetAfter = await getAthlete(targetAthlete.id);
+  assert.equal(targetAfter.user_id, null, "the target athlete must not be linked to someone else's account");
+});
+
+test("10. manual athlete login with a coach's or admin's email does not change that account", async () => {
+  const admin = await makeUser({ email: `admin5-${Date.now()}@test.local`, roleHint: "platform_admin", passwordHash: hashPassword("adminpass123") });
+  const otherCoach = await makeUser({ email: `other-coach-${Date.now()}@test.local`, roleHint: "coach", passwordHash: "coach-hash-unchanged" });
+  const targetAthlete = await makeAthlete();
+  const adminToken = await createSession(admin.id);
+
+  const res = await api("/api/organization/athlete-logins", {
+    method: "POST",
+    cookie: sessionCookieFor(adminToken),
+    body: { athleteId: targetAthlete.id, email: otherCoach.email, password: "coachchosen123" },
+  });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.requiresLogin, true);
+
+  const coachAfter = await getUser(otherCoach.email);
+  assert.equal(coachAfter.password_hash, "coach-hash-unchanged");
+  assert.equal(coachAfter.role_hint, "coach");
+
+  const targetAfter = await getAthlete(targetAthlete.id);
+  assert.equal(targetAfter.user_id, null);
+});
+
+test("11. manual athlete login still creates a brand-new account when the email is genuinely unused", async () => {
+  const admin = await makeUser({ email: `admin6-${Date.now()}@test.local`, roleHint: "platform_admin", passwordHash: hashPassword("adminpass123") });
+  const targetAthlete = await makeAthlete();
+  const freshEmail = `genuinely-new-${Date.now()}@test.local`;
+  cleanupUserEmails.add(freshEmail);
+  const adminToken = await createSession(admin.id);
+
+  const res = await api("/api/organization/athlete-logins", {
+    method: "POST",
+    cookie: sessionCookieFor(adminToken),
+    body: { athleteId: targetAthlete.id, email: freshEmail, password: "brandnewpass123" },
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.user.email.toLowerCase(), freshEmail.toLowerCase());
+
+  const targetAfter = await getAthlete(targetAthlete.id);
+  assert.equal(targetAfter.user_id, res.body.user.id);
+
+  const createdUser = await getUser(freshEmail);
+  assert.equal(createdUser.role_hint, "athlete");
+  assert.equal(createdUser.is_active, true);
+});
+
+test("12. manual athlete login refuses to reset the password of an athlete who already has a login, regardless of email typed", async () => {
+  const admin = await makeUser({ email: `admin7-${Date.now()}@test.local`, roleHint: "platform_admin", passwordHash: hashPassword("adminpass123") });
+  const athleteUser = await makeUser({ email: `already-has-login-${Date.now()}@test.local`, roleHint: "athlete", passwordHash: "keep-this-hash" });
+  const athlete = await makeAthlete({ userId: athleteUser.id });
+  const adminToken = await createSession(admin.id);
+
+  const res = await api("/api/organization/athlete-logins", {
+    method: "POST",
+    cookie: sessionCookieFor(adminToken),
+    body: { athleteId: athlete.id, email: `some-other-unused-${Date.now()}@test.local`, password: "newpasswordattempt123" },
+  });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.requiresLogin, true);
+
+  const userAfter = await getUser(athleteUser.email);
+  assert.equal(userAfter.password_hash, "keep-this-hash", "an athlete's existing password must never be reset through this form");
+});

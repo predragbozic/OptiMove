@@ -88,6 +88,7 @@ export async function submitInviteAccept(form) {
   const formData = new FormData(form);
   const password = String(formData.get("password") || "");
   const confirmPassword = String(formData.get("confirmPassword") || "");
+  const token = form.dataset.token || "";
   if (error) error.textContent = "";
   if (password !== confirmPassword) {
     if (error) error.textContent = "Passwords do not match.";
@@ -95,14 +96,79 @@ export async function submitInviteAccept(form) {
   }
   if (button) button.disabled = true;
   try {
-    const data = await api(`/api/auth/invites/${encodeURIComponent(form.dataset.token || "")}/accept`, {
+    const data = await api(`/api/auth/invites/${encodeURIComponent(token)}/accept`, {
       method: "POST",
       body: JSON.stringify({ password }),
     });
     state.currentUser = data.user;
     window.location.replace(state.currentUser?.role === "athlete" ? "/athlete" : "/");
   } catch (submitError) {
+    if (submitError.requiresLogin) {
+      const email = form.querySelector("input[readonly]")?.value || "";
+      renderInviteRequiresLogin(token, email);
+      return;
+    }
     if (error) error.textContent = submitError.message || "Could not activate account.";
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+// Shown when the invite's email already belongs to an existing account: the
+// public accept form can no longer set a password on it (see backend), so
+// the only safe way forward is logging in with the existing password and
+// letting the authenticated /link endpoint attach this athlete profile.
+function renderInviteRequiresLogin(token, email) {
+  els.content.innerHTML = `
+    <section class="login-panel">
+      <form class="login-form invite-form" id="inviteLoginForm" data-token="${escapeAttr(token)}">
+        <div>
+          <p class="eyebrow">Athlete access</p>
+          <h3>Log in to accept this invite</h3>
+          <p class="muted">An account with this email already exists. Log in with its existing password - this invite will then be linked to that account, without changing its password.</p>
+        </div>
+        <label class="search-field">
+          <span>Email</span>
+          <input value="${escapeAttr(email)}" readonly>
+        </label>
+        <label class="search-field">
+          <span>Password</span>
+          <input name="password" type="password" autocomplete="current-password" required placeholder="Your existing password">
+        </label>
+        <p class="login-error" aria-live="polite"></p>
+        <p class="login-success" aria-live="polite"></p>
+        <button class="plain-button" type="submit">Log in and accept invite</button>
+      </form>
+    </section>
+  `;
+}
+
+export async function submitInviteLogin(form) {
+  const error = form.querySelector(".login-error");
+  const success = form.querySelector(".login-success");
+  const button = form.querySelector("button[type='submit']");
+  const formData = new FormData(form);
+  const email = form.querySelector("input[readonly]")?.value || "";
+  const password = String(formData.get("password") || "");
+  const token = form.dataset.token || "";
+  if (error) error.textContent = "";
+  if (success) success.textContent = "";
+  if (button) button.disabled = true;
+  try {
+    const loginData = await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    state.currentUser = loginData.user;
+    try {
+      await api(`/api/auth/invites/${encodeURIComponent(token)}/link`, { method: "POST" });
+      window.location.replace(state.currentUser?.role === "athlete" ? "/athlete" : "/");
+    } catch (linkError) {
+      if (success) success.textContent = "Logged in, but the invite could not be linked.";
+      if (error) error.textContent = linkError.message || "Could not link this invite to your account.";
+    }
+  } catch (loginError) {
+    if (error) error.textContent = loginError.message || "Could not log in.";
   } finally {
     if (button) button.disabled = false;
   }

@@ -8,13 +8,15 @@ export async function api(path, options = {}) {
   });
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
+    let errorData = null;
     try {
-      const errorData = await response.json();
+      errorData = await response.json();
       message = errorData.error || errorData.message || message;
     } catch {}
     const error = new Error(message);
     error.status = response.status;
     error.path = path;
+    error.requiresLogin = Boolean(errorData?.requiresLogin);
     throw error;
   }
   return response.json();

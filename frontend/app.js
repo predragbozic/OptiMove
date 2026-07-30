@@ -4,6 +4,7 @@ import {
   renderInviteAccept as renderInviteAcceptAction,
   renderLogin as renderLoginAction,
   submitInviteAccept as submitInviteAcceptAction,
+  submitInviteLogin as submitInviteLoginAction,
 } from "./auth-actions.js";
 import {
   renderAthleteHeaderToolbarHtml,
@@ -310,6 +311,13 @@ async function handleContentSubmit(event) {
   if (inviteForm) {
     event.preventDefault();
     await submitInviteAcceptAction(inviteForm);
+    return;
+  }
+
+  const inviteLoginForm = event.target.closest("#inviteLoginForm");
+  if (inviteLoginForm) {
+    event.preventDefault();
+    await submitInviteLoginAction(inviteLoginForm);
     return;
   }
 

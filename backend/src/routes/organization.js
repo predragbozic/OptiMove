@@ -530,8 +530,14 @@ router.post("/team-roles", async (req, res, next) => {
   }
 });
 
+// Manual athlete login lets an authenticated coach/admin type a password on
+// an athlete's behalf, but that trust only ever covers CREATING a brand-new
+// account - it must never be usable to reset the password of an account
+// that already exists, no matter whose it is or how the coach found the
+// email. There is deliberately no platform-admin bypass for this rule: a
+// safe, explicit password-reset process is a separate future feature, not
+// this endpoint.
 router.post("/athlete-logins", async (req, res, next) => {
-  const client = await pool.connect();
   try {
     const athleteId = clean(req.body?.athleteId);
     const email = clean(req.body?.email).toLowerCase();
@@ -539,6 +545,7 @@ router.post("/athlete-logins", async (req, res, next) => {
     if (!athleteId || !email || !password) return res.status(400).json({ error: "Athlete, email, and password are required." });
     if (!(await canManageAthlete(req.user, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
     if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters." });
+
     const athlete = await query(
       `select a.id, a.user_id, coalesce(a.display_name, a.full_name, a.athlete_id) as name, u.role_hint as linked_role_hint
        from public.athletes a
@@ -548,102 +555,54 @@ router.post("/athlete-logins", async (req, res, next) => {
       [athleteId],
     );
     if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
-    const nameParts = splitName(athlete.rows[0].name || email);
-    // Only trust an existing link if it actually points to an athlete-role account.
-    // A link to a coach/admin account is bad data (e.g. from a past bug) and must
-    // never be renamed or have its password overwritten - treat it as unset instead.
-    const currentUserId = athlete.rows[0].linked_role_hint === "athlete" ? athlete.rows[0].user_id : null;
-    await client.query("begin");
 
+    // Only trust an existing link if it actually points to an athlete-role account.
+    // A link to a coach/admin account is bad data (e.g. from a past bug) and is
+    // treated as unset - it never blocks or resets anything here.
+    const currentUserId = athlete.rows[0].linked_role_hint === "athlete" ? athlete.rows[0].user_id : null;
     if (currentUserId) {
-      // Athlete already has a login: rename/reset that same account instead of
-      // creating a second user row and leaving the old one as an orphan.
-      const emailOwner = await client.query(
-        `select id from public.users where lower(email) = lower($1) limit 1`,
-        [email],
-      );
-      if (emailOwner.rows[0] && String(emailOwner.rows[0].id) !== String(currentUserId)) {
-        await client.query("rollback");
-        return res.status(409).json({ error: "This email is already in use by another account." });
-      }
-      const updated = await client.query(
-        `update public.users
-         set email = $2,
-             first_name = coalesce(first_name, $3),
-             last_name = coalesce(last_name, $4),
-             full_name = coalesce(full_name, $5),
-             display_name = coalesce(display_name, $5),
-             password_hash = $6,
-             role_hint = 'athlete',
-             is_active = true,
-             updated_at = now()
-         where id = $1
+      return res.status(409).json({
+        error: "This athlete already has a login. This form can no longer reset an existing password - they need to log in directly, or use a dedicated password reset process.",
+        requiresLogin: true,
+      });
+    }
+
+    const emailOwner = await query(`select id from public.users where lower(email) = lower($1) limit 1`, [email]);
+    if (emailOwner.rows[0]) {
+      return res.status(409).json({
+        error: "An account with this email already exists. That user must log in and link this athlete profile themselves via the invite/link process - this form cannot set a password for an existing account.",
+        requiresLogin: true,
+      });
+    }
+
+    const nameParts = splitName(athlete.rows[0].name || email);
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const inserted = await client.query(
+        `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
+         values ($1, $2, $3, $4, $5, $5, 'athlete', $6, true)
          returning id, email`,
-        [currentUserId, email, nameParts.firstName, nameParts.lastName, athlete.rows[0].name, hashPassword(password)],
+        [email, nameParts.firstName, nameParts.lastName, hashPassword(password), athlete.rows[0].name, req.user.id],
       );
+      await client.query(`update public.athletes set user_id = $2 where id = $1`, [athleteId, inserted.rows[0].id]);
       await client.query(
         `insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active)
          values ($1, $2, 'athlete', true)
          on conflict (user_id, athlete_id, relationship_type) do update set is_active = true, updated_at = now()`,
-        [currentUserId, athleteId],
+        [inserted.rows[0].id, athleteId],
       );
       await client.query("commit");
-      return res.status(201).json({ user: updated.rows[0] });
+      res.status(201).json({ user: inserted.rows[0] });
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      if (error?.code === "23505") return res.status(409).json({ error: "An account with this email already exists.", requiresLogin: true });
+      throw error;
+    } finally {
+      client.release();
     }
-
-    const existing = await client.query(
-      `select u.id, u.email, u.role_hint, a.id as linked_athlete_id
-       from public.users u
-       left join public.athletes a on a.user_id = u.id
-       where lower(u.email) = lower($1)
-       limit 1`,
-      [email],
-    );
-    const existingUser = existing.rows[0];
-    const existingRole = String(existingUser?.role_hint || "").toLowerCase();
-    if (existingUser && existingRole && !["athlete", "user"].includes(existingRole)) {
-      await client.query("rollback");
-      return res.status(409).json({ error: "This email already belongs to a staff user." });
-    }
-    if (existingUser?.linked_athlete_id && String(existingUser.linked_athlete_id) !== String(athleteId)) {
-      await client.query("rollback");
-      return res.status(409).json({ error: "This email is already connected to another athlete." });
-    }
-    const user = existingUser
-      ? await client.query(
-          `update public.users
-           set first_name = coalesce(first_name, $2),
-               last_name = coalesce(last_name, $3),
-               full_name = coalesce(full_name, $4),
-               display_name = coalesce(display_name, $4),
-               password_hash = $5,
-               role_hint = 'athlete',
-               is_active = true,
-               updated_at = now()
-           where id = $1
-           returning id, email`,
-          [existingUser.id, nameParts.firstName, nameParts.lastName, athlete.rows[0].name, hashPassword(password)],
-        )
-      : await client.query(
-          `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
-           values ($1, $2, $3, $4, $5, $5, 'athlete', $6, true)
-           returning id, email`,
-          [email, nameParts.firstName, nameParts.lastName, hashPassword(password), athlete.rows[0].name, req.user.id],
-        );
-    await client.query(`update public.athletes set user_id = $2 where id = $1`, [athleteId, user.rows[0].id]);
-    await client.query(
-      `insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active)
-       values ($1, $2, 'athlete', true)
-       on conflict (user_id, athlete_id, relationship_type) do update set is_active = true, updated_at = now()`,
-      [user.rows[0].id, athleteId],
-    );
-    await client.query("commit");
-    res.status(201).json({ user: user.rows[0] });
   } catch (error) {
-    await client.query("rollback").catch(() => {});
     next(error);
-  } finally {
-    client.release();
   }
 });
 
