@@ -160,7 +160,7 @@ export const createInitialState = () => ({
   exerciseEditor: emptyExerciseEditor(),
   programTagEditor: { open: false, planId: "", programName: "", tags: [], options: [], error: "" },
   programInfo: { open: false, program: null },
-  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", addFormOpen: false, assignOpen: false, accessOpen: false, showArchivedAthletes: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },
+  organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", addFormOpen: false, assignOpen: false, accessOpen: false, showArchivedAthletes: false, showArchivedTeamMembers: false, showArchivedClubMembers: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },
   organizationEditor: { open: false, type: "", row: null },
   organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
   taxonomy: {

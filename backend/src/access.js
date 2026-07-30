@@ -179,6 +179,15 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
   return result.rowCount > 0;
 }
 
+// Deliberately does NOT read athleteAlias.club_id/team_id - those are legacy
+// "primary pointer" columns only (see athlete_memberships migration), and an
+// athlete can hold several active club/team memberships at once, which a
+// single FK column can never represent. Active access always comes from a
+// real, currently-active row: a direct login (athletes.user_id), an active
+// private-coach relationship (user_athletes), or an active club/team
+// membership (athlete_memberships) matching one of the viewer's own
+// club/team roles. Archived memberships never grant access - the EXISTS
+// checks below are always scoped to status = 'active'.
 export function athleteAccessPredicate(athleteAlias = "a", userParam = "$1") {
   return `(
     ${athleteAlias}.user_id = ${userParam}
@@ -192,17 +201,24 @@ export function athleteAccessPredicate(athleteAlias = "a", userParam = "$1") {
     or exists (
       select 1
       from public.user_team_roles utr
+      join public.athlete_memberships tm
+        on tm.team_id = utr.team_id
+        and tm.membership_type = 'team'
+        and tm.status = 'active'
       where utr.user_id = ${userParam}
         and utr.is_active = true
-        and utr.team_id = ${athleteAlias}.team_id
+        and tm.athlete_id = ${athleteAlias}.id
     )
     or exists (
       select 1
       from public.user_club_roles ucr
-      left join public.teams athlete_team on athlete_team.id = ${athleteAlias}.team_id
+      join public.athlete_memberships cm
+        on cm.club_id = ucr.club_id
+        and cm.membership_type = 'club'
+        and cm.status = 'active'
       where ucr.user_id = ${userParam}
         and ucr.is_active = true
-        and (ucr.club_id = ${athleteAlias}.club_id or ucr.club_id = athlete_team.club_id)
+        and cm.athlete_id = ${athleteAlias}.id
     )
   )`;
 }

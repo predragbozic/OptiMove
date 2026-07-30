@@ -9,6 +9,8 @@ export const migrationPaths = [
   path.resolve(__dirname, "../../create_access_schema.sql"),
   // Depends on users, clubs, and user_club_roles from create_access_schema.sql above.
   path.resolve(__dirname, "../../migrations/20260730_backfill_club_admin_scope.sql"),
+  // Depends on athletes, clubs, teams, and users from create_access_schema.sql above.
+  path.resolve(__dirname, "../../migrations/20260801_athlete_memberships.sql"),
   path.resolve(__dirname, "../../create_builder_schema.sql"),
   path.resolve(__dirname, "../../create_exercise_user_state.sql"),
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),
