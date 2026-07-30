@@ -1010,6 +1010,11 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   background: #fff;
 }
 
+.organization-row.is-archived {
+  opacity: 0.72;
+  background: #f7f8fa;
+}
+
 .organization-row.is-selected {
   border-color: #287e77;
   background: #eef8f6;

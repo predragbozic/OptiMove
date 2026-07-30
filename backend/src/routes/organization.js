@@ -450,6 +450,20 @@ router.delete("/athletes/:athleteId", async (req, res, next) => {
   }
 });
 
+router.put("/athletes/:athleteId/restore", async (req, res, next) => {
+  try {
+    if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    const result = await query(
+      `update public.athletes set is_active = true where id = $1 returning id`,
+      [req.params.athleteId],
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Athlete not found." });
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
   try {
     if (!(await canManageAthlete(req.user, req.params.athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
@@ -844,7 +858,7 @@ async function loadManagedAthletes(user) {
     `select
        a.id, a.athlete_id, a.source_external_id,
        coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as name,
-       a.image_url, a.club_id, c.name as club_name, a.team_id, t.name as team_name, a.user_id,
+       a.image_url, coalesce(a.is_active, true) as is_active, a.club_id, c.name as club_name, a.team_id, t.name as team_name, a.user_id,
        case when a.user_id is null then null else coalesce(u.is_active, false) end as login_active,
        coalesce(ala.can_view_coach_library, true) as can_view_coach_library,
        coalesce(ala.can_view_team_library, false) as can_view_team_library,
@@ -869,8 +883,7 @@ async function loadManagedAthletes(user) {
      left join public.teams t on t.id = a.team_id
      left join public.users u on u.id = a.user_id and u.role_hint = 'athlete'
      left join public.athlete_library_access ala on ala.athlete_id = a.id
-     where coalesce(a.is_active, true)
-       and (
+     where (
          $2::boolean
          or a.user_id = $1
          or exists (select 1 from public.user_athletes ua where ua.user_id = $1 and ua.athlete_id = a.id and ua.is_active = true)

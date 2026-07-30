@@ -123,7 +123,10 @@ export function findOrganizationRow(type, id) {
 export async function deleteOrganizationRow(type, id, { loadAthletes, renderOrganizationPanel }) {
   const labels = { club: "club", team: "team", athlete: "athlete", user: "user" };
   if (!id || !labels[type]) return;
-  if (!window.confirm(`Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`)) return;
+  const confirmMessage = type === "athlete"
+    ? "Archive this athlete? All plans and history are kept, and you can restore them from Show archived at any time."
+    : `Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`;
+  if (!window.confirm(confirmMessage)) return;
   await api(`/api/organization/${type}s/${encodeURIComponent(id)}`, { method: "DELETE" });
   await loadAthletes();
   if (state.activeTab === "organization") await renderOrganizationPanel();
@@ -198,6 +201,26 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   if (type === "organization-toggle-assign-athlete") {
     state.organization.assignOpen = !state.organization.assignOpen;
     void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-toggle-archived-athletes") {
+    state.organization.showArchivedAthletes = !state.organization.showArchivedAthletes;
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-restore-athlete") {
+    const athleteId = action.dataset.athleteId;
+    if (!athleteId) return true;
+    action.disabled = true;
+    try {
+      await api(`/api/organization/athletes/${encodeURIComponent(athleteId)}/restore`, { method: "PUT" });
+      await loadAthletes();
+      if (state.activeTab === "organization") await renderOrganizationPanel();
+    } catch (error) {
+      window.alert(error?.message || "Could not restore this athlete.");
+    } finally {
+      action.disabled = false;
+    }
     return true;
   }
   if (type === "organization-toggle-athlete-access") {

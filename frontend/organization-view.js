@@ -18,6 +18,7 @@ export const ICON_ADD_ATHLETE = `
 `;
 const ICON_PENCIL = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z"></path><path d="M13 7l4 4"></path></svg>`;
 const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>`;
+const ICON_ARCHIVE = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><rect x="3.5" y="4" width="17" height="4.5" rx="1"></rect><path d="M4.5 8.5v9a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-9"></path><path d="M10 13h4"></path></svg>`;
 
 // Club badge/shield with a small ball at its center, matching the reference
 // "SPORT CLUB" ribbon-badge image, plus the same white-on-fill plus badge
@@ -170,7 +171,8 @@ function renderOrganizationSelectableRow(row, type, selectedId) {
 export function renderOrganizationBrowser(data) {
   const clubs = data.clubs || [];
   const teams = data.teams || [];
-  const athletes = data.athletes || [];
+  const athletes = (data.athletes || []).filter((athlete) => athlete.is_active !== false);
+  const archivedAthletes = (data.athletes || []).filter((athlete) => athlete.is_active === false);
   const users = data.users || [];
   const section = state.organization.section || "overview";
   const selectedClub = clubs.find((club) => String(club.id) === String(state.organization.selectedClubId));
@@ -193,6 +195,7 @@ export function renderOrganizationBrowser(data) {
         </div>
         <div class="organization-browser-actions">
           ${section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : ""}
+          ${section === "athletes" ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-athletes">${state.organization.showArchivedAthletes ? "Hide archived" : `Show archived (${archivedAthletes.length})`}</button>` : ""}
           ${state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : ""}
         </div>
       </div>
@@ -202,9 +205,35 @@ export function renderOrganizationBrowser(data) {
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes" ? selectedTeam ? renderTeamAthleteTable(selectedTeam, visibleAthletes, athletes) : renderOrganizationList(selectedClub ? `Athletes - ${selectedClub.name}` : "Athletes", visibleAthletes, "athlete") : ""}
       </section>
+      ${section === "athletes" && state.organization.showArchivedAthletes ? renderArchivedAthletesList(archivedAthletes) : ""}
       ${section === "athletes" && state.organization.accessOpen ? renderAthleteAccessModal(visibleAthletes) : ""}
       ${state.organizationInvite.open ? renderAthleteInviteModal(athletes) : ""}
     </section>
+  `;
+}
+
+function renderArchivedAthletesList(archivedAthletes) {
+  return `
+    <section class="panel organization-list-card organization-archived-athletes">
+      <div class="organization-list-head"><p class="eyebrow">Archived</p><strong>${archivedAthletes.length}</strong></div>
+      <div class="organization-list">
+        ${archivedAthletes.length ? archivedAthletes.map(renderArchivedAthleteRow).join("") : `<p class="muted">No archived athletes.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderArchivedAthleteRow(row) {
+  const title = row.name || row.full_name || row.display_name || row.athlete_id || "Untitled";
+  const subtitle = [row.athlete_id || row.source_external_id, row.team_name, row.club_name].filter(Boolean).join(" - ");
+  return `
+    <article class="organization-row is-archived">
+      <span class="organization-avatar">${escapeHtml((row.athlete_id || "AT").slice(0, 2).toUpperCase())}</span>
+      <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(subtitle || "athlete")}</small></span>
+      <span class="organization-row-actions">
+        <button class="plain-button compact-button" type="button" data-action="organization-restore-athlete" data-athlete-id="${escapeAttr(row.id)}">Restore</button>
+      </span>
+    </article>
   `;
 }
 
@@ -673,7 +702,7 @@ function renderOrganizationRoleForms(data) {
   const userOptions = users.map((user) => ({ value: user.id, label: `${user.name || user.email}${user.email ? ` - ${user.email}` : ""}` }));
   const clubOptions = (data.clubs || []).map((club) => ({ value: club.id, label: club.name }));
   const teamOptions = (data.teams || []).map((team) => ({ value: team.id, label: `${team.name}${team.club_name ? ` - ${team.club_name}` : ""}`, clubId: team.club_id }));
-  const athleteOptions = (data.athletes || []).map((athlete) => ({ value: athlete.id, label: `${athlete.name}${athlete.athlete_id ? ` - ID ${athlete.athlete_id}` : ""}` }));
+  const athleteOptions = (data.athletes || []).filter((athlete) => athlete.is_active !== false).map((athlete) => ({ value: athlete.id, label: `${athlete.name}${athlete.athlete_id ? ` - ID ${athlete.athlete_id}` : ""}` }));
   return `
     <form class="panel organization-form" data-organization-form="clubRole">
       <div><p class="eyebrow">Club access</p><h3>Assign club admin</h3></div>
@@ -695,7 +724,7 @@ function renderOrganizationRoleForms(data) {
       <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="example@example.com" autocomplete="off"></label>
       <label class="search-field"><span>Password</span><input name="password" type="password" required placeholder="At least 8 characters" autocomplete="new-password"></label>
       <p class="builder-error" aria-live="polite"></p>
-      <button class="plain-button" type="submit" ${(data.athletes || []).length ? "" : "disabled"}>Create login</button>
+      <button class="plain-button" type="submit" ${athleteOptions.length ? "" : "disabled"}>Create login</button>
     </form>
   `;
 }
@@ -713,13 +742,16 @@ function renderOrganizationList(title, rows, type) {
 
 function renderOrganizationRowV2(row, type) {
   const canEdit = type !== "user";
+  const isAthlete = type === "athlete";
   return `
     <article class="organization-row">
       ${renderOrganizationRowContent(row, type)}
       <span class="organization-row-actions">
-        ${type === "athlete" ? renderAthleteLoginToggle(row) : ""}
+        ${isAthlete ? renderAthleteLoginToggle(row) : ""}
         ${canEdit ? `<button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>` : ""}
-        <button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Delete" title="Delete">${ICON_TRASH}</button>
+        ${isAthlete
+          ? `<button class="plain-button icon-button" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Archive" title="Archive - reversible, keeps all history and can be restored later">${ICON_ARCHIVE}</button>`
+          : `<button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Delete" title="Delete">${ICON_TRASH}</button>`}
       </span>
     </article>
   `;
