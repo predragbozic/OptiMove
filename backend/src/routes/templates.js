@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { query } from "../db.js";
-import { canAccessAllAthletes, canAccessAthlete, isAthlete } from "../access.js";
+import { canAccessAllAthletes, canAccessAthlete } from "../access.js";
 import { isPlatformAdministrator } from "../authz.js";
 import { createNotification } from "../notifications.js";
 import {
@@ -24,11 +24,11 @@ router.get("/", async (req, res, next) => {
     const category = text(req.query.category);
     const tag = text(req.query.tag);
     const pricing = normalizeChoice(req.query.pricing, ["all", "free", "paid"], "all");
-    const athleteAccess = await loadAthleteLibraryAccess(query, req.user);
+    const athleteAccess = await loadAthleteLibraryAccess(query, req);
     const visibleScopes = templateScopesForUser(athleteAccess);
     const params = [
       req.user.id,
-      canAccessAllAthletes(req.user),
+      canAccessAllAthletes(req),
       requestedScope,
       search,
       category,
@@ -228,7 +228,7 @@ router.get("/options", async (req, res, next) => {
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
         order by library_category
         `,
-        [req.user.id, canAccessAllAthletes(req.user)],
+        [req.user.id, canAccessAllAthletes(req)],
       ),
       query(
         `
@@ -243,7 +243,7 @@ router.get("/options", async (req, res, next) => {
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
         order by t.name
         `,
-        [req.user.id, canAccessAllAthletes(req.user)],
+        [req.user.id, canAccessAllAthletes(req)],
       ),
       query(
         `
@@ -259,7 +259,7 @@ router.get("/options", async (req, res, next) => {
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
         order by name, u.email
         `,
-        [req.user.id, canAccessAllAthletes(req.user)],
+        [req.user.id, canAccessAllAthletes(req)],
       ),
       query(
         `
@@ -273,7 +273,7 @@ router.get("/options", async (req, res, next) => {
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
         order by c.name
         `,
-        [req.user.id, canAccessAllAthletes(req.user)],
+        [req.user.id, canAccessAllAthletes(req)],
       ),
     ]);
     res.json({
@@ -290,7 +290,7 @@ router.get("/options", async (req, res, next) => {
 router.patch("/:planId/metadata", async (req, res, next) => {
   try {
     const planId = req.params.planId;
-    if (!(await canEditTemplate(query, req.user, planId))) return res.status(404).json({ error: "Template not found." });
+    if (!(await canEditTemplate(query, req, planId))) return res.status(404).json({ error: "Template not found." });
 
     const requestedScope = normalizeLibraryScope(req.body?.libraryScope);
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
@@ -371,7 +371,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
 
 router.get("/:planId/tags", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(query, req.user, req.params.planId))) {
+    if (!(await canUseTemplate(query, req, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     const [allTags, programTags] = await Promise.all([
@@ -398,7 +398,7 @@ router.get("/:planId/tags", async (req, res, next) => {
              )
            )
          order by name`,
-        [req.user.id, canAccessAllAthletes(req.user)],
+        [req.user.id, canAccessAllAthletes(req)],
       ),
       query(
         `select t.id, t.name
@@ -418,7 +418,7 @@ router.get("/:planId/tags", async (req, res, next) => {
 
 router.get("/:planId/reviews", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(query, req.user, req.params.planId))) {
+    if (!(await canUseTemplate(query, req, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     const result = await query(
@@ -446,7 +446,10 @@ router.get("/:planId/reviews", async (req, res, next) => {
 
 router.get("/:planId/access-requests", async (req, res, next) => {
   try {
-    if (isAthlete(req.user)) return res.status(403).json({ error: "Coach access required." });
+    // Coach-only means "has coach capability", not "lacks athlete identity" -
+    // a multi-role athlete+coach account must still pass here. Never gate on
+    // the presence of athleteWorkspace/isAthlete.
+    if (!req.authz?.capabilities?.coachWorkspace) return res.status(403).json({ error: "Coach access required." });
     const result = await query(
       `select distinct
          pa.id,
@@ -492,7 +495,7 @@ router.get("/:planId/access-requests", async (req, res, next) => {
     );
     const requests = [];
     for (const row of result.rows) {
-      if (await canAccessAthlete(query, req.user, row.athlete_id)) requests.push(row);
+      if (await canAccessAthlete(query, req, row.athlete_id)) requests.push(row);
     }
     res.json({ requests });
   } catch (error) {
@@ -502,8 +505,11 @@ router.get("/:planId/access-requests", async (req, res, next) => {
 
 router.post("/:planId/assignments", async (req, res, next) => {
   try {
-    if (isAthlete(req.user)) return res.status(403).json({ error: "Coach access required." });
-    const plan = await loadAssignableTemplate(req.user, req.params.planId);
+    // Coach-only means "has coach capability", not "lacks athlete identity" -
+    // a multi-role athlete+coach account must still pass here. Never gate on
+    // the presence of athleteWorkspace/isAthlete.
+    if (!req.authz?.capabilities?.coachWorkspace) return res.status(403).json({ error: "Coach access required." });
+    const plan = await loadAssignableTemplate(req, req.params.planId);
     if (!plan) return res.status(404).json({ error: "Template not found." });
     if (plan.can_assign_to_athlete === false) return res.status(403).json({ error: "This program cannot be assigned." });
 
@@ -519,7 +525,7 @@ router.post("/:planId/assignments", async (req, res, next) => {
         skipped.push({ athleteId, reason: "Athlete not found." });
         continue;
       }
-      if (!(await canAccessAthlete(query, req.user, athlete.id))) {
+      if (!(await canAccessAthlete(query, req, athlete.id))) {
         skipped.push({ athleteId, athleteName: athlete.name, reason: "No access to this athlete." });
         continue;
       }
@@ -545,7 +551,7 @@ router.post("/:planId/assignments", async (req, res, next) => {
 
 router.post("/:planId/tags", async (req, res, next) => {
   try {
-    if (!(await canEditTemplate(query, req.user, req.params.planId))) {
+    if (!(await canEditTemplate(query, req, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     const name = text(req.body?.name);
@@ -580,7 +586,7 @@ router.post("/:planId/tags", async (req, res, next) => {
 
 router.delete("/:planId/tags/:tagId", async (req, res, next) => {
   try {
-    if (!(await canEditTemplate(query, req.user, req.params.planId))) {
+    if (!(await canEditTemplate(query, req, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     await query(
@@ -596,10 +602,10 @@ router.delete("/:planId/tags/:tagId", async (req, res, next) => {
 
 router.post("/:planId/use", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(query, req.user, req.params.planId))) {
+    if (!(await canUseTemplate(query, req, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
-    const access = await markProgramUsed(req.user, req.params.planId, text(req.body?.note));
+    const access = await markProgramUsed(req, req.params.planId, text(req.body?.note));
     res.json({ access });
   } catch (error) {
     next(error);
@@ -608,7 +614,7 @@ router.post("/:planId/use", async (req, res, next) => {
 
 router.post("/:planId/reviews", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(query, req.user, req.params.planId))) {
+    if (!(await canUseTemplate(query, req, req.params.planId))) {
       return res.status(404).json({ error: "Template not found." });
     }
     const access = await requireUsedProgramAccess(query, req.user, req.params.planId);
@@ -751,7 +757,7 @@ function slugify(value) {
     .slice(0, 80) || `tag-${Date.now()}`;
 }
 
-async function loadAssignableTemplate(user, planId) {
+async function loadAssignableTemplate(req, planId) {
   const result = await query(
     `select id,
             access_model,
@@ -771,7 +777,7 @@ async function loadAssignableTemplate(user, planId) {
        and coalesce(p.is_active, true)
        and ($3::boolean or p.created_by_user_id = $2 or p.visibility = 'public')
      limit 1`,
-    [planId, user.id, canAccessAllAthletes(user)],
+    [planId, req.user.id, canAccessAllAthletes(req)],
   );
   return result.rows[0] || null;
 }
@@ -847,7 +853,8 @@ async function assignProgramAccess(plan, userId) {
   return inserted.rows[0];
 }
 
-async function markProgramUsed(user, planId, note) {
+async function markProgramUsed(req, planId, note) {
+  const user = req.user;
   const plan = await query(
     `select id,
             name,
@@ -868,7 +875,7 @@ async function markProgramUsed(user, planId, note) {
     [planId],
   );
   const license = plan.rows[0] || {};
-  const athleteAccess = await loadAthleteLibraryAccess(query, user);
+  const athleteAccess = await loadAthleteLibraryAccess(query, req);
   const approvalRequired = Boolean(athleteAccess) && (license.requires_approval === true || athleteAccess.require_approval === true);
   const snapshot = licenseSnapshot(license);
   const accessType = accessTypeForLicense(license);

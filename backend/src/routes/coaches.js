@@ -396,14 +396,12 @@ function canUseClubProfiles(req) {
   return isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0 || req.authz.teamRoles.length > 0;
 }
 
-// The full-visibility bypass for this file. canAccessAllAthletes(req.user) is
-// still role_hint-based (a documented, accepted legacy dependency shared
-// across several route files, out of this PR's scope to change everywhere) -
-// but scoped locally to coaches.js, a platform_admin granted purely through
-// public.user_global_roles must get the same full bypass a legacy
-// role_hint='platform_admin' account already gets here.
+// The full-visibility bypass for this file. canAccessAllAthletes(req) is
+// real/table-backed (public.user_global_roles via req.authz.platformRoles) -
+// kept as a separate call alongside isPlatformAdministrator(req.authz) since
+// both read the same underlying signal through different call paths.
 function canBypassCoachVisibility(req) {
-  return isPlatformAdministrator(req.authz) || canAccessAllAthletes(req.user);
+  return isPlatformAdministrator(req.authz) || canAccessAllAthletes(req);
 }
 
 function text(value) {

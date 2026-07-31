@@ -1045,7 +1045,12 @@ async function loadUsers(req) {
      from public.users u
      where u.is_active = true
        and (
-         u.role_hint <> 'athlete'
+         -- Excludes only accounts whose SOLE real identity is an athlete
+         -- profile with no staff-ish role of any kind - never role_hint. A
+         -- multi-role athlete+staff account (any active global/club/team
+         -- role) must still appear here even if role_hint says "athlete".
+         not exists (select 1 from public.athletes ath where ath.user_id = u.id)
+         or exists (select 1 from public.user_global_roles ugr where ugr.user_id = u.id and ugr.is_active = true)
          or exists (select 1 from public.user_club_roles ucr2 where ucr2.user_id = u.id and ucr2.is_active = true)
          or exists (select 1 from public.user_team_roles utr2 where utr2.user_id = u.id and utr2.is_active = true)
        )

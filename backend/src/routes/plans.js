@@ -8,7 +8,7 @@ const router = Router();
 
 router.get("/:planId/weekly", async (req, res, next) => {
   try {
-    if (!(await canAccessPlan(query, req.user, req.params.planId))) return res.status(403).json({ error: "Forbidden" });
+    if (!(await canAccessPlan(query, req, req.params.planId))) return res.status(403).json({ error: "Forbidden" });
     const result = await query(
       `
       select *
@@ -32,10 +32,10 @@ router.get("/:planId/program", async (req, res, next) => {
   try {
     const summary = await query("select * from plans.v_plan_summary where plan_id = $1", [req.params.planId]);
     if (!summary.rows.length) return res.status(404).json({ error: "Plan not found" });
-    const canReadPlan = await canAccessPlan(query, req.user, req.params.planId);
-    const hasAccessRecord = await hasTemplateAccessRecord(query, req.user, summary.rows[0], req.params.planId);
+    const canReadPlan = await canAccessPlan(query, req, req.params.planId);
+    const hasAccessRecord = await hasTemplateAccessRecord(query, req, summary.rows[0], req.params.planId);
     if (!canReadPlan && !hasAccessRecord) return res.status(403).json({ error: "Forbidden" });
-    if (await needsTemplateApproval(query, req.user, summary.rows[0], req.params.planId)) {
+    if (await needsTemplateApproval(query, req, summary.rows[0], req.params.planId)) {
       return res.status(403).json({ error: "Program access requires coach approval." });
     }
 

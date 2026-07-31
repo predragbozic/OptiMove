@@ -1,7 +1,7 @@
-import { canAccessAllAthletes, isAthlete } from "./access.js";
+import { canAccessAllAthletes } from "./access.js";
 
-export async function loadAthleteLibraryAccess(query, user) {
-  if (!isAthlete(user)) return null;
+export async function loadAthleteLibraryAccess(query, req) {
+  if (!req?.authz?.isAthlete) return null;
   const result = await query(
     `select
        a.id as athlete_id,
@@ -39,7 +39,7 @@ export async function loadAthleteLibraryAccess(query, user) {
        )
      order by a.created_at nulls last
      limit 1`,
-    [user.id],
+    [req.user.id],
   );
   return result.rows[0] || null;
 }
@@ -67,18 +67,32 @@ export async function hasActiveProgramAccess(query, user, planId, statuses = ["a
   return result.rowCount > 0;
 }
 
-export async function hasTemplateAccessRecord(query, user, summary, planId) {
-  if (!isAthlete(user)) return false;
+export async function hasTemplateAccessRecord(query, req, summary, planId) {
+  if (!req?.authz?.isAthlete) return false;
   if (summary?.plan_type !== "program" || summary?.is_template !== true) return false;
-  return hasActiveProgramAccess(query, user, planId, ["requested", "rejected", "accessed", "used", "completed"]);
+  return hasActiveProgramAccess(query, req.user, planId, ["requested", "rejected", "accessed", "used", "completed"]);
 }
 
-export async function needsTemplateApproval(query, user, summary, planId) {
-  if (!isAthlete(user)) return false;
+export async function needsTemplateApproval(query, req, summary, planId) {
+  if (!req?.authz?.isAthlete) return false;
   if (summary?.plan_type !== "program" || summary?.is_template !== true) return false;
-  if (await hasActiveProgramAccess(query, user, planId)) return false;
+  if (await hasActiveProgramAccess(query, req.user, planId)) return false;
 
-  const athleteAccess = await loadAthleteLibraryAccess(query, user);
+  // The approval workflow exists to gate OTHER users' access to this
+  // content, not the creator's own view of it (or a platform admin's full
+  // bypass). A multi-role account that also happens to be an athlete must
+  // never be blocked from its own coach-side access by its own athlete-side
+  // approval settings.
+  if (req?.authz?.capabilities?.coachWorkspace) {
+    if (canAccessAllAthletes(req)) return false;
+    const ownership = await query(
+      `select 1 from plans.plans where id = $1 and created_by_user_id = $2 limit 1`,
+      [planId, req.user.id],
+    );
+    if (ownership.rows[0]) return false;
+  }
+
+  const athleteAccess = await loadAthleteLibraryAccess(query, req);
   return Boolean(athleteAccess) && (summary?.requires_approval === true || athleteAccess.require_approval === true);
 }
 
@@ -97,8 +111,13 @@ export async function requireUsedProgramAccess(query, user, planId) {
   return result.rows[0] || null;
 }
 
-export async function canUseTemplate(query, user, planId) {
-  if (!isAthlete(user)) {
+export async function canUseTemplate(query, req, planId) {
+  const user = req.user;
+  // Runs whenever the account has coach/platform capability, regardless of
+  // whether it's ALSO an athlete - a multi-role account must get the union
+  // of both, not one or the other. If this branch doesn't grant access, the
+  // athlete-scope checks below still run normally.
+  if (req?.authz?.capabilities?.coachWorkspace) {
     const staffResult = await query(
       `select 1
        from plans.plans p
@@ -108,7 +127,7 @@ export async function canUseTemplate(query, user, planId) {
          and coalesce(p.is_active, true)
          and ($3::boolean or p.created_by_user_id = $2 or p.visibility = 'public')
        limit 1`,
-      [planId, user.id, canAccessAllAthletes(user)],
+      [planId, user.id, canAccessAllAthletes(req)],
     );
     if (staffResult.rows[0]) return true;
   }
@@ -131,7 +150,7 @@ export async function canUseTemplate(query, user, planId) {
   );
   if (accessResult.rows[0]) return true;
 
-  const athleteAccess = await loadAthleteLibraryAccess(query, user);
+  const athleteAccess = await loadAthleteLibraryAccess(query, req);
   if (!athleteAccess) return false;
 
   const athleteResult = await query(
@@ -198,7 +217,7 @@ export async function canUseTemplate(query, user, planId) {
   return Boolean(athleteResult.rows[0]);
 }
 
-export async function canEditTemplate(query, user, planId) {
+export async function canEditTemplate(query, req, planId) {
   const result = await query(
     `select 1
      from plans.plans p
@@ -208,7 +227,7 @@ export async function canEditTemplate(query, user, planId) {
        and coalesce(p.is_active, true)
        and ($3::boolean or p.created_by_user_id = $2)
      limit 1`,
-    [planId, user.id, canAccessAllAthletes(user)],
+    [planId, req.user.id, canAccessAllAthletes(req)],
   );
   return Boolean(result.rows[0]);
 }

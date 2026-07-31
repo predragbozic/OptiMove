@@ -7,7 +7,7 @@ const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    const filter = athleteListAccessFilter(req.user, "a");
+    const filter = athleteListAccessFilter(req, "a");
     const result = await query(`
       select
         a.id as athlete_uuid,
@@ -51,7 +51,7 @@ router.get("/", async (req, res, next) => {
 
 router.get("/today", async (req, res, next) => {
   try {
-    const filter = athleteListAccessFilter(req.user, "a");
+    const filter = athleteListAccessFilter(req, "a");
     const result = await query(`
       select
         a.id as athlete_uuid,
@@ -100,7 +100,7 @@ router.get("/today", async (req, res, next) => {
 router.get("/:athleteId/plans", async (req, res, next) => {
   try {
     const athleteId = req.params.athleteId;
-    if (!(await canAccessAthlete(query, req.user, athleteId))) return res.status(403).json({ error: "Forbidden" });
+    if (!(await canAccessAthlete(query, req, athleteId))) return res.status(403).json({ error: "Forbidden" });
     const result = await query(
       `
       select *
@@ -119,7 +119,7 @@ router.get("/:athleteId/plans", async (req, res, next) => {
 router.get("/:athleteId/program-data", async (req, res, next) => {
   try {
     const athleteId = req.params.athleteId;
-    if (!(await canAccessAthlete(query, req.user, athleteId))) return res.status(403).json({ error: "Forbidden" });
+    if (!(await canAccessAthlete(query, req, athleteId))) return res.status(403).json({ error: "Forbidden" });
     const requestedProgram = String(req.query.program || "");
 
     const weeklyPlans = await query(
@@ -145,7 +145,7 @@ router.get("/:athleteId/program-data", async (req, res, next) => {
       [athleteId],
     );
 
-    const adminRows = await getAdminRows(req.user);
+    const adminRows = await getAdminRows(req);
     const hasWeekly = weeklyPlans.rows.length > 0;
 
     if (requestedProgram === "__all_programs__") {
@@ -231,12 +231,12 @@ async function loadPrograms(programPlans) {
   return buildPrograms(programPlans, rowsByPlanId);
 }
 
-async function getAdminRows(user = null) {
-  return getAthleteRows(user);
+async function getAdminRows(req = null) {
+  return getAthleteRows(req);
 }
 
-async function getAthleteRows(user = null) {
-  const filter = athleteListAccessFilter(user, "a");
+async function getAthleteRows(req = null) {
+  const filter = athleteListAccessFilter(req, "a");
   const result = await query(`
     select
       a.id as athlete_uuid,
