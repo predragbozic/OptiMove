@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../db.js";
-import { canAccessAllAthletes, isClubAdmin, isTeamCoach } from "../access.js";
+import { canAccessAllAthletes } from "../access.js";
+import { isPlatformAdministrator } from "../authz.js";
 import { createNotification } from "../notifications.js";
 import { ensureConversationForContactRequest } from "../messages.js";
 
@@ -8,7 +9,7 @@ const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
-    const result = await query(coachListSql(), [req.user.id, canAccessAllAthletes(req.user), canUseClubProfiles(req.user)]);
+    const result = await query(coachListSql(), [req.user.id, canBypassCoachVisibility(req), canUseClubProfiles(req)]);
     res.json({ coaches: result.rows });
   } catch (error) {
     next(error);
@@ -17,7 +18,7 @@ router.get("/", async (req, res, next) => {
 
 router.get("/me", async (req, res, next) => {
   try {
-    const profile = await ensureCoachProfile(req.user);
+    const profile = await ensureCoachProfile(req);
     res.json({ profile });
   } catch (error) {
     next(error);
@@ -26,7 +27,7 @@ router.get("/me", async (req, res, next) => {
 
 router.patch("/me", async (req, res, next) => {
   try {
-    const profile = await ensureCoachProfile(req.user);
+    const profile = await ensureCoachProfile(req);
     const visibility = normalizeChoice(req.body?.visibility, ["private", "club", "public", "marketplace"], "private");
     await query(
       `update public.coach_profiles
@@ -55,7 +56,7 @@ router.patch("/me", async (req, res, next) => {
       ],
     );
     await replaceProfileTags(profile.id, req.body?.tags);
-    const updated = await loadCoachProfileByUser(req.user.id, req.user);
+    const updated = await loadCoachProfileByUser(req.user.id, req);
     res.json({ profile: updated });
   } catch (error) {
     next(error);
@@ -64,7 +65,7 @@ router.patch("/me", async (req, res, next) => {
 
 router.get("/:profileId", async (req, res, next) => {
   try {
-    const profile = await loadVisibleCoachProfile(req.params.profileId, req.user);
+    const profile = await loadVisibleCoachProfile(req.params.profileId, req);
     if (!profile) return res.status(404).json({ error: "Coach profile not found." });
     const programs = await query(
       `select ps.plan_id, ps.plan_name, ps.library_category, ps.cover_image_url, ps.is_free, ps.price_cents, ps.item_count,
@@ -86,7 +87,7 @@ router.get("/:profileId", async (req, res, next) => {
          and coalesce(p.is_active, true)
          and (p.visibility = 'public' or p.library_scope in ('marketplace', 'optimove') or $2::boolean or p.created_by_user_id = $3)
        order by coalesce(ps.library_category, 'General'), ps.plan_name`,
-      [profile.user_id, canAccessAllAthletes(req.user), req.user.id],
+      [profile.user_id, canBypassCoachVisibility(req), req.user.id],
     );
     res.json({ profile, programs: programs.rows });
   } catch (error) {
@@ -96,7 +97,7 @@ router.get("/:profileId", async (req, res, next) => {
 
 router.post("/:profileId/contact", async (req, res, next) => {
   try {
-    const profile = await loadVisibleCoachProfile(req.params.profileId, req.user);
+    const profile = await loadVisibleCoachProfile(req.params.profileId, req);
     if (!profile || !profile.contact_enabled) return res.status(404).json({ error: "Coach profile not found." });
     const message = text(req.body?.message);
     if (!message) return res.status(400).json({ error: "Message is required." });
@@ -137,7 +138,7 @@ router.patch("/contact-requests/:requestId", async (req, res, next) => {
          and cp.id = ccr.coach_profile_id
          and (cp.user_id = $3 or $4::boolean)
        returning ccr.id, ccr.coach_profile_id, ccr.sender_user_id, ccr.status, ccr.updated_at`,
-      [req.params.requestId, status, req.user.id, canAccessAllAthletes(req.user)],
+      [req.params.requestId, status, req.user.id, canBypassCoachVisibility(req)],
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Contact request not found." });
     let conversationId = null;
@@ -165,7 +166,7 @@ router.patch("/contact-requests/:requestId", async (req, res, next) => {
 
 router.post("/:profileId/reviews", async (req, res, next) => {
   try {
-    const profile = await loadVisibleCoachProfile(req.params.profileId, req.user);
+    const profile = await loadVisibleCoachProfile(req.params.profileId, req);
     if (!profile) return res.status(404).json({ error: "Coach profile not found." });
     if (String(profile.user_id) === String(req.user.id)) {
       return res.status(400).json({ error: "You cannot review your own coach profile." });
@@ -328,28 +329,29 @@ function coachListSql({ includeOrder = true } = {}) {
   `;
 }
 
-async function ensureCoachProfile(user) {
+async function ensureCoachProfile(req) {
+  const user = req.user;
   await query(
     `insert into public.coach_profiles (user_id, contact_email, visibility)
      values ($1, $2, 'private')
      on conflict (user_id) do nothing`,
     [user.id, user.email],
   );
-  return loadCoachProfileByUser(user.id, user);
+  return loadCoachProfileByUser(user.id, req);
 }
 
-async function loadCoachProfileByUser(userId, viewer) {
+async function loadCoachProfileByUser(userId, req) {
   const result = await query(
     `${coachListSql({ includeOrder: false })} and cp.user_id = $4`,
-    [viewer.id, canAccessAllAthletes(viewer), canUseClubProfiles(viewer), userId],
+    [req.user.id, canBypassCoachVisibility(req), canUseClubProfiles(req), userId],
   );
   return result.rows[0] || null;
 }
 
-async function loadVisibleCoachProfile(profileId, viewer) {
+async function loadVisibleCoachProfile(profileId, req) {
   const result = await query(
     `${coachListSql({ includeOrder: false })} and cp.id = $4`,
-    [viewer.id, canAccessAllAthletes(viewer), canUseClubProfiles(viewer), profileId],
+    [req.user.id, canBypassCoachVisibility(req), canUseClubProfiles(req), profileId],
   );
   return result.rows[0] || null;
 }
@@ -385,8 +387,23 @@ async function replaceProfileTags(profileId, tagsValue) {
   }
 }
 
-function canUseClubProfiles(user) {
-  return isClubAdmin(user) || isTeamCoach(user);
+// req.authz-based: a real active club or team role unlocks club/team-shared
+// coach profiles - role_hint alone must never. platform_admin (from
+// public.user_global_roles) is included explicitly here too, redundantly
+// with canBypassCoachVisibility below, so this gate alone is already correct
+// even where the two aren't combined.
+function canUseClubProfiles(req) {
+  return isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0 || req.authz.teamRoles.length > 0;
+}
+
+// The full-visibility bypass for this file. canAccessAllAthletes(req.user) is
+// still role_hint-based (a documented, accepted legacy dependency shared
+// across several route files, out of this PR's scope to change everywhere) -
+// but scoped locally to coaches.js, a platform_admin granted purely through
+// public.user_global_roles must get the same full bypass a legacy
+// role_hint='platform_admin' account already gets here.
+function canBypassCoachVisibility(req) {
+  return isPlatformAdministrator(req.authz) || canAccessAllAthletes(req.user);
 }
 
 function text(value) {

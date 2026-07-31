@@ -43,3 +43,14 @@ test("the athlete_memberships migration is registered in the deploy migration ru
     "the athlete_memberships migration depends on athletes/clubs/teams/users from create_access_schema.sql and must run after it",
   );
 });
+
+test("the user_global_roles migration is registered in the deploy migration runner, after create_access_schema.sql", () => {
+  const globalRolesIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260802_user_global_roles.sql");
+  assert.notEqual(globalRolesIndex, -1, "migrationPaths must include the user_global_roles migration file");
+
+  const accessSchemaIndex = migrationPaths.findIndex((p) => path.basename(p) === "create_access_schema.sql");
+  assert.ok(
+    globalRolesIndex > accessSchemaIndex,
+    "the user_global_roles migration depends on users/athletes from create_access_schema.sql and must run after it",
+  );
+});

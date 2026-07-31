@@ -54,6 +54,22 @@ function cookieFor(token) {
   return `optimove_session=${token}`;
 }
 
+// Mirrors the exact mapping the real create-user flow now applies
+// transactionally (see POST /organization/users) and the backfill migration
+// used for pre-existing accounts - a fixture built with roleHint: "coach" (or
+// any of the other independent-coach-ish/platform-admin-ish strings) behaves
+// exactly as it did before authz.js stopped trusting role_hint directly,
+// because it now also gets the matching real user_global_roles row.
+const GLOBAL_ROLE_BY_ROLE_HINT = {
+  admin: "platform_admin",
+  platform_admin: "platform_admin",
+  general_admin: "platform_admin",
+  coach: "independent_coach",
+  independent_coach: "independent_coach",
+  fitness_coach: "independent_coach",
+  trainer: "independent_coach",
+};
+
 async function makeUser({ email, roleHint = "coach" }) {
   const result = await query(
     `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, is_active)
@@ -62,6 +78,14 @@ async function makeUser({ email, roleHint = "coach" }) {
     [email, roleHint],
   );
   cleanupUserIds.add(result.rows[0].id);
+  const globalRole = GLOBAL_ROLE_BY_ROLE_HINT[roleHint];
+  if (globalRole) {
+    await query(
+      `insert into public.user_global_roles (user_id, role, is_active) values ($1, $2, true)
+       on conflict (user_id, role) do update set is_active = true, updated_at = now()`,
+      [result.rows[0].id, globalRole],
+    );
+  }
   return result.rows[0];
 }
 

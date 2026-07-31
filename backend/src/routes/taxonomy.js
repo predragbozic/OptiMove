@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { query } from "../db.js";
-import { isPlatformAdmin } from "../access.js";
+import { isPlatformAdministrator } from "../authz.js";
 
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
@@ -17,7 +17,7 @@ router.get("/node-presets", async (req, res, next) => {
   try {
     const nodeType = clean(req.query?.nodeType);
     if (nodeType && !NODE_TYPES.has(nodeType)) return res.status(400).json({ error: "Invalid node type." });
-    const presets = await loadVisibleNodePresets(req.user, nodeType);
+    const presets = await loadVisibleNodePresets(req, nodeType);
     res.json({ presets });
   } catch (error) {
     next(error);
@@ -30,7 +30,7 @@ router.post("/node-presets", async (req, res, next) => {
     const name = clean(req.body?.name);
     if (!NODE_TYPES.has(nodeType)) return res.status(400).json({ error: "Invalid node type." });
     if (!name) return res.status(400).json({ error: "Name is required." });
-    const owner = await resolveOwnerScope(req.user, req.body);
+    const owner = await resolveOwnerScope(req, req.body);
     if (owner.error) return res.status(owner.status).json({ error: owner.error });
     const result = await query(
       `insert into library.node_presets (node_type, name, slug, color, icon_url, owner_scope, owner_club_id, owner_team_id, owner_user_id, created_by_user_id)
@@ -50,7 +50,7 @@ router.patch("/node-presets/:presetId", async (req, res, next) => {
   try {
     const preset = await loadNodePreset(req.params.presetId);
     if (!preset) return res.status(404).json({ error: "Preset not found." });
-    if (!(await canManagePreset(req.user, preset))) return res.status(403).json({ error: "Preset is outside your access." });
+    if (!(await canManagePreset(req, preset))) return res.status(403).json({ error: "Preset is outside your access." });
     const name = clean(req.body?.name) || preset.name;
     const result = await query(
       `update library.node_presets
@@ -69,14 +69,14 @@ router.delete("/node-presets/:presetId", async (req, res, next) => {
   try {
     const preset = await loadNodePreset(req.params.presetId);
     if (!preset) return res.status(404).json({ error: "Preset not found." });
-    if (preset.owner_scope === "system" && !isPlatformAdmin(req.user)) {
+    if (preset.owner_scope === "system" && !isPlatformAdministrator(req.authz)) {
       await query(
         `insert into library.node_preset_hidden (preset_id, user_id) values ($1, $2) on conflict (preset_id, user_id) do nothing`,
         [preset.id, req.user.id],
       );
       return res.json({ hidden: true });
     }
-    if (!(await canManagePreset(req.user, preset))) return res.status(403).json({ error: "Preset is outside your access." });
+    if (!(await canManagePreset(req, preset))) return res.status(403).json({ error: "Preset is outside your access." });
     await query(`update library.node_presets set is_active = false, updated_at = now() where id = $1`, [preset.id]);
     res.json({ deleted: true });
   } catch (error) {
@@ -86,7 +86,7 @@ router.delete("/node-presets/:presetId", async (req, res, next) => {
 
 router.get("/template-tags", async (req, res, next) => {
   try {
-    const tags = await loadVisibleTemplateTags(req.user);
+    const tags = await loadVisibleTemplateTags(req);
     res.json({ tags });
   } catch (error) {
     next(error);
@@ -97,7 +97,7 @@ router.post("/template-tags", async (req, res, next) => {
   try {
     const name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Name is required." });
-    const owner = await resolveOwnerScope(req.user, req.body);
+    const owner = await resolveOwnerScope(req, req.body);
     if (owner.error) return res.status(owner.status).json({ error: owner.error });
     const result = await query(
       `insert into library.program_tag_definitions (name, slug, owner_scope, owner_club_id, owner_team_id, owner_user_id, created_by_user_id)
@@ -117,7 +117,7 @@ router.patch("/template-tags/:tagId", async (req, res, next) => {
   try {
     const tag = await loadTemplateTag(req.params.tagId);
     if (!tag) return res.status(404).json({ error: "Tag not found." });
-    if (!(await canManagePreset(req.user, tag))) return res.status(403).json({ error: "Tag is outside your access." });
+    if (!(await canManagePreset(req, tag))) return res.status(403).json({ error: "Tag is outside your access." });
     const name = clean(req.body?.name) || tag.name;
     const result = await query(
       `update library.program_tag_definitions set name = $2, slug = $3, updated_at = now() where id = $1 returning *`,
@@ -133,14 +133,14 @@ router.delete("/template-tags/:tagId", async (req, res, next) => {
   try {
     const tag = await loadTemplateTag(req.params.tagId);
     if (!tag) return res.status(404).json({ error: "Tag not found." });
-    if (tag.owner_scope === "system" && !isPlatformAdmin(req.user)) {
+    if (tag.owner_scope === "system" && !isPlatformAdministrator(req.authz)) {
       await query(
         `insert into library.program_tag_hidden (tag_id, user_id) values ($1, $2) on conflict (tag_id, user_id) do nothing`,
         [tag.id, req.user.id],
       );
       return res.json({ hidden: true });
     }
-    if (!(await canManagePreset(req.user, tag))) return res.status(403).json({ error: "Tag is outside your access." });
+    if (!(await canManagePreset(req, tag))) return res.status(403).json({ error: "Tag is outside your access." });
     await query(`update library.program_tag_definitions set is_active = false, updated_at = now() where id = $1`, [tag.id]);
     res.json({ deleted: true });
   } catch (error) {
@@ -152,7 +152,7 @@ router.get("/library/:kind", async (req, res, next) => {
   try {
     const config = LIBRARY_LOOKUPS[req.params.kind];
     if (!config) return res.status(400).json({ error: "Invalid filter kind." });
-    const rows = await loadVisibleLibraryRows(req.user, req.params.kind, config);
+    const rows = await loadVisibleLibraryRows(req, req.params.kind, config);
     res.json({ rows });
   } catch (error) {
     next(error);
@@ -165,7 +165,7 @@ router.post("/library/:kind", async (req, res, next) => {
     if (!config) return res.status(400).json({ error: "Invalid filter kind." });
     const name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Name is required." });
-    const owner = await resolveOwnerScope(req.user, req.body);
+    const owner = await resolveOwnerScope(req, req.body);
     if (owner.error) return res.status(owner.status).json({ error: owner.error });
     const columns = ["name", "slug", "owner_scope", "owner_club_id", "owner_team_id", "owner_user_id", "created_by_user_id"];
     const values = [name, slugify(name), owner.scope, owner.clubId, owner.teamId, owner.userId, req.user.id];
@@ -191,7 +191,7 @@ router.patch("/library/:kind/:id", async (req, res, next) => {
     if (!config) return res.status(400).json({ error: "Invalid filter kind." });
     const row = await loadLibraryRow(config, req.params.id);
     if (!row) return res.status(404).json({ error: "Not found." });
-    if (!(await canManagePreset(req.user, row))) return res.status(403).json({ error: "Outside your access." });
+    if (!(await canManagePreset(req, row))) return res.status(403).json({ error: "Outside your access." });
     const name = clean(req.body?.name) || row.name;
     const setParts = ["name = $2", "slug = $3", "updated_at = now()"];
     const values = [row.id, name, slugify(name)];
@@ -216,14 +216,14 @@ router.delete("/library/:kind/:id", async (req, res, next) => {
     if (!config) return res.status(400).json({ error: "Invalid filter kind." });
     const row = await loadLibraryRow(config, req.params.id);
     if (!row) return res.status(404).json({ error: "Not found." });
-    if (row.owner_scope === "system" && !isPlatformAdmin(req.user)) {
+    if (row.owner_scope === "system" && !isPlatformAdministrator(req.authz)) {
       await query(
         `insert into library.filter_hidden (kind, item_id, user_id) values ($1, $2, $3) on conflict (kind, item_id, user_id) do nothing`,
         [req.params.kind, row.id, req.user.id],
       );
       return res.json({ hidden: true });
     }
-    if (!(await canManagePreset(req.user, row))) return res.status(403).json({ error: "Outside your access." });
+    if (!(await canManagePreset(req, row))) return res.status(403).json({ error: "Outside your access." });
     await query(`update library.${config.table} set is_active = false, updated_at = now() where id = $1`, [row.id]);
     res.json({ deleted: true });
   } catch (error) {
@@ -231,8 +231,9 @@ router.delete("/library/:kind/:id", async (req, res, next) => {
   }
 });
 
-async function loadVisibleNodePresets(user, nodeType) {
-  const admin = isPlatformAdmin(user);
+async function loadVisibleNodePresets(req, nodeType) {
+  const user = req.user;
+  const admin = isPlatformAdministrator(req.authz);
   const result = await query(
     `select p.*,
        (
@@ -263,8 +264,9 @@ async function loadVisibleNodePresets(user, nodeType) {
   return result.rows;
 }
 
-async function loadVisibleTemplateTags(user) {
-  const admin = isPlatformAdmin(user);
+async function loadVisibleTemplateTags(req) {
+  const user = req.user;
+  const admin = isPlatformAdministrator(req.authz);
   const result = await query(
     `select t.*,
        (
@@ -294,8 +296,9 @@ async function loadVisibleTemplateTags(user) {
   return result.rows;
 }
 
-async function loadVisibleLibraryRows(user, kind, config) {
-  const admin = isPlatformAdmin(user);
+async function loadVisibleLibraryRows(req, kind, config) {
+  const user = req.user;
+  const admin = isPlatformAdministrator(req.authz);
   const result = await query(
     `select r.*,
        (
@@ -340,8 +343,9 @@ async function loadTemplateTag(tagId) {
   return result.rows[0] || null;
 }
 
-async function canManagePreset(user, owned) {
-  if (isPlatformAdmin(user)) return true;
+async function canManagePreset(req, owned) {
+  const user = req.user;
+  if (isPlatformAdministrator(req.authz)) return true;
   if (owned.owner_scope === "system") return false;
   if (owned.owner_scope === "user") return owned.owner_user_id === user.id;
   if (owned.owner_scope === "club") {
@@ -364,23 +368,24 @@ async function canManagePreset(user, owned) {
   return false;
 }
 
-async function resolveOwnerScope(user, body) {
+async function resolveOwnerScope(req, body) {
+  const user = req.user;
   const scope = SCOPES.has(clean(body?.scope)) ? clean(body?.scope) : "user";
   if (scope === "system") {
-    if (!isPlatformAdmin(user)) return { error: "Only platform admin can create shared defaults.", status: 403 };
+    if (!isPlatformAdministrator(req.authz)) return { error: "Only platform admin can create shared defaults.", status: 403 };
     return { scope, clubId: null, teamId: null, userId: null };
   }
   if (scope === "club") {
     const clubId = clean(body?.clubId);
     if (!clubId) return { error: "Club is required for club-scoped entries.", status: 400 };
-    const allowed = await canManagePreset(user, { owner_scope: "club", owner_club_id: clubId });
+    const allowed = await canManagePreset(req, { owner_scope: "club", owner_club_id: clubId });
     if (!allowed) return { error: "Club is outside your access.", status: 403 };
     return { scope, clubId, teamId: null, userId: null };
   }
   if (scope === "team") {
     const teamId = clean(body?.teamId);
     if (!teamId) return { error: "Team is required for team-scoped entries.", status: 400 };
-    const allowed = await canManagePreset(user, { owner_scope: "team", owner_team_id: teamId });
+    const allowed = await canManagePreset(req, { owner_scope: "team", owner_team_id: teamId });
     if (!allowed) return { error: "Team is outside your access.", status: 403 };
     return { scope, clubId: null, teamId, userId: null };
   }

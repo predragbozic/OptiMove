@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../db.js";
-import { canAccessAllAthletes, canAccessAthlete, isAthlete, isClubAdmin, isPlatformAdmin, isTeamCoach } from "../access.js";
+import { canAccessAllAthletes, canAccessAthlete, isAthlete } from "../access.js";
+import { isPlatformAdministrator } from "../authz.js";
 import { createNotification } from "../notifications.js";
 import {
   accessExpiresAt,
@@ -295,7 +296,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
     const requestedStatus = normalizeProgramStatus(req.body?.programStatus);
-    const metadataPolicy = await resolveProgramMetadataPolicy(req.user, {
+    const metadataPolicy = await resolveProgramMetadataPolicy(req, {
       scope: requestedScope,
       status: requestedStatus,
       athleteCanViewDirectly: booleanValue(req.body?.athleteCanViewDirectly, false),
@@ -675,7 +676,7 @@ function normalizeLibraryScope(value) {
   return normalizeChoice(normalized, ["workspace", "my", "team", "club", "optimove", "marketplace"], "my");
 }
 
-async function resolveProgramMetadataPolicy(user, requested) {
+async function resolveProgramMetadataPolicy(req, requested) {
   const requestedScope = requested.scope || "my";
   const requestedStatus = requested.status || "draft";
   let scope = requestedStatus === "draft" ? "workspace" : requestedScope;
@@ -684,7 +685,7 @@ async function resolveProgramMetadataPolicy(user, requested) {
   if (scope === "workspace") status = "draft";
   if (status === "draft") scope = "workspace";
 
-  const allowedScopes = await editableLibraryScopesForUser(user);
+  const allowedScopes = await editableLibraryScopesForUser(req);
   if (!allowedScopes.has(scope)) {
     return {
       ok: false,
@@ -704,29 +705,21 @@ async function resolveProgramMetadataPolicy(user, requested) {
   };
 }
 
-async function editableLibraryScopesForUser(user) {
+// Fully req.authz-based now - platform_admin is authoritative via
+// public.user_global_roles, and club/team scope comes from req.authz's
+// real, already-loaded user_club_roles/user_team_roles rows (see
+// attachAuthorizationContext). role_hint is never consulted: a role_hint
+// string with no matching active scoped row must unlock nothing here.
+function editableLibraryScopesForUser(req) {
   const scopes = new Set(["workspace", "my"]);
-  if (isPlatformAdmin(user)) return new Set(["workspace", "my", "team", "club", "optimove", "marketplace"]);
-  if (isClubAdmin(user)) {
+  if (isPlatformAdministrator(req.authz)) return new Set(["workspace", "my", "team", "club", "optimove", "marketplace"]);
+  if (req.authz.clubRoles.length > 0) {
     scopes.add("team");
     scopes.add("club");
     return scopes;
   }
-  if (isTeamCoach(user) || await userHasActiveTeam(user)) scopes.add("team");
+  if (req.authz.teamRoles.length > 0 || req.authz.managedTeamIds.length > 0) scopes.add("team");
   return scopes;
-}
-
-async function userHasActiveTeam(user) {
-  if (!user?.id) return false;
-  const result = await query(
-    `select 1
-     from public.user_team_roles
-     where user_id = $1
-       and is_active = true
-     limit 1`,
-    [user.id],
-  );
-  return result.rowCount > 0;
 }
 
 function visibilityForScope(scope) {
