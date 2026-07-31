@@ -7,28 +7,34 @@ export function normalizeRole(role) {
   return String(role || "user").trim().toLowerCase();
 }
 
-export function isAthlete(user) {
+// Everything below in this block is role_hint-derived and intentionally NOT
+// exported - role_hint is a temporary legacy column (see authz.js) with
+// exactly two remaining, non-security uses: publicRole/accessScope feed the
+// login response's UI label fields only. No security decision anywhere in
+// the app may read role_hint, directly or through these helpers - use
+// req.authz (isAthlete, athleteId, platformRoles, clubRoles, teamRoles,
+// managedTeamIds, isIndependentCoach, capabilities), loaded once per request
+// by attachAuthorizationContext, instead. If a file needs to import one of
+// these by name, that's a sign it's making a security decision from
+// role_hint and needs to move to req.authz instead, not a sign this file
+// needs a wider export list.
+function roleHintIsAthlete(user) {
   return normalizeRole(user?.role_hint) === "athlete";
 }
 
-export function isPlatformAdmin(user) {
+function roleHintIsPlatformAdmin(user) {
   return PLATFORM_ROLES.has(normalizeRole(user?.role_hint));
 }
 
-export function isClubAdmin(user) {
+function roleHintIsClubAdmin(user) {
   return CLUB_ROLES.has(normalizeRole(user?.role_hint));
 }
 
-export function isTeamCoach(user) {
+function roleHintIsTeamCoach(user) {
   return TEAM_ROLES.has(normalizeRole(user?.role_hint));
 }
 
-// Deliberately does NOT include role === "user" (the generic default role_hint
-// must never imply coach access on its own) and does not exclude athletes
-// (role_hint alone can't tell whether an account also holds real coach
-// capability - see authz.js for the actual multi-role-aware check used by
-// requireCoach).
-export function isCoachUser(user) {
+function roleHintIsCoachUser(user) {
   const role = normalizeRole(user?.role_hint);
   return Boolean(user) && (
     PLATFORM_ROLES.has(role) || CLUB_ROLES.has(role) || TEAM_ROLES.has(role) || COACH_ROLES.has(role)
@@ -38,7 +44,8 @@ export function isCoachUser(user) {
 // Deliberately does NOT map role_hint "user" (the generic default) to
 // "coach" - a generic account must present as what it is, not as a coach it
 // then gets 403'd for. Anything unrecognized falls through to the raw role
-// string rather than being guessed as a coach.
+// string rather than being guessed as a coach. DISPLAY ONLY - feeds the
+// login response's "role" label, never a permission decision.
 export function publicRole(user) {
   const role = normalizeRole(user?.role_hint);
   if (PLATFORM_ROLES.has(role)) return "platform_admin";
@@ -49,34 +56,37 @@ export function publicRole(user) {
   return role;
 }
 
-// Same principle: only a recognized coach-ish role_hint reports "coach" -
-// the generic "user" default (or any other unrecognized value) reports
-// "user" instead of silently inheriting coach scope.
+// DISPLAY ONLY - feeds the login response's "accessScope" label, never a
+// permission decision. Use req.authz.capabilities for real capability
+// checks.
 export function accessScope(user) {
-  if (isPlatformAdmin(user)) return "platform";
-  if (isClubAdmin(user)) return "club";
-  if (isTeamCoach(user)) return "team";
-  if (isAthlete(user)) return "athlete";
-  if (isCoachUser(user)) return "coach";
+  if (roleHintIsPlatformAdmin(user)) return "platform";
+  if (roleHintIsClubAdmin(user)) return "club";
+  if (roleHintIsTeamCoach(user)) return "team";
+  if (roleHintIsAthlete(user)) return "athlete";
+  if (roleHintIsCoachUser(user)) return "coach";
   return "user";
 }
 
-export function canAccessAllAthletes(user) {
-  return isPlatformAdmin(user);
+// Real signal: an active platform_admin row in public.user_global_roles,
+// loaded once per request into req.authz.platformRoles by
+// attachAuthorizationContext. role_hint is never consulted.
+export function canAccessAllAthletes(req) {
+  return Boolean(req?.authz?.platformRoles?.length);
 }
 
-export function athleteListAccessFilter(user, athleteAlias = "a", startParam = 1) {
-  if (!user) return { sql: "and false", params: [] };
-  if (canAccessAllAthletes(user)) return { sql: "", params: [] };
+export function athleteListAccessFilter(req, athleteAlias = "a", startParam = 1) {
+  if (!req?.user) return { sql: "and false", params: [] };
+  if (canAccessAllAthletes(req)) return { sql: "", params: [] };
   return {
     sql: `and ${athleteAccessPredicate(athleteAlias, `$${startParam}`)}`,
-    params: [user.id],
+    params: [req.user.id],
   };
 }
 
-export async function canAccessAthlete(query, user, athleteId) {
-  if (!user) return false;
-  if (canAccessAllAthletes(user)) return true;
+export async function canAccessAthlete(query, req, athleteId) {
+  if (!req?.user) return false;
+  if (canAccessAllAthletes(req)) return true;
   const result = await query(
     `
     select 1
@@ -85,14 +95,14 @@ export async function canAccessAthlete(query, user, athleteId) {
       and ${athleteAccessPredicate("a", "$2")}
     limit 1
     `,
-    [athleteId, user.id],
+    [athleteId, req.user.id],
   );
   return result.rowCount > 0;
 }
 
-export async function canAccessPlan(query, user, planId, { editable = false } = {}) {
-  if (!user) return false;
-  if (canAccessAllAthletes(user)) return true;
+export async function canAccessPlan(query, req, planId, { editable = false } = {}) {
+  if (!req?.user) return false;
+  if (canAccessAllAthletes(req)) return true;
   const ownPlanStatus = editable
     ? "or p.created_by_user_id = $2"
     : "or (p.created_by_user_id = $2 and (p.visibility = 'private' or p.is_template = true))";
@@ -186,7 +196,7 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
       )
     limit 1
     `,
-    [planId, user.id, isAthlete(user)],
+    [planId, req.user.id, Boolean(req.authz?.isAthlete)],
   );
   return result.rowCount > 0;
 }

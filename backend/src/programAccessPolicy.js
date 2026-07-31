@@ -1,7 +1,7 @@
-import { canAccessAllAthletes, isAthlete } from "./access.js";
+import { canAccessAllAthletes } from "./access.js";
 
-export async function loadAthleteLibraryAccess(query, user) {
-  if (!isAthlete(user)) return null;
+export async function loadAthleteLibraryAccess(query, req) {
+  if (!req?.authz?.isAthlete) return null;
   const result = await query(
     `select
        a.id as athlete_id,
@@ -39,7 +39,7 @@ export async function loadAthleteLibraryAccess(query, user) {
        )
      order by a.created_at nulls last
      limit 1`,
-    [user.id],
+    [req.user.id],
   );
   return result.rows[0] || null;
 }
@@ -67,18 +67,18 @@ export async function hasActiveProgramAccess(query, user, planId, statuses = ["a
   return result.rowCount > 0;
 }
 
-export async function hasTemplateAccessRecord(query, user, summary, planId) {
-  if (!isAthlete(user)) return false;
+export async function hasTemplateAccessRecord(query, req, summary, planId) {
+  if (!req?.authz?.isAthlete) return false;
   if (summary?.plan_type !== "program" || summary?.is_template !== true) return false;
-  return hasActiveProgramAccess(query, user, planId, ["requested", "rejected", "accessed", "used", "completed"]);
+  return hasActiveProgramAccess(query, req.user, planId, ["requested", "rejected", "accessed", "used", "completed"]);
 }
 
-export async function needsTemplateApproval(query, user, summary, planId) {
-  if (!isAthlete(user)) return false;
+export async function needsTemplateApproval(query, req, summary, planId) {
+  if (!req?.authz?.isAthlete) return false;
   if (summary?.plan_type !== "program" || summary?.is_template !== true) return false;
-  if (await hasActiveProgramAccess(query, user, planId)) return false;
+  if (await hasActiveProgramAccess(query, req.user, planId)) return false;
 
-  const athleteAccess = await loadAthleteLibraryAccess(query, user);
+  const athleteAccess = await loadAthleteLibraryAccess(query, req);
   return Boolean(athleteAccess) && (summary?.requires_approval === true || athleteAccess.require_approval === true);
 }
 
@@ -97,8 +97,9 @@ export async function requireUsedProgramAccess(query, user, planId) {
   return result.rows[0] || null;
 }
 
-export async function canUseTemplate(query, user, planId) {
-  if (!isAthlete(user)) {
+export async function canUseTemplate(query, req, planId) {
+  const user = req.user;
+  if (!req?.authz?.isAthlete) {
     const staffResult = await query(
       `select 1
        from plans.plans p
@@ -108,7 +109,7 @@ export async function canUseTemplate(query, user, planId) {
          and coalesce(p.is_active, true)
          and ($3::boolean or p.created_by_user_id = $2 or p.visibility = 'public')
        limit 1`,
-      [planId, user.id, canAccessAllAthletes(user)],
+      [planId, user.id, canAccessAllAthletes(req)],
     );
     if (staffResult.rows[0]) return true;
   }
@@ -131,7 +132,7 @@ export async function canUseTemplate(query, user, planId) {
   );
   if (accessResult.rows[0]) return true;
 
-  const athleteAccess = await loadAthleteLibraryAccess(query, user);
+  const athleteAccess = await loadAthleteLibraryAccess(query, req);
   if (!athleteAccess) return false;
 
   const athleteResult = await query(
@@ -198,7 +199,7 @@ export async function canUseTemplate(query, user, planId) {
   return Boolean(athleteResult.rows[0]);
 }
 
-export async function canEditTemplate(query, user, planId) {
+export async function canEditTemplate(query, req, planId) {
   const result = await query(
     `select 1
      from plans.plans p
@@ -208,7 +209,7 @@ export async function canEditTemplate(query, user, planId) {
        and coalesce(p.is_active, true)
        and ($3::boolean or p.created_by_user_id = $2)
      limit 1`,
-    [planId, user.id, canAccessAllAthletes(user)],
+    [planId, req.user.id, canAccessAllAthletes(req)],
   );
   return Boolean(result.rows[0]);
 }

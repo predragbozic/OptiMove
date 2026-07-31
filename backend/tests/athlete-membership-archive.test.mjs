@@ -756,7 +756,7 @@ test("28. an athlete active in two scopes sees content from both, and archiving 
   );
   cleanupPlanIds.add(planClub.rows[0].id);
 
-  const athleteViewer = { id: athleteUser.id, role_hint: "athlete" };
+  const athleteViewer = { user: { id: athleteUser.id }, authz: { isAthlete: true, platformRoles: [] } };
   assert.equal(await canUseTemplate(query, athleteViewer, planTeam.rows[0].id), true, "the athlete's active team membership must unlock the team-scoped template");
   assert.equal(await canUseTemplate(query, athleteViewer, planClub.rows[0].id), true, "the athlete's active club membership must unlock the club-scoped template");
 

@@ -46,7 +46,7 @@ router.get("/drafts", async (req, res, next) => {
 
 router.get("/plans/:planId", async (req, res, next) => {
   try {
-    const plan = await getEditablePlan(req.user, req.params.planId);
+    const plan = await getEditablePlan(req, req.params.planId);
     if (!plan) return res.status(404).json({ error: "Draft program not found" });
     res.json(await buildDraft(plan));
   } catch (error) { next(error); }
@@ -54,7 +54,7 @@ router.get("/plans/:planId", async (req, res, next) => {
 
 router.patch("/plans/:planId", async (req, res, next) => {
   try {
-    const plan = await requirePlan(req.user, req.params.planId, res);
+    const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
     const name = text(req.body?.name) || (plan.plan_type === "weekly" ? `Weekly plan ${plan.week_start}` : plan.name);
     await query("update plans.plans set name = $2, updated_at = now() where id = $1", [plan.id, name]);
@@ -64,10 +64,10 @@ router.patch("/plans/:planId", async (req, res, next) => {
 
 router.post("/plans/:planId/sync-batch", async (req, res, next) => {
   try {
-    const plan = await requirePlan(req.user, req.params.planId, res);
+    const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
     if (plan.builder_batch_id && !plan.is_edit_draft) await syncBatchFromPlan(plan, req.user);
-    const freshPlan = await getEditablePlan(req.user, plan.id);
+    const freshPlan = await getEditablePlan(req, plan.id);
     res.json(await buildDraft(freshPlan || plan));
   } catch (error) { next(error); }
 });
@@ -117,7 +117,7 @@ router.post("/plans", async (req, res, next) => {
     await client.query("commit");
     client.release();
     client = null;
-    res.status(201).json(await buildDraft(await getEditablePlan(req.user, createdIds[0])));
+    res.status(201).json(await buildDraft(await getEditablePlan(req, createdIds[0])));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -129,10 +129,10 @@ router.post("/plans", async (req, res, next) => {
 
 router.post("/plans/:planId/submit", async (req, res, next) => {
   try {
-    const plan = await requirePlan(req.user, req.params.planId, res);
+    const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
     if (plan.is_edit_draft && plan.edit_source_plan_id) {
-      const updated = await applyEditDraft(req.user, plan);
+      const updated = await applyEditDraft(req, plan);
       return res.json(await buildDraft(updated));
     }
     const shouldSyncBatch = wantsBatchSync(req, plan);
@@ -154,16 +154,16 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     } else {
       await query("update plans.plans set status = 'active', updated_at = now() where id = $1", [plan.id]);
     }
-    res.json(await buildDraft(await getEditablePlan(req.user, plan.id)));
+    res.json(await buildDraft(await getEditablePlan(req, plan.id)));
   } catch (error) { next(error); }
 });
 
 router.post("/plans/:planId/duplicate", async (req, res, next) => {
   let client;
   try {
-    const source = await getCopySource(req.user, req.params.planId);
+    const source = await getCopySource(req, req.params.planId);
     if (!source) return res.status(404).json({ error: "Program or template not found." });
-    if (source.is_template && source.can_copy === false && !canAccessAllAthletes(req.user) && String(source.created_by_user_id) !== String(req.user.id)) {
+    if (source.is_template && source.can_copy === false && !canAccessAllAthletes(req) && String(source.created_by_user_id) !== String(req.user.id)) {
       return res.status(403).json({ error: "This template cannot be copied." });
     }
     const targetAthleteExternalIds = requestedAthleteIds(req.body);
@@ -216,7 +216,7 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     await client.query("commit");
     client.release();
     client = null;
-    res.status(201).json(await buildDraft(await getEditablePlan(req.user, createdIds[0])));
+    res.status(201).json(await buildDraft(await getEditablePlan(req, createdIds[0])));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -229,7 +229,7 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
 router.post("/plans/:planId/edit", async (req, res, next) => {
   let client;
   try {
-    const plan = await getEditablePlan(req.user, req.params.planId);
+    const plan = await getEditablePlan(req, req.params.planId);
     if (!plan) return res.status(404).json({ error: "Program not found or not editable." });
     if (plan.is_edit_draft) return res.json(await buildDraft(plan));
     if (plan.status === "draft" && plan.source_type === "builder" && !plan.edit_source_plan_id) {
@@ -247,7 +247,7 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
       [plan.id, req.user.id],
     );
     if (existingDraft.rows[0]) {
-      return res.json(await buildDraft(await getEditablePlan(req.user, existingDraft.rows[0].id)));
+      return res.json(await buildDraft(await getEditablePlan(req, existingDraft.rows[0].id)));
     }
 
     client = await pool.connect();
@@ -270,7 +270,7 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
     await client.query("commit");
     client.release();
     client = null;
-    res.json(await buildDraft(await getEditablePlan(req.user, created.rows[0].id)));
+    res.json(await buildDraft(await getEditablePlan(req, created.rows[0].id)));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -282,7 +282,7 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
 
 router.delete("/plans/:planId", async (req, res, next) => {
   try {
-    const plan = await requirePlan(req.user, req.params.planId, res);
+    const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
     const blocks = await query("select id from plans.plan_days where plan_id = $1", [plan.id]);
     for (const block of blocks.rows) await deleteBlockTree(block.id);
@@ -293,7 +293,7 @@ router.delete("/plans/:planId", async (req, res, next) => {
 
 router.post("/plans/:planId/blocks", async (req, res, next) => {
   try {
-    const plan = await requirePlan(req.user, req.params.planId, res);
+    const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
     if (plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
     const next = await nextOrder("plans.plan_days", "plan_id", plan.id, "block_order");
@@ -308,7 +308,7 @@ router.post("/plans/:planId/blocks", async (req, res, next) => {
 
 router.delete("/blocks/:blockId", async (req, res, next) => {
   try {
-    const block = await getEditableBlock(req.user, req.params.blockId);
+    const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plan days cannot be deleted." });
     await deleteBlockTree(block.id);
@@ -319,7 +319,7 @@ router.delete("/blocks/:blockId", async (req, res, next) => {
 router.post("/blocks/:blockId/copy", async (req, res, next) => {
   let client;
   try {
-    const block = await getEditableBlock(req.user, req.params.blockId);
+    const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
     const source = await query("select * from plans.plan_days where id = $1", [block.id]);
@@ -364,7 +364,7 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
 
 router.patch("/blocks/:blockId", async (req, res, next) => {
   try {
-    const block = await getEditableBlock(req.user, req.params.blockId);
+    const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     await query(
       "update plans.plan_days set block_name = $2, day_note = $3, updated_at = now() where id = $1",
@@ -376,7 +376,7 @@ router.patch("/blocks/:blockId", async (req, res, next) => {
 
 router.post("/blocks/:blockId/sessions", async (req, res, next) => {
   try {
-    const block = await getEditableBlock(req.user, req.params.blockId);
+    const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     const order = await nextOrder("plans.plan_sessions", "plan_day_id", block.id, "session_order");
     await query(
@@ -389,7 +389,7 @@ router.post("/blocks/:blockId/sessions", async (req, res, next) => {
 
 router.patch("/sessions/:sessionId", async (req, res, next) => {
   try {
-    const session = await getEditableSession(req.user, req.params.sessionId);
+    const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
     await query(
       "update plans.plan_sessions set session_time = $2, updated_at = now() where id = $1",
@@ -401,7 +401,7 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
 
 router.delete("/sessions/:sessionId", async (req, res, next) => {
   try {
-    const session = await getEditableSession(req.user, req.params.sessionId);
+    const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
     await deleteSessionTree(session.id);
     return respondWithDraft(req, res, req.user, session.plan);
@@ -410,7 +410,7 @@ router.delete("/sessions/:sessionId", async (req, res, next) => {
 
 router.post("/sessions/:sessionId/nodes", async (req, res, next) => {
   try {
-    const session = await getEditableSession(req.user, req.params.sessionId);
+    const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
     const nodeType = text(req.body?.nodeType).toLowerCase();
     const name = text(req.body?.name);
@@ -432,7 +432,7 @@ router.post("/sessions/:sessionId/nodes", async (req, res, next) => {
 
 router.delete("/nodes/:nodeId", async (req, res, next) => {
   try {
-    const node = await getEditableNode(req.user, req.params.nodeId);
+    const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     await deleteNodeTree(node.id);
     return respondWithDraft(req, res, req.user, node.plan);
@@ -441,7 +441,7 @@ router.delete("/nodes/:nodeId", async (req, res, next) => {
 
 router.patch("/nodes/:nodeId", async (req, res, next) => {
   try {
-    const node = await getEditableNode(req.user, req.params.nodeId);
+    const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     const name = text(req.body?.name) || node.name;
     const shortNote = req.body?.shortNote === undefined ? node.short_note : nullableText(req.body.shortNote);
@@ -505,7 +505,7 @@ async function syncSessionItemSnapshots(sessionId) {
 
 router.post("/nodes/:nodeId/move", async (req, res, next) => {
   try {
-    const node = await getEditableNode(req.user, req.params.nodeId);
+    const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     const direction = text(req.body?.direction);
     if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: "Move direction is required." });
@@ -536,7 +536,7 @@ router.post("/nodes/:nodeId/move", async (req, res, next) => {
 
 router.post("/nodes/:nodeId/exercises", async (req, res, next) => {
   try {
-    const node = await getEditableNode(req.user, req.params.nodeId);
+    const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     if (node.node_type !== "section") return res.status(400).json({ error: "Exercises can only be added to a section." });
     const exerciseResult = await query(
@@ -571,7 +571,7 @@ router.post("/nodes/:nodeId/exercises", async (req, res, next) => {
 
 router.post("/nodes/:nodeId/custom-exercise", async (req, res, next) => {
   try {
-    const node = await getEditableNode(req.user, req.params.nodeId);
+    const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     if (node.node_type !== "section") return res.status(400).json({ error: "Exercises can only be added to an exercise section." });
     const name = text(req.body?.name);
@@ -608,8 +608,8 @@ router.post("/nodes/:nodeId/custom-exercise", async (req, res, next) => {
 
 router.post("/nodes/:nodeId/copy", async (req, res, next) => {
   try {
-    const source = await getEditableNode(req.user, req.params.nodeId);
-    const targetSession = await getEditableSession(req.user, req.body?.targetSessionId);
+    const source = await getEditableNode(req, req.params.nodeId);
+    const targetSession = await getEditableSession(req, req.body?.targetSessionId);
     if (!source || !targetSession) return res.status(404).json({ error: "Source node or target session not found" });
     const targetParentId = nullableText(req.body?.targetParentId);
     if (targetParentId && !(await isNodeInSession(targetParentId, targetSession.id))) return res.status(400).json({ error: "Target parent is outside target session." });
@@ -623,7 +623,7 @@ router.post("/nodes/:nodeId/copy", async (req, res, next) => {
 
 router.patch("/items/:itemId", async (req, res, next) => {
   try {
-    const item = await getEditableItem(req.user, req.params.itemId);
+    const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
     await query(
       `update plans.plan_items set sets = $2, reps = $3, load = $4, description = $5, updated_at = now() where id = $1`,
@@ -635,7 +635,7 @@ router.patch("/items/:itemId", async (req, res, next) => {
 
 router.post("/items/:itemId/move", async (req, res, next) => {
   try {
-    const item = await getEditableItem(req.user, req.params.itemId);
+    const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
     const direction = text(req.body?.direction);
     if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: "Move direction is required." });
@@ -657,7 +657,7 @@ router.post("/items/:itemId/move", async (req, res, next) => {
 
 router.delete("/items/:itemId", async (req, res, next) => {
   try {
-    const item = await getEditableItem(req.user, req.params.itemId);
+    const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
     await query("delete from plans.plan_items where id = $1", [item.id]);
     return respondWithDraft(req, res, req.user, item.plan);
@@ -723,10 +723,10 @@ function wantsBatchSync(req, plan) {
 }
 
 async function respondWithDraft(req, res, user, plan, options = {}) {
-  const currentPlan = await getEditablePlan(user, plan.id);
+  const currentPlan = await getEditablePlan(req, plan.id);
   const targetPlan = currentPlan || plan;
   if (wantsBatchSync(req, targetPlan)) await syncBatchFromPlan(targetPlan, user);
-  const freshPlan = await getEditablePlan(user, targetPlan.id);
+  const freshPlan = await getEditablePlan(req, targetPlan.id);
   const draft = await buildDraft(freshPlan || targetPlan);
   if (options.status) return res.status(options.status).json(draft);
   return res.json(draft);
@@ -840,12 +840,12 @@ async function syncBatchFromPlan(sourcePlan, user) {
   }
 }
 
-async function applyEditDraft(user, draftPlan) {
+async function applyEditDraft(req, draftPlan) {
   let client;
   try {
     client = await pool.connect();
     await client.query("begin");
-    const source = await getEditablePlan(user, draftPlan.edit_source_plan_id);
+    const source = await getEditablePlan(req, draftPlan.edit_source_plan_id);
     if (!source) throw new Error("Original program not found or not editable.");
     const sourceDays = await client.query("select id from plans.plan_days where plan_id = $1", [source.id]);
     for (const day of sourceDays.rows) await deleteBlockTreeWithClient(client, day.id);
@@ -870,7 +870,7 @@ async function applyEditDraft(user, draftPlan) {
     await client.query("commit");
     client.release();
     client = null;
-    return await getEditablePlan(user, source.id);
+    return await getEditablePlan(req, source.id);
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -1277,7 +1277,7 @@ async function deleteNodeTree(nodeId) {
   await query("delete from plans.plan_nodes where id = $1", [nodeId]);
 }
 
-async function getEditablePlan(user, planId) {
+async function getEditablePlan(req, planId) {
   const result = await query(
     `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.visibility, p.is_template, p.status,
             p.source_type, p.start_date, p.duration_days, p.athlete_id as athlete_uuid, p.is_edit_draft, p.edit_source_plan_id,
@@ -1296,13 +1296,13 @@ async function getEditablePlan(user, planId) {
            where managed_athlete.id = p.athlete_id
              and ${athleteAccessPredicate("managed_athlete", "$2")}
          )
-       )`, [planId, user.id, canAccessAllAthletes(user)],
+       )`, [planId, req.user.id, canAccessAllAthletes(req)],
   );
   return result.rows[0] || null;
 }
 
-async function getCopySource(user, planId) {
-  if (!(await canAccessPlan(query, user, planId))) return null;
+async function getCopySource(req, planId) {
+  if (!(await canAccessPlan(query, req, planId))) return null;
   const result = await query(
     `select id, created_by_user_id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days, can_copy, can_edit_copy
      from plans.plans
@@ -1312,28 +1312,28 @@ async function getCopySource(user, planId) {
   return result.rows[0] || null;
 }
 
-async function requirePlan(user, planId, res) {
-  const plan = await getEditablePlan(user, planId);
+async function requirePlan(req, planId, res) {
+  const plan = await getEditablePlan(req, planId);
   if (!plan) { res.status(404).json({ error: "Draft program not found" }); return null; }
   return plan;
 }
 
-async function getEditableBlock(user, blockId) {
+async function getEditableBlock(req, blockId) {
   const result = await query("select pd.id, pd.plan_id from plans.plan_days pd where pd.id = $1", [blockId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(user, row.plan_id); return plan ? { id: row.id, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id); return plan ? { id: row.id, plan } : null;
 }
 
-async function getEditableSession(user, sessionId) {
+async function getEditableSession(req, sessionId) {
   const result = await query("select ps.id, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(user, row.plan_id); return plan ? { id: row.id, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id); return plan ? { id: row.id, plan } : null;
 }
 
-async function getEditableNode(user, nodeId) {
+async function getEditableNode(req, nodeId) {
   const result = await query("select pn.id, pn.plan_session_id, pn.parent_id, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1", [nodeId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(user, row.plan_id); return plan ? { ...row, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id); return plan ? { ...row, plan } : null;
 }
 
 async function getNodeAncestryMeta(node) {
@@ -1353,10 +1353,10 @@ async function getNodeAncestryMeta(node) {
   return chain;
 }
 
-async function getEditableItem(user, itemId) {
+async function getEditableItem(req, itemId) {
   const result = await query("select pi.id, pi.plan_node_id, pi.item_order, pd.plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pi.id = $1", [itemId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(user, row.plan_id); return plan ? { id: row.id, plan_node_id: row.plan_node_id, item_order: row.item_order, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id); return plan ? { id: row.id, plan_node_id: row.plan_node_id, item_order: row.item_order, plan } : null;
 }
 
 async function findAthlete(externalId) {

@@ -83,7 +83,10 @@ async function makeUser({ email, roleHint = "coach", passwordHash = "x" }) {
 }
 
 async function makeAthlete({ userId = null } = {}) {
-  const externalId = `t${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  // Keep the numeric portion short: GET /api/athletes sorts by casting
+  // digits-only(athlete_id) to a 32-bit int, so a long digit run (e.g. a raw
+  // Date.now() timestamp) overflows it.
+  const externalId = `t${Math.floor(Math.random() * 900000 + 100000)}`;
   const result = await query(
     `insert into public.athletes (athlete_id, source_external_id, first_name, last_name, full_name, display_name, user_id, is_active)
      values ($1, $1, 'Test', 'Athlete', 'Test Athlete', 'Test Athlete', $2, true)
