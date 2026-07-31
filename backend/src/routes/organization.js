@@ -19,7 +19,7 @@ router.get("/", async (req, res, next) => {
       loadTeams(req),
       loadManagedAthletes(req),
       loadUsers(req),
-      loadProgramAccessRequests(req.user),
+      loadProgramAccessRequests(req),
     ]);
     res.json({
       scope: req.user?.role_hint || "coach",
@@ -1035,7 +1035,15 @@ async function loadUsers(req) {
   return result.rows;
 }
 
-async function loadProgramAccessRequests(user) {
+// Takes the full req (not req.user) - canManageAthlete reads req.authz,
+// loaded once per request by attachAuthorizationContext. This previously
+// took req.user by mistake, so req.authz was undefined inside
+// canManageAthlete and any GET /organization request that actually had a
+// pending/decided program-access row to check crashed with a 500 (same
+// class of bug as the earlier resolveAthleteClubTeam fix, just in a
+// function Phase 3 never touched, so it stayed dormant until production
+// data happened to include a matching program_access row).
+async function loadProgramAccessRequests(req) {
   const result = await query(
     `select
        pa.id,
@@ -1089,7 +1097,7 @@ async function loadProgramAccessRequests(user) {
   );
   const visible = [];
   for (const row of result.rows) {
-    if (await canManageAthlete(user, row.athlete_id)) visible.push(row);
+    if (await canManageAthlete(req, row.athlete_id)) visible.push(row);
   }
   return visible;
 }
