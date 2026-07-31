@@ -76,8 +76,28 @@ async function makeAthlete({ clubId = null, teamId = null, userId = null } = {})
      returning id`,
     [externalId, clubId, teamId, userId],
   );
-  cleanupAthleteIds.add(result.rows[0].id);
-  return result.rows[0].id;
+  const athleteId = result.rows[0].id;
+  cleanupAthleteIds.add(athleteId);
+  // Authorization now comes from athlete_memberships (active rows), not the
+  // legacy club_id/team_id columns above - a fixture that only sets those
+  // columns would no longer be manageable by a club/team-scoped actor.
+  if (clubId) {
+    await query(
+      `insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status)
+       values ($1, $2, null, 'club', 'active')
+       on conflict (athlete_id, club_id) where status = 'active' and membership_type = 'club' do nothing`,
+      [athleteId, clubId],
+    );
+  }
+  if (teamId) {
+    await query(
+      `insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status)
+       values ($1, $2, $3, 'team', 'active')
+       on conflict (athlete_id, team_id) where status = 'active' and membership_type = 'team' do nothing`,
+      [athleteId, clubId, teamId],
+    );
+  }
+  return athleteId;
 }
 
 async function grantClubRole(userId, clubId, active = true) {
@@ -164,8 +184,12 @@ test("6. a team coach can manage their own team's athlete", async () => {
   await grantTeamRole(coach.id, teamX);
   const token = await createSession(coach.id);
 
-  const res = await api(`/api/organization/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
-  assert.equal(res.status, 200);
+  const res = await api(`/api/organization/athletes/${athlete}`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { fullName: "Role Test Updated" },
+  });
+  assert.equal(res.status, 200, "a team coach must be able to manage (edit) an athlete on their own team");
 });
 
 test("7. a team coach cannot manage a different team's athlete", async () => {
@@ -177,7 +201,11 @@ test("7. a team coach cannot manage a different team's athlete", async () => {
   await grantTeamRole(coach.id, teamX);
   const token = await createSession(coach.id);
 
-  const res = await api(`/api/organization/athletes/${athleteOnY}`, { method: "DELETE", cookie: cookieFor(token) });
+  const res = await api(`/api/organization/athletes/${athleteOnY}`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { fullName: "Should Not Update" },
+  });
   assert.equal(res.status, 403);
 });
 
@@ -300,6 +328,10 @@ test("17. an archived athlete profile keeps athleteWorkspace=true, and is flagge
   const athlete = await makeAthlete({ userId: athleteUser.id });
   const coach = await makeUser({ email: `archived-workspace-coach-${Date.now()}@test.local`, roleHint: "coach" });
   await grantCoachAthleteLink(coach.id, athlete);
+  // Whole-profile archiving is platform-admin only (see archive-profile) -
+  // a coach archiving their own relationship is a different, narrower action
+  // covered separately by the coach-relationship archive tests.
+  const admin = await makeUser({ email: `archived-workspace-admin-${Date.now()}@test.local`, roleHint: "platform_admin" });
 
   const coachToken = await createSession(coach.id);
   const before1 = await api("/api/organization", { cookie: cookieFor(coachToken) });
@@ -307,7 +339,8 @@ test("17. an archived athlete profile keeps athleteWorkspace=true, and is flagge
   assert.ok(beforeRow, "coach should see the athlete while active");
   assert.equal(beforeRow.is_active, true);
 
-  const archiveRes = await api(`/api/organization/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(coachToken) });
+  const adminToken = await createSession(admin.id);
+  const archiveRes = await api(`/api/organization/athletes/${athlete}/archive-profile`, { method: "DELETE", cookie: cookieFor(adminToken) });
   assert.equal(archiveRes.status, 200);
 
   const athleteToken = await createSession(athleteUser.id);

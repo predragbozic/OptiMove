@@ -1350,6 +1350,11 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   border-top: 0;
 }
 
+.organization-table-row.is-archived {
+  opacity: 0.72;
+  background: #f7f8fa;
+}
+
 .organization-table-head {
   background: var(--surface-soft);
   color: var(--muted);

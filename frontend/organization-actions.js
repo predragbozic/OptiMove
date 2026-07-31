@@ -120,14 +120,30 @@ export function findOrganizationRow(type, id) {
   return (rows || []).find((row) => String(row.id) === String(id)) || null;
 }
 
+// Athlete rows no longer go through this generic delete - archiving an
+// athlete always means archiving ONE specific relationship (coach/team/club)
+// or, for a platform admin only, the whole profile, each with its own
+// dedicated action below. This remains for club/team/user, which are
+// simple single-resource soft-deletes.
 export async function deleteOrganizationRow(type, id, { loadAthletes, renderOrganizationPanel }) {
-  const labels = { club: "club", team: "team", athlete: "athlete", user: "user" };
+  const labels = { club: "club", team: "team", user: "user" };
   if (!id || !labels[type]) return;
-  const confirmMessage = type === "athlete"
-    ? "Archive this athlete? All plans and history are kept, and you can restore them from Show archived at any time."
-    : `Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`;
+  const confirmMessage = `Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`;
   if (!window.confirm(confirmMessage)) return;
   await api(`/api/organization/${type}s/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await loadAthletes();
+  if (state.activeTab === "organization") await renderOrganizationPanel();
+}
+
+async function archiveAthleteRelationship(endpoint, confirmMessage, { loadAthletes, renderOrganizationPanel }) {
+  if (!window.confirm(confirmMessage)) return;
+  await api(endpoint, { method: "DELETE" });
+  await loadAthletes();
+  if (state.activeTab === "organization") await renderOrganizationPanel();
+}
+
+async function restoreAthleteRelationship(endpoint, { loadAthletes, renderOrganizationPanel }) {
+  await api(endpoint, { method: "PUT" });
   await loadAthletes();
   if (state.activeTab === "organization") await renderOrganizationPanel();
 }
@@ -208,16 +224,135 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
-  if (type === "organization-restore-athlete") {
+  if (type === "organization-toggle-archived-team-members") {
+    state.organization.showArchivedTeamMembers = !state.organization.showArchivedTeamMembers;
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-toggle-archived-club-members") {
+    state.organization.showArchivedClubMembers = !state.organization.showArchivedClubMembers;
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-archive-coach-relationship") {
     const athleteId = action.dataset.athleteId;
     if (!athleteId) return true;
     action.disabled = true;
     try {
-      await api(`/api/organization/athletes/${encodeURIComponent(athleteId)}/restore`, { method: "PUT" });
-      await loadAthletes();
-      if (state.activeTab === "organization") await renderOrganizationPanel();
+      await archiveAthleteRelationship(
+        `/api/organization/athletes/${encodeURIComponent(athleteId)}/coach-relationship`,
+        "Archive this athlete from your own athletes list? This only ends YOUR private-coach relationship - their login, history, and any other coach/team/club relationships stay exactly as they are. You can restore it later from Show archived.",
+        { loadAthletes, renderOrganizationPanel },
+      );
     } catch (error) {
-      window.alert(error?.message || "Could not restore this athlete.");
+      window.alert(error?.message || "Could not archive this relationship.");
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
+  if (type === "organization-restore-coach-relationship") {
+    const athleteId = action.dataset.athleteId;
+    if (!athleteId) return true;
+    action.disabled = true;
+    try {
+      await restoreAthleteRelationship(`/api/organization/athletes/${encodeURIComponent(athleteId)}/coach-relationship/restore`, { loadAthletes, renderOrganizationPanel });
+    } catch (error) {
+      window.alert(error?.message || "Could not restore this relationship.");
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
+  if (type === "organization-archive-team-membership") {
+    const athleteId = action.dataset.athleteId;
+    const teamId = action.dataset.teamId;
+    if (!athleteId || !teamId) return true;
+    action.disabled = true;
+    try {
+      await archiveAthleteRelationship(
+        `/api/organization/teams/${encodeURIComponent(teamId)}/athletes/${encodeURIComponent(athleteId)}`,
+        "Remove this athlete from the team? This only ends their membership in THIS team - their login, history, and any other teams/clubs/coaches stay exactly as they are. You can restore it later from Show archived.",
+        { loadAthletes, renderOrganizationPanel },
+      );
+    } catch (error) {
+      window.alert(error?.message || "Could not remove this athlete from the team.");
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
+  if (type === "organization-restore-team-membership") {
+    const athleteId = action.dataset.athleteId;
+    const teamId = action.dataset.teamId;
+    if (!athleteId || !teamId) return true;
+    action.disabled = true;
+    try {
+      await restoreAthleteRelationship(`/api/organization/teams/${encodeURIComponent(teamId)}/athletes/${encodeURIComponent(athleteId)}/restore`, { loadAthletes, renderOrganizationPanel });
+    } catch (error) {
+      window.alert(error?.message || "Could not restore this team membership.");
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
+  if (type === "organization-archive-club-membership") {
+    const athleteId = action.dataset.athleteId;
+    const clubId = action.dataset.clubId;
+    if (!athleteId || !clubId) return true;
+    action.disabled = true;
+    try {
+      await archiveAthleteRelationship(
+        `/api/organization/clubs/${encodeURIComponent(clubId)}/athletes/${encodeURIComponent(athleteId)}`,
+        "Archive this athlete from the club? This ends their membership in THIS club (and any active team memberships within it) - their login, history, other clubs, and any private coaches stay exactly as they are. You can restore the club membership later from Show archived.",
+        { loadAthletes, renderOrganizationPanel },
+      );
+    } catch (error) {
+      window.alert(error?.message || "Could not archive this club membership.");
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
+  if (type === "organization-restore-club-membership") {
+    const athleteId = action.dataset.athleteId;
+    const clubId = action.dataset.clubId;
+    if (!athleteId || !clubId) return true;
+    action.disabled = true;
+    try {
+      await restoreAthleteRelationship(`/api/organization/clubs/${encodeURIComponent(clubId)}/athletes/${encodeURIComponent(athleteId)}/restore`, { loadAthletes, renderOrganizationPanel });
+    } catch (error) {
+      window.alert(error?.message || "Could not restore this club membership.");
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
+  if (type === "organization-archive-profile") {
+    const athleteId = action.dataset.athleteId;
+    if (!athleteId) return true;
+    action.disabled = true;
+    try {
+      await archiveAthleteRelationship(
+        `/api/organization/athletes/${encodeURIComponent(athleteId)}/archive-profile`,
+        "Archive this athlete's WHOLE sporting profile? This hides it from active lists platform-wide. It does NOT disable their login, delete sessions, or end any coach/team/club relationship - use the specific relationship actions for that. This can be restored later.",
+        { loadAthletes, renderOrganizationPanel },
+      );
+    } catch (error) {
+      window.alert(error?.message || "Could not archive this profile.");
+    } finally {
+      action.disabled = false;
+    }
+    return true;
+  }
+  if (type === "organization-restore-profile") {
+    const athleteId = action.dataset.athleteId;
+    if (!athleteId) return true;
+    action.disabled = true;
+    try {
+      await restoreAthleteRelationship(`/api/organization/athletes/${encodeURIComponent(athleteId)}/restore-profile`, { loadAthletes, renderOrganizationPanel });
+    } catch (error) {
+      window.alert(error?.message || "Could not restore this profile.");
     } finally {
       action.disabled = false;
     }

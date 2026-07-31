@@ -32,3 +32,14 @@ test("the club_admin backfill migration is registered in the deploy migration ru
     assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
   }
 });
+
+test("the athlete_memberships migration is registered in the deploy migration runner, after create_access_schema.sql", () => {
+  const membershipsIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260801_athlete_memberships.sql");
+  assert.notEqual(membershipsIndex, -1, "migrationPaths must include the athlete_memberships migration file");
+
+  const accessSchemaIndex = migrationPaths.findIndex((p) => path.basename(p) === "create_access_schema.sql");
+  assert.ok(
+    membershipsIndex > accessSchemaIndex,
+    "the athlete_memberships migration depends on athletes/clubs/teams/users from create_access_schema.sql and must run after it",
+  );
+});

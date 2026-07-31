@@ -172,7 +172,7 @@ const admin = await makeUser({ email: `admin-${Date.now()}@test.local`, roleHint
   const athlete = await makeAthlete({ userId: athleteUser.id });
 
   const adminToken = await createSession(admin.id);
-  const del = await api(`/api/organization/athletes/${athlete.id}`, { method: "DELETE", cookie: sessionCookieFor(adminToken) });
+  const del = await api(`/api/organization/athletes/${athlete.id}/archive-profile`, { method: "DELETE", cookie: sessionCookieFor(adminToken) });
   assert.equal(del.status, 200);
 
   const athleteAfter = await getAthlete(athlete.id);
@@ -225,14 +225,14 @@ const admin = await makeUser({ email: `admin3-${Date.now()}@test.local`, roleHin
     cookie: sessionCookieFor(adminToken),
     body: { active: false },
   });
-  await api(`/api/organization/athletes/${athlete.id}`, { method: "DELETE", cookie: sessionCookieFor(adminToken) });
+  await api(`/api/organization/athletes/${athlete.id}/archive-profile`, { method: "DELETE", cookie: sessionCookieFor(adminToken) });
 
   const archived = await getAthlete(athlete.id);
   assert.equal(archived.is_active, false);
   const userWhileArchived = await getUser(athleteUser.email);
   assert.equal(userWhileArchived.is_active, false, "login was explicitly disabled before archiving, should still be disabled");
 
-  const restore = await api(`/api/organization/athletes/${athlete.id}/restore`, { method: "PUT", cookie: sessionCookieFor(adminToken) });
+  const restore = await api(`/api/organization/athletes/${athlete.id}/restore-profile`, { method: "PUT", cookie: sessionCookieFor(adminToken) });
   assert.equal(restore.status, 200);
 
   const restored = await getAthlete(athlete.id);

@@ -151,20 +151,32 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
                     and coach_rel.relationship_type = 'coach'
                     and coach_rel.is_active = true
                 ))
+                -- Team/club library visibility is keyed off the viewer athlete's
+                -- ACTIVE athlete_memberships rows, not the legacy
+                -- viewer_athlete.club_id/team_id pointer - an athlete can hold
+                -- several active team/club memberships at once, and an archived
+                -- one must never keep unlocking a scope it no longer belongs to.
                 or (coalesce(p.library_scope, 'my') = 'team' and coalesce(ala.can_view_team_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('team', 'club', 'public') and exists (
                   select 1
                   from public.user_team_roles creator_team
-                  where creator_team.team_id = viewer_athlete.team_id
-                    and creator_team.user_id = p.created_by_user_id
+                  join public.athlete_memberships viewer_team_membership
+                    on viewer_team_membership.team_id = creator_team.team_id
+                    and viewer_team_membership.membership_type = 'team'
+                    and viewer_team_membership.status = 'active'
+                  where creator_team.user_id = p.created_by_user_id
                     and creator_team.is_active = true
+                    and viewer_team_membership.athlete_id = viewer_athlete.id
                 ))
                 or (coalesce(p.library_scope, 'my') = 'club' and coalesce(ala.can_view_club_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility in ('club', 'public') and exists (
                   select 1
                   from public.user_club_roles creator_club
-                  left join public.teams viewer_team on viewer_team.id = viewer_athlete.team_id
+                  join public.athlete_memberships viewer_club_membership
+                    on viewer_club_membership.club_id = creator_club.club_id
+                    and viewer_club_membership.membership_type = 'club'
+                    and viewer_club_membership.status = 'active'
                   where creator_club.user_id = p.created_by_user_id
                     and creator_club.is_active = true
-                    and (creator_club.club_id = viewer_athlete.club_id or creator_club.club_id = viewer_team.club_id)
+                    and viewer_club_membership.athlete_id = viewer_athlete.id
                 ))
                 or (coalesce(p.library_scope, 'my') = 'optimove' and coalesce(ala.can_view_optimove_library, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
                 or (coalesce(p.library_scope, 'my') = 'marketplace' and coalesce(ala.can_view_marketplace, false) and coalesce(p.athlete_can_view_directly, false) and p.visibility = 'public')
@@ -179,6 +191,15 @@ export async function canAccessPlan(query, user, planId, { editable = false } = 
   return result.rowCount > 0;
 }
 
+// Deliberately does NOT read athleteAlias.club_id/team_id - those are legacy
+// "primary pointer" columns only (see athlete_memberships migration), and an
+// athlete can hold several active club/team memberships at once, which a
+// single FK column can never represent. Active access always comes from a
+// real, currently-active row: a direct login (athletes.user_id), an active
+// private-coach relationship (user_athletes), or an active club/team
+// membership (athlete_memberships) matching one of the viewer's own
+// club/team roles. Archived memberships never grant access - the EXISTS
+// checks below are always scoped to status = 'active'.
 export function athleteAccessPredicate(athleteAlias = "a", userParam = "$1") {
   return `(
     ${athleteAlias}.user_id = ${userParam}
@@ -192,17 +213,24 @@ export function athleteAccessPredicate(athleteAlias = "a", userParam = "$1") {
     or exists (
       select 1
       from public.user_team_roles utr
+      join public.athlete_memberships tm
+        on tm.team_id = utr.team_id
+        and tm.membership_type = 'team'
+        and tm.status = 'active'
       where utr.user_id = ${userParam}
         and utr.is_active = true
-        and utr.team_id = ${athleteAlias}.team_id
+        and tm.athlete_id = ${athleteAlias}.id
     )
     or exists (
       select 1
       from public.user_club_roles ucr
-      left join public.teams athlete_team on athlete_team.id = ${athleteAlias}.team_id
+      join public.athlete_memberships cm
+        on cm.club_id = ucr.club_id
+        and cm.membership_type = 'club'
+        and cm.status = 'active'
       where ucr.user_id = ${userParam}
         and ucr.is_active = true
-        and (ucr.club_id = ${athleteAlias}.club_id or ucr.club_id = athlete_team.club_id)
+        and cm.athlete_id = ${athleteAlias}.id
     )
   )`;
 }
