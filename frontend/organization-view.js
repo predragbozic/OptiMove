@@ -192,15 +192,22 @@ export function renderOrganizationBrowser(data) {
   const clubs = data.clubs || [];
   const teams = data.teams || [];
   const isPlatformAdmin = Boolean(data.isPlatformAdmin);
+  // Every athlete row the backend allowed this viewer to see at all - this
+  // INCLUDES archived-only rows (returned purely so Show archived/Restore
+  // have something to work with). Team/club archived lists and the two
+  // "archived because of me" lists below must all be computed from this,
+  // never from the active-only list - otherwise an athlete whose only tie
+  // to a specific team/club is archived would vanish from that team/club's
+  // "Show archived" the moment it stopped being active.
+  const allReturnedAthletes = data.athletes || [];
   // is_active alone is the PROFILE flag - it says nothing about whether this
-  // viewer's own tie to the athlete is still active. loadManagedAthletes can
-  // return a row whose only remaining tie is an ARCHIVED relationship
-  // (purely so Show archived/Restore have something to work with), and that
-  // row must never leak into the normal active list - has_active_access is
-  // the flag computed server-side for exactly this decision.
-  const athletes = (data.athletes || []).filter((athlete) => athlete.is_active !== false && athlete.has_active_access);
-  const myArchivedCoachRelationships = (data.athletes || []).filter((athlete) => athlete.has_my_archived_coach_relationship);
-  const archivedProfiles = isPlatformAdmin ? (data.athletes || []).filter((athlete) => athlete.is_active === false) : [];
+  // viewer's own tie to the athlete is still active. has_active_access is
+  // the flag computed server-side for that decision. Only THIS list may
+  // feed the active roster, the team/club "currently on this roster" rows,
+  // Access control, and Invite - never allReturnedAthletes directly.
+  const activeAthletes = allReturnedAthletes.filter((athlete) => athlete.is_active !== false && athlete.has_active_access);
+  const myArchivedCoachRelationships = allReturnedAthletes.filter((athlete) => athlete.has_my_archived_coach_relationship);
+  const archivedProfiles = isPlatformAdmin ? allReturnedAthletes.filter((athlete) => athlete.is_active === false) : [];
   const users = data.users || [];
   const section = state.organization.section || "overview";
   const selectedClub = clubs.find((club) => String(club.id) === String(state.organization.selectedClubId));
@@ -209,17 +216,17 @@ export function renderOrganizationBrowser(data) {
     ? teams.filter((team) => String(team.club_id) === String(state.organization.selectedClubId))
     : teams;
   const visibleAthletes = state.organization.selectedTeamId
-    ? athletes.filter((athlete) => hasActiveMembership(athlete, { teamId: state.organization.selectedTeamId }))
+    ? activeAthletes.filter((athlete) => hasActiveMembership(athlete, { teamId: state.organization.selectedTeamId }))
     : state.organization.selectedClubId
-      ? athletes.filter((athlete) => hasActiveMembership(athlete, { clubId: state.organization.selectedClubId }))
-      : athletes;
+      ? activeAthletes.filter((athlete) => hasActiveMembership(athlete, { clubId: state.organization.selectedClubId }))
+      : activeAthletes;
   return `
     <section class="organization-browser">
       <div class="organization-browser-head">
         <div>
           <p class="eyebrow">Organization browser</p>
           <h3>${escapeHtml(selectedTeam?.name || selectedClub?.name || "All accessible organization")}</h3>
-          <p class="muted">${escapeHtml(selectedTeam ? `${visibleAthletes.length} athletes in team` : selectedClub ? `${visibleTeams.length} teams - ${visibleAthletes.length} athletes` : `${clubs.length} clubs - ${teams.length} teams - ${athletes.length} athletes`)}</p>
+          <p class="muted">${escapeHtml(selectedTeam ? `${visibleAthletes.length} athletes in team` : selectedClub ? `${visibleTeams.length} teams - ${visibleAthletes.length} athletes` : `${clubs.length} clubs - ${teams.length} teams - ${activeAthletes.length} athletes`)}</p>
         </div>
         <div class="organization-browser-actions">
           ${section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : ""}
@@ -233,15 +240,15 @@ export function renderOrganizationBrowser(data) {
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes"
           ? selectedTeam
-            ? renderTeamAthleteTable(selectedTeam, visibleAthletes, athletes)
+            ? renderTeamAthleteTable(selectedTeam, visibleAthletes, allReturnedAthletes)
             : selectedClub
-              ? renderClubAthleteList(selectedClub, visibleAthletes, athletes)
+              ? renderClubAthleteList(selectedClub, visibleAthletes, allReturnedAthletes)
               : renderOrganizationList("Athletes", visibleAthletes, "athlete", { isPlatformAdmin })
           : ""}
       </section>
       ${section === "athletes" && !selectedClub && !selectedTeam && state.organization.showArchivedAthletes ? renderArchivedAthletesList(myArchivedCoachRelationships, archivedProfiles, isPlatformAdmin) : ""}
       ${section === "athletes" && state.organization.accessOpen ? renderAthleteAccessModal(visibleAthletes) : ""}
-      ${state.organizationInvite.open ? renderAthleteInviteModal(athletes) : ""}
+      ${state.organizationInvite.open ? renderAthleteInviteModal(activeAthletes) : ""}
     </section>
   `;
 }
