@@ -3,23 +3,19 @@
 // old model where a single flat users.role_hint string doubled as both the
 // UI's "which screen do I land on" hint AND the actual security boundary.
 //
-// role_hint remains useful as a UI default (which workspace to show first
-// after login), but it is NEVER, on its own, sufficient to grant coach or
-// admin capability - a generic "user" role_hint must not slip into coach
-// routes just because no one bothered to set a more specific value, and an
+// role_hint remains a legacy UI-preference column (which workspace to show
+// first after login), but it is NEVER read for authorization here - platform
+// admin and independent coach are real, independently-managed rows in
+// public.user_global_roles (Phase 4 PR 1), just like club/team roles already
+// are. A generic "user" role_hint must not slip into coach routes, and an
 // "athlete" role_hint must not by itself PREVENT someone from also holding
-// real coach/admin capability via user_club_roles/user_team_roles/
-// user_athletes. Multiple roles on one account are the normal case, not an
-// edge case.
+// real coach/admin capability via user_global_roles/user_club_roles/
+// user_team_roles/user_athletes. Multiple roles on one account are the
+// normal case, not an edge case - including holding BOTH platform_admin AND
+// independent_coach at once, which a single role_hint string could never
+// represent.
 import { query } from "./db.js";
-import { isPlatformAdmin, normalizeRole } from "./access.js";
-
-// role_hint values that represent a coach-ish job function on their own,
-// before any specific club/team scope is assigned. Deliberately excludes
-// "user" (the generic default - grants nothing) and "athlete" (grants
-// nothing by itself; real athlete capability comes from an actual linked
-// athletes row, checked separately below).
-const INDEPENDENT_COACH_ROLE_HINTS = new Set(["coach", "independent_coach", "fitness_coach", "trainer"]);
+import { normalizeRole } from "./access.js";
 
 export async function loadAuthorizationContext(user) {
   if (!user) {
@@ -37,9 +33,12 @@ export async function loadAuthorizationContext(user) {
   }
 
   const roleHint = normalizeRole(user.role_hint);
-  const platform = isPlatformAdmin(user);
 
-  const [clubRolesResult, teamRolesResult, athleteResult] = await Promise.all([
+  const [globalRolesResult, clubRolesResult, teamRolesResult, athleteResult] = await Promise.all([
+    query(
+      `select role from public.user_global_roles where user_id = $1 and is_active = true`,
+      [user.id],
+    ),
     query(
       `select club_id, role from public.user_club_roles where user_id = $1 and is_active = true`,
       [user.id],
@@ -60,6 +59,8 @@ export async function loadAuthorizationContext(user) {
     ),
   ]);
 
+  const globalRoles = new Set(globalRolesResult.rows.map((row) => row.role));
+
   const clubRoles = clubRolesResult.rows.map((row) => ({ clubId: row.club_id, role: row.role }));
   const clubAdminClubIds = clubRoles.filter((r) => r.role === "club_admin").map((r) => r.clubId);
 
@@ -77,11 +78,11 @@ export async function loadAuthorizationContext(user) {
   return {
     userId: user.id,
     roleHint,
-    platformRoles: platform ? [roleHint] : [],
+    platformRoles: globalRoles.has("platform_admin") ? ["platform_admin"] : [],
     clubRoles,
     teamRoles: teamRolesResult.rows.map((row) => ({ teamId: row.team_id, role: row.role })),
     managedTeamIds,
-    isIndependentCoach: INDEPENDENT_COACH_ROLE_HINTS.has(roleHint),
+    isIndependentCoach: globalRoles.has("independent_coach"),
     isAthlete: athleteResult.rows.length > 0,
     athleteId: athleteResult.rows[0]?.id || null,
   };

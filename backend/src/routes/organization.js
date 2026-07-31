@@ -39,6 +39,20 @@ router.get("/", async (req, res, next) => {
   }
 });
 
+// Mirrors PLATFORM_ROLES / INDEPENDENT_COACH_ROLE_HINTS (access.js/authz.js)
+// and the 20260802_user_global_roles.sql backfill mapping - kept as a
+// separate literal here (rather than imported) because this is the one
+// place a NEW account's role_hint choice must be translated into a real
+// user_global_roles row at creation time, same set, same meaning.
+const PLATFORM_ADMIN_ROLE_HINTS = new Set(["admin", "platform_admin", "general_admin"]);
+const INDEPENDENT_COACH_ROLE_HINTS = new Set(["coach", "independent_coach", "fitness_coach", "trainer"]);
+
+function globalRoleForRoleHint(roleHint) {
+  if (PLATFORM_ADMIN_ROLE_HINTS.has(roleHint)) return "platform_admin";
+  if (INDEPENDENT_COACH_ROLE_HINTS.has(roleHint)) return "independent_coach";
+  return null;
+}
+
 router.post("/users", async (req, res, next) => {
   try {
     // Frontend hides this form from anyone without club/platform scope, but
@@ -54,15 +68,40 @@ router.post("/users", async (req, res, next) => {
     if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
     if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters." });
     const nameParts = splitName(fullName || email);
-    const result = await query(
-      `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
-       values ($1, $2, $3, $4, $5, $5, $6, $7, true)
-       on conflict (email) do nothing
-       returning id, email, full_name, display_name, role_hint`,
-      [email, nameParts.firstName, nameParts.lastName, hashPassword(password), fullName || email, roleHint, req.user.id],
-    );
-    if (!result.rows[0]) return res.status(409).json({ error: "A user with this email already exists." });
-    res.status(201).json({ user: result.rows[0] });
+    const globalRole = globalRoleForRoleHint(roleHint);
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const result = await client.query(
+        `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, created_by_user_id, is_active)
+         values ($1, $2, $3, $4, $5, $5, $6, $7, true)
+         on conflict (email) do nothing
+         returning id, email, full_name, display_name, role_hint`,
+        [email, nameParts.firstName, nameParts.lastName, hashPassword(password), fullName || email, roleHint, req.user.id],
+      );
+      if (!result.rows[0]) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "A user with this email already exists." });
+      }
+      // Written in the SAME transaction as the users row - there must never
+      // be a moment where a platform_admin/independent_coach account exists
+      // without its matching real user_global_roles row (or vice versa).
+      if (globalRole) {
+        await client.query(
+          `insert into public.user_global_roles (user_id, role, is_active, granted_by_user_id)
+           values ($1, $2, true, $3)
+           on conflict (user_id, role) do update set is_active = true, updated_at = now()`,
+          [result.rows[0].id, globalRole, req.user.id],
+        );
+      }
+      await client.query("commit");
+      res.status(201).json({ user: result.rows[0] });
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     next(error);
   }
