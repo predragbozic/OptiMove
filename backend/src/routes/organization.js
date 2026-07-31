@@ -1245,15 +1245,14 @@ async function loadManagedAthletes(req) {
        -- capability, so the frontend can show a locked "multi-role" state
        -- instead of a plain toggle (see PUT /athletes/:id/login-status,
        -- which independently re-checks this server-side regardless of what
-       -- the client renders). Role_hint list here mirrors access.js's
-       -- PLATFORM_ROLES + CLUB_ROLES + TEAM_ROLES + COACH_ROLES sets.
+       -- the client renders). Mirrors that same endpoint's targetAuthz check
+       -- (platformRoles/isIndependentCoach via user_global_roles, plus
+       -- clubRoles/teamRoles) exactly - never role_hint, which can now
+       -- disagree with reality in both directions (a role_hint='athlete'
+       -- account can genuinely hold a real staff role, and a stale staff
+       -- role_hint with no matching row grants nothing).
        case when a.user_id is null then false else (
-         coalesce(u.role_hint, '') in (
-           'admin', 'platform_admin', 'general_admin',
-           'club_admin', 'club_manager',
-           'team_admin', 'team_coach', 'team_trainer',
-           'coach', 'independent_coach', 'fitness_coach', 'trainer'
-         )
+         exists (select 1 from public.user_global_roles ugr4 where ugr4.user_id = a.user_id and ugr4.is_active = true)
          or exists (select 1 from public.user_club_roles ucr4 where ucr4.user_id = a.user_id and ucr4.is_active = true)
          or exists (select 1 from public.user_team_roles utr4 where utr4.user_id = a.user_id and utr4.is_active = true)
        ) end as login_is_multi_role,

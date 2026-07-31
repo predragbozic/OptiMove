@@ -1,19 +1,22 @@
 // Centralized authorization: loads a user's real roles/scopes once per
 // request and derives every permission decision from that, instead of the
-// old model where a single flat users.role_hint string doubled as both the
-// UI's "which screen do I land on" hint AND the actual security boundary.
+// old model where a single flat users.role_hint string doubled as both a UI
+// hint and the actual security boundary.
 //
-// role_hint remains a legacy UI-preference column (which workspace to show
-// first after login), but it is NEVER read for authorization here - platform
-// admin and independent coach are real, independently-managed rows in
-// public.user_global_roles (Phase 4 PR 1), just like club/team roles already
-// are. A generic "user" role_hint must not slip into coach routes, and an
-// "athlete" role_hint must not by itself PREVENT someone from also holding
-// real coach/admin capability via user_global_roles/user_club_roles/
-// user_team_roles/user_athletes. Multiple roles on one account are the
-// normal case, not an edge case - including holding BOTH platform_admin AND
-// independent_coach at once, which a single role_hint string could never
-// represent.
+// role_hint is a TEMPORARY legacy column, kept only so old call sites and
+// the current UI don't break. It is NEVER read for authorization here -
+// platform admin and independent coach are real, independently-managed rows
+// in public.user_global_roles (Phase 4 PR 1), just like club/team roles
+// already are. It is also not the workspace-selection mechanism: a
+// dedicated preference (e.g. a default_workspace field) will replace its
+// remaining UI-default use in a later phase - do not start writing a user's
+// chosen workspace back into role_hint in the meantime. A generic "user"
+// role_hint must not slip into coach routes, and an "athlete" role_hint must
+// not by itself PREVENT someone from also holding real coach/admin
+// capability via user_global_roles/user_club_roles/user_team_roles/
+// user_athletes. Multiple roles on one account are the normal case, not an
+// edge case - including holding BOTH platform_admin AND independent_coach at
+// once, which a single role_hint string could never represent.
 import { query } from "./db.js";
 import { normalizeRole } from "./access.js";
 

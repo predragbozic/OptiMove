@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { query } from "../db.js";
-import { canAccessAllAthletes, canAccessAthlete, isAthlete, isClubAdmin, isTeamCoach } from "../access.js";
+import { canAccessAllAthletes, canAccessAthlete, isAthlete } from "../access.js";
 import { isPlatformAdministrator } from "../authz.js";
 import { createNotification } from "../notifications.js";
 import {
@@ -705,35 +705,21 @@ async function resolveProgramMetadataPolicy(req, requested) {
   };
 }
 
-async function editableLibraryScopesForUser(req) {
-  const user = req.user;
+// Fully req.authz-based now - platform_admin is authoritative via
+// public.user_global_roles, and club/team scope comes from req.authz's
+// real, already-loaded user_club_roles/user_team_roles rows (see
+// attachAuthorizationContext). role_hint is never consulted: a role_hint
+// string with no matching active scoped row must unlock nothing here.
+function editableLibraryScopesForUser(req) {
   const scopes = new Set(["workspace", "my"]);
-  // platform_admin is now authoritative via public.user_global_roles (see
-  // req.authz) - role_hint alone must never unlock every library scope here.
-  // isClubAdmin/isTeamCoach below are unrelated role_hint checks pre-dating
-  // this PR's scope (club/team roles already have their own real tables via
-  // authz.js elsewhere) and are left as-is.
   if (isPlatformAdministrator(req.authz)) return new Set(["workspace", "my", "team", "club", "optimove", "marketplace"]);
-  if (isClubAdmin(user)) {
+  if (req.authz.clubRoles.length > 0) {
     scopes.add("team");
     scopes.add("club");
     return scopes;
   }
-  if (isTeamCoach(user) || await userHasActiveTeam(user)) scopes.add("team");
+  if (req.authz.teamRoles.length > 0 || req.authz.managedTeamIds.length > 0) scopes.add("team");
   return scopes;
-}
-
-async function userHasActiveTeam(user) {
-  if (!user?.id) return false;
-  const result = await query(
-    `select 1
-     from public.user_team_roles
-     where user_id = $1
-       and is_active = true
-     limit 1`,
-    [user.id],
-  );
-  return result.rowCount > 0;
 }
 
 function visibilityForScope(scope) {

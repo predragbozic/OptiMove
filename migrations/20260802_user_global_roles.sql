@@ -1,9 +1,11 @@
 -- Phase 4 PR 1: give platform_admin and independent_coach a real,
 -- independently-managed home instead of a single-valued users.role_hint
--- string. A user_global_roles row is authoritative; role_hint remains a
--- legacy column used only as a UI "which screen did they last pick"
--- preference (never read for authorization after this migration lands -
--- see backend/src/authz.js) and is left completely untouched here.
+-- string. A user_global_roles row is authoritative; role_hint is a
+-- TEMPORARY legacy column kept only so old call sites and the current UI
+-- don't break (never read for authorization after this migration lands -
+-- see backend/src/authz.js). It is not the workspace-selection mechanism
+-- either - a dedicated preference field will replace its remaining UI-default
+-- use in a later phase. This migration leaves role_hint completely untouched.
 --
 -- This lets one account hold BOTH platform_admin AND independent_coach at
 -- once (structurally impossible with a single role_hint string), and lets
