@@ -446,7 +446,10 @@ router.get("/:planId/reviews", async (req, res, next) => {
 
 router.get("/:planId/access-requests", async (req, res, next) => {
   try {
-    if (req.authz?.isAthlete) return res.status(403).json({ error: "Coach access required." });
+    // Coach-only means "has coach capability", not "lacks athlete identity" -
+    // a multi-role athlete+coach account must still pass here. Never gate on
+    // the presence of athleteWorkspace/isAthlete.
+    if (!req.authz?.capabilities?.coachWorkspace) return res.status(403).json({ error: "Coach access required." });
     const result = await query(
       `select distinct
          pa.id,
@@ -502,7 +505,10 @@ router.get("/:planId/access-requests", async (req, res, next) => {
 
 router.post("/:planId/assignments", async (req, res, next) => {
   try {
-    if (req.authz?.isAthlete) return res.status(403).json({ error: "Coach access required." });
+    // Coach-only means "has coach capability", not "lacks athlete identity" -
+    // a multi-role athlete+coach account must still pass here. Never gate on
+    // the presence of athleteWorkspace/isAthlete.
+    if (!req.authz?.capabilities?.coachWorkspace) return res.status(403).json({ error: "Coach access required." });
     const plan = await loadAssignableTemplate(req, req.params.planId);
     if (!plan) return res.status(404).json({ error: "Template not found." });
     if (plan.can_assign_to_athlete === false) return res.status(403).json({ error: "This program cannot be assigned." });

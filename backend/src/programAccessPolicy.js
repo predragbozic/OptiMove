@@ -78,6 +78,20 @@ export async function needsTemplateApproval(query, req, summary, planId) {
   if (summary?.plan_type !== "program" || summary?.is_template !== true) return false;
   if (await hasActiveProgramAccess(query, req.user, planId)) return false;
 
+  // The approval workflow exists to gate OTHER users' access to this
+  // content, not the creator's own view of it (or a platform admin's full
+  // bypass). A multi-role account that also happens to be an athlete must
+  // never be blocked from its own coach-side access by its own athlete-side
+  // approval settings.
+  if (req?.authz?.capabilities?.coachWorkspace) {
+    if (canAccessAllAthletes(req)) return false;
+    const ownership = await query(
+      `select 1 from plans.plans where id = $1 and created_by_user_id = $2 limit 1`,
+      [planId, req.user.id],
+    );
+    if (ownership.rows[0]) return false;
+  }
+
   const athleteAccess = await loadAthleteLibraryAccess(query, req);
   return Boolean(athleteAccess) && (summary?.requires_approval === true || athleteAccess.require_approval === true);
 }
@@ -99,7 +113,11 @@ export async function requireUsedProgramAccess(query, user, planId) {
 
 export async function canUseTemplate(query, req, planId) {
   const user = req.user;
-  if (!req?.authz?.isAthlete) {
+  // Runs whenever the account has coach/platform capability, regardless of
+  // whether it's ALSO an athlete - a multi-role account must get the union
+  // of both, not one or the other. If this branch doesn't grant access, the
+  // athlete-scope checks below still run normally.
+  if (req?.authz?.capabilities?.coachWorkspace) {
     const staffResult = await query(
       `select 1
        from plans.plans p

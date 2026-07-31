@@ -12,12 +12,19 @@ import { createSession, hashPassword } from "../src/auth.js";
 // athletes.user_id) may. These tests build fixtures with a role_hint string
 // deliberately DISAGREEING with the account's real rows, to prove the app
 // follows the real rows every time.
+//
+// A second, related invariant covered below: "coach-only" must mean "has
+// coach capability" (req.authz.capabilities.coachWorkspace), never "lacks
+// athlete identity". A multi-role account (athlete + coach/admin) must get
+// the full union of its real capabilities, not have its coach access
+// switched off just because it also happens to be an athlete.
 
 let server;
 let baseUrl;
 const cleanupUserIds = new Set();
 const cleanupAthleteIds = new Set();
 const cleanupClubIds = new Set();
+const cleanupTeamIds = new Set();
 const cleanupPlanIds = new Set();
 
 before(async () => {
@@ -29,6 +36,7 @@ before(async () => {
 after(async () => {
   if (cleanupPlanIds.size) await query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]]);
   if (cleanupAthleteIds.size) await query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]]);
+  if (cleanupTeamIds.size) await query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]);
   if (cleanupClubIds.size) await query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]);
   if (cleanupUserIds.size) await query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]);
   await new Promise((resolve) => server.close(resolve));
@@ -101,11 +109,25 @@ async function makeClub(name) {
   return result.rows[0].id;
 }
 
+async function makeTeam(clubId, name) {
+  const result = await query(`insert into public.teams (club_id, name, is_active) values ($1, $2, true) returning id`, [clubId, name]);
+  cleanupTeamIds.add(result.rows[0].id);
+  return result.rows[0].id;
+}
+
 async function grantClubRole(userId, clubId, active = true) {
   await query(
     `insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1, $2, 'club_admin', $3)
      on conflict (user_id, club_id, role) do update set is_active = $3, updated_at = now()`,
     [userId, clubId, active],
+  );
+}
+
+async function grantTeamRole(userId, teamId, active = true) {
+  await query(
+    `insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1, $2, 'team_coach', $3)
+     on conflict (user_id, team_id, role) do update set is_active = $3, updated_at = now()`,
+    [userId, teamId, active],
   );
 }
 
@@ -120,10 +142,11 @@ async function makePublicTemplate(creatorUserId, { canCopy = true } = {}) {
   return result.rows[0].id;
 }
 
-// --- 1/2: athlete identity comes from athletes.user_id, never role_hint ---
+// --- 1-6: coach-only access must check coachWorkspace capability, never ---
+// --- the presence/absence of athlete identity                          ---
 
-test("1. an account with a real athlete FK and a neutral role_hint is blocked from a coach-only, isAthlete-gated route", async () => {
-  const user = await makeUser({ email: `pr2a-real-athlete-${Date.now()}@test.local`, roleHint: "user" });
+test("1. an athlete-only account (real FK, no coach-capability role) is blocked from the coach-only access-requests route", async () => {
+  const user = await makeUser({ email: `pr2a-athlete-only-${Date.now()}@test.local`, roleHint: "user" });
   await makeAthleteLinkedTo(user.id);
   const coach = await makeUser({ email: `pr2a-template-owner-a-${Date.now()}@test.local`, roleHint: "user" });
   await grantGlobalRole(coach.id, "independent_coach");
@@ -131,11 +154,23 @@ test("1. an account with a real athlete FK and a neutral role_hint is blocked fr
   const token = await createSession(user.id);
 
   const res = await api(`/api/templates/${planId}/access-requests`, { cookie: cookieFor(token) });
-  assert.equal(res.status, 403, "a real athlete FK link must trigger the isAthlete gate regardless of role_hint");
+  assert.equal(res.status, 403, "an athlete with no coach-capability role must fail the coachWorkspace gate");
   assert.equal(res.body.error, "Coach access required.");
 });
 
-test("2. a fake role_hint='athlete' with no real athletes.user_id link is NOT blocked by the isAthlete gate", async () => {
+test("2. a plain account with no athlete FK and no coach-capability role is also blocked from the same route", async () => {
+  const user = await makeUser({ email: `pr2a-plain-user-${Date.now()}@test.local`, roleHint: "user" });
+  const coach = await makeUser({ email: `pr2a-template-owner-e-${Date.now()}@test.local`, roleHint: "user" });
+  await grantGlobalRole(coach.id, "independent_coach");
+  const planId = await makePublicTemplate(coach.id);
+  const token = await createSession(user.id);
+
+  const res = await api(`/api/templates/${planId}/access-requests`, { cookie: cookieFor(token) });
+  assert.equal(res.status, 403, "the gate must key off coachWorkspace, not athlete identity - lacking both must still be 403");
+  assert.equal(res.body.error, "Coach access required.");
+});
+
+test("3. a fake role_hint='athlete' with no real FK and no coach-capability role is blocked from the same route", async () => {
   const user = await makeUser({ email: `pr2a-fake-athlete-${Date.now()}@test.local`, roleHint: "athlete" });
   const coach = await makeUser({ email: `pr2a-template-owner-b-${Date.now()}@test.local`, roleHint: "user" });
   await grantGlobalRole(coach.id, "independent_coach");
@@ -143,12 +178,59 @@ test("2. a fake role_hint='athlete' with no real athletes.user_id link is NOT bl
   const token = await createSession(user.id);
 
   const res = await api(`/api/templates/${planId}/access-requests`, { cookie: cookieFor(token) });
-  assert.notEqual(res.status, 403, "role_hint='athlete' alone must never trigger the isAthlete gate without a real FK link");
+  assert.equal(res.status, 403, "role_hint='athlete' alone grants nothing, and this account has no real coach capability either");
+  assert.equal(res.body.error, "Coach access required.");
 });
 
-// --- 3/4: canAccessAllAthletes / the platform-wide bypass ---
+test("4. a real athlete FK plus a real independent_coach global role is NOT blocked from the coach-only access-requests route", async () => {
+  const user = await makeUser({ email: `pr2a-multi-indiecoach-${Date.now()}@test.local`, roleHint: "user" });
+  await makeAthleteLinkedTo(user.id);
+  await grantGlobalRole(user.id, "independent_coach");
+  const coach = await makeUser({ email: `pr2a-template-owner-f-${Date.now()}@test.local`, roleHint: "user" });
+  await grantGlobalRole(coach.id, "independent_coach");
+  const planId = await makePublicTemplate(coach.id);
+  const token = await createSession(user.id);
 
-test("3. a platform_admin granted purely through user_global_roles (neutral role_hint) sees an athlete they have no relationship with", async () => {
+  const res = await api(`/api/templates/${planId}/access-requests`, { cookie: cookieFor(token) });
+  assert.notEqual(res.status, 403, "real coach capability must not be switched off by also being a real athlete");
+});
+
+test("5. a real athlete FK plus a real team_coach role is NOT blocked from the assignments route", async () => {
+  const club = await makeClub(`PR2A Assign Club ${Date.now()}`);
+  const team = await makeTeam(club, "PR2A Assign Team");
+  const user = await makeUser({ email: `pr2a-multi-teamcoach-${Date.now()}@test.local`, roleHint: "user" });
+  await makeAthleteLinkedTo(user.id);
+  await grantTeamRole(user.id, team);
+  const owner = await makeUser({ email: `pr2a-template-owner-g-${Date.now()}@test.local`, roleHint: "user" });
+  await grantGlobalRole(owner.id, "independent_coach");
+  const planId = await makePublicTemplate(owner.id);
+  const token = await createSession(user.id);
+
+  const res = await api(`/api/templates/${planId}/assignments`, {
+    method: "POST",
+    cookie: cookieFor(token),
+    body: { athleteIds: ["pr2a-nonexistent-target"] },
+  });
+  assert.notEqual(res.status, 403, "a real team_coach role must not be switched off by also being a real athlete");
+  assert.notEqual(res.body.error, "Coach access required.");
+});
+
+test("6. a real athlete FK plus a real platform_admin row passes the coachWorkspace gate on access-requests", async () => {
+  const user = await makeUser({ email: `pr2a-multi-admin-${Date.now()}@test.local`, roleHint: "user" });
+  await makeAthleteLinkedTo(user.id);
+  await grantGlobalRole(user.id, "platform_admin");
+  const coach = await makeUser({ email: `pr2a-template-owner-h-${Date.now()}@test.local`, roleHint: "user" });
+  await grantGlobalRole(coach.id, "independent_coach");
+  const planId = await makePublicTemplate(coach.id);
+  const token = await createSession(user.id);
+
+  const res = await api(`/api/templates/${planId}/access-requests`, { cookie: cookieFor(token) });
+  assert.notEqual(res.status, 403, "a real platform_admin row must not be switched off by also being a real athlete");
+});
+
+// --- 7/8: canAccessAllAthletes / the platform-wide bypass ---
+
+test("7. a platform_admin granted purely through user_global_roles (neutral role_hint) sees an athlete they have no relationship with", async () => {
   const admin = await makeUser({ email: `pr2a-real-admin-${Date.now()}@test.local`, roleHint: "user" });
   await grantGlobalRole(admin.id, "platform_admin");
   const unrelatedAthlete = await makeUnlinkedAthlete();
@@ -160,7 +242,7 @@ test("3. a platform_admin granted purely through user_global_roles (neutral role
   assert.ok(ids.includes(unrelatedAthlete), "a real platform_admin row must grant the full-visibility bypass regardless of role_hint");
 });
 
-test("4. a fake role_hint='platform_admin' with no real user_global_roles row does not get the bypass", async () => {
+test("8. a fake role_hint='platform_admin' with no real user_global_roles row does not get the bypass", async () => {
   const fakeAdmin = await makeUser({ email: `pr2a-fake-admin-${Date.now()}@test.local`, roleHint: "platform_admin" });
   const unrelatedAthlete = await makeUnlinkedAthlete();
   const token = await createSession(fakeAdmin.id);
@@ -173,7 +255,7 @@ test("4. a fake role_hint='platform_admin' with no real user_global_roles row do
 
 // --- builder.js: canAccessAllAthletes bypass on the template-copy lock ---
 
-test("5. a real platform_admin can duplicate a can_copy=false template via the builder", async () => {
+test("9. a real platform_admin can duplicate a can_copy=false template via the builder", async () => {
   const owner = await makeUser({ email: `pr2a-template-owner-c-${Date.now()}@test.local`, roleHint: "user" });
   await grantGlobalRole(owner.id, "independent_coach");
   const planId = await makePublicTemplate(owner.id, { canCopy: false });
@@ -186,7 +268,7 @@ test("5. a real platform_admin can duplicate a can_copy=false template via the b
   if (res.body?.plan?.id) cleanupPlanIds.add(res.body.plan.id);
 });
 
-test("6. a fake role_hint='platform_admin' cannot duplicate a can_copy=false template", async () => {
+test("10. a fake role_hint='platform_admin' cannot duplicate a can_copy=false template", async () => {
   const owner = await makeUser({ email: `pr2a-template-owner-d-${Date.now()}@test.local`, roleHint: "user" });
   await grantGlobalRole(owner.id, "independent_coach");
   const planId = await makePublicTemplate(owner.id, { canCopy: false });
@@ -199,7 +281,7 @@ test("6. a fake role_hint='platform_admin' cannot duplicate a can_copy=false tem
 
 // --- multi-role: one account holding both athlete and coach capability ---
 
-test("7. a single account with a real athlete FK and a real independent_coach row gets both workspaces regardless of role_hint", async () => {
+test("11. a single account with a real athlete FK and a real independent_coach row gets both workspaces regardless of role_hint", async () => {
   const user = await makeUser({ email: `pr2a-multi-role-${Date.now()}@test.local`, roleHint: "athlete" });
   await makeAthleteLinkedTo(user.id);
   await grantGlobalRole(user.id, "independent_coach");
@@ -213,9 +295,24 @@ test("7. a single account with a real athlete FK and a real independent_coach ro
   assert.equal(orgRes.status, 200, "a multi-role athlete+coach account must be able to use the coach workspace");
 });
 
+test("12. a multi-role athlete+coach account can use a template available to it as a coach, even while also having an athlete FK", async () => {
+  const user = await makeUser({ email: `pr2a-canusetemplate-multi-${Date.now()}@test.local`, roleHint: "user" });
+  await makeAthleteLinkedTo(user.id);
+  await grantGlobalRole(user.id, "independent_coach");
+  const owner = await makeUser({ email: `pr2a-template-owner-i-${Date.now()}@test.local`, roleHint: "user" });
+  await grantGlobalRole(owner.id, "independent_coach");
+  // Public, but deliberately NOT athlete_can_view_directly - only the staff
+  // (coachWorkspace) access path can see this, never the athlete-scope path.
+  const planId = await makePublicTemplate(owner.id);
+  const token = await createSession(user.id);
+
+  const res = await api(`/api/templates/${planId}/use`, { method: "POST", cookie: cookieFor(token), body: {} });
+  assert.equal(res.status, 200, "a real coach capability must grant canUseTemplate's staff branch even when the account is also a real athlete");
+});
+
 // --- organization.js loadUsers: multi-role visibility, no role_hint filter ---
 
-test("8. a multi-role athlete+club_admin account is visible in the Users list to a fellow club admin", async () => {
+test("13. a multi-role athlete+club_admin account is visible in the Users list to a fellow club admin", async () => {
   const club = await makeClub(`PR2A Users Club ${Date.now()}`);
   const multiRoleUser = await makeUser({ email: `pr2a-users-multirole-${Date.now()}@test.local`, roleHint: "athlete" });
   await makeAthleteLinkedTo(multiRoleUser.id);
@@ -231,7 +328,7 @@ test("8. a multi-role athlete+club_admin account is visible in the Users list to
   assert.ok(ids.includes(multiRoleUser.id), "a multi-role athlete+club_admin account must appear in the Users list despite role_hint='athlete'");
 });
 
-test("9. a pure athlete-only account (no staff role of any kind) is not visible in the Users list", async () => {
+test("14. a pure athlete-only account (no staff role of any kind) is not visible in the Users list", async () => {
   const club = await makeClub(`PR2A Users Club Pure ${Date.now()}`);
   const pureAthlete = await makeUser({ email: `pr2a-users-pure-athlete-${Date.now()}@test.local`, roleHint: "user" });
   await makeAthleteLinkedTo(pureAthlete.id);
@@ -248,7 +345,7 @@ test("9. a pure athlete-only account (no staff role of any kind) is not visible 
 
 // --- coaches.js: canBypassCoachVisibility ---
 
-test("10. a real platform_admin sees a private coach profile via GET /api/coaches", async () => {
+test("15. a real platform_admin sees a private coach profile via GET /api/coaches", async () => {
   const coach = await makeUser({ email: `pr2a-private-coach-${Date.now()}@test.local`, roleHint: "user" });
   await grantGlobalRole(coach.id, "independent_coach");
   const coachToken = await createSession(coach.id);
@@ -264,7 +361,7 @@ test("10. a real platform_admin sees a private coach profile via GET /api/coache
   assert.ok(userIds.includes(coach.id), "a real platform_admin row must bypass private coach-profile visibility");
 });
 
-test("11. a fake role_hint='platform_admin' does not see a private coach profile via GET /api/coaches", async () => {
+test("16. a fake role_hint='platform_admin' does not see a private coach profile via GET /api/coaches", async () => {
   const coach = await makeUser({ email: `pr2a-private-coach-b-${Date.now()}@test.local`, roleHint: "user" });
   await grantGlobalRole(coach.id, "independent_coach");
   const coachToken = await createSession(coach.id);
