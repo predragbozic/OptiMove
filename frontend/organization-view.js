@@ -192,7 +192,13 @@ export function renderOrganizationBrowser(data) {
   const clubs = data.clubs || [];
   const teams = data.teams || [];
   const isPlatformAdmin = Boolean(data.isPlatformAdmin);
-  const athletes = (data.athletes || []).filter((athlete) => athlete.is_active !== false);
+  // is_active alone is the PROFILE flag - it says nothing about whether this
+  // viewer's own tie to the athlete is still active. loadManagedAthletes can
+  // return a row whose only remaining tie is an ARCHIVED relationship
+  // (purely so Show archived/Restore have something to work with), and that
+  // row must never leak into the normal active list - has_active_access is
+  // the flag computed server-side for exactly this decision.
+  const athletes = (data.athletes || []).filter((athlete) => athlete.is_active !== false && athlete.has_active_access);
   const myArchivedCoachRelationships = (data.athletes || []).filter((athlete) => athlete.has_my_archived_coach_relationship);
   const archivedProfiles = isPlatformAdmin ? (data.athletes || []).filter((athlete) => athlete.is_active === false) : [];
   const users = data.users || [];
@@ -242,8 +248,9 @@ export function renderOrganizationBrowser(data) {
 
 // Two clearly separate reasons an athlete can show up here - ending YOUR
 // private-coach relationship (restorable by you) is a completely different
-// action from archiving the whole sporting profile (platform admin only,
-// also disables login). Never merged into one ambiguous "archived" row.
+// action from archiving the whole sporting profile (platform admin only;
+// login, sessions, and every individual relationship are left untouched).
+// Never merged into one ambiguous "archived" row.
 function renderArchivedAthletesList(myArchivedCoachRelationships, archivedProfiles, isPlatformAdmin) {
   return `
     <section class="panel organization-list-card organization-archived-athletes">

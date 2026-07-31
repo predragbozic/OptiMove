@@ -1161,6 +1161,39 @@ async function loadManagedAthletes(req) {
          select 1 from public.user_athletes ua_mine_archived
          where ua_mine_archived.user_id = $1 and ua_mine_archived.athlete_id = a.id and ua_mine_archived.relationship_type = 'coach' and ua_mine_archived.is_active = false
        ) as has_my_archived_coach_relationship,
+       -- True only when the viewer has a currently ACTIVE tie to this
+       -- athlete (platform admin, is the athlete themselves, an active
+       -- private-coach relationship, or an active team/club membership in a
+       -- team/club they manage). The row can still be RETURNED by the query
+       -- below when only an archived tie remains (so Show archived/Restore
+       -- work) - this flag is what the frontend must use to decide whether
+       -- the row belongs in the normal active list, never is_active alone.
+       -- coalesced to false: a.user_id = $1 is NULL (not false) whenever
+       -- a.user_id itself is NULL, and NULL would otherwise propagate through
+       -- the ORs and surface as SQL NULL / JS null in the JSON response
+       -- instead of a clean boolean (a WHERE clause silently treats NULL as
+       -- "no match", but a plain SELECTed column does not get that same
+       -- coercion).
+       coalesce(
+         $2::boolean
+         or a.user_id = $1
+         or exists (select 1 from public.user_athletes ua_access where ua_access.user_id = $1 and ua_access.athlete_id = a.id and ua_access.is_active = true)
+         or exists (
+           select 1
+           from public.user_team_roles utr_access
+           join public.athlete_memberships tm_access
+             on tm_access.team_id = utr_access.team_id and tm_access.membership_type = 'team' and tm_access.status = 'active'
+           where utr_access.user_id = $1 and utr_access.is_active = true and tm_access.athlete_id = a.id
+         )
+         or exists (
+           select 1
+           from public.user_club_roles ucr_access
+           join public.athlete_memberships cm_access
+             on cm_access.club_id = ucr_access.club_id and cm_access.membership_type = 'club' and cm_access.status = 'active'
+           where ucr_access.user_id = $1 and ucr_access.is_active = true and cm_access.athlete_id = a.id
+         ),
+         false
+       ) as has_active_access,
        -- True when the linked account also holds any real staff/coach/admin
        -- capability, so the frontend can show a locked "multi-role" state
        -- instead of a plain toggle (see PUT /athletes/:id/login-status,

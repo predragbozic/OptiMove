@@ -774,3 +774,94 @@ test("29. archiving the whole profile changes neither the login, sessions, nor a
   );
   assert.equal(coachLink.rows[0].is_active, true, "archiving the profile must not touch the private-coach relationship");
 });
+
+// Mirrors the exact rule the frontend must apply: is_active !== false is the
+// PROFILE flag alone and is never sufficient on its own - has_active_access
+// is what says whether THIS viewer's own tie to the athlete is currently
+// active. A row can legitimately appear in the API response with
+// is_active !== false but has_active_access === false (their only tie is
+// archived), and it must never be treated as "in the active list" then.
+function isInActiveList(row) {
+  return row.is_active !== false && row.has_active_access === true;
+}
+
+test("30. a private coach loses active access (but not archived visibility) after archiving their only coach relationship, and regains it on restore", async () => {
+  const coach = await makeUser({ email: `active-access-coach-${Date.now()}@test.local`, roleHint: "coach" });
+  const athlete = await makeAthlete();
+  await grantCoachAthleteLink(coach.id, athlete);
+  const token = await createSession(coach.id);
+
+  const before = await api("/api/organization", { cookie: cookieFor(token) });
+  const beforeRow = before.body.athletes.find((a) => a.id === athlete);
+  assert.equal(isInActiveList(beforeRow), true, "must be in the active list before archiving");
+
+  await api(`/api/organization/athletes/${athlete}/coach-relationship`, { method: "DELETE", cookie: cookieFor(token) });
+
+  const afterArchive = await api("/api/organization", { cookie: cookieFor(token) });
+  const archivedRow = afterArchive.body.athletes.find((a) => a.id === athlete);
+  assert.ok(archivedRow, "the row must still be returned for Show archived");
+  assert.equal(archivedRow.has_active_access, false, "active access must be false once the only coach relationship is archived");
+  assert.equal(isInActiveList(archivedRow), false, "must NOT be treated as in the active list anymore");
+  assert.equal(archivedRow.has_my_archived_coach_relationship, true);
+
+  await api(`/api/organization/athletes/${athlete}/coach-relationship/restore`, { method: "PUT", cookie: cookieFor(token) });
+
+  const afterRestore = await api("/api/organization", { cookie: cookieFor(token) });
+  const restoredRow = afterRestore.body.athletes.find((a) => a.id === athlete);
+  assert.equal(isInActiveList(restoredRow), true, "must be back in the active list after restore");
+});
+
+test("31. a team coach loses active access after archiving their only team membership, and regains it on restore", async () => {
+  const club = await makeClub(`Active Access Team Club ${Date.now()}`);
+  const team = await makeTeam(club, "Active Access Team");
+  const athlete = await makeAthlete();
+  await addTeamMembership(athlete, club, team);
+  const coach = await makeUser({ email: `active-access-teamcoach-${Date.now()}@test.local`, roleHint: "team_coach" });
+  await grantTeamRole(coach.id, team);
+  const token = await createSession(coach.id);
+
+  const before = await api("/api/organization", { cookie: cookieFor(token) });
+  const beforeRow = before.body.athletes.find((a) => a.id === athlete);
+  assert.equal(isInActiveList(beforeRow), true, "must be in the active list before archiving");
+
+  await api(`/api/organization/teams/${team}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+
+  const afterArchive = await api("/api/organization", { cookie: cookieFor(token) });
+  const archivedRow = afterArchive.body.athletes.find((a) => a.id === athlete);
+  assert.ok(archivedRow, "the row must still be returned for Show archived");
+  assert.equal(archivedRow.has_active_access, false, "active access must be false once the only team membership is archived");
+  assert.equal(isInActiveList(archivedRow), false, "must NOT be treated as in the active list anymore");
+
+  await api(`/api/organization/teams/${team}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+
+  const afterRestore = await api("/api/organization", { cookie: cookieFor(token) });
+  const restoredRow = afterRestore.body.athletes.find((a) => a.id === athlete);
+  assert.equal(isInActiveList(restoredRow), true, "must be back in the active list after restore");
+});
+
+test("32. a club admin loses active access after archiving their only club membership, and regains it on restore", async () => {
+  const club = await makeClub(`Active Access Club ${Date.now()}`);
+  const athlete = await makeAthlete();
+  await addClubMembership(athlete, club);
+  const admin = await makeUser({ email: `active-access-clubadmin-${Date.now()}@test.local`, roleHint: "club_admin" });
+  await grantClubRole(admin.id, club);
+  const token = await createSession(admin.id);
+
+  const before = await api("/api/organization", { cookie: cookieFor(token) });
+  const beforeRow = before.body.athletes.find((a) => a.id === athlete);
+  assert.equal(isInActiveList(beforeRow), true, "must be in the active list before archiving");
+
+  await api(`/api/organization/clubs/${club}/athletes/${athlete}`, { method: "DELETE", cookie: cookieFor(token) });
+
+  const afterArchive = await api("/api/organization", { cookie: cookieFor(token) });
+  const archivedRow = afterArchive.body.athletes.find((a) => a.id === athlete);
+  assert.ok(archivedRow, "the row must still be returned for Show archived");
+  assert.equal(archivedRow.has_active_access, false, "active access must be false once the only club membership is archived");
+  assert.equal(isInActiveList(archivedRow), false, "must NOT be treated as in the active list anymore");
+
+  await api(`/api/organization/clubs/${club}/athletes/${athlete}/restore`, { method: "PUT", cookie: cookieFor(token) });
+
+  const afterRestore = await api("/api/organization", { cookie: cookieFor(token) });
+  const restoredRow = afterRestore.body.athletes.find((a) => a.id === athlete);
+  assert.equal(isInActiveList(restoredRow), true, "must be back in the active list after restore");
+});
