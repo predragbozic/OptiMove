@@ -865,3 +865,41 @@ test("32. a club admin loses active access after archiving their only club membe
   const restoredRow = afterRestore.body.athletes.find((a) => a.id === athlete);
   assert.equal(isInActiveList(restoredRow), true, "must be back in the active list after restore");
 });
+
+// Regression for the production incident on commit 23fb2bf: loadProgramAccessRequests
+// was called as loadProgramAccessRequests(req.user) and internally called
+// canManageAthlete(user, ...) - canManageAthlete reads req.authz, so passing
+// the bare user object (no .authz) crashed with
+// "TypeError: Cannot read properties of undefined (reading 'platformRoles')"
+// as soon as there was at least one library.program_access row in a
+// requested/rejected/accessed/used/completed status to check. GET
+// /api/organization returned a plain 200 in every earlier test in this file
+// only because none of them had ever created a program_access row.
+test("33. GET /api/organization returns 200 (not 500) when there is a pending program-access request to check", async () => {
+  const coach = await makeUser({ email: `program-access-coach-${Date.now()}@test.local`, roleHint: "coach" });
+  const athleteUser = await makeUser({ email: `program-access-athlete-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athlete = await makeAthlete({ userId: athleteUser.id });
+  await grantCoachAthleteLink(coach.id, athlete);
+
+  const plan = await query(
+    `insert into plans.plans (plan_type, created_by_user_id, name, is_template)
+     values ('program', $1, 'Regression Plan', true)
+     returning id`,
+    [coach.id],
+  );
+  cleanupPlanIds.add(plan.rows[0].id);
+  await query(
+    `insert into library.program_access (plan_id, user_id, access_type, status)
+     values ($1, $2, 'assigned', 'requested')`,
+    [plan.rows[0].id, athleteUser.id],
+  );
+
+  const token = await createSession(coach.id);
+  const res = await api("/api/organization", { cookie: cookieFor(token) });
+  assert.equal(res.status, 200, "must not 500 when a program-access request needs to be checked against canManageAthlete");
+  assert.ok(Array.isArray(res.body.accessRequests), "the response must still include the accessRequests array");
+  assert.ok(
+    res.body.accessRequests.some((r) => r.athlete_id === athlete),
+    "the coach must see the pending request for their own athlete",
+  );
+});
