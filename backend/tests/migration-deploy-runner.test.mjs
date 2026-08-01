@@ -54,3 +54,19 @@ test("the user_global_roles migration is registered in the deploy migration runn
     "the user_global_roles migration depends on users/athletes from create_access_schema.sql and must run after it",
   );
 });
+
+test("the user_global_roles audit-columns migration is registered in the deploy migration runner, immediately after 20260802_user_global_roles.sql", () => {
+  const auditIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260803_user_global_roles_audit.sql");
+  assert.notEqual(auditIndex, -1, "migrationPaths must include the user_global_roles audit-columns migration file");
+
+  const globalRolesIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260802_user_global_roles.sql");
+  assert.equal(
+    auditIndex,
+    globalRolesIndex + 1,
+    "the audit-columns migration alters public.user_global_roles and must run immediately after it's created",
+  );
+
+  for (const migrationPath of migrationPaths) {
+    assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
+  }
+});
