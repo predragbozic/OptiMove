@@ -126,7 +126,11 @@ export function findOrganizationRow(type, id) {
 // dedicated action below. This remains for club/team/user, which are
 // simple single-resource soft-deletes.
 export async function deleteOrganizationRow(type, id, { loadAthletes, renderOrganizationPanel }) {
-  const labels = { club: "club", team: "team", user: "user" };
+  // "user" is deliberately absent - a user account is never hard- or soft-
+  // deleted from here. Its login is enabled/disabled via the Manage account
+  // modal (PUT /organization/users/:userId/login-status), which never
+  // touches roles, athlete profile, or membership history.
+  const labels = { club: "club", team: "team" };
   if (!id || !labels[type]) return;
   const confirmMessage = `Delete this ${labels[type]}? Existing plans are preserved, but it will be hidden from active lists.`;
   if (!window.confirm(confirmMessage)) return;
@@ -232,6 +236,77 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   if (type === "organization-toggle-archived-club-members") {
     state.organization.showArchivedClubMembers = !state.organization.showArchivedClubMembers;
     void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-toggle-disabled-users") {
+    state.organization.showDisabledUsers = !state.organization.showDisabledUsers;
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-manage-account-open") {
+    const userId = action.dataset.userId;
+    if (!userId) return true;
+    state.organizationUserManage = { open: true, userId, pending: false, error: "" };
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-manage-account-close") {
+    state.organizationUserManage = { open: false, userId: "", pending: false, error: "" };
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-global-role-toggle") {
+    const userId = action.dataset.userId || "";
+    const role = action.dataset.role || "";
+    const nextActive = action.dataset.nextActive === "true";
+    if (!userId || !role || state.organizationUserManage.pending) return true;
+    if (role === "platform_admin" && !nextActive) {
+      if (!window.confirm("Remove platform administrator access from this account? Other roles and login access will remain unchanged.")) return true;
+    }
+    action.disabled = true;
+    state.organizationUserManage.pending = true;
+    state.organizationUserManage.error = "";
+    void renderOrganizationPanel({ refresh: false });
+    try {
+      await api(`/api/organization/users/${encodeURIComponent(userId)}/global-roles/${encodeURIComponent(role)}`, {
+        method: nextActive ? "PUT" : "DELETE",
+      });
+      state.organizationUserManage.pending = false;
+      await refreshOrganizationData?.();
+      await renderOrganizationPanel({ refresh: false });
+    } catch (error) {
+      state.organizationUserManage.pending = false;
+      state.organizationUserManage.error = describeOrganizationAccountError(error);
+      void renderOrganizationPanel({ refresh: false });
+    }
+    return true;
+  }
+  if (type === "organization-user-login-toggle") {
+    const userId = action.dataset.userId || "";
+    const nextActive = action.dataset.nextActive === "true";
+    if (!userId || state.organizationUserManage.pending) return true;
+    if (!nextActive) {
+      if (!window.confirm("Disable sign-in for this account? All current sessions will end. Roles, athlete profile, memberships, plans and history will remain unchanged.")) return true;
+    }
+    action.disabled = true;
+    state.organizationUserManage.pending = true;
+    state.organizationUserManage.error = "";
+    void renderOrganizationPanel({ refresh: false });
+    try {
+      // Strictly a JSON boolean, never a coerced value - matches what
+      // PUT /organization/users/:userId/login-status requires.
+      await api(`/api/organization/users/${encodeURIComponent(userId)}/login-status`, {
+        method: "PUT",
+        body: JSON.stringify({ active: nextActive }),
+      });
+      state.organizationUserManage.pending = false;
+      await refreshOrganizationData?.();
+      await renderOrganizationPanel({ refresh: false });
+    } catch (error) {
+      state.organizationUserManage.pending = false;
+      state.organizationUserManage.error = describeOrganizationAccountError(error);
+      void renderOrganizationPanel({ refresh: false });
+    }
     return true;
   }
   if (type === "organization-archive-coach-relationship") {
@@ -505,6 +580,16 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     return true;
   }
   return false;
+}
+
+// LAST_PLATFORM_ADMIN is a machine-readable error code from the backend
+// (api.js surfaces it verbatim as error.message from {error: "..."}) - never
+// shown to the user as-is. Any other error (403, network failure, 500) just
+// passes the backend's own message through, or a generic fallback for a
+// network error with no JSON body.
+function describeOrganizationAccountError(error) {
+  if (error?.message === "LAST_PLATFORM_ADMIN") return "At least one active platform administrator must remain.";
+  return error?.message || "Something went wrong. Please try again.";
 }
 
 function accessGroupInputs(form, group) {
