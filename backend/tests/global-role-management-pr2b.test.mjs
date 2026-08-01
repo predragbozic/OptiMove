@@ -518,3 +518,101 @@ test("20. GET /api/organization returns structured globalRoles/clubRoles/teamRol
   assert.equal(row.capabilities.athleteWorkspace, true);
   assert.equal(row.capabilities.platformAdministration, false);
 });
+
+// --- follow-up fixes: LAST_PLATFORM_ADMIN must mean login-active AND
+// role-active; a shared cross-endpoint lock; disabled accounts stay
+// visible; strict login-status body validation ---
+
+test("21. a role-active admin whose LOGIN is disabled does not count toward the LAST_PLATFORM_ADMIN check", async () => {
+  const qualifying = await makePlatformAdmin(`pr2b-qualifying-${Date.now()}@test.local`);
+  const loginDisabled = await makePlatformAdmin(`pr2b-login-disabled-${Date.now()}@test.local`);
+  // Bypasses the endpoint on purpose - this builds the fixture state (role
+  // active, login disabled) directly, rather than exercising the
+  // disable-login code path itself.
+  await query(`update public.users set is_active = false where id = $1`, [loginDisabled.id]);
+  const token = await createSession(qualifying.id);
+
+  await withOnlyTheseAdminsActive([qualifying.id, loginDisabled.id], async () => {
+    const res = await api(`/api/organization/users/${qualifying.id}/global-roles/platform_admin`, { method: "DELETE", cookie: cookieFor(token) });
+    assert.equal(res.status, 409, "the only login-active admin must be protected even though another role-active-but-login-disabled row exists");
+    assert.equal(res.body.error, "LAST_PLATFORM_ADMIN");
+
+    const row = await query(`select is_active from public.user_global_roles where user_id = $1 and role = 'platform_admin'`, [qualifying.id]);
+    assert.equal(row.rows[0].is_active, true);
+  });
+});
+
+test("22. concurrent revoke-role and disable-login targeting different admins never leave zero login-active admins", async () => {
+  const adminA = await makePlatformAdmin(`pr2b-cross-a-${Date.now()}@test.local`);
+  const adminB = await makePlatformAdmin(`pr2b-cross-b-${Date.now()}@test.local`);
+  const actorToken = await createSession(adminA.id);
+
+  await withOnlyTheseAdminsActive([adminA.id, adminB.id], async () => {
+    const [revokeRes, disableRes] = await Promise.all([
+      api(`/api/organization/users/${adminA.id}/global-roles/platform_admin`, { method: "DELETE", cookie: cookieFor(actorToken) }),
+      api(`/api/organization/users/${adminB.id}/login-status`, { method: "PUT", cookie: cookieFor(actorToken), body: { active: false } }),
+    ]);
+
+    const statuses = [revokeRes.status, disableRes.status].sort();
+    assert.deepEqual(statuses, [200, 409], "exactly one of the two cross-endpoint operations must succeed");
+
+    const qualifying = await query(
+      `select u.id
+       from public.users u
+       join public.user_global_roles g on g.user_id = u.id and g.role = 'platform_admin' and g.is_active = true
+       where u.is_active = true and u.id = any($1::uuid[])`,
+      [[adminA.id, adminB.id]],
+    );
+    assert.equal(qualifying.rows.length, 1, "exactly one of the two admins must remain login-active and role-active");
+  });
+});
+
+test("23. a disabled account remains visible in GET /organization with loginActive=false, and re-enabling flips it back to true", async () => {
+  const admin = await makePlatformAdmin(`pr2b-visible-admin-${Date.now()}@test.local`);
+  const club = await makeClub(`PR2B Visible Club ${Date.now()}`);
+  const target = await makeUser({ email: `pr2b-visible-target-${Date.now()}@test.local`, roleHint: "user" });
+  await grantClubRole(target.id, club);
+  const adminToken = await createSession(admin.id);
+
+  const disable = await api(`/api/organization/users/${target.id}/login-status`, { method: "PUT", cookie: cookieFor(adminToken), body: { active: false } });
+  assert.equal(disable.status, 200);
+
+  const afterDisable = await api("/api/organization", { cookie: cookieFor(adminToken) });
+  const disabledRow = afterDisable.body.users.find((u) => u.id === target.id);
+  assert.ok(disabledRow, "a disabled account must still appear in the Users list so it can be found and re-enabled");
+  assert.equal(disabledRow.loginActive, false);
+  assert.ok(disabledRow.clubRoles.some((r) => r.clubId === club), "role data must still be present for a disabled account");
+
+  const reenable = await api(`/api/organization/users/${target.id}/login-status`, { method: "PUT", cookie: cookieFor(adminToken), body: { active: true } });
+  assert.equal(reenable.status, 200);
+
+  const afterReenable = await api("/api/organization", { cookie: cookieFor(adminToken) });
+  const activeRow = afterReenable.body.users.find((u) => u.id === target.id);
+  assert.equal(activeRow.loginActive, true);
+});
+
+test("24-27. login-status rejects anything that isn't a strict JSON boolean, with no mutation", async () => {
+  const admin = await makePlatformAdmin(`pr2b-strict-admin-${Date.now()}@test.local`);
+  const target = await makeUser({ email: `pr2b-strict-target-${Date.now()}@test.local`, roleHint: "user" });
+  await createSession(target.id);
+  const adminToken = await createSession(admin.id);
+  const sessionsBefore = await sessionCountFor(target.id);
+
+  const cases = [
+    { label: "missing active", body: {} },
+    { label: "string \"false\"", body: { active: "false" } },
+    { label: "number 0", body: { active: 0 } },
+    { label: "number 1", body: { active: 1 } },
+    { label: "null", body: { active: null } },
+  ];
+
+  for (const { label, body } of cases) {
+    const res = await api(`/api/organization/users/${target.id}/login-status`, { method: "PUT", cookie: cookieFor(adminToken), body });
+    assert.equal(res.status, 400, `${label} must be rejected`);
+    assert.equal(res.body.error, "INVALID_LOGIN_STATUS", `${label} must return INVALID_LOGIN_STATUS`);
+  }
+
+  const row = await query(`select is_active from public.users where id = $1`, [target.id]);
+  assert.equal(row.rows[0].is_active, true, "no invalid body may have changed the account's login status");
+  assert.equal(await sessionCountFor(target.id), sessionsBefore, "no invalid body may have touched sessions");
+});
