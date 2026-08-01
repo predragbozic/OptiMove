@@ -107,23 +107,222 @@ router.post("/users", async (req, res, next) => {
   }
 });
 
+// Legacy name only - this has always disabled the account (users.is_active
+// = false), never hard-deleted the row. Delegates to the same guarded
+// service PUT /users/:userId/login-status uses, so both paths get the same
+// self-disable guard, ownership/scope check, platform-admin-only-touches-
+// platform-admin rule, and last-platform-admin protection. The response is
+// explicitly labeled "disabled", not "deleted", to avoid implying the row
+// was removed.
 router.delete("/users/:userId", async (req, res, next) => {
   try {
-    if (req.params.userId === req.user.id) return res.status(400).json({ error: "You cannot delete your own account." });
-    const result = await query(
-      `update public.users
-       set is_active = false, updated_at = now()
-       where id = $1 and (created_by_user_id = $2 or $3::boolean)
-       returning id`,
-      [req.params.userId, req.user.id, isPlatformAdministrator(req.authz)],
-    );
-    if (!result.rows[0]) return res.status(404).json({ error: "User not found or outside your access." });
-    await destroySessionsForUser(result.rows[0].id);
-    res.json({ ok: true });
+    const result = await setUserLoginStatus(req, req.params.userId, false);
+    res.status(result.status).json({ ...result.body, deleted: false });
   } catch (error) {
     next(error);
   }
 });
+
+router.put("/users/:userId/login-status", async (req, res, next) => {
+  try {
+    const active = Boolean(req.body?.active);
+    const result = await setUserLoginStatus(req, req.params.userId, active);
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Enables/disables a login (users.is_active) without touching any role -
+// global, club, team, or athlete FK. Never a hard delete. Shared by the
+// legacy DELETE /users/:userId and the explicit PUT .../login-status.
+//
+// Ownership/scope follows the existing model unchanged: a platform admin can
+// manage any account; anyone else only an account they created
+// (created_by_user_id). On top of that scope check:
+//   - only a platform admin may disable a platform admin's login (their own
+//     included), even if they technically created that account (a club
+//     admin must never be able to lock out a platform admin);
+//   - disabling the last remaining login-active platform admin is rejected
+//     with 409 LAST_PLATFORM_ADMIN - the app must never end up with zero
+//     platform admins who can actually log in. This is checked BEFORE the
+//     generic self-disable rule below, so a platform admin disabling their
+//     own login gets the more specific 409 when they're the last one, and
+//     the generic 400 otherwise. That check locks the exact set of
+//     currently-qualifying (login-active AND role-active) platform admin
+//     user rows with SELECT ... FOR UPDATE (never COUNT(*) FOR UPDATE) so
+//     two concurrent disable attempts serialize against each other instead
+//     of both reading "more than one left" and both succeeding;
+//   - self-disable is otherwise always rejected, regardless of scope.
+async function setUserLoginStatus(req, targetUserId, active) {
+  const target = await query(`select id, created_by_user_id from public.users where id = $1 limit 1`, [targetUserId]);
+  if (!target.rows[0]) return { status: 404, body: { error: "User not found or outside your access." } };
+
+  const actorIsPlatformAdmin = isPlatformAdministrator(req.authz);
+  const ownsTarget = String(target.rows[0].created_by_user_id) === String(req.user.id);
+  if (!actorIsPlatformAdmin && !ownsTarget) {
+    return { status: 404, body: { error: "User not found or outside your access." } };
+  }
+
+  const targetPlatformAdminRow = await query(
+    `select 1 from public.user_global_roles where user_id = $1 and role = 'platform_admin' and is_active = true limit 1`,
+    [targetUserId],
+  );
+  const targetIsPlatformAdmin = Boolean(targetPlatformAdminRow.rows[0]);
+  if (targetIsPlatformAdmin && !actorIsPlatformAdmin) {
+    return { status: 403, body: { error: "Only a platform admin can manage a platform admin account." } };
+  }
+
+  if (!active && targetIsPlatformAdmin) {
+    // The lock is held for the full decision AND the update below, in one
+    // transaction - releasing it early (e.g. committing right after the
+    // lock-and-check, then updating in a separate statement) would reopen
+    // the exact race this is meant to close.
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const activeAdminLogins = await client.query(
+        `select u.id
+         from public.users u
+         join public.user_global_roles g on g.user_id = u.id and g.role = 'platform_admin' and g.is_active = true
+         where u.is_active = true
+         order by u.id
+         for update of u`,
+      );
+      const targetIsAmongThem = activeAdminLogins.rows.some((row) => String(row.id) === String(targetUserId));
+      if (targetIsAmongThem && activeAdminLogins.rows.length <= 1) {
+        await client.query("rollback");
+        return { status: 409, body: { error: "LAST_PLATFORM_ADMIN" } };
+      }
+      if (String(targetUserId) === String(req.user.id)) {
+        await client.query("rollback");
+        return { status: 400, body: { error: "You cannot disable your own account." } };
+      }
+      const updated = await client.query(
+        `update public.users set is_active = false, updated_at = now() where id = $1 returning id, is_active`,
+        [targetUserId],
+      );
+      await client.query("commit");
+      await destroySessionsForUser(targetUserId);
+      return { status: 200, body: { ok: true, active: updated.rows[0].is_active, disabled: true } };
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  if (!active && String(targetUserId) === String(req.user.id)) {
+    return { status: 400, body: { error: "You cannot disable your own account." } };
+  }
+
+  const updated = await query(
+    `update public.users set is_active = $2, updated_at = now() where id = $1 returning id, is_active`,
+    [targetUserId, active],
+  );
+  if (!active) await destroySessionsForUser(targetUserId);
+  return { status: 200, body: { ok: true, active: updated.rows[0].is_active, disabled: !active } };
+}
+
+// Allowed global roles - a "platform-wide" concept, structurally independent
+// of any club/team scope and of role_hint. Only an active platform_admin
+// from req.authz (real user_global_roles row, never role_hint) may grant or
+// revoke either one, including for their own account.
+const GLOBAL_ROLES = new Set(["platform_admin", "independent_coach"]);
+
+router.put("/users/:userId/global-roles/:role", async (req, res, next) => {
+  try {
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can grant global roles." });
+    const role = clean(req.params.role);
+    if (!GLOBAL_ROLES.has(role)) return res.status(400).json({ error: "Unknown global role." });
+    const targetUserId = clean(req.params.userId);
+    const target = await query(`select id from public.users where id = $1 limit 1`, [targetUserId]);
+    if (!target.rows[0]) return res.status(404).json({ error: "User not found." });
+
+    // Idempotent grant/reactivate: never touches role_hint, users.is_active,
+    // or any athlete/club/team role. Reactivating an existing (revoked) row
+    // always clears its revoke audit fields - a role that's active again has
+    // no "revoked by/at" to show.
+    await query(
+      `insert into public.user_global_roles (user_id, role, is_active, granted_by_user_id, revoked_at, revoked_by_user_id)
+       values ($1, $2, true, $3, null, null)
+       on conflict (user_id, role) do update
+         set is_active = true,
+             granted_by_user_id = excluded.granted_by_user_id,
+             revoked_at = null,
+             revoked_by_user_id = null,
+             updated_at = now()`,
+      [targetUserId, role, req.user.id],
+    );
+    res.json({ ok: true, globalRoles: await loadGlobalRoles(targetUserId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/users/:userId/global-roles/:role", async (req, res, next) => {
+  try {
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can revoke global roles." });
+    const role = clean(req.params.role);
+    if (!GLOBAL_ROLES.has(role)) return res.status(400).json({ error: "Unknown global role." });
+    const targetUserId = clean(req.params.userId);
+    const target = await query(`select id from public.users where id = $1 limit 1`, [targetUserId]);
+    if (!target.rows[0]) return res.status(404).json({ error: "User not found." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      if (role === "platform_admin") {
+        // Deterministically lock every currently-active platform_admin row
+        // (not just the target's) with SELECT ... FOR UPDATE, never
+        // COUNT(*) FOR UPDATE - two concurrent revoke requests then
+        // serialize on this same lock set, so the second one always sees
+        // the first's result before deciding, and they can never both
+        // succeed in dropping the count to zero.
+        const activeAdmins = await client.query(
+          `select id, user_id from public.user_global_roles where role = 'platform_admin' and is_active = true order by id for update`,
+        );
+        const targetIsActive = activeAdmins.rows.some((row) => String(row.user_id) === String(targetUserId));
+        if (targetIsActive && activeAdmins.rows.length <= 1) {
+          await client.query("rollback");
+          return res.status(409).json({ error: "LAST_PLATFORM_ADMIN" });
+        }
+      }
+      // Idempotent: if there's no active row for this (user, role) - already
+      // revoked, or never granted - this affects zero rows and the request
+      // still succeeds, returning the current (unchanged) role state.
+      await client.query(
+        `update public.user_global_roles
+         set is_active = false, revoked_at = now(), revoked_by_user_id = $1, updated_at = now()
+         where user_id = $2 and role = $3 and is_active = true`,
+        [req.user.id, targetUserId, role],
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true, globalRoles: await loadGlobalRoles(targetUserId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function loadGlobalRoles(userId) {
+  const result = await query(
+    `select role, is_active as "isActive", granted_by_user_id as "grantedByUserId",
+            revoked_at as "revokedAt", revoked_by_user_id as "revokedByUserId",
+            created_at as "createdAt", updated_at as "updatedAt"
+     from public.user_global_roles
+     where user_id = $1
+     order by role`,
+    [userId],
+  );
+  return result.rows;
+}
 
 router.post("/clubs", async (req, res, next) => {
   try {
@@ -1039,10 +1238,61 @@ async function loadTeams(req) {
   return [];
 }
 
+// Returns each visible user's REAL role set - global, club, and team roles
+// each as their own structured array (never collapsed into role_hint),
+// plus isAthlete and derived capabilities - so a future frontend can render
+// the account's full, actual access without guessing from role_hint. role_hint
+// itself is still included as legacyDisplayRole (display text only, per the
+// existing organization-view.js "role_hint" badge - never read as a real
+// role list) alongside the raw role_hint field the current frontend already
+// depends on.
 async function loadUsers(req) {
   const result = await query(
-    `select distinct u.id, u.email, coalesce(u.display_name, u.full_name, u.email) as name, u.role_hint
+    `select distinct
+       u.id, u.email, coalesce(u.display_name, u.full_name, u.email) as name,
+       u.role_hint,
+       u.is_active as login_active,
+       exists (select 1 from public.athletes ath where ath.user_id = u.id) as is_athlete,
+       coalesce(global_roles.data, '[]'::jsonb) as global_roles,
+       coalesce(club_roles.data, '[]'::jsonb) as club_roles,
+       coalesce(team_roles.data, '[]'::jsonb) as team_roles
      from public.users u
+     left join lateral (
+       select jsonb_agg(jsonb_build_object(
+         'role', g.role,
+         'isActive', g.is_active,
+         'grantedByUserId', g.granted_by_user_id,
+         'revokedAt', g.revoked_at,
+         'revokedByUserId', g.revoked_by_user_id,
+         'createdAt', g.created_at,
+         'updatedAt', g.updated_at
+       ) order by g.role) as data
+       from public.user_global_roles g
+       where g.user_id = u.id
+     ) global_roles on true
+     left join lateral (
+       select jsonb_agg(jsonb_build_object(
+         'clubId', ucr.club_id,
+         'clubName', c.name,
+         'role', ucr.role,
+         'isActive', ucr.is_active
+       ) order by c.name) as data
+       from public.user_club_roles ucr
+       join public.clubs c on c.id = ucr.club_id
+       where ucr.user_id = u.id
+     ) club_roles on true
+     left join lateral (
+       select jsonb_agg(jsonb_build_object(
+         'teamId', utr.team_id,
+         'teamName', t.name,
+         'clubId', t.club_id,
+         'role', utr.role,
+         'isActive', utr.is_active
+       ) order by t.name) as data
+       from public.user_team_roles utr
+       join public.teams t on t.id = utr.team_id
+       where utr.user_id = u.id
+     ) team_roles on true
      where u.is_active = true
        and (
          -- Excludes only accounts whose SOLE real identity is an athlete
@@ -1076,7 +1326,30 @@ async function loadUsers(req) {
      order by name`,
     [req.user.id, isPlatformAdministrator(req.authz)],
   );
-  return result.rows;
+  return result.rows.map((row) => {
+    const activeGlobalRoles = new Set(row.global_roles.filter((r) => r.isActive).map((r) => r.role));
+    const hasActiveClubRole = row.club_roles.some((r) => r.isActive);
+    const hasActiveTeamRole = row.team_roles.some((r) => r.isActive);
+    const platformAdministration = activeGlobalRoles.has("platform_admin");
+    const coachWorkspace = platformAdministration || hasActiveClubRole || hasActiveTeamRole || activeGlobalRoles.has("independent_coach");
+    return {
+      id: row.id,
+      email: row.email,
+      name: row.name,
+      role_hint: row.role_hint,
+      legacyDisplayRole: row.role_hint,
+      loginActive: row.login_active,
+      isAthlete: row.is_athlete,
+      globalRoles: row.global_roles,
+      clubRoles: row.club_roles,
+      teamRoles: row.team_roles,
+      capabilities: {
+        coachWorkspace,
+        athleteWorkspace: row.is_athlete,
+        platformAdministration,
+      },
+    };
+  });
 }
 
 // Takes the full req (not req.user) - canManageAthlete reads req.authz,

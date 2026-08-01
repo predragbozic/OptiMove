@@ -13,6 +13,8 @@ export const migrationPaths = [
   path.resolve(__dirname, "../../migrations/20260801_athlete_memberships.sql"),
   // Depends on users and athletes from create_access_schema.sql above.
   path.resolve(__dirname, "../../migrations/20260802_user_global_roles.sql"),
+  // Depends on public.user_global_roles from the migration directly above.
+  path.resolve(__dirname, "../../migrations/20260803_user_global_roles_audit.sql"),
   path.resolve(__dirname, "../../create_builder_schema.sql"),
   path.resolve(__dirname, "../../create_exercise_user_state.sql"),
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),
