@@ -8,6 +8,7 @@ import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
+import { runCleanupSteps } from "./_test-cleanup.mjs";
 
 // Phase 4 PR 1: public.user_global_roles becomes the real, independently-
 // managed home for platform_admin and independent_coach - the only two
@@ -26,6 +27,7 @@ const cleanupUserIds = new Set();
 const cleanupPlanIds = new Set();
 const cleanupClubIds = new Set();
 const cleanupTeamIds = new Set();
+const cleanupAthleteIds = new Set();
 
 before(async () => {
   server = http.createServer(app);
@@ -34,13 +36,21 @@ before(async () => {
 });
 
 after(async () => {
-  if (cleanupPlanIds.size) await query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]]);
-  if (cleanupTeamIds.size) await query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]);
-  if (cleanupClubIds.size) await query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]);
-  // user_global_roles rows cascade-delete with their user row.
-  if (cleanupUserIds.size) await query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]);
-  await new Promise((resolve) => server.close(resolve));
-  await pool.end();
+  // athletes.user_id is ON DELETE SET NULL, not CASCADE - deleting the
+  // linked user first would silently orphan the athlete row instead of
+  // removing it, so athletes are deleted explicitly and before their user.
+  // Every step is attempted regardless of earlier failures, and the whole
+  // hook rejects if any step failed - see runCleanupSteps.
+  await runCleanupSteps([
+    ["plans", () => cleanupPlanIds.size && query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]])],
+    ["athletes", () => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]])],
+    ["teams", () => cleanupTeamIds.size && query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]])],
+    ["clubs", () => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]])],
+    // user_global_roles rows cascade-delete with their user row.
+    ["users", () => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]])],
+    ["server close", () => new Promise((resolve) => server.close(resolve))],
+    ["pool end", () => pool.end()],
+  ]);
 });
 
 async function makeClub(name) {
@@ -307,6 +317,7 @@ test("11. the athlete login-status multi-role guard recognizes staff capability 
     [`grole${Math.floor(Math.random() * 900000 + 100000)}`, targetUser.id],
   );
   const athleteId = athleteResult.rows[0].id;
+  cleanupAthleteIds.add(athleteId);
 
   const res = await api(`/api/organization/athletes/${athleteId}/login-status`, {
     method: "PUT",
@@ -318,8 +329,6 @@ test("11. the athlete login-status multi-role guard recognizes staff capability 
 
   const stillActive = await query(`select is_active from public.users where id = $1`, [targetUser.id]);
   assert.equal(stillActive.rows[0].is_active, true, "the account must remain active - independent_coach from the new table must count as staff capability");
-
-  await query(`delete from public.athletes where id = $1`, [athleteId]);
 });
 
 // --- 9. taxonomy.js and templates.js use the new authorization -------------
@@ -519,13 +528,12 @@ test("20. login_is_multi_role is true for role_hint='athlete' with a real indepe
     [`mrole${Math.floor(Math.random() * 900000 + 100000)}`, targetUser.id],
   );
   const athleteId = athleteResult.rows[0].id;
+  cleanupAthleteIds.add(athleteId);
 
   const res = await api("/api/organization", { cookie: cookieFor(viewerToken) });
   const row = res.body.athletes.find((a) => a.id === athleteId);
   assert.ok(row, "the platform admin viewer must see the athlete");
   assert.equal(row.login_is_multi_role, true, "a real independent_coach row must mark the login as multi-role, even though role_hint says 'athlete'");
-
-  await query(`delete from public.athletes where id = $1`, [athleteId]);
 });
 
 test("21. login_is_multi_role is false for a stale staff role_hint with no real role row", async () => {
@@ -541,13 +549,12 @@ test("21. login_is_multi_role is false for a stale staff role_hint with no real 
     [`mrole${Math.floor(Math.random() * 900000 + 100000)}`, targetUser.id],
   );
   const athleteId = athleteResult.rows[0].id;
+  cleanupAthleteIds.add(athleteId);
 
   const res = await api("/api/organization", { cookie: cookieFor(viewerToken) });
   const row = res.body.athletes.find((a) => a.id === athleteId);
   assert.ok(row, "the platform admin viewer must see the athlete");
   assert.equal(row.login_is_multi_role, false, "role_hint='platform_admin' with no real user_global_roles row must not be reported as multi-role");
-
-  await query(`delete from public.athletes where id = $1`, [athleteId]);
 });
 
 // --- Follow-up round: coaches.js canUseClubProfiles must be req.authz-based ---

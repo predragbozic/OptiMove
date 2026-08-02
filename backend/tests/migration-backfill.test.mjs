@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { query, pool } from "../src/db.js";
+import { runCleanupSteps } from "./_test-cleanup.mjs";
 
 // Runs the ACTUAL migration file against the dev database, so this proves
 // what the real SQL does - not a reimplementation of it.
@@ -15,9 +16,11 @@ const cleanupUserIds = new Set();
 const cleanupClubIds = new Set();
 
 after(async () => {
-  if (cleanupClubIds.size) await query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]);
-  if (cleanupUserIds.size) await query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]);
-  await pool.end();
+  await runCleanupSteps([
+    ["clubs", () => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]])],
+    ["users", () => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]])],
+    ["pool end", () => pool.end()],
+  ]);
 });
 
 async function makeUser(email, roleHint) {

@@ -5,6 +5,7 @@ import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
+import { runCleanupSteps } from "./_test-cleanup.mjs";
 
 // Phase 4 PR 2B: safe grant/revoke of global roles (platform_admin,
 // independent_coach), kept strictly separate from login/account status,
@@ -18,6 +19,7 @@ let baseUrl;
 const cleanupUserIds = new Set();
 const cleanupClubIds = new Set();
 const cleanupTeamIds = new Set();
+const cleanupAthleteIds = new Set();
 
 before(async () => {
   server = http.createServer(app);
@@ -26,11 +28,20 @@ before(async () => {
 });
 
 after(async () => {
-  if (cleanupTeamIds.size) await query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]);
-  if (cleanupClubIds.size) await query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]);
-  if (cleanupUserIds.size) await query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]);
-  await new Promise((resolve) => server.close(resolve));
-  await pool.end();
+  // athletes.user_id is ON DELETE SET NULL, not CASCADE - deleting the user
+  // row first would silently orphan the athlete row (null user_id, fixture
+  // data left behind forever) instead of removing it, so athletes must be
+  // deleted explicitly and before their linked user. Every step is
+  // attempted regardless of earlier failures, and the whole hook rejects if
+  // any step failed - see runCleanupSteps.
+  await runCleanupSteps([
+    ["athletes", () => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]])],
+    ["teams", () => cleanupTeamIds.size && query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]])],
+    ["clubs", () => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]])],
+    ["users", () => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]])],
+    ["server close", () => new Promise((resolve) => server.close(resolve))],
+    ["pool end", () => pool.end()],
+  ]);
 });
 
 async function api(path, { method = "GET", body, cookie } = {}) {
@@ -106,6 +117,7 @@ async function makeAthleteLinkedTo(userId) {
      returning id`,
     [externalId, userId],
   );
+  cleanupAthleteIds.add(result.rows[0].id);
   return result.rows[0].id;
 }
 

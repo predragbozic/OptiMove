@@ -6,6 +6,7 @@ import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
+import { runCleanupSteps } from "./_test-cleanup.mjs";
 
 let server;
 let baseUrl;
@@ -19,14 +20,12 @@ before(async () => {
 });
 
 after(async () => {
-  if (cleanupAthleteIds.size) {
-    await query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]]);
-  }
-  if (cleanupUserEmails.size) {
-    await query(`delete from public.users where lower(email) = any($1::text[])`, [[...cleanupUserEmails].map((e) => e.toLowerCase())]);
-  }
-  await new Promise((resolve) => server.close(resolve));
-  await pool.end();
+  await runCleanupSteps([
+    ["athletes", () => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]])],
+    ["users", () => cleanupUserEmails.size && query(`delete from public.users where lower(email) = any($1::text[])`, [[...cleanupUserEmails].map((e) => e.toLowerCase())])],
+    ["server close", () => new Promise((resolve) => server.close(resolve))],
+    ["pool end", () => pool.end()],
+  ]);
 });
 
 function hashInviteToken(token) {

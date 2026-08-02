@@ -7,7 +7,8 @@
     "dev": "node --watch src/server.js",
     "start": "node src/migrate.js && node src/server.js",
     "migrate": "node src/migrate.js",
-    "test": "node --test tests/**/*.test.mjs",
+    "test": "node --test --test-concurrency=1 tests/**/*.test.mjs",
+    "test:verify-isolation": "node scripts/verify-test-suite-isolation.mjs",
     "import:plans:preview": "python ../tools/plan_import.py preview",
     "import:plans:apply": "python ../tools/plan_import.py apply"
   },
