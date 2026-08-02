@@ -47,6 +47,7 @@ function baseUser(overrides) {
     globalRoles: [],
     clubRoles: [],
     teamRoles: [],
+    canManageLogin: true,
     capabilities: { coachWorkspace: false, athleteWorkspace: false, platformAdministration: false },
     ...overrides,
   };
@@ -200,4 +201,56 @@ test("Manage account modal shows an in-modal error banner without hiding the res
 
   assert.ok(html.includes("At least one active platform administrator must remain."), "the error message must be shown");
   assert.ok(html.includes("Account status"), "the rest of the modal must still render");
+});
+
+// --- canManageLogin gating ---
+
+test("a non-self account with canManageLogin=true offers the Enable/Disable login control", () => {
+  resetOrganizationState();
+  const user = baseUser({ id: "user-managed", name: "Managed User", loginActive: true, canManageLogin: true });
+  state.organizationUserManage = { open: true, userId: "user-managed", pending: false, error: "" };
+  const html = renderManageAccountModal(baseData([user], { isPlatformAdmin: true }));
+
+  assert.ok(html.includes("Disable login"), "canManageLogin=true must offer the control");
+  assert.ok(!html.includes("You don't have permission to change this login."), "no permission note when the control is offered");
+});
+
+test("a non-self account with canManageLogin=false shows a neutral permission message instead of a control", () => {
+  resetOrganizationState();
+  const user = baseUser({ id: "user-unmanaged", name: "Unmanaged User", loginActive: true, canManageLogin: false });
+  state.organizationUserManage = { open: true, userId: "user-unmanaged", pending: false, error: "" };
+  const html = renderManageAccountModal(baseData([user], { isPlatformAdmin: false }));
+
+  assert.ok(!html.includes("Disable login"), "canManageLogin=false must not offer the control");
+  assert.ok(!html.includes("Enable login"), "canManageLogin=false must not offer the control even for a disabled login");
+  assert.ok(html.includes("You don't have permission to change this login."), "a neutral permission message must be shown instead");
+});
+
+test("the viewer's own account keeps the existing self-disable message even when canManageLogin=true", () => {
+  resetOrganizationState();
+  const self = baseUser({ id: "viewer-1", name: "Myself", loginActive: true, canManageLogin: true });
+  state.organizationUserManage = { open: true, userId: "viewer-1", pending: false, error: "" };
+  const html = renderManageAccountModal(baseData([self], { isPlatformAdmin: true }));
+
+  assert.ok(!html.includes("Disable login"), "self must never see the control regardless of canManageLogin");
+  assert.ok(html.includes("You can't disable your own login"), "the self message takes priority over the permission message");
+  assert.ok(!html.includes("You don't have permission to change this login."), "self gets its own message, not the generic permission one");
+});
+
+// --- scoped role badges show the role name, not just the club/team name ---
+
+test("club and team badges show the real role name alongside the club/team name", () => {
+  resetOrganizationState();
+  const user = baseUser({
+    id: "user-scoped",
+    name: "Scoped User",
+    clubRoles: [{ clubId: "club-1", clubName: "FK Crvena zvezda", role: "club_admin", isActive: true }],
+    teamRoles: [{ teamId: "team-1", teamName: "U17", clubId: "club-1", role: "team_coach", isActive: true }],
+  });
+  const html = renderOrganizationBrowser(baseData([user]));
+
+  assert.ok(html.includes("Club admin"), "the club badge must show the role name");
+  assert.ok(html.includes("FK Crvena zvezda"), "the club badge must still show the club name");
+  assert.ok(html.includes("Team coach"), "the team badge must show the role name");
+  assert.ok(html.includes("U17"), "the team badge must still show the team name");
 });

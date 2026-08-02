@@ -616,3 +616,92 @@ test("24-27. login-status rejects anything that isn't a strict JSON boolean, wit
   assert.equal(row.rows[0].is_active, true, "no invalid body may have changed the account's login status");
   assert.equal(await sessionCountFor(target.id), sessionsBefore, "no invalid body may have touched sessions");
 });
+
+// --- canManageLogin: GET /organization must mirror setUserLoginStatus's own policy ---
+
+test("28. a platform admin viewer gets canManageLogin=true for every visible account", async () => {
+  const admin = await makePlatformAdmin(`pr2b-canmanage-admin-${Date.now()}@test.local`);
+  const other = await makeUser({ email: `pr2b-canmanage-other-${Date.now()}@test.local`, roleHint: "user" });
+  const adminToken = await createSession(admin.id);
+
+  const res = await api("/api/organization", { cookie: cookieFor(adminToken) });
+  assert.equal(res.status, 200);
+  const row = res.body.users.find((u) => u.id === other.id);
+  assert.ok(row, "a platform admin must see every account");
+  assert.equal(row.canManageLogin, true, "a platform admin must be able to manage any account's login");
+});
+
+test("29. a non-admin creator gets canManageLogin=true only for the account they created", async () => {
+  const club = await makeClub(`PR2B CanManage Club ${Date.now()}`);
+  const clubAdmin = await makeUser({ email: `pr2b-canmanage-creator-${Date.now()}@test.local`, roleHint: "user" });
+  await grantClubRole(clubAdmin.id, club);
+  const clubAdminToken = await createSession(clubAdmin.id);
+
+  const created = await api("/api/organization/users", {
+    method: "POST",
+    cookie: cookieFor(clubAdminToken),
+    body: { email: `pr2b-canmanage-created-${Date.now()}@test.local`, password: "somepassword123", roleHint: "athlete" },
+  });
+  assert.equal(created.status, 201);
+  cleanupUserIds.add(created.body.user.id);
+
+  const res = await api("/api/organization", { cookie: cookieFor(clubAdminToken) });
+  assert.equal(res.status, 200);
+  const ownRow = res.body.users.find((u) => u.id === created.body.user.id);
+  assert.ok(ownRow, "the creator must see the account they created");
+  assert.equal(ownRow.canManageLogin, true, "the creator must be able to manage the login of an account they created");
+});
+
+test("30. a club/team-scoped viewer sees an account through shared scope but canManageLogin=false without ownership", async () => {
+  const club = await makeClub(`PR2B CanManage Scope Club ${Date.now()}`);
+  const viewer = await makeUser({ email: `pr2b-canmanage-viewer-${Date.now()}@test.local`, roleHint: "user" });
+  await grantClubRole(viewer.id, club);
+  const viewerToken = await createSession(viewer.id);
+
+  // Visible to viewer only because they share the club - viewer never
+  // created this account and never grants/creates it here.
+  const platformAdmin = await makePlatformAdmin(`pr2b-canmanage-other-creator-${Date.now()}@test.local`);
+  const platformAdminToken = await createSession(platformAdmin.id);
+  const created = await api("/api/organization/users", {
+    method: "POST",
+    cookie: cookieFor(platformAdminToken),
+    body: { email: `pr2b-canmanage-scoped-${Date.now()}@test.local`, password: "somepassword123", roleHint: "athlete" },
+  });
+  assert.equal(created.status, 201);
+  cleanupUserIds.add(created.body.user.id);
+  await grantClubRole(created.body.user.id, club);
+
+  const res = await api("/api/organization", { cookie: cookieFor(viewerToken) });
+  assert.equal(res.status, 200);
+  const row = res.body.users.find((u) => u.id === created.body.user.id);
+  assert.ok(row, "the viewer must see the account through the shared club scope");
+  assert.equal(row.canManageLogin, false, "shared scope alone must not grant login-management rights without ownership");
+});
+
+test("31. a hand-crafted login-status request from a non-owning, non-admin viewer is still rejected regardless of canManageLogin", async () => {
+  const club = await makeClub(`PR2B CanManage Enforce Club ${Date.now()}`);
+  const viewer = await makeUser({ email: `pr2b-canmanage-enforce-viewer-${Date.now()}@test.local`, roleHint: "user" });
+  await grantClubRole(viewer.id, club);
+  const viewerToken = await createSession(viewer.id);
+
+  const platformAdmin = await makePlatformAdmin(`pr2b-canmanage-enforce-creator-${Date.now()}@test.local`);
+  const platformAdminToken = await createSession(platformAdmin.id);
+  const created = await api("/api/organization/users", {
+    method: "POST",
+    cookie: cookieFor(platformAdminToken),
+    body: { email: `pr2b-canmanage-enforce-target-${Date.now()}@test.local`, password: "somepassword123", roleHint: "athlete" },
+  });
+  assert.equal(created.status, 201);
+  cleanupUserIds.add(created.body.user.id);
+  await grantClubRole(created.body.user.id, club);
+
+  const res = await api(`/api/organization/users/${created.body.user.id}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(viewerToken),
+    body: { active: false },
+  });
+  assert.notEqual(res.status, 200, "the backend must still reject this even though the account is visible to the viewer");
+
+  const row = await query(`select is_active from public.users where id = $1`, [created.body.user.id]);
+  assert.equal(row.rows[0].is_active, true, "the account's login status must be untouched");
+});

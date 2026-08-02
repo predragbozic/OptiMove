@@ -251,8 +251,7 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     return true;
   }
   if (type === "organization-manage-account-close") {
-    state.organizationUserManage = { open: false, userId: "", pending: false, error: "" };
-    void renderOrganizationPanel({ refresh: false });
+    closeManageAccountModal(renderOrganizationPanel);
     return true;
   }
   if (type === "organization-global-role-toggle") {
@@ -580,6 +579,15 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     return true;
   }
   return false;
+}
+
+// Shared by the modal's own close button/backdrop click (via
+// handleOrganizationAction above) and the global Escape handler in app.js,
+// so both paths reset exactly the same state - never an API request, just
+// closing the view.
+export function closeManageAccountModal(renderOrganizationPanel) {
+  state.organizationUserManage = { open: false, userId: "", pending: false, error: "" };
+  void renderOrganizationPanel({ refresh: false });
 }
 
 // LAST_PLATFORM_ADMIN is a machine-readable error code from the backend

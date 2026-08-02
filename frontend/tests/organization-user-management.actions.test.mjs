@@ -6,7 +6,7 @@ globalThis.document = {
   querySelectorAll: () => [],
 };
 
-const { handleOrganizationAction } = await import("../organization-actions.js");
+const { handleOrganizationAction, closeManageAccountModal } = await import("../organization-actions.js");
 const { state } = await import("../state.js");
 
 function resetState() {
@@ -244,4 +244,31 @@ test("a cancelled confirmation makes no network call at all", async () => {
     noopCallbacks(),
   );
   assert.equal(calls.length, 0, "declining the confirmation must not call the API at all");
+});
+
+// closeManageAccountModal is the exact function app.js's global Escape
+// handler calls (only when the modal is open) - this is the unit worth
+// testing directly, since app.js itself is a bootstrap entry point with no
+// exports to exercise in isolation.
+test("closeManageAccountModal resets the modal state and makes no network call", async () => {
+  resetState();
+  const calls = installFetchMock([]);
+  let rendered = false;
+
+  closeManageAccountModal(async () => { rendered = true; });
+
+  assert.deepEqual(state.organizationUserManage, { open: false, userId: "", pending: false, error: "" });
+  assert.equal(rendered, true, "the panel must be re-rendered so the modal actually disappears");
+  assert.equal(calls.length, 0, "closing via Escape must never call the API");
+});
+
+test("closeManageAccountModal clears a stale pending/error state left over from a failed action", async () => {
+  resetState();
+  state.organizationUserManage = { open: true, userId: "user-1", pending: true, error: "Something went wrong. Please try again." };
+
+  closeManageAccountModal(async () => {});
+
+  assert.equal(state.organizationUserManage.open, false);
+  assert.equal(state.organizationUserManage.pending, false);
+  assert.equal(state.organizationUserManage.error, "");
 });

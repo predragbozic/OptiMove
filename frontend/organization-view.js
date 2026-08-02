@@ -885,7 +885,13 @@ function renderOrganizationRoleForms(data) {
 // textually separate here (Platform access vs Private coaching) matches
 // that distinction; the backend table name is unrelated to this wording.
 function roleLabelText(role) {
-  return { club_admin: "Club admin", team_coach: "Team coach" }[role] || role || "Role";
+  return {
+    club_admin: "Club admin",
+    club_manager: "Club manager",
+    team_admin: "Team admin",
+    team_coach: "Team coach",
+    team_trainer: "Team trainer",
+  }[role] || role || "Role";
 }
 
 // Every badge below is derived from the account's REAL rows (globalRoles,
@@ -906,8 +912,14 @@ function renderOrganizationUserBadges(row) {
       ${row.isAthlete === true ? `<span class="role-badge is-athlete">Athlete</span>` : ""}
       ${isPlatformAdminBadge ? `<span class="role-badge is-platform-admin">Platform administrator</span>` : ""}
       ${isCoachBadge ? `<span class="role-badge is-coach">Independent/private coach</span>` : ""}
-      ${clubRoles.map((r) => `<span class="role-badge is-club" title="${escapeAttr(r.clubName || "Club")}">${escapeHtml(r.clubName || "Club")}</span>`).join("")}
-      ${teamRoles.map((r) => `<span class="role-badge is-team" title="${escapeAttr(r.teamName || "Team")}">${escapeHtml(r.teamName || "Team")}</span>`).join("")}
+      ${clubRoles.map((r) => {
+        const label = `${roleLabelText(r.role)} · ${r.clubName || "Club"}`;
+        return `<span class="role-badge is-club" title="${escapeAttr(label)}">${escapeHtml(label)}</span>`;
+      }).join("")}
+      ${teamRoles.map((r) => {
+        const label = `${roleLabelText(r.role)} · ${r.teamName || "Team"}`;
+        return `<span class="role-badge is-team" title="${escapeAttr(label)}">${escapeHtml(label)}</span>`;
+      }).join("")}
     </span>
   `;
 }
@@ -1007,7 +1019,9 @@ export function renderManageAccountModal(data) {
             <span class="user-status-badge ${loginActive ? "is-active" : "is-disabled"}">${loginActive ? "Active login" : "Login disabled"}</span>
             ${isSelf
               ? `<span class="muted">You can't disable your own login.</span>`
-              : `<button class="plain-button compact-button ${loginActive ? "danger-button" : ""}" type="button" data-action="organization-user-login-toggle" data-user-id="${escapeAttr(row.id)}" data-next-active="${loginActive ? "false" : "true"}" ${pending ? "disabled" : ""}>${loginActive ? "Disable login" : "Enable login"}</button>`}
+              : row.canManageLogin === true
+                ? `<button class="plain-button compact-button ${loginActive ? "danger-button" : ""}" type="button" data-action="organization-user-login-toggle" data-user-id="${escapeAttr(row.id)}" data-next-active="${loginActive ? "false" : "true"}" ${pending ? "disabled" : ""}>${loginActive ? "Disable login" : "Enable login"}</button>`
+                : `<span class="muted">You don't have permission to change this login.</span>`}
           </div>
           <p class="muted">Roles, athlete profile, memberships, and history are not changed by disabling or enabling this login.</p>
         </section>
