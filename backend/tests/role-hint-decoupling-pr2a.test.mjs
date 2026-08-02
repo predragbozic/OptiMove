@@ -5,6 +5,7 @@ import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
+import { safeCleanup } from "./_test-cleanup.mjs";
 
 // Phase 4 PR 2A: role_hint must never again gate an HTTP status, permission,
 // scope, or available data set - only req.authz (backed by
@@ -34,13 +35,13 @@ before(async () => {
 });
 
 after(async () => {
-  if (cleanupPlanIds.size) await query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]]);
-  if (cleanupAthleteIds.size) await query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]]);
-  if (cleanupTeamIds.size) await query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]);
-  if (cleanupClubIds.size) await query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]);
-  if (cleanupUserIds.size) await query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]);
-  await new Promise((resolve) => server.close(resolve));
-  await pool.end();
+  await safeCleanup(() => cleanupPlanIds.size && query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]]), "plans");
+  await safeCleanup(() => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]]), "athletes");
+  await safeCleanup(() => cleanupTeamIds.size && query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]), "teams");
+  await safeCleanup(() => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]), "clubs");
+  await safeCleanup(() => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]), "users");
+  await safeCleanup(() => new Promise((resolve) => server.close(resolve)), "server close");
+  await safeCleanup(() => pool.end(), "pool end");
 });
 
 async function api(path, { method = "GET", body, cookie } = {}) {

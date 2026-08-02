@@ -9,6 +9,7 @@ import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession } from "../src/auth.js";
 import { canUseTemplate } from "../src/programAccessPolicy.js";
+import { safeCleanup } from "./_test-cleanup.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationPath = path.resolve(__dirname, "../../migrations/20260801_athlete_memberships.sql");
@@ -30,14 +31,15 @@ before(async () => {
 after(async () => {
   // Deleting athletes/clubs/teams cascades to athlete_memberships,
   // user_athletes, and plans.plans rows created for these tests. Template
-  // plans (athlete_id is null) need their own explicit cleanup.
-  if (cleanupPlanIds.size) await query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]]);
-  if (cleanupAthleteIds.size) await query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]]);
-  if (cleanupTeamIds.size) await query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]);
-  if (cleanupClubIds.size) await query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]);
-  if (cleanupUserIds.size) await query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]);
-  await new Promise((resolve) => server.close(resolve));
-  await pool.end();
+  // plans (athlete_id is null) need their own explicit cleanup. Each step is
+  // wrapped so one failure never skips the rest.
+  await safeCleanup(() => cleanupPlanIds.size && query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]]), "plans");
+  await safeCleanup(() => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]]), "athletes");
+  await safeCleanup(() => cleanupTeamIds.size && query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]), "teams");
+  await safeCleanup(() => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]), "clubs");
+  await safeCleanup(() => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]), "users");
+  await safeCleanup(() => new Promise((resolve) => server.close(resolve)), "server close");
+  await safeCleanup(() => pool.end(), "pool end");
 });
 
 async function api(path, { method = "GET", body, cookie } = {}) {
