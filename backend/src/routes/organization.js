@@ -1303,11 +1303,23 @@ async function loadTeams(req) {
 // existing organization-view.js "role_hint" badge - never read as a real
 // role list) alongside the raw role_hint field the current frontend already
 // depends on.
+// The exact policy setUserLoginStatus enforces (mirrored here, not
+// duplicated with different logic): a platform admin can manage anyone;
+// anyone else only an account they created, and never a platform admin
+// account. Feeds the informational canManageLogin flag GET /organization
+// returns per user, so the frontend can decide whether to even offer the
+// Enable/Disable login control - the backend endpoint itself remains the
+// real enforcement point regardless of what this flag says.
+function canManageLoginFor({ actorIsPlatformAdmin, ownsTarget, targetIsPlatformAdmin }) {
+  return actorIsPlatformAdmin || (ownsTarget && !targetIsPlatformAdmin);
+}
+
 async function loadUsers(req) {
+  const actorIsPlatformAdmin = isPlatformAdministrator(req.authz);
   const result = await query(
     `select distinct
        u.id, u.email, coalesce(u.display_name, u.full_name, u.email) as name,
-       u.role_hint,
+       u.role_hint, u.created_by_user_id,
        u.is_active as login_active,
        exists (select 1 from public.athletes ath where ath.user_id = u.id) as is_athlete,
        coalesce(global_roles.data, '[]'::jsonb) as global_roles,
@@ -1380,7 +1392,7 @@ async function loadUsers(req) {
          )
        )
      order by name`,
-    [req.user.id, isPlatformAdministrator(req.authz)],
+    [req.user.id, actorIsPlatformAdmin],
   );
   return result.rows.map((row) => {
     const activeGlobalRoles = new Set(row.global_roles.filter((r) => r.isActive).map((r) => r.role));
@@ -1388,6 +1400,7 @@ async function loadUsers(req) {
     const hasActiveTeamRole = row.team_roles.some((r) => r.isActive);
     const platformAdministration = activeGlobalRoles.has("platform_admin");
     const coachWorkspace = platformAdministration || hasActiveClubRole || hasActiveTeamRole || activeGlobalRoles.has("independent_coach");
+    const ownsTarget = String(row.created_by_user_id) === String(req.user.id);
     return {
       id: row.id,
       email: row.email,
@@ -1399,6 +1412,7 @@ async function loadUsers(req) {
       globalRoles: row.global_roles,
       clubRoles: row.club_roles,
       teamRoles: row.team_roles,
+      canManageLogin: canManageLoginFor({ actorIsPlatformAdmin, ownsTarget, targetIsPlatformAdmin: platformAdministration }),
       capabilities: {
         coachWorkspace,
         athleteWorkspace: row.is_athlete,

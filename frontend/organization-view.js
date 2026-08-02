@@ -208,7 +208,6 @@ export function renderOrganizationBrowser(data) {
   const activeAthletes = allReturnedAthletes.filter((athlete) => athlete.is_active !== false && athlete.has_active_access);
   const myArchivedCoachRelationships = allReturnedAthletes.filter((athlete) => athlete.has_my_archived_coach_relationship);
   const archivedProfiles = isPlatformAdmin ? allReturnedAthletes.filter((athlete) => athlete.is_active === false) : [];
-  const users = data.users || [];
   const section = state.organization.section || "overview";
   const selectedClub = clubs.find((club) => String(club.id) === String(state.organization.selectedClubId));
   const selectedTeam = teams.find((team) => String(team.id) === String(state.organization.selectedTeamId));
@@ -235,7 +234,7 @@ export function renderOrganizationBrowser(data) {
         </div>
       </div>
       <section class="organization-lists organization-lists-browser">
-        ${section === "overview" || section === "users" ? renderOrganizationList("Users", users, "user") : ""}
+        ${section === "overview" || section === "users" ? renderOrganizationUsersSection(data) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" ? renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId) : ""}
         ${section === "overview" || section === "clubs" || section === "teams" || section === "athletes"
@@ -249,6 +248,7 @@ export function renderOrganizationBrowser(data) {
       ${section === "athletes" && !selectedClub && !selectedTeam && state.organization.showArchivedAthletes ? renderArchivedAthletesList(myArchivedCoachRelationships, archivedProfiles, isPlatformAdmin) : ""}
       ${section === "athletes" && state.organization.accessOpen ? renderAthleteAccessModal(visibleAthletes) : ""}
       ${state.organizationInvite.open ? renderAthleteInviteModal(activeAthletes) : ""}
+      ${state.organizationUserManage.open ? renderManageAccountModal(data) : ""}
     </section>
   `;
 }
@@ -875,6 +875,183 @@ function renderOrganizationRoleForms(data) {
       <p class="builder-error" aria-live="polite"></p>
       <button class="plain-button" type="submit" ${athleteOptions.length ? "" : "disabled"}>Create login</button>
     </form>
+  `;
+}
+
+// Independent/private coach is intentionally never called "global" in the
+// UI - it lives in public.user_global_roles because it isn't tied to one
+// specific club or team, but it grants NO platform-wide access (only real
+// club/team roles and platform_admin do). Keeping the two visually and
+// textually separate here (Platform access vs Private coaching) matches
+// that distinction; the backend table name is unrelated to this wording.
+function roleLabelText(role) {
+  return {
+    club_admin: "Club admin",
+    club_manager: "Club manager",
+    team_admin: "Team admin",
+    team_coach: "Team coach",
+    team_trainer: "Team trainer",
+  }[role] || role || "Role";
+}
+
+// Every badge below is derived from the account's REAL rows (globalRoles,
+// clubRoles, teamRoles, isAthlete, loginActive) as returned by
+// GET /api/organization - never from role_hint/legacyDisplayRole, which is
+// display-only legacy text and may not match reality for a multi-role
+// account. A multi-role account shows every applicable badge at once.
+function renderOrganizationUserBadges(row) {
+  const globalRoles = row.globalRoles || [];
+  const isPlatformAdminBadge = globalRoles.some((r) => r.role === "platform_admin" && r.isActive);
+  const isCoachBadge = globalRoles.some((r) => r.role === "independent_coach" && r.isActive);
+  const clubRoles = (row.clubRoles || []).filter((r) => r.isActive);
+  const teamRoles = (row.teamRoles || []).filter((r) => r.isActive);
+  const loginActive = row.loginActive !== false;
+  return `
+    <span class="organization-user-badges">
+      <span class="user-status-badge ${loginActive ? "is-active" : "is-disabled"}">${loginActive ? "Active login" : "Login disabled"}</span>
+      ${row.isAthlete === true ? `<span class="role-badge is-athlete">Athlete</span>` : ""}
+      ${isPlatformAdminBadge ? `<span class="role-badge is-platform-admin">Platform administrator</span>` : ""}
+      ${isCoachBadge ? `<span class="role-badge is-coach">Independent/private coach</span>` : ""}
+      ${clubRoles.map((r) => {
+        const label = `${roleLabelText(r.role)} · ${r.clubName || "Club"}`;
+        return `<span class="role-badge is-club" title="${escapeAttr(label)}">${escapeHtml(label)}</span>`;
+      }).join("")}
+      ${teamRoles.map((r) => {
+        const label = `${roleLabelText(r.role)} · ${r.teamName || "Team"}`;
+        return `<span class="role-badge is-team" title="${escapeAttr(label)}">${escapeHtml(label)}</span>`;
+      }).join("")}
+    </span>
+  `;
+}
+
+function renderOrganizationUserRow(row) {
+  const loginActive = row.loginActive !== false;
+  return `
+    <article class="organization-row organization-user-row ${loginActive ? "" : "is-disabled-account"}">
+      <span class="organization-avatar">${escapeHtml((row.name || row.email || "US").slice(0, 2).toUpperCase())}</span>
+      <span class="organization-user-summary">
+        <strong>${escapeHtml(row.name || row.email || "User")}</strong>
+        <small>${escapeHtml(row.email || "")}</small>
+        ${renderOrganizationUserBadges(row)}
+      </span>
+      <span class="organization-row-actions">
+        <button class="plain-button compact-button" type="button" data-action="organization-manage-account-open" data-user-id="${escapeAttr(row.id)}">Manage account</button>
+      </span>
+    </article>
+  `;
+}
+
+function renderOrganizationUsersSection(data) {
+  const allUsers = data.users || [];
+  const disabledUsers = allUsers.filter((row) => row.loginActive === false);
+  const activeUsers = allUsers.filter((row) => row.loginActive !== false);
+  const showDisabled = state.organization.showDisabledUsers;
+  const visibleUsers = showDisabled ? allUsers : activeUsers;
+  return `
+    <section class="panel organization-list-card">
+      <div class="organization-list-head">
+        <p class="eyebrow">Users</p>
+        <strong>${activeUsers.length}</strong>
+        ${disabledUsers.length ? `<button class="text-action" type="button" data-action="organization-toggle-disabled-users">${showDisabled ? "Hide disabled" : `Show disabled (${disabledUsers.length})`}</button>` : ""}
+      </div>
+      <div class="organization-list">
+        ${visibleUsers.length ? visibleUsers.map((row) => renderOrganizationUserRow(row)).join("") : `<p class="muted">No users yet.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderManageAccountRoleSection({ eyebrow, label, active, canManage, userId, role, note, grantLabel = "Grant access", removeLabel = "Remove access" }) {
+  return `
+    <section class="manage-account-section">
+      <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+      <div class="manage-account-row">
+        <strong>${escapeHtml(label)}</strong>
+        <span class="user-status-badge ${active ? "is-active" : "is-inactive"}">${active ? "Active" : "Not assigned"}</span>
+        ${canManage ? `
+          <button class="plain-button compact-button ${active ? "danger-button" : ""}" type="button" data-action="organization-global-role-toggle" data-user-id="${escapeAttr(userId)}" data-role="${escapeAttr(role)}" data-next-active="${active ? "false" : "true"}" ${state.organizationUserManage.pending ? "disabled" : ""}>${active ? removeLabel : grantLabel}</button>
+        ` : ""}
+      </div>
+      ${note ? `<p class="muted">${escapeHtml(note)}</p>` : ""}
+    </section>
+  `;
+}
+
+function renderManageAccountScopedRoles(title, rows, columns) {
+  return `
+    <section class="manage-account-section">
+      <p class="eyebrow">${escapeHtml(title)}</p>
+      ${rows.length ? `<div class="manage-account-list">${rows.map((row) => `
+        <div class="manage-account-row">
+          <span>${columns(row)}</span>
+          <span class="muted">${escapeHtml(roleLabelText(row.role))}</span>
+          <span class="user-status-badge ${row.isActive ? "is-active" : "is-inactive"}">${row.isActive ? "Active" : "Inactive"}</span>
+        </div>
+      `).join("")}</div>` : `<p class="muted">No ${escapeHtml(title.toLowerCase())}.</p>`}
+    </section>
+  `;
+}
+
+export function renderManageAccountModal(data) {
+  const row = (data.users || []).find((user) => String(user.id) === String(state.organizationUserManage.userId));
+  if (!row) return "";
+  const viewerIsPlatformAdmin = Boolean(data.isPlatformAdmin);
+  const viewerId = state.currentUser?.id;
+  const isSelf = Boolean(viewerId) && String(viewerId) === String(row.id);
+  const loginActive = row.loginActive !== false;
+  const globalRoles = row.globalRoles || [];
+  const platformAdminActive = globalRoles.some((r) => r.role === "platform_admin" && r.isActive);
+  const coachActive = globalRoles.some((r) => r.role === "independent_coach" && r.isActive);
+  const pending = state.organizationUserManage.pending;
+  const error = state.organizationUserManage.error;
+  return `
+    <div class="exercise-tag-overlay" role="presentation">
+      <button class="exercise-tag-backdrop" type="button" data-action="organization-manage-account-close" aria-label="Close manage account"></button>
+      <section class="panel exercise-tag-modal organization-manage-account-modal" role="dialog" aria-modal="true" aria-label="Manage account">
+        <div class="builder-modal-head">
+          <div><p class="eyebrow">Account</p><h3>${escapeHtml(row.name || row.email || "User")}</h3><p class="muted">${escapeHtml(row.email || "")}</p></div>
+          <button class="plain-button icon-button" type="button" data-action="organization-manage-account-close" aria-label="Close"><span class="button-icon">x</span></button>
+        </div>
+        ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
+        <section class="manage-account-section">
+          <p class="eyebrow">Account status</p>
+          <div class="manage-account-row">
+            <span class="user-status-badge ${loginActive ? "is-active" : "is-disabled"}">${loginActive ? "Active login" : "Login disabled"}</span>
+            ${isSelf
+              ? `<span class="muted">You can't disable your own login.</span>`
+              : row.canManageLogin === true
+                ? `<button class="plain-button compact-button ${loginActive ? "danger-button" : ""}" type="button" data-action="organization-user-login-toggle" data-user-id="${escapeAttr(row.id)}" data-next-active="${loginActive ? "false" : "true"}" ${pending ? "disabled" : ""}>${loginActive ? "Disable login" : "Enable login"}</button>`
+                : `<span class="muted">You don't have permission to change this login.</span>`}
+          </div>
+          <p class="muted">Roles, athlete profile, memberships, and history are not changed by disabling or enabling this login.</p>
+        </section>
+        ${renderManageAccountRoleSection({
+          eyebrow: "Platform access",
+          label: "Platform administrator",
+          active: platformAdminActive,
+          canManage: viewerIsPlatformAdmin,
+          userId: row.id,
+          role: "platform_admin",
+        })}
+        ${renderManageAccountRoleSection({
+          eyebrow: "Private coaching",
+          label: "Independent/private coach",
+          active: coachActive,
+          canManage: viewerIsPlatformAdmin,
+          userId: row.id,
+          role: "independent_coach",
+          grantLabel: "Grant private coaching",
+          removeLabel: "Remove private coaching",
+          note: "Can only manage athletes linked through an active private coach relationship. No automatic access to clubs or teams.",
+        })}
+        ${renderManageAccountScopedRoles("Club roles", (row.clubRoles || []), (r) => escapeHtml(r.clubName || "Club"))}
+        ${renderManageAccountScopedRoles("Team roles", (row.teamRoles || []), (r) => `${escapeHtml(r.teamName || "Team")}${r.clubName ? ` <small>${escapeHtml(r.clubName)}</small>` : ""}`)}
+        <section class="manage-account-section">
+          <p class="eyebrow">Athlete profile</p>
+          <p>${row.isAthlete === true ? "Athlete profile linked" : "No athlete profile linked"}</p>
+        </section>
+      </section>
+    </div>
   `;
 }
 

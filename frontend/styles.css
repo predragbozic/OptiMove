@@ -5000,6 +5000,127 @@ input:focus {
   color: var(--brand-dark);
 }
 
+/* Users list / Manage account modal (Phase 4 PR 3A) */
+
+.organization-user-row {
+  align-items: start;
+}
+
+.organization-user-summary {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.organization-user-summary strong,
+.organization-user-summary small {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.organization-user-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.organization-row.is-disabled-account {
+  opacity: 0.72;
+  background: #f7f8fa;
+}
+
+.user-status-badge,
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-status-badge.is-active {
+  background: #eaf7ee;
+  color: #2e9e4f;
+}
+
+.user-status-badge.is-disabled {
+  background: #fbeceb;
+  color: #a23b3b;
+}
+
+.user-status-badge.is-inactive {
+  background: #edf1f5;
+  color: var(--muted);
+}
+
+.role-badge {
+  background: #edf1f5;
+  color: var(--muted);
+}
+
+.role-badge.is-platform-admin {
+  background: #fdf1e7;
+  color: #a15c1f;
+}
+
+.role-badge.is-coach {
+  background: #eef2fb;
+  color: #3b5bab;
+}
+
+.role-badge.is-athlete {
+  background: #eef8f6;
+  color: #1f6f68;
+}
+
+.role-badge.is-club,
+.role-badge.is-team {
+  background: #f3eefb;
+  color: #6a3ba0;
+}
+
+.organization-manage-account-modal {
+  display: grid;
+  gap: 0;
+}
+
+.manage-account-section {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.manage-account-section:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.manage-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  word-break: break-word;
+}
+
+.manage-account-list {
+  display: grid;
+  gap: 6px;
+}
+
+.plain-button.danger-button {
+  border-color: var(--danger, #a23b3b);
+  color: var(--danger, #a23b3b);
+}
+
 .program-lifecycle-badge.is-draft {
   background: #f8fafc;
   color: #475569;

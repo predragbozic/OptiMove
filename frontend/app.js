@@ -72,6 +72,7 @@ import {
   visibleTemplateScopes,
 } from "./navigation.js";
 import {
+  closeManageAccountModal,
   handleOrganizationAction,
   handleOrganizationFilterInput,
   handleOrganizationSelectChange,
@@ -294,7 +295,9 @@ function bindEvents() {
   document.addEventListener("submit", handleGlobalSubmit);
   document.addEventListener("error", handleImageError, true);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeMedia();
+    if (event.key !== "Escape") return;
+    closeMedia();
+    if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
   });
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
