@@ -5,7 +5,7 @@ import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
-import { safeCleanup } from "./_test-cleanup.mjs";
+import { runCleanupSteps } from "./_test-cleanup.mjs";
 
 let server;
 let baseUrl;
@@ -21,12 +21,14 @@ before(async () => {
 });
 
 after(async () => {
-  await safeCleanup(() => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]]), "athletes");
-  await safeCleanup(() => cleanupTeamIds.size && query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]), "teams");
-  await safeCleanup(() => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]), "clubs");
-  await safeCleanup(() => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]), "users");
-  await safeCleanup(() => new Promise((resolve) => server.close(resolve)), "server close");
-  await safeCleanup(() => pool.end(), "pool end");
+  await runCleanupSteps([
+    ["athletes", () => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]])],
+    ["teams", () => cleanupTeamIds.size && query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]])],
+    ["clubs", () => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]])],
+    ["users", () => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]])],
+    ["server close", () => new Promise((resolve) => server.close(resolve))],
+    ["pool end", () => pool.end()],
+  ]);
 });
 
 async function api(path, { method = "GET", body, cookie } = {}) {

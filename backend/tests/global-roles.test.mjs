@@ -8,7 +8,7 @@ import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
-import { safeCleanup } from "./_test-cleanup.mjs";
+import { runCleanupSteps } from "./_test-cleanup.mjs";
 
 // Phase 4 PR 1: public.user_global_roles becomes the real, independently-
 // managed home for platform_admin and independent_coach - the only two
@@ -39,15 +39,18 @@ after(async () => {
   // athletes.user_id is ON DELETE SET NULL, not CASCADE - deleting the
   // linked user first would silently orphan the athlete row instead of
   // removing it, so athletes are deleted explicitly and before their user.
-  // Each step is wrapped so one failure never skips the rest.
-  await safeCleanup(() => cleanupPlanIds.size && query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]]), "plans");
-  await safeCleanup(() => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]]), "athletes");
-  await safeCleanup(() => cleanupTeamIds.size && query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]]), "teams");
-  await safeCleanup(() => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]]), "clubs");
-  // user_global_roles rows cascade-delete with their user row.
-  await safeCleanup(() => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]]), "users");
-  await safeCleanup(() => new Promise((resolve) => server.close(resolve)), "server close");
-  await safeCleanup(() => pool.end(), "pool end");
+  // Every step is attempted regardless of earlier failures, and the whole
+  // hook rejects if any step failed - see runCleanupSteps.
+  await runCleanupSteps([
+    ["plans", () => cleanupPlanIds.size && query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]])],
+    ["athletes", () => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]])],
+    ["teams", () => cleanupTeamIds.size && query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]])],
+    ["clubs", () => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]])],
+    // user_global_roles rows cascade-delete with their user row.
+    ["users", () => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]])],
+    ["server close", () => new Promise((resolve) => server.close(resolve))],
+    ["pool end", () => pool.end()],
+  ]);
 });
 
 async function makeClub(name) {
