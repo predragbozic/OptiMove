@@ -23,19 +23,24 @@ const router = Router();
 // before this function existed. A platform workspace (or no workspace at
 // all, e.g. right after a role was revoked) returns everything the account
 // is authorized to see, unfiltered - the same as pre-Phase-5 behavior.
-function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes, users }, actorUserId) {
+function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes, users, accessRequests }, actorUserId) {
   if (!workspace || workspace.type === "platform" || workspace.type === "athlete") {
-    return { clubs, teams, athletes, users };
+    return { clubs, teams, athletes, users, accessRequests };
   }
 
+  const isSelf = (user) => String(user.id) === String(actorUserId);
+  const hasAnyActiveScopedRole = (user) =>
+    (user.clubRoles || []).some((r) => r.isActive) || (user.teamRoles || []).some((r) => r.isActive);
   // A user row survives the workspace narrowing regardless of club/team
-  // match whenever the base loadUsers() visibility already granted it for a
-  // reason that has nothing to do with club/team scope: it's the actor's own
-  // account, or one they created (canManageLogin is only ever true for the
-  // actor's own creations or a platform admin, and platform never reaches
-  // this branch) - otherwise "Users I created" would disappear the moment a
-  // multi-club/team actor's workspace narrows to one specific club/team.
-  const alwaysVisibleUser = (user) => String(user.id) === String(actorUserId) || user.canManageLogin;
+  // match only when doing so can never leak a DIFFERENT club/team's roster:
+  // always the viewer's own account, and an account the viewer created but
+  // that doesn't yet hold any active club/team role anywhere (so it can
+  // still be assigned one from inside this workspace) - never an account
+  // whose only active scoped role is in some OTHER club/team, even if this
+  // same viewer created it. canManageLogin is only ever true for the
+  // viewer's own creations or a platform admin, and platform never reaches
+  // this branch.
+  const alwaysVisibleUser = (user) => isSelf(user) || (user.canManageLogin && !hasAnyActiveScopedRole(user));
 
   if (workspace.type === "club") {
     const clubId = String(workspace.scopeId);
@@ -54,7 +59,9 @@ function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes,
       || (user.clubRoles || []).some((r) => String(r.clubId) === clubId)
       || (user.teamRoles || []).some((r) => filteredTeamIds.has(String(r.teamId))),
     );
-    return { clubs: filteredClubs, teams: filteredTeams, athletes: filteredAthletes, users: filteredUsers };
+    const filteredAthleteIds = new Set(filteredAthletes.map((athlete) => String(athlete.id)));
+    const filteredAccessRequests = accessRequests.filter((r) => filteredAthleteIds.has(String(r.athlete_id)));
+    return { clubs: filteredClubs, teams: filteredTeams, athletes: filteredAthletes, users: filteredUsers, accessRequests: filteredAccessRequests };
   }
 
   if (workspace.type === "team") {
@@ -64,17 +71,21 @@ function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes,
       (athlete.memberships || []).some((m) => m.membershipType === "team" && String(m.teamId) === teamId),
     );
     const filteredUsers = users.filter((user) => alwaysVisibleUser(user) || (user.teamRoles || []).some((r) => String(r.teamId) === teamId));
-    return { clubs: [], teams: filteredTeams, athletes: filteredAthletes, users: filteredUsers };
+    const filteredAthleteIds = new Set(filteredAthletes.map((athlete) => String(athlete.id)));
+    const filteredAccessRequests = accessRequests.filter((r) => filteredAthleteIds.has(String(r.athlete_id)));
+    return { clubs: [], teams: filteredTeams, athletes: filteredAthletes, users: filteredUsers, accessRequests: filteredAccessRequests };
   }
 
   if (workspace.type === "private_coach") {
     // Only athletes tied to THIS account's own private-coach relationship -
     // never clubs/teams, even if the same account also holds those roles.
     const filteredAthletes = athletes.filter((athlete) => athlete.has_my_active_coach_relationship || athlete.has_my_archived_coach_relationship);
-    return { clubs: [], teams: [], athletes: filteredAthletes, users: [] };
+    const filteredAthleteIds = new Set(filteredAthletes.map((athlete) => String(athlete.id)));
+    const filteredAccessRequests = accessRequests.filter((r) => filteredAthleteIds.has(String(r.athlete_id)));
+    return { clubs: [], teams: [], athletes: filteredAthletes, users: [], accessRequests: filteredAccessRequests };
   }
 
-  return { clubs, teams, athletes, users };
+  return { clubs, teams, athletes, users, accessRequests };
 }
 
 router.get("/", async (req, res, next) => {
@@ -87,7 +98,7 @@ router.get("/", async (req, res, next) => {
       loadProgramAccessRequests(req),
       resolveActiveWorkspace(req.user.id, req.authz),
     ]);
-    const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users }, req.user.id);
+    const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users, accessRequests }, req.user.id);
     res.json({
       scope: req.user?.role_hint || "coach",
       isPlatformAdmin: isPlatformAdministrator(req.authz),
@@ -106,7 +117,7 @@ router.get("/", async (req, res, next) => {
       teams: scoped.teams,
       athletes: scoped.athletes,
       users: scoped.users,
-      accessRequests,
+      accessRequests: scoped.accessRequests,
       activeWorkspace,
     });
   } catch (error) {

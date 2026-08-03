@@ -22,6 +22,7 @@ const cleanupUserIds = new Set();
 const cleanupClubIds = new Set();
 const cleanupTeamIds = new Set();
 const cleanupAthleteIds = new Set();
+const cleanupPlanIds = new Set();
 
 before(async () => {
   server = http.createServer(app);
@@ -31,6 +32,7 @@ before(async () => {
 
 after(async () => {
   await runCleanupSteps([
+    ["plans", () => cleanupPlanIds.size && query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]])],
     ["athletes", () => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]])],
     ["teams", () => cleanupTeamIds.size && query(`delete from public.teams where id = any($1::uuid[])`, [[...cleanupTeamIds]])],
     ["clubs", () => cleanupClubIds.size && query(`delete from public.clubs where id = any($1::uuid[])`, [[...cleanupClubIds]])],
@@ -460,4 +462,90 @@ test("20. a platform workspace (and no workspace at all) leaves GET /organizatio
   const org = await api("/api/organization", { cookie: cookieFor(token) });
   assert.equal(org.body.activeWorkspace.type, "platform");
   assert.ok(org.body.clubs.some((c) => c.id === club), "a platform workspace must still see every club, unfiltered");
+});
+
+// --- 21: accessRequests are scoped by the same already-filtered athlete set, not role_hint ---
+
+async function makeRequestedProgramAccess(athleteUserId, creatorUserId) {
+  const plan = await query(
+    `insert into plans.plans (plan_type, created_by_user_id, name, is_template)
+     values ('program', $1, 'Workspace Access Request Plan', true)
+     returning id`,
+    [creatorUserId],
+  );
+  cleanupPlanIds.add(plan.rows[0].id);
+  await query(
+    `insert into library.program_access (plan_id, user_id, access_type, status)
+     values ($1, $2, 'assigned', 'requested')`,
+    [plan.rows[0].id, athleteUserId],
+  );
+}
+
+test("21. a multi-role account's accessRequests are scoped to the active workspace's own athletes, not mixed across contexts", async () => {
+  const clubX = await makeClub(`Workspace Club N1 ${Date.now()}`);
+  const clubZ = await makeClub(`Workspace Club N2 ${Date.now()}`);
+  const teamY = await makeTeam(clubZ, "Team N");
+  const multiRole = await makeUser({ email: `wksp-accessreq-multi-${Date.now()}@test.local`, roleHint: "user" });
+  await grantClubAdminDirectly(multiRole.id, clubX);
+  await grantTeamCoachDirectly(multiRole.id, teamY);
+
+  const athleteXUser = await makeUser({ email: `wksp-accessreq-athx-${Date.now()}@test.local` });
+  const athleteXId = await makeAthleteLinkedTo(athleteXUser.id, { membershipClubId: clubX });
+  const athleteYUser = await makeUser({ email: `wksp-accessreq-athy-${Date.now()}@test.local` });
+  const athleteYId = await makeAthleteLinkedTo(athleteYUser.id, { membershipClubId: clubZ, membershipTeamId: teamY });
+
+  await makeRequestedProgramAccess(athleteXUser.id, multiRole.id);
+  await makeRequestedProgramAccess(athleteYUser.id, multiRole.id);
+
+  const token = await createSession(multiRole.id);
+
+  await api("/api/auth/workspace", { method: "PUT", cookie: cookieFor(token), body: { type: "club", scopeId: clubX } });
+  const clubView = await api("/api/organization", { cookie: cookieFor(token) });
+  assert.ok(clubView.body.accessRequests.some((r) => r.athlete_id === athleteXId), "the club workspace must see its own athlete's request");
+  assert.ok(!clubView.body.accessRequests.some((r) => r.athlete_id === athleteYId), "the club workspace must not see the team workspace's athlete's request");
+
+  await api("/api/auth/workspace", { method: "PUT", cookie: cookieFor(token), body: { type: "team", scopeId: teamY } });
+  const teamView = await api("/api/organization", { cookie: cookieFor(token) });
+  assert.ok(teamView.body.accessRequests.some((r) => r.athlete_id === athleteYId), "the team workspace must see its own athlete's request");
+  assert.ok(!teamView.body.accessRequests.some((r) => r.athlete_id === athleteXId), "the team workspace must not see the club workspace's athlete's request");
+});
+
+// --- 22: a creator's users don't leak across clubs in the Users list ---
+
+test("22. a creator's account with an active role in a DIFFERENT club is not shown just because the same viewer created it", async () => {
+  const clubA = await makeClub(`Workspace Club O1 ${Date.now()}`);
+  const clubB = await makeClub(`Workspace Club O2 ${Date.now()}`);
+  const creator = await makeUser({ email: `wksp-leak-creator-${Date.now()}@test.local`, roleHint: "user" });
+  await grantClubAdminDirectly(creator.id, clubA);
+  const token = await createSession(creator.id);
+
+  const createdA = await api("/api/organization/users", {
+    method: "POST",
+    cookie: cookieFor(token),
+    body: { email: `wksp-leak-usera-${Date.now()}@test.local`, password: "somepassword123", roleHint: "athlete" },
+  });
+  assert.equal(createdA.status, 201);
+  cleanupUserIds.add(createdA.body.user.id);
+
+  const createdB = await api("/api/organization/users", {
+    method: "POST",
+    cookie: cookieFor(token),
+    body: { email: `wksp-leak-userb-${Date.now()}@test.local`, password: "somepassword123", roleHint: "athlete" },
+  });
+  assert.equal(createdB.status, 201);
+  cleanupUserIds.add(createdB.body.user.id);
+  // Give the second created account an active role in clubB, a club the
+  // creator does NOT administer and that is not the active workspace below.
+  await grantClubAdminDirectly(createdB.body.user.id, clubB);
+
+  await api("/api/auth/workspace", { method: "PUT", cookie: cookieFor(token), body: { type: "club", scopeId: clubA } });
+  const org = await api("/api/organization", { cookie: cookieFor(token) });
+  assert.ok(
+    org.body.users.some((u) => u.id === createdA.body.user.id),
+    "an account the viewer created with no active club/team role yet must still be visible, so a role can be assigned",
+  );
+  assert.ok(
+    !org.body.users.some((u) => u.id === createdB.body.user.id),
+    "an account whose only active role is in a DIFFERENT club must not be shown just because this viewer created it",
+  );
 });
