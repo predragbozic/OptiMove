@@ -54,7 +54,7 @@ function baseUser(overrides) {
 }
 
 function baseData(users, overrides) {
-  return { isPlatformAdmin: false, clubs: [], teams: [], athletes: [], users, ...overrides };
+  return { isPlatformAdmin: false, clubs: [], teams: [], athletes: [], manageableClubIds: [], manageableTeamIds: [], users, ...overrides };
 }
 
 test("a multi-role account shows every applicable badge at once", () => {
@@ -254,3 +254,86 @@ test("club and team badges show the real role name alongside the club/team name"
   assert.ok(html.includes("Team coach"), "the team badge must show the role name");
   assert.ok(html.includes("U17"), "the team badge must still show the team name");
 });
+
+// --- club/team role Add/Remove controls in the Manage account modal ---
+
+test("a viewer who manages this club sees Add club administrator and Remove role for an active row", () => {
+  resetOrganizationState();
+  const user = baseUser({
+    id: "user-clubrole",
+    name: "Club Role User",
+    clubRoles: [{ clubId: "club-1", clubName: "FK Partizan", role: "club_admin", isActive: true }],
+  });
+  state.organizationUserManage = { open: true, userId: "user-clubrole", pending: false, error: "" };
+  const data = baseData([user], {
+    clubs: [{ id: "club-1", name: "FK Partizan" }, { id: "club-2", name: "FK Vojvodina" }],
+    manageableClubIds: ["club-1", "club-2"],
+  });
+  const html = renderManageAccountModal(data);
+
+  assert.ok(html.includes("Add club administrator"), "a viewer who manages clubs must see the Add control");
+  assert.ok(html.includes("FK Vojvodina"), "the add-select must offer a manageable club the user doesn't already actively hold");
+  assert.ok(!html.includes('<option value="club-1">'), "a club the user already actively holds must not be offered again in the add-select");
+  assert.ok(html.includes('data-action="organization-club-role-remove"'), "an active club_admin row the viewer manages must offer Remove role");
+});
+
+test("a viewer who does not manage this club sees no Add/Remove club controls", () => {
+  resetOrganizationState();
+  const user = baseUser({
+    id: "user-clubrole-2",
+    name: "Club Role User 2",
+    clubRoles: [{ clubId: "club-1", clubName: "FK Partizan", role: "club_admin", isActive: true }],
+  });
+  state.organizationUserManage = { open: true, userId: "user-clubrole-2", pending: false, error: "" };
+  const data = baseData([user], {
+    clubs: [{ id: "club-1", name: "FK Partizan" }],
+    manageableClubIds: [],
+  });
+  const html = renderManageAccountModal(data);
+
+  assert.ok(!html.includes("Add club administrator"), "a viewer with no manageable clubs must not see the Add control");
+  assert.ok(!html.includes('data-action="organization-club-role-remove"'), "a viewer who doesn't manage this club must not see Remove role");
+});
+
+test("team roles: Add team coach and Remove role appear only for manageable teams", () => {
+  resetOrganizationState();
+  const user = baseUser({
+    id: "user-teamrole",
+    name: "Team Role User",
+    teamRoles: [
+      { teamId: "team-1", teamName: "U17", clubId: "club-1", role: "team_coach", isActive: true },
+      { teamId: "team-2", teamName: "U19", clubId: "club-2", role: "team_coach", isActive: true },
+    ],
+  });
+  state.organizationUserManage = { open: true, userId: "user-teamrole", pending: false, error: "" };
+  const data = baseData([user], {
+    teams: [{ id: "team-1", name: "U17", club_name: "FK Partizan" }, { id: "team-3", name: "U15", club_name: "FK Partizan" }],
+    manageableTeamIds: ["team-1", "team-3"],
+  });
+  const html = renderManageAccountModal(data);
+
+  assert.ok(html.includes("Add team coach"), "a viewer who manages teams must see the Add control");
+  assert.ok(html.includes("U15"), "the add-select must offer a manageable team not already actively held");
+  const removeButtons = html.match(/data-action="organization-team-role-remove"[^>]*data-team-id="([^"]*)"/g) || [];
+  assert.ok(removeButtons.some((entry) => entry.includes('data-team-id="team-1"')), "the manageable team-1 row must offer Remove role");
+  assert.ok(!removeButtons.some((entry) => entry.includes('data-team-id="team-2"')), "the non-manageable team-2 row must not offer Remove role");
+});
+
+test("a legacy/unsupported scoped role (e.g. club_manager) is always read-only, regardless of manageableClubIds", () => {
+  resetOrganizationState();
+  const user = baseUser({
+    id: "user-legacy",
+    name: "Legacy Role User",
+    clubRoles: [{ clubId: "club-1", clubName: "FK Partizan", role: "club_manager", isActive: true }],
+  });
+  state.organizationUserManage = { open: true, userId: "user-legacy", pending: false, error: "" };
+  const data = baseData([user], {
+    clubs: [{ id: "club-1", name: "FK Partizan" }],
+    manageableClubIds: ["club-1"],
+  });
+  const html = renderManageAccountModal(data);
+
+  assert.ok(html.includes("Club manager"), "the legacy role name must still be shown");
+  assert.ok(!html.includes('data-action="organization-club-role-remove"'), "a legacy club_manager role must never offer Remove role, even when the viewer manages the club");
+});
+

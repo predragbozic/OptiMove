@@ -5116,6 +5116,26 @@ input:focus {
   gap: 6px;
 }
 
+.manage-account-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.manage-account-add-row select {
+  flex: 1 1 180px;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 8px;
+  background: var(--surface, #fff);
+  color: var(--text);
+  font: inherit;
+}
+
 .plain-button.danger-button {
   border-color: var(--danger, #a23b3b);
   color: var(--danger, #a23b3b);

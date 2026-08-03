@@ -308,6 +308,62 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     }
     return true;
   }
+  if (type === "organization-club-role-add") {
+    const userId = action.dataset.userId || "";
+    const container = action.closest('[data-manage-account-add="club"]');
+    const clubId = container?.querySelector('select[name="clubId"]')?.value || "";
+    if (!userId || !clubId || state.organizationUserManage.pending) return true;
+    await performScopedRoleChange(action, {
+      endpoint: `/api/organization/users/${encodeURIComponent(userId)}/club-roles/${encodeURIComponent(clubId)}/club_admin`,
+      method: "PUT",
+      renderOrganizationPanel,
+      refreshOrganizationData,
+    });
+    return true;
+  }
+  if (type === "organization-club-role-remove") {
+    const userId = action.dataset.userId || "";
+    const clubId = action.dataset.clubId || "";
+    if (!userId || !clubId || state.organizationUserManage.pending) return true;
+    const userName = action.dataset.userName || "this user";
+    const clubName = action.dataset.clubName || "this club";
+    await performScopedRoleChange(action, {
+      endpoint: `/api/organization/users/${encodeURIComponent(userId)}/club-roles/${encodeURIComponent(clubId)}/club_admin`,
+      method: "DELETE",
+      confirmMessage: `Remove club administrator access for ${userName} in ${clubName}?`,
+      renderOrganizationPanel,
+      refreshOrganizationData,
+    });
+    return true;
+  }
+  if (type === "organization-team-role-add") {
+    const userId = action.dataset.userId || "";
+    const container = action.closest('[data-manage-account-add="team"]');
+    const teamId = container?.querySelector('select[name="teamId"]')?.value || "";
+    if (!userId || !teamId || state.organizationUserManage.pending) return true;
+    await performScopedRoleChange(action, {
+      endpoint: `/api/organization/users/${encodeURIComponent(userId)}/team-roles/${encodeURIComponent(teamId)}/team_coach`,
+      method: "PUT",
+      renderOrganizationPanel,
+      refreshOrganizationData,
+    });
+    return true;
+  }
+  if (type === "organization-team-role-remove") {
+    const userId = action.dataset.userId || "";
+    const teamId = action.dataset.teamId || "";
+    if (!userId || !teamId || state.organizationUserManage.pending) return true;
+    const userName = action.dataset.userName || "this user";
+    const teamName = action.dataset.teamName || "this team";
+    await performScopedRoleChange(action, {
+      endpoint: `/api/organization/users/${encodeURIComponent(userId)}/team-roles/${encodeURIComponent(teamId)}/team_coach`,
+      method: "DELETE",
+      confirmMessage: `Remove team coach access for ${userName} in ${teamName}?`,
+      renderOrganizationPanel,
+      refreshOrganizationData,
+    });
+    return true;
+  }
   if (type === "organization-archive-coach-relationship") {
     const athleteId = action.dataset.athleteId;
     if (!athleteId) return true;
@@ -590,14 +646,39 @@ export function closeManageAccountModal(renderOrganizationPanel) {
   void renderOrganizationPanel({ refresh: false });
 }
 
-// LAST_PLATFORM_ADMIN is a machine-readable error code from the backend
-// (api.js surfaces it verbatim as error.message from {error: "..."}) - never
-// shown to the user as-is. Any other error (403, network failure, 500) just
-// passes the backend's own message through, or a generic fallback for a
-// network error with no JSON body.
+// LAST_PLATFORM_ADMIN/LAST_CLUB_ADMIN are machine-readable error codes from
+// the backend (api.js surfaces them verbatim as error.message from
+// {error: "..."}) - never shown to the user as-is. Any other error (403,
+// network failure, 500) just passes the backend's own message through, or
+// a generic fallback for a network error with no JSON body.
 function describeOrganizationAccountError(error) {
   if (error?.message === "LAST_PLATFORM_ADMIN") return "At least one active platform administrator must remain.";
+  if (error?.message === "LAST_CLUB_ADMIN") return "At least one active club administrator must remain.";
   return error?.message || "Something went wrong. Please try again.";
+}
+
+// Shared executor for every Manage account modal action that hits a
+// PUT/DELETE scoped-role or login-status endpoint: blocks a repeat click
+// while a request is in flight, shows the confirmation (if any) before
+// doing anything, and on failure leaves state exactly as it was (no
+// optimistic change) with the error surfaced in the modal - it never closes
+// the modal on failure.
+async function performScopedRoleChange(action, { endpoint, method, confirmMessage, renderOrganizationPanel, refreshOrganizationData }) {
+  if (confirmMessage && !window.confirm(confirmMessage)) return;
+  action.disabled = true;
+  state.organizationUserManage.pending = true;
+  state.organizationUserManage.error = "";
+  void renderOrganizationPanel({ refresh: false });
+  try {
+    await api(endpoint, { method });
+    state.organizationUserManage.pending = false;
+    await refreshOrganizationData?.();
+    await renderOrganizationPanel({ refresh: false });
+  } catch (error) {
+    state.organizationUserManage.pending = false;
+    state.organizationUserManage.error = describeOrganizationAccountError(error);
+    void renderOrganizationPanel({ refresh: false });
+  }
 }
 
 function accessGroupInputs(form, group) {
