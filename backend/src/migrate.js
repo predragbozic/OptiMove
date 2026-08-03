@@ -17,6 +17,8 @@ export const migrationPaths = [
   path.resolve(__dirname, "../../migrations/20260803_user_global_roles_audit.sql"),
   // Depends on public.user_club_roles/user_team_roles from create_access_schema.sql above.
   path.resolve(__dirname, "../../migrations/20260804_scoped_role_audit.sql"),
+  // Depends on public.users from create_access_schema.sql above.
+  path.resolve(__dirname, "../../migrations/20260805_user_workspace_preferences.sql"),
   path.resolve(__dirname, "../../create_builder_schema.sql"),
   path.resolve(__dirname, "../../create_exercise_user_state.sql"),
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),

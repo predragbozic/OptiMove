@@ -82,7 +82,7 @@ export async function renderInviteAccept({ renderUserControls, setStatus }) {
   }
 }
 
-export async function submitInviteAccept(form) {
+export async function submitInviteAccept(form, { loadSession } = {}) {
   const error = form.querySelector(".login-error");
   const button = form.querySelector("button[type='submit']");
   const formData = new FormData(form);
@@ -101,7 +101,11 @@ export async function submitInviteAccept(form) {
       body: JSON.stringify({ password }),
     });
     state.currentUser = data.user;
-    window.location.replace(state.currentUser?.role === "athlete" ? "/athlete" : "/");
+    // /invites/:token/accept only returns the compatible base user shape -
+    // reload the full /me shape (activeWorkspace) before deciding which
+    // shell to land in.
+    await loadSession?.();
+    window.location.replace(state.currentUser?.activeWorkspace?.type === "athlete" ? "/athlete" : "/");
   } catch (submitError) {
     if (submitError.requiresLogin) {
       const email = form.querySelector("input[readonly]")?.value || "";
@@ -143,7 +147,7 @@ function renderInviteRequiresLogin(token, email) {
   `;
 }
 
-export async function submitInviteLogin(form) {
+export async function submitInviteLogin(form, { loadSession } = {}) {
   const error = form.querySelector(".login-error");
   const success = form.querySelector(".login-success");
   const button = form.querySelector("button[type='submit']");
@@ -162,7 +166,11 @@ export async function submitInviteLogin(form) {
     state.currentUser = loginData.user;
     try {
       await api(`/api/auth/invites/${encodeURIComponent(token)}/link`, { method: "POST" });
-      window.location.replace(state.currentUser?.role === "athlete" ? "/athlete" : "/");
+      // /login only returns the compatible base user shape - reload the
+      // full /me shape (activeWorkspace) before deciding which shell to
+      // land in.
+      await loadSession?.();
+      window.location.replace(state.currentUser?.activeWorkspace?.type === "athlete" ? "/athlete" : "/");
     } catch (linkError) {
       if (success) success.textContent = "Logged in, but the invite could not be linked.";
       if (error) error.textContent = linkError.message || "Could not link this invite to your account.";
