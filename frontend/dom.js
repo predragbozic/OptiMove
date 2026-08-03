@@ -22,5 +22,6 @@ export const els = {
   notificationPanel: document.querySelector("#notificationPanel"),
   messageToggle: document.querySelector("#messageToggle"),
   messagePanel: document.querySelector("#messagePanel"),
-  userRole: document.querySelector("#userRole"),
+  workspaceToggle: document.querySelector("#workspaceToggle"),
+  workspacePanel: document.querySelector("#workspacePanel"),
 };

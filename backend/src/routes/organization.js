@@ -11,18 +11,94 @@ import {
 } from "../authz.js";
 import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
+import { resolveActiveWorkspace } from "../workspace.js";
 
 const router = Router();
 
+// Presentation/data-context filtering only - narrows which of the already-
+// authorized clubs/teams/athletes/users this response includes, based on the
+// account's currently active workspace (see backend/src/workspace.js). This
+// is never a security boundary: every write endpoint below independently
+// re-checks req.authz regardless of what this filtering shows, exactly as
+// before this function existed. A platform workspace (or no workspace at
+// all, e.g. right after a role was revoked) returns everything the account
+// is authorized to see, unfiltered - the same as pre-Phase-5 behavior.
+function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes, users, accessRequests }, actorUserId) {
+  if (!workspace || workspace.type === "platform" || workspace.type === "athlete") {
+    return { clubs, teams, athletes, users, accessRequests };
+  }
+
+  const isSelf = (user) => String(user.id) === String(actorUserId);
+  const hasAnyActiveScopedRole = (user) =>
+    (user.clubRoles || []).some((r) => r.isActive) || (user.teamRoles || []).some((r) => r.isActive);
+  // A user row survives the workspace narrowing regardless of club/team
+  // match only when doing so can never leak a DIFFERENT club/team's roster:
+  // always the viewer's own account, and an account the viewer created but
+  // that doesn't yet hold any active club/team role anywhere (so it can
+  // still be assigned one from inside this workspace) - never an account
+  // whose only active scoped role is in some OTHER club/team, even if this
+  // same viewer created it. canManageLogin is only ever true for the
+  // viewer's own creations or a platform admin, and platform never reaches
+  // this branch.
+  const alwaysVisibleUser = (user) => isSelf(user) || (user.canManageLogin && !hasAnyActiveScopedRole(user));
+
+  if (workspace.type === "club") {
+    const clubId = String(workspace.scopeId);
+    const filteredClubs = clubs.filter((club) => String(club.id) === clubId);
+    const filteredTeams = teams.filter((team) => String(team.club_id) === clubId);
+    const filteredTeamIds = new Set(filteredTeams.map((team) => String(team.id)));
+    // Matches on club/team id alone, regardless of membership status - an
+    // archived-only tie must still surface here (same rows loadManagedAthletes
+    // already decided this actor may see, e.g. for Show archived/Restore),
+    // only rows with NO tie at all to this club are dropped.
+    const filteredAthletes = athletes.filter((athlete) =>
+      (athlete.memberships || []).some((m) => String(m.clubId) === clubId),
+    );
+    const filteredUsers = users.filter((user) =>
+      alwaysVisibleUser(user)
+      || (user.clubRoles || []).some((r) => String(r.clubId) === clubId)
+      || (user.teamRoles || []).some((r) => filteredTeamIds.has(String(r.teamId))),
+    );
+    const filteredAthleteIds = new Set(filteredAthletes.map((athlete) => String(athlete.id)));
+    const filteredAccessRequests = accessRequests.filter((r) => filteredAthleteIds.has(String(r.athlete_id)));
+    return { clubs: filteredClubs, teams: filteredTeams, athletes: filteredAthletes, users: filteredUsers, accessRequests: filteredAccessRequests };
+  }
+
+  if (workspace.type === "team") {
+    const teamId = String(workspace.scopeId);
+    const filteredTeams = teams.filter((team) => String(team.id) === teamId);
+    const filteredAthletes = athletes.filter((athlete) =>
+      (athlete.memberships || []).some((m) => m.membershipType === "team" && String(m.teamId) === teamId),
+    );
+    const filteredUsers = users.filter((user) => alwaysVisibleUser(user) || (user.teamRoles || []).some((r) => String(r.teamId) === teamId));
+    const filteredAthleteIds = new Set(filteredAthletes.map((athlete) => String(athlete.id)));
+    const filteredAccessRequests = accessRequests.filter((r) => filteredAthleteIds.has(String(r.athlete_id)));
+    return { clubs: [], teams: filteredTeams, athletes: filteredAthletes, users: filteredUsers, accessRequests: filteredAccessRequests };
+  }
+
+  if (workspace.type === "private_coach") {
+    // Only athletes tied to THIS account's own private-coach relationship -
+    // never clubs/teams, even if the same account also holds those roles.
+    const filteredAthletes = athletes.filter((athlete) => athlete.has_my_active_coach_relationship || athlete.has_my_archived_coach_relationship);
+    const filteredAthleteIds = new Set(filteredAthletes.map((athlete) => String(athlete.id)));
+    const filteredAccessRequests = accessRequests.filter((r) => filteredAthleteIds.has(String(r.athlete_id)));
+    return { clubs: [], teams: [], athletes: filteredAthletes, users: [], accessRequests: filteredAccessRequests };
+  }
+
+  return { clubs, teams, athletes, users, accessRequests };
+}
+
 router.get("/", async (req, res, next) => {
   try {
-    const [clubs, teams, athletes, users, accessRequests] = await Promise.all([
+    const [clubs, teams, athletes, users, accessRequests, { workspace: activeWorkspace }] = await Promise.all([
       loadClubs(req),
       loadTeams(req),
       loadManagedAthletes(req),
       loadUsers(req),
       loadProgramAccessRequests(req),
+      resolveActiveWorkspace(req.user.id, req.authz),
     ]);
+    const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users, accessRequests }, req.user.id);
     res.json({
       scope: req.user?.role_hint || "coach",
       isPlatformAdmin: isPlatformAdministrator(req.authz),
@@ -35,13 +111,14 @@ router.get("/", async (req, res, next) => {
       // functions the grant/revoke endpoints themselves enforce
       // (authzCanAssignClubRole/authzCanAssignTeamRole), so the frontend
       // never has to guess or re-derive this from role_hint or anything else.
-      manageableClubIds: clubs.filter((club) => authzCanAssignClubRole(req.authz, club.id)).map((club) => club.id),
-      manageableTeamIds: teams.filter((team) => authzCanAssignTeamRole(req.authz, team.id)).map((team) => team.id),
-      clubs,
-      teams,
-      athletes,
-      users,
-      accessRequests,
+      manageableClubIds: scoped.clubs.filter((club) => authzCanAssignClubRole(req.authz, club.id)).map((club) => club.id),
+      manageableTeamIds: scoped.teams.filter((team) => authzCanAssignTeamRole(req.authz, team.id)).map((team) => team.id),
+      clubs: scoped.clubs,
+      teams: scoped.teams,
+      athletes: scoped.athletes,
+      users: scoped.users,
+      accessRequests: scoped.accessRequests,
+      activeWorkspace,
     });
   } catch (error) {
     next(error);

@@ -172,6 +172,7 @@ import {
 import { handleWeeklyAction } from "./weekly-actions.js";
 import { renderUserControls } from "./user-controls.js";
 import { startRealtimeInbox, stopRealtimeInbox } from "./realtime.js";
+import { closeWorkspaceSwitcherIfOutside, handleWorkspaceAction, renderWorkspaceSwitcher } from "./workspace-actions.js";
 
 let inboxPollId = null;
 
@@ -194,7 +195,7 @@ async function init() {
   renderUserControls();
   renderNotifications();
   renderMessages();
-  if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
+  if (state.currentUser.activeWorkspace?.type === "athlete" && !document.body.classList.contains("athlete-mode")) {
     window.location.replace("/athlete");
     return;
   }
@@ -298,6 +299,10 @@ function bindEvents() {
     if (event.key !== "Escape") return;
     closeMedia();
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
+    if (state.workspaceSwitcher.open) {
+      state.workspaceSwitcher.open = false;
+      renderWorkspaceSwitcher();
+    }
   });
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
@@ -313,14 +318,14 @@ async function handleContentSubmit(event) {
   const inviteForm = event.target.closest("#inviteAcceptForm");
   if (inviteForm) {
     event.preventDefault();
-    await submitInviteAcceptAction(inviteForm);
+    await submitInviteAcceptAction(inviteForm, { loadSession });
     return;
   }
 
   const inviteLoginForm = event.target.closest("#inviteLoginForm");
   if (inviteLoginForm) {
     event.preventDefault();
-    await submitInviteLoginAction(inviteLoginForm);
+    await submitInviteLoginAction(inviteLoginForm, { loadSession });
     return;
   }
 
@@ -404,6 +409,10 @@ async function handleContentSubmit(event) {
         }),
       });
       state.currentUser = data.user;
+      // /login only returns the compatible base user shape - reload the
+      // full /me shape (capabilities/activeWorkspace/availableWorkspaces)
+      // before deciding which shell to land in below.
+      await loadSession();
       document.body.classList.remove("login-mode");
       renderUserControls();
       renderNotifications();
@@ -411,7 +420,7 @@ async function handleContentSubmit(event) {
       void loadNotifications({ silent: true });
       void loadMessages({ silent: true });
       startInboxPolling();
-      if (state.currentUser.role === "athlete" && !document.body.classList.contains("athlete-mode")) {
+      if (state.currentUser.activeWorkspace?.type === "athlete" && !document.body.classList.contains("athlete-mode")) {
         window.location.replace("/athlete");
         return;
       }
@@ -888,6 +897,10 @@ async function handleGlobalClick(event) {
   if (!action) {
     closeNotificationsIfOutside(event.target);
     closeMessagesIfOutside(event.target);
+    closeWorkspaceSwitcherIfOutside(event.target);
+    return;
+  }
+  if (await handleWorkspaceAction(action, { onWorkspaceChanged })) {
     return;
   }
   if (await handleNotificationAction(action, { openProgramRequests })) {
@@ -946,6 +959,7 @@ async function handleGlobalClick(event) {
   }
   closeNotificationsIfOutside(event.target);
   closeMessagesIfOutside(event.target);
+  closeWorkspaceSwitcherIfOutside(event.target);
 }
 
 async function handleGlobalSubmit(event) {
@@ -1421,6 +1435,14 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     role,
     scope,
   });
+}
+
+// Only the Organization panel is workspace-scoped in this phase - a switch
+// between two non-athlete workspaces (e.g. club A -> club B) never needs a
+// full page reload, just a re-fetch of whatever workspace-scoped data is
+// currently on screen.
+async function onWorkspaceChanged() {
+  if (state.activeTab === "organization") await renderOrganizationPanel();
 }
 
 async function refreshOrganizationData({ silent = false } = {}) {

@@ -164,6 +164,7 @@ export const createInitialState = () => ({
   organizationEditor: { open: false, type: "", row: null },
   organizationUserManage: { open: false, userId: "", pending: false, error: "" },
   organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
+  workspaceSwitcher: { open: false, pending: false, error: "" },
   taxonomy: {
     loaded: false,
     error: "",

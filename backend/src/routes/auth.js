@@ -10,6 +10,7 @@ import {
   verifyPassword,
 } from "../auth.js";
 import { accessScope, publicRole } from "../access.js";
+import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelection } from "../workspace.js";
 
 const router = Router();
 
@@ -21,9 +22,10 @@ router.get("/me", async (req, res, next) => {
     const teamRoles = authz.teamRoles || [];
     const clubIds = clubRoles.map((r) => r.clubId);
     const teamIds = teamRoles.map((r) => r.teamId);
-    const [clubsResult, teamsResult] = await Promise.all([
+    const [clubsResult, teamsResult, { workspace: activeWorkspace, availableWorkspaces }] = await Promise.all([
       clubIds.length ? query(`select id, name from public.clubs where id = any($1::uuid[])`, [clubIds]) : { rows: [] },
       teamIds.length ? query(`select id, name from public.teams where id = any($1::uuid[])`, [teamIds]) : { rows: [] },
+      resolveActiveWorkspace(req.user.id, authz),
     ]);
     const clubNameById = new Map(clubsResult.rows.map((c) => [String(c.id), c.name]));
     const teamNameById = new Map(teamsResult.rows.map((t) => [String(t.id), t.name]));
@@ -31,14 +33,40 @@ router.get("/me", async (req, res, next) => {
     res.json({
       user: {
         ...publicUser(req.user),
-        // Capability flags and scoped roles for the future multi-workspace
-        // UI - role_hint above still picks the initial screen, but any real
-        // permission decision must come from these, not from role_hint.
+        // Capability flags and scoped roles for the multi-workspace UI -
+        // role_hint above is legacy display only; any real permission
+        // decision must come from these, not from role_hint, and the
+        // active/available workspace below is presentation-only too (see
+        // backend/src/workspace.js's header comment).
         capabilities: authz.capabilities || {},
         clubs: clubRoles.map((r) => ({ id: r.clubId, name: clubNameById.get(String(r.clubId)) || null, role: r.role })),
         teams: teamRoles.map((r) => ({ id: r.teamId, name: teamNameById.get(String(r.teamId)) || null, role: r.role })),
+        activeWorkspace,
+        availableWorkspaces,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Switches which workspace the account is currently acting in - never grants,
+// revokes, or otherwise touches any role row; see backend/src/workspace.js.
+// The new type/scopeId is validated against req.authz (real, active
+// roles/FKs) before anything is written, so an invalid or currently-
+// unavailable workspace is rejected with no mutation at all.
+router.put("/workspace", async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    const type = typeof req.body?.type === "string" ? req.body.type : "";
+    const scopeId = req.body?.scopeId != null ? String(req.body.scopeId) : null;
+    const validated = await validateWorkspaceSelection(req.authz || {}, type, scopeId);
+    if (validated.error) {
+      const status = validated.error === "UNSUPPORTED_WORKSPACE_TYPE" ? 400 : 403;
+      return res.status(status).json({ error: validated.error });
+    }
+    await saveWorkspacePreference(req.user.id, validated.workspace.type, validated.workspace.scopeId);
+    res.json({ activeWorkspace: validated.workspace, availableWorkspaces: validated.availableWorkspaces });
   } catch (error) {
     next(error);
   }
