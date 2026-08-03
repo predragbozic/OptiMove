@@ -100,3 +100,18 @@ test("the user_workspace_preferences migration is registered in the deploy migra
     assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
   }
 });
+
+test("the athlete_invites context migration is registered in the deploy migration runner, after create_access_schema.sql", () => {
+  const inviteContextIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260806_athlete_invites_context.sql");
+  assert.notEqual(inviteContextIndex, -1, "migrationPaths must include the athlete_invites context migration file");
+
+  const accessSchemaIndex = migrationPaths.findIndex((p) => path.basename(p) === "create_access_schema.sql");
+  assert.ok(
+    inviteContextIndex > accessSchemaIndex,
+    "the athlete_invites context migration alters public.athlete_invites and must run after create_access_schema.sql creates it",
+  );
+
+  for (const migrationPath of migrationPaths) {
+    assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
+  }
+});

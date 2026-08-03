@@ -96,13 +96,29 @@ async function makeAthlete({ userId = null } = {}) {
   return result.rows[0];
 }
 
+// These tests are about /accept and /link mechanics, not about the invite
+// context feature - every fixture invite here uses the 'platform' context
+// with a real platform_admin as invited_by_user_id, so
+// isInviteContextStillValid (re-checked by loadUsableInvite on every
+// GET/accept/link) passes without each test having to set up its own
+// club/team/private-coach relationship. Memoized so the whole file only
+// ever creates one such fixture admin.
+let inviterPlatformAdminId = null;
+async function inviterPlatformAdmin() {
+  if (inviterPlatformAdminId) return inviterPlatformAdminId;
+  const admin = await makeUser({ email: `invite-fixture-platform-admin-${Date.now()}@test.local`, roleHint: "platform_admin" });
+  inviterPlatformAdminId = admin.id;
+  return inviterPlatformAdminId;
+}
+
 async function makeInvite({ athleteId, email, acceptedAt = null, expiresAt = null }) {
   const token = crypto.randomBytes(16).toString("hex");
   const tokenHash = hashInviteToken(token);
+  const invitedByUserId = await inviterPlatformAdmin();
   await query(
-    `insert into public.athlete_invites (athlete_id, email, token_hash, expires_at, accepted_at)
-     values ($1, $2, $3, $4, $5)`,
-    [athleteId, email, tokenHash, expiresAt || new Date(Date.now() + 60 * 60 * 1000), acceptedAt],
+    `insert into public.athlete_invites (athlete_id, email, token_hash, expires_at, accepted_at, invited_by_user_id, context_type, context_id)
+     values ($1, $2, $3, $4, $5, $6, 'platform', null)`,
+    [athleteId, email, tokenHash, expiresAt || new Date(Date.now() + 60 * 60 * 1000), acceptedAt, invitedByUserId],
   );
   return token;
 }

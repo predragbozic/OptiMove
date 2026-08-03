@@ -1493,6 +1493,9 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   gap: 8px;
 }
 
+.invite-copied { color: var(--accent, #1f6f68); font-weight: 700; }
+.invite-historical { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+
 body:not(.athlete-mode):not(.login-mode):not(.rail-expanded) .brand-name {
   display: none;
 }

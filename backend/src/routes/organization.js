@@ -12,6 +12,7 @@ import {
 import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
 import { resolveActiveWorkspace } from "../workspace.js";
+import { canCreateInviteInContext, canRevokeInvite, INVITE_CONTEXT_TYPES, inviteContextShapeValid, lockAthleteInviteActions } from "../inviteContext.js";
 
 const router = Router();
 
@@ -88,6 +89,59 @@ function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes,
   return { clubs, teams, athletes, users, accessRequests };
 }
 
+// Attaches, to each athlete row, the invite status the CURRENT viewer is
+// allowed to see - never anyone else's invites from a different context.
+// Only the invite matching the account's active workspace context (same
+// context_type + context_id) is surfaced, and for private_coach only the
+// invite THIS viewer personally sent (a private-coach invite is a 1:1
+// relationship, not something a fellow coach should see). Never returns a
+// token or token hash. Only the most recently created row per athlete is
+// shown - an older, superseded (regenerated/revoked) row stays in the audit
+// trail but never surfaces here.
+async function loadAthleteInviteStatuses(activeWorkspace, athleteIds, viewerUserId) {
+  const byAthlete = new Map();
+  if (!activeWorkspace || !athleteIds.length || !INVITE_CONTEXT_TYPES.has(activeWorkspace.type)) return byAthlete;
+  const contextType = activeWorkspace.type;
+  const contextId = activeWorkspace.scopeId || null;
+  const params = [athleteIds, contextType, contextId];
+  let viewerClause = "";
+  if (contextType === "private_coach") {
+    viewerClause = "and i.invited_by_user_id = $4";
+    params.push(viewerUserId);
+  }
+  const result = await query(
+    `select distinct on (i.athlete_id)
+       i.id, i.athlete_id, i.email, i.context_type, i.context_id, i.expires_at, i.created_at,
+       i.accepted_at, i.revoked_at, i.invited_by_user_id,
+       coalesce(u.display_name, u.full_name, u.email) as invited_by_name
+     from public.athlete_invites i
+     left join public.users u on u.id = i.invited_by_user_id
+     where i.athlete_id = any($1::uuid[])
+       and i.context_type = $2
+       and coalesce(i.context_id::text, '') = coalesce($3::text, '')
+       ${viewerClause}
+     order by i.athlete_id, i.created_at desc`,
+    params,
+  );
+  for (const row of result.rows) {
+    const status = row.accepted_at ? "accepted" : row.revoked_at ? "revoked" : new Date(row.expires_at) <= new Date() ? "expired" : "pending";
+    byAthlete.set(row.athlete_id, {
+      status,
+      invite: {
+        id: row.id,
+        email: row.email,
+        contextType: row.context_type,
+        contextId: row.context_id,
+        expiresAt: row.expires_at,
+        createdAt: row.created_at,
+        invitedByUserId: row.invited_by_user_id,
+        invitedByName: row.invited_by_name,
+      },
+    });
+  }
+  return byAthlete;
+}
+
 router.get("/", async (req, res, next) => {
   try {
     const [clubs, teams, athletes, users, accessRequests, { workspace: activeWorkspace }] = await Promise.all([
@@ -99,6 +153,11 @@ router.get("/", async (req, res, next) => {
       resolveActiveWorkspace(req.user.id, req.authz),
     ]);
     const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users, accessRequests }, req.user.id);
+    const inviteStatuses = await loadAthleteInviteStatuses(activeWorkspace, scoped.athletes.map((a) => a.id), req.user.id);
+    const athletesWithInviteStatus = scoped.athletes.map((athlete) => {
+      const entry = inviteStatuses.get(athlete.id);
+      return { ...athlete, inviteStatus: entry?.status || "none", invite: entry?.invite || null };
+    });
     res.json({
       scope: req.user?.role_hint || "coach",
       isPlatformAdmin: isPlatformAdministrator(req.authz),
@@ -115,7 +174,7 @@ router.get("/", async (req, res, next) => {
       manageableTeamIds: scoped.teams.filter((team) => authzCanAssignTeamRole(req.authz, team.id)).map((team) => team.id),
       clubs: scoped.clubs,
       teams: scoped.teams,
-      athletes: scoped.athletes,
+      athletes: athletesWithInviteStatus,
       users: scoped.users,
       accessRequests: scoped.accessRequests,
       activeWorkspace,
@@ -746,29 +805,166 @@ router.post("/athlete-invites", async (req, res, next) => {
   try {
     const athleteId = clean(req.body?.athleteId);
     const email = clean(req.body?.email).toLowerCase();
+    const contextType = clean(req.body?.contextType);
+    const contextId = req.body?.contextId != null ? clean(req.body.contextId) : null;
     if (!athleteId || !email) return res.status(400).json({ error: "Athlete and email are required." });
-    if (!(await canManageAthlete(req, athleteId))) return res.status(403).json({ error: "Athlete is outside your access." });
+    if (!inviteContextShapeValid(contextType, contextId)) return res.status(400).json({ error: "UNSUPPORTED_INVITE_CONTEXT" });
+
+    // Fast-fail pre-checks outside any transaction, purely so an obviously
+    // unauthorized or already-linked call never pays for opening a
+    // transaction/lock at all. Neither is the real enforcement point - both
+    // are re-run fresh below, after the per-athlete lock is held, which is
+    // what actually closes the races (see lockAthleteInviteActions).
+    const permission = await canCreateInviteInContext(query, req, athleteId, contextType, contextId);
+    if (!permission.ok) return res.status(permission.status).json({ error: permission.error });
+
     const athlete = await query(
-      `select id, coalesce(display_name, full_name, athlete_id) as name from public.athletes where id = $1 and coalesce(is_active, true) limit 1`,
+      `select id, coalesce(display_name, full_name, athlete_id) as name
+       from public.athletes where id = $1 and coalesce(is_active, true) limit 1`,
       [athleteId],
     );
     if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
-    const token = crypto.randomBytes(32).toString("base64url");
-    const tokenHash = hashInviteToken(token);
-    const invite = await query(
-      `insert into public.athlete_invites (athlete_id, email, token_hash, invited_by_user_id, expires_at)
-       values ($1, $2, $3, $4, now() + interval '14 days')
-       returning id, athlete_id, email, expires_at, created_at`,
-      [athleteId, email, tokenHash, req.user.id],
-    );
+
+    const client = await pool.connect();
+    let invite;
+    let token;
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      // Same lock namespace/key that accept, link, and revoke all acquire
+      // for this athlete_id before touching athletes.user_id or this
+      // athlete's invite rows - see lockAthleteInviteActions. This is what
+      // actually prevents a concurrent accept/link from linking the login
+      // (or a concurrent revoke from resolving) while this request is
+      // mid-decision.
+      await lockAthleteInviteActions(exec, athleteId);
+      // Re-check inside the lock: a concurrent accept/link could have
+      // linked this athlete's login between the pre-check above and here.
+      const recheck = await client.query(`select user_id from public.athletes where id = $1 for update`, [athleteId]);
+      if (recheck.rows[0]?.user_id) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "ATHLETE_ALREADY_HAS_LOGIN" });
+      }
+      // Re-run the exact same context/permission/membership check again,
+      // now under the lock - membership or role could have been archived in
+      // the window between the pre-check above and acquiring this lock.
+      const lockedPermission = await canCreateInviteInContext(exec, req, athleteId, contextType, contextId);
+      if (!lockedPermission.ok) {
+        await client.query("rollback");
+        return res.status(lockedPermission.status).json({ error: lockedPermission.error });
+      }
+      // Regenerating always revokes whatever open (not accepted, not
+      // revoked) invite already exists for this exact (athlete, context) -
+      // regardless of which email it was sent to - so there is only ever
+      // one live link per athlete+context, matching the partial unique
+      // index in the migration.
+      await client.query(
+        `update public.athlete_invites
+         set revoked_at = now(), revoked_by_user_id = $1, revoke_reason = 'regenerated', updated_at = now()
+         where athlete_id = $2 and context_type = $3 and coalesce(context_id::text, '') = coalesce($4::text, '')
+           and accepted_at is null and revoked_at is null`,
+        [req.user.id, athleteId, contextType, contextId],
+      );
+      token = crypto.randomBytes(32).toString("base64url");
+      const tokenHash = hashInviteToken(token);
+      const inserted = await client.query(
+        `insert into public.athlete_invites (athlete_id, email, token_hash, invited_by_user_id, context_type, context_id, expires_at)
+         values ($1, $2, $3, $4, $5, $6, now() + interval '7 days')
+         returning id, athlete_id, email, expires_at, created_at, context_type, context_id`,
+        [athleteId, email, tokenHash, req.user.id, contextType, contextId],
+      );
+      invite = inserted.rows[0];
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
     const inviteUrl = `${appOrigin(req)}/invite?token=${encodeURIComponent(token)}`;
     const subject = encodeURIComponent("OptiMove athlete access");
-    const body = encodeURIComponent(`Hi ${athlete.rows[0].name || ""},\n\nUse this link to activate your OptiMove athlete account:\n${inviteUrl}\n\nThis link expires in 14 days.`);
+    const body = encodeURIComponent(`Hi ${athlete.rows[0].name || ""},\n\nUse this link to activate your OptiMove athlete account:\n${inviteUrl}\n\nThis link expires in 7 days.`);
     res.status(201).json({
-      invite: invite.rows[0],
+      invite: {
+        id: invite.id,
+        athleteId: invite.athlete_id,
+        email: invite.email,
+        expiresAt: invite.expires_at,
+        createdAt: invite.created_at,
+        contextType: invite.context_type,
+        contextId: invite.context_id,
+      },
       inviteUrl,
       mailtoUrl: `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/athlete-invites/:inviteId", async (req, res, next) => {
+  try {
+    const inviteId = clean(req.params.inviteId);
+    // Resolve athlete_id without any mutation, purely to have the lock key
+    // before opening a transaction - if the invite doesn't exist at all,
+    // there's nothing to lock or revoke.
+    const resolved = await query(`select athlete_id from public.athlete_invites where id = $1 limit 1`, [inviteId]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "Invite not found." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      // Same per-athlete lock accept/link/generate all use - serializes this
+      // revoke against a concurrent accept/link of the SAME token (or a
+      // concurrent regenerate of a different open invite for this athlete).
+      await lockAthleteInviteActions(exec, resolved.rows[0].athlete_id);
+
+      const fresh = await client.query(
+        `select id, athlete_id, context_type, context_id, invited_by_user_id, accepted_at, revoked_at
+         from public.athlete_invites where id = $1 limit 1 for update`,
+        [inviteId],
+      );
+      const invite = fresh.rows[0];
+      if (!invite) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "Invite not found." });
+      }
+      if (invite.accepted_at) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "This invite has already been accepted." });
+      }
+
+      const permission = await canRevokeInvite(exec, req, invite);
+      if (!permission.ok) {
+        await client.query("rollback");
+        return res.status(permission.status).json({ error: permission.error });
+      }
+
+      // Idempotent: revoking an already-revoked invite is a no-op success,
+      // not an error - but the permission check above still ran first
+      // against the fresh, locked row, so an unauthorized viewer never
+      // learns whether it was already revoked.
+      if (invite.revoked_at) {
+        await client.query("commit");
+        return res.json({ ok: true });
+      }
+
+      await client.query(
+        `update public.athlete_invites
+         set revoked_at = now(), revoked_by_user_id = $1, revoke_reason = 'revoked', updated_at = now()
+         where id = $2 and accepted_at is null and revoked_at is null`,
+        [req.user.id, inviteId],
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }

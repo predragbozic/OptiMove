@@ -680,6 +680,19 @@ function renderAthleteLoginToggle(athlete) {
   `;
 }
 
+// The Invite trigger is only ever offered when the CURRENT active workspace
+// is one that can actually send an invite (platform/private_coach/club/
+// team - never athlete, and never when there's no resolved workspace at
+// all), and only for an athlete who doesn't already have a login. This is
+// presentation only - the backend independently re-derives and re-checks
+// the exact same context from req.authz regardless of what this renders.
+function inviteTriggerHtml(athlete) {
+  const workspace = state.currentUser?.activeWorkspace;
+  if (!workspace || workspace.type === "athlete") return "";
+  if (athlete.user_id) return "";
+  return `<button class="text-action" type="button" data-action="organization-invite-athlete" data-athlete-id="${escapeAttr(athlete.id)}">${athlete.inviteStatus === "pending" ? "Invite pending" : "Invite"}</button>`;
+}
+
 function renderTeamAthleteRow(athlete, team) {
   const image = athlete.image_url || "";
   return `
@@ -688,7 +701,7 @@ function renderTeamAthleteRow(athlete, team) {
       <span>${escapeHtml(athlete.athlete_id || athlete.source_external_id || "-")}</span>
       <span>${renderAthleteLoginToggle(athlete)}</span>
       <span class="organization-row-actions">
-        <button class="text-action" type="button" data-action="organization-invite-athlete" data-athlete-id="${escapeAttr(athlete.id)}">Invite</button>
+        ${inviteTriggerHtml(athlete)}
         <button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>
         <button class="plain-button icon-button" type="button" data-action="organization-archive-team-membership" data-team-id="${escapeAttr(team.id)}" data-athlete-id="${escapeAttr(athlete.id)}" aria-label="Remove from team" title="Remove from team - ends only this team membership. Login, history, and any other teams/clubs/coaches are kept, and it can be restored later.">${ICON_ARCHIVE}</button>
       </span>
@@ -744,6 +757,7 @@ function renderClubAthleteRow(athlete, club) {
       ${renderOrganizationRowContent(athlete, "athlete")}
       <span class="organization-row-actions">
         ${renderAthleteLoginToggle(athlete)}
+        ${inviteTriggerHtml(athlete)}
         <button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="athlete" data-org-id="${escapeAttr(athlete.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>
         <button class="plain-button icon-button" type="button" data-action="organization-archive-club-membership" data-club-id="${escapeAttr(club.id)}" data-athlete-id="${escapeAttr(athlete.id)}" aria-label="Archive from club" title="Archive from club - ends this club membership, and any active team memberships within it. Login, history, and other clubs/teams/coaches are kept, and it can be restored later.">${ICON_ARCHIVE}</button>
       </span>
@@ -762,33 +776,100 @@ function renderArchivedClubMemberRow(athlete, club) {
   `;
 }
 
+// Matches the exact 4 sendable contexts (never "athlete" - that workspace
+// never reaches this modal at all, per inviteTriggerHtml above).
+function inviteContextLabel(workspace) {
+  if (!workspace) return "";
+  if (workspace.type === "platform") return "Platform";
+  if (workspace.type === "private_coach") return "Private coaching";
+  if (workspace.type === "club") return `Club · ${workspace.label || ""}`;
+  if (workspace.type === "team") return `Team · ${workspace.label || ""}`;
+  return "";
+}
+
+function formatInviteDate(value) {
+  if (!value) return "";
+  return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function renderInviteLinkResultHtml() {
+  return `
+    <div class="invite-result">
+      <p class="muted">Send this activation link to the athlete. They will open it and set their own password. It expires in 7 days.</p>
+      <input readonly value="${escapeAttr(state.organizationInvite.inviteUrl)}">
+      <div class="invite-actions">
+        <button class="plain-button compact-button" type="button" data-action="organization-copy-invite">Copy link</button>
+        <a class="plain-button compact-button" href="${escapeAttr(state.organizationInvite.mailtoUrl || "#")}">Open email draft</a>
+      </div>
+      ${state.organizationInvite.copied ? `<p class="muted invite-copied">Link copied.</p>` : ""}
+    </div>
+  `;
+}
+
+function renderInviteCreateFormHtml(athlete) {
+  return `
+    <form class="organization-form" data-organization-form="athleteInvite">
+      <input type="hidden" name="athleteId" value="${escapeAttr(athlete.id)}">
+      <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="example@example.com" autocomplete="off"></label>
+      <button class="plain-button" type="submit" ${state.organizationInvite.pending ? "disabled" : ""}>Create invite link</button>
+    </form>
+  `;
+}
+
+function renderInvitePendingHtml(invite) {
+  return `
+    <div class="invite-result invite-pending">
+      <p><strong>Pending invite</strong></p>
+      <p class="muted">${escapeHtml(invite.email)} - expires ${formatInviteDate(invite.expiresAt)}</p>
+      <div class="invite-actions">
+        <button class="plain-button compact-button" type="button" data-action="organization-invite-regenerate" ${state.organizationInvite.pending ? "disabled" : ""}>Generate new link</button>
+        <button class="plain-button compact-button danger-button" type="button" data-action="organization-invite-revoke" data-invite-id="${escapeAttr(invite.id)}" ${state.organizationInvite.pending ? "disabled" : ""}>Revoke invite</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderInviteHistoricalHtml(invite, status, canCreateNew, athlete) {
+  const labels = { accepted: "Accepted", expired: "Expired", revoked: "Revoked" };
+  return `
+    <p class="muted invite-historical">${escapeHtml(labels[status] || status)} invite sent to ${escapeHtml(invite.email)}.</p>
+    ${canCreateNew ? renderInviteCreateFormHtml(athlete) : ""}
+  `;
+}
+
 function renderAthleteInviteModal(athletes) {
   const athlete = athletes.find((entry) => String(entry.id) === String(state.organizationInvite.athleteId));
   if (!athlete) return "";
+  const workspace = state.currentUser?.activeWorkspace;
+  const contextLabel = inviteContextLabel(workspace);
+  const justCreatedUrl = state.organizationInvite.inviteUrl;
+  const status = athlete.inviteStatus || "none";
+  const invite = athlete.invite || null;
+
+  let body;
+  if (justCreatedUrl) {
+    body = renderInviteLinkResultHtml();
+  } else if (status === "pending" && invite) {
+    body = renderInvitePendingHtml(invite);
+  } else if ((status === "accepted" || status === "expired" || status === "revoked") && invite) {
+    // Accepted normally means the athlete now has a login (no trigger would
+    // even be shown), but expired/revoked leaves the athlete still
+    // login-less, so a fresh invite may still be created from here.
+    body = renderInviteHistoricalHtml(invite, status, !athlete.user_id, athlete);
+  } else {
+    body = renderInviteCreateFormHtml(athlete);
+  }
+
   return `
     <div class="exercise-tag-overlay">
       <button class="exercise-tag-backdrop" type="button" data-action="organization-invite-close" aria-label="Close invite"></button>
       <section class="panel exercise-tag-modal organization-invite-modal" role="dialog" aria-modal="true" aria-label="Athlete invite">
         <div class="builder-modal-head">
-          <div><p class="eyebrow">Athlete invite</p><h3>${escapeHtml(athlete.name || "Athlete")}</h3></div>
+          <div><p class="eyebrow">Athlete invite${contextLabel ? ` · ${escapeHtml(contextLabel)}` : ""}</p><h3>${escapeHtml(athlete.name || "Athlete")}</h3></div>
           <button class="plain-button icon-button" type="button" data-action="organization-invite-close" aria-label="Close"><span class="button-icon">x</span></button>
         </div>
-        <form class="organization-form" data-organization-form="athleteInvite">
-          <input type="hidden" name="athleteId" value="${escapeAttr(athlete.id)}">
-          <label class="search-field"><span>Email</span><input name="email" type="email" required placeholder="example@example.com" autocomplete="off"></label>
-          <p class="builder-error" aria-live="polite">${escapeHtml(state.organizationInvite.error || "")}</p>
-          <button class="plain-button" type="submit">Create invite email</button>
-        </form>
-        ${state.organizationInvite.inviteUrl ? `
-          <div class="invite-result">
-            <p class="muted">Send this activation link to the athlete. They will open it and set their own password. It expires in 14 days.</p>
-            <input readonly value="${escapeAttr(state.organizationInvite.inviteUrl)}">
-            <div class="invite-actions">
-              <button class="plain-button compact-button" type="button" data-action="organization-copy-invite">Copy link</button>
-              <a class="plain-button compact-button" href="${escapeAttr(state.organizationInvite.mailtoUrl || "#")}">Open email draft</a>
-            </div>
-          </div>
-        ` : ""}
+        <p class="builder-error" aria-live="polite">${escapeHtml(state.organizationInvite.error || "")}</p>
+        ${body}
       </section>
     </div>
   `;
@@ -1159,6 +1240,7 @@ function renderOrganizationRowV2(row, type, { isPlatformAdmin = false } = {}) {
       ${renderOrganizationRowContent(row, type)}
       <span class="organization-row-actions">
         ${isAthlete ? renderAthleteLoginToggle(row) : ""}
+        ${isAthlete ? inviteTriggerHtml(row) : ""}
         ${canEdit ? `<button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>` : ""}
         ${isAthlete
           ? renderAthleteArchiveActions(row, isPlatformAdmin)

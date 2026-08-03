@@ -35,7 +35,7 @@ function resetOrganizationState() {
     requestError: "",
     requestMessage: "",
   };
-  state.organizationInvite = { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" };
+  state.organizationInvite = { open: false, athleteId: "", pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false };
 }
 
 function baseAthlete(overrides) {
@@ -219,7 +219,7 @@ test("an archived-only athlete is never offered by the Invite modal", () => {
   });
   const data = { isPlatformAdmin: false, clubs: [], teams: [], athletes: [archivedOnly], users: [] };
 
-  state.organizationInvite = { open: true, athleteId: "athlete-no-invite", inviteUrl: "", mailtoUrl: "", error: "" };
+  state.organizationInvite = { open: true, athleteId: "athlete-no-invite", pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false };
   const html = renderOrganizationBrowser(data);
   assert.ok(!html.includes("No Invite Athlete"), "the Invite modal must not render for an athlete with no active access");
 });
