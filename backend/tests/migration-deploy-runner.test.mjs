@@ -70,3 +70,18 @@ test("the user_global_roles audit-columns migration is registered in the deploy 
     assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
   }
 });
+
+test("the scoped-role (user_club_roles/user_team_roles) audit-columns migration is registered in the deploy migration runner, after create_access_schema.sql", () => {
+  const scopedAuditIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260804_scoped_role_audit.sql");
+  assert.notEqual(scopedAuditIndex, -1, "migrationPaths must include the scoped-role audit-columns migration file");
+
+  const accessSchemaIndex = migrationPaths.findIndex((p) => path.basename(p) === "create_access_schema.sql");
+  assert.ok(
+    scopedAuditIndex > accessSchemaIndex,
+    "the scoped-role audit-columns migration alters public.user_club_roles/user_team_roles and must run after create_access_schema.sql creates them",
+  );
+
+  for (const migrationPath of migrationPaths) {
+    assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
+  }
+});

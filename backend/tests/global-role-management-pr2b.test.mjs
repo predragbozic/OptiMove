@@ -392,6 +392,10 @@ test("13. disabling a login destroys sessions but preserves every role", async (
   const target = await makeUser({ email: `pr2b-disable-target-${Date.now()}@test.local`, roleHint: "user" });
   await grantGlobalRoleDirectly(target.id, "independent_coach");
   await grantClubRole(target.id, club);
+  // A second club_admin, so disabling target's login below isn't itself the
+  // last one for this club (that's covered by its own LAST_CLUB_ADMIN tests).
+  const otherClubAdmin = await makeUser({ email: `pr2b-disable-otheradmin-${Date.now()}@test.local`, roleHint: "user" });
+  await grantClubRole(otherClubAdmin.id, club);
   await createSession(target.id);
   assert.equal(await sessionCountFor(target.id), 1);
   const adminToken = await createSession(admin.id);
@@ -584,6 +588,10 @@ test("23. a disabled account remains visible in GET /organization with loginActi
   const club = await makeClub(`PR2B Visible Club ${Date.now()}`);
   const target = await makeUser({ email: `pr2b-visible-target-${Date.now()}@test.local`, roleHint: "user" });
   await grantClubRole(target.id, club);
+  // A second club_admin, so disabling target's login below isn't itself the
+  // last one for this club (that's covered by its own LAST_CLUB_ADMIN tests).
+  const otherClubAdmin = await makeUser({ email: `pr2b-visible-otheradmin-${Date.now()}@test.local`, roleHint: "user" });
+  await grantClubRole(otherClubAdmin.id, club);
   const adminToken = await createSession(admin.id);
 
   const disable = await api(`/api/organization/users/${target.id}/login-status`, { method: "PUT", cookie: cookieFor(adminToken), body: { active: false } });

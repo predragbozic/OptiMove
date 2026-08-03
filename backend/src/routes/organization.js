@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../db.js";
 import {
+  canAssignClubRole as authzCanAssignClubRole,
+  canAssignTeamRole as authzCanAssignTeamRole,
   canManageClub as authzCanManageClub,
   canManageTeamById as authzCanManageTeam,
   isPlatformAdministrator,
@@ -28,6 +30,13 @@ router.get("/", async (req, res, next) => {
       canCreateTeam: isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0,
       canCreateAthlete: true,
       canCreateUser: isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0,
+      // The single source of truth for which club_admin/team_coach Add/Remove
+      // controls the frontend may offer - computed with the exact same
+      // functions the grant/revoke endpoints themselves enforce
+      // (authzCanAssignClubRole/authzCanAssignTeamRole), so the frontend
+      // never has to guess or re-derive this from role_hint or anything else.
+      manageableClubIds: clubs.filter((club) => authzCanAssignClubRole(req.authz, club.id)).map((club) => club.id),
+      manageableTeamIds: teams.filter((team) => authzCanAssignTeamRole(req.authz, team.id)).map((team) => team.id),
       clubs,
       teams,
       athletes,
@@ -237,6 +246,11 @@ async function setUserLoginStatus(req, targetUserId, active) {
           await client.query("rollback");
           return { status: 409, body: { error: "LAST_PLATFORM_ADMIN" } };
         }
+      }
+      const blockedClubId = await findClubAdminLastAdminBlock(client, targetUserId);
+      if (blockedClubId) {
+        await client.query("rollback");
+        return { status: 409, body: { error: "LAST_CLUB_ADMIN" } };
       }
       if (String(targetUserId) === String(req.user.id)) {
         await client.query("rollback");
@@ -1101,20 +1115,332 @@ router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
   }
 });
 
+// Scoped role management (Phase 4: security/scoped-role-management).
+//
+// Only two scoped roles are grantable through these endpoints: club_admin
+// and team_coach. club_manager/team_admin/team_trainer have no fully
+// defined authorization semantics in authz.js - if they exist in old data
+// they are shown read-only elsewhere (loadUsers/loadClubs/loadTeams never
+// filter them out), but nothing here ever grants, revokes, or infers
+// meaning for them.
+//
+// canAssignTeamRole is NOT the same check as canManageTeamById (used
+// elsewhere for day-to-day team/athlete management) - canManageTeamById
+// deliberately also returns true for a team's own team_coach, which is
+// correct for managing that team's athletes but would be a privilege
+// escalation if reused here: a team_coach must never be able to grant
+// themselves or anyone else more team_coach access. Assigning either
+// scoped role is always a CLUB-level decision (platform admin, or the
+// club_admin of the club that owns the club/team in question) - see
+// authz.js's canAssignClubRole/canAssignTeamRole.
+
+// Shared lock namespace for the "does this club still have an active
+// admin" invariant, scoped per-club via hashtext(clubId) as the second
+// advisory-lock key (distinct from PLATFORM_ADMIN_HEADCOUNT_LOCK_KEY's
+// single global key - concurrent revokes on two DIFFERENT clubs must not
+// block each other). The exact constant carries no meaning beyond "this
+// one lock namespace" and must never change or be reused elsewhere.
+const CLUB_ADMIN_HEADCOUNT_LOCK_NAMESPACE = 891234567;
+
+async function lockClubAdminHeadcount(client, clubId) {
+  await client.query("select pg_advisory_xact_lock($1, hashtext($2::text))", [CLUB_ADMIN_HEADCOUNT_LOCK_NAMESPACE, clubId]);
+}
+
+// Must be called AFTER lockClubAdminHeadcount, inside the same open
+// transaction - re-reads current state fresh. "Qualifying" means BOTH
+// users.is_active = true (can actually log in) AND
+// user_club_roles.is_active = true (still holds the role), mirroring the
+// same fix already applied to LAST_PLATFORM_ADMIN: a role-active admin
+// whose login is disabled cannot actually administer the club, so must
+// never count toward "there's still an admin left".
+async function loadQualifyingClubAdminUserIds(client, clubId) {
+  const result = await client.query(
+    `select u.id
+     from public.users u
+     join public.user_club_roles r on r.user_id = u.id and r.club_id = $1 and r.role = 'club_admin' and r.is_active = true
+     where u.is_active = true
+     order by u.id
+     for update of u, r`,
+    [clubId],
+  );
+  return result.rows.map((row) => row.id);
+}
+
+// Must be called inside the same open transaction as the login-disable flow
+// in setUserLoginStatus, before any mutation. Finds every ACTIVE club where
+// the target currently holds an active club_admin role (an archived club is
+// exempt from the LAST_CLUB_ADMIN invariant - it doesn't need to keep an
+// admin forever), locks each one's headcount via lockClubAdminHeadcount in
+// deterministic (sorted club id) order - never any other order - so that
+// two concurrent requests against a user who administers multiple clubs can
+// never form a circular wait, then re-reads the fresh qualifying count for
+// each locked club. Returns the id of the first club where the target would
+// be left as the last qualifying admin, or null if disabling the login is
+// safe for all of them. No bypass for platform admin actors - this runs
+// unconditionally, exactly like the LAST_PLATFORM_ADMIN check above.
+async function findClubAdminLastAdminBlock(client, targetUserId) {
+  const clubRows = await client.query(
+    `select r.club_id as "clubId"
+     from public.user_club_roles r
+     join public.clubs c on c.id = r.club_id
+     where r.user_id = $1 and r.role = 'club_admin' and r.is_active = true and coalesce(c.is_active, true) = true
+     order by r.club_id`,
+    [targetUserId],
+  );
+  const clubIds = clubRows.rows.map((row) => row.clubId);
+  for (const clubId of clubIds) {
+    await lockClubAdminHeadcount(client, clubId);
+  }
+  for (const clubId of clubIds) {
+    const qualifyingIds = await loadQualifyingClubAdminUserIds(client, clubId);
+    const targetQualifies = qualifyingIds.some((id) => String(id) === String(targetUserId));
+    if (targetQualifies && qualifyingIds.length <= 1) {
+      return clubId;
+    }
+  }
+  return null;
+}
+
+async function loadClubRolesForUser(userId) {
+  const result = await query(
+    `select r.club_id as "clubId", c.name as "clubName", r.role, r.is_active as "isActive",
+            r.granted_by_user_id as "grantedByUserId", r.revoked_at as "revokedAt", r.revoked_by_user_id as "revokedByUserId",
+            r.created_at as "createdAt", r.updated_at as "updatedAt"
+     from public.user_club_roles r
+     join public.clubs c on c.id = r.club_id
+     where r.user_id = $1
+     order by c.name`,
+    [userId],
+  );
+  return result.rows;
+}
+
+async function loadTeamRolesForUser(userId) {
+  const result = await query(
+    `select r.team_id as "teamId", t.name as "teamName", t.club_id as "clubId", r.role, r.is_active as "isActive",
+            r.granted_by_user_id as "grantedByUserId", r.revoked_at as "revokedAt", r.revoked_by_user_id as "revokedByUserId",
+            r.created_at as "createdAt", r.updated_at as "updatedAt"
+     from public.user_team_roles r
+     join public.teams t on t.id = r.team_id
+     where r.user_id = $1
+     order by t.name`,
+    [userId],
+  );
+  return result.rows;
+}
+
+async function grantClubAdminRole(req, targetUserId, clubId) {
+  if (!authzCanAssignClubRole(req.authz, clubId)) {
+    return { status: 403, body: { error: "Only a platform admin, or this club's own admin, can grant club administrator access." } };
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const [club, target] = await Promise.all([
+      client.query(`select id from public.clubs where id = $1 limit 1`, [clubId]),
+      client.query(`select id from public.users where id = $1 limit 1`, [targetUserId]),
+    ]);
+    if (!club.rows[0]) {
+      await client.query("rollback");
+      return { status: 404, body: { error: "Club not found." } };
+    }
+    if (!target.rows[0]) {
+      await client.query("rollback");
+      return { status: 404, body: { error: "User not found." } };
+    }
+    // Idempotent: never touches role_hint, login status, or any other
+    // global/club/team/athlete role. Reactivating an existing (revoked) row
+    // always clears its revoke audit fields.
+    await client.query(
+      `insert into public.user_club_roles (user_id, club_id, role, is_active, granted_by_user_id, revoked_at, revoked_by_user_id)
+       values ($1, $2, 'club_admin', true, $3, null, null)
+       on conflict (user_id, club_id, role) do update
+         set is_active = true,
+             granted_by_user_id = excluded.granted_by_user_id,
+             revoked_at = null,
+             revoked_by_user_id = null,
+             updated_at = now()`,
+      [targetUserId, clubId, req.user.id],
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { status: 200, body: { ok: true, clubRoles: await loadClubRolesForUser(targetUserId) } };
+}
+
+async function revokeClubAdminRole(req, targetUserId, clubId) {
+  if (!authzCanAssignClubRole(req.authz, clubId)) {
+    return { status: 403, body: { error: "Only a platform admin, or this club's own admin, can remove club administrator access." } };
+  }
+  const club = await query(`select id, coalesce(is_active, true) as "isActive" from public.clubs where id = $1 limit 1`, [clubId]);
+  if (!club.rows[0]) return { status: 404, body: { error: "Club not found." } };
+  const clubIsActive = club.rows[0].isActive;
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    // The LAST_CLUB_ADMIN invariant only protects ACTIVE clubs - an
+    // archived club doesn't need to keep an admin forever, so the lock and
+    // headcount check are skipped entirely for it. When the club is active,
+    // the lock is held for the full decision AND the update below, in one
+    // transaction - releasing it early would reopen the exact race this is
+    // meant to close. Applies regardless of who the actor is (platform
+    // admin included) - there is no bypass for this check.
+    if (clubIsActive) {
+      await lockClubAdminHeadcount(client, clubId);
+      const qualifyingIds = await loadQualifyingClubAdminUserIds(client, clubId);
+      const targetQualifies = qualifyingIds.some((id) => String(id) === String(targetUserId));
+      if (targetQualifies && qualifyingIds.length <= 1) {
+        await client.query("rollback");
+        return { status: 409, body: { error: "LAST_CLUB_ADMIN" } };
+      }
+    }
+    // Idempotent: if there's no active row for this (user, club) - already
+    // revoked, or never granted - this affects zero rows and the request
+    // still succeeds, returning the current (unchanged) role state.
+    await client.query(
+      `update public.user_club_roles
+       set is_active = false, revoked_at = now(), revoked_by_user_id = $1, updated_at = now()
+       where user_id = $2 and club_id = $3 and role = 'club_admin' and is_active = true`,
+      [req.user.id, targetUserId, clubId],
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { status: 200, body: { ok: true, clubRoles: await loadClubRolesForUser(targetUserId) } };
+}
+
+async function grantTeamCoachRole(req, targetUserId, teamId) {
+  if (!authzCanAssignTeamRole(req.authz, teamId)) {
+    return { status: 403, body: { error: "Only a platform admin, or this team's club admin, can grant team coach access." } };
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const [team, target] = await Promise.all([
+      client.query(`select id from public.teams where id = $1 limit 1`, [teamId]),
+      client.query(`select id from public.users where id = $1 limit 1`, [targetUserId]),
+    ]);
+    if (!team.rows[0]) {
+      await client.query("rollback");
+      return { status: 404, body: { error: "Team not found." } };
+    }
+    if (!target.rows[0]) {
+      await client.query("rollback");
+      return { status: 404, body: { error: "User not found." } };
+    }
+    await client.query(
+      `insert into public.user_team_roles (user_id, team_id, role, is_active, granted_by_user_id, revoked_at, revoked_by_user_id)
+       values ($1, $2, 'team_coach', true, $3, null, null)
+       on conflict (user_id, team_id, role) do update
+         set is_active = true,
+             granted_by_user_id = excluded.granted_by_user_id,
+             revoked_at = null,
+             revoked_by_user_id = null,
+             updated_at = now()`,
+      [targetUserId, teamId, req.user.id],
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { status: 200, body: { ok: true, teamRoles: await loadTeamRolesForUser(targetUserId) } };
+}
+
+// No LAST_CLUB_ADMIN-style protection here on purpose - a team may
+// legitimately sit without a coach for a while; only a club losing its
+// last administrator is treated as an invariant worth blocking.
+async function revokeTeamCoachRole(req, targetUserId, teamId) {
+  if (!authzCanAssignTeamRole(req.authz, teamId)) {
+    return { status: 403, body: { error: "Only a platform admin, or this team's club admin, can remove team coach access." } };
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const team = await client.query(`select id from public.teams where id = $1 limit 1`, [teamId]);
+    if (!team.rows[0]) {
+      await client.query("rollback");
+      return { status: 404, body: { error: "Team not found." } };
+    }
+    await client.query(
+      `update public.user_team_roles
+       set is_active = false, revoked_at = now(), revoked_by_user_id = $1, updated_at = now()
+       where user_id = $2 and team_id = $3 and role = 'team_coach' and is_active = true`,
+      [req.user.id, targetUserId, teamId],
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { status: 200, body: { ok: true, teamRoles: await loadTeamRolesForUser(targetUserId) } };
+}
+
+router.put("/users/:userId/club-roles/:clubId/:role", async (req, res, next) => {
+  try {
+    if (clean(req.params.role) !== "club_admin") return res.status(400).json({ error: "Unsupported club role." });
+    const result = await grantClubAdminRole(req, clean(req.params.userId), clean(req.params.clubId));
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/users/:userId/club-roles/:clubId/:role", async (req, res, next) => {
+  try {
+    if (clean(req.params.role) !== "club_admin") return res.status(400).json({ error: "Unsupported club role." });
+    const result = await revokeClubAdminRole(req, clean(req.params.userId), clean(req.params.clubId));
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put("/users/:userId/team-roles/:teamId/:role", async (req, res, next) => {
+  try {
+    if (clean(req.params.role) !== "team_coach") return res.status(400).json({ error: "Unsupported team role." });
+    const result = await grantTeamCoachRole(req, clean(req.params.userId), clean(req.params.teamId));
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/users/:userId/team-roles/:teamId/:role", async (req, res, next) => {
+  try {
+    if (clean(req.params.role) !== "team_coach") return res.status(400).json({ error: "Unsupported team role." });
+    const result = await revokeTeamCoachRole(req, clean(req.params.userId), clean(req.params.teamId));
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Legacy endpoints, kept only because the existing "Add or manage users"
+// club/team assignment forms still call them - rewired onto the exact same
+// service functions and checks above (no weaker parallel path). New code
+// should use the explicit /users/:userId/club-roles|team-roles/:scopeId/:role
+// endpoints instead.
 router.post("/club-roles", async (req, res, next) => {
   try {
     const userId = clean(req.body?.userId);
     const clubId = clean(req.body?.clubId);
     if (!userId || !clubId) return res.status(400).json({ error: "User and club are required." });
-    if (!(await canManageClub(req, clubId))) return res.status(403).json({ error: "Club is outside your access." });
-    const result = await query(
-      `insert into public.user_club_roles (user_id, club_id, role, is_active)
-       values ($1, $2, 'club_admin', true)
-       on conflict (user_id, club_id, role) do update set is_active = true, updated_at = now()
-       returning id`,
-      [userId, clubId],
-    );
-    res.status(201).json({ role: result.rows[0] });
+    const result = await grantClubAdminRole(req, userId, clubId);
+    res.status(result.status).json(result.body);
   } catch (error) {
     next(error);
   }
@@ -1125,15 +1451,8 @@ router.post("/team-roles", async (req, res, next) => {
     const userId = clean(req.body?.userId);
     const teamId = clean(req.body?.teamId);
     if (!userId || !teamId) return res.status(400).json({ error: "User and team are required." });
-    if (!(await canManageTeam(req, teamId))) return res.status(403).json({ error: "Team is outside your access." });
-    const result = await query(
-      `insert into public.user_team_roles (user_id, team_id, role, is_active)
-       values ($1, $2, 'team_coach', true)
-       on conflict (user_id, team_id, role) do update set is_active = true, updated_at = now()
-       returning id`,
-      [userId, teamId],
-    );
-    res.status(201).json({ role: result.rows[0] });
+    const result = await grantTeamCoachRole(req, userId, teamId);
+    res.status(result.status).json(result.body);
   } catch (error) {
     next(error);
   }

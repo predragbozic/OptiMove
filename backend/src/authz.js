@@ -126,8 +126,17 @@ export function canAssignClubRole(authz, clubId) {
   return canManageClub(authz, clubId);
 }
 
+// Deliberately NOT canManageTeamById - that also returns true for the
+// team's own team_coach (so they can manage their team's athletes day to
+// day), but assigning or revoking the team_coach role itself is a
+// CLUB-level staff decision: only a platform admin, or the club_admin of
+// the club that owns this team, may do it. Reusing canManageTeamById here
+// would let a team_coach grant themselves or anyone else more team_coach
+// access on their own team - a privilege escalation via their own scope,
+// found and fixed in Phase 4 PR 4 (security/scoped-role-management).
 export function canAssignTeamRole(authz, teamId) {
-  return canManageTeamById(authz, teamId);
+  if (isPlatformAdministrator(authz)) return true;
+  return authz.managedTeamIds.some((id) => String(id) === String(teamId));
 }
 
 export function canUsePlatformAdministration(authz) {

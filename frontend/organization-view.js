@@ -977,17 +977,85 @@ function renderManageAccountRoleSection({ eyebrow, label, active, canManage, use
   `;
 }
 
-function renderManageAccountScopedRoles(title, rows, columns) {
+// Shared by both club and team role rows below - a Remove button only ever
+// appears for the ONE role this phase actually manages (club_admin /
+// team_coach), and only when the viewer has real assignment rights for
+// THIS specific club/team (manageableClubIds/manageableTeamIds, computed
+// server-side - never guessed here). Any other role value - including the
+// legacy club_manager/team_admin/team_trainer names, which have no defined
+// authorization semantics yet - always renders read-only, matching
+// existing behavior exactly.
+function renderManageAccountScopedRoleRow({ label, sublabel, roleValue, isActive, canManage, removeAction, removeDataAttrs }) {
+  const manageableRole = roleValue === "club_admin" || roleValue === "team_coach";
+  return `
+    <div class="manage-account-row">
+      <span>${escapeHtml(label)}${sublabel ? ` <small>${escapeHtml(sublabel)}</small>` : ""}</span>
+      <span class="muted">${escapeHtml(roleLabelText(roleValue))}</span>
+      <span class="user-status-badge ${isActive ? "is-active" : "is-inactive"}">${isActive ? "Active" : "Inactive"}</span>
+      ${manageableRole && isActive && canManage ? `
+        <button class="plain-button compact-button danger-button" type="button" data-action="${removeAction}" ${removeDataAttrs} ${state.organizationUserManage.pending ? "disabled" : ""}>Remove role</button>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderManageAccountClubRolesSection(row, data) {
+  const clubRoles = row.clubRoles || [];
+  const manageableClubIds = data.manageableClubIds || [];
+  const isManageableClub = (clubId) => manageableClubIds.some((id) => String(id) === String(clubId));
+  const activeClubIds = new Set(clubRoles.filter((r) => r.role === "club_admin" && r.isActive).map((r) => String(r.clubId)));
+  const addableClubs = (data.clubs || []).filter((club) => isManageableClub(club.id) && !activeClubIds.has(String(club.id)));
+  const pending = state.organizationUserManage.pending;
   return `
     <section class="manage-account-section">
-      <p class="eyebrow">${escapeHtml(title)}</p>
-      ${rows.length ? `<div class="manage-account-list">${rows.map((row) => `
-        <div class="manage-account-row">
-          <span>${columns(row)}</span>
-          <span class="muted">${escapeHtml(roleLabelText(row.role))}</span>
-          <span class="user-status-badge ${row.isActive ? "is-active" : "is-inactive"}">${row.isActive ? "Active" : "Inactive"}</span>
+      <p class="eyebrow">Club roles</p>
+      ${clubRoles.length ? `<div class="manage-account-list">${clubRoles.map((r) => renderManageAccountScopedRoleRow({
+        label: r.clubName || "Club",
+        roleValue: r.role,
+        isActive: r.isActive,
+        canManage: isManageableClub(r.clubId),
+        removeAction: "organization-club-role-remove",
+        removeDataAttrs: `data-user-id="${escapeAttr(row.id)}" data-club-id="${escapeAttr(r.clubId)}" data-user-name="${escapeAttr(row.name || row.email || "this user")}" data-club-name="${escapeAttr(r.clubName || "this club")}"`,
+      })).join("")}</div>` : `<p class="muted">No club roles.</p>`}
+      ${manageableClubIds.length ? `
+        <div class="manage-account-add-row" data-manage-account-add="club">
+          <select name="clubId" ${addableClubs.length ? "" : "disabled"}>
+            ${addableClubs.length ? addableClubs.map((club) => `<option value="${escapeAttr(club.id)}">${escapeHtml(club.name)}</option>`).join("") : `<option value="">No clubs available to add</option>`}
+          </select>
+          <button class="plain-button compact-button" type="button" data-action="organization-club-role-add" data-user-id="${escapeAttr(row.id)}" ${addableClubs.length && !pending ? "" : "disabled"}>Add club administrator</button>
         </div>
-      `).join("")}</div>` : `<p class="muted">No ${escapeHtml(title.toLowerCase())}.</p>`}
+      ` : ""}
+    </section>
+  `;
+}
+
+function renderManageAccountTeamRolesSection(row, data) {
+  const teamRoles = row.teamRoles || [];
+  const manageableTeamIds = data.manageableTeamIds || [];
+  const isManageableTeam = (teamId) => manageableTeamIds.some((id) => String(id) === String(teamId));
+  const activeTeamIds = new Set(teamRoles.filter((r) => r.role === "team_coach" && r.isActive).map((r) => String(r.teamId)));
+  const addableTeams = (data.teams || []).filter((team) => isManageableTeam(team.id) && !activeTeamIds.has(String(team.id)));
+  const pending = state.organizationUserManage.pending;
+  return `
+    <section class="manage-account-section">
+      <p class="eyebrow">Team roles</p>
+      ${teamRoles.length ? `<div class="manage-account-list">${teamRoles.map((r) => renderManageAccountScopedRoleRow({
+        label: r.teamName || "Team",
+        sublabel: r.clubName || "",
+        roleValue: r.role,
+        isActive: r.isActive,
+        canManage: isManageableTeam(r.teamId),
+        removeAction: "organization-team-role-remove",
+        removeDataAttrs: `data-user-id="${escapeAttr(row.id)}" data-team-id="${escapeAttr(r.teamId)}" data-user-name="${escapeAttr(row.name || row.email || "this user")}" data-team-name="${escapeAttr(r.teamName || "this team")}"`,
+      })).join("")}</div>` : `<p class="muted">No team roles.</p>`}
+      ${manageableTeamIds.length ? `
+        <div class="manage-account-add-row" data-manage-account-add="team">
+          <select name="teamId" ${addableTeams.length ? "" : "disabled"}>
+            ${addableTeams.length ? addableTeams.map((team) => `<option value="${escapeAttr(team.id)}">${escapeHtml(team.name)}${team.club_name ? ` - ${escapeHtml(team.club_name)}` : ""}</option>`).join("") : `<option value="">No teams available to add</option>`}
+          </select>
+          <button class="plain-button compact-button" type="button" data-action="organization-team-role-add" data-user-id="${escapeAttr(row.id)}" ${addableTeams.length && !pending ? "" : "disabled"}>Add team coach</button>
+        </div>
+      ` : ""}
     </section>
   `;
 }
@@ -1044,8 +1112,8 @@ export function renderManageAccountModal(data) {
           removeLabel: "Remove private coaching",
           note: "Can only manage athletes linked through an active private coach relationship. No automatic access to clubs or teams.",
         })}
-        ${renderManageAccountScopedRoles("Club roles", (row.clubRoles || []), (r) => escapeHtml(r.clubName || "Club"))}
-        ${renderManageAccountScopedRoles("Team roles", (row.teamRoles || []), (r) => `${escapeHtml(r.teamName || "Team")}${r.clubName ? ` <small>${escapeHtml(r.clubName)}</small>` : ""}`)}
+        ${renderManageAccountClubRolesSection(row, data)}
+        ${renderManageAccountTeamRolesSection(row, data)}
         <section class="manage-account-section">
           <p class="eyebrow">Athlete profile</p>
           <p>${row.isAthlete === true ? "Athlete profile linked" : "No athlete profile linked"}</p>
