@@ -32,6 +32,32 @@ export async function lockAthleteInviteActions(executor, athleteId) {
   await executor(`select pg_advisory_xact_lock($1, hashtext($2::text))`, [ATHLETE_INVITE_ACTION_LOCK_NAMESPACE, String(athleteId)]);
 }
 
+// Called by accept and link, in the SAME transaction as (and immediately
+// after) marking the invite that was just used as accepted, while still
+// holding the per-athlete lock from lockAthleteInviteActions. An athlete
+// can only ever have one login, so once one invite links it, every OTHER
+// still-open invite for this athlete - any context, any email, including
+// ones this same request never touched - can never be meaningfully
+// accepted afterward; leaving them "open" would just be stale, misleading
+// pending state (and would violate the "no open invite once linked"
+// invariant the concurrency hardening above depends on). Closed with
+// revoke_reason = 'athlete_linked' so this is distinguishable in the audit
+// trail from an explicit DELETE /athlete-invites/:id (revoke_reason =
+// 'revoked') or a regenerate superseding its own prior token
+// (revoke_reason = 'regenerated'). revoked_by_user_id is set to the
+// account that just linked - not null - since that account's own action is
+// what caused this closure; it is simply also the accepted_by_user_id of
+// the invite that triggered it. Never touches an invite that's already
+// accepted or already revoked.
+export async function closeOtherOpenInvitesForAthlete(executor, athleteId, justAcceptedInviteId, linkedByUserId) {
+  await executor(
+    `update public.athlete_invites
+     set revoked_at = now(), revoked_by_user_id = $1, revoke_reason = 'athlete_linked', updated_at = now()
+     where athlete_id = $2 and id <> $3 and accepted_at is null and revoked_at is null`,
+    [linkedByUserId, athleteId, justAcceptedInviteId],
+  );
+}
+
 export function inviteContextShapeValid(contextType, contextId) {
   if (!INVITE_CONTEXT_TYPES.has(contextType)) return false;
   if (contextType === "club" || contextType === "team") return Boolean(contextId);

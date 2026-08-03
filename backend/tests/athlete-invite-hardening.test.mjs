@@ -125,6 +125,20 @@ async function makePlatformAdmin(email) {
   return admin;
 }
 
+async function makePrivateCoach(email) {
+  const coach = await makeUser({ email, roleHint: "user" });
+  await grantGlobalRoleDirectly(coach.id, "independent_coach");
+  return coach;
+}
+
+async function makeCoachRelationship(coachUserId, athleteId) {
+  await query(
+    `insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active) values ($1, $2, 'coach', true)
+     on conflict (user_id, athlete_id, relationship_type) do update set is_active = true, updated_at = now()`,
+    [coachUserId, athleteId],
+  );
+}
+
 function inviteEndpoint() {
   return "/api/organization/athlete-invites";
 }
@@ -340,4 +354,100 @@ test("6. concurrent revoke and link (existing account): exactly one wins, and th
     assert.equal(revokeRes.status, 409);
     assert.equal(String(athleteRow.rows[0].user_id), String(existing.id));
   }
+});
+
+// --- accept/link close every OTHER open invite for the same athlete ---
+
+test("7. accepting one of two open invites (different contexts, different emails) closes the other with revoke_reason='athlete_linked'", async () => {
+  const platformAdmin = await makePlatformAdmin(`hardening-close-others-pa-${Date.now()}@test.local`);
+  const coach = await makePrivateCoach(`hardening-close-others-coach-${Date.now()}@test.local`);
+  const athlete = await makeAthlete("Close Others Target");
+  await makeCoachRelationship(coach.id, athlete);
+  const platformToken = await createSession(platformAdmin.id);
+  const coachToken = await createSession(coach.id);
+
+  const emailA = `hardening-close-others-a-${Date.now()}@test.local`;
+  const emailB = `hardening-close-others-b-${Date.now()}@test.local`;
+  const createdA = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(platformToken), body: { athleteId: athlete, email: emailA, contextType: "platform", contextId: null } });
+  assert.equal(createdA.status, 201);
+  const createdB = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(coachToken), body: { athleteId: athlete, email: emailB, contextType: "private_coach", contextId: null } });
+  assert.equal(createdB.status, 201);
+  const rawTokenA = decodeURIComponent(createdA.body.inviteUrl.split("token=")[1]);
+  const rawTokenB = decodeURIComponent(createdB.body.inviteUrl.split("token=")[1]);
+
+  const accept = await api(`/api/auth/invites/${encodeURIComponent(rawTokenA)}/accept`, { method: "POST", body: { password: "somepassword123" } });
+  assert.equal(accept.status, 200);
+  cleanupUserIds.add(accept.body.user.id);
+
+  const rowA = await query(`select accepted_at, accepted_by_user_id, revoked_at from public.athlete_invites where id = $1`, [createdA.body.invite.id]);
+  assert.ok(rowA.rows[0].accepted_at, "the accepted invite must have accepted_at set");
+  assert.equal(String(rowA.rows[0].accepted_by_user_id), String(accept.body.user.id));
+  assert.equal(rowA.rows[0].revoked_at, null, "the accepted invite itself must never also be marked revoked");
+
+  const rowB = await query(`select accepted_at, revoked_at, revoked_by_user_id, revoke_reason from public.athlete_invites where id = $1`, [createdB.body.invite.id]);
+  assert.equal(rowB.rows[0].accepted_at, null, "the other, unrelated invite must never be marked accepted");
+  assert.ok(rowB.rows[0].revoked_at, "the other open invite must be closed once the athlete is linked");
+  assert.equal(rowB.rows[0].revoke_reason, "athlete_linked");
+  assert.equal(String(rowB.rows[0].revoked_by_user_id), String(accept.body.user.id));
+
+  const athleteRow = await query(`select user_id from public.athletes where id = $1`, [athlete]);
+  assert.equal(String(athleteRow.rows[0].user_id), String(accept.body.user.id), "the athlete must have exactly the one new login");
+
+  const openInvites = await query(`select id from public.athlete_invites where athlete_id = $1 and accepted_at is null and revoked_at is null`, [athlete]);
+  assert.equal(openInvites.rowCount, 0, "no open invite may remain once the athlete has a login");
+
+  const lookupB = await api(`/api/auth/invites/${encodeURIComponent(rawTokenB)}`);
+  assert.equal(lookupB.status, 404);
+  assert.equal(lookupB.body.error, "Invite is invalid or expired.", "closing the other invite must never be revealed as the reason - the same generic message as any other invalid token");
+  const acceptB = await api(`/api/auth/invites/${encodeURIComponent(rawTokenB)}/accept`, { method: "POST", body: { password: "someotherpassword456" } });
+  assert.equal(acceptB.status, 404);
+  const linkAttemptToken = await createSession(coach.id);
+  const linkB = await api(`/api/auth/invites/${encodeURIComponent(rawTokenB)}/link`, { method: "POST", cookie: cookieFor(linkAttemptToken) });
+  assert.equal(linkB.status, 404);
+});
+
+test("8. linking one of two open invites (different contexts) to an existing multi-role account closes the other, and keeps every staff role intact", async () => {
+  const club = await makeClub(`Hardening Close Others Club ${Date.now()}`);
+  const staffAccount = await makeUser({ email: `hardening-close-others-staff-${Date.now()}@test.local`, roleHint: "user" });
+  await grantClubAdminDirectly(staffAccount.id, club);
+  const platformAdmin = await makePlatformAdmin(`hardening-close-others-link-pa-${Date.now()}@test.local`);
+  const athlete = await makeAthlete("Close Others Link Target");
+  await addClubMembership(athlete, club);
+  const platformToken = await createSession(platformAdmin.id);
+  const staffToken = await createSession(staffAccount.id);
+
+  // Two DIFFERENT contexts (platform, club) so neither creation revokes the
+  // other via the pre-existing "regenerate supersedes the same (athlete,
+  // context)" behavior - both must genuinely stay open at once, so linking
+  // via A can only close B through the NEW "close every other open invite"
+  // behavior being tested here.
+  const createdA = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(platformToken), body: { athleteId: athlete, email: staffAccount.email, contextType: "platform", contextId: null } });
+  assert.equal(createdA.status, 201);
+  const createdB = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(staffToken), body: { athleteId: athlete, email: staffAccount.email, contextType: "club", contextId: club } });
+  assert.equal(createdB.status, 201);
+  const rawTokenA = decodeURIComponent(createdA.body.inviteUrl.split("token=")[1]);
+  const rawTokenB = decodeURIComponent(createdB.body.inviteUrl.split("token=")[1]);
+
+  const link = await api(`/api/auth/invites/${encodeURIComponent(rawTokenA)}/link`, { method: "POST", cookie: cookieFor(staffToken) });
+  assert.equal(link.status, 200);
+
+  const athleteRow = await query(`select user_id from public.athletes where id = $1`, [athlete]);
+  assert.equal(String(athleteRow.rows[0].user_id), String(staffAccount.id));
+
+  const rowB = await query(`select accepted_at, revoked_at, revoke_reason, revoked_by_user_id from public.athlete_invites where id = $1`, [createdB.body.invite.id]);
+  assert.equal(rowB.rows[0].accepted_at, null);
+  assert.ok(rowB.rows[0].revoked_at, "the other open invite (a genuinely different context) must be closed once linked");
+  assert.equal(rowB.rows[0].revoke_reason, "athlete_linked");
+  assert.equal(String(rowB.rows[0].revoked_by_user_id), String(staffAccount.id));
+
+  const openInvites = await query(`select id from public.athlete_invites where athlete_id = $1 and accepted_at is null and revoked_at is null`, [athlete]);
+  assert.equal(openInvites.rowCount, 0, "no open invite may remain once linked");
+
+  const lookupB = await api(`/api/auth/invites/${encodeURIComponent(rawTokenB)}`);
+  assert.equal(lookupB.status, 404);
+  assert.equal(lookupB.body.error, "Invite is invalid or expired.");
+
+  const me = await api("/api/auth/me", { cookie: cookieFor(staffToken) });
+  assert.ok(me.body.user.availableWorkspaces.some((w) => w.type === "club" && w.scopeId === club), "linking as an athlete must never remove the account's existing club_admin workspace");
+  assert.ok(me.body.user.availableWorkspaces.some((w) => w.type === "athlete"), "the account must now also have an athlete workspace");
 });

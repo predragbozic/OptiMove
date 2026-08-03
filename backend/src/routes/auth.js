@@ -11,7 +11,7 @@ import {
 } from "../auth.js";
 import { accessScope, publicRole } from "../access.js";
 import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelection } from "../workspace.js";
-import { loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
+import { closeOtherOpenInvitesForAthlete, loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
 
 const router = Router();
 
@@ -256,6 +256,12 @@ router.post("/invites/:token/accept", async (req, res, next) => {
       `update public.athlete_invites set accepted_by_user_id = $2, accepted_at = now() where id = $1`,
       [invite.id, user.id],
     );
+    // The athlete now has exactly one login - any OTHER still-open invite
+    // for this same athlete (any context, any email) can never be
+    // meaningfully accepted afterward, so close them out now rather than
+    // leaving stale pending state behind. Still under the same per-athlete
+    // lock this whole transaction has held since the top of this handler.
+    await closeOtherOpenInvitesForAthlete(exec, invite.athlete_id, invite.id, user.id);
     await client.query("commit");
 
     const token = await createSession(user.id);
@@ -321,6 +327,13 @@ router.post("/invites/:token/link", async (req, res, next) => {
       `update public.athlete_invites set accepted_by_user_id = $2, accepted_at = now() where id = $1`,
       [invite.id, req.user.id],
     );
+    // Same as /accept above: this athlete now has exactly one login, so any
+    // OTHER still-open invite for it (any context, any email) is closed out
+    // now rather than left as stale pending state - still under the same
+    // per-athlete lock held since the top of this handler. A no-op if
+    // req.user already held this athlete (idempotent re-link) and nothing
+    // else was ever open.
+    await closeOtherOpenInvitesForAthlete(exec, invite.athlete_id, invite.id, req.user.id);
     await client.query("commit");
     res.json({ ok: true, athleteId: invite.athlete_id });
   } catch (error) {

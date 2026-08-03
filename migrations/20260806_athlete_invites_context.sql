@@ -94,23 +94,35 @@ create index if not exists athlete_invites_athlete_context_idx
 -- An invite can never be both accepted and revoked at once - accepting and
 -- revoking are mutually exclusive terminal states (see the transactional
 -- accept/link/revoke handlers, which each re-check this under a per-athlete
--- lock before mutating). Only added if no existing row already violates it -
--- checked explicitly rather than letting a bad add_constraint crash the
--- deploy, so conflicting data is surfaced (via a NOTICE, for someone to
--- investigate) instead of silently blocked or silently masked.
+-- lock before mutating, and now also close out every OTHER open invite for
+-- the same athlete the moment one is accepted - see
+-- backend/src/routes/auth.js).
+--
+-- Production has never run this revoke/accepted-exclusivity scheme before,
+-- so no historical row can legitimately have both timestamps set - if this
+-- check ever finds one, that is real, unexplained conflicting data, not an
+-- expected legacy shape to quietly tolerate. This deliberately RAISES AN
+-- EXCEPTION and aborts the whole migration run rather than skipping the
+-- constraint and deploying with the invariant silently unenforced - a
+-- failed deploy is recoverable (investigate, fix the data, redeploy); a
+-- deploy that quietly shipped without this constraint is not something
+-- anyone would notice until it mattered. Never rewrites the conflicting
+-- rows itself - a human has to look at them first.
 do $$
 declare
   conflicting_count integer;
 begin
-  select count(*) into conflicting_count
-  from public.athlete_invites
-  where accepted_at is not null and revoked_at is not null;
-
-  if conflicting_count > 0 then
-    raise notice 'Skipping athlete_invites_not_both_accepted_and_revoked_check: % existing row(s) have both accepted_at and revoked_at set. Investigate before adding this constraint.', conflicting_count;
-  elsif not exists (
+  if not exists (
     select 1 from pg_constraint where conname = 'athlete_invites_not_both_accepted_and_revoked_check'
   ) then
+    select count(*) into conflicting_count
+    from public.athlete_invites
+    where accepted_at is not null and revoked_at is not null;
+
+    if conflicting_count > 0 then
+      raise exception 'athlete_invites_not_both_accepted_and_revoked_check: % existing row(s) have both accepted_at and revoked_at set - investigate and resolve before this migration can proceed. Migration aborted, no constraint added, no rows changed.', conflicting_count;
+    end if;
+
     alter table public.athlete_invites
       add constraint athlete_invites_not_both_accepted_and_revoked_check
       check (not (accepted_at is not null and revoked_at is not null));
