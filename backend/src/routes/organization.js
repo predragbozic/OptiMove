@@ -12,7 +12,7 @@ import {
 import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
 import { resolveActiveWorkspace } from "../workspace.js";
-import { canCreateInviteInContext, canRevokeInvite, INVITE_CONTEXT_TYPES, inviteContextShapeValid } from "../inviteContext.js";
+import { canCreateInviteInContext, canRevokeInvite, INVITE_CONTEXT_TYPES, inviteContextShapeValid, lockAthleteInviteActions } from "../inviteContext.js";
 
 const router = Router();
 
@@ -801,14 +801,6 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
   }
 });
 
-// Shared lock namespace for "create/regenerate an invite for this exact
-// (athlete, context)" - serializes two parallel generate/regenerate calls so
-// one of them can never observe the other's not-yet-committed open invite
-// and leave two open links at once. Distinct from the club-admin/platform-
-// admin headcount locks; this key carries no meaning beyond "this one lock
-// namespace" and must never change or be reused elsewhere.
-const ATHLETE_INVITE_LOCK_NAMESPACE = 402956871;
-
 router.post("/athlete-invites", async (req, res, next) => {
   try {
     const athleteId = clean(req.body?.athleteId);
@@ -818,36 +810,48 @@ router.post("/athlete-invites", async (req, res, next) => {
     if (!athleteId || !email) return res.status(400).json({ error: "Athlete and email are required." });
     if (!inviteContextShapeValid(contextType, contextId)) return res.status(400).json({ error: "UNSUPPORTED_INVITE_CONTEXT" });
 
+    // Fast-fail pre-checks outside any transaction, purely so an obviously
+    // unauthorized or already-linked call never pays for opening a
+    // transaction/lock at all. Neither is the real enforcement point - both
+    // are re-run fresh below, after the per-athlete lock is held, which is
+    // what actually closes the races (see lockAthleteInviteActions).
     const permission = await canCreateInviteInContext(query, req, athleteId, contextType, contextId);
     if (!permission.ok) return res.status(permission.status).json({ error: permission.error });
 
     const athlete = await query(
-      `select id, coalesce(display_name, full_name, athlete_id) as name, user_id
+      `select id, coalesce(display_name, full_name, athlete_id) as name
        from public.athletes where id = $1 and coalesce(is_active, true) limit 1`,
       [athleteId],
     );
     if (!athlete.rows[0]) return res.status(404).json({ error: "Athlete not found." });
-    if (athlete.rows[0].user_id) return res.status(409).json({ error: "ATHLETE_ALREADY_HAS_LOGIN" });
 
     const client = await pool.connect();
     let invite;
     let token;
     try {
       await client.query("begin");
-      // Held for the full decision AND the update+insert below, in one
-      // transaction - so two parallel generate/regenerate calls for the
-      // same (athlete, context) can never both observe "no open invite yet"
-      // and both insert one.
-      await client.query(`select pg_advisory_xact_lock($1, hashtext($2::text))`, [
-        ATHLETE_INVITE_LOCK_NAMESPACE,
-        `${athleteId}:${contextType}:${contextId || ""}`,
-      ]);
+      const exec = (text, params) => client.query(text, params);
+      // Same lock namespace/key that accept, link, and revoke all acquire
+      // for this athlete_id before touching athletes.user_id or this
+      // athlete's invite rows - see lockAthleteInviteActions. This is what
+      // actually prevents a concurrent accept/link from linking the login
+      // (or a concurrent revoke from resolving) while this request is
+      // mid-decision.
+      await lockAthleteInviteActions(exec, athleteId);
       // Re-check inside the lock: a concurrent accept/link could have
-      // linked this athlete's login between the read above and here.
-      const recheck = await client.query(`select user_id from public.athletes where id = $1 limit 1`, [athleteId]);
+      // linked this athlete's login between the pre-check above and here.
+      const recheck = await client.query(`select user_id from public.athletes where id = $1 for update`, [athleteId]);
       if (recheck.rows[0]?.user_id) {
         await client.query("rollback");
         return res.status(409).json({ error: "ATHLETE_ALREADY_HAS_LOGIN" });
+      }
+      // Re-run the exact same context/permission/membership check again,
+      // now under the lock - membership or role could have been archived in
+      // the window between the pre-check above and acquiring this lock.
+      const lockedPermission = await canCreateInviteInContext(exec, req, athleteId, contextType, contextId);
+      if (!lockedPermission.ok) {
+        await client.query("rollback");
+        return res.status(lockedPermission.status).json({ error: lockedPermission.error });
       }
       // Regenerating always revokes whatever open (not accepted, not
       // revoked) invite already exists for this exact (athlete, context) -
@@ -902,27 +906,64 @@ router.post("/athlete-invites", async (req, res, next) => {
 router.delete("/athlete-invites/:inviteId", async (req, res, next) => {
   try {
     const inviteId = clean(req.params.inviteId);
-    const existing = await query(
-      `select id, athlete_id, context_type, context_id, invited_by_user_id, accepted_at, revoked_at
-       from public.athlete_invites where id = $1 limit 1`,
-      [inviteId],
-    );
-    const invite = existing.rows[0];
-    if (!invite) return res.status(404).json({ error: "Invite not found." });
-    if (invite.accepted_at) return res.status(409).json({ error: "This invite has already been accepted." });
+    // Resolve athlete_id without any mutation, purely to have the lock key
+    // before opening a transaction - if the invite doesn't exist at all,
+    // there's nothing to lock or revoke.
+    const resolved = await query(`select athlete_id from public.athlete_invites where id = $1 limit 1`, [inviteId]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "Invite not found." });
 
-    const permission = await canRevokeInvite(query, req, invite);
-    if (!permission.ok) return res.status(permission.status).json({ error: permission.error });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      // Same per-athlete lock accept/link/generate all use - serializes this
+      // revoke against a concurrent accept/link of the SAME token (or a
+      // concurrent regenerate of a different open invite for this athlete).
+      await lockAthleteInviteActions(exec, resolved.rows[0].athlete_id);
 
-    // Idempotent: revoking an already-revoked invite is a no-op success,
-    // not an error - but the permission check above still ran first, so an
-    // unauthorized viewer never learns whether it was already revoked.
-    if (invite.revoked_at) return res.json({ ok: true });
+      const fresh = await client.query(
+        `select id, athlete_id, context_type, context_id, invited_by_user_id, accepted_at, revoked_at
+         from public.athlete_invites where id = $1 limit 1 for update`,
+        [inviteId],
+      );
+      const invite = fresh.rows[0];
+      if (!invite) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "Invite not found." });
+      }
+      if (invite.accepted_at) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "This invite has already been accepted." });
+      }
 
-    await query(
-      `update public.athlete_invites set revoked_at = now(), revoked_by_user_id = $1, revoke_reason = 'revoked', updated_at = now() where id = $2`,
-      [req.user.id, inviteId],
-    );
+      const permission = await canRevokeInvite(exec, req, invite);
+      if (!permission.ok) {
+        await client.query("rollback");
+        return res.status(permission.status).json({ error: permission.error });
+      }
+
+      // Idempotent: revoking an already-revoked invite is a no-op success,
+      // not an error - but the permission check above still ran first
+      // against the fresh, locked row, so an unauthorized viewer never
+      // learns whether it was already revoked.
+      if (invite.revoked_at) {
+        await client.query("commit");
+        return res.json({ ok: true });
+      }
+
+      await client.query(
+        `update public.athlete_invites
+         set revoked_at = now(), revoked_by_user_id = $1, revoke_reason = 'revoked', updated_at = now()
+         where id = $2 and accepted_at is null and revoked_at is null`,
+        [req.user.id, inviteId],
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
     res.json({ ok: true });
   } catch (error) {
     next(error);

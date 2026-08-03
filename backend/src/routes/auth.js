@@ -11,7 +11,7 @@ import {
 } from "../auth.js";
 import { accessScope, publicRole } from "../access.js";
 import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelection } from "../workspace.js";
-import { loadUsableInvite } from "../inviteContext.js";
+import { loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
 
 const router = Router();
 
@@ -171,27 +171,47 @@ router.post("/invites/:token/accept", async (req, res, next) => {
     if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters." });
     const tokenHash = hashInviteToken(req.params.token);
 
+    // Resolve which athlete this token targets WITHOUT any mutation, purely
+    // to have the per-athlete lock key before opening a transaction - if the
+    // token doesn't even exist, there is nothing to lock, so this falls
+    // through to the exact same generic response as every other invalid case.
+    const resolved = await query(`select athlete_id from public.athlete_invites where token_hash = $1 limit 1`, [tokenHash]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "Invite is invalid or expired." });
+
     await client.query("begin");
-    // loadUsableInvite (shared with GET/link) also re-checks that the
-    // original context (private-coach relationship / club or team
-    // membership / inviter's continued authority) is STILL valid right now -
-    // not just that the token hasn't expired - so a stale link can never
-    // resurrect an archived relationship. Any failure reason collapses to
-    // the same generic 404 below.
-    const invite = await loadUsableInvite((text, params) => client.query(text, params), tokenHash, { forUpdate: true });
+    const exec = (text, params) => client.query(text, params);
+    // Same lock generate/regenerate, link, and revoke all acquire for this
+    // athlete_id before touching athletes.user_id or this athlete's invite
+    // rows - see lockAthleteInviteActions. This is what actually prevents a
+    // concurrent regenerate from revoking this exact token (or a concurrent
+    // revoke) while this accept is mid-decision.
+    await lockAthleteInviteActions(exec, resolved.rows[0].athlete_id);
+    // loadUsableInvite (shared with GET/link) re-loads and re-locks the
+    // invite row fresh, now that no concurrent operation for this athlete
+    // can be mid-flight, and re-checks that the original context (private-
+    // coach relationship / club or team membership / inviter's continued
+    // authority) is STILL valid right now - not just that the token hasn't
+    // expired - so a stale link can never resurrect an archived
+    // relationship. Any failure reason collapses to the same generic 404
+    // below.
+    const invite = await loadUsableInvite(exec, tokenHash, { forUpdate: true });
     if (!invite) {
       await client.query("rollback");
       return res.status(404).json({ error: "Invite is invalid or expired." });
     }
 
-    // Trust athletes.user_id directly - it's the athlete's own real FK link,
-    // not role_hint, so a multi-role account (e.g. role_hint="coach" who is
-    // also, genuinely, this athlete) is correctly recognized as already
-    // linked. This used to also require role_hint="athlete", which broke
-    // exactly that multi-role case; the historical bug that once let this
-    // column point at an unrelated staff account (POST /athletes writing the
-    // wrong column) is fixed at its source, so the raw FK is trustworthy.
-    const linkedAthleteUserId = invite.athlete_user_id || null;
+    // A fresh, locked read - not the unlocked-at-read-time join value inside
+    // loadUsableInvite's own SELECT - immediately before deciding whether to
+    // create a new account. Trust athletes.user_id directly - it's the
+    // athlete's own real FK link, not role_hint, so a multi-role account
+    // (e.g. role_hint="coach" who is also, genuinely, this athlete) is
+    // correctly recognized as already linked. This used to also require
+    // role_hint="athlete", which broke exactly that multi-role case; the
+    // historical bug that once let this column point at an unrelated staff
+    // account (POST /athletes writing the wrong column) is fixed at its
+    // source, so the raw FK is trustworthy.
+    const athleteRow = await client.query(`select user_id from public.athletes where id = $1 for update`, [invite.athlete_id]);
+    const linkedAthleteUserId = athleteRow.rows[0]?.user_id || null;
     if (linkedAthleteUserId) {
       // This athlete already has a login. The public accept form must never be
       // able to change that account's email or password, no matter what email
@@ -260,8 +280,18 @@ router.post("/invites/:token/link", async (req, res, next) => {
   try {
     const tokenHash = hashInviteToken(req.params.token);
 
+    // Resolve which athlete this token targets WITHOUT any mutation, purely
+    // to have the per-athlete lock key before opening a transaction.
+    const resolved = await query(`select athlete_id from public.athlete_invites where token_hash = $1 limit 1`, [tokenHash]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "Invite is invalid or expired." });
+
     await client.query("begin");
-    const invite = await loadUsableInvite((text, params) => client.query(text, params), tokenHash, { forUpdate: true });
+    const exec = (text, params) => client.query(text, params);
+    // Same per-athlete lock accept/generate/regenerate/revoke all acquire -
+    // see lockAthleteInviteActions - so this link is serialized against a
+    // concurrent regenerate (which would revoke this exact token) or revoke.
+    await lockAthleteInviteActions(exec, resolved.rows[0].athlete_id);
+    const invite = await loadUsableInvite(exec, tokenHash, { forUpdate: true });
     if (!invite) {
       await client.query("rollback");
       return res.status(404).json({ error: "Invite is invalid or expired." });
@@ -270,10 +300,11 @@ router.post("/invites/:token/link", async (req, res, next) => {
       await client.query("rollback");
       return res.status(403).json({ error: "This invite was sent to a different email address." });
     }
-    // See the note in /accept above: trust athletes.user_id directly (not
-    // role_hint), so a multi-role account is correctly recognized as already
-    // linked.
-    const linkedAthleteUserId = invite.athlete_user_id || null;
+    // A fresh, locked read - see the note in /accept above: trust
+    // athletes.user_id directly (not role_hint), so a multi-role account is
+    // correctly recognized as already linked.
+    const athleteRow = await client.query(`select user_id from public.athletes where id = $1 for update`, [invite.athlete_id]);
+    const linkedAthleteUserId = athleteRow.rows[0]?.user_id || null;
     if (linkedAthleteUserId && String(linkedAthleteUserId) !== String(req.user.id)) {
       await client.query("rollback");
       return res.status(409).json({ error: "This athlete profile is already linked to a different account." });

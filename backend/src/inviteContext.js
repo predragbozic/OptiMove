@@ -8,7 +8,29 @@
 // granting access).
 import { canManageTeamById, isPlatformAdministrator } from "./authz.js";
 
+// The set of context types the CURRENT invite-creation endpoint may write.
+// 'legacy' is deliberately excluded - it is only ever assigned once, by the
+// 20260806_athlete_invites_context.sql migration, to invite rows that
+// predate context tracking entirely. No code path ever creates a new
+// 'legacy' row.
 export const INVITE_CONTEXT_TYPES = new Set(["platform", "private_coach", "club", "team"]);
+
+// Shared lock namespace serializing every mutation that can affect a given
+// athlete's invite/login state: creating or regenerating an invite in ANY
+// context, accepting one, linking one to an existing account, and revoking
+// one. All four acquire this SAME lock, keyed by athlete_id ALONE (never by
+// context too), before reading or writing anything that another one of
+// these four could also read or write - athletes.user_id and the invite
+// row(s) for this athlete. Because every caller takes exactly this one
+// lock and nothing else, there is no ordering to get wrong and therefore no
+// way for these four operations to deadlock against each other. The key
+// carries no meaning beyond "this one lock namespace" and must never change
+// or be reused elsewhere.
+const ATHLETE_INVITE_ACTION_LOCK_NAMESPACE = 719402583;
+
+export async function lockAthleteInviteActions(executor, athleteId) {
+  await executor(`select pg_advisory_xact_lock($1, hashtext($2::text))`, [ATHLETE_INVITE_ACTION_LOCK_NAMESPACE, String(athleteId)]);
+}
 
 export function inviteContextShapeValid(contextType, contextId) {
   if (!INVITE_CONTEXT_TYPES.has(contextType)) return false;
@@ -113,6 +135,41 @@ export async function canRevokeInvite(executor, req, invite) {
     return { ok: true };
   }
 
+  if (invite.context_type === "legacy") {
+    // No recorded context to check a specific role against - allow revoke
+    // by anyone who currently has ANY real active access to this athlete
+    // (mirrors isInviteContextStillValid's legacy check below), not only
+    // the original inviter, matching how club/team already work.
+    if (authz.isIndependentCoach) {
+      const relationship = await executor(
+        `select 1 from public.user_athletes where user_id = $1 and athlete_id = $2 and relationship_type = 'coach' and is_active = true limit 1`,
+        [req.user.id, invite.athlete_id],
+      );
+      if (relationship.rowCount) return { ok: true };
+    }
+    const clubAdmin = await executor(
+      `select 1
+       from public.user_club_roles ucr
+       join public.athlete_memberships am
+         on am.club_id = ucr.club_id and am.membership_type = 'club' and am.status = 'active'
+       where ucr.user_id = $1 and ucr.role = 'club_admin' and ucr.is_active = true and am.athlete_id = $2
+       limit 1`,
+      [req.user.id, invite.athlete_id],
+    );
+    if (clubAdmin.rowCount) return { ok: true };
+    const teamCoach = await executor(
+      `select 1
+       from public.user_team_roles utr
+       join public.athlete_memberships am
+         on am.team_id = utr.team_id and am.membership_type = 'team' and am.status = 'active'
+       where utr.user_id = $1 and utr.role = 'team_coach' and utr.is_active = true and am.athlete_id = $2
+       limit 1`,
+      [req.user.id, invite.athlete_id],
+    );
+    if (teamCoach.rowCount) return { ok: true };
+    return { ok: false, status: 403, error: "You do not have active access to this athlete." };
+  }
+
   return { ok: false, status: 403, error: "UNSUPPORTED_INVITE_CONTEXT" };
 }
 
@@ -175,6 +232,53 @@ export async function isInviteContextStillValid(executor, invite) {
       [invite.invited_by_user_id, invite.context_id, clubId],
     );
     return stillQualifies.rowCount > 0;
+  }
+
+  if (invite.context_type === "legacy") {
+    // A historical invite from before context tracking existed (backfilled
+    // by the migration - see its comment). Its real originating context was
+    // never recorded and is never guessed at here. Instead: valid as long
+    // as the original inviter has ANY real, currently active access to this
+    // athlete - platform_admin, an active private-coach relationship, an
+    // active club_admin role together with the athlete's active membership
+    // in that same club, or an active team_coach role together with the
+    // athlete's active membership in that same team. Never role_hint.
+    // Accepting a legacy invite still only links the existing profile to a
+    // user account, exactly like every other context - it never creates or
+    // reactivates a relationship, so there is no membership to widen here.
+    const admin = await executor(
+      `select 1 from public.user_global_roles where user_id = $1 and role = 'platform_admin' and is_active = true limit 1`,
+      [invite.invited_by_user_id],
+    );
+    if (admin.rowCount > 0) return true;
+
+    const privateCoach = await executor(
+      `select 1 from public.user_athletes where user_id = $1 and athlete_id = $2 and relationship_type = 'coach' and is_active = true limit 1`,
+      [invite.invited_by_user_id, invite.athlete_id],
+    );
+    if (privateCoach.rowCount > 0) return true;
+
+    const clubAdmin = await executor(
+      `select 1
+       from public.user_club_roles ucr
+       join public.athlete_memberships am
+         on am.club_id = ucr.club_id and am.membership_type = 'club' and am.status = 'active'
+       where ucr.user_id = $1 and ucr.role = 'club_admin' and ucr.is_active = true and am.athlete_id = $2
+       limit 1`,
+      [invite.invited_by_user_id, invite.athlete_id],
+    );
+    if (clubAdmin.rowCount > 0) return true;
+
+    const teamCoach = await executor(
+      `select 1
+       from public.user_team_roles utr
+       join public.athlete_memberships am
+         on am.team_id = utr.team_id and am.membership_type = 'team' and am.status = 'active'
+       where utr.user_id = $1 and utr.role = 'team_coach' and utr.is_active = true and am.athlete_id = $2
+       limit 1`,
+      [invite.invited_by_user_id, invite.athlete_id],
+    );
+    return teamCoach.rowCount > 0;
   }
 
   return false;
