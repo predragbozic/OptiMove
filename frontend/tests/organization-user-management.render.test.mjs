@@ -336,4 +336,3 @@ test("a legacy/unsupported scoped role (e.g. club_manager) is always read-only, 
   assert.ok(html.includes("Club manager"), "the legacy role name must still be shown");
   assert.ok(!html.includes('data-action="organization-club-role-remove"'), "a legacy club_manager role must never offer Remove role, even when the viewer manages the club");
 });
-

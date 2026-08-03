@@ -247,6 +247,11 @@ async function setUserLoginStatus(req, targetUserId, active) {
           return { status: 409, body: { error: "LAST_PLATFORM_ADMIN" } };
         }
       }
+      const blockedClubId = await findClubAdminLastAdminBlock(client, targetUserId);
+      if (blockedClubId) {
+        await client.query("rollback");
+        return { status: 409, body: { error: "LAST_CLUB_ADMIN" } };
+      }
       if (String(targetUserId) === String(req.user.id)) {
         await client.query("rollback");
         return { status: 400, body: { error: "You cannot disable your own account." } };
@@ -1161,6 +1166,41 @@ async function loadQualifyingClubAdminUserIds(client, clubId) {
   return result.rows.map((row) => row.id);
 }
 
+// Must be called inside the same open transaction as the login-disable flow
+// in setUserLoginStatus, before any mutation. Finds every ACTIVE club where
+// the target currently holds an active club_admin role (an archived club is
+// exempt from the LAST_CLUB_ADMIN invariant - it doesn't need to keep an
+// admin forever), locks each one's headcount via lockClubAdminHeadcount in
+// deterministic (sorted club id) order - never any other order - so that
+// two concurrent requests against a user who administers multiple clubs can
+// never form a circular wait, then re-reads the fresh qualifying count for
+// each locked club. Returns the id of the first club where the target would
+// be left as the last qualifying admin, or null if disabling the login is
+// safe for all of them. No bypass for platform admin actors - this runs
+// unconditionally, exactly like the LAST_PLATFORM_ADMIN check above.
+async function findClubAdminLastAdminBlock(client, targetUserId) {
+  const clubRows = await client.query(
+    `select r.club_id as "clubId"
+     from public.user_club_roles r
+     join public.clubs c on c.id = r.club_id
+     where r.user_id = $1 and r.role = 'club_admin' and r.is_active = true and coalesce(c.is_active, true) = true
+     order by r.club_id`,
+    [targetUserId],
+  );
+  const clubIds = clubRows.rows.map((row) => row.clubId);
+  for (const clubId of clubIds) {
+    await lockClubAdminHeadcount(client, clubId);
+  }
+  for (const clubId of clubIds) {
+    const qualifyingIds = await loadQualifyingClubAdminUserIds(client, clubId);
+    const targetQualifies = qualifyingIds.some((id) => String(id) === String(targetUserId));
+    if (targetQualifies && qualifyingIds.length <= 1) {
+      return clubId;
+    }
+  }
+  return null;
+}
+
 async function loadClubRolesForUser(userId) {
   const result = await query(
     `select r.club_id as "clubId", c.name as "clubName", r.role, r.is_active as "isActive",
@@ -1236,22 +1276,28 @@ async function revokeClubAdminRole(req, targetUserId, clubId) {
   if (!authzCanAssignClubRole(req.authz, clubId)) {
     return { status: 403, body: { error: "Only a platform admin, or this club's own admin, can remove club administrator access." } };
   }
-  const club = await query(`select id from public.clubs where id = $1 limit 1`, [clubId]);
+  const club = await query(`select id, coalesce(is_active, true) as "isActive" from public.clubs where id = $1 limit 1`, [clubId]);
   if (!club.rows[0]) return { status: 404, body: { error: "Club not found." } };
+  const clubIsActive = club.rows[0].isActive;
 
   const client = await pool.connect();
   try {
     await client.query("begin");
-    // The lock is held for the full decision AND the update below, in one
+    // The LAST_CLUB_ADMIN invariant only protects ACTIVE clubs - an
+    // archived club doesn't need to keep an admin forever, so the lock and
+    // headcount check are skipped entirely for it. When the club is active,
+    // the lock is held for the full decision AND the update below, in one
     // transaction - releasing it early would reopen the exact race this is
     // meant to close. Applies regardless of who the actor is (platform
     // admin included) - there is no bypass for this check.
-    await lockClubAdminHeadcount(client, clubId);
-    const qualifyingIds = await loadQualifyingClubAdminUserIds(client, clubId);
-    const targetQualifies = qualifyingIds.some((id) => String(id) === String(targetUserId));
-    if (targetQualifies && qualifyingIds.length <= 1) {
-      await client.query("rollback");
-      return { status: 409, body: { error: "LAST_CLUB_ADMIN" } };
+    if (clubIsActive) {
+      await lockClubAdminHeadcount(client, clubId);
+      const qualifyingIds = await loadQualifyingClubAdminUserIds(client, clubId);
+      const targetQualifies = qualifyingIds.some((id) => String(id) === String(targetUserId));
+      if (targetQualifies && qualifyingIds.length <= 1) {
+        await client.query("rollback");
+        return { status: 409, body: { error: "LAST_CLUB_ADMIN" } };
+      }
     }
     // Idempotent: if there's no active row for this (user, club) - already
     // revoked, or never granted - this affects zero rows and the request

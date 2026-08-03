@@ -464,6 +464,191 @@ test("15. the legacy POST /club-roles endpoint enforces the exact same scope che
   assert.equal(ownClubAttempt.status, 200, "the legacy endpoint must still work for a club the actor genuinely administers");
 });
 
+// --- 16-22: LAST_CLUB_ADMIN protection extended to the login-status disable path ---
+
+test("16. disabling the login of the last active club_admin of an active club is rejected with 409 LAST_CLUB_ADMIN, login and sessions untouched", async () => {
+  const club = await makeClub(`Scoped Club V ${Date.now()}`);
+  const soleAdmin = await makeClubAdmin(`scoped-loginlast-${Date.now()}@test.local`, club);
+  const platformAdmin = await makePlatformAdmin(`scoped-loginlast-pa-${Date.now()}@test.local`);
+  await createSession(soleAdmin.id);
+  const token = await createSession(platformAdmin.id);
+  assert.equal(await sessionCountFor(soleAdmin.id), 1);
+
+  const res = await api(`/api/organization/users/${soleAdmin.id}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { active: false },
+  });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, "LAST_CLUB_ADMIN");
+
+  const row = await query(`select is_active from public.users where id = $1`, [soleAdmin.id]);
+  assert.equal(row.rows[0].is_active, true, "the last club admin's login must remain enabled after a rejected disable");
+  assert.equal(await sessionCountFor(soleAdmin.id), 1, "sessions must be untouched by a rejected disable");
+});
+
+test("17. when a club has two usable club_admins, disabling one of their logins succeeds", async () => {
+  const club = await makeClub(`Scoped Club W ${Date.now()}`);
+  const admin1 = await makeClubAdmin(`scoped-logintwo-1-${Date.now()}@test.local`, club);
+  const admin2 = await makeClubAdmin(`scoped-logintwo-2-${Date.now()}@test.local`, club);
+  const platformAdmin = await makePlatformAdmin(`scoped-logintwo-pa-${Date.now()}@test.local`);
+  const token = await createSession(platformAdmin.id);
+
+  const res = await api(`/api/organization/users/${admin1.id}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { active: false },
+  });
+  assert.equal(res.status, 200, "disabling one of two usable club admins must succeed");
+
+  const row = await query(`select is_active from public.users where id = $1`, [admin1.id]);
+  assert.equal(row.rows[0].is_active, false);
+  const otherRow = await query(`select is_active from public.users where id = $1`, [admin2.id]);
+  assert.equal(otherRow.rows[0].is_active, true, "the other admin's login must remain untouched");
+});
+
+test("18. a platform admin cannot disable the login of the last club admin - must grant another admin first", async () => {
+  const club = await makeClub(`Scoped Club X ${Date.now()}`);
+  const soleAdmin = await makeClubAdmin(`scoped-loginbypass-${Date.now()}@test.local`, club);
+  const platformAdmin = await makePlatformAdmin(`scoped-loginbypass-pa-${Date.now()}@test.local`);
+  const token = await createSession(platformAdmin.id);
+
+  const blocked = await api(`/api/organization/users/${soleAdmin.id}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { active: false },
+  });
+  assert.equal(blocked.status, 409, "a platform admin must not be able to bypass LAST_CLUB_ADMIN via login-status");
+  assert.equal(blocked.body.error, "LAST_CLUB_ADMIN");
+
+  // Grant a second admin first, then the original disable must succeed.
+  const second = await makeClubAdmin(`scoped-loginbypass-second-${Date.now()}@test.local`, club);
+  const allowed = await api(`/api/organization/users/${soleAdmin.id}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { active: false },
+  });
+  assert.equal(allowed.status, 200, "once a second admin exists, the original account's login can be disabled");
+});
+
+test("19. re-enabling a login still works and needs no LAST_CLUB_ADMIN check", async () => {
+  const club = await makeClub(`Scoped Club Y ${Date.now()}`);
+  const soleAdmin = await makeClubAdmin(`scoped-reenable-${Date.now()}@test.local`, club);
+  const second = await makeClubAdmin(`scoped-reenable-second-${Date.now()}@test.local`, club);
+  const platformAdmin = await makePlatformAdmin(`scoped-reenable-pa-${Date.now()}@test.local`);
+  const token = await createSession(platformAdmin.id);
+
+  const disable = await api(`/api/organization/users/${soleAdmin.id}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { active: false },
+  });
+  assert.equal(disable.status, 200);
+
+  const reenable = await api(`/api/organization/users/${soleAdmin.id}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { active: true },
+  });
+  assert.equal(reenable.status, 200, "re-enabling a login must always work, even though this club would then have only one qualifying admin again");
+  const row = await query(`select is_active from public.users where id = $1`, [soleAdmin.id]);
+  assert.equal(row.rows[0].is_active, true);
+});
+
+test("20. an archived club does not block disabling the login of, or revoking, its last club_admin", async () => {
+  const club = await makeClub(`Scoped Club Z ${Date.now()}`);
+  const soleAdmin = await makeClubAdmin(`scoped-archived-${Date.now()}@test.local`, club);
+  const platformAdmin = await makePlatformAdmin(`scoped-archived-pa-${Date.now()}@test.local`);
+  const token = await createSession(platformAdmin.id);
+  await query(`update public.clubs set is_active = false where id = $1`, [club]);
+
+  const disableRes = await api(`/api/organization/users/${soleAdmin.id}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { active: false },
+  });
+  assert.equal(disableRes.status, 200, "an archived club must not block disabling its last club_admin's login");
+
+  // Re-enable, then prove the revoke endpoint is equally unblocked.
+  await api(`/api/organization/users/${soleAdmin.id}/login-status`, { method: "PUT", cookie: cookieFor(token), body: { active: true } });
+  const revokeRes = await api(`/api/organization/users/${soleAdmin.id}/club-roles/${club}/club_admin`, { method: "DELETE", cookie: cookieFor(token) });
+  assert.equal(revokeRes.status, 200, "an archived club must not block revoking its last club_admin role");
+});
+
+test("21. concurrent revoke(admin A) + disable-login(admin B), the only two admins of the same club: exactly one succeeds, and at least one login-active + role-active club_admin remains", async () => {
+  const club = await makeClub(`Scoped Club AA ${Date.now()}`);
+  const adminA = await makeClubAdmin(`scoped-concur-a-${Date.now()}@test.local`, club);
+  const adminB = await makeClubAdmin(`scoped-concur-b-${Date.now()}@test.local`, club);
+  const platformAdmin = await makePlatformAdmin(`scoped-concur-pa-${Date.now()}@test.local`);
+  const token = await createSession(platformAdmin.id);
+
+  const [revokeA, disableB] = await Promise.all([
+    api(`/api/organization/users/${adminA.id}/club-roles/${club}/club_admin`, { method: "DELETE", cookie: cookieFor(token) }),
+    api(`/api/organization/users/${adminB.id}/login-status`, { method: "PUT", cookie: cookieFor(token), body: { active: false } }),
+  ]);
+  const statuses = [revokeA.status, disableB.status].sort();
+  assert.deepEqual(statuses, [200, 409], "exactly one of the concurrent revoke/disable must succeed and the other must be rejected as the last admin");
+
+  const qualifying = await query(
+    `select u.id
+     from public.users u
+     join public.user_club_roles r on r.user_id = u.id and r.club_id = $1 and r.role = 'club_admin' and r.is_active = true
+     where u.is_active = true`,
+    [club],
+  );
+  assert.ok(qualifying.rowCount >= 1, "at least one login-active + role-active club_admin must remain after the race");
+});
+
+test("22. disabling the login of a user who administers multiple clubs does not deadlock and leaves no club adminless", async () => {
+  const clubOne = await makeClub(`Scoped Club BB1 ${Date.now()}`);
+  const clubTwo = await makeClub(`Scoped Club BB2 ${Date.now()}`);
+  const multiAdmin = await makeClubAdmin(`scoped-multi-${Date.now()}@test.local`, clubOne);
+  await grantClubAdminDirectly(multiAdmin.id, clubTwo);
+  // A second admin only on clubTwo, so disabling multiAdmin's login must be
+  // blocked by clubOne (where multiAdmin is the sole qualifying admin), not
+  // by clubTwo - proving both clubs are actually checked.
+  const secondOnTwo = await makeClubAdmin(`scoped-multi-second-${Date.now()}@test.local`, clubTwo);
+  const platformAdmin = await makePlatformAdmin(`scoped-multi-pa-${Date.now()}@test.local`);
+  const token = await createSession(platformAdmin.id);
+
+  const blocked = await api(`/api/organization/users/${multiAdmin.id}/login-status`, {
+    method: "PUT",
+    cookie: cookieFor(token),
+    body: { active: false },
+  });
+  assert.equal(blocked.status, 409, "must be blocked because clubOne would be left without a qualifying admin");
+  assert.equal(blocked.body.error, "LAST_CLUB_ADMIN");
+
+  // Now run it concurrently from two different actors to also exercise the
+  // deterministic multi-lock ordering under real concurrency: one platform
+  // admin disabling multiAdmin's login, another revoking multiAdmin's role
+  // in clubTwo at the same time. Neither club may end up adminless, and the
+  // pair must not hang (a real deadlock would cause this test to time out).
+  const secondPlatformAdmin = await makePlatformAdmin(`scoped-multi-pa2-${Date.now()}@test.local`);
+  const token2 = await createSession(secondPlatformAdmin.id);
+  const [disableRes, revokeClubTwoRes] = await Promise.all([
+    api(`/api/organization/users/${multiAdmin.id}/login-status`, { method: "PUT", cookie: cookieFor(token), body: { active: false } }),
+    api(`/api/organization/users/${multiAdmin.id}/club-roles/${clubTwo}/club_admin`, { method: "DELETE", cookie: cookieFor(token2) }),
+  ]);
+  assert.equal(disableRes.status, 409, "clubOne still has no second admin, so disabling multiAdmin's login must still be rejected");
+  assert.equal(revokeClubTwoRes.status, 200, "revoking multiAdmin's clubTwo role must succeed since clubTwo still has secondOnTwo as a qualifying admin");
+
+  const clubOneQualifying = await query(
+    `select u.id from public.users u
+     join public.user_club_roles r on r.user_id = u.id and r.club_id = $1 and r.role = 'club_admin' and r.is_active = true
+     where u.is_active = true`,
+    [clubOne],
+  );
+  assert.ok(clubOneQualifying.rowCount >= 1, "clubOne must still have a qualifying admin");
+  const clubTwoQualifying = await query(
+    `select u.id from public.users u
+     join public.user_club_roles r on r.user_id = u.id and r.club_id = $1 and r.role = 'club_admin' and r.is_active = true
+     where u.is_active = true`,
+    [clubTwo],
+  );
+  assert.ok(clubTwoQualifying.rowCount >= 1, "clubTwo must still have a qualifying admin");
+});
+
 test("15b. the legacy POST /team-roles endpoint no longer lets a team_coach grant team_coach on their own team", async () => {
   const club = await makeClub(`Scoped Club U ${Date.now()}`);
   const team = await makeTeam(club, "Team U");
