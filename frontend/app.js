@@ -72,6 +72,7 @@ import {
   visibleTemplateScopes,
 } from "./navigation.js";
 import {
+  closeAthleteInviteModal,
   closeManageAccountModal,
   handleOrganizationAction,
   handleOrganizationFilterInput,
@@ -299,6 +300,7 @@ function bindEvents() {
     if (event.key !== "Escape") return;
     closeMedia();
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
+    if (state.organizationInvite.open) closeAthleteInviteModal(renderOrganizationPanel);
     if (state.workspaceSwitcher.open) {
       state.workspaceSwitcher.open = false;
       renderWorkspaceSwitcher();

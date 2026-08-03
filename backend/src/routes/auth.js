@@ -11,6 +11,7 @@ import {
 } from "../auth.js";
 import { accessScope, publicRole } from "../access.js";
 import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelection } from "../workspace.js";
+import { loadUsableInvite } from "../inviteContext.js";
 
 const router = Router();
 
@@ -144,23 +145,13 @@ router.post("/login", async (req, res, next) => {
 router.get("/invites/:token", async (req, res, next) => {
   try {
     const tokenHash = hashInviteToken(req.params.token);
-    const result = await query(
-      `
-      select i.id, i.email, i.expires_at,
-             coalesce(a.display_name, a.full_name, a.athlete_id) as athlete_name,
-             a.athlete_id as athlete_code
-      from public.athlete_invites i
-      join public.athletes a on a.id = i.athlete_id
-      where i.token_hash = $1
-        and i.accepted_at is null
-        and i.expires_at > now()
-      limit 1
-      `,
-      [tokenHash],
-    );
-    const invite = result.rows[0];
+    // loadUsableInvite folds "not found", "expired", "revoked", "already
+    // accepted", and "the original context is no longer valid" into the
+    // exact same null result - a link must never be usable to tell an
+    // anonymous caller which of those it was.
+    const invite = await loadUsableInvite(query, tokenHash);
     if (!invite) return res.status(404).json({ error: "Invite is invalid or expired." });
-    res.json({ invite });
+    res.json({ invite: { id: invite.id, email: invite.email, expires_at: invite.expires_at, athlete_name: invite.athlete_name, athlete_code: invite.athlete_code } });
   } catch (error) {
     next(error);
   }
@@ -181,21 +172,13 @@ router.post("/invites/:token/accept", async (req, res, next) => {
     const tokenHash = hashInviteToken(req.params.token);
 
     await client.query("begin");
-    const inviteResult = await client.query(
-      `
-      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id,
-             coalesce(a.display_name, a.full_name, a.athlete_id, i.email) as athlete_name
-      from public.athlete_invites i
-      join public.athletes a on a.id = i.athlete_id
-      where i.token_hash = $1
-        and i.accepted_at is null
-        and i.expires_at > now()
-      limit 1
-      for update of i
-      `,
-      [tokenHash],
-    );
-    const invite = inviteResult.rows[0];
+    // loadUsableInvite (shared with GET/link) also re-checks that the
+    // original context (private-coach relationship / club or team
+    // membership / inviter's continued authority) is STILL valid right now -
+    // not just that the token hasn't expired - so a stale link can never
+    // resurrect an archived relationship. Any failure reason collapses to
+    // the same generic 404 below.
+    const invite = await loadUsableInvite((text, params) => client.query(text, params), tokenHash, { forUpdate: true });
     if (!invite) {
       await client.query("rollback");
       return res.status(404).json({ error: "Invite is invalid or expired." });
@@ -278,20 +261,7 @@ router.post("/invites/:token/link", async (req, res, next) => {
     const tokenHash = hashInviteToken(req.params.token);
 
     await client.query("begin");
-    const inviteResult = await client.query(
-      `
-      select i.id, i.email, i.athlete_id, a.user_id as athlete_user_id
-      from public.athlete_invites i
-      join public.athletes a on a.id = i.athlete_id
-      where i.token_hash = $1
-        and i.accepted_at is null
-        and i.expires_at > now()
-      limit 1
-      for update of i
-      `,
-      [tokenHash],
-    );
-    const invite = inviteResult.rows[0];
+    const invite = await loadUsableInvite((text, params) => client.query(text, params), tokenHash, { forUpdate: true });
     if (!invite) {
       await client.query("rollback");
       return res.status(404).json({ error: "Invite is invalid or expired." });

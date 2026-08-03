@@ -163,7 +163,7 @@ export const createInitialState = () => ({
   organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", addFormOpen: false, assignOpen: false, accessOpen: false, showArchivedAthletes: false, showArchivedTeamMembers: false, showArchivedClubMembers: false, showDisabledUsers: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },
   organizationEditor: { open: false, type: "", row: null },
   organizationUserManage: { open: false, userId: "", pending: false, error: "" },
-  organizationInvite: { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" },
+  organizationInvite: { open: false, athleteId: "", pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false },
   workspaceSwitcher: { open: false, pending: false, error: "" },
   taxonomy: {
     loaded: false,

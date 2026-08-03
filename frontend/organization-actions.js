@@ -47,17 +47,27 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
     payload.freeOnly = formData.has("freeOnly");
     payload.requireApproval = formData.has("requireApproval");
   }
+  if (type === "athleteInvite") {
+    // The invite always carries the account's CURRENT active workspace as
+    // its presentation context - the backend independently re-derives and
+    // re-checks permission from req.authz regardless of what's sent here.
+    const workspace = state.currentUser?.activeWorkspace;
+    payload.contextType = workspace?.type || "";
+    payload.contextId = workspace?.scopeId || null;
+  }
   try {
     const result = await api(endpoint, { method, body: JSON.stringify(payload) });
     if (type === "athleteInvite") {
       state.organizationInvite = {
         open: true,
         athleteId: payload.athleteId || state.organizationInvite.athleteId,
+        pending: false,
+        error: "",
         inviteUrl: result.inviteUrl || "",
         mailtoUrl: result.mailtoUrl || "",
-        error: "",
+        copied: false,
       };
-      await renderOrganizationPanel({ refresh: false });
+      await renderOrganizationPanel({ refresh: true });
       return;
     }
     form.reset();
@@ -66,7 +76,12 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
     await loadAthletes();
     if (state.activeTab === "organization") await renderOrganizationPanel();
   } catch (submitError) {
-    if (error) error.textContent = submitError.message || "Could not save.";
+    if (type === "athleteInvite") {
+      state.organizationInvite.error = describeInviteError(submitError);
+      void renderOrganizationPanel({ refresh: false });
+    } else if (error) {
+      error.textContent = submitError.message || "Could not save.";
+    }
   } finally {
     if (button) button.disabled = false;
   }
@@ -511,19 +526,76 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   if (type === "organization-invite-athlete") {
     const row = findOrganizationRow("athlete", action.dataset.athleteId);
     if (!row) return true;
-    state.organizationInvite = { open: true, athleteId: row.id, inviteUrl: "", mailtoUrl: "", error: "" };
+    state.organizationInvite = { open: true, athleteId: row.id, pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false };
     state.organizationEditor = { open: false, type: "", row: null };
     void renderOrganizationPanel({ refresh: false });
     return true;
   }
   if (type === "organization-invite-close") {
-    state.organizationInvite = { open: false, athleteId: "", inviteUrl: "", mailtoUrl: "", error: "" };
-    void renderOrganizationPanel({ refresh: false });
+    closeAthleteInviteModal(renderOrganizationPanel);
     return true;
   }
   if (type === "organization-copy-invite") {
     const inviteUrl = state.organizationInvite.inviteUrl || "";
-    if (inviteUrl) void navigator.clipboard?.writeText(inviteUrl);
+    if (!inviteUrl) return true;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(inviteUrl);
+        state.organizationInvite.copied = true;
+      }
+    } catch {
+      state.organizationInvite.copied = false;
+    }
+    // If the clipboard API isn't available or the write failed, the link
+    // stays visible in its readonly input either way - the user can select
+    // and copy it manually - so no error is surfaced here, just no "Link
+    // copied" confirmation.
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-invite-regenerate") {
+    const athleteId = state.organizationInvite.athleteId;
+    const row = findOrganizationRow("athlete", athleteId);
+    const currentInvite = row?.invite;
+    if (!athleteId || !currentInvite || state.organizationInvite.pending) return true;
+    if (!window.confirm("Generate a new invite link? The current link will stop working immediately.")) return true;
+    const workspace = state.currentUser?.activeWorkspace;
+    state.organizationInvite.pending = true;
+    state.organizationInvite.error = "";
+    void renderOrganizationPanel({ refresh: false });
+    try {
+      const result = await api("/api/organization/athlete-invites", {
+        method: "POST",
+        body: JSON.stringify({ athleteId, email: currentInvite.email, contextType: workspace?.type || "", contextId: workspace?.scopeId || null }),
+      });
+      state.organizationInvite.pending = false;
+      state.organizationInvite.inviteUrl = result.inviteUrl || "";
+      state.organizationInvite.mailtoUrl = result.mailtoUrl || "";
+      state.organizationInvite.copied = false;
+      await renderOrganizationPanel({ refresh: true });
+    } catch (error) {
+      state.organizationInvite.pending = false;
+      state.organizationInvite.error = describeInviteError(error);
+      void renderOrganizationPanel({ refresh: false });
+    }
+    return true;
+  }
+  if (type === "organization-invite-revoke") {
+    const inviteId = action.dataset.inviteId;
+    if (!inviteId || state.organizationInvite.pending) return true;
+    if (!window.confirm("Revoke this invite? The link will stop working immediately.")) return true;
+    state.organizationInvite.pending = true;
+    state.organizationInvite.error = "";
+    void renderOrganizationPanel({ refresh: false });
+    try {
+      await api(`/api/organization/athlete-invites/${encodeURIComponent(inviteId)}`, { method: "DELETE" });
+      state.organizationInvite.pending = false;
+      await renderOrganizationPanel({ refresh: true });
+    } catch (error) {
+      state.organizationInvite.pending = false;
+      state.organizationInvite.error = describeInviteError(error);
+      void renderOrganizationPanel({ refresh: false });
+    }
     return true;
   }
   if (type === "organization-delete") {
@@ -646,6 +718,14 @@ export function closeManageAccountModal(renderOrganizationPanel) {
   void renderOrganizationPanel({ refresh: false });
 }
 
+// Shared by the invite modal's own close button/backdrop click (via
+// handleOrganizationAction above) and the global Escape handler in app.js -
+// never an API call, just closing the view.
+export function closeAthleteInviteModal(renderOrganizationPanel) {
+  state.organizationInvite = { open: false, athleteId: "", pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false };
+  void renderOrganizationPanel({ refresh: false });
+}
+
 // LAST_PLATFORM_ADMIN/LAST_CLUB_ADMIN are machine-readable error codes from
 // the backend (api.js surfaces them verbatim as error.message from
 // {error: "..."}) - never shown to the user as-is. Any other error (403,
@@ -655,6 +735,14 @@ function describeOrganizationAccountError(error) {
   if (error?.message === "LAST_PLATFORM_ADMIN") return "At least one active platform administrator must remain.";
   if (error?.message === "LAST_CLUB_ADMIN") return "At least one active club administrator must remain.";
   return error?.message || "Something went wrong. Please try again.";
+}
+
+// ATHLETE_ALREADY_HAS_LOGIN/UNSUPPORTED_INVITE_CONTEXT are machine-readable
+// codes from the backend - never shown to the user as-is.
+function describeInviteError(error) {
+  if (error?.message === "ATHLETE_ALREADY_HAS_LOGIN") return "This athlete already has a login and cannot receive a new invite.";
+  if (error?.message === "UNSUPPORTED_INVITE_CONTEXT") return "This workspace cannot send invites.";
+  return error?.message || "Could not save the invite. Please try again.";
 }
 
 // Shared executor for every Manage account modal action that hits a
