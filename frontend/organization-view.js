@@ -938,15 +938,22 @@ function renderJoinLinkRow(link) {
 function renderJoinApplicationRow(app) {
   const isPending = app.status === "pending";
   const isBusy = state.organizationJoinLinks.reviewPendingId === app.id;
+  // A new-email application's Approve stays disabled until email_verified_at
+  // is set (backend/src/routes/organization.js's EMAIL_NOT_VERIFIED gate is
+  // the real enforcement - this is purely a UX affordance, never the actual
+  // security boundary). An existing-account application is always reported
+  // emailVerified=true (see loadJoinApplicationsForWorkspace) since
+  // session-proven ownership already covers it.
+  const approveDisabled = isBusy || !app.emailVerified;
   return `
     <article class="organization-row">
       <div class="organization-row-main" style="flex:1">
         <strong>${escapeHtml(app.name)}</strong>
-        <p class="muted">${escapeHtml(app.email)} · ${app.accountType === "existing" ? "Existing account" : "New account"} · ${formatInviteDate(app.submittedAt)} · ${escapeHtml(joinApplicationStatusLabel(app.status))}</p>
+        <p class="muted">${escapeHtml(app.email)} · ${app.accountType === "existing" ? "Existing account" : "New account"} · ${formatInviteDate(app.submittedAt)} · ${escapeHtml(joinApplicationStatusLabel(app.status))}${isPending && !app.emailVerified ? " · Email not verified" : ""}</p>
       </div>
       ${isPending ? `
         <span class="organization-row-actions">
-          <button class="plain-button compact-button" type="button" data-action="organization-join-application-approve" data-application-id="${escapeAttr(app.id)}" ${isBusy ? "disabled" : ""}>Approve</button>
+          <button class="plain-button compact-button" type="button" data-action="organization-join-application-approve" data-application-id="${escapeAttr(app.id)}" ${approveDisabled ? "disabled" : ""} title="${app.emailVerified ? "" : "The applicant must verify their email before this request can be approved."}">Approve</button>
           <button class="plain-button compact-button danger-button" type="button" data-action="organization-join-application-reject" data-application-id="${escapeAttr(app.id)}" ${isBusy ? "disabled" : ""}>Reject</button>
         </span>
       ` : ""}

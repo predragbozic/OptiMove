@@ -71,7 +71,7 @@ app.get("/api/realtime", requireAuth, realtimeRouter);
 app.use(express.static(frontendDir, {
   setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),
 }));
-app.get(["/", "/app", "/invite", "/join"], (_req, res) => {
+app.get(["/", "/app", "/invite", "/join", "/verify-email"], (_req, res) => {
   res.sendFile(path.join(frontendDir, "index.html"));
 });
 app.get("/athlete", (_req, res) => {

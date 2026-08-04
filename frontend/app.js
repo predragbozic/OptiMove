@@ -12,6 +12,10 @@ import {
   submitJoinLogin as submitJoinLoginAction,
 } from "./join-actions.js";
 import {
+  renderVerifyEmailPage as renderVerifyEmailPageAction,
+  submitResendVerification as submitResendVerificationAction,
+} from "./email-verification-actions.js";
+import {
   renderAthleteHeaderToolbarHtml,
   renderAthleteListHtml,
   renderAthleteSettingsHtml,
@@ -197,6 +201,10 @@ async function init() {
     await renderJoinPageAction({ renderUserControls, setStatus });
     return;
   }
+  if (window.location.pathname === "/verify-email") {
+    await renderVerifyEmailPageAction({ renderUserControls, setStatus });
+    return;
+  }
   await loadSession();
   if (!state.currentUser) {
     renderLoginAction({ renderUserControls, setStatus });
@@ -351,6 +359,13 @@ async function handleContentSubmit(event) {
   if (joinLoginForm) {
     event.preventDefault();
     await submitJoinLoginAction(joinLoginForm);
+    return;
+  }
+
+  const resendVerificationForm = event.target.closest("#resendVerificationForm");
+  if (resendVerificationForm) {
+    event.preventDefault();
+    await submitResendVerificationAction(resendVerificationForm);
     return;
   }
 

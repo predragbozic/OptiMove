@@ -67,7 +67,7 @@ export async function submitJoinApply(form) {
   if (error) error.textContent = "";
   if (button) button.disabled = true;
   try {
-    const data = await api(`/api/auth/join-links/${encodeURIComponent(token)}/apply`, {
+    await api(`/api/auth/join-links/${encodeURIComponent(token)}/apply`, {
       method: "POST",
       body: JSON.stringify({
         firstName: String(formData.get("firstName") || ""),
@@ -76,7 +76,11 @@ export async function submitJoinApply(form) {
         password: String(formData.get("password") || ""),
       }),
     });
-    renderJoinPending(data.statusToken);
+    // A brand-new-email application now always requires email verification
+    // (feature/email-verification-foundation) before it can ever be
+    // reviewed - the status-token pending screen only applies to
+    // apply-existing below, which never needs this step.
+    renderCheckYourEmail(email);
   } catch (submitError) {
     if (submitError.requiresLogin) {
       renderJoinLoginRequired(token, email);
@@ -86,6 +90,29 @@ export async function submitJoinApply(form) {
   } finally {
     if (button) button.disabled = false;
   }
+}
+
+// Shown right after a brand-new-email apply succeeds - the request now
+// waits on email verification (see /verify-email, email-verification-
+// actions.js) before a coach/admin can even see it as reviewable. Never
+// reveals whether this exact email already had a request pending - a fresh
+// apply() call always reaches this same screen when it isn't the
+// requiresLogin case, so there's nothing to distinguish.
+function renderCheckYourEmail(email) {
+  els.content.innerHTML = `
+    <section class="login-panel">
+      <div class="login-form invite-form">
+        <div><p class="eyebrow">Join request submitted</p><h3>Check your email</h3></div>
+        <p class="muted">We sent a confirmation link to ${escapeHtml(email)}. Verify your email to finish this request - your request will then be reviewed before access is activated.</p>
+        <p class="muted">Didn't get it? Check your spam folder, or request a new link below.</p>
+        <form id="resendVerificationForm" data-email="${escapeAttr(email)}">
+          <p class="login-success" aria-live="polite"></p>
+          <p class="login-error" aria-live="polite"></p>
+          <button class="plain-button compact-button" type="submit">Resend verification email</button>
+        </form>
+      </div>
+    </section>
+  `;
 }
 
 // Shown when the applicant's email already belongs to an existing account:
