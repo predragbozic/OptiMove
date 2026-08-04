@@ -7,6 +7,11 @@ import {
   submitInviteLogin as submitInviteLoginAction,
 } from "./auth-actions.js";
 import {
+  renderJoinPage as renderJoinPageAction,
+  submitJoinApply as submitJoinApplyAction,
+  submitJoinLogin as submitJoinLoginAction,
+} from "./join-actions.js";
+import {
   renderAthleteHeaderToolbarHtml,
   renderAthleteListHtml,
   renderAthleteSettingsHtml,
@@ -188,6 +193,10 @@ async function init() {
     await renderInviteAcceptAction({ renderUserControls, setStatus });
     return;
   }
+  if (window.location.pathname === "/join") {
+    await renderJoinPageAction({ renderUserControls, setStatus });
+    return;
+  }
   await loadSession();
   if (!state.currentUser) {
     renderLoginAction({ renderUserControls, setStatus });
@@ -328,6 +337,20 @@ async function handleContentSubmit(event) {
   if (inviteLoginForm) {
     event.preventDefault();
     await submitInviteLoginAction(inviteLoginForm, { loadSession });
+    return;
+  }
+
+  const joinApplyForm = event.target.closest("#joinApplyForm");
+  if (joinApplyForm) {
+    event.preventDefault();
+    await submitJoinApplyAction(joinApplyForm);
+    return;
+  }
+
+  const joinLoginForm = event.target.closest("#joinLoginForm");
+  if (joinLoginForm) {
+    event.preventDefault();
+    await submitJoinLoginAction(joinLoginForm);
     return;
   }
 

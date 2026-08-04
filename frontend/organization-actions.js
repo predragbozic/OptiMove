@@ -23,6 +23,7 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
     teamRole: "/api/organization/team-roles",
     athleteLogin: "/api/organization/athlete-logins",
     athleteInvite: "/api/organization/athlete-invites",
+    joinLink: "/api/organization/athlete-join-links",
     assignTeamAthlete: `/api/organization/teams/${encodeURIComponent(teamId || "")}/athletes`,
     athleteLibraryAccess: `/api/organization/athletes/${encodeURIComponent(athleteId || "")}/library-access`,
     "edit-club": `/api/organization/clubs/${encodeURIComponent(editId)}`,
@@ -55,8 +56,28 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
     payload.contextType = workspace?.type || "";
     payload.contextId = workspace?.scopeId || null;
   }
+  if (type === "joinLink") {
+    // Same principle as athleteInvite above - the backend independently
+    // re-derives and re-checks permission from req.authz regardless of what
+    // is sent here.
+    const workspace = state.currentUser?.activeWorkspace;
+    payload.contextType = workspace?.type || "";
+    payload.contextId = workspace?.scopeId || null;
+    payload.expiresInDays = Number(payload.expiresInDays) || 7;
+    payload.maxUses = payload.maxUses ? Number(payload.maxUses) : null;
+  }
   try {
     const result = await api(endpoint, { method, body: JSON.stringify(payload) });
+    if (type === "joinLink") {
+      state.organizationJoinLinks.justCreatedId = result.link?.id || "";
+      state.organizationJoinLinks.justCreatedUrl = result.joinUrl || "";
+      state.organizationJoinLinks.copiedId = "";
+      state.organizationJoinLinks.error = "";
+      state.organization.addFormOpen = false;
+      form.reset();
+      await renderOrganizationPanel({ refresh: true });
+      return;
+    }
     if (type === "athleteInvite") {
       state.organizationInvite = {
         open: true,
@@ -79,6 +100,8 @@ export async function submitOrganizationForm(form, { loadAthletes, renderOrganiz
     if (type === "athleteInvite") {
       state.organizationInvite.error = describeInviteError(submitError);
       void renderOrganizationPanel({ refresh: false });
+    } else if (type === "joinLink") {
+      if (error) error.textContent = submitError.message || "Could not create the join link.";
     } else if (error) {
       error.textContent = submitError.message || "Could not save.";
     }
@@ -598,6 +621,100 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     }
     return true;
   }
+  if (type === "organization-join-link-copy") {
+    const linkId = action.dataset.linkId;
+    const url = linkId === state.organizationJoinLinks.justCreatedId ? state.organizationJoinLinks.justCreatedUrl : "";
+    if (!url) return true;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+        state.organizationJoinLinks.copiedId = linkId;
+      }
+    } catch {
+      state.organizationJoinLinks.copiedId = "";
+    }
+    // Same fallback philosophy as organization-copy-invite above: the link
+    // stays visible in its readonly input regardless, so a failed/unavailable
+    // clipboard write just skips the "Link copied" confirmation, never an error.
+    void renderOrganizationPanel({ refresh: false });
+    return true;
+  }
+  if (type === "organization-join-link-regenerate") {
+    const linkId = action.dataset.linkId;
+    if (!linkId || state.organizationJoinLinks.pending) return true;
+    if (!window.confirm("Generate a new join link? The current link will stop working immediately.")) return true;
+    state.organizationJoinLinks.pending = true;
+    state.organizationJoinLinks.error = "";
+    void renderOrganizationPanel({ refresh: false });
+    try {
+      const result = await api(`/api/organization/athlete-join-links/${encodeURIComponent(linkId)}/regenerate`, { method: "POST" });
+      state.organizationJoinLinks.pending = false;
+      state.organizationJoinLinks.justCreatedId = result.link?.id || "";
+      state.organizationJoinLinks.justCreatedUrl = result.joinUrl || "";
+      state.organizationJoinLinks.copiedId = "";
+      await renderOrganizationPanel({ refresh: true });
+    } catch (error) {
+      state.organizationJoinLinks.pending = false;
+      state.organizationJoinLinks.error = error?.message || "Could not generate a new link.";
+      void renderOrganizationPanel({ refresh: false });
+    }
+    return true;
+  }
+  if (type === "organization-join-link-revoke") {
+    const linkId = action.dataset.linkId;
+    if (!linkId || state.organizationJoinLinks.pending) return true;
+    if (!window.confirm("Revoke this join link? It will stop working immediately, and any pending requests against it will be cancelled.")) return true;
+    state.organizationJoinLinks.pending = true;
+    state.organizationJoinLinks.error = "";
+    void renderOrganizationPanel({ refresh: false });
+    try {
+      await api(`/api/organization/athlete-join-links/${encodeURIComponent(linkId)}`, { method: "DELETE" });
+      state.organizationJoinLinks.pending = false;
+      await renderOrganizationPanel({ refresh: true });
+    } catch (error) {
+      state.organizationJoinLinks.pending = false;
+      state.organizationJoinLinks.error = error?.message || "Could not revoke this link.";
+      void renderOrganizationPanel({ refresh: false });
+    }
+    return true;
+  }
+  if (type === "organization-join-application-approve") {
+    const applicationId = action.dataset.applicationId;
+    if (!applicationId || state.organizationJoinLinks.reviewPendingId) return true;
+    if (!window.confirm("Approve this request? This creates the athlete's login and access.")) return true;
+    state.organizationJoinLinks.reviewPendingId = applicationId;
+    state.organizationJoinLinks.error = "";
+    void renderOrganizationPanel({ refresh: false });
+    try {
+      await api(`/api/organization/athlete-join-applications/${encodeURIComponent(applicationId)}/approve`, { method: "POST" });
+      state.organizationJoinLinks.reviewPendingId = "";
+      await renderOrganizationPanel({ refresh: true });
+    } catch (error) {
+      state.organizationJoinLinks.reviewPendingId = "";
+      state.organizationJoinLinks.error = describeJoinApplicationError(error);
+      void renderOrganizationPanel({ refresh: false });
+    }
+    return true;
+  }
+  if (type === "organization-join-application-reject") {
+    const applicationId = action.dataset.applicationId;
+    if (!applicationId || state.organizationJoinLinks.reviewPendingId) return true;
+    const reason = window.prompt("Reject this request? Optionally add a reason (Cancel aborts):", "");
+    if (reason === null) return true;
+    state.organizationJoinLinks.reviewPendingId = applicationId;
+    state.organizationJoinLinks.error = "";
+    void renderOrganizationPanel({ refresh: false });
+    try {
+      await api(`/api/organization/athlete-join-applications/${encodeURIComponent(applicationId)}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+      state.organizationJoinLinks.reviewPendingId = "";
+      await renderOrganizationPanel({ refresh: true });
+    } catch (error) {
+      state.organizationJoinLinks.reviewPendingId = "";
+      state.organizationJoinLinks.error = describeJoinApplicationError(error);
+      void renderOrganizationPanel({ refresh: false });
+    }
+    return true;
+  }
   if (type === "organization-delete") {
     await deleteOrganizationRow(action.dataset.orgType, action.dataset.orgId, { loadAthletes, renderOrganizationPanel });
     return true;
@@ -743,6 +860,14 @@ function describeInviteError(error) {
   if (error?.message === "ATHLETE_ALREADY_HAS_LOGIN") return "This athlete already has a login and cannot receive a new invite.";
   if (error?.message === "UNSUPPORTED_INVITE_CONTEXT") return "This workspace cannot send invites.";
   return error?.message || "Could not save the invite. Please try again.";
+}
+
+// JOIN_LINK_FULL/EMAIL_NOW_EXISTS_REQUIRES_LOGIN are machine-readable codes
+// from the backend - never shown to the user as-is.
+function describeJoinApplicationError(error) {
+  if (error?.message === "JOIN_LINK_FULL") return "This join link has already reached its maximum number of approved members.";
+  if (error?.message === "EMAIL_NOW_EXISTS_REQUIRES_LOGIN") return "This request's email now belongs to a real account - the applicant must log in and resubmit before this can be approved.";
+  return error?.message || "Could not review this request. Please try again.";
 }
 
 // Shared executor for every Manage account modal action that hits a

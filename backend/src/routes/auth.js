@@ -12,6 +12,7 @@ import {
 import { accessScope, publicRole } from "../access.js";
 import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelection } from "../workspace.js";
 import { closeOtherOpenInvitesForAthlete, loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
+import { loadJoinLinkContextName, loadUsableJoinLink, lockJoinLinkActions } from "../joinLinkContext.js";
 
 const router = Router();
 
@@ -341,6 +342,183 @@ router.post("/invites/:token/link", async (req, res, next) => {
     next(error);
   } finally {
     client.release();
+  }
+});
+
+// --- Group athlete join links (feature/group-athlete-join-links) ---
+// A SEPARATE, public-facing system from the invite endpoints above - a join
+// link is not addressed to any one person or existing athlete profile.
+// GET/apply/apply-existing all fold not-found/inactive/revoked/
+// expired/full/context-invalid into the exact same generic response (see
+// loadUsableJoinLink), so a token can never be used to probe which of those
+// it was.
+
+router.get("/join-links/:token", async (req, res, next) => {
+  try {
+    const tokenHash = hashInviteToken(req.params.token);
+    const link = await loadUsableJoinLink(query, tokenHash);
+    if (!link) return res.status(404).json({ error: "This join link is invalid or no longer available." });
+    const contextName = await loadJoinLinkContextName(query, link);
+    res.json({
+      link: {
+        label: link.label,
+        contextType: link.context_type,
+        contextName,
+        expiresAt: link.expires_at,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Public, unauthenticated submission for someone with no existing account.
+// Never creates a user/athlete row here - only a pending application with a
+// freshly hashed password, decided later by POST
+// /organization/athlete-join-applications/:id/approve.
+router.post("/join-links/:token/apply", async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const firstName = String(req.body?.firstName || "").trim();
+    const lastName = String(req.body?.lastName || "").trim();
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+    if (!firstName) return res.status(400).json({ error: "First name is required." });
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "A valid email is required." });
+    if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters." });
+    const tokenHash = hashInviteToken(req.params.token);
+
+    // Resolve without mutation, purely to have the lock key.
+    const resolved = await query(`select id from public.athlete_join_links where token_hash = $1 limit 1`, [tokenHash]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "This join link is invalid or no longer available." });
+
+    await client.query("begin");
+    const exec = (text, params) => client.query(text, params);
+    // Same per-join-link lock regenerate/revoke/approve all acquire - closes
+    // the race between this submission and a concurrent revoke/regenerate of
+    // this exact link.
+    await lockJoinLinkActions(exec, resolved.rows[0].id);
+    const link = await loadUsableJoinLink(exec, tokenHash, { forUpdate: true });
+    if (!link) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "This join link is invalid or no longer available." });
+    }
+
+    // If this email already belongs to a real account, this public form must
+    // never be able to set a password on it - the real owner has to log in
+    // and use POST /join-links/:token/apply-existing instead.
+    const emailOwner = await client.query(`select id from public.users where lower(email) = lower($1) limit 1`, [email]);
+    if (emailOwner.rows[0]) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "An account with this email already exists. Log in, then submit this request from your account.", requiresLogin: true });
+    }
+
+    const rawStatusToken = crypto.randomBytes(24).toString("base64url");
+    const statusTokenHash = hashInviteToken(rawStatusToken);
+    const displayName = [firstName, lastName].filter(Boolean).join(" ") || email;
+    try {
+      await client.query(
+        `insert into public.athlete_join_applications
+           (join_link_id, applicant_user_id, email, first_name, last_name, display_name, password_hash, status, status_token_hash)
+         values ($1, null, $2, $3, $4, $5, $6, 'pending', $7)`,
+        [link.id, email, firstName, lastName, displayName, hashPassword(password), statusTokenHash],
+      );
+    } catch (insertError) {
+      // The partial unique index on (join_link_id, lower(email)) for
+      // pending/requires_login rows - a second submission for the same
+      // email against the same link never creates a second row (and never
+      // leaks whether one already exists to anyone who doesn't already know
+      // this is their own email).
+      if (insertError?.code === "23505") {
+        await client.query("rollback");
+        return res.status(409).json({ error: "A request for this email is already pending review." });
+      }
+      throw insertError;
+    }
+    await client.query("commit");
+    res.status(201).json({ ok: true, statusToken: rawStatusToken });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+// Authenticated counterpart to /apply: proves ownership of the account via
+// session rather than a typed email, and never carries or stores a password.
+router.post("/join-links/:token/apply-existing", async (req, res, next) => {
+  if (!req.user) return res.status(401).json({ error: "Log in first, then submit this request from your account." });
+  const client = await pool.connect();
+  try {
+    const tokenHash = hashInviteToken(req.params.token);
+    const resolved = await query(`select id from public.athlete_join_links where token_hash = $1 limit 1`, [tokenHash]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "This join link is invalid or no longer available." });
+
+    await client.query("begin");
+    const exec = (text, params) => client.query(text, params);
+    await lockJoinLinkActions(exec, resolved.rows[0].id);
+    const link = await loadUsableJoinLink(exec, tokenHash, { forUpdate: true });
+    if (!link) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "This join link is invalid or no longer available." });
+    }
+
+    const rawStatusToken = crypto.randomBytes(24).toString("base64url");
+    const statusTokenHash = hashInviteToken(rawStatusToken);
+    try {
+      // email comes from the account itself, never from the request body -
+      // this can never be used to submit a request under someone else's
+      // address. No password_hash is ever written for an existing account.
+      await client.query(
+        `insert into public.athlete_join_applications
+           (join_link_id, applicant_user_id, email, password_hash, status, status_token_hash)
+         values ($1, $2, $3, null, 'pending', $4)`,
+        [link.id, req.user.id, req.user.email, statusTokenHash],
+      );
+    } catch (insertError) {
+      if (insertError?.code === "23505") {
+        await client.query("rollback");
+        return res.status(409).json({ error: "You already have a pending request for this join link." });
+      }
+      throw insertError;
+    }
+    await client.query("commit");
+    res.status(201).json({ ok: true, statusToken: rawStatusToken });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/join-applications/:statusToken", async (req, res, next) => {
+  try {
+    const statusTokenHash = hashInviteToken(req.params.statusToken);
+    const result = await query(
+      `select a.status, a.submitted_at, a.reviewed_at, a.rejection_reason,
+              l.label, l.context_type, l.context_id, l.created_by_user_id
+       from public.athlete_join_applications a
+       join public.athlete_join_links l on l.id = a.join_link_id
+       where a.status_token_hash = $1
+       limit 1`,
+      [statusTokenHash],
+    );
+    const row = result.rows[0];
+    if (!row) return res.status(404).json({ error: "Request not found." });
+    const contextName = await loadJoinLinkContextName(query, { context_type: row.context_type, context_id: row.context_id, created_by_user_id: row.created_by_user_id });
+    res.json({
+      application: {
+        status: row.status,
+        submittedAt: row.submitted_at,
+        reviewedAt: row.reviewed_at,
+        rejectionReason: row.status === "rejected" ? row.rejection_reason : null,
+        contextLabel: row.label || contextName,
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 });
 
