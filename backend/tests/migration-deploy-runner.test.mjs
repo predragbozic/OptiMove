@@ -130,3 +130,18 @@ test("the athlete_join_links group-invite migration is registered in the deploy 
     assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
   }
 });
+
+test("the athlete_generated_id_seq migration is registered in the deploy migration runner, after create_access_schema.sql", () => {
+  const seqIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260808_athlete_id_sequence.sql");
+  assert.notEqual(seqIndex, -1, "migrationPaths must include the athlete_generated_id_seq migration file");
+
+  const accessSchemaIndex = migrationPaths.findIndex((p) => path.basename(p) === "create_access_schema.sql");
+  assert.ok(
+    seqIndex > accessSchemaIndex,
+    "the athlete_generated_id_seq migration reads public.athletes' existing rows to seed its starting value and must run after create_access_schema.sql creates it",
+  );
+
+  for (const migrationPath of migrationPaths) {
+    assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
+  }
+});

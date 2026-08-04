@@ -773,8 +773,18 @@ test("20b. an archived club blocks approval of its pending applications even for
   const approve = await api(`/api/organization/athlete-join-applications/${appId}/approve`, { method: "POST", cookie: cookieFor(token) });
   assert.equal(approve.status, 409, "an archived club must block approval even though the admin's role row is technically still active");
 
-  const row = await query(`select status from public.athlete_join_applications where id = $1`, [appId]);
-  assert.equal(row.rows[0].status, "pending");
+  // The archived-club sweep (closeUnusableJoinLinkApplications, run inside
+  // this same approve attempt) closes the application as 'cancelled' with
+  // its password hash cleared - it does NOT stay 'pending' forever, since
+  // nothing (no background job) would ever revisit it otherwise. Nothing was
+  // created: no user, no athlete, no membership.
+  const row = await query(`select status, password_hash, resulting_user_id, resulting_athlete_id from public.athlete_join_applications where id = $1`, [appId]);
+  assert.equal(row.rows[0].status, "cancelled");
+  assert.equal(row.rows[0].password_hash, null);
+  assert.equal(row.rows[0].resulting_user_id, null);
+  assert.equal(row.rows[0].resulting_athlete_id, null);
+  const userRow = await query(`select id from public.users where lower(email) = lower($1)`, [email]);
+  assert.equal(userRow.rowCount, 0, "nothing must be created when approval is blocked by an archived club");
   await query(`update public.clubs set is_active = true where id = $1`, [club]);
 });
 
@@ -849,4 +859,194 @@ test("24. a different independent coach cannot manage or review someone else's p
 
   const revokeByB = await api(`${linksEndpoint()}/${created.body.link.id}`, { method: "DELETE", cookie: cookieFor(tokenB) });
   assert.equal(revokeByB.status, 403, "a private_coach link stays tied to its specific creator, unlike club/team links");
+});
+
+// --- Post-launch hardening: fixes for 3 issues found before merge ---
+// 1. Concurrent approval of the SAME existing account through two DIFFERENT
+//    join links (so lockJoinLinkActions alone can't serialize them).
+// 2. nextAthleteId() raced on a non-transactional MAX(...) + 1 - now backed
+//    by public.athlete_generated_id_seq (see
+//    migrations/20260808_athlete_id_sequence.sql).
+// 3. A pending application's password_hash could live forever once its link
+//    expired or its context died, since only approve/reject/revoke ever
+//    cleared it - now swept by closeUnusableJoinLinkApplications, called
+//    opportunistically from the same authenticated read/management flows
+//    that already hold the per-link lock (GET /api/organization[/
+//    athlete-join-links], and immediately inside approve/reject).
+
+test("25. two applications for the SAME existing account, through two DIFFERENT join links, both approve successfully and share one athlete profile", async () => {
+  const coach = await makePrivateCoach(`join-hardening-existing-coach-${Date.now()}@test.local`);
+  const club = await makeClub(`Join Hardening Existing Club ${Date.now()}`);
+  const clubAdmin = await makeUser({ email: `join-hardening-existing-clubadmin-${Date.now()}@test.local` });
+  await grantClubAdminDirectly(clubAdmin.id, club);
+  const coachToken = await createSession(coach.id);
+  const clubAdminToken = await createSession(clubAdmin.id);
+
+  const existing = await makeUser({ email: `join-hardening-existing-applicant-${Date.now()}@test.local` });
+  const existingToken = await createSession(existing.id);
+
+  const linkA = await trackLink(await createLink(cookieFor(coachToken), { contextType: "private_coach", expiresInDays: 5 }));
+  const linkB = await trackLink(await createLink(cookieFor(clubAdminToken), { contextType: "club", contextId: club, expiresInDays: 5 }));
+  const rawTokenA = extractToken(linkA.body.joinUrl);
+  const rawTokenB = extractToken(linkB.body.joinUrl);
+
+  const applyA = await api(`/api/auth/join-links/${encodeURIComponent(rawTokenA)}/apply-existing`, { method: "POST", cookie: cookieFor(existingToken) });
+  const applyB = await api(`/api/auth/join-links/${encodeURIComponent(rawTokenB)}/apply-existing`, { method: "POST", cookie: cookieFor(existingToken) });
+  assert.equal(applyA.status, 201);
+  assert.equal(applyB.status, 201);
+  const appIdA = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [linkA.body.link.id])).rows[0].id;
+  const appIdB = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [linkB.body.link.id])).rows[0].id;
+
+  const [approveA, approveB] = await Promise.all([
+    api(`/api/organization/athlete-join-applications/${appIdA}/approve`, { method: "POST", cookie: cookieFor(coachToken) }),
+    api(`/api/organization/athlete-join-applications/${appIdB}/approve`, { method: "POST", cookie: cookieFor(clubAdminToken) }),
+  ]);
+  assert.equal(approveA.status, 200, `expected both approvals to succeed, got A=${approveA.status} body=${JSON.stringify(approveA.body)}`);
+  assert.equal(approveB.status, 200, `expected both approvals to succeed, got B=${approveB.status} body=${JSON.stringify(approveB.body)}`);
+  assert.equal(String(approveA.body.athleteId), String(approveB.body.athleteId), "both approvals must converge on the exact same athlete profile");
+  cleanupAthleteIds.add(approveA.body.athleteId);
+
+  const athleteRows = await query(`select id from public.athletes where user_id = $1`, [existing.id]);
+  assert.equal(athleteRows.rowCount, 1, "exactly one athletes row must exist for this account, never two");
+
+  const coachRelationship = await query(
+    `select 1 from public.user_athletes where user_id = $1 and athlete_id = $2 and relationship_type = 'coach' and is_active = true`,
+    [coach.id, approveA.body.athleteId],
+  );
+  assert.equal(coachRelationship.rowCount, 1, "the private-coach relationship from link A must exist");
+  const clubMembership = await query(
+    `select 1 from public.athlete_memberships where athlete_id = $1 and club_id = $2 and membership_type = 'club' and status = 'active'`,
+    [approveA.body.athleteId, club],
+  );
+  assert.equal(clubMembership.rowCount, 1, "the club membership from link B must exist");
+});
+
+test("26. two concurrent approvals of two DIFFERENT brand-new applicants on the same link both succeed with distinct athlete ids", async () => {
+  const coach = await makePrivateCoach(`join-hardening-newid-coach-${Date.now()}@test.local`);
+  const token = await createSession(coach.id);
+  const created = await trackLink(await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 }));
+  const rawToken = extractToken(created.body.joinUrl);
+  const emailA = `join-hardening-newid-a-${Date.now()}@test.local`;
+  const emailB = `join-hardening-newid-b-${Date.now()}@test.local`;
+  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "New", lastName: "IdA", email: emailA, password: "somepassword123" } });
+  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "New", lastName: "IdB", email: emailB, password: "somepassword456" } });
+  const rows = await query(`select id from public.athlete_join_applications where join_link_id = $1 order by submitted_at`, [created.body.link.id]);
+  const [appIdA, appIdB] = rows.rows.map((r) => r.id);
+
+  const [approveA, approveB] = await Promise.all([
+    api(`/api/organization/athlete-join-applications/${appIdA}/approve`, { method: "POST", cookie: cookieFor(token) }),
+    api(`/api/organization/athlete-join-applications/${appIdB}/approve`, { method: "POST", cookie: cookieFor(token) }),
+  ]);
+  assert.equal(approveA.status, 200, `expected both approvals to succeed, got A=${approveA.status} body=${JSON.stringify(approveA.body)}`);
+  assert.equal(approveB.status, 200, `expected both approvals to succeed, got B=${approveB.status} body=${JSON.stringify(approveB.body)}`);
+  cleanupUserIds.add(approveA.body.userId);
+  cleanupUserIds.add(approveB.body.userId);
+  cleanupAthleteIds.add(approveA.body.athleteId);
+  cleanupAthleteIds.add(approveB.body.athleteId);
+  assert.notEqual(approveA.body.athleteId, approveB.body.athleteId);
+
+  const idRows = await query(`select athlete_id, source_external_id from public.athletes where id = any($1::uuid[])`, [[approveA.body.athleteId, approveB.body.athleteId]]);
+  const generatedIds = idRows.rows.map((r) => r.athlete_id);
+  assert.equal(new Set(generatedIds).size, 2, "the two concurrently generated athlete_id values must be distinct");
+});
+
+test("26b. two concurrent POST /organization/athletes calls (the other caller of the shared id generator) get distinct athlete_id values", async () => {
+  const admin = await makePlatformAdmin(`join-hardening-directcreate-${Date.now()}@test.local`);
+  const token = await createSession(admin.id);
+
+  const [createA, createB] = await Promise.all([
+    api("/api/organization/athletes", { method: "POST", cookie: cookieFor(token), body: { fullName: "Direct Create A" } }),
+    api("/api/organization/athletes", { method: "POST", cookie: cookieFor(token), body: { fullName: "Direct Create B" } }),
+  ]);
+  assert.equal(createA.status, 201);
+  assert.equal(createB.status, 201);
+  cleanupAthleteIds.add(createA.body.athlete.id);
+  cleanupAthleteIds.add(createB.body.athlete.id);
+  assert.notEqual(createA.body.athlete.athlete_id, createB.body.athlete.athlete_id, "POST /organization/athletes must also get distinct ids from the shared sequence-backed generator under concurrency");
+});
+
+test("27. a pending new-email application against a link that has since expired has its password hash cleared and its status closed, once an authenticated manager loads it", async () => {
+  const coach = await makePrivateCoach(`join-hardening-expired-${Date.now()}@test.local`);
+  const token = await createSession(coach.id);
+  const created = await trackLink(await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 }));
+  const rawToken = extractToken(created.body.joinUrl);
+  const email = `join-hardening-expired-applicant-${Date.now()}@test.local`;
+  const apply = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Expired", lastName: "Pending", email, password: "somepassword123" } });
+  assert.equal(apply.status, 201);
+  const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+
+  const beforeHash = (await query(`select password_hash from public.athlete_join_applications where id = $1`, [appId])).rows[0].password_hash;
+  assert.ok(beforeHash, "the pending application must have a password hash before expiry");
+
+  // Simulate time passing past expiry - directly, since we can't wait days
+  // in a test.
+  await query(`update public.athlete_join_links set expires_at = now() - interval '1 hour' where id = $1`, [created.body.link.id]);
+
+  // GET /api/organization/athlete-join-links is the authenticated
+  // management/read flow the sweep is wired into - the creator loading
+  // their own links is what performs the cleanup here.
+  const list = await api(linksEndpoint(), { cookie: cookieFor(token) });
+  assert.equal(list.status, 200);
+  const listedLink = list.body.links.find((l) => l.id === created.body.link.id);
+  assert.equal(listedLink.status, "expired");
+  assert.equal(listedLink.pendingCount, 0, "the list response must reflect the sweep immediately, not the stale pre-sweep count");
+
+  const row = await query(`select status, password_hash from public.athlete_join_applications where id = $1`, [appId]);
+  assert.equal(row.rows[0].status, "cancelled");
+  assert.equal(row.rows[0].password_hash, null);
+});
+
+test("28. a private coach losing the role closes their link's pending application once a platform admin's read flow sweeps it", async () => {
+  const coach = await makePrivateCoach(`join-hardening-lostrole-sweep-${Date.now()}@test.local`);
+  const platformAdmin = await makePlatformAdmin(`join-hardening-lostrole-sweep-pa-${Date.now()}@test.local`);
+  const coachToken = await createSession(coach.id);
+  const platformToken = await createSession(platformAdmin.id);
+  const created = await trackLink(await createLink(cookieFor(coachToken), { contextType: "private_coach", expiresInDays: 5 }));
+  const rawToken = extractToken(created.body.joinUrl);
+  const email = `join-hardening-lostrole-sweep-applicant-${Date.now()}@test.local`;
+  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Lost", lastName: "RoleSweep", email, password: "somepassword123" } });
+  const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+
+  await revokeGlobalRoleDirectly(coach.id, "independent_coach");
+
+  // The coach themself can no longer even hold a private_coach workspace
+  // (see backend/src/workspace.js), so they could never trigger this via
+  // their own GET - but a platform admin's platform-workspace read flow
+  // sees every link regardless of context and performs the sweep instead.
+  const list = await api(linksEndpoint(), { cookie: cookieFor(platformToken) });
+  assert.equal(list.status, 200);
+  assert.ok(list.body.links.some((l) => l.id === created.body.link.id), "a platform admin must see every link regardless of context");
+
+  const row = await query(`select status, password_hash from public.athlete_join_applications where id = $1`, [appId]);
+  assert.equal(row.rows[0].status, "cancelled");
+  assert.equal(row.rows[0].password_hash, null);
+});
+
+test("29. an already-terminal (approved) application on a since-expired link is left completely untouched by the sweep", async () => {
+  const coach = await makePrivateCoach(`join-hardening-terminal-${Date.now()}@test.local`);
+  const token = await createSession(coach.id);
+  const created = await trackLink(await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 }));
+  const rawToken = extractToken(created.body.joinUrl);
+  const email = `join-hardening-terminal-applicant-${Date.now()}@test.local`;
+  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Terminal", lastName: "Approved", email, password: "somepassword123" } });
+  const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+  const approve = await api(`/api/organization/athlete-join-applications/${appId}/approve`, { method: "POST", cookie: cookieFor(token) });
+  assert.equal(approve.status, 200);
+  cleanupUserIds.add(approve.body.userId);
+  cleanupAthleteIds.add(approve.body.athleteId);
+
+  const before = await query(`select status, reviewed_at, resulting_user_id, resulting_athlete_id from public.athlete_join_applications where id = $1`, [appId]);
+  assert.equal(before.rows[0].status, "approved");
+
+  // Now the link expires - the already-approved row must never be reopened,
+  // relabeled, or otherwise touched by the sweep.
+  await query(`update public.athlete_join_links set expires_at = now() - interval '1 hour' where id = $1`, [created.body.link.id]);
+  const list = await api(linksEndpoint(), { cookie: cookieFor(token) });
+  assert.equal(list.status, 200);
+
+  const after = await query(`select status, reviewed_at, resulting_user_id, resulting_athlete_id from public.athlete_join_applications where id = $1`, [appId]);
+  assert.equal(after.rows[0].status, "approved");
+  assert.equal(String(after.rows[0].resulting_user_id), String(before.rows[0].resulting_user_id));
+  assert.equal(String(after.rows[0].resulting_athlete_id), String(before.rows[0].resulting_athlete_id));
+  assert.deepEqual(after.rows[0].reviewed_at, before.rows[0].reviewed_at);
 });

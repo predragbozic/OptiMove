@@ -17,9 +17,10 @@ import {
   canCreateJoinLinkInContext,
   canManageJoinLink,
   canReviewJoinApplication,
-  isJoinLinkContextStillValid,
+  closeUnusableJoinLinkApplications,
   joinLinkContextShapeValid,
   joinLinkStatus,
+  lockApplicantAthleteCreation,
   lockJoinLinkActions,
 } from "../joinLinkContext.js";
 
@@ -151,6 +152,36 @@ async function loadAthleteInviteStatuses(activeWorkspace, athleteIds, viewerUser
   return byAthlete;
 }
 
+// Re-loads a join link FOR UPDATE under its own lock/transaction and closes
+// out its still-open applications if it has become permanently unusable
+// (expired/revoked/context-invalid) - see closeUnusableJoinLinkApplications.
+// Always re-fetches fresh rather than trusting any caller-supplied row,
+// since this may run well after that row was first read. Safe to call
+// speculatively (e.g. once per link on every list load) - a healthy link
+// costs one extra locked SELECT and nothing else.
+async function sweepUnusableJoinLink(linkId) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const exec = (text, params) => client.query(text, params);
+    await lockJoinLinkActions(exec, linkId);
+    const fresh = await client.query(
+      `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, expires_at
+       from public.athlete_join_links where id = $1 limit 1 for update`,
+      [linkId],
+    );
+    let closed = 0;
+    if (fresh.rows[0]) closed = await closeUnusableJoinLinkApplications(exec, fresh.rows[0]);
+    await client.query("commit");
+    return closed;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // Group join links visible to the CURRENT viewer's active workspace - a
 // separate system from the per-athlete invites above (see
 // backend/src/joinLinkContext.js). private_coach shows only the viewer's own
@@ -188,6 +219,19 @@ async function loadJoinLinksForWorkspace(req, activeWorkspace) {
      order by l.created_at desc`,
     params,
   );
+  // Opportunistic cleanup (no background job scheduler exists in this
+  // codebase - see closeUnusableJoinLinkApplications): the current
+  // authenticated viewer loading their own manageable links is what actually
+  // sweeps a link that expired, was archived, or whose private-coach creator
+  // lost the role, since its last mutation. Only attempted for a link that
+  // still shows an outstanding pending count - a link with nothing pending
+  // has nothing to sweep, and this keeps every ordinary load cheap.
+  for (const row of result.rows) {
+    if (Number(row.pending_count) > 0) {
+      const closed = await sweepUnusableJoinLink(row.id);
+      if (closed > 0) row.pending_count = 0;
+    }
+  }
   return result.rows.map((row) => ({
     id: row.id,
     contextType: row.context_type,
@@ -1309,6 +1353,20 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
         return res.status(permission.status).json({ error: permission.error });
       }
 
+      // Opportunistic cleanup, same as the read-list loader (see
+      // sweepUnusableJoinLink/loadJoinLinksForWorkspace) - if the link has
+      // expired, been revoked, or its context (archived club/team, or a
+      // private coach who lost the role) is no longer real, this closes THIS
+      // application (and any siblings) as 'cancelled' with its password hash
+      // cleared before the status check below ever runs. A healthy, still-
+      // usable link is untouched (closeUnusableJoinLinkApplications no-ops).
+      // From here on, every early exit COMMITS rather than rolls back -
+      // this cleanup is a real mutation that must survive even when the
+      // approve attempt itself goes on to fail for an unrelated reason
+      // (already reviewed, full) - rolling it back would silently undo the
+      // exact fix this is here for.
+      await closeUnusableJoinLinkApplications(exec, link);
+
       const appResult = await client.query(
         `select id, join_link_id, applicant_user_id, email, first_name, last_name, display_name, password_hash, status
          from public.athlete_join_applications where id = $1 limit 1 for update`,
@@ -1316,25 +1374,19 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
       );
       const application = appResult.rows[0];
       if (!application || String(application.join_link_id) !== String(link.id)) {
-        await client.query("rollback");
+        await client.query("commit");
         return res.status(404).json({ error: "Request not found." });
       }
       if (application.status !== "pending") {
-        await client.query("rollback");
+        // Covers both "someone already reviewed this" and "the cleanup just
+        // above closed it as no-longer-usable" - both are safely the same
+        // generic response, since neither ever created anything.
+        await client.query("commit");
         return res.status(409).json({ error: "This request has already been reviewed." });
       }
 
-      // Re-checked fresh, under the lock, immediately before creating
-      // anything - the private coach may have lost the role, or the
-      // club/team may have been archived, since this application was
-      // submitted (or even since the reviewer opened this screen).
-      const contextValid = await isJoinLinkContextStillValid(exec, link);
-      if (!contextValid || !link.is_active || link.revoked_at) {
-        await client.query("rollback");
-        return res.status(409).json({ error: "This join link is no longer valid, so this request cannot be approved." });
-      }
       if (link.max_uses != null && Number(link.approved_uses) >= Number(link.max_uses)) {
-        await client.query("rollback");
+        await client.query("commit");
         return res.status(409).json({ error: "JOIN_LINK_FULL" });
       }
 
@@ -1348,6 +1400,17 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
         // account (athletes.user_id is the real FK, protected by the
         // athletes_user_id_unique partial index), or creates exactly one new
         // one if it doesn't have one yet.
+        //
+        // A SECOND lock, keyed by applicant_user_id (not join_link_id) -
+        // see lockApplicantAthleteCreation's comment in joinLinkContext.js.
+        // Without it, two applications for the SAME account approved
+        // concurrently through two DIFFERENT join links (so each holds a
+        // different join-link lock and neither serializes the other) could
+        // both see no existing athletes row and both attempt to insert one,
+        // tripping athletes_user_id_unique on whichever loses and
+        // surfacing as an unhandled 500 instead of both cleanly converging
+        // on the same profile.
+        await lockApplicantAthleteCreation(exec, application.applicant_user_id);
         const existingAthlete = await client.query(`select id from public.athletes where user_id = $1 limit 1`, [application.applicant_user_id]);
         if (existingAthlete.rows[0]) {
           resultingAthleteId = existingAthlete.rows[0].id;
@@ -1486,7 +1549,8 @@ router.post("/athlete-join-applications/:applicationId/reject", async (req, res,
       await lockJoinLinkActions(exec, resolved.rows[0].join_link_id);
 
       const linkResult = await client.query(
-        `select id, context_type, context_id, created_by_user_id from public.athlete_join_links where id = $1 limit 1 for update`,
+        `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, expires_at
+         from public.athlete_join_links where id = $1 limit 1 for update`,
         [resolved.rows[0].join_link_id],
       );
       const link = linkResult.rows[0];
@@ -1500,17 +1564,25 @@ router.post("/athlete-join-applications/:applicationId/reject", async (req, res,
         return res.status(permission.status).json({ error: permission.error });
       }
 
+      // Same opportunistic cleanup as approve/the read-list loader - if this
+      // link is dead, this closes the application as 'cancelled' (rather
+      // than 'rejected') before the status check below, since nobody
+      // actually reviewed it; either way it ends up closed with no hash.
+      // From here on, every early exit COMMITS rather than rolls back, so
+      // this cleanup is never silently undone.
+      await closeUnusableJoinLinkApplications(exec, link);
+
       const appResult = await client.query(
         `select id, join_link_id, status from public.athlete_join_applications where id = $1 limit 1 for update`,
         [applicationId],
       );
       const application = appResult.rows[0];
       if (!application || String(application.join_link_id) !== String(link.id)) {
-        await client.query("rollback");
+        await client.query("commit");
         return res.status(404).json({ error: "Request not found." });
       }
       if (application.status !== "pending") {
-        await client.query("rollback");
+        await client.query("commit");
         return res.status(409).json({ error: "This request has already been reviewed." });
       }
 
@@ -3119,12 +3191,19 @@ function allowedUserRole(authz, requestedRole) {
   return "athlete";
 }
 
+// Backed by public.athlete_generated_id_seq (see
+// migrations/20260808_athlete_id_sequence.sql) - a real DB sequence, not a
+// SELECT MAX(...) + 1 read outside any transaction. nextval() is atomic
+// regardless of which connection/transaction calls it, so two callers
+// (concurrent POST /athletes calls, or two join-application approvals in
+// separate transactions - see POST .../athlete-join-applications/:id/approve)
+// can never be handed the same value, closing the race the old MAX-based
+// approach had. Format is unchanged (a bare digit string) - only the
+// generation mechanism changed, so this is a drop-in replacement for every
+// existing caller.
 async function nextAthleteId() {
-  const result = await query(
-    `select coalesce(max(nullif(regexp_replace(coalesce(source_external_id, athlete_id), '\\D', '', 'g'), '')::int), 999) + 1 as next_id
-     from public.athletes`,
-  );
-  return String(result.rows[0]?.next_id || Date.now());
+  const result = await query(`select nextval('public.athlete_generated_id_seq')::text as next_id`);
+  return result.rows[0].next_id;
 }
 
 function clean(value) {

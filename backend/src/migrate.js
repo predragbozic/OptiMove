@@ -26,6 +26,9 @@ export const migrationPaths = [
   // system, not an extension of athlete_invites) but ordered after it purely
   // to keep invite-lifecycle and join-link migrations chronologically grouped.
   path.resolve(__dirname, "../../migrations/20260807_athlete_join_links.sql"),
+  // Depends on public.athletes from create_access_schema.sql above (reads its
+  // existing rows to seed the sequence's starting value).
+  path.resolve(__dirname, "../../migrations/20260808_athlete_id_sequence.sql"),
   path.resolve(__dirname, "../../create_builder_schema.sql"),
   path.resolve(__dirname, "../../create_exercise_user_state.sql"),
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),

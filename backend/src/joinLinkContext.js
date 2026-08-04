@@ -26,6 +26,28 @@ export async function lockJoinLinkActions(executor, joinLinkId) {
   await executor(`select pg_advisory_xact_lock($1, hashtext($2::text))`, [JOIN_LINK_ACTION_LOCK_NAMESPACE, String(joinLinkId)]);
 }
 
+// A SECOND, independent lock namespace keyed by applicant_user_id (never
+// join_link_id) - held only inside POST .../approve's existing-account
+// branch, around the "does this account already have an athlete profile"
+// check-then-create. Two applications against two DIFFERENT join links for
+// the SAME existing account each hold a different lockJoinLinkActions key
+// (their own link's id), so that lock alone cannot serialize them against
+// each other - both could see athletes.user_id as still empty and both
+// attempt to insert a new athletes row, tripping the athletes_user_id_unique
+// partial index on whichever loses and surfacing as an unhandled 500 instead
+// of a clean, successful re-use of the same profile. This lock closes
+// exactly that gap. A distinct constant from both
+// JOIN_LINK_ACTION_LOCK_NAMESPACE above and
+// inviteContext.js's ATHLETE_INVITE_ACTION_LOCK_NAMESPACE - never reused. No
+// deadlock risk: every caller acquires its own join-link lock first and this
+// user lock second, always in that order, and never holds two different
+// join-link locks at once.
+const APPLICANT_ATHLETE_CREATION_LOCK_NAMESPACE = 719402629;
+
+export async function lockApplicantAthleteCreation(executor, userId) {
+  await executor(`select pg_advisory_xact_lock($1, hashtext($2::text))`, [APPLICANT_ATHLETE_CREATION_LOCK_NAMESPACE, String(userId)]);
+}
+
 export function joinLinkContextShapeValid(contextType, contextId) {
   if (!JOIN_LINK_CONTEXT_TYPES.has(contextType)) return false;
   if (contextType === "club" || contextType === "team") return Boolean(contextId);
@@ -127,6 +149,44 @@ export async function isJoinLinkContextStillValid(executor, link) {
     return Boolean(team.rows[0].team_active) && Boolean(team.rows[0].club_active);
   }
   return false;
+}
+
+// Closes out every still-open (pending or requires_login) application for a
+// join link that has become permanently unusable for NEW activity - expired,
+// revoked, or its backing context (an archived club/team, or a private coach
+// who has lost the independent_coach role) is no longer real. Deliberately
+// does NOT trigger on "full" (max_uses reached) alone - a full link is still
+// a real, valid link whose outstanding requests may still legitimately be
+// rejected, just never approved past capacity. Idempotent: a no-op once
+// nothing matches (already cancelled, or the link never had anything
+// pending), and never touches an already-approved/rejected/cancelled row.
+// No single human "reviewed" this closure, so reviewed_by_user_id is left
+// null - distinct from an explicit revoke's cascade (see
+// backend/src/routes/organization.js's DELETE .../athlete-join-links/:linkId,
+// which sets it to the revoking admin and is left untouched by this
+// function).
+//
+// Must be called with `executor` bound to a transaction that already holds
+// lockJoinLinkActions for this exact link.id (see
+// backend/src/routes/organization.js's sweepUnusableJoinLink, and the
+// approve/reject handlers, which all call this immediately after loading the
+// link FOR UPDATE under that lock) - there is no background job scheduler in
+// this codebase, so an authenticated viewer loading (GET
+// /api/organization[/athlete-join-links]) or acting on (approve/reject) a
+// link is what actually performs this sweep, opportunistically, the next
+// time anyone with real access looks at it.
+export async function closeUnusableJoinLinkApplications(executor, link) {
+  const isExpired = new Date(link.expires_at) <= new Date();
+  const isRevoked = !link.is_active || Boolean(link.revoked_at);
+  const contextValid = isExpired || isRevoked ? false : await isJoinLinkContextStillValid(executor, link);
+  if (!isExpired && !isRevoked && contextValid) return 0;
+  const result = await executor(
+    `update public.athlete_join_applications
+     set status = 'cancelled', password_hash = null, reviewed_at = now(), updated_at = now()
+     where join_link_id = $1 and status in ('pending', 'requires_login')`,
+    [link.id],
+  );
+  return result.rowCount;
 }
 
 export function joinLinkIsWithinCapacity(link) {
