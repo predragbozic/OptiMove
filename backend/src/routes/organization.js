@@ -13,6 +13,16 @@ import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import { canCreateInviteInContext, canRevokeInvite, INVITE_CONTEXT_TYPES, inviteContextShapeValid, lockAthleteInviteActions } from "../inviteContext.js";
+import {
+  canCreateJoinLinkInContext,
+  canManageJoinLink,
+  canReviewJoinApplication,
+  closeUnusableJoinLinkApplications,
+  joinLinkContextShapeValid,
+  joinLinkStatus,
+  lockApplicantAthleteCreation,
+  lockJoinLinkActions,
+} from "../joinLinkContext.js";
 
 const router = Router();
 
@@ -142,6 +152,129 @@ async function loadAthleteInviteStatuses(activeWorkspace, athleteIds, viewerUser
   return byAthlete;
 }
 
+// Re-loads a join link FOR UPDATE under its own lock/transaction and closes
+// out its still-open applications if it has become permanently unusable
+// (expired/revoked/context-invalid) - see closeUnusableJoinLinkApplications.
+// Always re-fetches fresh rather than trusting any caller-supplied row,
+// since this may run well after that row was first read. Safe to call
+// speculatively (e.g. once per link on every list load) - a healthy link
+// costs one extra locked SELECT and nothing else.
+async function sweepUnusableJoinLink(linkId) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const exec = (text, params) => client.query(text, params);
+    await lockJoinLinkActions(exec, linkId);
+    const fresh = await client.query(
+      `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, expires_at
+       from public.athlete_join_links where id = $1 limit 1 for update`,
+      [linkId],
+    );
+    let closed = 0;
+    if (fresh.rows[0]) closed = await closeUnusableJoinLinkApplications(exec, fresh.rows[0]);
+    await client.query("commit");
+    return closed;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Group join links visible to the CURRENT viewer's active workspace - a
+// separate system from the per-athlete invites above (see
+// backend/src/joinLinkContext.js). private_coach shows only the viewer's own
+// links (a personal 1:1 scope, like a private-coach invite); club shows every
+// link for that club AND every team-context link for a team under that club
+// (a club admin manages both); team shows only that team's own links;
+// platform (for a platform admin) shows every link across every context.
+// Never filtered by role_hint.
+async function loadJoinLinksForWorkspace(req, activeWorkspace) {
+  const authz = req.authz;
+  let whereClause;
+  const params = [];
+  if (activeWorkspace?.type === "platform" && isPlatformAdministrator(authz)) {
+    whereClause = "true";
+  } else if (activeWorkspace?.type === "private_coach" && authz.isIndependentCoach) {
+    params.push(req.user.id);
+    whereClause = `l.context_type = 'private_coach' and l.created_by_user_id = $1`;
+  } else if (activeWorkspace?.type === "club") {
+    params.push(activeWorkspace.scopeId);
+    whereClause = `(l.context_type = 'club' and l.context_id = $1) or (l.context_type = 'team' and l.context_id in (select id from public.teams where club_id = $1))`;
+  } else if (activeWorkspace?.type === "team") {
+    params.push(activeWorkspace.scopeId);
+    whereClause = `l.context_type = 'team' and l.context_id = $1`;
+  } else {
+    return [];
+  }
+  const result = await query(
+    `select l.id, l.context_type, l.context_id, l.created_by_user_id, l.label, l.expires_at, l.max_uses,
+            l.approved_uses, l.is_active, l.revoked_at, l.created_at,
+            coalesce(u.display_name, u.full_name, u.email) as created_by_name,
+            (select count(*) from public.athlete_join_applications a where a.join_link_id = l.id and a.status = 'pending') as pending_count
+     from public.athlete_join_links l
+     left join public.users u on u.id = l.created_by_user_id
+     where ${whereClause}
+     order by l.created_at desc`,
+    params,
+  );
+  // Opportunistic cleanup (no background job scheduler exists in this
+  // codebase - see closeUnusableJoinLinkApplications): the current
+  // authenticated viewer loading their own manageable links is what actually
+  // sweeps a link that expired, was archived, or whose private-coach creator
+  // lost the role, since its last mutation. Only attempted for a link that
+  // still shows an outstanding pending count - a link with nothing pending
+  // has nothing to sweep, and this keeps every ordinary load cheap.
+  for (const row of result.rows) {
+    if (Number(row.pending_count) > 0) {
+      const closed = await sweepUnusableJoinLink(row.id);
+      if (closed > 0) row.pending_count = 0;
+    }
+  }
+  return result.rows.map((row) => ({
+    id: row.id,
+    contextType: row.context_type,
+    contextId: row.context_id,
+    createdByUserId: row.created_by_user_id,
+    createdByName: row.created_by_name,
+    label: row.label,
+    expiresAt: row.expires_at,
+    maxUses: row.max_uses,
+    approvedUses: row.approved_uses,
+    pendingCount: Number(row.pending_count),
+    status: joinLinkStatus(row),
+    createdAt: row.created_at,
+  }));
+}
+
+// Every application (any status, for history) against a join link the
+// current viewer can already see per loadJoinLinksForWorkspace above - never
+// a password hash or status token.
+async function loadJoinApplicationsForWorkspace(req, activeWorkspace, links) {
+  const linkIds = links.map((link) => link.id);
+  if (!linkIds.length) return [];
+  const result = await query(
+    `select a.id, a.join_link_id, a.applicant_user_id, a.email, a.first_name, a.last_name, a.display_name,
+            a.status, a.submitted_at, a.reviewed_at, a.rejection_reason
+     from public.athlete_join_applications a
+     where a.join_link_id = any($1::uuid[])
+     order by a.submitted_at desc`,
+    [linkIds],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    joinLinkId: row.join_link_id,
+    email: row.email,
+    name: row.display_name || [row.first_name, row.last_name].filter(Boolean).join(" ") || row.email,
+    accountType: row.applicant_user_id ? "existing" : "new",
+    status: row.status,
+    submittedAt: row.submitted_at,
+    reviewedAt: row.reviewed_at,
+    rejectionReason: row.rejection_reason,
+  }));
+}
+
 router.get("/", async (req, res, next) => {
   try {
     const [clubs, teams, athletes, users, accessRequests, { workspace: activeWorkspace }] = await Promise.all([
@@ -158,6 +291,8 @@ router.get("/", async (req, res, next) => {
       const entry = inviteStatuses.get(athlete.id);
       return { ...athlete, inviteStatus: entry?.status || "none", invite: entry?.invite || null };
     });
+    const joinLinks = await loadJoinLinksForWorkspace(req, activeWorkspace);
+    const joinApplications = await loadJoinApplicationsForWorkspace(req, activeWorkspace, joinLinks);
     res.json({
       scope: req.user?.role_hint || "coach",
       isPlatformAdmin: isPlatformAdministrator(req.authz),
@@ -177,6 +312,8 @@ router.get("/", async (req, res, next) => {
       athletes: athletesWithInviteStatus,
       users: scoped.users,
       accessRequests: scoped.accessRequests,
+      joinLinks,
+      joinApplications,
       activeWorkspace,
     });
   } catch (error) {
@@ -956,6 +1093,504 @@ router.delete("/athlete-invites/:inviteId", async (req, res, next) => {
          set revoked_at = now(), revoked_by_user_id = $1, revoke_reason = 'revoked', updated_at = now()
          where id = $2 and accepted_at is null and revoked_at is null`,
         [req.user.id, inviteId],
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// --- Group athlete join links (feature/group-athlete-join-links) ---
+// A SEPARATE system from the athlete-invites endpoints above - a join link
+// targets a context (private_coach/club/team), not a pre-existing athlete
+// profile, and many different people can submit a request against the same
+// link. See backend/src/joinLinkContext.js for the shared permission
+// matrix/lock.
+
+router.post("/athlete-join-links", async (req, res, next) => {
+  try {
+    const contextType = clean(req.body?.contextType);
+    const contextId = req.body?.contextId != null ? clean(req.body.contextId) : null;
+    const label = clean(req.body?.label) || null;
+    const expiresInDaysRaw = Number(req.body?.expiresInDays);
+    const expiresInDays = Number.isFinite(expiresInDaysRaw) ? Math.trunc(expiresInDaysRaw) : NaN;
+    if (!joinLinkContextShapeValid(contextType, contextId)) return res.status(400).json({ error: "UNSUPPORTED_JOIN_LINK_CONTEXT" });
+    if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > 30) {
+      return res.status(400).json({ error: "Expiration must be between 1 and 30 days." });
+    }
+    let maxUses = null;
+    const maxUsesRaw = req.body?.maxUses;
+    if (maxUsesRaw !== null && maxUsesRaw !== undefined && maxUsesRaw !== "") {
+      const parsed = Number(maxUsesRaw);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 500) {
+        return res.status(400).json({ error: "Max uses must be a whole number between 1 and 500, or left empty for unlimited." });
+      }
+      maxUses = parsed;
+    }
+    if (contextType === "club" || contextType === "team") {
+      const table = contextType === "club" ? "clubs" : "teams";
+      const exists = await query(`select id from public.${table} where id = $1 and coalesce(is_active, true) limit 1`, [contextId]);
+      if (!exists.rows[0]) return res.status(404).json({ error: contextType === "club" ? "Club not found." : "Team not found." });
+    }
+    const permission = canCreateJoinLinkInContext(req, contextType, contextId);
+    if (!permission.ok) return res.status(permission.status).json({ error: permission.error });
+
+    const token = crypto.randomBytes(32).toString("base64url");
+    const tokenHash = hashInviteToken(token);
+    const inserted = await query(
+      `insert into public.athlete_join_links (token_hash, context_type, context_id, created_by_user_id, label, expires_at, max_uses)
+       values ($1, $2, $3, $4, $5, now() + ($6 || ' days')::interval, $7)
+       returning id, context_type, context_id, label, expires_at, max_uses, approved_uses, is_active, created_at`,
+      [tokenHash, contextType, contextId, req.user.id, label, String(expiresInDays), maxUses],
+    );
+    const link = inserted.rows[0];
+    res.status(201).json({
+      link: {
+        id: link.id,
+        contextType: link.context_type,
+        contextId: link.context_id,
+        label: link.label,
+        expiresAt: link.expires_at,
+        maxUses: link.max_uses,
+        approvedUses: link.approved_uses,
+        pendingCount: 0,
+        status: joinLinkStatus(link),
+        createdAt: link.created_at,
+      },
+      joinUrl: `${appOrigin(req)}/join?token=${encodeURIComponent(token)}`,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/athlete-join-links", async (req, res, next) => {
+  try {
+    const { workspace: activeWorkspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const links = await loadJoinLinksForWorkspace(req, activeWorkspace);
+    res.json({ links });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/athlete-join-links/:linkId", async (req, res, next) => {
+  try {
+    const linkId = clean(req.params.linkId);
+    // Resolve without mutation, purely to have the lock key - if the link
+    // doesn't exist at all, there's nothing to lock or revoke.
+    const resolved = await query(`select id from public.athlete_join_links where id = $1 limit 1`, [linkId]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "Join link not found." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockJoinLinkActions(exec, linkId);
+
+      const fresh = await client.query(
+        `select id, context_type, context_id, created_by_user_id, is_active, revoked_at
+         from public.athlete_join_links where id = $1 limit 1 for update`,
+        [linkId],
+      );
+      const link = fresh.rows[0];
+      if (!link) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "Join link not found." });
+      }
+      const permission = canManageJoinLink(req, link);
+      if (!permission.ok) {
+        await client.query("rollback");
+        return res.status(permission.status).json({ error: permission.error });
+      }
+
+      // Idempotent - revoking an already-revoked link is a no-op success.
+      if (!link.is_active || link.revoked_at) {
+        await client.query("commit");
+        return res.json({ ok: true });
+      }
+
+      await client.query(
+        `update public.athlete_join_links set is_active = false, revoked_at = now(), revoked_by_user_id = $1, updated_at = now() where id = $2`,
+        [req.user.id, linkId],
+      );
+      // Revoking auto-cancels this link's still-open applications (pending or
+      // requires_login) and clears their password hashes - none of them can
+      // ever be reviewed/approved once the link itself is dead, so leaving
+      // them open would just be stale, misleading state (and a lingering
+      // password hash with nowhere safe to go). Already-approved/rejected/
+      // cancelled applications are untouched - they stay as audit history.
+      await client.query(
+        `update public.athlete_join_applications
+         set status = 'cancelled', password_hash = null, reviewed_at = now(), reviewed_by_user_id = $1, updated_at = now()
+         where join_link_id = $2 and status in ('pending', 'requires_login')`,
+        [req.user.id, linkId],
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/athlete-join-links/:linkId/regenerate", async (req, res, next) => {
+  try {
+    const linkId = clean(req.params.linkId);
+    const resolved = await query(`select id from public.athlete_join_links where id = $1 limit 1`, [linkId]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "Join link not found." });
+
+    const client = await pool.connect();
+    let link;
+    let token;
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockJoinLinkActions(exec, linkId);
+
+      const fresh = await client.query(
+        `select id, context_type, context_id, created_by_user_id, is_active, revoked_at
+         from public.athlete_join_links where id = $1 limit 1 for update`,
+        [linkId],
+      );
+      const current = fresh.rows[0];
+      if (!current) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "Join link not found." });
+      }
+      const permission = canManageJoinLink(req, current);
+      if (!permission.ok) {
+        await client.query("rollback");
+        return res.status(permission.status).json({ error: permission.error });
+      }
+      if (!current.is_active || current.revoked_at) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "This join link has been revoked. Create a new one instead." });
+      }
+
+      // Regenerating changes the SAME row's token in place (unlike an
+      // athlete-invite regenerate, which revokes an old row and inserts a
+      // new one) - a join link is a persistent context-level entity, and its
+      // id is what every already-submitted application (join_link_id) points
+      // at, so those must never be disturbed by this.
+      token = crypto.randomBytes(32).toString("base64url");
+      const tokenHash = hashInviteToken(token);
+      const updated = await client.query(
+        `update public.athlete_join_links set token_hash = $2, updated_at = now() where id = $1
+         returning id, context_type, context_id, label, expires_at, max_uses, approved_uses, is_active, created_at`,
+        [linkId, tokenHash],
+      );
+      link = updated.rows[0];
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+    res.json({
+      link: {
+        id: link.id,
+        contextType: link.context_type,
+        contextId: link.context_id,
+        label: link.label,
+        expiresAt: link.expires_at,
+        maxUses: link.max_uses,
+        approvedUses: link.approved_uses,
+        status: joinLinkStatus(link),
+        createdAt: link.created_at,
+      },
+      joinUrl: `${appOrigin(req)}/join?token=${encodeURIComponent(token)}`,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/athlete-join-applications/:applicationId/approve", async (req, res, next) => {
+  try {
+    const applicationId = clean(req.params.applicationId);
+    const resolved = await query(`select join_link_id from public.athlete_join_applications where id = $1 limit 1`, [applicationId]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "Request not found." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      // Same per-join-link lock regenerate/revoke/apply all acquire - this is
+      // what actually prevents two concurrent approvals of two different
+      // pending applications on the SAME link from both squeezing past the
+      // max_uses check, and what makes "two parallel approvals of the SAME
+      // application create only one account" hold (the loser sees status is
+      // no longer 'pending' once it gets the lock).
+      await lockJoinLinkActions(exec, resolved.rows[0].join_link_id);
+
+      const linkResult = await client.query(
+        `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, max_uses, approved_uses
+         from public.athlete_join_links where id = $1 limit 1 for update`,
+        [resolved.rows[0].join_link_id],
+      );
+      const link = linkResult.rows[0];
+      if (!link) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "Join link not found." });
+      }
+      const permission = canReviewJoinApplication(req, link);
+      if (!permission.ok) {
+        await client.query("rollback");
+        return res.status(permission.status).json({ error: permission.error });
+      }
+
+      // Opportunistic cleanup, same as the read-list loader (see
+      // sweepUnusableJoinLink/loadJoinLinksForWorkspace) - if the link has
+      // expired, been revoked, or its context (archived club/team, or a
+      // private coach who lost the role) is no longer real, this closes THIS
+      // application (and any siblings) as 'cancelled' with its password hash
+      // cleared before the status check below ever runs. A healthy, still-
+      // usable link is untouched (closeUnusableJoinLinkApplications no-ops).
+      // From here on, every early exit COMMITS rather than rolls back -
+      // this cleanup is a real mutation that must survive even when the
+      // approve attempt itself goes on to fail for an unrelated reason
+      // (already reviewed, full) - rolling it back would silently undo the
+      // exact fix this is here for.
+      await closeUnusableJoinLinkApplications(exec, link);
+
+      const appResult = await client.query(
+        `select id, join_link_id, applicant_user_id, email, first_name, last_name, display_name, password_hash, status
+         from public.athlete_join_applications where id = $1 limit 1 for update`,
+        [applicationId],
+      );
+      const application = appResult.rows[0];
+      if (!application || String(application.join_link_id) !== String(link.id)) {
+        await client.query("commit");
+        return res.status(404).json({ error: "Request not found." });
+      }
+      if (application.status !== "pending") {
+        // Covers both "someone already reviewed this" and "the cleanup just
+        // above closed it as no-longer-usable" - both are safely the same
+        // generic response, since neither ever created anything.
+        await client.query("commit");
+        return res.status(409).json({ error: "This request has already been reviewed." });
+      }
+
+      if (link.max_uses != null && Number(link.approved_uses) >= Number(link.max_uses)) {
+        await client.query("commit");
+        return res.status(409).json({ error: "JOIN_LINK_FULL" });
+      }
+
+      let resultingUserId;
+      let resultingAthleteId;
+
+      if (application.applicant_user_id) {
+        // Existing account (POST .../apply-existing): never touches
+        // password/email/role_hint, never disturbs any other role the
+        // account holds. Reuses the athlete profile already linked to this
+        // account (athletes.user_id is the real FK, protected by the
+        // athletes_user_id_unique partial index), or creates exactly one new
+        // one if it doesn't have one yet.
+        //
+        // A SECOND lock, keyed by applicant_user_id (not join_link_id) -
+        // see lockApplicantAthleteCreation's comment in joinLinkContext.js.
+        // Without it, two applications for the SAME account approved
+        // concurrently through two DIFFERENT join links (so each holds a
+        // different join-link lock and neither serializes the other) could
+        // both see no existing athletes row and both attempt to insert one,
+        // tripping athletes_user_id_unique on whichever loses and
+        // surfacing as an unhandled 500 instead of both cleanly converging
+        // on the same profile.
+        await lockApplicantAthleteCreation(exec, application.applicant_user_id);
+        const existingAthlete = await client.query(`select id from public.athletes where user_id = $1 limit 1`, [application.applicant_user_id]);
+        if (existingAthlete.rows[0]) {
+          resultingAthleteId = existingAthlete.rows[0].id;
+        } else {
+          const userRow = await client.query(`select email, full_name, display_name from public.users where id = $1 limit 1`, [application.applicant_user_id]);
+          const fullName = userRow.rows[0]?.full_name || userRow.rows[0]?.display_name || userRow.rows[0]?.email || "Athlete";
+          const generatedId = await nextAthleteId();
+          const { firstName, lastName } = splitName(fullName);
+          // created_by_user_id is the APPROVER (req.user.id) - the account
+          // actually performing this creation, mirroring POST /athletes
+          // elsewhere in this file - not the join link's original creator,
+          // who may not even be the one reviewing this request (any current
+          // holder of a club/team role may review).
+          const createdAthlete = await client.query(
+            `insert into public.athletes (athlete_id, source_external_id, first_name, last_name, full_name, display_name, user_id, created_by_user_id, is_active)
+             values ($1, $1, $2, $3, $4, $4, $5, $6, true)
+             returning id`,
+            [generatedId, firstName, lastName, fullName, application.applicant_user_id, req.user.id],
+          );
+          resultingAthleteId = createdAthlete.rows[0].id;
+        }
+        resultingUserId = application.applicant_user_id;
+      } else {
+        // Brand-new email (POST .../apply): re-check it hasn't been claimed
+        // by anyone since this application was submitted - never upsert a
+        // password onto an existing row, and never silently approve into
+        // the wrong account.
+        const emailOwner = await client.query(`select id from public.users where lower(email) = lower($1) limit 1`, [application.email]);
+        if (emailOwner.rows[0]) {
+          await client.query(
+            `update public.athlete_join_applications set status = 'requires_login', password_hash = null, updated_at = now() where id = $1`,
+            [application.id],
+          );
+          await client.query("commit");
+          return res.status(409).json({ error: "EMAIL_NOW_EXISTS_REQUIRES_LOGIN" });
+        }
+        const fullName = application.display_name || [application.first_name, application.last_name].filter(Boolean).join(" ") || application.email;
+        let insertedUser;
+        try {
+          insertedUser = await client.query(
+            `insert into public.users (email, first_name, last_name, password_hash, full_name, display_name, role_hint, is_active)
+             values ($1, $2, $3, $4, $5, $5, 'athlete', true)
+             returning id`,
+            [application.email, application.first_name || "Athlete", application.last_name || "", application.password_hash, fullName],
+          );
+        } catch (insertError) {
+          // A second, DIFFERENT join link's pending application for the same
+          // email could be approved concurrently - each approve only locks
+          // its OWN join_link_id, so this is the one race the per-link lock
+          // above cannot close on its own. The database's own unique
+          // constraint on users.email is the real backstop.
+          if (insertError?.code === "23505") {
+            await client.query(
+              `update public.athlete_join_applications set status = 'requires_login', password_hash = null, updated_at = now() where id = $1`,
+              [application.id],
+            );
+            await client.query("commit");
+            return res.status(409).json({ error: "EMAIL_NOW_EXISTS_REQUIRES_LOGIN" });
+          }
+          throw insertError;
+        }
+        resultingUserId = insertedUser.rows[0].id;
+        const generatedId = await nextAthleteId();
+        const { firstName, lastName } = splitName(fullName);
+        const createdAthlete = await client.query(
+          `insert into public.athletes (athlete_id, source_external_id, first_name, last_name, full_name, display_name, user_id, created_by_user_id, is_active)
+           values ($1, $1, $2, $3, $4, $4, $5, $6, true)
+           returning id`,
+          [generatedId, firstName, lastName, fullName, resultingUserId, req.user.id],
+        );
+        resultingAthleteId = createdAthlete.rows[0].id;
+      }
+
+      await client.query(
+        `insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active)
+         values ($1, $2, 'athlete', true)
+         on conflict (user_id, athlete_id, relationship_type) do update set is_active = true, updated_at = now()`,
+        [resultingUserId, resultingAthleteId],
+      );
+
+      // The relationship/membership this join CONTEXT grants - never touches
+      // any other existing relationship this athlete/account may already
+      // have.
+      if (link.context_type === "private_coach") {
+        await client.query(
+          `insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active)
+           values ($1, $2, 'coach', true)
+           on conflict (user_id, athlete_id, relationship_type) do update set is_active = true, updated_at = now()`,
+          [link.created_by_user_id, resultingAthleteId],
+        );
+      } else if (link.context_type === "club") {
+        await ensureActiveMembership(client, resultingAthleteId, link.context_id, null, "club", req.user.id);
+      } else if (link.context_type === "team") {
+        const teamRow = await client.query(`select club_id from public.teams where id = $1 limit 1`, [link.context_id]);
+        const clubId = teamRow.rows[0]?.club_id;
+        await ensureActiveMembership(client, resultingAthleteId, clubId, null, "club", req.user.id);
+        await ensureActiveMembership(client, resultingAthleteId, clubId, link.context_id, "team", req.user.id);
+      }
+      await syncLegacyAthletePointer(resultingAthleteId, { query: (text, params) => client.query(text, params) });
+
+      await client.query(
+        `update public.athlete_join_applications
+         set status = 'approved', password_hash = null, reviewed_at = now(), reviewed_by_user_id = $1,
+             resulting_user_id = $2, resulting_athlete_id = $3, updated_at = now()
+         where id = $4`,
+        [req.user.id, resultingUserId, resultingAthleteId, application.id],
+      );
+      await client.query(
+        `update public.athlete_join_links set approved_uses = approved_uses + 1, updated_at = now() where id = $1`,
+        [link.id],
+      );
+      await client.query("commit");
+      res.json({ ok: true, userId: resultingUserId, athleteId: resultingAthleteId });
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/athlete-join-applications/:applicationId/reject", async (req, res, next) => {
+  try {
+    const applicationId = clean(req.params.applicationId);
+    const reason = clean(req.body?.reason) || null;
+    const resolved = await query(`select join_link_id from public.athlete_join_applications where id = $1 limit 1`, [applicationId]);
+    if (!resolved.rows[0]) return res.status(404).json({ error: "Request not found." });
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockJoinLinkActions(exec, resolved.rows[0].join_link_id);
+
+      const linkResult = await client.query(
+        `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, expires_at
+         from public.athlete_join_links where id = $1 limit 1 for update`,
+        [resolved.rows[0].join_link_id],
+      );
+      const link = linkResult.rows[0];
+      if (!link) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "Join link not found." });
+      }
+      const permission = canReviewJoinApplication(req, link);
+      if (!permission.ok) {
+        await client.query("rollback");
+        return res.status(permission.status).json({ error: permission.error });
+      }
+
+      // Same opportunistic cleanup as approve/the read-list loader - if this
+      // link is dead, this closes the application as 'cancelled' (rather
+      // than 'rejected') before the status check below, since nobody
+      // actually reviewed it; either way it ends up closed with no hash.
+      // From here on, every early exit COMMITS rather than rolls back, so
+      // this cleanup is never silently undone.
+      await closeUnusableJoinLinkApplications(exec, link);
+
+      const appResult = await client.query(
+        `select id, join_link_id, status from public.athlete_join_applications where id = $1 limit 1 for update`,
+        [applicationId],
+      );
+      const application = appResult.rows[0];
+      if (!application || String(application.join_link_id) !== String(link.id)) {
+        await client.query("commit");
+        return res.status(404).json({ error: "Request not found." });
+      }
+      if (application.status !== "pending") {
+        await client.query("commit");
+        return res.status(409).json({ error: "This request has already been reviewed." });
+      }
+
+      await client.query(
+        `update public.athlete_join_applications
+         set status = 'rejected', password_hash = null, reviewed_at = now(), reviewed_by_user_id = $1, rejection_reason = $2, updated_at = now()
+         where id = $3`,
+        [req.user.id, reason, application.id],
       );
       await client.query("commit");
     } catch (error) {
@@ -2556,12 +3191,19 @@ function allowedUserRole(authz, requestedRole) {
   return "athlete";
 }
 
+// Backed by public.athlete_generated_id_seq (see
+// migrations/20260808_athlete_id_sequence.sql) - a real DB sequence, not a
+// SELECT MAX(...) + 1 read outside any transaction. nextval() is atomic
+// regardless of which connection/transaction calls it, so two callers
+// (concurrent POST /athletes calls, or two join-application approvals in
+// separate transactions - see POST .../athlete-join-applications/:id/approve)
+// can never be handed the same value, closing the race the old MAX-based
+// approach had. Format is unchanged (a bare digit string) - only the
+// generation mechanism changed, so this is a drop-in replacement for every
+// existing caller.
 async function nextAthleteId() {
-  const result = await query(
-    `select coalesce(max(nullif(regexp_replace(coalesce(source_external_id, athlete_id), '\\D', '', 'g'), '')::int), 999) + 1 as next_id
-     from public.athletes`,
-  );
-  return String(result.rows[0]?.next_id || Date.now());
+  const result = await query(`select nextval('public.athlete_generated_id_seq')::text as next_id`);
+  return result.rows[0].next_id;
 }
 
 function clean(value) {

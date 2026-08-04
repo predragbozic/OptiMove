@@ -21,6 +21,14 @@ export const migrationPaths = [
   path.resolve(__dirname, "../../migrations/20260805_user_workspace_preferences.sql"),
   // Depends on public.athlete_invites/users/clubs/teams from create_access_schema.sql above.
   path.resolve(__dirname, "../../migrations/20260806_athlete_invites_context.sql"),
+  // Depends on public.users/clubs/teams/athletes from create_access_schema.sql above.
+  // Independent of 20260806_athlete_invites_context.sql (a separate group-join
+  // system, not an extension of athlete_invites) but ordered after it purely
+  // to keep invite-lifecycle and join-link migrations chronologically grouped.
+  path.resolve(__dirname, "../../migrations/20260807_athlete_join_links.sql"),
+  // Depends on public.athletes from create_access_schema.sql above (reads its
+  // existing rows to seed the sequence's starting value).
+  path.resolve(__dirname, "../../migrations/20260808_athlete_id_sequence.sql"),
   path.resolve(__dirname, "../../create_builder_schema.sql"),
   path.resolve(__dirname, "../../create_exercise_user_state.sql"),
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),

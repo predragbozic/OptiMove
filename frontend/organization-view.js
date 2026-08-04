@@ -84,7 +84,10 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
       </section>
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
-      ${state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : `
+      ${state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "joinLinks" ? `
+        ${renderOrganizationActions(data)}
+        ${renderJoinLinksSection(data)}
+      ` : `
         ${renderOrganizationActions(data)}
         ${renderOrganizationBrowser(data)}
         ${state.organizationEditor.open ? renderOrganizationEditModal(data) : ""}
@@ -99,6 +102,14 @@ const organizationAddFormConfig = {
   athletes: (data) => (data.canCreateAthlete ? { icon: ICON_ADD_ATHLETE, label: "Add athlete", render: () => renderOrganizationAthleteForm(data.clubs, data.teams) } : null),
   users: (data) => (data.canCreateUser || (data.users || []).length
     ? { icon: ICON_MANAGE_USERS, label: "Add or manage users", render: () => `${data.canCreateUser ? renderOrganizationUserForm() : ""}${renderOrganizationRoleForms(data)}` }
+    : null),
+  // A join link's context comes from the account's own CURRENT active
+  // workspace (private_coach/club/team) - there is no platform-wide join
+  // link (see backend/src/joinLinkContext.js), so a platform (or athlete)
+  // workspace never offers this trigger at all, matching the backend, which
+  // would reject the create call regardless.
+  joinLinks: () => (["private_coach", "club", "team"].includes(state.currentUser?.activeWorkspace?.type)
+    ? { icon: ICON_ADD_ATHLETE, label: "Create join link", render: () => renderJoinLinkCreateFormHtml() }
     : null),
 };
 
@@ -872,6 +883,101 @@ function renderAthleteInviteModal(athletes) {
         ${body}
       </section>
     </div>
+  `;
+}
+
+// --- Group athlete join links (feature/group-athlete-join-links) ---
+// A separate, context-level system from the per-athlete Invite modal above -
+// see backend/src/joinLinkContext.js. A link's context (private_coach/club/
+// team) always comes from the account's own current active workspace, never
+// a client-chosen value.
+
+function renderJoinLinkCreateFormHtml() {
+  return `
+    <form class="panel organization-form" data-organization-form="joinLink">
+      <div><p class="eyebrow">Join link</p><h3>Create join link</h3></div>
+      <label class="search-field"><span>Label</span><input name="label" placeholder="e.g. Fall tryouts"></label>
+      <label class="search-field"><span>Expires in (days)</span><input name="expiresInDays" type="number" min="1" max="30" value="7" required></label>
+      <label class="search-field"><span>Max members (optional)</span><input name="maxUses" type="number" min="1" max="500" placeholder="Unlimited"></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <button class="plain-button" type="submit" ${state.organizationJoinLinks.pending ? "disabled" : ""}>Create join link</button>
+    </form>
+  `;
+}
+
+function joinLinkStatusLabel(status) {
+  return { active: "Active", expired: "Expired", revoked: "Revoked", full: "Full" }[status] || status;
+}
+
+function renderJoinLinkRow(link) {
+  const justCreated = state.organizationJoinLinks.justCreatedId === link.id && state.organizationJoinLinks.justCreatedUrl;
+  const isDead = link.status === "revoked";
+  return `
+    <article class="organization-row">
+      <div class="organization-row-main" style="flex:1">
+        <strong>${escapeHtml(link.label || "Join link")}</strong>
+        <p class="muted">${escapeHtml(joinLinkStatusLabel(link.status))} · ${link.approvedUses}${link.maxUses != null ? `/${escapeHtml(String(link.maxUses))}` : ""} used · ${link.pendingCount} pending · expires ${formatInviteDate(link.expiresAt)}</p>
+        ${justCreated ? `
+          <div class="invite-result">
+            <input readonly value="${escapeAttr(state.organizationJoinLinks.justCreatedUrl)}">
+            <div class="invite-actions">
+              <button class="plain-button compact-button" type="button" data-action="organization-join-link-copy" data-link-id="${escapeAttr(link.id)}">Copy link</button>
+            </div>
+            ${state.organizationJoinLinks.copiedId === link.id ? `<p class="muted invite-copied">Link copied.</p>` : ""}
+          </div>
+        ` : ""}
+      </div>
+      <span class="organization-row-actions">
+        <button class="plain-button compact-button" type="button" data-action="organization-join-link-regenerate" data-link-id="${escapeAttr(link.id)}" ${isDead || state.organizationJoinLinks.pending ? "disabled" : ""}>Generate new link</button>
+        <button class="plain-button compact-button danger-button" type="button" data-action="organization-join-link-revoke" data-link-id="${escapeAttr(link.id)}" ${isDead || state.organizationJoinLinks.pending ? "disabled" : ""}>Revoke</button>
+      </span>
+    </article>
+  `;
+}
+
+function renderJoinApplicationRow(app) {
+  const isPending = app.status === "pending";
+  const isBusy = state.organizationJoinLinks.reviewPendingId === app.id;
+  return `
+    <article class="organization-row">
+      <div class="organization-row-main" style="flex:1">
+        <strong>${escapeHtml(app.name)}</strong>
+        <p class="muted">${escapeHtml(app.email)} · ${app.accountType === "existing" ? "Existing account" : "New account"} · ${formatInviteDate(app.submittedAt)} · ${escapeHtml(joinApplicationStatusLabel(app.status))}</p>
+      </div>
+      ${isPending ? `
+        <span class="organization-row-actions">
+          <button class="plain-button compact-button" type="button" data-action="organization-join-application-approve" data-application-id="${escapeAttr(app.id)}" ${isBusy ? "disabled" : ""}>Approve</button>
+          <button class="plain-button compact-button danger-button" type="button" data-action="organization-join-application-reject" data-application-id="${escapeAttr(app.id)}" ${isBusy ? "disabled" : ""}>Reject</button>
+        </span>
+      ` : ""}
+    </article>
+  `;
+}
+
+function joinApplicationStatusLabel(status) {
+  return { pending: "Pending", approved: "Approved", rejected: "Rejected", cancelled: "Cancelled", requires_login: "Needs applicant login" }[status] || status;
+}
+
+function renderJoinLinksSection(data) {
+  const links = data.joinLinks || [];
+  const applications = data.joinApplications || [];
+  const pendingCount = applications.filter((app) => app.status === "pending").length;
+  return `
+    <section class="organization-lists organization-lists-browser">
+      <section class="panel organization-list-card">
+        <div class="organization-list-head"><p class="eyebrow">Join links</p><strong>${links.length}</strong></div>
+        <p class="builder-error" aria-live="polite">${escapeHtml(state.organizationJoinLinks.error || "")}</p>
+        <div class="organization-list">
+          ${links.length ? links.map(renderJoinLinkRow).join("") : `<p class="muted">No join links yet.</p>`}
+        </div>
+      </section>
+      <section class="panel organization-list-card">
+        <div class="organization-list-head"><p class="eyebrow">Join requests</p><strong>${pendingCount} pending</strong></div>
+        <div class="organization-list">
+          ${applications.length ? applications.map(renderJoinApplicationRow).join("") : `<p class="muted">No requests yet.</p>`}
+        </div>
+      </section>
+    </section>
   `;
 }
 

@@ -136,6 +136,7 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     ["teams", "Teams"],
     ["athletes", "Athletes"],
     ["users", "Users"],
+    ["joinLinks", "Join links"],
     ["presets", "Tags & Presets"],
   ];
   return `
