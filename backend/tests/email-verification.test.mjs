@@ -568,6 +568,77 @@ test("14b. immediately after a failed send, resend is not throttled and succeeds
   assert.equal(confirm.status, 200);
 });
 
+// --- 14c: EMAIL_PROVIDER=brevo, end to end - sent_at only follows a real success ---
+
+// The outer HTTP calls this test file's own api()/applyNew()/resendVerification()
+// helpers make (against this test's local http.Server) and the inner Brevo
+// HTTPS call backend/src/email.js makes both go through the same global
+// fetch in this one process - so the mock installed here must pass every
+// non-Brevo request straight through to the real fetch, and only intercept
+// requests to api.brevo.com. Restored in `finally` no matter what.
+function mockBrevoFetch(handler) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url, options) => {
+    if (typeof url === "string" && url.includes("api.brevo.com")) return handler(url, options);
+    return originalFetch(url, options);
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+test("14c. with EMAIL_PROVIDER=brevo, sent_at is set only after a genuinely successful Brevo call, and a failed one still leaves resend unblocked", async () => {
+  const coach = await makePrivateCoach(`ev-brevo-coach-${Date.now()}@test.local`);
+  const token = await createSession(coach.id);
+  const created = await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 });
+  const rawToken = extractToken(created.body.joinUrl);
+  const email = `ev-brevo-applicant-${Date.now()}@test.local`;
+
+  const originalProvider = process.env.EMAIL_PROVIDER;
+  const originalKey = process.env.BREVO_API_KEY;
+  const originalFrom = process.env.EMAIL_FROM;
+  process.env.EMAIL_PROVIDER = "brevo";
+  process.env.BREVO_API_KEY = "test-brevo-key";
+  process.env.EMAIL_FROM = "OptiMove <optimovee@gmail.com>";
+  const restoreEnv = () => {
+    if (originalProvider === undefined) delete process.env.EMAIL_PROVIDER;
+    else process.env.EMAIL_PROVIDER = originalProvider;
+    if (originalKey === undefined) delete process.env.BREVO_API_KEY;
+    else process.env.BREVO_API_KEY = originalKey;
+    if (originalFrom === undefined) delete process.env.EMAIL_FROM;
+    else process.env.EMAIL_FROM = originalFrom;
+  };
+
+  let restoreFetch = mockBrevoFetch(async () => ({ ok: false, status: 401, json: async () => ({ code: "unauthorized" }) }));
+  let applied;
+  try {
+    applied = await applyNew(rawToken, { email });
+  } finally {
+    restoreFetch();
+  }
+  assert.equal(applied.status, 201);
+  assert.equal(applied.body.emailSendFailed, true, "a failing Brevo call must surface as emailSendFailed, never a false success");
+
+  const applicationId = (await query(`select id from public.athlete_join_applications where join_link_id = $1 and lower(email) = lower($2)`, [created.body.link.id, email])).rows[0].id;
+  const afterFailure = await query(`select sent_at from public.email_verification_tokens where athlete_join_application_id = $1`, [applicationId]);
+  assert.equal(afterFailure.rows[0].sent_at, null, "sent_at must never be set for a token whose Brevo send failed");
+
+  restoreFetch = mockBrevoFetch(async () => ({ ok: true, status: 201, json: async () => ({ messageId: "mock-message-id" }) }));
+  let resend;
+  try {
+    // No backdating needed - sent_at was never set by the failed apply, so
+    // the 60-second throttle (keyed off sent_at) never engaged.
+    resend = await resendVerification(email);
+  } finally {
+    restoreFetch();
+    restoreEnv();
+  }
+  assert.equal(resend.status, 200, "the immediate resend must not be throttled by a Brevo call that never actually succeeded");
+
+  const afterSuccess = await query(`select sent_at from public.email_verification_tokens where athlete_join_application_id = $1 order by created_at desc limit 1`, [applicationId]);
+  assert.ok(afterSuccess.rows[0].sent_at, "sent_at must be set once the Brevo call actually succeeds");
+});
+
 // --- Extra: resend never reveals whether an email/application exists ---
 
 test("15. resend returns the exact same response for a real pending application and a completely unknown email", async () => {

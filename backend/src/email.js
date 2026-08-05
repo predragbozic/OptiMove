@@ -6,16 +6,25 @@
 // this file.
 //
 // Env vars:
-//   EMAIL_PROVIDER     "gmail" | "resend" | "dev" | "console" - required in
-//                       production (see assertEmailConfigValid); defaults to
-//                       "dev" everywhere else if unset.
-//   EMAIL_FROM         sender address - required for gmail/resend.
-//   EMAIL_REPLY_TO      optional reply-to address.
+//   EMAIL_PROVIDER     "gmail" | "brevo" | "resend" | "dev" | "console" -
+//                       required in production (see assertEmailConfigValid);
+//                       defaults to "dev" everywhere else if unset.
+//   EMAIL_FROM         sender address - required for gmail/brevo/resend.
+//                       "Display Name <address@example.com>" or a bare
+//                       address are both accepted.
+//   EMAIL_REPLY_TO      optional reply-to address, same format as EMAIL_FROM.
 //   GMAIL_USER         required when EMAIL_PROVIDER=gmail.
 //   GMAIL_APP_PASSWORD  required when EMAIL_PROVIDER=gmail - a Gmail App
 //                       Password, NEVER the account's own login password.
 //                       Read only from this environment variable, never
 //                       logged, never hardcoded.
+//   BREVO_API_KEY      required when EMAIL_PROVIDER=brevo - a Brevo
+//                       transactional-email API key. Read only from this
+//                       environment variable, never logged, never hardcoded.
+//                       Added because Render's outbound network drops Gmail
+//                       SMTP (ESOCKET/CONN) intermittently - Brevo is sent
+//                       over HTTPS instead of raw SMTP, avoiding that class
+//                       of failure entirely.
 //   RESEND_API_KEY     required when EMAIL_PROVIDER=resend.
 //   PUBLIC_APP_URL     (not read here - see backend/src/appOrigin.js) used by
 //                       callers to build the verificationUrl this module sends.
@@ -75,6 +84,11 @@ export function assertEmailConfigValid() {
     if (!String(process.env.EMAIL_FROM || "").trim()) throw new EmailConfigError("EMAIL_FROM is required when EMAIL_PROVIDER=gmail.");
     return;
   }
+  if (provider === "brevo") {
+    if (!process.env.BREVO_API_KEY) throw new EmailConfigError("BREVO_API_KEY is required when EMAIL_PROVIDER=brevo.");
+    if (!String(process.env.EMAIL_FROM || "").trim()) throw new EmailConfigError("EMAIL_FROM is required when EMAIL_PROVIDER=brevo.");
+    return;
+  }
   if (provider === "resend") {
     if (!process.env.RESEND_API_KEY) throw new EmailConfigError("RESEND_API_KEY is required when EMAIL_PROVIDER=resend.");
     if (!String(process.env.EMAIL_FROM || "").trim()) throw new EmailConfigError("EMAIL_FROM is required when EMAIL_PROVIDER=resend.");
@@ -131,6 +145,87 @@ async function sendViaResend({ to, subject, html, text }) {
     // Never logs the response body (could echo request contents) or the API
     // key - only the status code, which carries no secret.
     throw new EmailSendError(`Resend responded with status ${response.status}.`);
+  }
+}
+
+// Brevo's API wants sender/replyTo as separate {name, email} fields, not the
+// combined "Display Name <address@example.com>" string every other adapter
+// in this file accepts directly (nodemailer, Resend). Accepts a bare
+// address too.
+function parseFromAddress(value) {
+  const trimmed = String(value || "").trim();
+  const match = trimmed.match(/^(.*)<([^<>]+)>\s*$/);
+  if (match) {
+    const name = match[1].trim().replace(/^"(.*)"$/, "$1");
+    return { email: match[2].trim(), ...(name ? { name } : {}) };
+  }
+  return { email: trimmed };
+}
+
+const BREVO_DEFAULT_REQUEST_TIMEOUT_MS = 10000;
+let brevoRequestTimeoutMs = BREVO_DEFAULT_REQUEST_TIMEOUT_MS;
+
+// Test-only: lets a test shrink the request timeout so a simulated hang
+// resolves in milliseconds instead of the real 10s.
+export function __setBrevoRequestTimeoutMsForTests(ms) {
+  brevoRequestTimeoutMs = ms;
+}
+
+export function __resetBrevoRequestTimeoutMsForTests() {
+  brevoRequestTimeoutMs = BREVO_DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
+async function sendViaBrevo({ to, subject, html, text }) {
+  const apiKey = process.env.BREVO_API_KEY;
+  const from = String(process.env.EMAIL_FROM || "").trim();
+  if (!apiKey) throw new EmailConfigError("BREVO_API_KEY is not configured.");
+  if (!from) throw new EmailConfigError("EMAIL_FROM is not configured.");
+  const replyToRaw = String(process.env.EMAIL_REPLY_TO || "").trim();
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), brevoRequestTimeoutMs);
+  let response;
+  try {
+    response = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: { "api-key": apiKey, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        sender: parseFromAddress(from),
+        to: [{ email: to }],
+        ...(replyToRaw ? { replyTo: parseFromAddress(replyToRaw) } : {}),
+        subject,
+        htmlContent: html,
+        textContent: text,
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    // Never logs the caught error or its message - a network/fetch failure
+    // can embed the request URL, and an abort error's message varies by
+    // runtime. Only whether it was a timeout is safe to record.
+    const timedOut = error?.name === "AbortError";
+    console.error("[email:brevo] send failed", { provider: "brevo", reason: timedOut ? "timeout" : "network_error" });
+    throw new EmailSendError(timedOut ? "Brevo send timed out." : "Brevo SMTP send failed (network error).");
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    // Brevo's error body has a short, machine-readable `code` field (e.g.
+    // "invalid_parameter", "unauthorized") alongside a free-text `message`
+    // that can echo request details - only `code` (never the raw body) is
+    // safe to log. Parsing can itself fail for a non-JSON error body; that
+    // failure is silently ignored, not logged.
+    let brevoCode;
+    try {
+      const body = await response.json();
+      brevoCode = typeof body?.code === "string" ? body.code : undefined;
+    } catch {
+      brevoCode = undefined;
+    }
+    console.error("[email:brevo] send failed", { provider: "brevo", status: response.status, code: brevoCode });
+    const label = [response.status, brevoCode].filter((part) => part !== undefined).join("/");
+    throw new EmailSendError(`Brevo send failed (${label}).`);
   }
 }
 
@@ -235,6 +330,10 @@ export async function sendEmailVerification({ to, verificationUrl, recipientName
   const { subject, text, html } = buildVerificationEmail({ verificationUrl, recipientName, contextLabel, expiresAt });
   if (provider === "gmail") {
     await sendViaGmail({ to, subject, html, text });
+    return;
+  }
+  if (provider === "brevo") {
+    await sendViaBrevo({ to, subject, html, text });
     return;
   }
   if (provider === "resend") {
