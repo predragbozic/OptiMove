@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import "dotenv/config";
 import {
   EmailConfigError,
+  __gmailTransportOptionsForTests,
   __resetGmailTransportFactoryForTests,
   __setGmailTransportFactoryForTests,
   assertEmailConfigValid,
@@ -130,6 +131,104 @@ test("4. Gmail adapter never falls back to a plain password field - only GMAIL_A
   } finally {
     __resetGmailTransportFactoryForTests();
   }
+});
+
+test("12. the Gmail transport uses explicit host/port 587/STARTTLS and finite timeouts, never the service:\"gmail\" shorthand (which resolves to implicit-TLS 465)", () => {
+  setEnv({ GMAIL_USER: "optimovee@gmail.com", GMAIL_APP_PASSWORD: "fake-app-password" });
+  const options = __gmailTransportOptionsForTests();
+  assert.equal(options.host, "smtp.gmail.com");
+  assert.equal(options.port, 587);
+  assert.equal(options.secure, false);
+  assert.equal(options.requireTLS, true);
+  assert.equal(options.connectionTimeout, 10000);
+  assert.equal(options.greetingTimeout, 10000);
+  assert.equal(options.socketTimeout, 15000);
+  assert.equal(options.service, undefined, "must not use the service:\"gmail\" shorthand");
+  assert.equal(options.auth.user, "optimovee@gmail.com");
+  assert.equal(options.auth.pass, "fake-app-password");
+});
+
+// --- Sanitized diagnostics: only code/responseCode/command may ever be logged ---
+
+function captureConsole(fn) {
+  const originalError = console.error;
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const captured = [];
+  const capture = (...args) => {
+    captured.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+  };
+  console.error = capture;
+  console.log = capture;
+  console.warn = capture;
+  return fn()
+    .then((result) => ({ result, captured }))
+    .catch((error) => ({ error, captured }))
+    .finally(() => {
+      console.error = originalError;
+      console.log = originalLog;
+      console.warn = originalWarn;
+    });
+}
+
+test("13. an EAUTH SMTP failure logs only code/responseCode/command - never the raw SMTP response text, the address, or the token", async () => {
+  setEnv({ EMAIL_PROVIDER: "gmail", EMAIL_FROM: "OptiMove <optimovee@gmail.com>", GMAIL_USER: "optimovee@gmail.com", GMAIL_APP_PASSWORD: "fake-app-password" });
+  __setGmailTransportFactoryForTests(() => ({
+    sendMail: async () => {
+      const error = new Error("Invalid login: 535-5.7.8 Username and Password not accepted. Learn more at https://support.google.com/mail/?p=BadCredentials");
+      error.code = "EAUTH";
+      error.responseCode = 535;
+      error.command = "AUTH PLAIN";
+      throw error;
+    },
+  }));
+  const rawToken = "raw-verification-token-should-never-log";
+  const recipient = "secret-recipient@test.local";
+  const { error, captured } = await captureConsole(() =>
+    sendEmailVerification({ to: recipient, verificationUrl: `https://app.example.com/verify-email?token=${rawToken}`, expiresAt: new Date() }),
+  );
+  __resetGmailTransportFactoryForTests();
+
+  assert.equal(error.name, "EmailSendError");
+  assert.equal(error.message, "Gmail SMTP send failed (EAUTH/535).", "the sanitized code may appear in the internal error message");
+
+  assert.ok(captured.length >= 1, "the failure must produce at least one diagnostic log line");
+  const combined = captured.join("\n");
+  assert.ok(combined.includes("EAUTH"));
+  assert.ok(combined.includes("535"));
+  assert.ok(combined.includes("AUTH PLAIN"));
+  assert.ok(!combined.includes("Username and Password"), "the raw SMTP response text must never be logged");
+  assert.ok(!combined.includes("BadCredentials"), "the raw SMTP response text must never be logged");
+  assert.ok(!combined.includes(rawToken), "the raw verification token must never be logged");
+  assert.ok(!combined.includes(recipient), "the recipient address must never be logged");
+  assert.ok(!combined.includes("fake-app-password"), "the app password must never be logged");
+});
+
+test("14. an ETIMEDOUT connection failure logs only a safe code - never the raw error text, the address, or the token", async () => {
+  setEnv({ EMAIL_PROVIDER: "gmail", EMAIL_FROM: "OptiMove <optimovee@gmail.com>", GMAIL_USER: "optimovee@gmail.com", GMAIL_APP_PASSWORD: "fake-app-password" });
+  __setGmailTransportFactoryForTests(() => ({
+    sendMail: async () => {
+      const error = new Error("Connection timeout at smtp.gmail.com:587 after 10000ms - ETIMEDOUT");
+      error.code = "ETIMEDOUT";
+      throw error;
+    },
+  }));
+  const rawToken = "raw-verification-token-should-never-log-either";
+  const recipient = "another-secret-recipient@test.local";
+  const { error, captured } = await captureConsole(() =>
+    sendEmailVerification({ to: recipient, verificationUrl: `https://app.example.com/verify-email?token=${rawToken}`, expiresAt: new Date() }),
+  );
+  __resetGmailTransportFactoryForTests();
+
+  assert.equal(error.name, "EmailSendError");
+  assert.equal(error.message, "Gmail SMTP send failed (ETIMEDOUT).");
+
+  const combined = captured.join("\n");
+  assert.ok(combined.includes("ETIMEDOUT"));
+  assert.ok(!combined.includes("Connection timeout at smtp.gmail.com:587 after 10000ms"), "the raw error message must never be logged");
+  assert.ok(!combined.includes(rawToken));
+  assert.ok(!combined.includes(recipient));
+  assert.ok(!combined.includes("fake-app-password"));
 });
 
 // --- assertEmailConfigValid: production startup validation ---

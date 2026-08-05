@@ -134,25 +134,56 @@ async function sendViaResend({ to, subject, html, text }) {
   }
 }
 
+// Explicit STARTTLS config on port 587 - NOT nodemailer's `service: "gmail"`
+// shorthand, which resolves to implicit TLS on port 465. Render's outbound
+// network reaches Gmail fine on 587/STARTTLS but was silently failing (or
+// hanging until a generic timeout) against 465 in production - hence the
+// explicit host/port/secure/requireTLS and the finite timeouts below, so a
+// bad connection fails fast with a classifiable error instead of hanging.
+function gmailTransportOptions() {
+  return {
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    requireTLS: true,
+    auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
+  };
+}
+
+// Test-only: lets a test assert on the exact options this module would pass
+// to nodemailer.createTransport, without needing to mock nodemailer itself.
+export function __gmailTransportOptionsForTests() {
+  return gmailTransportOptions();
+}
+
 // Overridable only by backend/tests/email-service.test.mjs, so tests can
 // inject a mock transport and never send a real email through a real Gmail
 // account. No route or other application code ever calls this.
-let gmailTransportFactory = () =>
-  nodemailer.createTransport({
-    service: "gmail",
-    auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
-  });
+let gmailTransportFactory = () => nodemailer.createTransport(gmailTransportOptions());
 
 export function __setGmailTransportFactoryForTests(factory) {
   gmailTransportFactory = factory;
 }
 
 export function __resetGmailTransportFactoryForTests() {
-  gmailTransportFactory = () =>
-    nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
-    });
+  gmailTransportFactory = () => nodemailer.createTransport(gmailTransportOptions());
+}
+
+// Pulls out only the non-sensitive diagnostic fields an SMTP/nodemailer
+// error may carry - code (e.g. "EAUTH", "ETIMEDOUT"), responseCode (the SMTP
+// status, e.g. 535), and command (e.g. "AUTH PLAIN"). These are short,
+// protocol-defined enums/strings, never the raw error message or SMTP
+// response text, which can echo connection details or (in some client
+// error shapes) fragments of the request itself. Used both for the safe
+// startup-to-console diagnostic log and to build EmailSendError's message.
+function sanitizeSmtpError(error) {
+  const code = typeof error?.code === "string" ? error.code : undefined;
+  const responseCode = typeof error?.responseCode === "number" ? error.responseCode : undefined;
+  const command = typeof error?.command === "string" ? error.command : undefined;
+  return { code, responseCode, command };
 }
 
 async function sendViaGmail({ to, subject, html, text }) {
@@ -170,11 +201,17 @@ async function sendViaGmail({ to, subject, html, text }) {
   const transport = gmailTransportFactory();
   try {
     await transport.sendMail({ from, to, subject, html, text, ...(replyTo ? { replyTo } : {}) });
-  } catch {
-    // Never logs the caught error directly - some SMTP client error shapes
-    // can embed connection/auth details. Only a generic, secret-free
-    // message ever surfaces from here.
-    throw new EmailSendError("Gmail SMTP send failed.");
+  } catch (error) {
+    // Never logs the caught error directly, its message, or its response
+    // text - some SMTP client error shapes embed the SMTP server's full
+    // response line, which can echo back connection/auth detail. Only the
+    // three sanitized, protocol-level fields below are ever written to the
+    // console - no recipient address, no email content, no verification
+    // URL/token, no secret.
+    const { code, responseCode, command } = sanitizeSmtpError(error);
+    console.error("[email:gmail] send failed", { code, responseCode, command });
+    const label = [code, responseCode].filter((part) => part !== undefined).join("/");
+    throw new EmailSendError(label ? `Gmail SMTP send failed (${label}).` : "Gmail SMTP send failed.");
   }
 }
 
