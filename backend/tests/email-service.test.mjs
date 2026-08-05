@@ -4,21 +4,26 @@ import "dotenv/config";
 import {
   EmailConfigError,
   __gmailTransportOptionsForTests,
+  __resetBrevoRequestTimeoutMsForTests,
   __resetGmailTransportFactoryForTests,
+  __setBrevoRequestTimeoutMsForTests,
   __setGmailTransportFactoryForTests,
   assertEmailConfigValid,
   sendEmailVerification,
 } from "../src/email.js";
 
-// Unit tests for backend/src/email.js's provider selection, Gmail adapter,
-// and production startup validation. Never sends a real email - the Gmail
-// transport is always replaced with a mock via
-// __setGmailTransportFactoryForTests, which every test resets in `after`/on
-// its own error path so no test state leaks into other files (same
-// isolation discipline used throughout this codebase's test suite).
+// Unit tests for backend/src/email.js's provider selection, Gmail/Brevo
+// adapters, and production startup validation. Never sends a real email -
+// the Gmail transport is always replaced with a mock via
+// __setGmailTransportFactoryForTests, and Brevo (which talks HTTPS via the
+// built-in fetch, not an injectable client) is exercised by temporarily
+// replacing globalThis.fetch. Every test resets both in `after`/on its own
+// error path so no test state leaks into other files (same isolation
+// discipline used throughout this codebase's test suite).
 
-const ENV_KEYS = ["NODE_ENV", "EMAIL_PROVIDER", "EMAIL_FROM", "EMAIL_REPLY_TO", "GMAIL_USER", "GMAIL_APP_PASSWORD", "RESEND_API_KEY"];
+const ENV_KEYS = ["NODE_ENV", "EMAIL_PROVIDER", "EMAIL_FROM", "EMAIL_REPLY_TO", "GMAIL_USER", "GMAIL_APP_PASSWORD", "BREVO_API_KEY", "RESEND_API_KEY"];
 let savedEnv;
+const originalFetch = globalThis.fetch;
 
 before(() => {
   savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -30,6 +35,8 @@ after(() => {
     else process.env[key] = savedEnv[key];
   }
   __resetGmailTransportFactoryForTests();
+  __resetBrevoRequestTimeoutMsForTests();
+  globalThis.fetch = originalFetch;
 });
 
 function setEnv(overrides) {
@@ -131,6 +138,153 @@ test("4. Gmail adapter never falls back to a plain password field - only GMAIL_A
   } finally {
     __resetGmailTransportFactoryForTests();
   }
+});
+
+// --- Brevo adapter (HTTPS API via the built-in fetch - mocked, never a real send) ---
+
+function mockFetchOnce(handler) {
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return handler(url, options);
+  };
+  return calls;
+}
+
+function jsonResponse(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  };
+}
+
+test("15. sendEmailVerification with EMAIL_PROVIDER=brevo POSTs the exact URL, method, headers, and payload", async () => {
+  setEnv({ EMAIL_PROVIDER: "brevo", EMAIL_FROM: "OptiMove <optimovee@gmail.com>", BREVO_API_KEY: "fake-brevo-key" });
+  const calls = mockFetchOnce(() => jsonResponse(201, { messageId: "mock-message-id" }));
+  try {
+    await sendEmailVerification({
+      to: "athlete@test.local",
+      verificationUrl: "https://app.example.com/verify-email?token=some-raw-token",
+      recipientName: "Athlete",
+      contextLabel: "Test Club",
+      expiresAt: new Date(Date.now() + 60000),
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(calls.length, 1);
+  const { url, options } = calls[0];
+  assert.equal(url, "https://api.brevo.com/v3/smtp/email");
+  assert.equal(options.method, "POST");
+  assert.equal(options.headers["api-key"], "fake-brevo-key");
+  assert.equal(options.headers["content-type"], "application/json");
+  assert.equal(options.headers.accept, "application/json");
+  const body = JSON.parse(options.body);
+  assert.deepEqual(body.sender, { email: "optimovee@gmail.com", name: "OptiMove" });
+  assert.deepEqual(body.to, [{ email: "athlete@test.local" }]);
+  assert.equal(body.subject, "Confirm your email for OptiMove");
+  assert.ok(body.htmlContent.includes("some-raw-token"), "the request body itself legitimately carries the token (that's the email content) - only logging must never carry it");
+  assert.ok(typeof body.textContent === "string" && body.textContent.length > 0, "a text version must be sent alongside the HTML one");
+  assert.equal(body.replyTo, undefined, "EMAIL_REPLY_TO was not set, so replyTo must be omitted entirely");
+});
+
+test("16. Brevo adapter passes EMAIL_REPLY_TO through as {email}, and omits it when unset", async () => {
+  setEnv({ EMAIL_PROVIDER: "brevo", EMAIL_FROM: "OptiMove <optimovee@gmail.com>", EMAIL_REPLY_TO: "optimovee@gmail.com", BREVO_API_KEY: "fake-brevo-key" });
+  const calls = mockFetchOnce(() => jsonResponse(201, {}));
+  try {
+    await sendEmailVerification({ to: "a@test.local", verificationUrl: "https://x/verify-email?token=t", expiresAt: new Date() });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const body = JSON.parse(calls[0].options.body);
+  assert.deepEqual(body.replyTo, { email: "optimovee@gmail.com" });
+});
+
+test("17. a 2xx Brevo response resolves without throwing", async () => {
+  setEnv({ EMAIL_PROVIDER: "brevo", EMAIL_FROM: "OptiMove <optimovee@gmail.com>", BREVO_API_KEY: "fake-brevo-key" });
+  mockFetchOnce(() => jsonResponse(201, { messageId: "mock-message-id" }));
+  try {
+    await assert.doesNotReject(() => sendEmailVerification({ to: "a@test.local", verificationUrl: "https://x/verify-email?token=t", expiresAt: new Date() }));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("18. a non-2xx Brevo response throws EmailSendError, logging only status and Brevo's code - never the raw body, secret, address, or token", async () => {
+  setEnv({ EMAIL_PROVIDER: "brevo", EMAIL_FROM: "OptiMove <optimovee@gmail.com>", BREVO_API_KEY: "fake-brevo-key" });
+  mockFetchOnce(() => jsonResponse(401, { code: "unauthorized", message: "Key not found for api-key fake-brevo-key belonging to account optimovee@gmail.com" }));
+  const rawToken = "brevo-raw-token-should-never-log";
+  const recipient = "brevo-secret-recipient@test.local";
+  const { error, captured } = await captureConsole(() =>
+    sendEmailVerification({ to: recipient, verificationUrl: `https://app.example.com/verify-email?token=${rawToken}`, expiresAt: new Date() }),
+  );
+  globalThis.fetch = originalFetch;
+
+  assert.equal(error.name, "EmailSendError");
+  assert.equal(error.message, "Brevo send failed (401/unauthorized).");
+
+  const combined = captured.join("\n");
+  assert.ok(combined.includes("401"));
+  assert.ok(combined.includes("unauthorized"));
+  assert.ok(!combined.includes("Key not found"), "the raw Brevo error message must never be logged");
+  assert.ok(!combined.includes("fake-brevo-key"), "the API key must never be logged");
+  assert.ok(!combined.includes(rawToken));
+  assert.ok(!combined.includes(recipient));
+});
+
+test("19. a Brevo network failure throws a generic EmailSendError, logging only that it was a network error - never the raw error text", async () => {
+  setEnv({ EMAIL_PROVIDER: "brevo", EMAIL_FROM: "OptiMove <optimovee@gmail.com>", BREVO_API_KEY: "fake-brevo-key" });
+  globalThis.fetch = async () => {
+    throw new Error("getaddrinfo ENOTFOUND api.brevo.com");
+  };
+  const rawToken = "brevo-network-fail-token";
+  const recipient = "brevo-network-fail-recipient@test.local";
+  const { error, captured } = await captureConsole(() =>
+    sendEmailVerification({ to: recipient, verificationUrl: `https://app.example.com/verify-email?token=${rawToken}`, expiresAt: new Date() }),
+  );
+  globalThis.fetch = originalFetch;
+
+  assert.equal(error.name, "EmailSendError");
+  assert.equal(error.message, "Brevo SMTP send failed (network error).");
+
+  const combined = captured.join("\n");
+  assert.ok(combined.includes("network_error"));
+  assert.ok(!combined.includes("ENOTFOUND"), "the raw network error text must never be logged");
+  assert.ok(!combined.includes("fake-brevo-key"));
+  assert.ok(!combined.includes(rawToken));
+  assert.ok(!combined.includes(recipient));
+});
+
+test("20. a Brevo request that never resolves is aborted at the configured timeout and throws a generic timeout EmailSendError", async () => {
+  setEnv({ EMAIL_PROVIDER: "brevo", EMAIL_FROM: "OptiMove <optimovee@gmail.com>", BREVO_API_KEY: "fake-brevo-key" });
+  __setBrevoRequestTimeoutMsForTests(30);
+  globalThis.fetch = (url, options) =>
+    new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => {
+        const abortError = new Error("This operation was aborted");
+        abortError.name = "AbortError";
+        reject(abortError);
+      });
+    });
+  const rawToken = "brevo-timeout-token";
+  const recipient = "brevo-timeout-recipient@test.local";
+  const start = Date.now();
+  const { error, captured } = await captureConsole(() =>
+    sendEmailVerification({ to: recipient, verificationUrl: `https://app.example.com/verify-email?token=${rawToken}`, expiresAt: new Date() }),
+  );
+  globalThis.fetch = originalFetch;
+  __resetBrevoRequestTimeoutMsForTests();
+
+  assert.ok(Date.now() - start < 5000, "the request must fail fast at the configured timeout, not hang");
+  assert.equal(error.name, "EmailSendError");
+  assert.equal(error.message, "Brevo send timed out.");
+
+  const combined = captured.join("\n");
+  assert.ok(combined.includes("timeout"));
+  assert.ok(!combined.includes("fake-brevo-key"));
+  assert.ok(!combined.includes(rawToken));
+  assert.ok(!combined.includes(recipient));
 });
 
 test("12. the Gmail transport uses explicit host/port 587/STARTTLS and finite timeouts, never the service:\"gmail\" shorthand (which resolves to implicit-TLS 465)", () => {
@@ -256,6 +410,19 @@ test("7. production with EMAIL_PROVIDER=gmail missing GMAIL_USER/GMAIL_APP_PASSW
 
 test("8. production with EMAIL_PROVIDER=gmail and all three required vars set does not throw", () => {
   setEnv({ NODE_ENV: "production", EMAIL_PROVIDER: "gmail", GMAIL_USER: "optimovee@gmail.com", GMAIL_APP_PASSWORD: "app-password", EMAIL_FROM: "OptiMove <optimovee@gmail.com>" });
+  assert.doesNotThrow(() => assertEmailConfigValid());
+});
+
+test("21. production with EMAIL_PROVIDER=brevo missing BREVO_API_KEY/EMAIL_FROM refuses to start", () => {
+  setEnv({ NODE_ENV: "production", EMAIL_PROVIDER: "brevo" });
+  assert.throws(() => assertEmailConfigValid(), /BREVO_API_KEY/);
+
+  setEnv({ NODE_ENV: "production", EMAIL_PROVIDER: "brevo", BREVO_API_KEY: "key" });
+  assert.throws(() => assertEmailConfigValid(), /EMAIL_FROM/);
+});
+
+test("22. production with EMAIL_PROVIDER=brevo and both required vars set does not throw", () => {
+  setEnv({ NODE_ENV: "production", EMAIL_PROVIDER: "brevo", BREVO_API_KEY: "key", EMAIL_FROM: "OptiMove <optimovee@gmail.com>" });
   assert.doesNotThrow(() => assertEmailConfigValid());
 });
 
