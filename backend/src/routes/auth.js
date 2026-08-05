@@ -20,6 +20,7 @@ import {
   hashVerificationToken,
   issueEmailVerificationToken,
   loadLastVerificationTokenSentAt,
+  markVerificationTokenSent,
   requestIp,
   resentTooSoon,
   revokeActiveEmailVerificationTokens,
@@ -395,6 +396,7 @@ router.post("/join-links/:token/apply", async (req, res, next) => {
   const client = await pool.connect();
   let insertedApplicationId;
   let verificationToken;
+  let verificationTokenId;
   let verificationExpiresAt;
   let contextLabel;
   let rawStatusToken;
@@ -462,6 +464,7 @@ router.post("/join-links/:token/apply", async (req, res, next) => {
 
     const issued = await issueEmailVerificationToken(exec, { applicationId: insertedApplicationId, email });
     verificationToken = issued.rawToken;
+    verificationTokenId = issued.tokenId;
     verificationExpiresAt = issued.expiresAt;
     contextLabel = await loadJoinLinkContextName(exec, link);
 
@@ -479,6 +482,7 @@ router.post("/join-links/:token/apply", async (req, res, next) => {
   }
 
   const verificationUrl = `${resolveAppOrigin(req)}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+  let emailSendFailed = false;
   try {
     await sendEmailVerification({
       to: req.body?.email ? String(req.body.email).trim().toLowerCase() : "",
@@ -487,15 +491,22 @@ router.post("/join-links/:token/apply", async (req, res, next) => {
       contextLabel,
       expiresAt: verificationExpiresAt,
     });
+    // Only marked sent once the provider call actually succeeded - the
+    // resend throttle (POST .../email-verifications/resend) is keyed off
+    // this, never off when the token was merely created, so a failed send
+    // here never blocks an immediate retry.
+    await markVerificationTokenSent(query, verificationTokenId);
   } catch (emailError) {
-    // Never leaked to the client - the request still succeeded from the
-    // applicant's point of view (their application exists and can be
-    // resent), and the provider's own error text may contain details we
-    // don't want in a client response regardless.
+    emailSendFailed = true;
+    // Never leaked to the client as the provider's own error text - the
+    // request still succeeded from the applicant's point of view (their
+    // application exists and can be resent); only a sanitized reason class
+    // is logged, never the verification link/token and never a raw
+    // provider error object.
     console.error(`Failed to send verification email for application ${insertedApplicationId}:`, emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
   }
 
-  const responseBody = { ok: true, statusToken: rawStatusToken };
+  const responseBody = { ok: true, statusToken: rawStatusToken, emailSendFailed };
   if (!isProduction) {
     // Automated tests and local development need the raw token to drive the
     // confirm flow without a real inbox - never included in a production
@@ -577,13 +588,47 @@ router.post("/email-verifications/:token/confirm", async (req, res, next) => {
   const genericInvalid = () => res.status(404).json({ error: "This verification link is invalid or has expired." });
   try {
     const tokenHash = hashVerificationToken(req.params.token);
+
+    // Read-only resolve, purely to get the join_link_id lock key - mirrors
+    // every other join-link mutation's "resolve without mutation, then
+    // lock, then re-check" pattern. Never trusted past this point; the
+    // token/application/link rows are all re-loaded FOR UPDATE below.
+    const resolved = await query(
+      `select a.join_link_id
+       from public.email_verification_tokens t
+       join public.athlete_join_applications a on a.id = t.athlete_join_application_id
+       where t.token_hash = $1 and t.purpose = 'athlete_join_application'
+       limit 1`,
+      [tokenHash],
+    );
+    if (!resolved.rows[0]) return genericInvalid();
+
     await client.query("begin");
-    // A plain row lock on the token itself is sufficient here (unlike the
-    // join-link/athlete flows, which need an advisory lock because they
-    // must serialize around rows that might not exist yet) - two concurrent
-    // confirms of the SAME token both target this one already-existing row,
-    // so the second simply blocks until the first commits, then observes
-    // consumed_at already set.
+    const exec = (text, params) => client.query(text, params);
+    // Same per-join-link lock every other mutation (apply/apply-existing/
+    // regenerate/revoke/approve/reject) already acquires FIRST, before
+    // touching anything else. This is what actually prevents a deadlock
+    // against revoke/reject: those close out an application (locking its
+    // row) and then revoke its verification token (locking the token row) -
+    // the exact reverse order this handler used to lock in. Two
+    // transactions taking row locks in opposite orders is a classic
+    // deadlock; serializing both through this same advisory lock first
+    // means only one of them is ever inside its row-locking section for
+    // this join link at a time, so the row-lock order beneath it no longer
+    // matters.
+    await lockJoinLinkActions(exec, resolved.rows[0].join_link_id);
+
+    const linkResult = await client.query(
+      `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, expires_at
+       from public.athlete_join_links where id = $1 limit 1 for update`,
+      [resolved.rows[0].join_link_id],
+    );
+    const link = linkResult.rows[0];
+    if (!link) {
+      await client.query("rollback");
+      return genericInvalid();
+    }
+
     const tokenResult = await client.query(
       `select id, athlete_join_application_id, expires_at, consumed_at, revoked_at
        from public.email_verification_tokens
@@ -607,11 +652,27 @@ router.post("/email-verifications/:token/confirm", async (req, res, next) => {
     // applicant_user_id must be null (this purpose is only ever issued for
     // a new-email application - see issueEmailVerificationToken's only
     // caller), and status must still be 'pending' - anything else (already
-    // rejected, cancelled by the closeUnusableJoinLinkApplications sweep,
-    // or somehow already approved) means this token no longer leads
-    // anywhere useful.
-    if (!application || application.applicant_user_id || application.status !== "pending") {
+    // rejected, cancelled, or somehow already approved) means this token no
+    // longer leads anywhere useful.
+    if (!application || String(application.join_link_id) !== String(link.id) || application.applicant_user_id || application.status !== "pending") {
       await client.query("rollback");
+      return genericInvalid();
+    }
+
+    // Re-check the link/context is still real - it may have expired, been
+    // revoked, or its context (archived club/team, private coach who lost
+    // the role) may no longer be valid since this token was issued. Reuses
+    // the exact same cleanup service every other flow uses (sweep/approve/
+    // reject/resend) rather than re-implementing the check here: if the
+    // link is dead, this closes the application (and this token, and any
+    // sibling ones) as 'cancelled' with the password hash cleared, so a
+    // revoked/expired link can never end up with an approvable application
+    // just because its email got confirmed in the same instant. From here
+    // on, every early exit COMMITS rather than rolls back - this cleanup is
+    // a real mutation that must survive.
+    const closed = await closeUnusableJoinLinkApplications(exec, link);
+    if (closed > 0) {
+      await client.query("commit");
       return genericInvalid();
     }
 
@@ -668,6 +729,7 @@ router.post("/email-verifications/resend", async (req, res, next) => {
 
     const client = await pool.connect();
     let verificationToken;
+    let verificationTokenId;
     let verificationExpiresAt;
     let contextLabel;
     let recipientEmail;
@@ -714,6 +776,7 @@ router.post("/email-verifications/resend", async (req, res, next) => {
 
       const issued = await issueEmailVerificationToken(exec, { applicationId: application.id, email: application.email });
       verificationToken = issued.rawToken;
+      verificationTokenId = issued.tokenId;
       verificationExpiresAt = issued.expiresAt;
       contextLabel = link ? await loadJoinLinkContextName(exec, link) : "";
       recipientEmail = application.email;
@@ -731,6 +794,10 @@ router.post("/email-verifications/resend", async (req, res, next) => {
       const verificationUrl = `${resolveAppOrigin(req)}/verify-email?token=${encodeURIComponent(verificationToken)}`;
       try {
         await sendEmailVerification({ to: recipientEmail, verificationUrl, recipientName, contextLabel, expiresAt: verificationExpiresAt });
+        // Only marked sent once the provider call actually succeeded - a
+        // failed send here must never block an immediate retry (the
+        // throttle above is keyed off sent_at, never created_at).
+        await markVerificationTokenSent(query, verificationTokenId);
       } catch (emailError) {
         console.error("Failed to send verification resend email:", emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
       }

@@ -18,6 +18,7 @@ import taxonomyRouter from "./routes/taxonomy.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
+import { assertEmailConfigValid } from "./email.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -93,6 +94,10 @@ app.use((error, _req, res, _next) => {
 
 const isMainModule = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
+  // Refuses to start at all in production if the configured email provider
+  // is missing what it needs (see backend/src/email.js) - a no-op outside
+  // production, so local dev/tests are never affected.
+  assertEmailConfigValid();
   app.listen(port, () => {
     console.log(`Optimove backend listening on http://localhost:${port}`);
   });

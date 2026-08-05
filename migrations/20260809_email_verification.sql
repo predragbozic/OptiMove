@@ -15,11 +15,23 @@ create table if not exists public.email_verification_tokens (
   athlete_join_application_id uuid references public.athlete_join_applications(id) on delete cascade,
   token_hash text not null unique,
   expires_at timestamptz not null,
+  sent_at timestamptz,
   consumed_at timestamptz,
   revoked_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Added after the table already existed on some databases - proof the
+-- underlying email provider call actually succeeded (see
+-- markVerificationTokenSent in backend/src/emailVerification.js), set
+-- exactly once, right after send. Distinct from created_at: a token can be
+-- created (and its row committed) before the send is even attempted, and
+-- the send can fail - the resend throttle (POST
+-- /api/auth/email-verifications/resend) is keyed off sent_at, never
+-- created_at, so a failed send never blocks an immediate retry.
+alter table public.email_verification_tokens
+  add column if not exists sent_at timestamptz;
 
 -- Only one purpose exists in this phase - deliberately a small, explicit
 -- enum (not a free-text column) so a future purpose (e.g. a password-reset

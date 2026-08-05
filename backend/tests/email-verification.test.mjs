@@ -141,13 +141,14 @@ async function resendVerification(email) {
   return api("/api/auth/email-verifications/resend", { method: "POST", body: { email } });
 }
 
-// Pushes the application's most recent verification token's created_at
-// back so resend's 60-second-since-last-send throttle doesn't collide with
-// the token issued by the original apply() call itself, which always
-// happens moments earlier in the same test.
+// Pushes the application's most recent verification token's sent_at back so
+// resend's 60-second-since-last-send throttle (keyed off sent_at, never
+// created_at - see loadLastVerificationTokenSentAt) doesn't collide with the
+// token issued by the original apply() call itself, which always happens
+// moments earlier in the same test.
 async function backdateLastVerificationToken(applicationId, seconds) {
   await query(
-    `update public.email_verification_tokens set created_at = now() - ($2 || ' seconds')::interval
+    `update public.email_verification_tokens set sent_at = now() - ($2 || ' seconds')::interval
      where id = (select id from public.email_verification_tokens where athlete_join_application_id = $1 order by created_at desc limit 1)`,
     [applicationId, String(seconds)],
   );
@@ -173,13 +174,15 @@ test("1. a brand-new-email apply creates only a pending application (no user/ath
   const { link, applicationId, applied } = await makeCoachLinkAndApply();
   assert.equal(applied.status, 201);
   assert.ok(applied.body.devVerificationToken, "non-production responses must include the raw verification token for automated tests");
+  assert.equal(applied.body.emailSendFailed, false, "the dev adapter never fails, so this must be false on the golden path");
 
   const row = await query(`select email_verified_at, status from public.athlete_join_applications where id = $1`, [applicationId]);
   assert.equal(row.rows[0].email_verified_at, null);
   assert.equal(row.rows[0].status, "pending");
 
-  const tokenRow = await query(`select id from public.email_verification_tokens where athlete_join_application_id = $1`, [applicationId]);
+  const tokenRow = await query(`select id, sent_at from public.email_verification_tokens where athlete_join_application_id = $1`, [applicationId]);
   assert.equal(tokenRow.rowCount, 1, "exactly one verification token must exist for this application");
+  assert.ok(tokenRow.rows[0].sent_at, "a successfully sent token must have sent_at set");
   void link;
 });
 
@@ -435,6 +438,58 @@ test("13b. even if confirm succeeds in the window before a link's expiry is swep
   assert.equal(row.rows[0].resulting_user_id, null);
 });
 
+// --- 13c/13d/13e: confirm follows the same global join-link lock order as
+// revoke/reject, so it can never deadlock against them, and a revoked/
+// expired/rejected link never ends up with an approvable application ---
+
+test("13c. confirm racing a link revoke never deadlocks/500s, and the application ends cancelled either way", async () => {
+  const coach = await makePrivateCoach(`ev-race-revoke-coach-${Date.now()}@test.local`);
+  const token = await createSession(coach.id);
+  const created = await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 });
+  const rawToken = extractToken(created.body.joinUrl);
+  const applied = await applyNew(rawToken);
+  const applicationId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+
+  const [confirmResult, revokeResult] = await Promise.all([
+    confirmEmail(applied.body.devVerificationToken),
+    api(`${linksEndpoint()}/${created.body.link.id}`, { method: "DELETE", cookie: cookieFor(token) }),
+  ]);
+  assert.ok([200, 404].includes(confirmResult.status), "confirm must never 500, regardless of who wins the race");
+  assert.equal(revokeResult.status, 200);
+
+  const row = await query(`select status, email_verified_at, resulting_user_id from public.athlete_join_applications where id = $1`, [applicationId]);
+  assert.equal(row.rows[0].status, "cancelled", "a revoked link must never leave behind a still-pending, approvable application");
+  assert.equal(row.rows[0].resulting_user_id, null);
+});
+
+test("13d. confirm racing an application reject never deadlocks/500s, and the application ends rejected either way", async () => {
+  const { coachCookie, applicationId, applied } = await makeCoachLinkAndApply();
+
+  const [confirmResult, rejectResult] = await Promise.all([confirmEmail(applied.body.devVerificationToken), api(`/api/organization/athlete-join-applications/${applicationId}/reject`, { method: "POST", cookie: coachCookie })]);
+  assert.ok([200, 404].includes(confirmResult.status), "confirm must never 500, regardless of who wins the race");
+  assert.equal(rejectResult.status, 200);
+
+  const row = await query(`select status, resulting_user_id from public.athlete_join_applications where id = $1`, [applicationId]);
+  assert.equal(row.rows[0].status, "rejected", "a rejected application must never end up approvable, even if confirm also ran");
+  assert.equal(row.rows[0].resulting_user_id, null);
+});
+
+test("13e. two parallel confirms against an already-expired link never deadlock/500, and the sweep leaves the application cancelled", async () => {
+  const { applicationId, applied, link } = await makeCoachLinkAndApply();
+  await query(`update public.athlete_join_links set expires_at = now() - interval '1 hour' where id = $1`, [link.id]);
+
+  const [first, second] = await Promise.all([confirmEmail(applied.body.devVerificationToken), confirmEmail(applied.body.devVerificationToken)]);
+  assert.ok([200, 404].includes(first.status));
+  assert.ok([200, 404].includes(second.status));
+  assert.notEqual(first.status, 200, "an already-expired link's sweep must fire before any confirm can succeed");
+  assert.notEqual(second.status, 200);
+
+  const row = await query(`select status, email_verified_at, password_hash from public.athlete_join_applications where id = $1`, [applicationId]);
+  assert.equal(row.rows[0].status, "cancelled");
+  assert.equal(row.rows[0].email_verified_at, null);
+  assert.equal(row.rows[0].password_hash, null);
+});
+
 // --- 14: email provider failure never creates duplicate applications ---
 
 test("14. a failing email provider still leaves exactly one usable application, and a resubmission hits the existing duplicate guard", async () => {
@@ -462,6 +517,7 @@ test("14. a failing email provider still leaves exactly one usable application, 
   // and must never surface as a failed apply.
   assert.equal(applied.status, 201);
   assert.ok(applied.body.statusToken);
+  assert.equal(applied.body.emailSendFailed, true, "the client must be told the confirmation email specifically could not be sent");
 
   const count = await query(`select count(*) from public.athlete_join_applications where join_link_id = $1 and lower(email) = lower($2)`, [created.body.link.id, email]);
   assert.equal(Number(count.rows[0].count), 1);
@@ -470,6 +526,46 @@ test("14. a failing email provider still leaves exactly one usable application, 
   assert.equal(retry.status, 409, "a resubmission for the same email must hit the existing duplicate-pending guard, never create a second row");
   const countAfter = await query(`select count(*) from public.athlete_join_applications where join_link_id = $1 and lower(email) = lower($2)`, [created.body.link.id, email]);
   assert.equal(Number(countAfter.rows[0].count), 1);
+
+  // sent_at must never have been set for the failed token - the resend
+  // throttle is keyed off sent_at, never created_at, so this proves an
+  // immediate resend is not blocked.
+  const applicationId = (await query(`select id from public.athlete_join_applications where join_link_id = $1 and lower(email) = lower($2)`, [created.body.link.id, email])).rows[0].id;
+  const tokenRow = await query(`select sent_at from public.email_verification_tokens where athlete_join_application_id = $1`, [applicationId]);
+  assert.equal(tokenRow.rows[0].sent_at, null, "a token whose send failed must never be marked sent");
+});
+
+test("14b. immediately after a failed send, resend is not throttled and succeeds on its own next attempt", async () => {
+  const coach = await makePrivateCoach(`ev-providerfail-resend-coach-${Date.now()}@test.local`);
+  const token = await createSession(coach.id);
+  const created = await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 });
+  const rawToken = extractToken(created.body.joinUrl);
+  const email = `ev-providerfail-resend-applicant-${Date.now()}@test.local`;
+
+  const originalProvider = process.env.EMAIL_PROVIDER;
+  const originalKey = process.env.RESEND_API_KEY;
+  process.env.EMAIL_PROVIDER = "resend";
+  delete process.env.RESEND_API_KEY;
+  let applied;
+  try {
+    applied = await applyNew(rawToken, { email });
+  } finally {
+    if (originalProvider === undefined) delete process.env.EMAIL_PROVIDER;
+    else process.env.EMAIL_PROVIDER = originalProvider;
+    if (originalKey !== undefined) process.env.RESEND_API_KEY = originalKey;
+  }
+  assert.equal(applied.status, 201);
+  assert.equal(applied.body.emailSendFailed, true);
+
+  // Resend immediately (no backdating) - must succeed on the dev adapter
+  // (which never fails) since sent_at was never set for the prior, failed
+  // attempt, so the 60-second-since-last-send throttle never engaged.
+  const resend = await resendVerification(email);
+  assert.equal(resend.status, 200);
+  assert.ok(resend.body.devVerificationToken, "the immediate resend must not be throttled by a send that never actually succeeded");
+
+  const confirm = await confirmEmail(resend.body.devVerificationToken);
+  assert.equal(confirm.status, 200);
 });
 
 // --- Extra: resend never reveals whether an email/application exists ---
@@ -489,6 +585,79 @@ test("15. resend returns the exact same response for a real pending application 
   const { devVerificationToken: _a, ...knownRest } = knownResult.body;
   const { devVerificationToken: _b, ...unknownRest } = unknownResult.body;
   assert.deepEqual(knownRest, unknownRest);
+});
+
+// --- 17: raw verification token/URL must never be logged ---
+
+test("17. the raw verification token and verification URL never appear in console output for apply, confirm, or resend", async () => {
+  const originalLog = console.log;
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const captured = [];
+  const capture = (...args) => {
+    captured.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+  };
+  console.log = capture;
+  console.error = capture;
+  console.warn = capture;
+
+  let applied;
+  let resend;
+  try {
+    const coach = await makePrivateCoach(`ev-nolog-coach-${Date.now()}@test.local`);
+    const token = await createSession(coach.id);
+    const created = await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 });
+    const rawToken = extractToken(created.body.joinUrl);
+    applied = await applyNew(rawToken);
+    const applicationId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+    await backdateLastVerificationToken(applicationId, 120);
+    const email = (await query(`select email from public.athlete_join_applications where id = $1`, [applicationId])).rows[0].email;
+    resend = await resendVerification(email);
+    await confirmEmail(resend.body.devVerificationToken);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    console.warn = originalWarn;
+  }
+
+  assert.equal(applied.status, 201);
+  assert.equal(resend.status, 200);
+  const rawTokens = [applied.body.devVerificationToken, resend.body.devVerificationToken].filter(Boolean);
+  assert.ok(rawTokens.length >= 2);
+  for (const line of captured) {
+    for (const rawToken of rawTokens) {
+      assert.ok(!line.includes(rawToken), `captured console output must never contain a raw verification token, but found it in: ${line}`);
+    }
+    assert.ok(!line.includes("/verify-email?token="), `captured console output must never contain a verification URL, but found it in: ${line}`);
+  }
+});
+
+// --- 18: resend keeps its generic response even when the underlying send itself fails ---
+
+test("18. resend still returns its generic success response even when the provider send fails", async () => {
+  const { applicationId, applied } = await makeCoachLinkAndApply();
+  const email = (await query(`select email from public.athlete_join_applications where id = $1`, [applicationId])).rows[0].email;
+  await backdateLastVerificationToken(applicationId, 120);
+  void applied;
+
+  const originalProvider = process.env.EMAIL_PROVIDER;
+  const originalKey = process.env.RESEND_API_KEY;
+  process.env.EMAIL_PROVIDER = "resend";
+  delete process.env.RESEND_API_KEY;
+  let resend;
+  try {
+    resend = await resendVerification(email);
+  } finally {
+    if (originalProvider === undefined) delete process.env.EMAIL_PROVIDER;
+    else process.env.EMAIL_PROVIDER = originalProvider;
+    if (originalKey !== undefined) process.env.RESEND_API_KEY = originalKey;
+  }
+
+  assert.equal(resend.status, 200, "a failed provider send must never surface as a distinguishable error from resend");
+  assert.equal(resend.body.message, "If a pending request needs email verification, a new link has been sent.");
+
+  const tokenRow = await query(`select sent_at from public.email_verification_tokens where athlete_join_application_id = $1 order by created_at desc limit 1`, [applicationId]);
+  assert.equal(tokenRow.rows[0].sent_at, null, "the newly issued token must not be marked sent since the provider call failed");
 });
 
 // --- Migration idempotency ---

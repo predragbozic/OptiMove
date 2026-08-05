@@ -55,25 +55,44 @@ export async function revokeActiveEmailVerificationTokensForJoinLink(executor, j
 // verification token is never minted any other way. Must be called with
 // `executor` bound to a transaction that already holds
 // lockJoinLinkActions for this application's join link - both callers do.
+// Returns the new row's id (tokenId) so the caller can mark it `sent` -
+// separately, via markVerificationTokenSent, AFTER the transaction commits
+// and the actual provider call succeeds (never inside this transaction -
+// a network call must never hold a DB lock, and issuance must survive even
+// when sending fails).
 export async function issueEmailVerificationToken(executor, { applicationId, email }) {
   await revokeActiveEmailVerificationTokens(executor, applicationId);
   const rawToken = crypto.randomBytes(32).toString("base64url");
   const tokenHash = hashVerificationToken(rawToken);
   const expiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS);
-  await executor(
+  const inserted = await executor(
     `insert into public.email_verification_tokens (email, purpose, athlete_join_application_id, token_hash, expires_at)
-     values (lower($1), 'athlete_join_application', $2, $3, $4)`,
+     values (lower($1), 'athlete_join_application', $2, $3, $4)
+     returning id`,
     [email, applicationId, tokenHash, expiresAt],
   );
-  return { rawToken, expiresAt };
+  return { rawToken, expiresAt, tokenId: inserted.rows[0].id };
 }
 
+// Called once, right after sendEmailVerification's provider call actually
+// succeeds - never inside the transaction that inserted the token (see
+// issueEmailVerificationToken). A token that was created but never
+// successfully sent (provider failure) is NOT "sent", so it must never
+// count toward the resend throttle below - see loadLastVerificationTokenSentAt.
+export async function markVerificationTokenSent(executor, tokenId) {
+  await executor(`update public.email_verification_tokens set sent_at = now(), updated_at = now() where id = $1`, [tokenId]);
+}
+
+// Deliberately keyed off sent_at, NOT created_at - a token that was created
+// but whose send attempt failed was never actually delivered, so it must
+// never block an immediate retry (see resentTooSoon's caller in POST
+// /api/auth/email-verifications/resend).
 export async function loadLastVerificationTokenSentAt(executor, applicationId) {
   const result = await executor(
-    `select created_at from public.email_verification_tokens where athlete_join_application_id = $1 order by created_at desc limit 1`,
+    `select max(sent_at) as last_sent_at from public.email_verification_tokens where athlete_join_application_id = $1 and sent_at is not null`,
     [applicationId],
   );
-  return result.rows[0]?.created_at || null;
+  return result.rows[0]?.last_sent_at || null;
 }
 
 const RESEND_MIN_INTERVAL_MS = 60 * 1000;
