@@ -12,7 +12,21 @@ import {
 import { accessScope, publicRole } from "../access.js";
 import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelection } from "../workspace.js";
 import { closeOtherOpenInvitesForAthlete, loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
-import { loadJoinLinkContextName, loadUsableJoinLink, lockJoinLinkActions } from "../joinLinkContext.js";
+import { closeUnusableJoinLinkApplications, loadJoinLinkContextName, loadUsableJoinLink, lockJoinLinkActions } from "../joinLinkContext.js";
+import { resolveAppOrigin } from "../appOrigin.js";
+import { EmailConfigError, EmailSendError, sendEmailVerification } from "../email.js";
+import {
+  allowResendAttemptForIp,
+  hashVerificationToken,
+  issueEmailVerificationToken,
+  loadLastVerificationTokenSentAt,
+  markVerificationTokenSent,
+  requestIp,
+  resentTooSoon,
+  revokeActiveEmailVerificationTokens,
+} from "../emailVerification.js";
+
+const isProduction = process.env.NODE_ENV === "production";
 
 const router = Router();
 
@@ -374,10 +388,18 @@ router.get("/join-links/:token", async (req, res, next) => {
 
 // Public, unauthenticated submission for someone with no existing account.
 // Never creates a user/athlete row here - only a pending application with a
-// freshly hashed password, decided later by POST
-// /organization/athlete-join-applications/:id/approve.
+// freshly hashed password, and now a pending email-verification requirement
+// (see backend/src/emailVerification.js) - the application can never be
+// approved (POST /organization/athlete-join-applications/:id/approve) until
+// the applicant clicks the link this sends them.
 router.post("/join-links/:token/apply", async (req, res, next) => {
   const client = await pool.connect();
+  let insertedApplicationId;
+  let verificationToken;
+  let verificationTokenId;
+  let verificationExpiresAt;
+  let contextLabel;
+  let rawStatusToken;
   try {
     const firstName = String(req.body?.firstName || "").trim();
     const lastName = String(req.body?.lastName || "").trim();
@@ -413,14 +435,16 @@ router.post("/join-links/:token/apply", async (req, res, next) => {
       return res.status(409).json({ error: "An account with this email already exists. Log in, then submit this request from your account.", requiresLogin: true });
     }
 
-    const rawStatusToken = crypto.randomBytes(24).toString("base64url");
-    const statusTokenHash = hashInviteToken(rawStatusToken);
+    const rawStatusToken2 = crypto.randomBytes(24).toString("base64url");
+    const statusTokenHash = hashInviteToken(rawStatusToken2);
     const displayName = [firstName, lastName].filter(Boolean).join(" ") || email;
+    let inserted;
     try {
-      await client.query(
+      inserted = await client.query(
         `insert into public.athlete_join_applications
            (join_link_id, applicant_user_id, email, first_name, last_name, display_name, password_hash, status, status_token_hash)
-         values ($1, null, $2, $3, $4, $5, $6, 'pending', $7)`,
+         values ($1, null, $2, $3, $4, $5, $6, 'pending', $7)
+         returning id`,
         [link.id, email, firstName, lastName, displayName, hashPassword(password), statusTokenHash],
       );
     } catch (insertError) {
@@ -435,18 +459,76 @@ router.post("/join-links/:token/apply", async (req, res, next) => {
       }
       throw insertError;
     }
+    insertedApplicationId = inserted.rows[0].id;
+    rawStatusToken = rawStatusToken2;
+
+    const issued = await issueEmailVerificationToken(exec, { applicationId: insertedApplicationId, email });
+    verificationToken = issued.rawToken;
+    verificationTokenId = issued.tokenId;
+    verificationExpiresAt = issued.expiresAt;
+    contextLabel = await loadJoinLinkContextName(exec, link);
+
+    // Commit BEFORE attempting to send anything - the application (and its
+    // hashed, still-unsent verification token) must survive an email
+    // provider hiccup. If sending below throws, the row is already safely
+    // persisted in a state POST .../email-verifications/resend can retry
+    // from - never a duplicate application, never a lost one.
     await client.query("commit");
-    res.status(201).json({ ok: true, statusToken: rawStatusToken });
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    next(error);
+    return next(error);
   } finally {
     client.release();
   }
+
+  const verificationUrl = `${resolveAppOrigin(req)}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+  let emailSendFailed = false;
+  try {
+    await sendEmailVerification({
+      to: req.body?.email ? String(req.body.email).trim().toLowerCase() : "",
+      verificationUrl,
+      recipientName: String(req.body?.firstName || "").trim(),
+      contextLabel,
+      expiresAt: verificationExpiresAt,
+    });
+    // Only marked sent once the provider call actually succeeded - the
+    // resend throttle (POST .../email-verifications/resend) is keyed off
+    // this, never off when the token was merely created, so a failed send
+    // here never blocks an immediate retry.
+    await markVerificationTokenSent(query, verificationTokenId);
+  } catch (emailError) {
+    emailSendFailed = true;
+    // Never leaked to the client as the provider's own error text - the
+    // request still succeeded from the applicant's point of view (their
+    // application exists and can be resent); only a sanitized reason class
+    // is logged, never the verification link/token and never a raw
+    // provider error object.
+    console.error(`Failed to send verification email for application ${insertedApplicationId}:`, emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
+  }
+
+  const responseBody = { ok: true, statusToken: rawStatusToken, emailSendFailed };
+  if (!isProduction) {
+    // Automated tests and local development need the raw token to drive the
+    // confirm flow without a real inbox - never included in a production
+    // response or in any log line.
+    responseBody.devVerificationToken = verificationToken;
+  }
+  res.status(201).json(responseBody);
 });
 
 // Authenticated counterpart to /apply: proves ownership of the account via
 // session rather than a typed email, and never carries or stores a password.
+//
+// Deliberately never sends (or requires) an email-verification token: this
+// endpoint only runs for a session already authenticated via
+// POST /api/auth/login against that account's own existing password -
+// logging in with a correct password for that email IS itself proof of
+// control over the account (and, transitively, its email), which is exactly
+// what an email-verification link would otherwise be establishing. Sending
+// a redundant verification email here would add friction without adding
+// any real assurance. See emailVerification.js's header comment for the
+// same decision from the other side, and test "apply-existing does not
+// require or create an email verification token" below.
 router.post("/join-links/:token/apply-existing", async (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: "Log in first, then submit this request from your account." });
   const client = await pool.connect();
@@ -490,6 +572,242 @@ router.post("/join-links/:token/apply-existing", async (req, res, next) => {
     next(error);
   } finally {
     client.release();
+  }
+});
+
+// Confirms email ownership for a brand-new-email join application. Never
+// creates a user/athlete row and never approves anything by itself - it
+// only unlocks the application for a reviewer to later approve (see POST
+// /organization/athlete-join-applications/:id/approve's EMAIL_NOT_VERIFIED
+// check). Every invalid variant (unknown token, expired, already consumed,
+// revoked, or an application that is no longer pending for any other
+// reason) returns the exact same generic message, so a token can never be
+// used to probe why it stopped working.
+router.post("/email-verifications/:token/confirm", async (req, res, next) => {
+  const client = await pool.connect();
+  const genericInvalid = () => res.status(404).json({ error: "This verification link is invalid or has expired." });
+  try {
+    const tokenHash = hashVerificationToken(req.params.token);
+
+    // Read-only resolve, purely to get the join_link_id lock key - mirrors
+    // every other join-link mutation's "resolve without mutation, then
+    // lock, then re-check" pattern. Never trusted past this point; the
+    // token/application/link rows are all re-loaded FOR UPDATE below.
+    const resolved = await query(
+      `select a.join_link_id
+       from public.email_verification_tokens t
+       join public.athlete_join_applications a on a.id = t.athlete_join_application_id
+       where t.token_hash = $1 and t.purpose = 'athlete_join_application'
+       limit 1`,
+      [tokenHash],
+    );
+    if (!resolved.rows[0]) return genericInvalid();
+
+    await client.query("begin");
+    const exec = (text, params) => client.query(text, params);
+    // Same per-join-link lock every other mutation (apply/apply-existing/
+    // regenerate/revoke/approve/reject) already acquires FIRST, before
+    // touching anything else. This is what actually prevents a deadlock
+    // against revoke/reject: those close out an application (locking its
+    // row) and then revoke its verification token (locking the token row) -
+    // the exact reverse order this handler used to lock in. Two
+    // transactions taking row locks in opposite orders is a classic
+    // deadlock; serializing both through this same advisory lock first
+    // means only one of them is ever inside its row-locking section for
+    // this join link at a time, so the row-lock order beneath it no longer
+    // matters.
+    await lockJoinLinkActions(exec, resolved.rows[0].join_link_id);
+
+    const linkResult = await client.query(
+      `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, expires_at
+       from public.athlete_join_links where id = $1 limit 1 for update`,
+      [resolved.rows[0].join_link_id],
+    );
+    const link = linkResult.rows[0];
+    if (!link) {
+      await client.query("rollback");
+      return genericInvalid();
+    }
+
+    const tokenResult = await client.query(
+      `select id, athlete_join_application_id, expires_at, consumed_at, revoked_at
+       from public.email_verification_tokens
+       where token_hash = $1 and purpose = 'athlete_join_application'
+       limit 1
+       for update`,
+      [tokenHash],
+    );
+    const tokenRow = tokenResult.rows[0];
+    if (!tokenRow || tokenRow.consumed_at || tokenRow.revoked_at || new Date(tokenRow.expires_at) <= new Date()) {
+      await client.query("rollback");
+      return genericInvalid();
+    }
+
+    const appResult = await client.query(
+      `select id, join_link_id, applicant_user_id, email, status
+       from public.athlete_join_applications where id = $1 limit 1 for update`,
+      [tokenRow.athlete_join_application_id],
+    );
+    const application = appResult.rows[0];
+    // applicant_user_id must be null (this purpose is only ever issued for
+    // a new-email application - see issueEmailVerificationToken's only
+    // caller), and status must still be 'pending' - anything else (already
+    // rejected, cancelled, or somehow already approved) means this token no
+    // longer leads anywhere useful.
+    if (!application || String(application.join_link_id) !== String(link.id) || application.applicant_user_id || application.status !== "pending") {
+      await client.query("rollback");
+      return genericInvalid();
+    }
+
+    // Re-check the link/context is still real - it may have expired, been
+    // revoked, or its context (archived club/team, private coach who lost
+    // the role) may no longer be valid since this token was issued. Reuses
+    // the exact same cleanup service every other flow uses (sweep/approve/
+    // reject/resend) rather than re-implementing the check here: if the
+    // link is dead, this closes the application (and this token, and any
+    // sibling ones) as 'cancelled' with the password hash cleared, so a
+    // revoked/expired link can never end up with an approvable application
+    // just because its email got confirmed in the same instant. From here
+    // on, every early exit COMMITS rather than rolls back - this cleanup is
+    // a real mutation that must survive.
+    const closed = await closeUnusableJoinLinkApplications(exec, link);
+    if (closed > 0) {
+      await client.query("commit");
+      return genericInvalid();
+    }
+
+    // Re-check the email hasn't been claimed by a real account since this
+    // application was submitted - mirrors the same race handled at approval
+    // time (see POST .../approve). Confirming control of the inbox is not
+    // itself proof this exact email is still free to create a new account
+    // with.
+    const emailOwner = await client.query(`select id from public.users where lower(email) = lower($1) limit 1`, [application.email]);
+    if (emailOwner.rows[0]) {
+      await client.query(
+        `update public.athlete_join_applications set status = 'requires_login', password_hash = null, updated_at = now() where id = $1`,
+        [application.id],
+      );
+      await client.query(`update public.email_verification_tokens set revoked_at = now(), updated_at = now() where id = $1`, [tokenRow.id]);
+      await client.query("commit");
+      return res.status(409).json({ error: "EMAIL_NOW_EXISTS_REQUIRES_LOGIN" });
+    }
+
+    await client.query(`update public.athlete_join_applications set email_verified_at = now(), updated_at = now() where id = $1`, [application.id]);
+    await client.query(`update public.email_verification_tokens set consumed_at = now(), updated_at = now() where id = $1`, [tokenRow.id]);
+    await client.query("commit");
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+// Resends a verification email for a pending, not-yet-verified, brand-new-
+// email application. ALWAYS returns the exact same generic response
+// regardless of what actually happened (no matching application, already
+// verified/reviewed, rate-limited) - this endpoint must never be usable to
+// probe whether a given email has a pending request at all.
+router.post("/email-verifications/resend", async (req, res, next) => {
+  const genericResponse = () => res.json({ ok: true, message: "If a pending request needs email verification, a new link has been sent." });
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return genericResponse();
+
+    const ip = requestIp(req);
+    if (!allowResendAttemptForIp(ip)) return genericResponse();
+
+    const candidate = await query(
+      `select id, join_link_id from public.athlete_join_applications
+       where lower(email) = $1 and applicant_user_id is null and status = 'pending'
+       order by submitted_at desc
+       limit 1`,
+      [email],
+    );
+    if (!candidate.rows[0]) return genericResponse();
+
+    const client = await pool.connect();
+    let verificationToken;
+    let verificationTokenId;
+    let verificationExpiresAt;
+    let contextLabel;
+    let recipientEmail;
+    let recipientName;
+    let shouldSend = false;
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockJoinLinkActions(exec, candidate.rows[0].join_link_id);
+
+      const appResult = await client.query(
+        `select id, join_link_id, email, first_name, last_name, display_name, applicant_user_id, status
+         from public.athlete_join_applications where id = $1 limit 1 for update`,
+        [candidate.rows[0].id],
+      );
+      const application = appResult.rows[0];
+      if (!application || application.applicant_user_id || application.status !== "pending") {
+        await client.query("commit");
+        return genericResponse();
+      }
+
+      const linkResult = await client.query(
+        `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, expires_at
+         from public.athlete_join_links where id = $1 limit 1 for update`,
+        [application.join_link_id],
+      );
+      const link = linkResult.rows[0];
+      // Same opportunistic cleanup every other authenticated/management flow
+      // performs - a dead link (expired/revoked/archived context) must never
+      // let a resend through, and this also closes the application + clears
+      // its password hash if that's what just happened.
+      if (link) await closeUnusableJoinLinkApplications(exec, link);
+      const recheck = await client.query(`select status from public.athlete_join_applications where id = $1`, [application.id]);
+      if (!recheck.rows[0] || recheck.rows[0].status !== "pending") {
+        await client.query("commit");
+        return genericResponse();
+      }
+
+      const lastSentAt = await loadLastVerificationTokenSentAt(exec, application.id);
+      if (resentTooSoon(lastSentAt)) {
+        await client.query("commit");
+        return genericResponse();
+      }
+
+      const issued = await issueEmailVerificationToken(exec, { applicationId: application.id, email: application.email });
+      verificationToken = issued.rawToken;
+      verificationTokenId = issued.tokenId;
+      verificationExpiresAt = issued.expiresAt;
+      contextLabel = link ? await loadJoinLinkContextName(exec, link) : "";
+      recipientEmail = application.email;
+      recipientName = application.first_name || application.display_name || "";
+      shouldSend = true;
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    if (shouldSend) {
+      const verificationUrl = `${resolveAppOrigin(req)}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+      try {
+        await sendEmailVerification({ to: recipientEmail, verificationUrl, recipientName, contextLabel, expiresAt: verificationExpiresAt });
+        // Only marked sent once the provider call actually succeeded - a
+        // failed send here must never block an immediate retry (the
+        // throttle above is keyed off sent_at, never created_at).
+        await markVerificationTokenSent(query, verificationTokenId);
+      } catch (emailError) {
+        console.error("Failed to send verification resend email:", emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
+      }
+      if (!isProduction) {
+        return res.json({ ok: true, message: "If a pending request needs email verification, a new link has been sent.", devVerificationToken: verificationToken });
+      }
+    }
+    return genericResponse();
+  } catch (error) {
+    next(error);
   }
 });
 

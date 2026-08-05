@@ -140,6 +140,18 @@ async function trackLink(created) {
   return created;
 }
 
+// feature/email-verification-foundation: every new-email apply() response
+// now includes a devVerificationToken (non-production only - see
+// backend/src/routes/auth.js) that must be confirmed via this endpoint
+// before the resulting application can ever be approved. Existing tests
+// below that approve a new-email application now call this first - the
+// email-verification-specific behavior itself (expiry, reuse, races,
+// resend, EMAIL_NOT_VERIFIED gating) is covered separately in
+// backend/tests/email-verification.test.mjs.
+async function confirmEmail(rawVerificationToken) {
+  return api(`/api/auth/email-verifications/${encodeURIComponent(rawVerificationToken)}/confirm`, { method: "POST" });
+}
+
 // --- 1: creation permission matrix ---
 
 test("1a. a private coach can create a private_coach join link", async () => {
@@ -271,6 +283,8 @@ test("3d. a link at max capacity returns the same generic message for new lookup
     body: { firstName: "Full", lastName: "Slot", email: `join-full-applicant-${Date.now()}@test.local`, password: "somepassword123" },
   });
   assert.equal(apply.status, 201);
+  const confirm = await confirmEmail(apply.body.devVerificationToken);
+  assert.equal(confirm.status, 200);
   const approve = await api(`/api/organization/athlete-join-applications/${(await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id}/approve`, { method: "POST", cookie: cookieFor(token) });
   assert.equal(approve.status, 200);
   cleanupUserIds.add(approve.body.userId);
@@ -517,6 +531,8 @@ test("12. approving a new-email application creates exactly one user + athlete, 
 
   const apply = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Approve", lastName: "New", email, password: "somepassword123" } });
   const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+  const confirm = await confirmEmail(apply.body.devVerificationToken);
+  assert.equal(confirm.status, 200);
 
   const approve = await api(`/api/organization/athlete-join-applications/${appId}/approve`, { method: "POST", cookie: cookieFor(token) });
   assert.equal(approve.status, 200);
@@ -596,8 +612,10 @@ test("14. approving a team-context application creates both an active club membe
   const rawToken = extractToken(created.body.joinUrl);
   const email = `join-team-approve-applicant-${Date.now()}@test.local`;
 
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Team", lastName: "Joiner", email, password: "somepassword123" } });
+  const applied = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Team", lastName: "Joiner", email, password: "somepassword123" } });
   const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+  const confirm = await confirmEmail(applied.body.devVerificationToken);
+  assert.equal(confirm.status, 200);
   const approve = await api(`/api/organization/athlete-join-applications/${appId}/approve`, { method: "POST", cookie: cookieFor(coachToken) });
   assert.equal(approve.status, 200);
   cleanupUserIds.add(approve.body.userId);
@@ -640,8 +658,10 @@ test("16. two parallel approve requests for the same application create only one
   const created = await trackLink(await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 }));
   const rawToken = extractToken(created.body.joinUrl);
   const email = `join-parallel-approve-applicant-${Date.now()}@test.local`;
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Parallel", lastName: "Approve", email, password: "somepassword123" } });
+  const applied = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Parallel", lastName: "Approve", email, password: "somepassword123" } });
   const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+  const confirm = await confirmEmail(applied.body.devVerificationToken);
+  assert.equal(confirm.status, 200);
 
   const [first, second] = await Promise.all([
     api(`/api/organization/athlete-join-applications/${appId}/approve`, { method: "POST", cookie: cookieFor(token) }),
@@ -665,8 +685,12 @@ test("17. concurrent approve and revoke: exactly one wins, and a revoked link ne
   const created = await trackLink(await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 }));
   const rawToken = extractToken(created.body.joinUrl);
   const email = `join-approve-revoke-race-applicant-${Date.now()}@test.local`;
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Race", lastName: "Approve", email, password: "somepassword123" } });
+  const applied = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Race", lastName: "Approve", email, password: "somepassword123" } });
   const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+  // Verify email up front so the race below is genuinely between approve
+  // and revoke - not just an immediate, uninteresting EMAIL_NOT_VERIFIED.
+  const confirm = await confirmEmail(applied.body.devVerificationToken);
+  assert.equal(confirm.status, 200);
 
   const [approveRes, revokeRes] = await Promise.all([
     api(`/api/organization/athlete-join-applications/${appId}/approve`, { method: "POST", cookie: cookieFor(token) }),
@@ -693,8 +717,10 @@ test("18. max_uses = 1 under concurrent approvals never approves more than one a
   const rawToken = extractToken(created.body.joinUrl);
   const emailA = `join-maxuses-a-${Date.now()}@test.local`;
   const emailB = `join-maxuses-b-${Date.now()}@test.local`;
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Max", lastName: "A", email: emailA, password: "somepassword123" } });
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Max", lastName: "B", email: emailB, password: "somepassword456" } });
+  const appliedA = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Max", lastName: "A", email: emailA, password: "somepassword123" } });
+  const appliedB = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Max", lastName: "B", email: emailB, password: "somepassword456" } });
+  assert.equal((await confirmEmail(appliedA.body.devVerificationToken)).status, 200);
+  assert.equal((await confirmEmail(appliedB.body.devVerificationToken)).status, 200);
   const rows = await query(`select id from public.athlete_join_applications where join_link_id = $1 order by submitted_at`, [created.body.link.id]);
   const [appIdA, appIdB] = rows.rows.map((r) => r.id);
 
@@ -720,8 +746,12 @@ test("19. approving a new-email application whose email now belongs to a real ac
   const created = await trackLink(await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 }));
   const rawToken = extractToken(created.body.joinUrl);
   const email = `join-email-race-applicant-${Date.now()}@test.local`;
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Race", lastName: "Email", email, password: "somepassword123" } });
+  const applied = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Race", lastName: "Email", email, password: "somepassword123" } });
   const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+  // Verified BEFORE the racer below claims the email, so this exercises the
+  // approve-time race specifically, not the confirm-time one (already
+  // covered by email-verification.test.mjs test 11).
+  assert.equal((await confirmEmail(applied.body.devVerificationToken)).status, 200);
 
   // Someone else claims this exact email via a normal account creation in the
   // meantime.
@@ -839,8 +869,9 @@ test("23. a DIFFERENT current club admin of the same club can approve/reject a p
   const created = await trackLink(await createLink(cookieFor(creatorToken), { contextType: "club", contextId: club, expiresInDays: 5 }));
   const rawToken = extractToken(created.body.joinUrl);
   const email = `join-shared-applicant-${Date.now()}@test.local`;
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Shared", lastName: "Review", email, password: "somepassword123" } });
+  const applied = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Shared", lastName: "Review", email, password: "somepassword123" } });
   const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+  assert.equal((await confirmEmail(applied.body.devVerificationToken)).status, 200);
 
   const approve = await api(`/api/organization/athlete-join-applications/${appId}/approve`, { method: "POST", cookie: cookieFor(otherToken) });
   assert.equal(approve.status, 200, "any current club_admin of this club may review it, not only the original creator");
@@ -928,8 +959,10 @@ test("26. two concurrent approvals of two DIFFERENT brand-new applicants on the 
   const rawToken = extractToken(created.body.joinUrl);
   const emailA = `join-hardening-newid-a-${Date.now()}@test.local`;
   const emailB = `join-hardening-newid-b-${Date.now()}@test.local`;
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "New", lastName: "IdA", email: emailA, password: "somepassword123" } });
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "New", lastName: "IdB", email: emailB, password: "somepassword456" } });
+  const appliedA = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "New", lastName: "IdA", email: emailA, password: "somepassword123" } });
+  const appliedB = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "New", lastName: "IdB", email: emailB, password: "somepassword456" } });
+  assert.equal((await confirmEmail(appliedA.body.devVerificationToken)).status, 200);
+  assert.equal((await confirmEmail(appliedB.body.devVerificationToken)).status, 200);
   const rows = await query(`select id from public.athlete_join_applications where join_link_id = $1 order by submitted_at`, [created.body.link.id]);
   const [appIdA, appIdB] = rows.rows.map((r) => r.id);
 
@@ -1028,8 +1061,9 @@ test("29. an already-terminal (approved) application on a since-expired link is 
   const created = await trackLink(await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 }));
   const rawToken = extractToken(created.body.joinUrl);
   const email = `join-hardening-terminal-applicant-${Date.now()}@test.local`;
-  await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Terminal", lastName: "Approved", email, password: "somepassword123" } });
+  const applied = await api(`/api/auth/join-links/${encodeURIComponent(rawToken)}/apply`, { method: "POST", body: { firstName: "Terminal", lastName: "Approved", email, password: "somepassword123" } });
   const appId = (await query(`select id from public.athlete_join_applications where join_link_id = $1`, [created.body.link.id])).rows[0].id;
+  assert.equal((await confirmEmail(applied.body.devVerificationToken)).status, 200);
   const approve = await api(`/api/organization/athlete-join-applications/${appId}/approve`, { method: "POST", cookie: cookieFor(token) });
   assert.equal(approve.status, 200);
   cleanupUserIds.add(approve.body.userId);

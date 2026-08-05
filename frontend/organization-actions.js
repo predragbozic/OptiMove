@@ -867,6 +867,7 @@ function describeInviteError(error) {
 function describeJoinApplicationError(error) {
   if (error?.message === "JOIN_LINK_FULL") return "This join link has already reached its maximum number of approved members.";
   if (error?.message === "EMAIL_NOW_EXISTS_REQUIRES_LOGIN") return "This request's email now belongs to a real account - the applicant must log in and resubmit before this can be approved.";
+  if (error?.message === "EMAIL_NOT_VERIFIED") return "The applicant has not verified their email yet - this request cannot be approved until they do.";
   return error?.message || "Could not review this request. Please try again.";
 }
 

@@ -23,6 +23,8 @@ import {
   lockApplicantAthleteCreation,
   lockJoinLinkActions,
 } from "../joinLinkContext.js";
+import { resolveAppOrigin } from "../appOrigin.js";
+import { revokeActiveEmailVerificationTokens, revokeActiveEmailVerificationTokensForJoinLink } from "../emailVerification.js";
 
 const router = Router();
 
@@ -256,7 +258,7 @@ async function loadJoinApplicationsForWorkspace(req, activeWorkspace, links) {
   if (!linkIds.length) return [];
   const result = await query(
     `select a.id, a.join_link_id, a.applicant_user_id, a.email, a.first_name, a.last_name, a.display_name,
-            a.status, a.submitted_at, a.reviewed_at, a.rejection_reason
+            a.status, a.submitted_at, a.reviewed_at, a.rejection_reason, a.email_verified_at
      from public.athlete_join_applications a
      where a.join_link_id = any($1::uuid[])
      order by a.submitted_at desc`,
@@ -272,6 +274,12 @@ async function loadJoinApplicationsForWorkspace(req, activeWorkspace, links) {
     submittedAt: row.submitted_at,
     reviewedAt: row.reviewed_at,
     rejectionReason: row.rejection_reason,
+    // An existing-account application (apply-existing) never needs email
+    // verification at all - session-proven ownership already covers it
+    // (see backend/src/routes/auth.js's apply-existing comment) - so it is
+    // always reported verified here regardless of email_verified_at, which
+    // stays null for that row by construction.
+    emailVerified: Boolean(row.applicant_user_id) || Boolean(row.email_verified_at),
   }));
 }
 
@@ -1233,6 +1241,10 @@ router.delete("/athlete-join-links/:linkId", async (req, res, next) => {
          where join_link_id = $2 and status in ('pending', 'requires_login')`,
         [req.user.id, linkId],
       );
+      // Any still-active email-verification token for one of those
+      // just-cancelled applications would otherwise remain a live, clickable
+      // link to nowhere-useful indefinitely.
+      await revokeActiveEmailVerificationTokensForJoinLink(exec, linkId);
       await client.query("commit");
     } catch (error) {
       await client.query("rollback").catch(() => {});
@@ -1338,7 +1350,7 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
       await lockJoinLinkActions(exec, resolved.rows[0].join_link_id);
 
       const linkResult = await client.query(
-        `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, max_uses, approved_uses
+        `select id, context_type, context_id, created_by_user_id, is_active, revoked_at, expires_at, max_uses, approved_uses
          from public.athlete_join_links where id = $1 limit 1 for update`,
         [resolved.rows[0].join_link_id],
       );
@@ -1368,7 +1380,7 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
       await closeUnusableJoinLinkApplications(exec, link);
 
       const appResult = await client.query(
-        `select id, join_link_id, applicant_user_id, email, first_name, last_name, display_name, password_hash, status
+        `select id, join_link_id, applicant_user_id, email, first_name, last_name, display_name, password_hash, status, email_verified_at
          from public.athlete_join_applications where id = $1 limit 1 for update`,
         [applicationId],
       );
@@ -1383,6 +1395,17 @@ router.post("/athlete-join-applications/:applicationId/approve", async (req, res
         // generic response, since neither ever created anything.
         await client.query("commit");
         return res.status(409).json({ error: "This request has already been reviewed." });
+      }
+      // A brand-new-email application (applicant_user_id null) can never be
+      // approved until the applicant has confirmed control of that email
+      // via POST /email-verifications/:token/confirm - the real,
+      // server-side gate (the frontend also disables Approve, but this is
+      // what actually enforces it if that request is sent manually). An
+      // authenticated apply-existing application never needs this - see the
+      // comment on that route in backend/src/routes/auth.js for why.
+      if (!application.applicant_user_id && !application.email_verified_at) {
+        await client.query("commit");
+        return res.status(409).json({ error: "EMAIL_NOT_VERIFIED" });
       }
 
       if (link.max_uses != null && Number(link.approved_uses) >= Number(link.max_uses)) {
@@ -1592,6 +1615,9 @@ router.post("/athlete-join-applications/:applicationId/reject", async (req, res,
          where id = $3`,
         [req.user.id, reason, application.id],
       );
+      // Same reasoning as revoke's cascade - a rejected application's
+      // verification link (if it ever had one) must never remain live.
+      await revokeActiveEmailVerificationTokens(exec, application.id);
       await client.query("commit");
     } catch (error) {
       await client.query("rollback").catch(() => {});
@@ -3220,12 +3246,9 @@ function hashInviteToken(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("base64url");
 }
 
-function appOrigin(req) {
-  const configured = clean(process.env.PUBLIC_APP_URL);
-  if (configured) return configured.replace(/\/$/, "");
-  const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
-  return `${protocol}://${req.get("host")}`;
-}
+// Delegates to the shared backend/src/appOrigin.js so this and auth.js's
+// email-verification links are never derived two different ways.
+const appOrigin = resolveAppOrigin;
 
 function splitName(value) {
   const parts = clean(value).split(/\s+/).filter(Boolean);

@@ -9,6 +9,7 @@
 // permission matrix, a per-entity advisory lock, "resolve without mutation,
 // then lock, then re-check").
 import { canManageTeamById, isPlatformAdministrator } from "./authz.js";
+import { revokeActiveEmailVerificationTokensForJoinLink } from "./emailVerification.js";
 
 export const JOIN_LINK_CONTEXT_TYPES = new Set(["private_coach", "club", "team"]);
 
@@ -186,6 +187,10 @@ export async function closeUnusableJoinLinkApplications(executor, link) {
      where join_link_id = $1 and status in ('pending', 'requires_login')`,
     [link.id],
   );
+  // Any still-active email-verification token for one of the applications
+  // just cancelled above would otherwise remain a live, clickable link to
+  // nowhere-useful indefinitely - see backend/src/emailVerification.js.
+  await revokeActiveEmailVerificationTokensForJoinLink(executor, link.id);
   return result.rowCount;
 }
 

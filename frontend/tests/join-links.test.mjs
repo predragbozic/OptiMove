@@ -205,6 +205,55 @@ test("6b. an error banner in organizationJoinLinks stays visible in the Join lin
   assert.ok(html.includes("Could not revoke this link."));
 });
 
+// --- feature/email-verification-foundation: Approve gating ---
+
+test("6c. a pending new-email application with an unverified email shows a disabled Approve button and an 'Email not verified' label", () => {
+  resetState();
+  state.currentUser = { activeWorkspace: { type: "club", scopeId: "club-1" } };
+  const data = baseData({
+    joinApplications: [
+      { id: "a-unverified", joinLinkId: "l1", email: "unverified@test.local", name: "Unverified Person", accountType: "new", status: "pending", submittedAt: "2026-01-01T00:00:00.000Z", emailVerified: false },
+    ],
+  });
+  const html = renderOrganizationPanelHtml({ currentUser: state.currentUser, data, error: "", role: "club_admin", scope: "FK Partizan" });
+  const row = html.match(/Unverified Person[\s\S]*?<\/article>/)?.[0] || "";
+  assert.ok(row.includes("Email not verified"));
+  const approveButton = row.match(/data-action="organization-join-application-approve"[^>]*/)?.[0] || "";
+  assert.ok(approveButton.includes("disabled"), "Approve must be disabled while the new-email applicant hasn't verified yet");
+  const rejectButton = row.match(/data-action="organization-join-application-reject"[^>]*/)?.[0] || "";
+  assert.ok(!rejectButton.includes("disabled"), "Reject must still be available even while unverified");
+});
+
+test("6d. a pending new-email application with a verified email shows an enabled Approve button and no warning label", () => {
+  resetState();
+  state.currentUser = { activeWorkspace: { type: "club", scopeId: "club-1" } };
+  const data = baseData({
+    joinApplications: [
+      { id: "a-verified", joinLinkId: "l1", email: "verified@test.local", name: "Verified Person", accountType: "new", status: "pending", submittedAt: "2026-01-01T00:00:00.000Z", emailVerified: true },
+    ],
+  });
+  const html = renderOrganizationPanelHtml({ currentUser: state.currentUser, data, error: "", role: "club_admin", scope: "FK Partizan" });
+  const row = html.match(/Verified Person[\s\S]*?<\/article>/)?.[0] || "";
+  assert.ok(!row.includes("Email not verified"));
+  const approveButton = row.match(/data-action="organization-join-application-approve"[^>]*/)?.[0] || "";
+  assert.ok(!approveButton.includes("disabled"), "Approve must be enabled once the email is verified");
+});
+
+test("6e. a pending existing-account application (always reported emailVerified) shows an enabled Approve button", () => {
+  resetState();
+  state.currentUser = { activeWorkspace: { type: "club", scopeId: "club-1" } };
+  const data = baseData({
+    joinApplications: [
+      { id: "a-existing", joinLinkId: "l1", email: "existing@test.local", name: "Existing Person", accountType: "existing", status: "pending", submittedAt: "2026-01-01T00:00:00.000Z", emailVerified: true },
+    ],
+  });
+  const html = renderOrganizationPanelHtml({ currentUser: state.currentUser, data, error: "", role: "club_admin", scope: "FK Partizan" });
+  const row = html.match(/Existing Person[\s\S]*?<\/article>/)?.[0] || "";
+  assert.ok(!row.includes("Email not verified"));
+  const approveButton = row.match(/data-action="organization-join-application-approve"[^>]*/)?.[0] || "";
+  assert.ok(!approveButton.includes("disabled"));
+});
+
 // --- actions: copy ---
 
 test("7. copying a just-created link writes to the clipboard and shows confirmation", async () => {
@@ -332,6 +381,15 @@ test("15. a failed approve (e.g. JOIN_LINK_FULL) surfaces a readable error, not 
   assert.equal(state.organizationJoinLinks.reviewPendingId, "");
   assert.ok(state.organizationJoinLinks.error.length > 0);
   assert.notEqual(state.organizationJoinLinks.error, "JOIN_LINK_FULL");
+});
+
+test("15b. approve blocked with EMAIL_NOT_VERIFIED surfaces a readable error, not the raw code", async () => {
+  resetState();
+  globalThis.window = { confirm: () => true, alert: () => {} };
+  installFetchMock([{ status: 409, body: { error: "EMAIL_NOT_VERIFIED" } }]);
+  await handleOrganizationAction(fakeAction({ action: "organization-join-application-approve", applicationId: "a1" }), noopCallbacks());
+  assert.ok(state.organizationJoinLinks.error.length > 0);
+  assert.notEqual(state.organizationJoinLinks.error, "EMAIL_NOT_VERIFIED");
 });
 
 test("16. reject prompts for an optional reason; cancelling the prompt makes no network call", async () => {

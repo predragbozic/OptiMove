@@ -29,6 +29,9 @@ export const migrationPaths = [
   // Depends on public.athletes from create_access_schema.sql above (reads its
   // existing rows to seed the sequence's starting value).
   path.resolve(__dirname, "../../migrations/20260808_athlete_id_sequence.sql"),
+  // Depends on public.athlete_join_applications from
+  // 20260807_athlete_join_links.sql above (its FK target).
+  path.resolve(__dirname, "../../migrations/20260809_email_verification.sql"),
   path.resolve(__dirname, "../../create_builder_schema.sql"),
   path.resolve(__dirname, "../../create_exercise_user_state.sql"),
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),

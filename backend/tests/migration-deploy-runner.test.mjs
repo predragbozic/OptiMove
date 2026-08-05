@@ -145,3 +145,18 @@ test("the athlete_generated_id_seq migration is registered in the deploy migrati
     assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
   }
 });
+
+test("the email_verification_tokens migration is registered in the deploy migration runner, after 20260807_athlete_join_links.sql", () => {
+  const emailVerificationIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260809_email_verification.sql");
+  assert.notEqual(emailVerificationIndex, -1, "migrationPaths must include the email_verification_tokens migration file");
+
+  const joinLinksIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260807_athlete_join_links.sql");
+  assert.ok(
+    emailVerificationIndex > joinLinksIndex,
+    "the email_verification_tokens migration FKs to public.athlete_join_applications and must run after 20260807_athlete_join_links.sql creates it",
+  );
+
+  for (const migrationPath of migrationPaths) {
+    assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
+  }
+});
