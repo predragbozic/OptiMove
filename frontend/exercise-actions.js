@@ -5,7 +5,7 @@ import { els } from "./dom.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
 import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters } from "./exercise-library.js";
 import { emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
-import { debounce } from "./utils.js";
+import { debounce, escapeHtml } from "./utils.js";
 
 function activeExerciseSelectFilterCount(filters) {
   return EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key) && filters[filter.key]).length;
@@ -13,7 +13,18 @@ function activeExerciseSelectFilterCount(filters) {
 
 export async function loadExercises(handlers) {
   state.navStack = [];
-  await loadExerciseFilterOptions();
+  // /api/exercises/options (filter dropdown data) and the initial
+  // /api/exercises search never depend on each other - the search query is
+  // built purely from state.exerciseSearch.filters (already-selected
+  // values), never from the options list - so both start at once instead of
+  // the options fetch blocking the exercise list. Options failing is
+  // swallowed here (non-critical background refinement, same "silent"
+  // treatment other secondary loads get elsewhere in this app) so it can
+  // never stop the toolbar/list from rendering with whatever's already in
+  // state.exerciseSearch.options.
+  const optionsPromise = loadExerciseFilterOptions().catch(() => {});
+  const searchPromise = searchExercises("", handlers);
+  await optionsPromise;
   const selectFilterCount = activeExerciseSelectFilterCount(state.exerciseSearch.filters);
   els.toolbar.innerHTML = `
     <label class="search-field exercise-search-field">
@@ -44,16 +55,25 @@ export async function loadExercises(handlers) {
       searchExercises(input.value, handlers);
     });
   });
-  await searchExercises(input.value, handlers);
+  await searchPromise;
 }
 
 export async function searchExercises(term, handlers) {
   const query = term.trim();
   state.exerciseSearch.term = query;
   handlers.setLoading(query ? "Searching exercises..." : "Loading exercises...");
-  const data = await api(exerciseSearchUrl(query, state.exerciseSearch.limit, state.exerciseSearch.filters));
-  state.exerciseSearch.hasMore = Boolean(data.hasMore);
-  handlers.renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters));
+  try {
+    const data = await api(exerciseSearchUrl(query, state.exerciseSearch.limit, state.exerciseSearch.filters));
+    state.exerciseSearch.hasMore = Boolean(data.hasMore);
+    handlers.renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters));
+  } catch (error) {
+    // Without this, a failed fetch leaves the "Loading/Searching
+    // exercises..." placeholder from setLoading above on screen forever -
+    // handlers only carries setLoading/renderExercises, neither of which is
+    // an error view, so the error is rendered directly here (same pattern as
+    // app.js's own renderError: a plain .error box, no new UI concept).
+    els.content.innerHTML = `<div class="error">${escapeHtml(error?.message || "Could not load exercises.")}</div>`;
+  }
 }
 
 export async function submitExerciseTagForm(form, handlers) {
