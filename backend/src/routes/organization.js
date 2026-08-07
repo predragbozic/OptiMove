@@ -294,12 +294,18 @@ router.get("/", async (req, res, next) => {
       resolveActiveWorkspace(req.user.id, req.authz),
     ]);
     const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users, accessRequests }, req.user.id);
-    const inviteStatuses = await loadAthleteInviteStatuses(activeWorkspace, scoped.athletes.map((a) => a.id), req.user.id);
+    // Independent of each other - neither reads the other's result - so they
+    // run concurrently instead of back-to-back. loadJoinApplicationsForWorkspace
+    // still has to wait: it needs the actual joinLinks rows (their ids) to
+    // know which applications belong to a link this viewer can see.
+    const [inviteStatuses, joinLinks] = await Promise.all([
+      loadAthleteInviteStatuses(activeWorkspace, scoped.athletes.map((a) => a.id), req.user.id),
+      loadJoinLinksForWorkspace(req, activeWorkspace),
+    ]);
     const athletesWithInviteStatus = scoped.athletes.map((athlete) => {
       const entry = inviteStatuses.get(athlete.id);
       return { ...athlete, inviteStatus: entry?.status || "none", invite: entry?.invite || null };
     });
-    const joinLinks = await loadJoinLinksForWorkspace(req, activeWorkspace);
     const joinApplications = await loadJoinApplicationsForWorkspace(req, activeWorkspace, joinLinks);
     res.json({
       scope: req.user?.role_hint || "coach",

@@ -77,6 +77,8 @@ import {
   renderLibraryNav,
   renderMobileNavState,
   renderRailState,
+  shouldBackgroundRefreshOrganizationForTemplates,
+  shouldFetchOrganizationData,
   templateScopeMeta,
   visibleTemplateScopes,
 } from "./navigation.js";
@@ -449,6 +451,14 @@ async function handleContentSubmit(event) {
         }),
       });
       state.currentUser = data.user;
+      // Defensive, not load-bearing: signOut() always does a hard
+      // window.location.replace("/"), which already resets the entire
+      // `state` module (including organization.data) via a fresh page
+      // load/module re-evaluation before this login form can ever be
+      // submitted again. Cleared explicitly anyway so cached Organization
+      // data can never be attributed to the wrong account, even if that
+      // reload behavior changes later.
+      state.organization.data = null;
       // /login only returns the compatible base user shape - reload the
       // full /me shape (capabilities/activeWorkspace/availableWorkspaces)
       // before deciding which shell to land in below.
@@ -1173,7 +1183,17 @@ async function loadActiveTab() {
   renderLibraryNav();
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();
-  if (state.activeTab === "organization") return renderOrganizationPanel();
+  // Switching between Settings sub-tabs (Overview/Users/Clubs/Teams/Athletes/
+  // Tags & Presets/Join links) keeps state.activeTab === "organization" the
+  // whole time - every one of those clicks routes through here. Reuse
+  // whatever's already cached instead of re-fetching the full
+  // /api/organization payload on every single sub-tab click; a genuine first
+  // entry into Settings this session (state.organization.data still null)
+  // still fetches, since renderOrganizationPanel falls back to `refresh ||
+  // !state.organization.data`. Explicit refreshes (mutations, workspace
+  // switch - see onWorkspaceChanged) call renderOrganizationPanel()/
+  // refreshOrganizationData() directly and are untouched by this.
+  if (state.activeTab === "organization") return renderOrganizationPanel({ refresh: false });
   if (state.activeTab === "coach-home") return loadCoachHome();
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
@@ -1235,8 +1255,17 @@ async function loadPrograms() {
 }
 
 async function loadTemplates(options = {}) {
-  if (state.activeTab === "templates" && state.currentUser?.role !== "athlete") {
-    await refreshOrganizationData({ silent: true });
+  // Program Library's own list (/api/templates) never depends on Organization
+  // data - the only thing here that reads it is the sidebar's "Requests"
+  // badge count (see updateProgramLibraryNavLabels/renderLibraryNav), which
+  // is allowed to be a beat behind. If Organization data is already cached,
+  // use it as-is and skip the fetch entirely. If it isn't (nothing loaded
+  // yet this session), refresh it in the background - never awaited here -
+  // so a slow /api/organization can never delay the template list itself.
+  if (shouldBackgroundRefreshOrganizationForTemplates({ activeTab: state.activeTab, isAthlete: state.currentUser?.role === "athlete", cachedData: state.organization.data })) {
+    void refreshOrganizationData({ silent: true }).then(() => {
+      if (state.activeTab === "templates") renderLibraryNav();
+    });
   }
   return loadTemplatesData(programLibraryDataContext(), options);
 }
@@ -1449,7 +1478,7 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
   els.title.textContent = "Settings";
   els.toolbar.innerHTML = "";
 
-  if (refresh || !state.organization.data) {
+  if (shouldFetchOrganizationData({ forceRefresh: refresh, cachedData: state.organization.data })) {
     setLoading("Loading organization...");
     try {
       state.organization.data = await api("/api/organization");
