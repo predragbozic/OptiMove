@@ -3,6 +3,20 @@ import { renderBuilderExerciseResult } from "./builder-exercises.js";
 import { renderBuilder, renderBuilderSectionItems } from "./builder-view.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
 import { state } from "./state.js";
+import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
+
+const BUILDER_DRAFTS_CACHE_NAMESPACE = "builderDrafts";
+
+// GET /api/builder/drafts is scoped purely to the caller's own account
+// (created_by_user_id) - never workspace-dependent, unlike Coaches/
+// Organization/Program Library/Exercise Library.
+function builderDraftsContextKey() {
+  return buildContextKey([state.currentUser?.id]);
+}
+
+export function invalidateBuilderDraftsCache() {
+  invalidateCacheNamespace(BUILDER_DRAFTS_CACHE_NAMESPACE);
+}
 
 let builderExerciseRequestId = 0;
 
@@ -41,14 +55,28 @@ export async function loadBuilderNodePresets() {
   state.builder.nodePresets = data.presets || [];
 }
 
-export async function loadBuilderDrafts() {
+export async function loadBuilderDrafts({ forceRefresh = false } = {}) {
   if (state.builder.draft) return;
-  state.builder.draftsLoading = true;
-  try {
-    const data = await api("/api/builder/drafts");
-    state.builder.drafts = data.drafts || [];
-  } finally {
-    state.builder.draftsLoading = false;
-  }
-  renderBuilder();
+  await loadCachedView({
+    namespace: BUILDER_DRAFTS_CACHE_NAMESPACE,
+    contextKey: builderDraftsContextKey(),
+    forceRefresh,
+    fetcher: () => api("/api/builder/drafts"),
+    showLoading: () => { state.builder.draftsLoading = true; },
+    applyData: (data) => {
+      state.builder.drafts = data.drafts || [];
+      state.builder.draftsLoading = false;
+      renderBuilder();
+    },
+    applyError: (error) => {
+      // Matches the pre-cache contract exactly: this function never handled
+      // its own errors, letting the caller's own .catch(renderBuilderError)
+      // (see app.js's loadBuilder()) do it - only reached when nothing was
+      // already cached to fall back on (see loadCachedView's keptCache
+      // check), so a background refresh failure never hits this path.
+      state.builder.draftsLoading = false;
+      throw error;
+    },
+    getCurrentContextKey: builderDraftsContextKey,
+  });
 }

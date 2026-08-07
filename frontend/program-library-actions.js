@@ -415,7 +415,10 @@ export async function submitTemplateMetadataForm(form, { loadTemplates }) {
     state.templateFilters.lifecycle = "all";
     state.templatePreview = emptyTemplatePreview();
     state.selectedTemplateId = null;
-    await loadTemplates();
+    // Just changed this template's own metadata - the cached list for the
+    // current scope still has the pre-edit row, so this reload must never
+    // be satisfied from cache.
+    await loadTemplates({ forceRefresh: true });
   } catch (submitError) {
     if (error) error.textContent = submitError.message || "Could not save library settings.";
   } finally {
@@ -514,7 +517,9 @@ export async function submitTemplateReviewForm(form, { loadTemplates, renderTemp
       reviewMessage: "Review saved.",
       reviewError: "",
     };
-    await loadTemplates();
+    // A new review can change this template's rating summary in the list -
+    // never trust the cached pre-review list here.
+    await loadTemplates({ forceRefresh: true });
   } catch (error) {
     state.templatePreview = {
       ...state.templatePreview,

@@ -4,98 +4,128 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// perf/settings-navigation-fast-path: Settings sub-tab switches (Overview/
-// Users/Clubs/Teams/Athletes/Tags & Presets/Join links) must reuse the
-// already-loaded state.organization.data instead of refetching
-// /api/organization on every click, and Program Library must never block its
-// own /api/templates load on a full Organization refresh. Both decisions are
-// pure boolean predicates extracted into navigation.js specifically so they
-// can be exercised here without booting the whole app (app.js runs init()
-// - real DOM/session/network wiring - at import time, so it is deliberately
-// never imported directly by this test suite; see the same convention in
-// every other frontend test file).
-globalThis.document = {
-  querySelector: () => null,
-  querySelectorAll: () => [],
-};
-
-const { shouldBackgroundRefreshOrganizationForTemplates, shouldFetchOrganizationData } = await import("../navigation.js");
-
+// perf/main-navigation-cache: Settings/Organization, Coaches, Program
+// Library, and Exercise Library are all now backed by view-cache.js (see
+// view-cache.test.mjs for the generic cache mechanics, and
+// coaches-view-cache.test.mjs/program-library-view-cache.test.mjs/
+// exercise-library-view-cache.test.mjs for real behavioral coverage of the
+// standalone modules). renderOrganizationPanel/refreshOrganizationData/
+// onWorkspaceChanged/signOut/the login handler all live in app.js, which
+// runs init() - full DOM/session/network wiring - at import time and is
+// deliberately never imported directly by this test suite (same convention
+// as every other frontend test file). These are source-pattern regression
+// guards for that specific glue code: proof the right functions are still
+// called, in the right order, not full behavioral tests.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appJsSource = await readFile(path.resolve(__dirname, "../app.js"), "utf8");
 
-// --- 1-2: first entry into Settings vs. switching between its sub-tabs ---
-
-test("1. a genuine first entry into Settings (no cached data yet) always fetches, regardless of forceRefresh", () => {
-  assert.equal(shouldFetchOrganizationData({ forceRefresh: false, cachedData: null }), true, "loadActiveTab() calls this with forceRefresh:false on every Settings click - only cachedData decides a first-ever entry");
-  assert.equal(shouldFetchOrganizationData({ forceRefresh: true, cachedData: null }), true);
-});
-
-test("2. once Organization data is cached, switching between all Settings sub-tabs makes no additional request", () => {
-  const cachedData = { clubs: [], teams: [], athletes: [], users: [] };
-  // Every one of Overview/Users/Clubs/Teams/Athletes/Tags & Presets/Join
-  // links routes through loadActiveTab() -> renderOrganizationPanel({refresh:
-  // false}) while state.activeTab stays "organization" - this is exactly
-  // that call shape, repeated for every sub-tab.
-  for (const section of ["overview", "users", "clubs", "teams", "athletes", "presets", "joinLinks"]) {
-    assert.equal(
-      shouldFetchOrganizationData({ forceRefresh: false, cachedData }),
-      false,
-      `switching to Settings/${section} must not trigger a fetch once data is already cached`,
-    );
+function functionBody(name) {
+  const marker = `async function ${name}(`;
+  const start = appJsSource.indexOf(marker);
+  if (start < 0) return null;
+  // First scan (paren depth) past the parameter list - which may itself
+  // contain a destructured default object, e.g. `({ refresh = true } = {})`
+  // - to the `{` that actually opens the function BODY, not the parameter
+  // pattern's own brace. Only then start the brace-depth scan for the body.
+  let parenDepth = 0;
+  let i = start + marker.length - 1;
+  for (; i < appJsSource.length; i += 1) {
+    if (appJsSource[i] === "(") parenDepth += 1;
+    else if (appJsSource[i] === ")") {
+      parenDepth -= 1;
+      if (parenDepth === 0) break;
+    }
   }
+  const bodyOpen = appJsSource.indexOf("{", i);
+  let depth = 0;
+  let j = bodyOpen;
+  for (; j < appJsSource.length; j += 1) {
+    if (appJsSource[j] === "{") depth += 1;
+    else if (appJsSource[j] === "}") {
+      depth -= 1;
+      if (depth === 0) return appJsSource.slice(bodyOpen, j + 1);
+    }
+  }
+  return null;
+}
+
+// --- 1-2: renderOrganizationPanel routes through loadCachedView ---
+
+test("1. renderOrganizationPanel still exists and routes /api/organization through loadCachedView, not a raw fetch", () => {
+  const body = functionBody("renderOrganizationPanel");
+  assert.ok(body, "renderOrganizationPanel must still exist in app.js");
+  assert.ok(body.includes("loadCachedView("), "the fetch must go through the shared view cache, not a bare api() call");
+  assert.ok(body.includes('namespace: ORGANIZATION_CACHE_NAMESPACE'), "must use the dedicated organization cache namespace");
+  assert.ok(body.includes("forceRefresh: refresh"), "the existing refresh:true/false parameter must still control whether a fetch is forced");
+  assert.ok(body.includes("getCurrentContextKey"), "must pass a race guard so a late response for an abandoned workspace/account is never applied");
 });
 
-test("3. an explicit refresh (workspace switch, post-mutation) still forces a real fetch even when data is cached", () => {
-  const cachedData = { clubs: [], teams: [], athletes: [], users: [] };
-  assert.equal(shouldFetchOrganizationData({ forceRefresh: true, cachedData }), true);
-  assert.equal(shouldFetchOrganizationData(), true, "the default forceRefresh:true/cachedData:null shape must still fetch");
+// --- 3: an explicit refresh (workspace switch, post-mutation) still forces a real fetch ---
+
+test("3. onWorkspaceChanged still calls renderOrganizationPanel with a forced refresh when Settings is the active tab", () => {
+  const body = functionBody("onWorkspaceChanged");
+  assert.ok(body, "onWorkspaceChanged must still exist in app.js");
+  assert.ok(/renderOrganizationPanel\(\)/.test(body), "must call renderOrganizationPanel() with no refresh override, so its default forced refresh applies");
 });
 
-// --- 4: Program Library is never blocked by a full Organization refresh ---
-
-test("4. Program Library only needs a background Organization refresh when nothing is cached yet, and never for an athlete", () => {
-  assert.equal(shouldBackgroundRefreshOrganizationForTemplates({ activeTab: "templates", isAthlete: false, cachedData: null }), true);
-  assert.equal(shouldBackgroundRefreshOrganizationForTemplates({ activeTab: "templates", isAthlete: false, cachedData: { clubs: [] } }), false, "already-cached Organization data must be reused, not refetched, when opening Program Library");
-  assert.equal(shouldBackgroundRefreshOrganizationForTemplates({ activeTab: "templates", isAthlete: true, cachedData: null }), false, "an athlete account has no Organization/accessRequests badge to refresh");
-  assert.equal(shouldBackgroundRefreshOrganizationForTemplates({ activeTab: "coaches", isAthlete: false, cachedData: null }), false, "must only apply while actually on the templates tab");
+test("3b. onWorkspaceChanged also refreshes Coaches/Program Library/Exercise Library when THEY are the active tab, each with forceRefresh", () => {
+  const body = functionBody("onWorkspaceChanged");
+  assert.ok(body.includes('loadCoaches({ forceRefresh: true })'));
+  assert.ok(body.includes('loadTemplates({ forceRefresh: true })'));
+  assert.ok(/loadExercises\([^)]*\{\s*forceRefresh:\s*true\s*\}\)/.test(body), "Exercise Library's forceRefresh must be passed through on workspace change");
 });
 
-// --- 5: loadTemplates() must never await this refresh before loading templates ---
+// --- 4: refreshOrganizationData keeps its exact existing name/contract, now cache-aware ---
 
-test("5. loadTemplates() fires the background Organization refresh with void, never awaiting it before loadTemplatesData()", () => {
+test("4. refreshOrganizationData keeps its exact existing signature/behavior (every organization-actions.js mutation handler calls it by this name) and now also writes the fresh result into the cache", () => {
+  const body = functionBody("refreshOrganizationData");
+  assert.ok(body, "refreshOrganizationData must still exist under this exact name - organization-actions.js calls it by name after every mutation (grant/revoke roles, login-status, archive/restore, invite/join-link actions, club/team/athlete/user CRUD)");
+  assert.ok(body.includes("silent"), "the existing silent:true/false contract must be preserved");
+  assert.ok(body.includes("setCacheData("), "a successful refresh must write into the cache so the next Settings/Program-Library-badge read sees it immediately");
+  assert.ok(body.includes("setCacheError("), "a failed refresh must still be recorded in the cache (background-refresh-failure semantics), not silently dropped");
+});
+
+// --- 5: workspace switch invalidates old data structurally, via a different context key ---
+
+test("5. organizationContextKey/loadTemplates/loadCoaches/searchExercises all key off currentUserWorkspaceContextParts, so a workspace switch can never read the old workspace's cache", () => {
+  assert.ok(appJsSource.includes("function organizationContextKey()"));
+  assert.ok(appJsSource.includes("currentUserWorkspaceContextParts()"), "app.js's own organizationContextKey must include the account+workspace parts");
+});
+
+// --- 6: logout/login fully clears the cache ---
+
+test("6. signOut clears the entire view cache before/alongside its hard reload", () => {
+  const start = appJsSource.indexOf("async function signOut()");
+  assert.ok(start >= 0, "signOut must still exist in app.js");
+  const window = appJsSource.slice(start, start + 1000);
+  assert.ok(window.includes("clearAllViewCache()"), "signOut must clear the view cache, not just state.currentUser");
+  const clearIndex = window.indexOf("clearAllViewCache()");
+  // Searches for the redirect starting AFTER clearIndex - a comment earlier
+  // in this same function also mentions window.location.replace("/") by
+  // name (explaining why the explicit clear is defensive, not load-bearing)
+  // and must not be mistaken for the real call.
+  const replaceIndex = window.indexOf('window.location.replace("/")', clearIndex);
+  assert.ok(clearIndex >= 0 && replaceIndex >= 0 && clearIndex < replaceIndex, "the cache must be cleared before (or at latest alongside) the redirect, never left for \"later\"");
+});
+
+test("7. the login success handler clears the view cache (and organization.data) before deciding which shell to land in", () => {
+  const loginBlockStart = appJsSource.indexOf('closest("#loginForm")');
+  assert.ok(loginBlockStart >= 0, "the #loginForm submit handler must still exist in app.js");
+  const window = appJsSource.slice(loginBlockStart, loginBlockStart + 2000);
+  const currentUserIndex = window.indexOf("state.currentUser = data.user;");
+  const clearCacheIndex = window.indexOf("clearAllViewCache();");
+  const loadSessionIndex = window.indexOf("await loadSession();");
+  assert.ok(currentUserIndex >= 0 && clearCacheIndex >= 0 && loadSessionIndex >= 0, "login must still set currentUser, clear the view cache, and reload the session");
+  assert.ok(currentUserIndex < clearCacheIndex && clearCacheIndex < loadSessionIndex, "the cache must be cleared after the new user is known but before anything re-renders from it");
+});
+
+// --- 8: Program Library is never blocked by a full Organization refresh ---
+
+test("8. loadTemplates() fires the background Organization refresh with void, never awaiting it before loadTemplatesData()", () => {
   const match = appJsSource.match(/async function loadTemplates\(options = \{\}\) \{[\s\S]*?\n\}/);
   assert.ok(match, "loadTemplates() must still exist in app.js");
   const body = match[0];
   assert.ok(body.includes("void refreshOrganizationData"), "the Organization refresh must be fired with void, not awaited");
   assert.ok(!/await refreshOrganizationData/.test(body), "loadTemplates() must never await refreshOrganizationData before returning loadTemplatesData(...)");
   assert.ok(/return loadTemplatesData\(/.test(body), "the /api/templates load must still be the function's return value");
-});
-
-// --- 6: workspace switch still forces a real Organization refresh ---
-
-test("6. onWorkspaceChanged() still calls renderOrganizationPanel with a forced refresh, invalidating any cached data for the new workspace", () => {
-  const match = appJsSource.match(/async function onWorkspaceChanged\(\)\s*\{[\s\S]*?\n\}/);
-  assert.ok(match, "onWorkspaceChanged() must still exist in app.js");
-  // No explicit `{ refresh: false }` (or any other falsy override) may be
-  // passed here - renderOrganizationPanel's default refresh:true must apply,
-  // which is exactly what shouldFetchOrganizationData({forceRefresh:true,...})
-  // above proves always triggers a fetch.
-  assert.ok(/renderOrganizationPanel\(\)/.test(match[0]), "onWorkspaceChanged must call renderOrganizationPanel() with no refresh override, so the default forced refresh applies");
-});
-
-// --- 7: cached Organization data can never survive a login as a different account ---
-
-test("7. the login success handler still clears any cached Organization data before deciding which shell to land in", () => {
-  const loginBlockStart = appJsSource.indexOf('closest("#loginForm")');
-  assert.ok(loginBlockStart >= 0, "the #loginForm submit handler must still exist in app.js");
-  // Scan only the next ~2000 chars after the handler starts - large enough
-  // to comfortably cover the login success path, small enough to avoid
-  // matching an unrelated, later occurrence of these same statements.
-  const window = appJsSource.slice(loginBlockStart, loginBlockStart + 2000);
-  const currentUserIndex = window.indexOf("state.currentUser = data.user;");
-  const resetIndex = window.indexOf("state.organization.data = null;");
-  const loadSessionIndex = window.indexOf("await loadSession();");
-  assert.ok(currentUserIndex >= 0 && resetIndex >= 0 && loadSessionIndex >= 0, "login must still set currentUser, reset organization.data, and reload the session");
-  assert.ok(currentUserIndex < resetIndex && resetIndex < loadSessionIndex, "organization.data must be cleared after the new user is known but before anything re-renders from it");
 });

@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { currentUserWorkspaceContextParts } from "./access.js";
 import { loadBuilderExercises } from "./builder-data.js";
 import { renderBuilder } from "./builder-view.js";
 import { els } from "./dom.js";
@@ -6,6 +7,32 @@ import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOption
 import { filterIconSvg, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters } from "./exercise-library.js";
 import { emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
 import { debounce, escapeHtml } from "./utils.js";
+import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
+
+const EXERCISES_CACHE_NAMESPACE = "exercises";
+
+// Mirrors exactly what exerciseSearchUrl() itself sends to the server - the
+// search term, every EXERCISE_FILTERS value, `favorite` (also a real query
+// param) and `limit` (this view's only form of pagination - "load more"
+// bumps it and, as a different limit, is naturally a fresh fetch, never a
+// stale short page). `marked` is deliberately excluded: it's a purely
+// client-side filter (see applyClientExerciseFilters) that exerciseSearchUrl
+// never sends to the server, so it must never fragment the cache - toggling
+// it re-derives instantly from whatever's already cached under the other,
+// server-relevant filters.
+function exercisesContextKey(term, limit, filters) {
+  return buildContextKey([
+    ...currentUserWorkspaceContextParts(),
+    term,
+    limit,
+    ...EXERCISE_FILTERS.map((filter) => filters[filter.key]),
+    filters.favorite,
+  ]);
+}
+
+export function invalidateExercisesCache() {
+  invalidateCacheNamespace(EXERCISES_CACHE_NAMESPACE);
+}
 
 function activeExerciseSelectFilterCount(filters) {
   return EXERCISE_FILTERS.filter((filter) => !QUICK_FILTER_KEYS.has(filter.key) && filters[filter.key]).length;
@@ -58,22 +85,36 @@ export async function loadExercises(handlers) {
   await searchPromise;
 }
 
-export async function searchExercises(term, handlers) {
+export async function searchExercises(term, handlers, { forceRefresh = false } = {}) {
   const query = term.trim();
   state.exerciseSearch.term = query;
-  handlers.setLoading(query ? "Searching exercises..." : "Loading exercises...");
-  try {
-    const data = await api(exerciseSearchUrl(query, state.exerciseSearch.limit, state.exerciseSearch.filters));
-    state.exerciseSearch.hasMore = Boolean(data.hasMore);
-    handlers.renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters));
-  } catch (error) {
-    // Without this, a failed fetch leaves the "Loading/Searching
-    // exercises..." placeholder from setLoading above on screen forever -
-    // handlers only carries setLoading/renderExercises, neither of which is
-    // an error view, so the error is rendered directly here (same pattern as
-    // app.js's own renderError: a plain .error box, no new UI concept).
-    els.content.innerHTML = `<div class="error">${escapeHtml(error?.message || "Could not load exercises.")}</div>`;
-  }
+  const { limit, filters } = state.exerciseSearch;
+  const contextKey = exercisesContextKey(query, limit, filters);
+  await loadCachedView({
+    namespace: EXERCISES_CACHE_NAMESPACE,
+    contextKey,
+    forceRefresh,
+    fetcher: () => api(exerciseSearchUrl(query, limit, filters)),
+    showLoading: () => handlers.setLoading(query ? "Searching exercises..." : "Loading exercises..."),
+    applyData: (data) => {
+      state.exerciseSearch.hasMore = Boolean(data.hasMore);
+      // Reads the LIVE filters, not the snapshot this fetch was keyed by -
+      // `marked` isn't part of the cache key (see exercisesContextKey), so
+      // it may have changed since this fetch was dispatched even though the
+      // rest of the context hasn't; the render must reflect its current
+      // value, not a stale one from dispatch time.
+      handlers.renderExercises(applyClientExerciseFilters(data.exercises || [], state.exerciseSearch.filters));
+    },
+    applyError: (error) => {
+      // Without this, a failed fetch leaves the "Loading/Searching
+      // exercises..." placeholder from setLoading above on screen forever -
+      // handlers only carries setLoading/renderExercises, neither of which is
+      // an error view, so the error is rendered directly here (same pattern as
+      // app.js's own renderError: a plain .error box, no new UI concept).
+      els.content.innerHTML = `<div class="error">${escapeHtml(error?.message || "Could not load exercises.")}</div>`;
+    },
+    getCurrentContextKey: () => exercisesContextKey(state.exerciseSearch.term, state.exerciseSearch.limit, state.exerciseSearch.filters),
+  });
 }
 
 export async function submitExerciseTagForm(form, handlers) {
@@ -171,7 +212,12 @@ async function toggleExerciseFavorite(exerciseId, isFavorite, handlers) {
     method: isFavorite ? "DELETE" : "POST",
   });
   if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
-  else await searchExercises(state.exerciseSearch.term, handlers);
+  // Just changed this exercise's favorite flag server-side - the cached
+  // entry for the current search context still has the pre-toggle value
+  // (favorite is a real server filter, so a favorites-only view could even
+  // need to drop/gain this row), so this specific re-fetch must never be
+  // satisfied from cache.
+  else await searchExercises(state.exerciseSearch.term, handlers, { forceRefresh: true });
 }
 
 function toggleExerciseMark(exerciseId, handlers) {
@@ -229,7 +275,10 @@ async function refreshExerciseTagEditor() {
 
 async function refreshCurrentExerciseSearch(handlers) {
   if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
-  else await searchExercises(state.exerciseSearch.term, handlers);
+  // Called after a tag was added/removed on an exercise - the cached list
+  // still has the pre-change tags for that row, so this must always be a
+  // real re-fetch, never satisfied from cache.
+  else await searchExercises(state.exerciseSearch.term, handlers, { forceRefresh: true });
 }
 
 function rerenderCurrentExerciseSurface(handlers) {

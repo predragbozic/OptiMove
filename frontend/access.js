@@ -76,3 +76,15 @@ export function canManageCoachProfile(user = state.currentUser) {
 export function isAthleteMode() {
   return document.body.classList.contains("athlete-mode");
 }
+
+// perf/main-navigation-cache: the account id + active workspace (type and,
+// where relevant, scope id) is the part of a view-cache context key that
+// every cached view shares - Coaches/Organization/Program Library/Exercise
+// Library/Builder drafts all differ per account and per active workspace,
+// on top of whatever view-specific filters they add themselves (see
+// view-cache.js's buildContextKey). Centralized here so every call site
+// derives it the exact same way, rather than five slightly different
+// inline reads of state.currentUser.
+export function currentUserWorkspaceContextParts(user = state.currentUser) {
+  return [user?.id, user?.activeWorkspace?.type, user?.activeWorkspace?.scopeId];
+}
