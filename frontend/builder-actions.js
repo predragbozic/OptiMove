@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-data.js";
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
+import { invalidateCoachHomeCache } from "./coach-home-data.js";
 import { emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
 
@@ -118,6 +119,12 @@ async function exitBuilderToPlanContext(plan, handlers) {
     // follows a delete/submit/save that can change what Calendar shows for
     // this exact athlete; never trust a cached pre-exit payload here.
     await handlers.loadWeekly({ forceRefresh: true });
+    // Home's "today" overview (GET /api/athletes/today) is a same-day
+    // rollup of exactly this data across every athlete, not just this one -
+    // invalidate rather than force-load, since Home is very likely not even
+    // the active tab right now; the next time it IS entered, it must not
+    // still show pre-mutation counts.
+    invalidateCoachHomeCache();
     return;
   }
   if (plan?.isTemplate || !plan?.athleteId) {
@@ -133,7 +140,10 @@ async function exitBuilderToPlanContext(plan, handlers) {
   state.activeTab = "programs";
   handlers.renderTabs();
   handlers.renderLibraryNav();
-  await handlers.loadPrograms();
+  // Same reasoning as the weekly branch above - this exit always follows a
+  // delete/submit/save that can change this exact athlete's specific-program
+  // list; never trust a cached pre-exit payload here.
+  await handlers.loadPrograms({ forceRefresh: true });
 }
 
 export async function handleBuilderPlanAction(action, handlers) {
@@ -655,9 +665,15 @@ export async function handleBuilderDraftAction(action, handlers) {
       // Just deleted this plan - the cached Calendar payload for this
       // athlete must never keep showing it.
       await handlers.loadWeekly({ forceRefresh: true });
+      // Home's "today" overview rolls up exactly this data across every
+      // athlete - invalidate so the next visit reflects the deletion,
+      // whether or not Home happens to be the active tab right now.
+      invalidateCoachHomeCache();
     } else if (state.activeTab === "programs") {
       state.selectedProgramId = null;
-      await handlers.loadPrograms();
+      // Just deleted this plan - the cached specific-programs payload for
+      // this athlete must never keep showing it.
+      await handlers.loadPrograms({ forceRefresh: true });
     } else {
       state.selectedTemplateId = null;
       // Just deleted this plan - the cached list must never keep showing it.

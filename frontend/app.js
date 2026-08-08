@@ -39,6 +39,7 @@ import {
 } from "./coach-profile-actions.js";
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { renderCoachHomeHtml } from "./coach-home.js";
+import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { els } from "./dom.js";
 import {
   handleExerciseDetailAction,
@@ -181,6 +182,7 @@ import {
 } from "./weekly-plan.js";
 import { handleWeeklyAction } from "./weekly-actions.js";
 import { loadWeekly as loadWeeklyData } from "./weekly-data.js";
+import { invalidateProgramsCache, loadPrograms as loadProgramsData } from "./programs-data.js";
 import { renderUserControls } from "./user-controls.js";
 import { startRealtimeInbox, stopRealtimeInbox } from "./realtime.js";
 import { closeWorkspaceSwitcherIfOutside, handleWorkspaceAction, renderWorkspaceSwitcher } from "./workspace-actions.js";
@@ -1176,6 +1178,14 @@ async function loadAthletes() {
   try {
     const data = await api("/api/admin/athletes");
     state.athletes = data.adminRows || [];
+    // organization-actions.js reuses this same function as its post-mutation
+    // athlete-roster reload (create/archive/restore athlete, coach/team/club
+    // relationship archive/restore - see handleOrganizationAction's
+    // loadAthletes call sites) - Home's "today" overview lists exactly this
+    // roster (GET /api/athletes/today, filtered the same way), so every one
+    // of those mutations must invalidate it too, not just the initial
+    // session bootstrap call this function also serves as.
+    invalidateCoachHomeCache();
     const athleteParam = new URLSearchParams(window.location.search).get("athlete");
     const requestedAthlete = state.athletes.find((athlete) => athlete.athlete_id === athleteParam);
     state.selectedAthleteId = requestedAthlete?.athlete_id || state.athletes[0]?.athlete_id || null;
@@ -1221,18 +1231,16 @@ async function loadCoaches({ forceRefresh = false } = {}) {
   return loadCoachesAction({ setLoading, renderCoaches, forceRefresh });
 }
 
-async function loadCoachHome() {
+async function loadCoachHome({ forceRefresh = false } = {}) {
   state.navStack = [];
   els.context.textContent = "Overview";
   els.title.textContent = "Home";
   els.toolbar.innerHTML = "";
-  setLoading("Loading today's overview...");
-  try {
-    const data = await api("/api/athletes/today");
-    els.content.innerHTML = renderCoachHomeHtml({ rows: data.rows || [], error: "" });
-  } catch (error) {
-    els.content.innerHTML = renderCoachHomeHtml({ rows: [], error: error.message || "Could not load today's overview." });
-  }
+  return loadCoachHomeData({ setLoading, renderCoachHome, forceRefresh });
+}
+
+function renderCoachHome({ rows, error }) {
+  els.content.innerHTML = renderCoachHomeHtml({ rows, error });
 }
 
 async function loadWeekly(options = {}) {
@@ -1242,17 +1250,11 @@ async function loadWeekly(options = {}) {
   );
 }
 
-async function loadPrograms() {
-  if (!state.selectedAthleteId) return renderEmpty("No athlete selected.");
-  state.navStack = [];
-  setLoading("Loading specific programs...");
-  const data = await api(`/api/athletes/${encodeURIComponent(state.selectedAthleteId)}/program-data?program=__all_programs__`);
-  state.lastProgramBundle = data;
-  const programs = data.programs || [];
-  if (!state.selectedProgramId) state.selectedProgramId = programs[0]?.id || null;
-  renderAthleteHeader(data);
-  renderProgramToolbar(programs);
-  renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
+async function loadPrograms(options = {}) {
+  return loadProgramsData(
+    { renderEmpty, setLoading, renderError, renderAthleteHeader, renderProgramToolbar, renderProgramRoot },
+    options,
+  );
 }
 
 async function loadTemplates(options = {}) {
@@ -1542,6 +1544,7 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
 // is re-verified against the server rather than trusted purely from cache.
 async function onWorkspaceChanged() {
   if (state.activeTab === "organization") return renderOrganizationPanel();
+  if (state.activeTab === "coach-home") return loadCoachHome({ forceRefresh: true });
   if (state.activeTab === "coaches") return loadCoaches({ forceRefresh: true });
   if (state.activeTab === "templates") return loadTemplates({ forceRefresh: true });
   if (state.activeTab === "exercises") return loadExercises({ renderExercises, setLoading }, { forceRefresh: true });
