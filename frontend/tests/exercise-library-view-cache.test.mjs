@@ -21,8 +21,9 @@ globalThis.document = {
 };
 
 const { searchExercises } = await import("../exercise-actions.js");
-const { state } = await import("../state.js");
-const { clearAllViewCache } = await import("../view-cache.js");
+const { state, EXERCISE_FILTERS } = await import("../state.js");
+const { buildContextKey, clearAllViewCache, getCacheEntry, VIEW_CACHE_FRESHNESS_MS } = await import("../view-cache.js");
+const { currentUserWorkspaceContextParts } = await import("../access.js");
 
 const originalFetch = globalThis.fetch;
 after(() => {
@@ -148,4 +149,27 @@ test("5. a different limit (\"load more\") always fetches fresh, never a short c
   await searchExercises(state.exerciseSearch.term, h);
   assert.equal(calls, 2, "a bumped limit (load more) must always be a fresh fetch, never satisfied from the 30-row cache");
   assert.equal(h.renderCalls[0].length, 45);
+});
+
+test("6. a failed background refresh keeps the last-known-good exercise list on screen, never blanks it or shows loading again", async () => {
+  resetState();
+  mockFetchBySearch({ "||": [{ id: "e1", name: "Squat" }] });
+  await searchExercises("", handlers());
+  const contextKey = buildContextKey([
+    ...currentUserWorkspaceContextParts(),
+    "",
+    state.exerciseSearch.limit,
+    ...EXERCISE_FILTERS.map((filter) => state.exerciseSearch.filters[filter.key]),
+    state.exerciseSearch.filters.favorite,
+  ]);
+  const entry = getCacheEntry("exercises", contextKey);
+  assert.ok(entry, "sanity check: the cache entry must exist under the expected context key");
+  entry.loadedAt = Date.now() - (VIEW_CACHE_FRESHNESS_MS + 5000);
+
+  globalThis.fetch = async () => { throw new Error("network down"); };
+  const h = handlers();
+  await searchExercises("", h);
+  assert.equal(h.loadingCalls.length, 0, "a background refresh failure must never show the loading screen over good data");
+  assert.equal(h.renderCalls.length, 1, "only the still-good cached list was rendered - the failed refresh never got to render again");
+  assert.deepEqual(h.renderCalls[0].map((e) => e.id), ["e1"], "the last-known-good results must survive the failed background refresh untouched");
 });

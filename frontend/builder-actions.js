@@ -205,6 +205,10 @@ export async function handleBuilderPlanAction(action, handlers) {
         method: "POST",
         body: JSON.stringify({ athleteId: athleteIds[0] || "", athleteIds, weekStart: state.builder.copyWeekStart }),
       }), { preserveBatch: false });
+      // /duplicate always creates a brand new status='draft' row (see
+      // backend/src/routes/builder.js) - the cached drafts list must never
+      // be missing it just because it happened to be cached before this copy.
+      invalidateBuilderDraftsCache();
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
@@ -667,6 +671,12 @@ export async function handleBuilderDraftAction(action, handlers) {
     if (!window.confirm(`Delete this ${label}? This cannot be undone.`)) return true;
     await api(type === "builder-delete-plan" ? url : withBatchSyncUrl(url), { method: "DELETE" });
     if (type === "builder-delete-plan") {
+      // The just-deleted plan may well have been the one showing in the
+      // cached drafts list (unless it was an is_edit_draft row, already
+      // excluded from that list server-side) - invalidate unconditionally
+      // rather than re-deriving which case this was, so the next re-entry
+      // into the empty-state picker can never show a plan that's gone.
+      invalidateBuilderDraftsCache();
       state.builder = emptyBuilderState();
       handlers.renderBuilder();
       return true;

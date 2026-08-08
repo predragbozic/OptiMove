@@ -85,6 +85,28 @@ test("4. refreshOrganizationData keeps its exact existing signature/behavior (ev
   assert.ok(body.includes("setCacheError("), "a failed refresh must still be recorded in the cache (background-refresh-failure semantics), not silently dropped");
 });
 
+test("4b. refreshOrganizationData never lets a late response overwrite state.organization.data/error once the account/workspace has moved on", () => {
+  // loadTemplates() fires this in the background with `void`, unawaited (see
+  // test 8 below) - a workspace/account switch can complete before it
+  // resolves. Unlike renderOrganizationPanel (which gets this for free via
+  // loadCachedView's own getCurrentContextKey guard), refreshOrganizationData
+  // writes into state.organization.data/error directly and must re-check the
+  // context itself, on BOTH the success and failure paths, before doing so.
+  const body = functionBody("refreshOrganizationData");
+  assert.ok(body, "refreshOrganizationData must still exist");
+  const setCacheDataIndex = body.indexOf("setCacheData(");
+  const stateWriteIndex = body.indexOf("state.organization.data = data;");
+  assert.ok(setCacheDataIndex >= 0 && stateWriteIndex >= 0 && setCacheDataIndex < stateWriteIndex, "the cache write (always correct - it's keyed by the request's own captured context) must happen before the guarded live-state write");
+  const guardBeforeStateWrite = body.slice(setCacheDataIndex, stateWriteIndex);
+  assert.ok(/organizationContextKey\(\)\s*!==\s*contextKey/.test(guardBeforeStateWrite), "a context re-check must sit between the cache write and the state.organization.data write on the success path");
+
+  const setCacheErrorIndex = body.indexOf("setCacheError(");
+  const errorStateWriteIndex = body.indexOf("state.organization.error = error.message");
+  assert.ok(setCacheErrorIndex >= 0 && errorStateWriteIndex >= 0 && setCacheErrorIndex < errorStateWriteIndex);
+  const guardBeforeErrorWrite = body.slice(setCacheErrorIndex, errorStateWriteIndex);
+  assert.ok(/organizationContextKey\(\)\s*!==\s*contextKey/.test(guardBeforeErrorWrite), "a context re-check must sit between the cache error write and the state.organization.error write on the failure path too");
+});
+
 // --- 5: workspace switch invalidates old data structurally, via a different context key ---
 
 test("5. organizationContextKey/loadTemplates/loadCoaches/searchExercises all key off currentUserWorkspaceContextParts, so a workspace switch can never read the old workspace's cache", () => {

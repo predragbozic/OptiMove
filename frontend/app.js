@@ -1572,10 +1572,21 @@ async function refreshOrganizationData({ silent = false } = {}) {
   try {
     const data = await dedupeRequest(ORGANIZATION_CACHE_NAMESPACE, contextKey, () => api("/api/organization"));
     setCacheData(ORGANIZATION_CACHE_NAMESPACE, contextKey, data);
+    // The cache write above is always correct (it's keyed by the context this
+    // request was actually issued for), but this function also writes
+    // directly into the live render state below - unlike renderOrganizationPanel,
+    // which goes through loadCachedView's own race guard. The caller that
+    // fires this in the background without awaiting it (loadTemplates()'s
+    // `void refreshOrganizationData({ silent: true })`) means a workspace or
+    // account switch can complete before this resolves; without this check a
+    // late response for the OLD context would silently overwrite
+    // state.organization.data with another workspace's data.
+    if (organizationContextKey() !== contextKey) return;
     state.organization.data = data;
     state.organization.error = "";
   } catch (error) {
     setCacheError(ORGANIZATION_CACHE_NAMESPACE, contextKey, error);
+    if (organizationContextKey() !== contextKey) return;
     state.organization.error = error.message || "Could not load organization.";
     if (!silent) throw error;
   }

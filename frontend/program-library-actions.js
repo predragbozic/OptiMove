@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { emptyTemplatePreview, state } from "./state.js";
 import { clean } from "./utils.js";
+import { invalidateTemplatesCache } from "./program-library-data.js";
 
 export async function openTemplatePreview(planId, renderAfter, options = {}) {
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(planId));
@@ -379,6 +380,12 @@ function patchTemplatePendingRequestCount(planId, delta) {
     const pending = Math.max(0, Number(template.pending_access_count || 0) + delta);
     return { ...template, pending_access_count: pending };
   });
+  // .map() above returns a NEW array, breaking the reference aliasing that
+  // otherwise keeps the view-cache entry (whose `data.templates` still
+  // points at the OLD array) implicitly in sync with in-place edits. Without
+  // this, re-entering Program Library within the freshness window would
+  // read the stale cached pending count right back over this update.
+  invalidateTemplatesCache();
 }
 
 export async function submitTemplateMetadataForm(form, { loadTemplates }) {
@@ -480,6 +487,11 @@ function updateTemplateAccess(planId, access) {
   state.lastTemplates = (state.lastTemplates || []).map((template) => (
     String(template.plan_id) === String(planId) ? { ...template, ...accessPatch } : template
   ));
+  // Same reasoning as patchTemplatePendingRequestCount: .map() breaks the
+  // aliasing with the cached data.templates array, so the cache must be
+  // invalidated or a same-TTL re-entry would revert this access-status
+  // change right back to its pre-mark-as-used value.
+  invalidateTemplatesCache();
   if (String(state.templatePreview?.detail?.plan_id) === String(planId)) {
     state.templatePreview = {
       ...state.templatePreview,

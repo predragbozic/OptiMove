@@ -112,6 +112,19 @@ test("6. a failed first load propagates the error (matches the pre-cache contrac
   assert.equal(state.builder.draftsLoading, false, "the loading flag must still be cleared even on failure");
 });
 
+test("6b. a failed background refresh keeps the last-known-good drafts list, never blanks it or shows loading again", async () => {
+  resetState();
+  mockFetchOnce([{ groupKey: "g1", name: "Draft One" }]);
+  await loadBuilderDrafts();
+  const entry = getCacheEntry("builderDrafts", "u1");
+  entry.loadedAt = Date.now() - (VIEW_CACHE_FRESHNESS_MS + 5000);
+
+  globalThis.fetch = async () => { throw new Error("network down"); };
+  await loadBuilderDrafts();
+  assert.equal(state.builder.draftsLoading, false, "a background refresh failure must never leave the loading flag stuck on");
+  assert.equal(state.builder.drafts.length, 1, "the last-known-good drafts list must survive the failed background refresh untouched");
+});
+
 // --- source-pattern guards for app.js/builder-actions.js glue ---
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -136,4 +149,18 @@ test("8. draft-list-membership mutations (create/delete/submit) still invalidate
   const submitIndex = builderActionsSource.indexOf("/submit`");
   assert.ok(submitIndex >= 0);
   assert.ok(builderActionsSource.slice(submitIndex, submitIndex + 500).includes("invalidateBuilderDraftsCache()"), "submitting a draft (it leaves 'draft' status) must invalidate the cached drafts list");
+});
+
+test("9. duplicating a plan (/duplicate) invalidates the cached drafts list, since it always creates a new status='draft' row", () => {
+  const duplicateIndex = builderActionsSource.indexOf("/duplicate`");
+  assert.ok(duplicateIndex >= 0, "the duplicate-plan endpoint call must still exist");
+  assert.ok(builderActionsSource.slice(duplicateIndex, duplicateIndex + 600).includes("invalidateBuilderDraftsCache()"), "confirming a plan duplication must invalidate the cached drafts list, or a same-TTL re-entry into the empty-state picker would be missing the new copy");
+});
+
+test("10. deleting the whole open draft plan (builder-delete-plan) invalidates the cached drafts list", () => {
+  const deleteTargetsIndex = builderActionsSource.indexOf("const deleteTargets = {");
+  assert.ok(deleteTargetsIndex >= 0, "the shared delete-targets dispatch must still exist");
+  const deletePlanBranch = builderActionsSource.indexOf('if (type === "builder-delete-plan") {', deleteTargetsIndex);
+  assert.ok(deletePlanBranch >= 0);
+  assert.ok(builderActionsSource.slice(deletePlanBranch, deletePlanBranch + 700).includes("invalidateBuilderDraftsCache()"), "deleting the whole open draft must invalidate the cached drafts list, or a same-TTL re-entry into the empty-state picker would still show the deleted plan");
 });

@@ -134,7 +134,39 @@ test("4. once stale, re-entry into the same scope renders the cached list first,
   assert.equal(state.lastTemplates.length, 2);
 });
 
-test("5. options.forceRefresh always bypasses the cache, even when fresh (post-mutation reload)", async () => {
+test("5b. a failed background refresh keeps the last-known-good template list on screen, never blanks it or shows loading again", async () => {
+  resetState();
+  mockFetchByScope({ my_programs: [{ plan_id: "p1", name: "Program One" }] });
+  await loadTemplates(handlers());
+  const entry = getCacheEntry("templates", "u1|private_coach||my_programs");
+  entry.loadedAt = Date.now() - (VIEW_CACHE_FRESHNESS_MS + 5000);
+
+  globalThis.fetch = async () => { throw new Error("500"); };
+  const h = handlers();
+  await loadTemplates(h);
+  assert.equal(h.loadingCalls.length, 0, "a background refresh failure must never show the loading screen over good data");
+  assert.equal(h.errorCalls.length, 0, "a background refresh failure must never flip an already-good view into its first-load error state");
+  assert.equal(state.lastTemplates.length, 1, "the last-known-good list must survive the failed background refresh untouched");
+});
+
+test("6. once the user switches scope mid-request, a late response for the OLD scope must never overwrite the NEW scope's state", async () => {
+  resetState();
+  let resolveOld;
+  const oldFetchPromise = new Promise((resolve) => { resolveOld = resolve; });
+  globalThis.fetch = async () => oldFetchPromise.then((templates) => ({ ok: true, status: 200, json: async () => ({ templates, allowedScopes: ["my_programs", "optimove", "marketplace"] }) }));
+  const pending = loadTemplates(handlers());
+
+  state.templateScope = "optimove";
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ templates: [{ plan_id: "p2", name: "OptiMove Program" }], allowedScopes: ["my_programs", "optimove", "marketplace"] }) });
+  await loadTemplates(handlers());
+  assert.deepEqual(state.lastTemplates.map((t) => t.plan_id), ["p2"]);
+
+  resolveOld([{ plan_id: "p1", name: "My Program" }]);
+  await pending;
+  assert.deepEqual(state.lastTemplates.map((t) => t.plan_id), ["p2"], "the late my_programs response must never overwrite the optimove scope the user actually switched to");
+});
+
+test("7. options.forceRefresh always bypasses the cache, even when fresh (post-mutation reload)", async () => {
   resetState();
   const calls = mockFetchByScope({ my_programs: [{ plan_id: "p1", name: "Old Name" }] });
   await loadTemplates(handlers());

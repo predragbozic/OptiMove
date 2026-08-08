@@ -6,7 +6,24 @@ import assert from "node:assert/strict";
 // different (account, workspace) contexts. coach-profile-actions.js is a
 // standalone, already-exported module (loadCoaches doesn't touch
 // document/els at all - only the render callbacks it's handed do), so this
-// drives it directly, unlike app.js.
+// drives it directly, unlike app.js. It does, however, import
+// openTemplatePreviewFromCoachProgram from program-library-actions.js
+// (pre-merge audit fix: that file now also imports invalidateTemplatesCache
+// from program-library-data.js, which touches `document` at module load via
+// dom.js) - the minimal stub below exists purely to satisfy that transitive
+// import chain, not because loadCoaches itself needs a DOM.
+const fakeElements = new Map();
+function fakeElement() {
+  return { textContent: "", innerHTML: "", classList: { contains: () => false } };
+}
+globalThis.document = {
+  body: fakeElement(),
+  querySelector(selector) {
+    if (!fakeElements.has(selector)) fakeElements.set(selector, fakeElement());
+    return fakeElements.get(selector);
+  },
+  querySelectorAll: () => [],
+};
 
 const { loadCoaches, submitCoachProfileForm } = await import("../coach-profile-actions.js");
 const { state } = await import("../state.js");
@@ -97,7 +114,47 @@ test("4. switching to a different workspace never shows the previous workspace's
   assert.equal(state.coaches.rows[0].id, "c9");
 });
 
-test("5. saving the account's own coach profile forces a real refetch even though the directory was already cached and fresh", async () => {
+test("6. a failed background refresh keeps the last-known-good coach list on screen, never blanks it or shows loading again", async () => {
+  resetState();
+  mockFetchOnce([{ id: "c1", name: "Coach One" }]);
+  await loadCoaches(handlers());
+  const entry = getCacheEntry("coaches", "coach-1|private_coach|");
+  entry.loadedAt = Date.now() - (VIEW_CACHE_FRESHNESS_MS + 5000);
+
+  globalThis.fetch = async () => { throw new Error("network down"); };
+  const h = handlers();
+  await loadCoaches(h);
+  assert.equal(h.loadingCalls.length, 0, "a background refresh failure must never show the loading screen over good data");
+  assert.equal(h.renderCalls.length, 1, "only the still-good cached data was rendered - the failed refresh never got to call renderCoaches again");
+  assert.equal(state.coaches.rows.length, 1, "the last-known-good rows must survive the failed background refresh untouched");
+  assert.equal(state.coaches.error, "", "a background failure must not flip the view into its first-load error state");
+});
+
+test("7. a genuine in-flight race: a late response for the OLD workspace must never overwrite state after the user has already switched to a NEW workspace", async () => {
+  resetState({ id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-A" } });
+  let resolveOld;
+  const oldFetchPromise = new Promise((resolve) => { resolveOld = resolve; });
+  globalThis.fetch = async () => oldFetchPromise.then((coaches) => ({ ok: true, status: 200, json: async () => ({ coaches }) }));
+  const pending = loadCoaches(handlers());
+
+  // The workspace switch happens WHILE the club-A request is still in flight
+  // - onWorkspaceChanged's own forceRefresh:true call is simulated here by
+  // firing a second, independent loadCoaches() for the new workspace before
+  // the first one has resolved.
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-B" } };
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ coaches: [{ id: "c9", name: "Club B Coach" }] }) });
+  const hB = handlers();
+  await loadCoaches(hB);
+  assert.equal(state.coaches.rows[0].id, "c9", "club B's own request must win first since it's the one the user is actually looking at");
+
+  // Now the slow club-A response finally arrives, long after the switch.
+  resolveOld([{ id: "c1", name: "Club A Coach" }]);
+  await pending;
+  assert.equal(state.coaches.rows[0].id, "c9", "the late club-A response must never overwrite club B's state, even though it resolved last");
+  assert.equal(state.coaches.rows.length, 1);
+});
+
+test("8. saving the account's own coach profile forces a real refetch even though the directory was already cached and fresh", async () => {
   resetState();
   mockFetchOnce([{ id: "c1", name: "Old Headline" }]);
   await loadCoaches(handlers());
