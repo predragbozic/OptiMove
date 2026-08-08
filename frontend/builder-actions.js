@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { loadBuilderNodePresets } from "./builder-data.js";
+import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-data.js";
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
@@ -121,7 +121,10 @@ async function exitBuilderToPlanContext(plan, handlers) {
     state.activeTab = "templates";
     handlers.renderTabs();
     handlers.renderLibraryNav();
-    await handlers.loadTemplates();
+    // Every path into exitBuilderToPlanContext follows a delete/submit/save
+    // that can change this plan's row in the template list - never trust a
+    // cached pre-exit list here.
+    await handlers.loadTemplates({ forceRefresh: true });
     return;
   }
   state.activeTab = "programs";
@@ -202,6 +205,10 @@ export async function handleBuilderPlanAction(action, handlers) {
         method: "POST",
         body: JSON.stringify({ athleteId: athleteIds[0] || "", athleteIds, weekStart: state.builder.copyWeekStart }),
       }), { preserveBatch: false });
+      // /duplicate always creates a brand new status='draft' row (see
+      // backend/src/routes/builder.js) - the cached drafts list must never
+      // be missing it just because it happened to be cached before this copy.
+      invalidateBuilderDraftsCache();
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
@@ -251,7 +258,9 @@ export async function handleBuilderPlanAction(action, handlers) {
       await api(`/api/builder/plans/${encodeURIComponent(id)}`, { method: "DELETE" });
     }
     state.builder.selectedDraftKeys = [];
-    await handlers.loadBuilderDrafts();
+    // Just deleted one or more drafts - the cached drafts list must never
+    // keep showing them.
+    await handlers.loadBuilderDrafts({ forceRefresh: true });
     return true;
   }
   if (type === "builder-toggle-drafts-panel") {
@@ -289,7 +298,9 @@ export async function handleBuilderPlanAction(action, handlers) {
       }
     }
     state.builder.selectedDraftKeys = [];
-    await handlers.loadBuilderDrafts();
+    // Just deleted one or more drafts - the cached drafts list must never
+    // keep showing them.
+    await handlers.loadBuilderDrafts({ forceRefresh: true });
     return true;
   }
   if (type === "builder-open-batch-plan") {
@@ -606,6 +617,10 @@ export async function handleBuilderDraftAction(action, handlers) {
         method: "POST",
         body: JSON.stringify(withBatchSyncPayload({})),
       });
+      // This plan has left 'draft' status either way - the cached drafts
+      // list (see loadBuilderDrafts) must never keep showing it once the
+      // user next lands on that empty-state picker.
+      invalidateBuilderDraftsCache();
       if (result?.deleted && result?.empty) {
         await exitBuilderToPlanContext(draft.plan, handlers);
         return true;
@@ -640,7 +655,8 @@ export async function handleBuilderDraftAction(action, handlers) {
       await handlers.loadPrograms();
     } else {
       state.selectedTemplateId = null;
-      await handlers.loadTemplates();
+      // Just deleted this plan - the cached list must never keep showing it.
+      await handlers.loadTemplates({ forceRefresh: true });
     }
     return true;
   }
@@ -655,6 +671,12 @@ export async function handleBuilderDraftAction(action, handlers) {
     if (!window.confirm(`Delete this ${label}? This cannot be undone.`)) return true;
     await api(type === "builder-delete-plan" ? url : withBatchSyncUrl(url), { method: "DELETE" });
     if (type === "builder-delete-plan") {
+      // The just-deleted plan may well have been the one showing in the
+      // cached drafts list (unless it was an is_edit_draft row, already
+      // excluded from that list server-side) - invalidate unconditionally
+      // rather than re-deriving which case this was, so the next re-entry
+      // into the empty-state picker can never show a plan that's gone.
+      invalidateBuilderDraftsCache();
       state.builder = emptyBuilderState();
       handlers.renderBuilder();
       return true;
@@ -731,6 +753,10 @@ export async function submitBuilderForm(form, handlers) {
     data.athleteIds = athleteIds;
     data.athleteId = athleteIds[0] || "";
     const created = await api("/api/builder/plans", { method: "POST", body: JSON.stringify(data) });
+    // A brand new draft now exists - the cached drafts list (shown again
+    // whenever this account next has no draft open) must never be missing
+    // it just because it happened to be cached before this create.
+    invalidateBuilderDraftsCache();
     setBuilderDraft(created, { preserveBatch: false });
     state.builder.selectedSessionId = "";
     state.builder.selectedNodeId = "";

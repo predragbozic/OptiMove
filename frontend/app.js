@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { accessScopeLabel, isAthleteMode, roleLabel } from "./access.js";
+import { accessScopeLabel, currentUserWorkspaceContextParts, isAthleteMode, roleLabel } from "./access.js";
 import {
   renderInviteAccept as renderInviteAcceptAction,
   renderLogin as renderLoginAction,
@@ -43,6 +43,7 @@ import { els } from "./dom.js";
 import {
   handleExerciseDetailAction,
   handleExerciseLibraryAction,
+  invalidateExercisesCache,
   loadExercises,
   submitExerciseTagForm as submitExerciseTagFormAction,
 } from "./exercise-actions.js";
@@ -77,8 +78,6 @@ import {
   renderLibraryNav,
   renderMobileNavState,
   renderRailState,
-  shouldBackgroundRefreshOrganizationForTemplates,
-  shouldFetchOrganizationData,
   templateScopeMeta,
   visibleTemplateScopes,
 } from "./navigation.js";
@@ -185,6 +184,7 @@ import { handleWeeklyAction } from "./weekly-actions.js";
 import { renderUserControls } from "./user-controls.js";
 import { startRealtimeInbox, stopRealtimeInbox } from "./realtime.js";
 import { closeWorkspaceSwitcherIfOutside, handleWorkspaceAction, renderWorkspaceSwitcher } from "./workspace-actions.js";
+import { buildContextKey, clearAllViewCache, dedupeRequest, loadCachedView, setCacheData, setCacheError } from "./view-cache.js";
 
 let inboxPollId = null;
 
@@ -453,12 +453,15 @@ async function handleContentSubmit(event) {
       state.currentUser = data.user;
       // Defensive, not load-bearing: signOut() always does a hard
       // window.location.replace("/"), which already resets the entire
-      // `state` module (including organization.data) via a fresh page
-      // load/module re-evaluation before this login form can ever be
-      // submitted again. Cleared explicitly anyway so cached Organization
-      // data can never be attributed to the wrong account, even if that
-      // reload behavior changes later.
+      // `state` module (including organization.data) AND view-cache.js's
+      // in-memory store via a fresh page load/module re-evaluation before
+      // this login form can ever be submitted again. Cleared explicitly
+      // anyway so cached data (Organization, and since perf/main-navigation-
+      // cache, Coaches/Program Library/Exercise Library/Builder drafts too)
+      // can never be attributed to the wrong account, even if that reload
+      // behavior changes later.
       state.organization.data = null;
+      clearAllViewCache();
       // /login only returns the compatible base user shape - reload the
       // full /me shape (capabilities/activeWorkspace/availableWorkspaces)
       // before deciding which shell to land in below.
@@ -783,6 +786,14 @@ async function signOut() {
   } finally {
     stopInboxPolling();
     state.currentUser = null;
+    // Defensive, not load-bearing: window.location.replace("/") below
+    // already reloads the page (a fresh module evaluation resets
+    // view-cache.js's in-memory store on its own), so no cached
+    // Coaches/Organization/Program Library/Exercise Library/Builder-drafts
+    // data could survive into the next session regardless. Cleared
+    // explicitly anyway so that invariant is self-evident here, not just an
+    // accident of the reload, in case that ever changes.
+    clearAllViewCache();
     window.location.replace("/");
   }
 }
@@ -1203,11 +1214,11 @@ async function loadActiveTab() {
   return loadExercises({ renderExercises, setLoading });
 }
 
-async function loadCoaches() {
+async function loadCoaches({ forceRefresh = false } = {}) {
   els.context.textContent = "Coach directory";
   els.title.textContent = "Coaches";
   els.toolbar.innerHTML = "";
-  return loadCoachesAction({ setLoading, renderCoaches });
+  return loadCoachesAction({ setLoading, renderCoaches, forceRefresh });
 }
 
 async function loadCoachHome() {
@@ -1255,14 +1266,16 @@ async function loadPrograms() {
 }
 
 async function loadTemplates(options = {}) {
-  // Program Library's own list (/api/templates) never depends on Organization
-  // data - the only thing here that reads it is the sidebar's "Requests"
-  // badge count (see updateProgramLibraryNavLabels/renderLibraryNav), which
-  // is allowed to be a beat behind. If Organization data is already cached,
-  // use it as-is and skip the fetch entirely. If it isn't (nothing loaded
-  // yet this session), refresh it in the background - never awaited here -
-  // so a slow /api/organization can never delay the template list itself.
-  if (shouldBackgroundRefreshOrganizationForTemplates({ activeTab: state.activeTab, isAthlete: state.currentUser?.role === "athlete", cachedData: state.organization.data })) {
+  // Program Library's own list (/api/templates, see program-library-data.js
+  // for its own caching) never depends on Organization data - the only
+  // thing here that reads it is the sidebar's "Requests" badge count (see
+  // updateProgramLibraryNavLabels/renderLibraryNav), which is allowed to be
+  // a beat behind. If Organization data is already cached (fresh or stale -
+  // renderOrganizationPanel/refreshOrganizationData own its own freshness),
+  // this never fires at all. If nothing is cached yet this session, refresh
+  // it in the background - never awaited here - so a slow /api/organization
+  // can never delay the template list itself.
+  if (state.activeTab === "templates" && state.currentUser?.role !== "athlete" && !state.organization.data) {
     void refreshOrganizationData({ silent: true }).then(() => {
       if (state.activeTab === "templates") renderLibraryNav();
     });
@@ -1468,6 +1481,18 @@ function renderAthleteListState() {
   document.body.classList.toggle("athletes-drawer-open", state.athletesExpanded);
 }
 
+const ORGANIZATION_CACHE_NAMESPACE = "organization";
+
+// The /api/organization payload differs per account and per active
+// workspace only - never per Settings sub-tab (Overview/Users/Clubs/Teams/
+// Athletes/Tags & Presets/Join links all read the exact same payload, just
+// render different slices of it - see renderOrganizationPanelHtml). That's
+// the whole reason Settings sub-tab switches can safely reuse this cache
+// entry instead of refetching.
+function organizationContextKey() {
+  return buildContextKey(currentUserWorkspaceContextParts());
+}
+
 async function renderOrganizationPanel({ refresh = true } = {}) {
   state.athletesExpanded = false;
   state.weekSelectorOpen = false;
@@ -1478,47 +1503,90 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
   els.title.textContent = "Settings";
   els.toolbar.innerHTML = "";
 
-  if (shouldFetchOrganizationData({ forceRefresh: refresh, cachedData: state.organization.data })) {
-    setLoading("Loading organization...");
-    try {
-      state.organization.data = await api("/api/organization");
+  const paintOrganizationPanel = async () => {
+    if (state.organization.section === "presets" && !state.taxonomy.loaded) {
+      await loadTaxonomyData();
+    }
+    const data = state.organization.data || { clubs: [], teams: [], athletes: [], users: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true, canCreateUser: true };
+    normalizeOrganizationSelection(data);
+    const role = roleLabel();
+    const scope = accessScopeLabel();
+    els.content.innerHTML = renderOrganizationPanelHtml({
+      currentUser: state.currentUser,
+      data,
+      error: state.organization.error,
+      role,
+      scope,
+    });
+  };
+
+  await loadCachedView({
+    namespace: ORGANIZATION_CACHE_NAMESPACE,
+    contextKey: organizationContextKey(),
+    forceRefresh: refresh,
+    fetcher: () => api("/api/organization"),
+    showLoading: () => setLoading("Loading organization..."),
+    applyData: (data) => {
+      state.organization.data = data;
       state.organization.error = "";
-    } catch (error) {
+      return paintOrganizationPanel();
+    },
+    applyError: (error) => {
       state.organization.error = error.message || "Could not load organization.";
       state.organization.data = null;
-    }
-  }
-
-  if (state.organization.section === "presets" && !state.taxonomy.loaded) {
-    await loadTaxonomyData();
-  }
-
-  const data = state.organization.data || { clubs: [], teams: [], athletes: [], users: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true, canCreateUser: true };
-  normalizeOrganizationSelection(data);
-  const role = roleLabel();
-  const scope = accessScopeLabel();
-  els.content.innerHTML = renderOrganizationPanelHtml({
-    currentUser: state.currentUser,
-    data,
-    error: state.organization.error,
-    role,
-    scope,
+      return paintOrganizationPanel();
+    },
+    getCurrentContextKey: organizationContextKey,
   });
 }
 
-// Only the Organization panel is workspace-scoped in this phase - a switch
-// between two non-athlete workspaces (e.g. club A -> club B) never needs a
-// full page reload, just a re-fetch of whatever workspace-scoped data is
-// currently on screen.
+// A switch between two non-athlete workspaces (e.g. club A -> club B) never
+// needs a full page reload - just a re-fetch of whatever workspace-scoped
+// data is currently on screen. Coaches, Organization, Program Library, and
+// Exercise Library are all workspace-scoped (their view-cache context key
+// includes currentUserWorkspaceContextParts - see access.js), so the new
+// workspace's context key is already different from the old one on its
+// own; this is never at risk of showing the old workspace's cached data
+// even for an instant. forceRefresh:true is still passed explicitly so a
+// workspace this account happened to already visit earlier in the session
+// is re-verified against the server rather than trusted purely from cache.
 async function onWorkspaceChanged() {
-  if (state.activeTab === "organization") await renderOrganizationPanel();
+  if (state.activeTab === "organization") return renderOrganizationPanel();
+  if (state.activeTab === "coaches") return loadCoaches({ forceRefresh: true });
+  if (state.activeTab === "templates") return loadTemplates({ forceRefresh: true });
+  if (state.activeTab === "exercises") return loadExercises({ renderExercises, setLoading }, { forceRefresh: true });
 }
 
+// The shared post-mutation refresh every organization-actions.js handler
+// already calls by name (grant/revoke roles, login-status, archive/restore,
+// invite/join-link actions, club/team/athlete/user CRUD - see
+// handleOrganizationAction's many `refreshOrganizationData?.()` call sites).
+// Left with the exact same name/signature/behavior (always a real forced
+// fetch, updates state.organization.data/error, `silent` swallows vs.
+// rethrows) so none of those call sites need to change - the only addition
+// is that the fresh result is also written into the cache, so the very next
+// navigation into Settings (or Program Library's accessRequests badge) sees
+// it immediately instead of triggering yet another fetch.
 async function refreshOrganizationData({ silent = false } = {}) {
+  const contextKey = organizationContextKey();
   try {
-    state.organization.data = await api("/api/organization");
+    const data = await dedupeRequest(ORGANIZATION_CACHE_NAMESPACE, contextKey, () => api("/api/organization"));
+    setCacheData(ORGANIZATION_CACHE_NAMESPACE, contextKey, data);
+    // The cache write above is always correct (it's keyed by the context this
+    // request was actually issued for), but this function also writes
+    // directly into the live render state below - unlike renderOrganizationPanel,
+    // which goes through loadCachedView's own race guard. The caller that
+    // fires this in the background without awaiting it (loadTemplates()'s
+    // `void refreshOrganizationData({ silent: true })`) means a workspace or
+    // account switch can complete before this resolves; without this check a
+    // late response for the OLD context would silently overwrite
+    // state.organization.data with another workspace's data.
+    if (organizationContextKey() !== contextKey) return;
+    state.organization.data = data;
     state.organization.error = "";
   } catch (error) {
+    setCacheError(ORGANIZATION_CACHE_NAMESPACE, contextKey, error);
+    if (organizationContextKey() !== contextKey) return;
     state.organization.error = error.message || "Could not load organization.";
     if (!silent) throw error;
   }
@@ -1882,6 +1950,24 @@ function renderTemplatePreviewModal() {
     templateOptions: state.templateOptions,
   });
 }
+// perf/main-navigation-cache Builder decision: a draft's structural/content
+// edits (add/move/delete node/session/item/exercise, rename, dose changes -
+// see builder-actions.js's queuedBuilderApi/setBuilderDraft) already
+// autosave to the server on every single action; there is no separate
+// "unsaved draft" state to protect on the happy path. The real risk this
+// function used to carry was re-entering this tab (e.g. after a quick trip
+// to Coaches) unconditionally re-GETting and OVERWRITING state.builder.draft
+// - besides being a wasted request every time, that GET can race an
+// in-flight autosave PATCH (whichever resolves last wins, silently
+// reverting a just-made edit), and it wipes the whole view (scroll
+// position, open exercise search, expanded sections) for no reason. Rather
+// than folding the draft itself into the generic view-cache (its local copy
+// IS the freshest known-good state between edits, so there's nothing useful
+// a TTL-based cache would add), this simply stops re-fetching it on mere
+// re-entry: an already-open draft is just re-rendered from what's already
+// in memory. A real refetch stays available, unchanged, via the existing
+// explicit refreshBuilderDraft() (see builder-data.js), still called by the
+// small number of actions that already call it deliberately.
 async function loadBuilder() {
   state.navStack = [];
   els.context.textContent = "Program builder";
@@ -1893,9 +1979,7 @@ async function loadBuilder() {
     void loadBuilderDrafts().catch(renderBuilderError);
     return;
   }
-  setLoading("Loading draft program...");
-  const data = await api(`/api/builder/plans/${encodeURIComponent(state.builder.draft.plan.id)}`);
-  state.builder.draft = data;
+  renderBuilder();
   await loadBuilderExercises();
 }
 
@@ -1963,6 +2047,11 @@ function renderExerciseEditorOverlay() {
 const exerciseEditorHandlers = {
   rerender: renderExerciseEditorOverlay,
   refreshAfterSave: async () => {
+    // A new/edited exercise can appear in (or change within) any previously
+    // cached search/filter combination, not just whatever's on screen right
+    // now - clearing the whole namespace here is simpler and safer than
+    // trying to guess which of many cached filter combinations are affected.
+    invalidateExercisesCache();
     if (state.activeTab === "exercises") await loadExercises({ renderExercises, setLoading });
     else if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
   },

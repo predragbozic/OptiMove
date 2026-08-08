@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { emptyTemplatePreview, state } from "./state.js";
 import { clean } from "./utils.js";
+import { invalidateTemplatesCache } from "./program-library-data.js";
 
 export async function openTemplatePreview(planId, renderAfter, options = {}) {
   const selected = state.lastTemplates.find((template) => String(template.plan_id) === String(planId));
@@ -379,6 +380,12 @@ function patchTemplatePendingRequestCount(planId, delta) {
     const pending = Math.max(0, Number(template.pending_access_count || 0) + delta);
     return { ...template, pending_access_count: pending };
   });
+  // .map() above returns a NEW array, breaking the reference aliasing that
+  // otherwise keeps the view-cache entry (whose `data.templates` still
+  // points at the OLD array) implicitly in sync with in-place edits. Without
+  // this, re-entering Program Library within the freshness window would
+  // read the stale cached pending count right back over this update.
+  invalidateTemplatesCache();
 }
 
 export async function submitTemplateMetadataForm(form, { loadTemplates }) {
@@ -415,7 +422,10 @@ export async function submitTemplateMetadataForm(form, { loadTemplates }) {
     state.templateFilters.lifecycle = "all";
     state.templatePreview = emptyTemplatePreview();
     state.selectedTemplateId = null;
-    await loadTemplates();
+    // Just changed this template's own metadata - the cached list for the
+    // current scope still has the pre-edit row, so this reload must never
+    // be satisfied from cache.
+    await loadTemplates({ forceRefresh: true });
   } catch (submitError) {
     if (error) error.textContent = submitError.message || "Could not save library settings.";
   } finally {
@@ -477,6 +487,11 @@ function updateTemplateAccess(planId, access) {
   state.lastTemplates = (state.lastTemplates || []).map((template) => (
     String(template.plan_id) === String(planId) ? { ...template, ...accessPatch } : template
   ));
+  // Same reasoning as patchTemplatePendingRequestCount: .map() breaks the
+  // aliasing with the cached data.templates array, so the cache must be
+  // invalidated or a same-TTL re-entry would revert this access-status
+  // change right back to its pre-mark-as-used value.
+  invalidateTemplatesCache();
   if (String(state.templatePreview?.detail?.plan_id) === String(planId)) {
     state.templatePreview = {
       ...state.templatePreview,
@@ -514,7 +529,9 @@ export async function submitTemplateReviewForm(form, { loadTemplates, renderTemp
       reviewMessage: "Review saved.",
       reviewError: "",
     };
-    await loadTemplates();
+    // A new review can change this template's rating summary in the list -
+    // never trust the cached pre-review list here.
+    await loadTemplates({ forceRefresh: true });
   } catch (error) {
     state.templatePreview = {
       ...state.templatePreview,

@@ -1,18 +1,42 @@
 import { api } from "./api.js";
-import { canManageCoachProfile } from "./access.js";
+import { canManageCoachProfile, currentUserWorkspaceContextParts } from "./access.js";
 import { openTemplatePreviewFromCoachProgram } from "./program-library-actions.js";
 import { state } from "./state.js";
+import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
 
-export async function loadCoaches({ setLoading, renderCoaches }) {
+const COACHES_CACHE_NAMESPACE = "coaches";
+
+// The coach directory (/api/coaches) is filtered per-viewer and per-workspace
+// (see canUseClubProfiles/canBypassCoachVisibility in
+// backend/src/routes/coaches.js) - no other filters/search apply to this
+// list, so the account+workspace part alone is the full context key.
+function coachesContextKey() {
+  return buildContextKey(currentUserWorkspaceContextParts());
+}
+
+export function invalidateCoachesCache() {
+  invalidateCacheNamespace(COACHES_CACHE_NAMESPACE);
+}
+
+export async function loadCoaches({ setLoading, renderCoaches, forceRefresh = false } = {}) {
   state.navStack = [];
-  setLoading("Loading coach profiles...");
-  try {
-    const data = await api("/api/coaches");
-    state.coaches = { ...state.coaches, rows: data.coaches || [], error: "" };
-  } catch (error) {
-    state.coaches = { ...state.coaches, error: error.message || "Could not load coach profiles." };
-  }
-  renderCoaches();
+  const contextKey = coachesContextKey();
+  await loadCachedView({
+    namespace: COACHES_CACHE_NAMESPACE,
+    contextKey,
+    forceRefresh,
+    fetcher: () => api("/api/coaches"),
+    showLoading: () => setLoading("Loading coach profiles..."),
+    applyData: (data) => {
+      state.coaches = { ...state.coaches, rows: data.coaches || [], error: "" };
+      renderCoaches();
+    },
+    applyError: (error) => {
+      state.coaches = { ...state.coaches, error: error.message || "Could not load coach profiles." };
+      renderCoaches();
+    },
+    getCurrentContextKey: coachesContextKey,
+  });
 }
 
 export async function openCoachProfile(profileId, { renderCoachContext }) {
@@ -97,7 +121,10 @@ export async function submitCoachProfileForm(form, { loadCoaches }) {
       }),
     });
     state.coaches.editOpen = false;
-    await loadCoaches();
+    // The account just changed its own coach profile - the cached directory
+    // list must never keep showing the pre-edit version, so force a real
+    // refetch rather than trusting whatever was cached moments ago.
+    await loadCoaches({ forceRefresh: true });
   } catch (submitError) {
     if (error) error.textContent = submitError.message || "Could not save profile.";
   } finally {

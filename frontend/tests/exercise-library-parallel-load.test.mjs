@@ -26,12 +26,18 @@ globalThis.document = {
 const { loadExercises, searchExercises } = await import("../exercise-actions.js");
 const { els } = await import("../dom.js");
 const { state } = await import("../state.js");
+const { clearAllViewCache } = await import("../view-cache.js");
 
 function resetState() {
   state.exerciseSearch = { term: "", limit: 30, hasMore: false, filters: { purpose: "", quality: "", group: "", bodyPart: "", movementPattern: "", startingPosition: "", place: "", complexity: "", attractor: "", tag: "", favorite: false, marked: false }, options: { purposes: [], qualities: [], groups: [], bodyParts: [], movementPatterns: [], startingPositions: [], places: [], complexities: [], attractors: [], tags: [] } };
   state.navStack = [];
   els.content.innerHTML = "";
   els.toolbar.innerHTML = "";
+  // perf/main-navigation-cache: searchExercises() now goes through
+  // view-cache.js's module-level (test-run-wide) cache store - without this,
+  // every test after the first would see a fresh() cache hit for the same
+  // (empty term, default filters) context and never actually call fetch.
+  clearAllViewCache();
 }
 
 function handlers() {

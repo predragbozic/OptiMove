@@ -145,26 +145,3 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     </nav>
   `;
 }
-
-// Pure decision logic for renderOrganizationPanel(app.js): whether to
-// (re)fetch /api/organization. Extracted so it's testable without a DOM -
-// switching between Settings sub-tabs (Overview/Users/Clubs/Teams/Athletes/
-// Tags & Presets/Join links) keeps calling this with forceRefresh: false, so
-// once cachedData exists, it's reused instead of triggering another full
-// fetch. A genuine first entry into Settings (cachedData still null) still
-// fetches regardless of forceRefresh. Explicit refresh call sites
-// (onWorkspaceChanged after a workspace switch, refreshOrganizationData
-// after a mutation) are untouched by this and keep forcing a real fetch.
-export function shouldFetchOrganizationData({ forceRefresh = true, cachedData = null } = {}) {
-  return Boolean(forceRefresh) || !cachedData;
-}
-
-// Pure decision logic for loadTemplates(app.js): whether Program Library
-// needs to kick off a background Organization refresh at all before showing
-// /api/templates results. Only the sidebar's accessRequests-derived
-// "Requests" badge reads Organization data from here, and only when nothing
-// is cached yet - never blocks (or is a prerequisite for) the template list
-// itself.
-export function shouldBackgroundRefreshOrganizationForTemplates({ activeTab, isAthlete, cachedData } = {}) {
-  return activeTab === "templates" && !isAthlete && !cachedData;
-}
