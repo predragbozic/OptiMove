@@ -2741,11 +2741,14 @@ async function loadProgramAccessRequests(req) {
        pa.created_at desc
      limit 100`,
   );
-  const visible = [];
-  for (const row of result.rows) {
-    if (await canManageAthlete(req, row.athlete_id)) visible.push(row);
-  }
-  return visible;
+  // Was one canManageAthlete call per row (N extra queries for N rows,
+  // worse for repeat rows of the same athlete since each one re-checked the
+  // exact same access). canManageAthletes resolves the whole set in a
+  // single batch query, then this just filters the already-ordered rows -
+  // .filter() preserves relative order, so the existing status/updated_at
+  // ordering from the SQL above is untouched.
+  const manageableAthleteIds = await canManageAthletes(req, result.rows.map((row) => row.athlete_id));
+  return result.rows.filter((row) => manageableAthleteIds.has(String(row.athlete_id)));
 }
 
 async function loadProgramAccessRequest(accessId) {
@@ -3072,6 +3075,69 @@ async function canManageAthlete(req, athleteId) {
   return result.rowCount > 0;
 }
 
+// perf/program-access-batch-authorization: batch equivalent of
+// canManageAthlete, for call sites (loadProgramAccessRequests) that need the
+// same decision for a whole list of athlete ids without N separate queries.
+// Mirrors canManageAthlete's own branches exactly - see that function for
+// the source of truth this was derived from - just restructured so each
+// branch runs once for the whole set instead of once per athlete:
+//   - a.user_id = $1 (an athlete managing their own profile row): resolved
+//     from req.authz.athleteId (already loaded once per request by
+//     loadAuthorizationContext - selecting the exact same
+//     `public.athletes where user_id = $1` row), no extra query.
+//   - the user_athletes existence check (deliberately NOT filtered by
+//     relationship_type, matching canManageAthlete precisely) and both
+//     athlete_memberships checks (club/team) are folded into one UNION
+//     query, since club_admin/team_coach role ids are already sitting in
+//     req.authz.clubRoles/teamRoles (loaded with the identical
+//     is_active = true filter canManageAthlete's own EXISTS joins use) and
+//     don't need re-querying user_club_roles/user_team_roles at all.
+// A platform admin short-circuits with no query at all, same as
+// canManageAthlete. An empty athleteIds list also short-circuits with no
+// query - there is nothing to authorize.
+// `executor` defaults to the real pooled `query`; tests pass a wrapping
+// executor to count real SQL calls without relying on wall-clock timing.
+async function canManageAthletes(req, athleteIds, executor = { query }) {
+  const uniqueIds = [...new Set((athleteIds || []).filter(Boolean).map(String))];
+  if (!uniqueIds.length) return new Set();
+  if (isPlatformAdministrator(req.authz)) return new Set(uniqueIds);
+
+  const manageable = new Set();
+  const ownAthleteId = req.authz?.athleteId ? String(req.authz.athleteId) : null;
+  if (ownAthleteId && uniqueIds.includes(ownAthleteId)) manageable.add(ownAthleteId);
+
+  const adminClubIds = (req.authz?.clubRoles || []).filter((r) => r.role === "club_admin").map((r) => r.clubId);
+  const coachTeamIds = (req.authz?.teamRoles || []).filter((r) => r.role === "team_coach").map((r) => r.teamId);
+
+  const result = await executor.query(
+    `select distinct athlete_id
+     from (
+       select ua.athlete_id
+       from public.user_athletes ua
+       where ua.user_id = $1
+         and ua.athlete_id = any($2::uuid[])
+         and ua.is_active = true
+       union
+       select tm.athlete_id
+       from public.athlete_memberships tm
+       where tm.membership_type = 'team'
+         and tm.status = 'active'
+         and tm.team_id = any($3::uuid[])
+         and tm.athlete_id = any($2::uuid[])
+       union
+       select cm.athlete_id
+       from public.athlete_memberships cm
+       where cm.membership_type = 'club'
+         and cm.status = 'active'
+         and cm.club_id = any($4::uuid[])
+         and cm.athlete_id = any($2::uuid[])
+     ) matched`,
+    [req.user.id, uniqueIds, coachTeamIds, adminClubIds],
+  );
+  for (const row of result.rows) manageable.add(String(row.athlete_id));
+  return manageable;
+}
+
 function canManageClub(req, clubId) {
   return authzCanManageClub(req.authz, clubId);
 }
@@ -3263,5 +3329,10 @@ function splitName(value) {
     lastName: parts.slice(1).join(" "),
   };
 }
+
+// Exported purely for direct unit/equivalence testing (see
+// program-access-batch-authorization.test.mjs) - every real call site still
+// goes through the default router export below.
+export { canManageAthlete, canManageAthletes };
 
 export default router;
