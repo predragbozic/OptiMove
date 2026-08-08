@@ -173,7 +173,6 @@ import {
 import {
   buildWeeklyCalendarMonth,
   clampMonth,
-  defaultWeekIndex,
   flattenDayGroups,
   groupItems,
   selectedWeeklyDay,
@@ -181,6 +180,7 @@ import {
   weeklyCalendarMonthRange,
 } from "./weekly-plan.js";
 import { handleWeeklyAction } from "./weekly-actions.js";
+import { loadWeekly as loadWeeklyData } from "./weekly-data.js";
 import { renderUserControls } from "./user-controls.js";
 import { startRealtimeInbox, stopRealtimeInbox } from "./realtime.js";
 import { closeWorkspaceSwitcherIfOutside, handleWorkspaceAction, renderWorkspaceSwitcher } from "./workspace-actions.js";
@@ -1235,21 +1235,11 @@ async function loadCoachHome() {
   }
 }
 
-async function loadWeekly() {
-  if (!state.selectedAthleteId) return renderEmpty("No athlete selected.");
-  state.navStack = [];
-  setLoading("Loading weekly plans...");
-  const data = await api(`/api/athletes/${encodeURIComponent(state.selectedAthleteId)}/program-data?program=__weekly__`);
-  state.lastWeeklyData = data;
-  state.selectedWeekIndex = defaultWeekIndex(data.weeks || []);
-  state.weekSelectorOpen = Boolean(state.openWeekCalendarOnLoad);
-  state.openWeekCalendarOnLoad = false;
-  if (state.weekSelectorOpen) {
-    const activeWeek = data.weeks?.[state.selectedWeekIndex] || data.weeks?.[0];
-    state.weekCalendarMonth = monthStartIso(activeWeek?.weekStart || localDateIso());
-  }
-  renderAthleteHeader(data);
-  renderWeeklyRoot(data);
+async function loadWeekly(options = {}) {
+  return loadWeeklyData(
+    { setLoading, renderEmpty, renderError, renderAthleteHeader, renderWeeklyRoot },
+    options,
+  );
 }
 
 async function loadPrograms() {
