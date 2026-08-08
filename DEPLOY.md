@@ -15,6 +15,29 @@ Najjednostavniji prvi deploy je jedan Node Web Service koji servira i backend i 
    - `PORT` ne mora rucno, hosting ga obicno sam postavlja
 5. Deploy.
 
+### perf/frontend-production-build: sta rade `npm run build` / `npm start`
+
+Vrednosti Build/Start command-i u Render-u se NE menjaju (i dalje `npm run
+build` / `npm start`) - promenjen je samo sadrzaj tih root `package.json`
+skripti:
+
+- **Build** (`npm run build`, root `package.json`): `npm --prefix backend
+  ci` (instalacija backend zavisnosti) pa `npm --prefix frontend ci`
+  (instalacija frontend/Vite zavisnosti) pa `npm --prefix frontend run
+  build` (produkcioni Vite build u `frontend/dist/`, hash-ovan i
+  minifikovan).
+- **Start** (`npm start`, root `package.json` -> `npm --prefix backend
+  start` -> backend's own `node src/migrate.js && node src/server.js`,
+  nepromenjeno): prvo migracije, pa start servera. Server u produkciji
+  (`NODE_ENV=production`) servira `frontend/dist` umesto sirovog
+  `frontend/` izvora, i namerno puca sa jasnom greskom pri startu ako
+  `frontend/dist` ne postoji (znaci da build korak nije prosao ili nije
+  pokrenut).
+
+Nijedna migracija se ne pokrece rucno ovim PR-om, i nijedna Render
+environment promenljiva se ne menja - `frontend/dist/` se generise pri
+svakom deploy-u i nikad se ne commit-uje u repo.
+
 ## Test linkovi
 
 Kada servis dobije javni URL, npr.:

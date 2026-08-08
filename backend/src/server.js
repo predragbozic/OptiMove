@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import athletesRouter from "./routes/athletes.js";
@@ -25,6 +26,14 @@ const port = Number(process.env.PORT || 3001);
 const isProduction = process.env.NODE_ENV === "production";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const frontendDir = path.resolve(__dirname, "../../frontend");
+// perf/frontend-production-build: in production, serve the built,
+// hashed-and-minified frontend/dist (see frontend/vite.config.js) instead
+// of the raw source directory. Dev/test keep serving frontendDir directly,
+// unbuilt - the existing practical dev flow (`npm run dev` / `node --watch`)
+// and the existing frontend test suite (which imports frontend/*.js source
+// modules directly - see frontend/tests/*.test.mjs) are both untouched.
+const distDir = path.join(frontendDir, "dist");
+const staticRoot = isProduction ? distDir : frontendDir;
 const corsOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -63,20 +72,47 @@ app.use("/api/notifications", requireAuth, notificationsRouter);
 app.use("/api/messages", requireAuth, messagesRouter);
 app.get("/api/realtime", requireAuth, realtimeRouter);
 
-// This is a plain ES-modules frontend with no build step: script imports (e.g.
-// "./builder-view.js") carry no cache-busting hash, and browsers cache compiled
-// ES modules more aggressively than typical HTTP caching -- a stale module can
-// keep getting reused across reloads (even hard reloads) independent of the HTML
-// page. Force revalidation on every request so a deploy is never masked by a
-// cached JS/CSS file.
-app.use(express.static(frontendDir, {
-  setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),
+// Dev/test: this is a plain ES-modules frontend with no build step - script
+// imports (e.g. "./builder-view.js") carry no cache-busting hash, and
+// browsers cache compiled ES modules more aggressively than typical HTTP
+// caching, so a stale module can keep getting reused across reloads (even
+// hard reloads) independent of the HTML page. Force revalidation on every
+// request so a local reload is never masked by a cached JS/CSS file.
+//
+// Production: staticRoot is frontend/dist (see above). Its hashed
+// assets/* files (e.g. app-CB0IK9wT.js) are safe to cache forever - a new
+// deploy always emits new hashed filenames, never reuses an old one - but
+// index.html/athlete.html themselves must stay revalidate-on-every-request
+// (same as dev), since THEY are what point at the current deploy's hashed
+// filenames; caching them long-lived would keep serving a stale deploy's
+// asset references after a new one ships.
+const distAssetsDir = path.join(distDir, "assets") + path.sep;
+app.use(express.static(staticRoot, {
+  setHeaders: (res, filePath) => {
+    if (isProduction && filePath.startsWith(distAssetsDir)) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    } else {
+      res.setHeader("Cache-Control", "no-cache");
+    }
+  },
 }));
+// res.sendFile() applies its own default Cache-Control (from the `send`
+// package) and does NOT run through express.static's setHeaders above, so
+// these routes must set the header themselves - otherwise these five paths
+// would silently diverge from the "/" request (served by express.static's
+// own directory-index handling, which DOES go through setHeaders) even
+// though both must behave identically: revalidate on every request, never
+// long-lived, so a new deploy's hashed asset references are picked up
+// immediately.
+function sendHtmlEntry(res, fileName) {
+  res.setHeader("Cache-Control", "no-cache");
+  res.sendFile(path.join(staticRoot, fileName));
+}
 app.get(["/", "/app", "/invite", "/join", "/verify-email"], (_req, res) => {
-  res.sendFile(path.join(frontendDir, "index.html"));
+  sendHtmlEntry(res, "index.html");
 });
 app.get("/athlete", (_req, res) => {
-  res.sendFile(path.join(frontendDir, "athlete.html"));
+  sendHtmlEntry(res, "athlete.html");
 });
 
 app.use((req, res) => {
@@ -98,6 +134,17 @@ if (isMainModule) {
   // is missing what it needs (see backend/src/email.js) - a no-op outside
   // production, so local dev/tests are never affected.
   assertEmailConfigValid();
+  // Refuses to start at all in production if frontend/dist wasn't built -
+  // silently falling back to serving nothing (or, worse, stale raw source)
+  // would look like a healthy deploy while actually serving a broken or
+  // missing frontend. A no-op outside production, so local dev/tests
+  // (which serve frontendDir directly, unbuilt) are never affected.
+  if (isProduction && (!existsSync(path.join(distDir, "index.html")) || !existsSync(path.join(distDir, "athlete.html")))) {
+    throw new Error(
+      `Production frontend build is missing: ${distDir} has no index.html/athlete.html. ` +
+        "Run `npm run build` in frontend/ (wired into the root build step - see package.json) before starting the server in production.",
+    );
+  }
   app.listen(port, () => {
     console.log(`Optimove backend listening on http://localhost:${port}`);
   });
