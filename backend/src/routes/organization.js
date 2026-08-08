@@ -155,15 +155,26 @@ async function loadAthleteInviteStatuses(activeWorkspace, athleteIds, viewerUser
   return byAthlete;
 }
 
-// perf/join-link-cleanup: a plain counter, never read or branched on by any
-// production code path - incremented once per real sweepUnusableJoinLink()
-// transaction actually opened, so tests can prove the batch prefilter's
-// savings via a real signal (not wall-clock timing) without monkey-patching
-// pg-pool internals, which interacts badly with connection pooling/teardown
-// (a pool.connect()-wrapping approach was tried and dropped - see this PR's
-// commit history for why). A trivial object-property increment; always a
-// no-op in production, never activated/toggled by anything.
-export const __testHooks = { cleanupTransactionCount: 0 };
+// perf/join-link-cleanup: an optional observer a test can install to prove
+// how many real sweepUnusableJoinLink() transactions a request actually
+// opened, without any always-on production counter. null (a genuine no-op,
+// nothing to call) by default and in every production request; only a test
+// that has explicitly called __setSweepObserverForTests installs a callback
+// here, and it is responsible for resetting it back to null itself once
+// done (see countCleanupTransactions in join-link-cleanup-batch.test.mjs,
+// which always does so in a finally block). Never read or branched on for
+// any business decision - purely an optional notification, and no
+// NODE_ENV check gates it either. This replaces an earlier always-on
+// `{ cleanupTransactionCount: 0 }` counter that was incremented
+// unconditionally on every request (including production) - not full
+// disabled-by-default instrumentation - and, before that, a
+// pool.connect()-wrapping approach that interacted badly with connection
+// pooling/teardown (both dropped - see this PR's commit history for why).
+let sweepObserverForTests = null;
+
+export function __setSweepObserverForTests(observer) {
+  sweepObserverForTests = observer;
+}
 
 // Re-loads a join link FOR UPDATE under its own lock/transaction and closes
 // out its still-open applications if it has become permanently unusable
@@ -173,7 +184,7 @@ export const __testHooks = { cleanupTransactionCount: 0 };
 // speculatively (e.g. once per link on every list load) - a healthy link
 // costs one extra locked SELECT and nothing else.
 async function sweepUnusableJoinLink(linkId) {
-  __testHooks.cleanupTransactionCount += 1;
+  sweepObserverForTests?.(linkId);
   const client = await pool.connect();
   try {
     await client.query("begin");

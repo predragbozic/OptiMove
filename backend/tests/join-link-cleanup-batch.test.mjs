@@ -7,7 +7,7 @@ import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
 import { closeUnusableJoinLinkApplications, findJoinLinkIdsNeedingCleanupCheck, lockJoinLinkActions } from "../src/joinLinkContext.js";
-import { __testHooks } from "../src/routes/organization.js";
+import { __setSweepObserverForTests } from "../src/routes/organization.js";
 import { runCleanupSteps } from "./_test-cleanup.mjs";
 
 // perf/join-link-cleanup: GET /api/organization[/athlete-join-links] used to
@@ -164,36 +164,33 @@ function regenerateEndpoint(linkId) {
   return `/api/organization/athlete-join-links/${linkId}/regenerate`;
 }
 
-// node-postgres's pg-pool implements the plain query() convenience method
-// (used by db.js's own `query()`, and by every ordinary SELECT in this
-// codebase, including the batch prefilter's own reads) internally via THE
-// SAME pool.connect() - so counting raw connect() calls does not
-// distinguish "a real cleanup transaction opened" from "any query ran at
-// all" (confirmed by reading node_modules/pg-pool/index.js). What's actually
-// unique to a real cleanup transaction (sweepUnusableJoinLink, and every
-// other mutation endpoint in this codebase) is an explicit `client.query
-// ("begin")` issued against a client checked out via an explicit
-// pool.connect() call - a plain pool.query() never issues that literal
-// statement. This wraps pool.connect to intercept the returned client's own
-// .query() and count only exact "begin" calls, which is what precisely
-// counts real transactions (not wall-clock timing) without touching
-// production code at all - always restored in a finally block.
 // Monkey-patching pool.connect()/client.query() to count real transactions
 // was tried first and dropped: node-postgres recycles pooled client objects
 // across acquisitions, and an occasional connect() unrelated to the request
 // under test can stay pending well past this helper's own window (observed
 // as spurious "asynchronous activity after the test ended" errors once the
 // pool is torn down in this file's own after() hook) - the wrap has no safe
-// place to fully unwind. organization.js's __testHooks.cleanupTransactionCount
-// is a plain counter incremented once per real sweepUnusableJoinLink()
-// transaction, with no pg internals involved at all - the diff between two
-// readings of it is exactly "how many cleanup transactions actually ran"
-// during `fn()`, and nothing about it can outlive `fn()` in a way that
-// causes trouble.
+// place to fully unwind. An always-on exported counter incremented
+// unconditionally by production code was tried next and also dropped - it
+// worked, but stayed live and mutated itself on every request in
+// production, not just during a test. organization.js's
+// __setSweepObserverForTests installs a callback that sweepUnusableJoinLink
+// invokes once per real transaction it opens; the callback is null (a
+// genuine no-op) whenever no test has installed one, including always in
+// production. This installs one just for the duration of `fn()`, counts
+// its calls, and unconditionally clears it back to null in a finally block
+// so no observer can ever leak into a later test or request.
 async function countCleanupTransactions(fn) {
-  const before = __testHooks.cleanupTransactionCount;
-  await fn();
-  return __testHooks.cleanupTransactionCount - before;
+  let count = 0;
+  __setSweepObserverForTests(() => {
+    count += 1;
+  });
+  try {
+    await fn();
+  } finally {
+    __setSweepObserverForTests(null);
+  }
+  return count;
 }
 
 // Reconstructs the PRE-perf/join-link-cleanup per-link loop exactly - what
@@ -204,11 +201,12 @@ async function countCleanupTransactions(fn) {
 // "before" transaction count for the Scenario A/B proofs below, using the
 // exact same already-exported primitives sweepUnusableJoinLink itself uses.
 // Returns the number of transactions it opened directly (one per link,
-// unconditionally, by construction) rather than routing through
-// __testHooks.cleanupTransactionCount - this helper deliberately calls none
-// of the real production code path (sweepUnusableJoinLink is what that
-// counter tracks), only the same already-exported primitives it's built
-// from, so its own loop is the ground truth for the "before" count.
+// unconditionally, by construction) rather than routing through the
+// observer countCleanupTransactions installs - this helper deliberately
+// calls none of the real production code path (sweepUnusableJoinLink is
+// what that observer watches), only the same already-exported primitives
+// it's built from, so its own loop is the ground truth for the "before"
+// count.
 async function oldStyleSweepEveryPendingLink(linkIds) {
   let transactionsOpened = 0;
   for (const linkId of linkIds) {
@@ -673,4 +671,30 @@ test("18. findJoinLinkIdsNeedingCleanupCheck: empty input needs no query, and on
   ];
   const flagged = await findJoinLinkIdsNeedingCleanupCheck(query, links);
   assert.deepEqual([...flagged].sort(), ["archived-club", "expired", "revoked"].sort());
+});
+
+// --- 19: the production path needs no observer at all ---
+
+test("19. without a test observer installed, the production cleanup path runs completely normally", async () => {
+  const coach = await makePrivateCoach(`jlc-no-observer-${Date.now()}@test.local`);
+  const token = await createSession(coach.id);
+  const created = await trackLink(await createLink(cookieFor(token), { contextType: "private_coach", expiresInDays: 5 }));
+  const rawToken = extractToken(created.body.joinUrl);
+  await applyToLink(rawToken, "jlc-no-observer-applicant");
+  await query(`update public.athlete_join_links set expires_at = now() - interval '1 hour' where id = $1`, [created.body.link.id]);
+
+  // No __setSweepObserverForTests call anywhere in this test - the default,
+  // permanent production state - yet the sweep must still run and close the
+  // now-expired link's pending application exactly as every other test here
+  // observes, proving the observer is optional instrumentation, not
+  // something the real cleanup path depends on to function.
+  const list = await api(linksEndpoint(), { cookie: cookieFor(token) });
+  assert.equal(list.status, 200);
+  const listed = list.body.links.find((l) => l.id === created.body.link.id);
+  assert.equal(listed.status, "expired");
+  assert.equal(listed.pendingCount, 0);
+
+  const row = await applicationRow(created.body.link.id);
+  assert.equal(row.status, "cancelled");
+  assert.equal(row.password_hash, null);
 });
