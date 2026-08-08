@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "npm --prefix backend ci && npm --prefix frontend ci && npm --prefix frontend run build",
+    "build": "npm --prefix backend ci && npm --prefix frontend ci --include=dev && npm --prefix frontend run build",
     "start": "npm --prefix backend start",
-    "dev": "npm --prefix backend run dev"
+    "dev": "npm --prefix backend run dev",
+    "verify:render-build": "node scripts/verify-render-build.mjs"
   }
 }
