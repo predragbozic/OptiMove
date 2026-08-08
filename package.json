@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "npm --prefix backend ci",
+    "build": "npm --prefix backend ci && npm --prefix frontend ci && npm --prefix frontend run build",
     "start": "npm --prefix backend start",
     "dev": "npm --prefix backend run dev"
   }
