@@ -18,6 +18,7 @@ import {
   canManageJoinLink,
   canReviewJoinApplication,
   closeUnusableJoinLinkApplications,
+  findJoinLinkIdsNeedingCleanupCheck,
   joinLinkContextShapeValid,
   joinLinkStatus,
   lockApplicantAthleteCreation,
@@ -154,6 +155,27 @@ async function loadAthleteInviteStatuses(activeWorkspace, athleteIds, viewerUser
   return byAthlete;
 }
 
+// perf/join-link-cleanup: an optional observer a test can install to prove
+// how many real sweepUnusableJoinLink() transactions a request actually
+// opened, without any always-on production counter. null (a genuine no-op,
+// nothing to call) by default and in every production request; only a test
+// that has explicitly called __setSweepObserverForTests installs a callback
+// here, and it is responsible for resetting it back to null itself once
+// done (see countCleanupTransactions in join-link-cleanup-batch.test.mjs,
+// which always does so in a finally block). Never read or branched on for
+// any business decision - purely an optional notification, and no
+// NODE_ENV check gates it either. This replaces an earlier always-on
+// `{ cleanupTransactionCount: 0 }` counter that was incremented
+// unconditionally on every request (including production) - not full
+// disabled-by-default instrumentation - and, before that, a
+// pool.connect()-wrapping approach that interacted badly with connection
+// pooling/teardown (both dropped - see this PR's commit history for why).
+let sweepObserverForTests = null;
+
+export function __setSweepObserverForTests(observer) {
+  sweepObserverForTests = observer;
+}
+
 // Re-loads a join link FOR UPDATE under its own lock/transaction and closes
 // out its still-open applications if it has become permanently unusable
 // (expired/revoked/context-invalid) - see closeUnusableJoinLinkApplications.
@@ -162,6 +184,7 @@ async function loadAthleteInviteStatuses(activeWorkspace, athleteIds, viewerUser
 // speculatively (e.g. once per link on every list load) - a healthy link
 // costs one extra locked SELECT and nothing else.
 async function sweepUnusableJoinLink(linkId) {
+  sweepObserverForTests?.(linkId);
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -228,10 +251,28 @@ async function loadJoinLinksForWorkspace(req, activeWorkspace) {
   // lost the role, since its last mutation. Only attempted for a link that
   // still shows an outstanding pending count - a link with nothing pending
   // has nothing to sweep, and this keeps every ordinary load cheap.
-  for (const row of result.rows) {
-    if (Number(row.pending_count) > 0) {
-      const closed = await sweepUnusableJoinLink(row.id);
-      if (closed > 0) row.pending_count = 0;
+  //
+  // perf/join-link-cleanup: sweepUnusableJoinLink opens a real
+  // connection+transaction+advisory-lock, so calling it once per pending
+  // link here - even for a link that's still perfectly valid, the
+  // overwhelmingly common case - used to cost N extra transactions for N
+  // pending links regardless of how many actually needed anything closed.
+  // findJoinLinkIdsNeedingCleanupCheck is a read-only batch prefilter (at
+  // most 3 extra queries total, not one per link) that narrows this down to
+  // only the links that MIGHT be permanently unusable; sweepUnusableJoinLink
+  // itself is completely unchanged for every one of those candidates - same
+  // lock, same re-fetch FOR UPDATE, same recheck, same mutation. A link the
+  // prefilter clears is never touched at all.
+  const pendingRows = result.rows.filter((row) => Number(row.pending_count) > 0);
+  if (pendingRows.length) {
+    const rowsById = new Map(result.rows.map((row) => [String(row.id), row]));
+    const candidateIds = await findJoinLinkIdsNeedingCleanupCheck(query, pendingRows);
+    for (const linkId of candidateIds) {
+      const closed = await sweepUnusableJoinLink(linkId);
+      if (closed > 0) {
+        const row = rowsById.get(linkId);
+        if (row) row.pending_count = 0;
+      }
     }
   }
   return result.rows.map((row) => ({
