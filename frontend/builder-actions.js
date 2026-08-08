@@ -114,7 +114,10 @@ async function exitBuilderToPlanContext(plan, handlers) {
     state.weekSelectorOpen = false;
     handlers.renderTabs();
     handlers.renderLibraryNav();
-    await handlers.loadWeekly();
+    // Same reasoning as the templates branch below - this exit always
+    // follows a delete/submit/save that can change what Calendar shows for
+    // this exact athlete; never trust a cached pre-exit payload here.
+    await handlers.loadWeekly({ forceRefresh: true });
     return;
   }
   if (plan?.isTemplate || !plan?.athleteId) {
@@ -649,7 +652,9 @@ export async function handleBuilderDraftAction(action, handlers) {
     await api(`/api/builder/plans/${encodeURIComponent(planId)}`, { method: "DELETE" });
     if (state.activeTab === "weekly") {
       state.weekSelectorOpen = false;
-      await handlers.loadWeekly();
+      // Just deleted this plan - the cached Calendar payload for this
+      // athlete must never keep showing it.
+      await handlers.loadWeekly({ forceRefresh: true });
     } else if (state.activeTab === "programs") {
       state.selectedProgramId = null;
       await handlers.loadPrograms();
