@@ -194,6 +194,89 @@ export async function closeUnusableJoinLinkApplications(executor, link) {
   return result.rowCount;
 }
 
+// perf/join-link-cleanup: batch, READ-ONLY prefilter for
+// loadJoinLinksForWorkspace (backend/src/routes/organization.js) - answers
+// "which of these links might closeUnusableJoinLinkApplications actually
+// need to touch?" for many links in one pass, using at most 3 extra queries
+// total (one each for private_coach creators / clubs / teams among the
+// candidates - never one query per link, and zero when nothing needs a
+// context check). This is ONLY an optimization: every id it returns still
+// goes through the exact same lock -> re-fetch FOR UPDATE -> re-check
+// -> mutate sequence as before (see organization.js's sweepUnusableJoinLink)
+// - this function only decides whether that sequence runs AT ALL, never
+// what it does once it runs. A link this misses as a false negative (its
+// context changed in the instant between this read and the caller's lock)
+// is caught the next time anyone with real access loads it, or the moment
+// anyone approves/rejects one of its applications directly - exactly the
+// same "opportunistic, eventually swept" characteristic the unbatched
+// version already had, not a new one introduced by batching.
+//
+// `links` must carry the same shape loadJoinLinksForWorkspace's own SELECT
+// already produces (id, context_type, context_id, created_by_user_id,
+// expires_at, is_active, revoked_at) - no separate query needed to obtain
+// it. Only links already known to have a pending_count > 0 should be passed
+// in; a link with nothing pending has nothing this could ever flag anyway.
+export async function findJoinLinkIdsNeedingCleanupCheck(executor, links) {
+  const now = new Date();
+  const candidateIds = new Set();
+  const needsContextCheck = [];
+  for (const link of links) {
+    const isExpired = new Date(link.expires_at) <= now;
+    const isRevoked = !link.is_active || Boolean(link.revoked_at);
+    if (isExpired || isRevoked) {
+      candidateIds.add(String(link.id));
+      continue;
+    }
+    needsContextCheck.push(link);
+  }
+  if (!needsContextCheck.length) return candidateIds;
+
+  const privateCoachCreatorIds = [...new Set(
+    needsContextCheck.filter((link) => link.context_type === "private_coach").map((link) => link.created_by_user_id),
+  )];
+  const clubContextIds = [...new Set(
+    needsContextCheck.filter((link) => link.context_type === "club").map((link) => link.context_id),
+  )];
+  const teamContextIds = [...new Set(
+    needsContextCheck.filter((link) => link.context_type === "team").map((link) => link.context_id),
+  )];
+
+  const [activeCoachRows, clubRows, teamRows] = await Promise.all([
+    privateCoachCreatorIds.length
+      ? executor(
+          `select user_id from public.user_global_roles where role = 'independent_coach' and is_active = true and user_id = any($1::uuid[])`,
+          [privateCoachCreatorIds],
+        )
+      : Promise.resolve({ rows: [] }),
+    clubContextIds.length
+      ? executor(`select id, coalesce(is_active, true) as is_active from public.clubs where id = any($1::uuid[])`, [clubContextIds])
+      : Promise.resolve({ rows: [] }),
+    teamContextIds.length
+      ? executor(
+          `select t.id, coalesce(t.is_active, true) as team_active, coalesce(c.is_active, true) as club_active
+           from public.teams t
+           join public.clubs c on c.id = t.club_id
+           where t.id = any($1::uuid[])`,
+          [teamContextIds],
+        )
+      : Promise.resolve({ rows: [] }),
+  ]);
+
+  const activeCoachIds = new Set(activeCoachRows.rows.map((row) => String(row.user_id)));
+  const clubIsActive = new Map(clubRows.rows.map((row) => [String(row.id), Boolean(row.is_active)]));
+  const teamIsActive = new Map(teamRows.rows.map((row) => [String(row.id), Boolean(row.team_active) && Boolean(row.club_active)]));
+
+  for (const link of needsContextCheck) {
+    let contextValid;
+    if (link.context_type === "private_coach") contextValid = activeCoachIds.has(String(link.created_by_user_id));
+    else if (link.context_type === "club") contextValid = clubIsActive.get(String(link.context_id)) === true;
+    else if (link.context_type === "team") contextValid = teamIsActive.get(String(link.context_id)) === true;
+    else contextValid = false;
+    if (!contextValid) candidateIds.add(String(link.id));
+  }
+  return candidateIds;
+}
+
 export function joinLinkIsWithinCapacity(link) {
   if (link.max_uses == null) return true;
   return Number(link.approved_uses) < Number(link.max_uses);
