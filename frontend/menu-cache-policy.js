@@ -103,17 +103,17 @@ export const MENU_CACHE_POLICIES = {
   },
   "coach-home": {
     label: "Home",
-    policy: "always-refresh",
-    namespace: null,
+    policy: "cached",
+    namespace: "coach-home",
     rationale:
-      "Shows \"today's\" athlete overview (GET /api/athletes/today) - not wired into view-cache in this PR. A stale cached view of \"today\" is a worse failure mode than one extra request, and Home is typically the very first screen after login, with nothing to reuse yet. Candidate for a future perf PR if warranted.",
+      "Wired into view-cache.js in perf/home-specific-programs-cache. GET /api/athletes/today is filtered per-viewer/workspace only (athleteListAccessFilter) - the backend always computes \"today\" itself, so account+workspace is the whole context key (coach-home-data.js's coachHomeContextKey). The 30s TTL/background-refresh already used everywhere else in this file is exactly the right fit here too: a coach re-opening Home mid-session sees the same roster instantly instead of a repeat empty Loading screen, and any real change (a session added/removed/deleted for today, an athlete archived/restored/created) invalidates the whole (single-entry) namespace rather than waiting out the TTL - see invalidateCoachHomeCache()'s call sites in builder-actions.js (weekly-plan submit/delete exits) and app.js's loadAthletes() (reused by organization-actions.js as its post-mutation athlete-roster reload). A midnight rollover during a long-lived open tab is bounded by the same 30s TTL, not a permanent staleness risk.",
   },
   programs: {
     label: "Specific programs",
-    policy: "always-refresh",
-    namespace: null,
+    policy: "cached",
+    namespace: "programs",
     rationale:
-      "Same loader shape and same athleteId-scoped endpoint family as Calendar (GET /api/athletes/:id/program-data?program=<name>), but deliberately not wired into view-cache in this PR to keep this change reviewable and scoped to Calendar. Documented follow-up, not a silent gap.",
+      "Wired into view-cache.js in perf/home-specific-programs-cache. Same loader shape and same athleteId-scoped endpoint family as Calendar (GET /api/athletes/:id/program-data?program=<name>) - context key is [...workspace parts, athleteId] (programs-data.js's programsContextKey), the exact same shape as weekly's. state.selectedProgramId (which of the athlete's already-fetched programs is on screen) never reaches the server and is deliberately excluded from the key, same reasoning as weekly's week/day/month selection. Invalidated via forceRefresh at the same two exit points weekly already uses (exitBuilderToPlanContext, builder-delete-source-plan in builder-actions.js) - a program's own Builder edit/duplicate/delete always routes through one of those. The athlete shell's own \"Specific programs\" tab (data-athlete-tab=\"programs\") sets this exact same state.activeTab and shares this exact same cache.",
   },
   "athlete-settings": {
     label: "Settings (athlete shell)",
