@@ -29,6 +29,7 @@ export function renderLogin({ renderUserControls, setStatus }) {
         </label>
         <p class="login-error" aria-live="polite"></p>
         <button class="plain-button" type="submit">Sign in</button>
+        <p class="muted"><a href="/forgot-password">Forgot password?</a></p>
       </form>
     </section>
   `;

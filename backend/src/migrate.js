@@ -32,6 +32,12 @@ export const migrationPaths = [
   // Depends on public.athlete_join_applications from
   // 20260807_athlete_join_links.sql above (its FK target).
   path.resolve(__dirname, "../../migrations/20260809_email_verification.sql"),
+  // Depends on public.users from create_access_schema.sql above. A separate
+  // table from email_verification_tokens right above (see this migration's
+  // own header comment for why) - ordered after it purely to keep every
+  // token-table migration chronologically grouped, not because of any real
+  // dependency between them.
+  path.resolve(__dirname, "../../migrations/20260810_password_reset.sql"),
   path.resolve(__dirname, "../../create_builder_schema.sql"),
   path.resolve(__dirname, "../../create_exercise_user_state.sql"),
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),

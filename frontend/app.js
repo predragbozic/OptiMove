@@ -16,6 +16,12 @@ import {
   submitResendVerification as submitResendVerificationAction,
 } from "./email-verification-actions.js";
 import {
+  renderForgotPassword as renderForgotPasswordAction,
+  renderResetPassword as renderResetPasswordAction,
+  submitForgotPassword as submitForgotPasswordAction,
+  submitResetPassword as submitResetPasswordAction,
+} from "./password-reset-actions.js";
+import {
   renderAthleteHeaderToolbarHtml,
   renderAthleteListHtml,
   renderAthleteSettingsHtml,
@@ -209,6 +215,14 @@ async function init() {
     await renderVerifyEmailPageAction({ renderUserControls, setStatus });
     return;
   }
+  if (window.location.pathname === "/forgot-password") {
+    await renderForgotPasswordAction({ renderUserControls, setStatus });
+    return;
+  }
+  if (window.location.pathname === "/reset-password") {
+    await renderResetPasswordAction({ renderUserControls, setStatus });
+    return;
+  }
   await loadSession();
   if (!state.currentUser) {
     renderLoginAction({ renderUserControls, setStatus });
@@ -370,6 +384,20 @@ async function handleContentSubmit(event) {
   if (resendVerificationForm) {
     event.preventDefault();
     await submitResendVerificationAction(resendVerificationForm);
+    return;
+  }
+
+  const forgotPasswordForm = event.target.closest("#forgotPasswordForm");
+  if (forgotPasswordForm) {
+    event.preventDefault();
+    await submitForgotPasswordAction(forgotPasswordForm);
+    return;
+  }
+
+  const resetPasswordForm = event.target.closest("#resetPasswordForm");
+  if (resetPasswordForm) {
+    event.preventDefault();
+    await submitResetPasswordAction(resetPasswordForm);
     return;
   }
 
