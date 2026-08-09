@@ -27,6 +27,7 @@ import {
 } from "../emailVerification.js";
 import {
   allowForgotAttemptForIp,
+  enforceForgotResponseFloor,
   hashResetToken,
   issuePasswordResetToken,
   loadLastPasswordResetTokenSentAt,
@@ -172,34 +173,110 @@ router.post("/login", async (req, res, next) => {
 // regardless of whether the email belongs to an account, whether that
 // account is active, whether it's currently throttled, or whether the
 // email provider fails to send - this endpoint must never be usable to
-// probe which emails have accounts, active or not. See
-// backend/src/passwordReset.js for the token/throttle helpers.
+// probe which emails have accounts, active or not, INCLUDING via response
+// timing. See backend/src/passwordReset.js for the token/throttle/timing-
+// floor helpers.
 //
-// A residual timing side-channel is accepted, not eliminated: a real
-// account that isn't currently throttled does real extra work (a
-// transaction, an advisory lock, a token insert, and - outside the
-// transaction - a real network call to the email provider) that a
-// nonexistent or deactivated email never triggers. Closing this
-// completely would mean doing an equally expensive dummy transaction/
-// network call for every miss too, which turns this endpoint into a much
-// cheaper DoS target for no real security gain (the response body/status
-// are already byte-identical in every case, which is what actually
-// matters for enumeration) - deliberately not done here.
+// Two things close the timing side-channel a naive implementation would
+// have:
+// 1. The real network call to the email provider (Brevo/Gmail/Resend) is
+//    fired without being awaited (see fireForgotPasswordResetEmail below) -
+//    it can never add its own latency to the HTTP response, slow or fast,
+//    success or failure.
+// 2. Every remaining, genuinely real difference in DB-only work (a
+//    sendable account does a transaction + advisory lock + a FOR UPDATE
+//    reload + a throttle read + a token insert + commit; every other exit
+//    does at most one lookup query, or none at all) is absorbed by
+//    enforceForgotResponseFloor - a small shared minimum-response-time
+//    floor with bounded random jitter, applied to every single exit of
+//    this handler. Not an attempt at cryptographically constant-time
+//    behavior, just enough to remove the practically-measurable "instant"
+//    vs "waited on real DB work" gap (see that function's own header
+//    comment in backend/src/passwordReset.js for the exact reasoning and
+//    constants).
+const GENERIC_FORGOT_RESPONSE_MESSAGE = "If an active account exists for that email, we've sent password reset instructions.";
+
+// Fired without being awaited by the request handler below - the HTTP
+// response must never wait on a real network call to the email provider.
+// This function must NEVER reject: every error is caught and reduced to a
+// sanitized log line, so an un-awaited call here can never produce an
+// unhandled promise rejection. sent_at is set only once
+// sendPasswordResetEmail's provider call has genuinely succeeded; a
+// failure leaves it null, which is exactly what the resend throttle (see
+// resetResendTooSoon in passwordReset.js) is keyed off - a failed/never-
+// confirmed send never blocks an immediate retry. Never logs the email
+// address, raw token, reset URL, or the provider's raw response - only a
+// sanitized error class/message, same as before this was made
+// fire-and-forget.
+//
+// A caveat specific to Render: it runs this as a long-lived Node Web
+// Service, not a serverless function frozen the instant the HTTP response
+// is written - this promise keeps running on the same event loop after
+// res.json() returns. It is only ever lost if the process is killed in the
+// narrow window between the response being sent and this promise
+// settling (e.g. a deploy or restart landing at that exact moment). That's
+// an accepted, documented tradeoff, not a hidden wait - and the next
+// forgot request for the same account can immediately issue a fresh token
+// regardless, since a token that was created but never confirmed sent
+// never got sent_at set, and the resend throttle only looks at sent_at.
+async function fireForgotPasswordResetEmail({ to, resetUrl, recipientName, expiresAt, tokenId }) {
+  try {
+    await sendPasswordResetEmail({ to, resetUrl, recipientName, expiresAt });
+    await markPasswordResetTokenSent(query, tokenId);
+  } catch (emailError) {
+    console.error("Failed to send password reset email:", emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
+  }
+}
+
+// Test-only hook: POST /password/forgot fires fireForgotPasswordResetEmail
+// above without awaiting it, by design (see that function's own header
+// comment) - a test that wants to deterministically wait for it to finish
+// (to check sent_at, console output, or that it never throws) has no other
+// way to observe an intentionally un-awaited background promise. Tracking
+// is off by default (a no-op, zero overhead) so production never
+// accumulates promises nobody drains.
+let forgotSendTrackingEnabled = false;
+let trackedForgotSendPromises = [];
+
+export function __enableForgotSendTrackingForTests() {
+  forgotSendTrackingEnabled = true;
+  trackedForgotSendPromises = [];
+}
+
+export function __disableForgotSendTrackingForTests() {
+  forgotSendTrackingEnabled = false;
+  trackedForgotSendPromises = [];
+}
+
+export async function __flushForgotSendPromisesForTests() {
+  const pending = trackedForgotSendPromises;
+  trackedForgotSendPromises = [];
+  await Promise.allSettled(pending);
+}
+
+function trackForgotSendPromiseForTests(promise) {
+  if (forgotSendTrackingEnabled) trackedForgotSendPromises.push(promise);
+}
+
 router.post("/password/forgot", async (req, res, next) => {
-  const genericResponse = () => res.json({ ok: true, message: "If an active account exists for that email, we've sent password reset instructions." });
+  const startedAt = Date.now();
+  const respondGeneric = async (extra = {}) => {
+    await enforceForgotResponseFloor(startedAt);
+    res.json({ ok: true, message: GENERIC_FORGOT_RESPONSE_MESSAGE, ...extra });
+  };
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return genericResponse();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return await respondGeneric();
 
     const ip = requestIp(req);
-    if (!allowForgotAttemptForIp(ip)) return genericResponse();
+    if (!allowForgotAttemptForIp(ip)) return await respondGeneric();
 
     const candidate = await query(`select id, is_active from public.users where lower(email) = $1 limit 1`, [email]);
     const user = candidate.rows[0];
     // No account, or an account that's deactivated - never sends a reset
     // link for either case (a deactivated account can't log in even with a
     // new password), but the response must stay identical either way.
-    if (!user || !user.is_active) return genericResponse();
+    if (!user || !user.is_active) return await respondGeneric();
 
     const client = await pool.connect();
     let resetToken;
@@ -213,26 +290,25 @@ router.post("/password/forgot", async (req, res, next) => {
       await lockPasswordResetActions(exec, user.id);
 
       // Re-load fresh, under the lock - the account could have been
-      // disabled between the unlocked read above and here.
+      // disabled between the unlocked read above and here. Deliberately
+      // structured as nested ifs, not early returns, so every branch below
+      // still reaches the single commit/finally at the bottom of this
+      // block - the pool client must always be released BEFORE
+      // respondGeneric's timing-floor wait (and before the fire-and-forget
+      // email dispatch) run, never while it's still checked out.
       const fresh = await client.query(`select id, is_active, full_name, display_name from public.users where id = $1 limit 1 for update`, [user.id]);
       const freshUser = fresh.rows[0];
-      if (!freshUser || !freshUser.is_active) {
-        await client.query("commit");
-        return genericResponse();
+      if (freshUser && freshUser.is_active) {
+        const lastSentAt = await loadLastPasswordResetTokenSentAt(exec, user.id);
+        if (!resetResendTooSoon(lastSentAt)) {
+          const issued = await issuePasswordResetToken(exec, user.id);
+          resetToken = issued.rawToken;
+          tokenId = issued.tokenId;
+          expiresAt = issued.expiresAt;
+          recipientName = freshUser.display_name || freshUser.full_name || "";
+          shouldSend = true;
+        }
       }
-
-      const lastSentAt = await loadLastPasswordResetTokenSentAt(exec, user.id);
-      if (resetResendTooSoon(lastSentAt)) {
-        await client.query("commit");
-        return genericResponse();
-      }
-
-      const issued = await issuePasswordResetToken(exec, user.id);
-      resetToken = issued.rawToken;
-      tokenId = issued.tokenId;
-      expiresAt = issued.expiresAt;
-      recipientName = freshUser.display_name || freshUser.full_name || "";
-      shouldSend = true;
       await client.query("commit");
     } catch (error) {
       await client.query("rollback").catch(() => {});
@@ -243,27 +319,17 @@ router.post("/password/forgot", async (req, res, next) => {
 
     if (shouldSend) {
       const resetUrl = `${resolveAppOrigin(req)}/reset-password?token=${encodeURIComponent(resetToken)}`;
-      try {
-        await sendPasswordResetEmail({ to: email, resetUrl, recipientName, expiresAt });
-        // Only marked sent once the provider call actually succeeded - the
-        // resend throttle above is keyed off this, never off when the token
-        // was merely created, so a failed send never blocks an immediate
-        // retry.
-        await markPasswordResetTokenSent(query, tokenId);
-      } catch (emailError) {
-        // Never leaked to the client - the response is identical either
-        // way - and never logs the raw token/URL/email, only a sanitized
-        // reason class.
-        console.error("Failed to send password reset email:", emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
-      }
+      // Not awaited - see fireForgotPasswordResetEmail's header comment.
+      const sendPromise = fireForgotPasswordResetEmail({ to: email, resetUrl, recipientName, expiresAt, tokenId });
+      trackForgotSendPromiseForTests(sendPromise);
       if (!isProduction) {
         // Automated tests and local development need the raw token to
         // drive the reset flow without a real inbox - never included in a
         // production response or in any log line.
-        return res.json({ ok: true, message: "If an active account exists for that email, we've sent password reset instructions.", devResetToken: resetToken });
+        return await respondGeneric({ devResetToken: resetToken });
       }
     }
-    return genericResponse();
+    return await respondGeneric();
   } catch (error) {
     next(error);
   }

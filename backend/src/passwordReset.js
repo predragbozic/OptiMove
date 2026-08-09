@@ -136,3 +136,54 @@ export function allowForgotAttemptForIp(ip) {
 export function __resetForgotIpLimiterForTests() {
   forgotAttemptsByIp.clear();
 }
+
+// --- Response-timing floor for POST /api/auth/password/forgot ---
+//
+// Applied to EVERY exit of that handler (invalid email, IP-throttled, no
+// account, deactivated account, DB resend-throttled, and a genuine account
+// whose send was just kicked off) so the response time itself can't be used
+// to tell them apart. This is not an attempt at cryptographically
+// constant-time behavior - it only needs to swamp the practically
+// measurable gap between "return immediately" (every miss path above does
+// at most one lookup query, several do none at all) and the real extra work
+// a genuine, sendable account triggers: pool.connect + begin + an advisory
+// lock + a FOR UPDATE reload + the resend-throttle read + a token insert +
+// commit - several real DB round trips. The real network call to the email
+// provider is deliberately NOT part of that gap (see
+// fireForgotPasswordResetEmail in backend/src/routes/auth.js, which is
+// fired without being awaited) - only DB-only work needs absorbing here.
+//
+// FORGOT_RESPONSE_MIN_FLOOR_MS (250ms) is chosen generously above typical
+// local/managed-Postgres round-trip latency for that handful of extra
+// queries (each usually single-digit-to-low-tens of milliseconds; a few
+// hundred ms of headroom comfortably covers normal variance, including on
+// Render's managed Postgres) while staying well within normal, unremarkable
+// API latency for a form submit - nowhere near the multi-second delays that
+// would themselves become a usability problem or a cheap way to keep a
+// response open. FORGOT_RESPONSE_JITTER_MS (120ms) adds a bounded random
+// component on top: an attacker sampling many requests can't just subtract
+// one fixed constant to recover the real underlying difference - they would
+// need enough samples to average out both genuine network/DB jitter AND
+// this jitter, which is exactly the extra statistical cost this mechanism
+// is meant to impose.
+//
+// Deliberately not a bigger DoS surface: this only ever holds an open HTTP
+// response via a plain setTimeout (never blocks the event loop, never holds
+// a DB connection - the pool client is always released before this runs),
+// and the endpoint already has its own IP + DB throttles (see
+// allowForgotAttemptForIp above and resetResendTooSoon) bounding how many
+// times any one source can trigger it in the first place.
+export const FORGOT_RESPONSE_MIN_FLOOR_MS = 250;
+export const FORGOT_RESPONSE_JITTER_MS = 120;
+
+// Called once, right before every response POST /password/forgot sends -
+// see the header comment above for the reasoning. Safe to call multiple
+// times or with startedAtMs already in the past by more than the floor
+// (resolves immediately, no negative delay).
+export async function enforceForgotResponseFloor(startedAtMs) {
+  const target = FORGOT_RESPONSE_MIN_FLOOR_MS + Math.random() * FORGOT_RESPONSE_JITTER_MS;
+  const remaining = target - (Date.now() - startedAtMs);
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+}

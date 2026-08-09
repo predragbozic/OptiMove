@@ -2,12 +2,57 @@ import { after, before, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
+import net from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
-import { __resetForgotIpLimiterForTests } from "../src/passwordReset.js";
+import { FORGOT_RESPONSE_JITTER_MS, FORGOT_RESPONSE_MIN_FLOOR_MS, __resetForgotIpLimiterForTests } from "../src/passwordReset.js";
+import { __enableForgotSendTrackingForTests, __flushForgotSendPromisesForTests } from "../src/routes/auth.js";
 import { runCleanupSteps } from "./_test-cleanup.mjs";
+
+const backendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// Spawn/health-check/kill helpers for the production-mode devResetToken test
+// near the end of this file - isProduction is a module-level constant in
+// backend/src/routes/auth.js, frozen at import time from process.env, so
+// the only way to actually exercise production behavior is a real spawned
+// `node src/server.js` child with NODE_ENV=production, mirroring
+// production-static-serving.test.mjs's own pattern (self-contained here
+// rather than imported, matching this codebase's per-file convention).
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+    srv.on("error", reject);
+  });
+}
+
+async function waitForHealth(port, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`http://localhost:${port}/api/health`);
+      if (res.ok) return true;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return false;
+}
+
+function killChild(child) {
+  return new Promise((resolve) => {
+    if (!child || child.exitCode !== null) return resolve();
+    child.once("exit", () => resolve());
+    child.kill();
+  });
+}
 
 // security/password-recovery: proves POST /api/auth/password/forgot,
 // GET /api/auth/password/reset/:token, and POST /api/auth/password/reset/:token
@@ -26,6 +71,13 @@ before(async () => {
   server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, resolve));
   baseUrl = `http://localhost:${server.address().port}`;
+  // POST /password/forgot fires its email send without awaiting it (see
+  // fireForgotPasswordResetEmail in backend/src/routes/auth.js) - tracking
+  // lets the forgot() helper below deterministically wait for that
+  // background promise via __flushForgotSendPromisesForTests() instead of
+  // sleeping, so every existing sent_at/log assertion in this file stays
+  // exact regardless of the response-time floor's timing.
+  __enableForgotSendTrackingForTests();
 });
 
 // Every request in this file shares the same loopback IP, and the per-IP
@@ -164,7 +216,22 @@ async function uniqueEmail(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}@test.local`;
 }
 
+// Waits for the background email-send promise to settle (see
+// __enableForgotSendTrackingForTests in before() above) before returning -
+// this is what every test that reads sent_at, or captures console output
+// produced by the send, actually wants: deterministic completion, not a
+// race against a fire-and-forget background task.
 async function forgot(email) {
+  const res = await api("/api/auth/password/forgot", { method: "POST", body: { email } });
+  await __flushForgotSendPromisesForTests();
+  return res;
+}
+
+// The raw, non-flushing call - used only by tests that specifically need to
+// observe state BETWEEN the HTTP response and the background send
+// completing (the whole point of making the send fire-and-forget). Callers
+// of this must flush explicitly once they're done inspecting that window.
+async function forgotRaw(email) {
   return api("/api/auth/password/forgot", { method: "POST", body: { email } });
 }
 
@@ -174,6 +241,44 @@ async function checkResetToken(rawToken) {
 
 async function resetPassword(rawToken, password) {
   return api(`/api/auth/password/reset/${encodeURIComponent(rawToken)}`, { method: "POST", body: { password } });
+}
+
+// Mirrors email-verification.test.mjs's own mockBrevoFetch - the outer HTTP
+// calls this file's api()/forgot() helpers make (against this test's local
+// http.Server) and the inner Brevo HTTPS call backend/src/email.js makes
+// both go through the same global fetch in this one process, so the mock
+// installed here must pass every non-Brevo request straight through to the
+// real fetch, and only intercept requests to api.brevo.com. Used by the
+// async-send-ordering tests below, which need full manual control over
+// exactly when the "network call" resolves/rejects - a real network call
+// (even a fast-failing one) can't give that control deterministically.
+function mockBrevoFetch(handler) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url, options) => {
+    if (typeof url === "string" && url.includes("api.brevo.com")) return handler(url, options);
+    return originalFetch(url, options);
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+function withBrevoEnv(fn) {
+  const originalProvider = process.env.EMAIL_PROVIDER;
+  const originalKey = process.env.BREVO_API_KEY;
+  const originalFrom = process.env.EMAIL_FROM;
+  process.env.EMAIL_PROVIDER = "brevo";
+  process.env.BREVO_API_KEY = "test-brevo-key";
+  process.env.EMAIL_FROM = "OptiMove <optimovee@gmail.com>";
+  const restore = () => {
+    if (originalProvider === undefined) delete process.env.EMAIL_PROVIDER;
+    else process.env.EMAIL_PROVIDER = originalProvider;
+    if (originalKey === undefined) delete process.env.BREVO_API_KEY;
+    else process.env.BREVO_API_KEY = originalKey;
+    if (originalFrom === undefined) delete process.env.EMAIL_FROM;
+    else process.env.EMAIL_FROM = originalFrom;
+  };
+  return fn().finally(restore);
 }
 
 async function backdateLastResetSentAt(userId, seconds) {
@@ -835,4 +940,233 @@ test("31. an invalid-token reset and a well-formed-but-unknown-token reset retur
   const [consumedAttempt, neverIssuedAttempt] = await Promise.all([resetPassword(knownButConsumed, "irrelevant-1"), resetPassword(neverIssued, "irrelevant-2")]);
   assert.equal(consumedAttempt.status, neverIssuedAttempt.status);
   assert.deepEqual(consumedAttempt.body, neverIssuedAttempt.body);
+});
+
+// --- Timing side-channel hardening (follow-up fix) ---
+// enforceForgotResponseFloor (backend/src/passwordReset.js) applies a
+// shared minimum-response-time + bounded jitter to every exit of
+// POST /password/forgot, and the real email-provider call is fired
+// without being awaited (fireForgotPasswordResetEmail,
+// backend/src/routes/auth.js) - together these mean the response time
+// itself can no longer distinguish "no account"/"deactivated"/"throttled"
+// from "a real send just started". A margin above the nominal ceiling
+// absorbs normal CI/dev-machine scheduling noise and the real DB round
+// trips a genuine account triggers, while still proving there's no
+// runaway multi-second delay.
+const FLOOR_LOWER_BOUND_MS = FORGOT_RESPONSE_MIN_FLOOR_MS - 15;
+const FLOOR_UPPER_BOUND_MS = FORGOT_RESPONSE_MIN_FLOOR_MS + FORGOT_RESPONSE_JITTER_MS + 600;
+
+function assertWithinResponseFloor(elapsedMs, label) {
+  assert.ok(elapsedMs >= FLOOR_LOWER_BOUND_MS, `${label}: response returned too fast (${elapsedMs}ms) - the minimum-response-time floor must not be skipped`);
+  assert.ok(elapsedMs <= FLOOR_UPPER_BOUND_MS, `${label}: response took too long (${elapsedMs}ms) - must stay well under a second, never multi-second`);
+}
+
+test("32. a slow email provider never extends the HTTP response duration - the response returns at the floor, not after the provider call resolves", async () => {
+  const user = await makeUser({ email: await uniqueEmail("pr-slow-provider") });
+  let releaseProviderCall;
+  const restoreFetch = mockBrevoFetch(() => new Promise((resolve) => {
+    releaseProviderCall = () => resolve({ ok: true, status: 201, json: async () => ({ messageId: "mock-message-id" }) });
+  }));
+
+  const startedAt = Date.now();
+  const res = await withBrevoEnv(() => forgotRaw(user.email));
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.equal(res.status, 200);
+  assertWithinResponseFloor(elapsedMs, "slow-provider response");
+
+  const beforeFlush = await query(`select sent_at from public.password_reset_tokens where user_id = $1`, [user.id]);
+  assert.equal(beforeFlush.rows[0].sent_at, null, "the response must have returned before the still-pending provider call ever resolved");
+
+  releaseProviderCall();
+  await __flushForgotSendPromisesForTests();
+  restoreFetch();
+
+  const afterFlush = await query(`select sent_at from public.password_reset_tokens where user_id = $1`, [user.id]);
+  assert.ok(afterFlush.rows[0].sent_at, "sent_at must be set once the (now-released) provider call actually resolves");
+});
+
+test("33. a provider rejection AFTER the response has already been sent leaves sent_at null and never produces an unhandled promise rejection", async () => {
+  const unhandled = [];
+  const onUnhandledRejection = (reason) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
+
+  const user = await makeUser({ email: await uniqueEmail("pr-reject-after-response") });
+  let rejectProviderCall;
+  const restoreFetch = mockBrevoFetch(() => new Promise((_resolve, reject) => {
+    rejectProviderCall = () => reject(new Error("simulated network failure"));
+  }));
+
+  try {
+    const res = await withBrevoEnv(() => forgotRaw(user.email));
+    assert.equal(res.status, 200);
+
+    const beforeFlush = await query(`select sent_at from public.password_reset_tokens where user_id = $1`, [user.id]);
+    assert.equal(beforeFlush.rows[0].sent_at, null, "the response must have returned before the still-pending provider call ever rejected");
+
+    rejectProviderCall();
+    await __flushForgotSendPromisesForTests();
+  } finally {
+    restoreFetch();
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+
+  const afterFlush = await query(`select sent_at from public.password_reset_tokens where user_id = $1`, [user.id]);
+  assert.equal(afterFlush.rows[0].sent_at, null, "sent_at must remain null after a provider rejection");
+  assert.equal(unhandled.length, 0, "a rejected background send must never surface as an unhandled promise rejection - fireForgotPasswordResetEmail must catch it internally");
+
+  // Same account, same (now-settled, still-null-sent_at) token state - an
+  // immediate retry must not be blocked, since the resend throttle is keyed
+  // off sent_at, never off whether a send was merely attempted.
+  const retry = await forgot(user.email);
+  assert.ok(retry.body.devResetToken, "an immediate retry after a failed send must not be blocked by the DB resend throttle");
+});
+
+test("34. every exit path of forgot shares the same minimum response-time floor - invalid email, no account, deactivated account, a genuine send, and DB-throttled", async () => {
+  const activeUser = await makeUser({ email: await uniqueEmail("pr-floor-active") });
+  const inactiveUser = await makeUser({ email: await uniqueEmail("pr-floor-inactive"), isActive: false });
+  const nonexistentEmail = await uniqueEmail("pr-floor-nonexistent");
+
+  const timed = async (fn) => {
+    const startedAt = Date.now();
+    const res = await fn();
+    return { res, elapsedMs: Date.now() - startedAt };
+  };
+
+  const invalidEmail = await timed(() => forgotRaw("not-an-email"));
+  assert.equal(invalidEmail.res.status, 200);
+  assertWithinResponseFloor(invalidEmail.elapsedMs, "invalid email format");
+
+  const nonexistent = await timed(() => forgotRaw(nonexistentEmail));
+  assertWithinResponseFloor(nonexistent.elapsedMs, "nonexistent account");
+
+  const deactivated = await timed(() => forgotRaw(inactiveUser.email));
+  assertWithinResponseFloor(deactivated.elapsedMs, "deactivated account");
+
+  const genuine = await timed(() => forgotRaw(activeUser.email));
+  assert.ok(genuine.res.body.devResetToken, "the genuine send must actually have issued a token");
+  assertWithinResponseFloor(genuine.elapsedMs, "genuine account, send just kicked off");
+
+  const throttled = await timed(() => forgotRaw(activeUser.email));
+  assert.equal(throttled.res.body.devResetToken, undefined, "the immediate repeat must be DB-throttled, not issue a second token");
+  assertWithinResponseFloor(throttled.elapsedMs, "DB resend-throttled");
+
+  await __flushForgotSendPromisesForTests();
+});
+
+test("34b. the IP-throttled exit path also respects the same minimum response-time floor", async () => {
+  __resetForgotIpLimiterForTests();
+  try {
+    const email = await uniqueEmail("pr-floor-ip-limited");
+    for (let i = 0; i < 10; i += 1) {
+      await forgotRaw(email);
+    }
+    const startedAt = Date.now();
+    const res = await forgotRaw(email);
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(res.status, 200);
+    assertWithinResponseFloor(elapsedMs, "IP-throttled");
+  } finally {
+    __resetForgotIpLimiterForTests();
+    await __flushForgotSendPromisesForTests();
+  }
+});
+
+test("35. two parallel forgot requests on the same account still leave at most one active token, with the new async-send/timing-floor structure", async () => {
+  const user = await makeUser({ email: await uniqueEmail("pr-parallel-async") });
+  const [first, second] = await Promise.all([forgotRaw(user.email), forgotRaw(user.email)]);
+  await __flushForgotSendPromisesForTests();
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+
+  const tokensIssued = [first.body.devResetToken, second.body.devResetToken].filter(Boolean);
+  assert.equal(tokensIssued.length, 1, "exactly one of the two parallel forgot requests must actually issue a token");
+
+  const count = await query(`select count(*) from public.password_reset_tokens where user_id = $1`, [user.id]);
+  assert.equal(Number(count.rows[0].count), 1, "only one token row may exist after two parallel forgot requests");
+});
+
+test("36. in production mode, POST /password/forgot never includes devResetToken in the response - for an existing account or a nonexistent one", async (t) => {
+  const user = await makeUser({ email: await uniqueEmail("pr-prodmode") });
+  const port = await getFreePort();
+  const child = spawn("node", ["src/server.js"], {
+    cwd: backendDir,
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      PORT: String(port),
+      EMAIL_PROVIDER: "brevo",
+      BREVO_API_KEY: "password-reset-prodmode-test-fixture-key",
+      EMAIL_FROM: "Test Fixture <test-fixture@test.local>",
+    },
+  });
+  t.after(() => killChild(child));
+
+  const healthy = await waitForHealth(port);
+  assert.ok(healthy, "spawned production server must become healthy");
+
+  const existingRes = await fetch(`http://localhost:${port}/api/auth/password/forgot`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: user.email }),
+  });
+  const existingBody = await existingRes.json();
+
+  const nonexistentRes = await fetch(`http://localhost:${port}/api/auth/password/forgot`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: await uniqueEmail("pr-prodmode-nonexistent") }),
+  });
+  const nonexistentBody = await nonexistentRes.json();
+
+  assert.equal(existingRes.status, 200);
+  assert.ok(!("devResetToken" in existingBody), "production response for an existing account must never include devResetToken");
+  assert.equal(nonexistentRes.status, 200);
+  assert.ok(!("devResetToken" in nonexistentBody), "production response for a nonexistent account must never include devResetToken");
+  assert.deepEqual(Object.keys(existingBody).sort(), Object.keys(nonexistentBody).sort(), "the production response shape must be identical for both cases");
+});
+
+test("37. the raw token, reset URL, and provider raw response never appear in console output when a slow-then-successful async send is involved", async () => {
+  const originalLog = console.log;
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const captured = [];
+  const capture = (...args) => {
+    captured.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+  };
+  console.log = capture;
+  console.error = capture;
+  console.warn = capture;
+
+  const user = await makeUser({ email: await uniqueEmail("pr-nolog-async") });
+  let releaseProviderCall;
+  const restoreFetch = mockBrevoFetch(() => new Promise((resolve) => {
+    releaseProviderCall = () => resolve({ ok: true, status: 201, json: async () => ({ messageId: "mock-message-id-should-never-be-logged" }) });
+  }));
+
+  let res;
+  try {
+    res = await withBrevoEnv(() => forgotRaw(user.email));
+    releaseProviderCall();
+    await __flushForgotSendPromisesForTests();
+  } finally {
+    restoreFetch();
+    console.log = originalLog;
+    console.error = originalError;
+    console.warn = originalWarn;
+  }
+
+  assert.equal(res.status, 200);
+  assert.ok(res.body.devResetToken, "a token must genuinely have been issued for this check to be meaningful");
+  const row = await query(`select sent_at from public.password_reset_tokens where user_id = $1`, [user.id]);
+  assert.ok(row.rows[0].sent_at, "the background send must have completed successfully before this assertion");
+
+  for (const line of captured) {
+    assert.ok(!line.includes(res.body.devResetToken), `captured console output must never contain the raw reset token, but found it in: ${line}`);
+    assert.ok(!line.includes(user.email), `captured console output must never contain the target email, but found it in: ${line}`);
+    assert.ok(!line.includes("/reset-password?token="), `captured console output must never contain a reset URL, but found it in: ${line}`);
+    assert.ok(!line.includes("mock-message-id-should-never-be-logged"), `captured console output must never contain the provider's raw response, but found it in: ${line}`);
+  }
 });
