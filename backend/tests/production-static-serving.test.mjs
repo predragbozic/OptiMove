@@ -117,9 +117,9 @@ test("2. production server serves hashed assets, HTML entries, and never SPA-fal
     assert.equal(res.headers.get("cache-control"), "public, max-age=31536000, immutable");
   });
 
-  await t.test("2c. /app, /invite, /join, /verify-email all serve the same index.html, no-cache (never immutable)", async () => {
+  await t.test("2c. /app, /invite, /join, /verify-email, /forgot-password, /reset-password all serve the same index.html, no-cache (never immutable)", async () => {
     const indexBody = await (await fetch(`http://localhost:${port}/`)).text();
-    for (const routePath of ["/app", "/invite", "/join", "/verify-email"]) {
+    for (const routePath of ["/app", "/invite", "/join", "/verify-email", "/forgot-password", "/reset-password"]) {
       const res = await fetch(`http://localhost:${port}${routePath}`);
       assert.equal(res.status, 200, `${routePath} must return 200`);
       assert.equal(res.headers.get("cache-control"), "no-cache", `${routePath} must be no-cache, never immutable`);

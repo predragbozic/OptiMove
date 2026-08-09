@@ -14,7 +14,7 @@ import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelec
 import { closeOtherOpenInvitesForAthlete, loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
 import { closeUnusableJoinLinkApplications, loadJoinLinkContextName, loadUsableJoinLink, lockJoinLinkActions } from "../joinLinkContext.js";
 import { resolveAppOrigin } from "../appOrigin.js";
-import { EmailConfigError, EmailSendError, sendEmailVerification } from "../email.js";
+import { EmailConfigError, EmailSendError, sendEmailVerification, sendPasswordResetEmail } from "../email.js";
 import {
   allowResendAttemptForIp,
   hashVerificationToken,
@@ -25,6 +25,16 @@ import {
   resentTooSoon,
   revokeActiveEmailVerificationTokens,
 } from "../emailVerification.js";
+import {
+  allowForgotAttemptForIp,
+  hashResetToken,
+  issuePasswordResetToken,
+  loadLastPasswordResetTokenSentAt,
+  lockPasswordResetActions,
+  markPasswordResetTokenSent,
+  resetResendTooSoon,
+  revokeActivePasswordResetTokens,
+} from "../passwordReset.js";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -154,6 +164,217 @@ router.post("/login", async (req, res, next) => {
     res.json({ user: publicUser(user) });
   } catch (error) {
     next(error);
+  }
+});
+
+// --- Forgot / reset password (security/password-recovery) ---
+// Public, unauthenticated. ALWAYS returns the exact same generic response
+// regardless of whether the email belongs to an account, whether that
+// account is active, whether it's currently throttled, or whether the
+// email provider fails to send - this endpoint must never be usable to
+// probe which emails have accounts, active or not. See
+// backend/src/passwordReset.js for the token/throttle helpers.
+//
+// A residual timing side-channel is accepted, not eliminated: a real
+// account that isn't currently throttled does real extra work (a
+// transaction, an advisory lock, a token insert, and - outside the
+// transaction - a real network call to the email provider) that a
+// nonexistent or deactivated email never triggers. Closing this
+// completely would mean doing an equally expensive dummy transaction/
+// network call for every miss too, which turns this endpoint into a much
+// cheaper DoS target for no real security gain (the response body/status
+// are already byte-identical in every case, which is what actually
+// matters for enumeration) - deliberately not done here.
+router.post("/password/forgot", async (req, res, next) => {
+  const genericResponse = () => res.json({ ok: true, message: "If an active account exists for that email, we've sent password reset instructions." });
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return genericResponse();
+
+    const ip = requestIp(req);
+    if (!allowForgotAttemptForIp(ip)) return genericResponse();
+
+    const candidate = await query(`select id, is_active from public.users where lower(email) = $1 limit 1`, [email]);
+    const user = candidate.rows[0];
+    // No account, or an account that's deactivated - never sends a reset
+    // link for either case (a deactivated account can't log in even with a
+    // new password), but the response must stay identical either way.
+    if (!user || !user.is_active) return genericResponse();
+
+    const client = await pool.connect();
+    let resetToken;
+    let tokenId;
+    let expiresAt;
+    let recipientName;
+    let shouldSend = false;
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockPasswordResetActions(exec, user.id);
+
+      // Re-load fresh, under the lock - the account could have been
+      // disabled between the unlocked read above and here.
+      const fresh = await client.query(`select id, is_active, full_name, display_name from public.users where id = $1 limit 1 for update`, [user.id]);
+      const freshUser = fresh.rows[0];
+      if (!freshUser || !freshUser.is_active) {
+        await client.query("commit");
+        return genericResponse();
+      }
+
+      const lastSentAt = await loadLastPasswordResetTokenSentAt(exec, user.id);
+      if (resetResendTooSoon(lastSentAt)) {
+        await client.query("commit");
+        return genericResponse();
+      }
+
+      const issued = await issuePasswordResetToken(exec, user.id);
+      resetToken = issued.rawToken;
+      tokenId = issued.tokenId;
+      expiresAt = issued.expiresAt;
+      recipientName = freshUser.display_name || freshUser.full_name || "";
+      shouldSend = true;
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    if (shouldSend) {
+      const resetUrl = `${resolveAppOrigin(req)}/reset-password?token=${encodeURIComponent(resetToken)}`;
+      try {
+        await sendPasswordResetEmail({ to: email, resetUrl, recipientName, expiresAt });
+        // Only marked sent once the provider call actually succeeded - the
+        // resend throttle above is keyed off this, never off when the token
+        // was merely created, so a failed send never blocks an immediate
+        // retry.
+        await markPasswordResetTokenSent(query, tokenId);
+      } catch (emailError) {
+        // Never leaked to the client - the response is identical either
+        // way - and never logs the raw token/URL/email, only a sanitized
+        // reason class.
+        console.error("Failed to send password reset email:", emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
+      }
+      if (!isProduction) {
+        // Automated tests and local development need the raw token to
+        // drive the reset flow without a real inbox - never included in a
+        // production response or in any log line.
+        return res.json({ ok: true, message: "If an active account exists for that email, we've sent password reset instructions.", devResetToken: resetToken });
+      }
+    }
+    return genericResponse();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Read-only check, used by the frontend before showing the "set a new
+// password" form - never consumes the token and never changes anything.
+// Every invalid reason (not found, expired, consumed, revoked, or the
+// account it belongs to no longer being active) collapses to the exact
+// same generic { valid: false } - a token can never be used to probe why
+// it stopped working, or to learn anything about the account it belongs
+// to (no email, name, id, or role in this response, ever).
+router.get("/password/reset/:token", async (req, res, next) => {
+  try {
+    const tokenHash = hashResetToken(req.params.token);
+    const result = await query(
+      `select t.expires_at, t.consumed_at, t.revoked_at, u.is_active
+       from public.password_reset_tokens t
+       join public.users u on u.id = t.user_id
+       where t.token_hash = $1
+       limit 1`,
+      [tokenHash],
+    );
+    const row = result.rows[0];
+    if (!row || row.consumed_at || row.revoked_at || new Date(row.expires_at) <= new Date() || !row.is_active) {
+      return res.json({ valid: false });
+    }
+    res.json({ valid: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Actually changes the password. Transactional: resolve the token's owner
+// without mutation (purely for the lock key), lock, re-load the token FOR
+// UPDATE, re-check it and the account are still valid, hash the new
+// password, write ONLY users.password_hash, consume the token, defensively
+// revoke any other still-active token for this user, and delete every one
+// of this user's existing sessions - all in the same transaction, so a
+// failure at any step leaves password/token/session state exactly as it
+// was before this request. Touches nothing else: not email, role_hint,
+// user_global_roles, user_club_roles, user_team_roles, athletes.user_id,
+// athlete_memberships, user_athletes, workspace preference, or is_active.
+// Never creates a new session - the caller logs in again with the new
+// password.
+router.post("/password/reset/:token", async (req, res, next) => {
+  const genericInvalid = () => res.status(404).json({ error: "This reset link is invalid or has expired." });
+  const client = await pool.connect();
+  try {
+    const password = String(req.body?.password || "");
+    // No transaction has been opened yet at this point - a plain early
+    // return is enough; the finally block below still releases the client
+    // in every path.
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters." });
+    }
+    const tokenHash = hashResetToken(req.params.token);
+
+    // Resolve without mutation, purely to have the lock key - mirrors every
+    // other token flow's "resolve without mutation, then lock, then
+    // re-check" pattern. Never trusted past this point; the token/user rows
+    // are both re-loaded FOR UPDATE below. Still no transaction open yet.
+    const resolved = await query(`select user_id from public.password_reset_tokens where token_hash = $1 limit 1`, [tokenHash]);
+    if (!resolved.rows[0]) {
+      return genericInvalid();
+    }
+
+    await client.query("begin");
+    const exec = (text, params) => client.query(text, params);
+    await lockPasswordResetActions(exec, resolved.rows[0].user_id);
+
+    const tokenResult = await client.query(
+      `select id, user_id, expires_at, consumed_at, revoked_at
+       from public.password_reset_tokens where token_hash = $1 limit 1 for update`,
+      [tokenHash],
+    );
+    const tokenRow = tokenResult.rows[0];
+    if (!tokenRow || tokenRow.consumed_at || tokenRow.revoked_at || new Date(tokenRow.expires_at) <= new Date()) {
+      await client.query("rollback");
+      return genericInvalid();
+    }
+
+    const userResult = await client.query(`select id, is_active from public.users where id = $1 limit 1 for update`, [tokenRow.user_id]);
+    const user = userResult.rows[0];
+    if (!user || !user.is_active) {
+      await client.query("rollback");
+      return genericInvalid();
+    }
+
+    const passwordHash = hashPassword(password);
+    await client.query(`update public.users set password_hash = $2, updated_at = now() where id = $1`, [user.id, passwordHash]);
+    await client.query(`update public.password_reset_tokens set consumed_at = now(), updated_at = now() where id = $1`, [tokenRow.id]);
+    // Defensive, normally a no-op: the partial unique index on
+    // password_reset_tokens already guarantees at most one active token per
+    // user existed before this request, and the one that existed is the one
+    // just consumed above (excluded by revokeActivePasswordResetTokens's own
+    // consumed_at is null filter, now that it's set) - see that function's
+    // header comment.
+    await revokeActivePasswordResetTokens(exec, user.id);
+    // Every existing session for this account is invalidated - the whole
+    // point of a password reset is that anyone who had access via the old
+    // password (or a stolen session) no longer does. The caller logs back
+    // in with the new password afterward; no new session is created here.
+    await client.query(`delete from public.auth_sessions where user_id = $1`, [user.id]);
+    await client.query("commit");
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
   }
 });
 

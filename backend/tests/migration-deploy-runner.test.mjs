@@ -160,3 +160,39 @@ test("the email_verification_tokens migration is registered in the deploy migrat
     assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
   }
 });
+
+test("the password_reset_tokens migration is registered in the deploy migration runner, immediately after 20260809_email_verification.sql", () => {
+  const passwordResetIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260810_password_reset.sql");
+  assert.notEqual(passwordResetIndex, -1, "migrationPaths must include the password_reset_tokens migration file");
+
+  const emailVerificationIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260809_email_verification.sql");
+  assert.equal(
+    passwordResetIndex,
+    emailVerificationIndex + 1,
+    "password_reset_tokens is a deliberately separate table from email_verification_tokens (see the migration's own header comment) - ordered immediately after it purely to keep token-table migrations chronologically grouped",
+  );
+
+  for (const migrationPath of migrationPaths) {
+    assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
+  }
+});
+
+test("the password_reset_tokens migration file can be applied twice with no error, and produces the expected invariants", async () => {
+  const migrationPath = migrationPaths.find((p) => path.basename(p) === "20260810_password_reset.sql");
+  const sql = await (await import("node:fs/promises")).readFile(migrationPath, "utf8");
+  await pool.query(sql);
+  await pool.query(sql);
+
+  const cols = await pool.query(
+    `select column_name from information_schema.columns where table_schema = 'public' and table_name = 'password_reset_tokens'`,
+  );
+  const colNames = cols.rows.map((r) => r.column_name).sort();
+  for (const expected of ["id", "user_id", "token_hash", "expires_at", "sent_at", "consumed_at", "revoked_at", "created_at", "updated_at"]) {
+    assert.ok(colNames.includes(expected), `password_reset_tokens must have a ${expected} column`);
+  }
+
+  const indexes = await pool.query(`select indexname from pg_indexes where schemaname = 'public' and tablename = 'password_reset_tokens'`);
+  const indexNames = indexes.rows.map((r) => r.indexname);
+  assert.ok(indexNames.includes("password_reset_tokens_one_active_per_user_idx"), "the partial unique 'one active token per user' index must exist");
+  assert.ok(indexNames.includes("password_reset_tokens_token_hash_key"), "token_hash must be unique");
+});

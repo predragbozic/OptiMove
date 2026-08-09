@@ -34,9 +34,10 @@ test("1. production build succeeds and produces a dist directory", () => {
 });
 
 test("2. every expected HTML entry point exists in dist", () => {
-  // index.html covers /, /app, /invite, /join, /verify-email (see
-  // backend/src/server.js's route table); athlete.html covers /athlete.
-  // Not "assume a single index.html" - both real entries are checked.
+  // index.html covers /, /app, /invite, /join, /verify-email,
+  // /forgot-password, /reset-password (see backend/src/server.js's route
+  // table); athlete.html covers /athlete. Not "assume a single index.html" -
+  // both real entries are checked.
   assert.ok(existsSync(path.join(distDir, "index.html")), "dist/index.html must exist");
   assert.ok(existsSync(path.join(distDir, "athlete.html")), "dist/athlete.html must exist");
 });

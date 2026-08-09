@@ -108,7 +108,7 @@ function sendHtmlEntry(res, fileName) {
   res.setHeader("Cache-Control", "no-cache");
   res.sendFile(path.join(staticRoot, fileName));
 }
-app.get(["/", "/app", "/invite", "/join", "/verify-email"], (_req, res) => {
+app.get(["/", "/app", "/invite", "/join", "/verify-email", "/forgot-password", "/reset-password"], (_req, res) => {
   sendHtmlEntry(res, "index.html");
 });
 app.get("/athlete", (_req, res) => {

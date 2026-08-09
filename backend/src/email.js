@@ -104,6 +104,36 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
 }
 
+// security/password-recovery: a second email "purpose" through this same
+// central service - reuses every provider transport function below
+// (sendViaGmail/sendViaBrevo/sendViaResend/sendViaDevAdapter) unchanged,
+// since all four are already generic on {to, subject, html, text} and know
+// nothing about verification vs. reset. Only the content builder differs.
+function buildPasswordResetEmail({ resetUrl, recipientName, expiresAt }) {
+  const subject = "Reset your OptiMove password";
+  const greeting = recipientName ? `Hi ${recipientName},` : "Hi,";
+  const expiresLabel = new Date(expiresAt).toUTCString();
+  const text = [
+    greeting,
+    "",
+    "We received a request to reset your OptiMove password.",
+    "",
+    `Reset password: ${resetUrl}`,
+    "",
+    `This link expires ${expiresLabel}.`,
+    "",
+    "If you did not request this, you can safely ignore this email - your password will not be changed.",
+  ].join("\n");
+  const html = [
+    `<p>${escapeHtml(greeting)}</p>`,
+    "<p>We received a request to reset your OptiMove password.</p>",
+    `<p><a href="${escapeHtml(resetUrl)}">Reset password</a></p>`,
+    `<p>This link expires ${escapeHtml(expiresLabel)}.</p>`,
+    "<p>If you did not request this, you can safely ignore this email - your password will not be changed.</p>",
+  ].join("\n");
+  return { subject, text, html };
+}
+
 function buildVerificationEmail({ verificationUrl, recipientName, contextLabel, expiresAt }) {
   const subject = "Confirm your email for OptiMove";
   const greeting = recipientName ? `Hi ${recipientName},` : "Hi,";
@@ -328,6 +358,35 @@ export async function sendEmailVerification({ to, verificationUrl, recipientName
     throw new EmailConfigError("EMAIL_PROVIDER is not configured.");
   }
   const { subject, text, html } = buildVerificationEmail({ verificationUrl, recipientName, contextLabel, expiresAt });
+  if (provider === "gmail") {
+    await sendViaGmail({ to, subject, html, text });
+    return;
+  }
+  if (provider === "brevo") {
+    await sendViaBrevo({ to, subject, html, text });
+    return;
+  }
+  if (provider === "resend") {
+    await sendViaResend({ to, subject, html, text });
+    return;
+  }
+  if (provider === "dev" || provider === "console") {
+    sendViaDevAdapter({ to, subject });
+    return;
+  }
+  throw new EmailConfigError(`Unsupported EMAIL_PROVIDER: "${provider}".`);
+}
+
+// security/password-recovery: same dispatch shape as sendEmailVerification
+// above, same provider transport functions, only the content differs (see
+// buildPasswordResetEmail). Never logs the raw reset token/URL, in any
+// environment - identical guarantee to sendEmailVerification.
+export async function sendPasswordResetEmail({ to, resetUrl, recipientName, expiresAt }) {
+  const provider = resolveProvider();
+  if (!provider) {
+    throw new EmailConfigError("EMAIL_PROVIDER is not configured.");
+  }
+  const { subject, text, html } = buildPasswordResetEmail({ resetUrl, recipientName, expiresAt });
   if (provider === "gmail") {
     await sendViaGmail({ to, subject, html, text });
     return;
