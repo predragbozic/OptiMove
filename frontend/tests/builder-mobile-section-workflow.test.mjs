@@ -146,28 +146,39 @@ test("1c. builderAddedCounts + renderBuilderExerciseResults derive the badge per
   assert.doesNotMatch(html.slice(squatIndex, squatIndex + 400), /Added \d+×/, "an exercise never added must never show a count badge");
 });
 
-test("2a. renderBuilderAddedList renders one compact card per item with a dose summary and a 2-line title clamp class", () => {
-  const items = [makeItem({ title: "Nordic hamstring curl", sets: "3", reps: "8", load: "40 kg" }), makeItem({ title: "Box jump" })];
+test("2a. renderBuilderAddedList renders one compact card per item, each with live Sets/Reps/Load inputs (not a read-only summary) and a 2-line title clamp class", () => {
+  const items = [makeItem({ id: "item-with-dose", title: "Nordic hamstring curl", sets: "3", reps: "8", load: "40 kg" }), makeItem({ id: "item-without-dose", title: "Box jump" })];
   const html = renderBuilderAddedList({ items });
-  const cardCount = (html.match(/builder-added-card"/g) || []).length;
+  const cardCount = (html.match(/builder-added-card /g) || []).length;
   assert.equal(cardCount, 2);
   assert.match(html, /builder-added-card-title/, "the title element must carry the class styles.css clamps to 2 lines");
-  assert.match(html, /3 sets/);
-  assert.match(html, /8 reps/);
-  assert.match(html, /40 kg/);
-  assert.match(html, /No dose set yet/, "an item with no dose yet must say so, not show a blank summary");
+  assert.match(html, /name="sets" value="3" placeholder="e\.g\. 3"/, "Sets must be a live, editable input carrying the item's current value - not a read-only summary");
+  assert.match(html, /name="reps" value="8" placeholder="e\.g\. 8"/);
+  assert.match(html, /name="load" value="40 kg" placeholder="e\.g\. 40 kg"/);
+  const emptyCardHtml = html.slice(html.indexOf("item-without-dose"));
+  assert.match(emptyCardHtml, /name="sets" value="" placeholder="e\.g\. 3"/, "an item with no dose yet must show an empty, directly-editable input, not a blank summary");
 });
 
-test("2b. Instruction starts collapsed in the single-item edit view - no textarea until explicitly opened", () => {
+test("2a-bis. each compact card is itself the autosave form, and always carries a hidden 'description' field with the item's current instruction - Instruction only ever renders inline in the single-item edit view, so without this hidden field an inline Sets/Reps/Load save would submit no description at all and wipe it (PATCH /items/:itemId writes all four columns unconditionally)", () => {
+  const items = [makeItem({ id: "item-1", description: "Keep the knee soft on landing." })];
+  const html = renderBuilderAddedList({ items });
+  assert.match(html, /<form class="builder-added-card builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="item-1">/, "the card must be a form wired to the same update-item autosave path as the desktop form and the single-item edit view");
+  assert.match(html, /<input type="hidden" name="description" value="Keep the knee soft on landing\.">/);
+  assert.doesNotMatch(html, /<textarea/, "the compact card must never render the Instruction textarea inline - only Sets/Reps/Load are inline, Instruction stays behind Edit details");
+});
+
+test("2b. Instruction starts collapsed in the single-item edit view - no textarea until explicitly opened, and a hidden field keeps the existing text from being wiped by a dose-only save", () => {
   const node = { items: [makeItem({ id: "item-1", description: "Existing instruction text" })] };
   const closed = renderBuilderItemEdit(node, "item-1", false);
   assert.doesNotMatch(closed, /<textarea/, "the instruction textarea must not render while collapsed");
   assert.match(closed, /Instruction &#9662;/);
   assert.match(closed, /Existing instruction text/, "a collapsed item with existing text should still show a short preview, just not the full editable textarea");
+  assert.match(closed, /<input type="hidden" name="description" value="Existing instruction text">/, "regression guard: without this hidden field, autosaving Sets/Reps/Load while Instruction is collapsed would submit no 'description' key, and PATCH /items/:itemId writes all four columns unconditionally - silently wiping the existing instruction");
 
   const open = renderBuilderItemEdit(node, "item-1", true);
   assert.match(open, /<textarea/);
   assert.match(open, /Instruction &#9652;/);
+  assert.doesNotMatch(open, /type="hidden" name="description"/, "the hidden fallback must not coexist with the real textarea, or FormData would carry two 'description' entries");
 });
 
 test("2c. the single-item edit view shows position and disables Previous/Next only at the ends", () => {
@@ -183,14 +194,14 @@ test("2c. the single-item edit view shows position and disables Previous/Next on
 });
 
 test("3a. renderBuilderStickyBar always shows the exact count and up to 4 thumbnails with a +N overflow badge beyond that", () => {
-  const empty = renderBuilderStickyBar({ items: [] });
+  const empty = renderBuilderStickyBar({ items: [] }, "add");
   assert.match(empty, /Added exercises \(0\)/);
 
-  const three = renderBuilderStickyBar({ items: [makeItem(), makeItem(), makeItem()] });
+  const three = renderBuilderStickyBar({ items: [makeItem(), makeItem(), makeItem()] }, "add");
   assert.match(three, /Added exercises \(3\)/);
   assert.doesNotMatch(three, /\+\d/);
 
-  const six = renderBuilderStickyBar({ items: Array.from({ length: 6 }, () => makeItem()) });
+  const six = renderBuilderStickyBar({ items: Array.from({ length: 6 }, () => makeItem()) }, "add");
   assert.match(six, /Added exercises \(6\)/);
   assert.match(six, /\+2/, "6 items with a 4-thumbnail limit must show a +2 overflow badge");
   const thumbCount = (six.match(/builder-sticky-thumb(?!-)/g) || []).length;
@@ -198,10 +209,24 @@ test("3a. renderBuilderStickyBar always shows the exact count and up to 4 thumbn
 });
 
 test("3b. sticky bar thumbnails open a media preview, never the edit form directly", () => {
-  const html = renderBuilderStickyBar({ items: [makeItem({ imageUrl: "https://example.test/img.jpg", title: "Box jump" })] });
+  const html = renderBuilderStickyBar({ items: [makeItem({ imageUrl: "https://example.test/img.jpg", title: "Box jump" })] }, "add");
   const thumbMarkup = html.slice(html.indexOf("builder-sticky-thumb"), html.indexOf("builder-sticky-thumb") + 300);
   assert.match(thumbMarkup, /data-action="open-media"/);
   assert.doesNotMatch(thumbMarkup, /data-action="builder-open-edit-item"/);
+});
+
+test("3c. the sticky bar has no standing mode-tabs pair - its own action button is mode-aware instead: 'Edit' (-> added) while in Add-exercises mode, 'Add exercises' (-> add) while already in Added-exercises mode", () => {
+  const addMode = renderBuilderStickyBar({ items: [makeItem()] }, "add");
+  assert.match(addMode, /<button class="text-action" type="button" data-action="builder-set-mobile-mode" data-mode="added">Edit<\/button>/);
+  assert.doesNotMatch(addMode, />Add exercises</, "while already in Add-exercises mode there is nothing to switch back to");
+
+  const addedMode = renderBuilderStickyBar({ items: [makeItem()] }, "added");
+  assert.match(addedMode, /<button class="text-action" type="button" data-action="builder-set-mobile-mode" data-mode="add">Add exercises<\/button>/);
+  assert.doesNotMatch(addedMode, />Edit</, "while already in Added-exercises mode there is nothing to switch back to");
+
+  // Done must always be present and unaffected by mode.
+  assert.match(addMode, /data-action="builder-finish-section">Done</);
+  assert.match(addedMode, /data-action="builder-finish-section">Done</);
 });
 
 test("4a. renderBuilderAddConfirmation is empty when nothing was just added, and shows the title + Edit now otherwise", () => {
@@ -409,10 +434,49 @@ test("13a. Done (builder-finish-section) never makes an API call and fully reset
   assert.equal(state.builder.addConfirmation, null);
 });
 
-test("14a. the sticky bar and mode tabs are hidden by default (desktop) in the CSS, not just at the ≤560px breakpoint", async () => {
+test("14a. the sticky bar and mobile-only Added views are hidden by default (desktop) in the CSS, not just at the ≤560px breakpoint", async () => {
   const css = await readFile(path.join(frontendDir, "styles.css"), "utf8");
-  const baseRuleMatch = css.match(/\.builder-added-list-compact,\s*\n\.builder-item-edit,\s*\n\.builder-mobile-mode-tabs,\s*\n\.builder-mobile-sticky-bar,\s*\n\.builder-add-confirmation,\s*\n\.builder-section-close-button\s*\{\s*\n\s*display:\s*none;/);
-  assert.ok(baseRuleMatch, "the new mobile-only elements must default to display:none outside any media query, so desktop is unaffected even if the ≤560px query is ever mis-scoped");
+  const baseRuleMatch = css.match(/\.builder-added-list-compact,\s*\n\.builder-item-edit,\s*\n\.builder-mobile-sticky-bar,\s*\n\.builder-add-confirmation,\s*\n\.builder-section-close-button\s*\{\s*\n\s*display:\s*none;/);
+  assert.ok(baseRuleMatch, "the mobile-only elements must default to display:none outside any media query, so desktop is unaffected even if the ≤560px query is ever mis-scoped");
+});
+
+test("16a. regression guard: .builder-item-edit is switched back to visible somewhere in the CSS - this was the actual root cause of \"Edit details doesn't work\" (a CSS bug, not an event-handler/render/state bug). The handler and DOM were always correct: builder-open-edit-item set editItemId and re-rendered .builder-item-edit into the DOM with the right content (verified live: the element existed, computedStyle.display was 'none', offsetParent was null), but the base rule (see test 14a) always set it to display:none and nothing ever turned it back on, so it could never actually become visible on any screen size.", async () => {
+  const css = await readFile(path.join(frontendDir, "styles.css"), "utf8");
+  // Every "turn it back on" rule for .builder-item-edit as a standalone
+  // selector (not -head/-position/-nav children) must set a real display
+  // value. There must be at least one such rule beyond the base
+  // display:none - the exact bug was that there were zero.
+  const standaloneRules = [...css.matchAll(/(?<!,\s*\n)\.builder-item-edit\s*\{\s*\n\s*display:\s*([a-z-]+);/g)];
+  const turnOnRules = standaloneRules.filter((match) => match[1] !== "none");
+  assert.ok(turnOnRules.length > 0, "there must be a rule setting .builder-item-edit to a non-'none' display - without one, the single-item edit view (Instruction, Previous/Next) can never be seen on any device, even though the handler and DOM patch are correct");
+});
+
+test("16b. the top-level mode-tabs pair (\"Add exercises\" / \"Added exercises (N)\" tab buttons) no longer exists anywhere - the sticky bar's own mode-aware button is the only way to switch modes on mobile", async () => {
+  const sectionSource = await readFile(path.join(frontendDir, "builder-section.js"), "utf8");
+  assert.doesNotMatch(sectionSource, /builder-mobile-mode-tabs/, "the standing mode-tabs container must not be rendered");
+  assert.doesNotMatch(sectionSource, /role="tablist"/, "no tablist markup should remain once the tabs are gone");
+
+  const css = await readFile(path.join(frontendDir, "styles.css"), "utf8");
+  assert.doesNotMatch(css, /\.builder-mobile-mode-tab\b/, "the mode-tab styling rules must be removed along with the markup, not just hidden");
+});
+
+test("16c. regression guard: the reorder arrows stay vertical (up/down) at every width - the stale mobile override that rotated them to left/right (a leftover from the old horizontal-scroll Added-list design, long since replaced by a vertical list) must not come back", async () => {
+  const css = await readFile(path.join(frontendDir, "styles.css"), "utf8");
+  assert.match(css, /\.builder-item-move-up \.builder-icon-svg \{ transform: rotate\(0deg\); \}/);
+  assert.match(css, /\.builder-item-move-down \.builder-icon-svg \{ transform: rotate\(180deg\); \}/);
+  assert.doesNotMatch(css, /rotate\(-?90deg\)/, "no rule anywhere should rotate the reorder arrows onto their side");
+});
+
+test("16d. the quick-dose fields (Sets/Reps/Load, shown before an exercise is added) use 'e.g.' placeholders, not bare numbers that could be mistaken for an entered value", async () => {
+  const sectionSource = await readFile(path.join(frontendDir, "builder-section.js"), "utf8");
+  assert.match(sectionSource, /data-builder-new-dose name="sets" placeholder="e\.g\. 3"/);
+  assert.match(sectionSource, /data-builder-new-dose name="reps" placeholder="e\.g\. 8"/);
+  assert.match(sectionSource, /data-builder-new-dose name="load" placeholder="e\.g\. 40 kg"/);
+});
+
+test("16e. dose-input placeholders render in a visibly lighter color than typed values, via a dedicated ::placeholder rule scoped to .builder-dose-inputs", async () => {
+  const css = await readFile(path.join(frontendDir, "styles.css"), "utf8");
+  assert.match(css, /\.builder-dose-inputs input::placeholder \{ color: #a7b0ba; opacity: 1;/, "the placeholder color must be explicitly set and lighter than the default (near-black) typed-value text, not left to a possibly-inconsistent browser default");
 });
 
 test("15a. an add error resets the button, leaves query/filters untouched, and a retry can still succeed", async () => {

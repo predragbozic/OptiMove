@@ -197,15 +197,28 @@ export function renderBuilderSectionItems() {
   const scrollTop = scrollEl ? scrollEl.scrollTop : null;
   const active = document.activeElement;
   const activeForm = active?.closest?.(".builder-item");
+  // Three different views can render a .builder-item[data-item-id] at once
+  // (compact mobile card, single-item mobile edit form, desktop full form) -
+  // on mobile the compact card and the desktop form share the very same
+  // item id, and a plain "first match" query after the re-render would
+  // silently grab the wrong (CSS-hidden) one instead of the form the coach
+  // was actually typing in. Remember which of the three scopes the focused
+  // form was inside, and re-query within that same scope only.
+  const activeScopeEl = activeForm?.closest?.(".builder-added-list-compact, .builder-item-edit, .builder-added-list-desktop");
+  const activeScopeClass = activeScopeEl?.classList.contains("builder-added-list-compact") ? "builder-added-list-compact"
+    : activeScopeEl?.classList.contains("builder-item-edit") ? "builder-item-edit"
+    : activeScopeEl?.classList.contains("builder-added-list-desktop") ? "builder-added-list-desktop"
+    : "";
   const focusState = activeForm && container.contains(activeForm)
-    ? { itemId: activeForm.dataset.itemId, fieldName: active.getAttribute("name"), start: active.selectionStart, end: active.selectionEnd }
+    ? { itemId: activeForm.dataset.itemId, fieldName: active.getAttribute("name"), start: active.selectionStart, end: active.selectionEnd, scopeClass: activeScopeClass }
     : null;
 
   container.innerHTML = renderBuilderAddedPanelContent(state, selectedNode);
 
   if (scrollEl && scrollTop !== null) scrollEl.scrollTop = scrollTop;
   if (focusState) {
-    const nextForm = container.querySelector(`.builder-item[data-item-id="${CSS.escape(focusState.itemId)}"]`);
+    const scopeEl = (focusState.scopeClass && container.querySelector(`.${focusState.scopeClass}`)) || container;
+    const nextForm = scopeEl.querySelector(`.builder-item[data-item-id="${CSS.escape(focusState.itemId)}"]`);
     const nextField = nextForm?.querySelector(`[name="${CSS.escape(focusState.fieldName)}"]`);
     if (nextField) {
       nextField.focus({ preventScroll: true });
@@ -246,10 +259,7 @@ export function renderBuilderAddFeedback() {
   }
 
   const stickyEl = panel.querySelector(".builder-mobile-sticky-bar");
-  if (stickyEl) stickyEl.outerHTML = renderBuilderStickyBar(selectedNode);
-
-  const modeTabAdded = panel.querySelector('.builder-mobile-mode-tab[data-mode="added"]');
-  if (modeTabAdded) modeTabAdded.textContent = `Added exercises (${selectedNode.items.length})`;
+  if (stickyEl) stickyEl.outerHTML = renderBuilderStickyBar(selectedNode, state.builder.mobileMode);
 
   renderBuilderSectionItems();
   return true;

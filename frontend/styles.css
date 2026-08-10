@@ -7239,6 +7239,10 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-node-row-actions .builder-add-node-triggers { gap: 2px; }
 .builder-dose-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .builder-dose-inputs label { display: grid; gap: 4px; font-size: 12px; color: var(--muted, #667085); font-weight: 700; }
+/* "e.g. 3" etc. is only an example, not a value the coach entered - keep it
+   visibly lighter than typed text (which uses the input's normal, darker
+   default color) so the two are never mistaken for one another. */
+.builder-dose-inputs input::placeholder { color: #a7b0ba; opacity: 1; font-weight: 400; }
 .exercise-filter-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: stretch; min-width: min(100%, 620px); }
 .exercise-filter-field { margin: 0; min-width: 0; }
 .exercise-filter-field select,
@@ -7433,13 +7437,6 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-item-actions .builder-icon-action[disabled] { opacity: .4; cursor: default; }
 .builder-item-move-up .builder-icon-svg { transform: rotate(0deg); }
 .builder-item-move-down .builder-icon-svg { transform: rotate(180deg); }
-
-@media (max-width: 560px) {
-  /* Added exercises scroll horizontally on mobile, so "up/down" reads as
-     "earlier/later in the row" -- point the arrows left/right to match. */
-  .builder-item-move-up .builder-icon-svg { transform: rotate(-90deg); }
-  .builder-item-move-down .builder-icon-svg { transform: rotate(90deg); }
-}
 .builder-added-exercise-image, .builder-added-exercise-fallback { width: 68px; height: 52px; border-radius: 5px; object-fit: cover; background: #eef2f4; }
 .builder-added-exercise-media { width: 68px; height: 52px; padding: 0; border: 0; border-radius: 5px; background: #eef2f4; cursor: pointer; overflow: hidden; }
 .builder-added-exercise-media .builder-added-exercise-image { display: block; }
@@ -7510,7 +7507,13 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-block { flex: 0 0 82vw; width: 82vw; }
   .builder-add-block-card { flex: 0 0 220px; width: 220px; }
   .builder-section-overlay { z-index: 950; padding: 8px; align-items: end; }
-  .builder-section-modal { width: min(560px, 100%); min-height: 0; max-height: 92dvh; padding: 14px; border-radius: 8px; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; }
+  /* No bottom padding here: position:sticky's bottom:0 resolves against
+     this element's padding box, so any bottom padding here would leave a
+     permanent gap below the sticky bar (see .builder-mobile-sticky-bar)
+     with scrolled content visibly passing underneath it. The sticky bar
+     supplies its own bottom padding (including the safe-area inset)
+     instead, so it still clears the device's home indicator. */
+  .builder-section-modal { width: min(560px, 100%); min-height: 0; max-height: 92dvh; padding: 14px 14px 0; border-radius: 8px; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; }
   .builder-section-modal .builder-section-panel { min-width: 0; }
   .builder-section-modal .builder-section-panel-head { position: sticky; top: -14px; z-index: 2; margin: -14px -14px 14px; padding: 14px 14px 11px; background: #fff; }
   .builder-section-editor-actions { flex: 0 0 auto; }
@@ -7993,13 +7996,14 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 
 /* feature/mobile-builder-section-workflow: on desktop (default, no media
    query matched) the section editor keeps its original parallel library/
-   added layout untouched - the compact mobile-only elements below (mode
-   tabs, compact Added cards, single-item edit view, sticky bar, add-
-   confirmation banner, mobile close icon) are all hidden by default and
-   only switched on inside the ≤560px media query further down. */
+   added layout untouched - the compact mobile-only elements below (compact
+   Added cards, single-item edit view, sticky bar, add-confirmation banner,
+   mobile close icon) are all hidden by default and only switched on inside
+   the ≤560px media query further down. There is no standing mode-tabs pair
+   any more - the sticky bar's own mode-aware action button is the only
+   Add/Added switch (see renderBuilderStickyBar in builder-exercises.js). */
 .builder-added-list-compact,
 .builder-item-edit,
-.builder-mobile-mode-tabs,
 .builder-mobile-sticky-bar,
 .builder-add-confirmation,
 .builder-section-close-button {
@@ -8068,32 +8072,6 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     position: absolute;
     top: 0;
     right: 0;
-  }
-
-  .builder-mobile-mode-tabs {
-    display: flex;
-    gap: 6px;
-    margin: 10px 0 12px;
-  }
-
-  .builder-mobile-mode-tab {
-    flex: 1 1 0;
-    min-width: 0;
-    padding: 8px 6px;
-    border: 1px solid var(--line, #dfe4ea);
-    border-radius: 999px;
-    background: var(--surface, #fff);
-    color: var(--muted, #667085);
-    font-size: 13px;
-    font-weight: 700;
-    text-align: center;
-    cursor: pointer;
-  }
-
-  .builder-mobile-mode-tab.is-active {
-    border-color: var(--accent, #1f6f68);
-    background: var(--accent, #1f6f68);
-    color: #fff;
   }
 
   .exercise-filter-field {
@@ -8186,17 +8164,23 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   }
 
   .builder-added-card {
-    display: grid;
-    grid-template-columns: 20px 46px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
     padding: 8px;
     border: 1px solid var(--line, #dfe4ea);
     border-radius: 8px;
     background: var(--surface, #fff);
   }
 
+  .builder-added-card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .builder-added-card-index {
+    flex: 0 0 auto;
     color: var(--muted, #667085);
     font-size: 12px;
     font-weight: 800;
@@ -8205,11 +8189,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 
   .builder-added-card-media,
   .builder-added-card-media-fallback {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 46px;
-    height: 46px;
+    width: 40px;
+    height: 40px;
     border: 0;
     border-radius: 6px;
     background: var(--surface-soft, #f2f4f6);
@@ -8220,19 +8205,15 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   }
 
   .builder-added-card-media-image {
-    width: 46px;
-    height: 46px;
+    width: 40px;
+    height: 40px;
     object-fit: cover;
     object-position: center top;
   }
 
-  .builder-added-card-body {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-
   .builder-added-card-title {
+    flex: 1 1 auto;
+    min-width: 0;
     display: -webkit-box;
     overflow: hidden;
     -webkit-box-orient: vertical;
@@ -8241,23 +8222,40 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     line-height: 1.2;
   }
 
-  .builder-added-card-dose {
-    color: var(--muted, #667085);
-    font-size: 11px;
+  /* Reorder controls are grouped and stacked vertically (up above down) -
+     exercises are a vertical execution order, so the arrows read the same
+     direction as the list itself instead of pointing sideways. */
+  .builder-added-card-move {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
-  .builder-added-card-actions {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+  .builder-added-card-dose-inputs {
+    gap: 6px;
+  }
+
+  .builder-added-card-dose-inputs input {
+    padding: 6px 7px;
+    font-size: 13px;
   }
 
   .builder-added-card-edit {
-    flex: 0 0 100%;
-    text-align: right;
+    align-self: flex-end;
     font-size: 12px;
+  }
+
+  /* Missing before this fix: .builder-item-edit was left permanently
+     display:none (only ever turned off, never back on) by the base rule
+     near the top of this file, so "Edit details" always updated
+     state.builder.editItemId/mobileMode and re-rendered the DOM correctly,
+     but the resulting single-item edit view could never actually become
+     visible on any screen size - a pure CSS bug, not an event-handler,
+     render, or state bug (verified by inspecting the live DOM: the element
+     existed with the right content, computedStyle.display was "none"). */
+  .builder-item-edit {
+    display: block;
   }
 
   .builder-item-edit-head {
@@ -8298,7 +8296,13 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     position: sticky;
     bottom: 0;
     z-index: 4;
-    margin: 12px -14px -14px;
+    /* Horizontal-only negative margin, to bleed into the modal's left/right
+       padding for edge-to-edge width. No negative bottom margin: the modal
+       itself now carries zero bottom padding (see .builder-section-modal
+       above), so bottom: 0 already lands exactly on the modal's true bottom
+       edge - stacking a negative margin on top of that would just push the
+       bar past the modal's rounded corner and get clipped. */
+    margin: 12px -14px 0;
     padding: 8px 14px calc(8px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--line, #dfe4ea);
     background: var(--surface, #fff);
