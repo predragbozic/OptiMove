@@ -58,7 +58,25 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
   `;
 }
 
-export function renderAthleteSettingsHtml(athlete, currentUser) {
+// security/verified-email-change: the old combined "Login and password"
+// form let a typo'd or someone-else's email become the account's login
+// identity on nothing more than the CURRENT password - proof of owning the
+// old account, not proof of controlling the new address. Login email and
+// password are now two separate forms/flows: changing the login email
+// always requires confirming a link sent to the NEW address before
+// anything changes (see data-account-form="email-change-request" below and
+// POST /api/auth/account/email-change/request), and changing the password
+// (data-account-form="password-change") can never touch the email, even via
+// a hand-crafted request - see PUT /api/auth/me/credentials's own
+// enforcement in backend/src/routes/auth.js.
+//
+// emailChangeStatus is either null (no pending request - render the
+// request form) or { newEmail, expiresAt, requestSource } from
+// GET /api/auth/account/email-change/status - the caller
+// (renderAthleteSettings in app.js) fetches this after the initial render
+// and re-renders with it, mirroring how every other async-status panel in
+// this app is patched in.
+export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatus) {
   return `
     <section class="content-section athlete-simple-view">
       <section class="panel athlete-settings-card">
@@ -81,18 +99,60 @@ export function renderAthleteSettingsHtml(athlete, currentUser) {
       <section class="panel athlete-settings-card">
         <div>
           <p class="eyebrow">Account</p>
-          <h3>Login and password</h3>
-          <p class="muted">Change the email or password you use to sign in. Confirm with your current password.</p>
+          <h3>Login email</h3>
+          <p class="muted">The email you use to sign in. Changing it requires confirming the new address before it takes effect.</p>
         </div>
-        <form class="organization-form" data-account-form="credentials">
-          <label class="search-field"><span>Email</span><input name="email" type="email" placeholder="${escapeAttr(currentUser?.email || "you@example.com")}" autocomplete="off"></label>
-          <label class="search-field"><span>New password (optional)</span><input name="newPassword" type="password" placeholder="Leave blank to keep current password" autocomplete="new-password"></label>
+        <p class="account-current-email"><span>Current login email</span> <strong>${escapeHtml(currentUser?.email || "")}</strong></p>
+        ${renderEmailChangeStatusHtml(emailChangeStatus)}
+      </section>
+      <section class="panel athlete-settings-card">
+        <div>
+          <p class="eyebrow">Account</p>
+          <h3>Change password</h3>
+          <p class="muted">Change the password you use to sign in. This never changes your login email.</p>
+        </div>
+        <form class="organization-form" data-account-form="password-change">
           <label class="search-field"><span>Current password</span><input name="currentPassword" type="password" required placeholder="Confirm with your current password" autocomplete="current-password"></label>
+          <label class="search-field"><span>New password</span><input name="newPassword" type="password" required minlength="8" placeholder="At least 8 characters" autocomplete="new-password"></label>
+          <label class="search-field"><span>Confirm new password</span><input name="confirmNewPassword" type="password" required minlength="8" autocomplete="new-password"></label>
           <p class="builder-error" aria-live="polite"></p>
           <p class="builder-success" aria-live="polite"></p>
-          <button class="plain-button" type="submit">Save changes</button>
+          <button class="plain-button" type="submit">Change password</button>
         </form>
       </section>
     </section>
   `;
+}
+
+function renderEmailChangeStatusHtml(status) {
+  if (status?.pending) {
+    return `
+      <div class="account-email-pending" role="status">
+        <p class="builder-success">Your login email has not changed yet. Confirm the link sent to <strong>${escapeHtml(status.newEmail || "")}</strong> to finish - it expires ${escapeHtml(formatExpiryLabel(status.expiresAt))}.</p>
+        <div class="account-email-pending-actions">
+          <button class="text-action" type="button" data-action="email-change-resend">Resend</button>
+          <button class="text-action danger-action" type="button" data-action="email-change-cancel">Cancel request</button>
+        </div>
+        <p class="builder-error" aria-live="polite" data-role="email-change-pending-error"></p>
+      </div>
+    `;
+  }
+  return `
+    <form class="organization-form" data-account-form="email-change-request">
+      <label class="search-field"><span>New login email</span><input name="newEmail" type="email" required autocomplete="off"></label>
+      <label class="search-field"><span>Current password</span><input name="currentPassword" type="password" required placeholder="Confirm with your current password" autocomplete="current-password"></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <p class="builder-success" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Send verification link</button>
+    </form>
+  `;
+}
+
+function formatExpiryLabel(expiresAt) {
+  if (!expiresAt) return "soon";
+  try {
+    return new Date(expiresAt).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" });
+  } catch {
+    return "soon";
+  }
 }

@@ -196,3 +196,46 @@ test("the password_reset_tokens migration file can be applied twice with no erro
   assert.ok(indexNames.includes("password_reset_tokens_one_active_per_user_idx"), "the partial unique 'one active token per user' index must exist");
   assert.ok(indexNames.includes("password_reset_tokens_token_hash_key"), "token_hash must be unique");
 });
+
+test("the account_email_change_tokens migration is registered in the deploy migration runner, after 20260810_password_reset.sql", () => {
+  const emailChangeIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260811_account_email_change.sql");
+  assert.notEqual(emailChangeIndex, -1, "migrationPaths must include the account_email_change_tokens migration file");
+
+  const passwordResetIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260810_password_reset.sql");
+  assert.ok(
+    emailChangeIndex > passwordResetIndex,
+    "account_email_change_tokens is a deliberately separate table from both password_reset_tokens and email_verification_tokens (see the migration's own header comment) - ordered after password_reset_tokens purely to keep token-table migrations chronologically grouped",
+  );
+
+  for (const migrationPath of migrationPaths) {
+    assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
+  }
+});
+
+test("the account_email_change_tokens migration file can be applied twice with no error, and produces the expected invariants", async () => {
+  const migrationPath = migrationPaths.find((p) => path.basename(p) === "20260811_account_email_change.sql");
+  const sql = await (await import("node:fs/promises")).readFile(migrationPath, "utf8");
+  await pool.query(sql);
+  await pool.query(sql);
+
+  const cols = await pool.query(
+    `select column_name from information_schema.columns where table_schema = 'public' and table_name = 'account_email_change_tokens'`,
+  );
+  const colNames = cols.rows.map((r) => r.column_name).sort();
+  for (const expected of ["id", "user_id", "new_email", "token_hash", "requested_by_user_id", "request_source", "expires_at", "sent_at", "consumed_at", "revoked_at", "created_at", "updated_at"]) {
+    assert.ok(colNames.includes(expected), `account_email_change_tokens must have a ${expected} column`);
+  }
+
+  const indexes = await pool.query(`select indexname from pg_indexes where schemaname = 'public' and tablename = 'account_email_change_tokens'`);
+  const indexNames = indexes.rows.map((r) => r.indexname);
+  assert.ok(indexNames.includes("account_email_change_tokens_one_active_per_user_idx"), "the partial unique 'one active token per user' index must exist");
+  assert.ok(indexNames.includes("account_email_change_tokens_token_hash_key"), "token_hash must be unique");
+
+  const constraints = await pool.query(
+    `select conname from pg_constraint where conrelid = 'public.account_email_change_tokens'::regclass`,
+  );
+  const constraintNames = constraints.rows.map((r) => r.conname);
+  assert.ok(constraintNames.includes("account_email_change_tokens_request_source_check"), "request_source must be constrained to 'self'/'platform_admin'");
+  assert.ok(constraintNames.includes("account_email_change_tokens_new_email_lower_check"), "new_email must be constrained to lowercase");
+  assert.ok(constraintNames.includes("account_email_change_tokens_not_both_consumed_and_revoked_check"), "consumed_at and revoked_at must never both be set");
+});

@@ -134,6 +134,60 @@ function buildPasswordResetEmail({ resetUrl, recipientName, expiresAt }) {
   return { subject, text, html };
 }
 
+// security/verified-email-change: sent to the NEW address a coach/athlete
+// asked to change their login email to - confirms they can actually
+// receive mail there before public.users.email ever changes. Same
+// dispatch shape as buildPasswordResetEmail/buildVerificationEmail above.
+function buildAccountEmailChangeVerificationEmail({ verificationUrl, recipientName, expiresAt }) {
+  const subject = "Confirm your new OptiMove login email";
+  const greeting = recipientName ? `Hi ${recipientName},` : "Hi,";
+  const expiresLabel = new Date(expiresAt).toUTCString();
+  const text = [
+    greeting,
+    "",
+    "A request was made to use this address as the login email for an OptiMove account.",
+    "",
+    `Confirm this email address: ${verificationUrl}`,
+    "",
+    `This link expires ${expiresLabel}.`,
+    "",
+    "Your login email will not change until you click this link. If you did not request this, you can safely ignore this email - nothing will change.",
+  ].join("\n");
+  const html = [
+    `<p>${escapeHtml(greeting)}</p>`,
+    "<p>A request was made to use this address as the login email for an OptiMove account.</p>",
+    `<p><a href="${escapeHtml(verificationUrl)}">Confirm this email address</a></p>`,
+    `<p>This link expires ${escapeHtml(expiresLabel)}.</p>`,
+    "<p>Your login email will not change until you click this link. If you did not request this, you can safely ignore this email - nothing will change.</p>",
+  ].join("\n");
+  return { subject, text, html };
+}
+
+// security/verified-email-change: sent to the OLD address once a login-
+// email change has actually completed - a best-effort security notice, not
+// part of the change itself (see sendAccountEmailChangedNotice's own
+// caller, which never rolls back the DB change if this fails).
+function buildAccountEmailChangedNoticeEmail({ changedAt }) {
+  const subject = "Your OptiMove login email was changed";
+  const changedLabel = new Date(changedAt).toUTCString();
+  const text = [
+    "Hi,",
+    "",
+    `Your OptiMove login email was changed on ${changedLabel}.`,
+    "",
+    "If you made this change, no action is needed.",
+    "",
+    "If you did not make this change, contact support right away - someone else may have access to your account.",
+  ].join("\n");
+  const html = [
+    "<p>Hi,</p>",
+    `<p>Your OptiMove login email was changed on ${escapeHtml(changedLabel)}.</p>`,
+    "<p>If you made this change, no action is needed.</p>",
+    "<p>If you did not make this change, contact support right away - someone else may have access to your account.</p>",
+  ].join("\n");
+  return { subject, text, html };
+}
+
 function buildVerificationEmail({ verificationUrl, recipientName, contextLabel, expiresAt }) {
   const subject = "Confirm your email for OptiMove";
   const greeting = recipientName ? `Hi ${recipientName},` : "Hi,";
@@ -358,6 +412,66 @@ export async function sendEmailVerification({ to, verificationUrl, recipientName
     throw new EmailConfigError("EMAIL_PROVIDER is not configured.");
   }
   const { subject, text, html } = buildVerificationEmail({ verificationUrl, recipientName, contextLabel, expiresAt });
+  if (provider === "gmail") {
+    await sendViaGmail({ to, subject, html, text });
+    return;
+  }
+  if (provider === "brevo") {
+    await sendViaBrevo({ to, subject, html, text });
+    return;
+  }
+  if (provider === "resend") {
+    await sendViaResend({ to, subject, html, text });
+    return;
+  }
+  if (provider === "dev" || provider === "console") {
+    sendViaDevAdapter({ to, subject });
+    return;
+  }
+  throw new EmailConfigError(`Unsupported EMAIL_PROVIDER: "${provider}".`);
+}
+
+// security/verified-email-change: same dispatch shape as sendEmailVerification
+// above, same provider transport functions, only the content differs (see
+// buildAccountEmailChangeVerificationEmail). Never logs the raw token/URL,
+// in any environment - identical guarantee to sendEmailVerification/
+// sendPasswordResetEmail.
+export async function sendAccountEmailChangeVerification({ to, verificationUrl, recipientName, expiresAt }) {
+  const provider = resolveProvider();
+  if (!provider) {
+    throw new EmailConfigError("EMAIL_PROVIDER is not configured.");
+  }
+  const { subject, text, html } = buildAccountEmailChangeVerificationEmail({ verificationUrl, recipientName, expiresAt });
+  if (provider === "gmail") {
+    await sendViaGmail({ to, subject, html, text });
+    return;
+  }
+  if (provider === "brevo") {
+    await sendViaBrevo({ to, subject, html, text });
+    return;
+  }
+  if (provider === "resend") {
+    await sendViaResend({ to, subject, html, text });
+    return;
+  }
+  if (provider === "dev" || provider === "console") {
+    sendViaDevAdapter({ to, subject });
+    return;
+  }
+  throw new EmailConfigError(`Unsupported EMAIL_PROVIDER: "${provider}".`);
+}
+
+// security/verified-email-change: the best-effort security notice sent to
+// the OLD address once a change has completed - same dispatch shape,
+// deliberately never awaited by its one caller in a way that could roll
+// back the already-committed email change (see that call site's own
+// comment in backend/src/routes/auth.js).
+export async function sendAccountEmailChangedNotice({ to, changedAt }) {
+  const provider = resolveProvider();
+  if (!provider) {
+    throw new EmailConfigError("EMAIL_PROVIDER is not configured.");
+  }
+  const { subject, text, html } = buildAccountEmailChangedNoticeEmail({ changedAt });
   if (provider === "gmail") {
     await sendViaGmail({ to, subject, html, text });
     return;

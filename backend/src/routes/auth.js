@@ -4,6 +4,7 @@ import { pool, query } from "../db.js";
 import {
   clearSessionCookie,
   createSession,
+  destroyOtherSessionsForUser,
   destroySession,
   hashPassword,
   sessionCookie,
@@ -14,7 +15,24 @@ import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelec
 import { closeOtherOpenInvitesForAthlete, loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
 import { closeUnusableJoinLinkApplications, loadJoinLinkContextName, loadUsableJoinLink, lockJoinLinkActions } from "../joinLinkContext.js";
 import { resolveAppOrigin } from "../appOrigin.js";
-import { EmailConfigError, EmailSendError, sendEmailVerification, sendPasswordResetEmail } from "../email.js";
+import {
+  EmailConfigError,
+  EmailSendError,
+  sendAccountEmailChangedNotice,
+  sendAccountEmailChangeVerification,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+} from "../email.js";
+import {
+  accountEmailChangeResendTooSoon,
+  hashEmailChangeToken,
+  issueAccountEmailChangeToken,
+  loadActiveAccountEmailChangeRequest,
+  loadLastAccountEmailChangeTokenSentAt,
+  lockAccountEmailChangeActions,
+  markAccountEmailChangeTokenSent,
+  revokeActiveAccountEmailChangeTokens,
+} from "../accountEmailChange.js";
 import {
   allowResendAttemptForIp,
   hashVerificationToken,
@@ -99,15 +117,30 @@ router.put("/workspace", async (req, res, next) => {
   }
 });
 
+// security/verified-email-change: this endpoint is now PASSWORD-ONLY. It
+// used to also change users.email directly, on nothing more than the
+// caller's current password - that proves control of the OLD account, not
+// that the caller can receive mail at the NEW address, so it let anyone
+// type in someone else's (or a nonexistent, or a mistyped) address and have
+// it become their login identity immediately. A crafted request that still
+// includes an "email" field is rejected outright below - the frontend no
+// longer sends one (see the split Account/Password forms in
+// frontend/athlete-view.js), but this is the real, backend-enforced
+// boundary; the frontend is not trusted to omit it. Use
+// POST /api/auth/account/email-change/request instead, which requires the
+// new address to prove receipt via a confirmation link before
+// users.email ever changes.
 router.put("/me/credentials", async (req, res, next) => {
   try {
     if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    if (req.body?.email !== undefined) {
+      return res.status(400).json({ error: "EMAIL_VERIFICATION_REQUIRED" });
+    }
     const currentPassword = String(req.body?.currentPassword || "");
-    const nextEmail = req.body?.email !== undefined ? String(req.body.email).trim().toLowerCase() : "";
     const nextPassword = req.body?.newPassword !== undefined ? String(req.body.newPassword) : "";
     if (!currentPassword) return res.status(400).json({ error: "Enter your current password to confirm this change." });
-    if (!nextEmail && !nextPassword) return res.status(400).json({ error: "Enter a new email or a new password." });
-    if (nextPassword && nextPassword.length < 8) return res.status(400).json({ error: "New password must be at least 8 characters." });
+    if (!nextPassword) return res.status(400).json({ error: "Enter a new password." });
+    if (nextPassword.length < 8) return res.status(400).json({ error: "New password must be at least 8 characters." });
 
     const current = await query(
       `select id, email, password_hash from public.users where id = $1 limit 1`,
@@ -118,17 +151,348 @@ router.put("/me/credentials", async (req, res, next) => {
       return res.status(401).json({ error: "Current password is incorrect." });
     }
 
-    const email = nextEmail || user.email;
-    const passwordHash = nextPassword ? hashPassword(nextPassword) : user.password_hash;
+    const passwordHash = hashPassword(nextPassword);
     const updated = await query(
-      `update public.users set email = $2, password_hash = $3, updated_at = now() where id = $1
+      `update public.users set password_hash = $2, updated_at = now() where id = $1
        returning id, email, full_name, display_name, role_hint`,
-      [user.id, email, passwordHash],
+      [user.id, passwordHash],
     );
+    // Every OTHER session for this account is invalidated - the same
+    // "changing your credential kicks out anyone else with access" rule a
+    // full password reset already applies (there, via a single DELETE for
+    // ALL sessions, since a reset happens outside any session at all). Here
+    // the caller IS an authenticated session that just proved the old
+    // password, so it is deliberately kept alive rather than forcing an
+    // immediate re-login for the very request that just succeeded - see
+    // destroyOtherSessionsForUser's own header comment in
+    // backend/src/auth.js.
+    await destroyOtherSessionsForUser(user.id, req.sessionToken);
     res.json({ user: publicUser(updated.rows[0]) });
   } catch (error) {
-    if (error?.code === "23505") return res.status(409).json({ error: "This email is already in use by another account." });
     next(error);
+  }
+});
+
+// --- Verified account login-email change (security/verified-email-change) ---
+// users.email is the account's login identity - it is deliberately never
+// written directly by any authenticated or admin-facing endpoint. Every
+// change to it goes through this token-backed flow: a request (self-
+// service below, or platform-admin-initiated in
+// backend/src/routes/organization.js) issues a hashed, 30-minute token and
+// emails a confirmation link to the NEW address; only that link's own
+// public confirm endpoint (further below) ever writes users.email, and
+// only after re-verifying the address is still free at that exact moment.
+const ACCOUNT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+router.post("/account/email-change/request", async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    const currentPassword = String(req.body?.currentPassword || "");
+    const newEmail = String(req.body?.newEmail || "").trim().toLowerCase();
+    if (!currentPassword) return res.status(400).json({ error: "INVALID_CURRENT_PASSWORD" });
+    if (!newEmail || !ACCOUNT_EMAIL_RE.test(newEmail)) return res.status(400).json({ error: "INVALID_EMAIL" });
+
+    const current = await query(`select id, email, password_hash, display_name, full_name from public.users where id = $1 limit 1`, [req.user.id]);
+    const user = current.rows[0];
+    if (!user || !verifyPassword(currentPassword, user.password_hash)) {
+      return res.status(401).json({ error: "INVALID_CURRENT_PASSWORD" });
+    }
+    if (newEmail === String(user.email).toLowerCase()) {
+      return res.status(400).json({ error: "EMAIL_UNCHANGED" });
+    }
+
+    const client = await pool.connect();
+    let rawToken;
+    let tokenId;
+    let expiresAt;
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockAccountEmailChangeActions(exec, user.id);
+      // Fresh, locked check for the exact address this request is for -
+      // never trusted from any read taken before the lock.
+      const existingOwner = await client.query(`select id from public.users where lower(email) = $1 limit 1`, [newEmail]);
+      if (existingOwner.rows[0]) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "EMAIL_ALREADY_IN_USE" });
+      }
+      const issued = await issueAccountEmailChangeToken(exec, { userId: user.id, newEmail, requestedByUserId: user.id, requestSource: "self" });
+      rawToken = issued.rawToken;
+      tokenId = issued.tokenId;
+      expiresAt = issued.expiresAt;
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return await sendEmailChangeVerificationAndRespond(req, res, {
+      to: newEmail,
+      recipientName: user.display_name || user.full_name || "",
+      expiresAt,
+      tokenId,
+      rawToken,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/account/email-change/resend", async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    const client = await pool.connect();
+    let rawToken;
+    let tokenId;
+    let expiresAt;
+    let newEmail;
+    let recipientName;
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockAccountEmailChangeActions(exec, req.user.id);
+      const active = await loadActiveAccountEmailChangeRequest(exec, req.user.id);
+      if (!active) {
+        await client.query("commit");
+        return res.status(404).json({ error: "NO_PENDING_EMAIL_CHANGE" });
+      }
+      // Re-check the pending address hasn't become taken since it was
+      // first requested.
+      const existingOwner = await client.query(`select id from public.users where lower(email) = $1 and id != $2 limit 1`, [active.new_email, req.user.id]);
+      if (existingOwner.rows[0]) {
+        await client.query("commit");
+        return res.status(409).json({ error: "EMAIL_ALREADY_IN_USE" });
+      }
+      const lastSentAt = await loadLastAccountEmailChangeTokenSentAt(exec, req.user.id);
+      if (accountEmailChangeResendTooSoon(lastSentAt)) {
+        await client.query("commit");
+        return res.status(429).json({ error: "RESEND_TOO_SOON" });
+      }
+      const issued = await issueAccountEmailChangeToken(exec, {
+        userId: req.user.id,
+        newEmail: active.new_email,
+        requestedByUserId: active.requested_by_user_id,
+        requestSource: active.request_source,
+      });
+      rawToken = issued.rawToken;
+      tokenId = issued.tokenId;
+      expiresAt = issued.expiresAt;
+      newEmail = active.new_email;
+      const nameResult = await client.query(`select display_name, full_name from public.users where id = $1`, [req.user.id]);
+      recipientName = nameResult.rows[0]?.display_name || nameResult.rows[0]?.full_name || "";
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return await sendEmailChangeVerificationAndRespond(req, res, { to: newEmail, recipientName, expiresAt, tokenId, rawToken });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/account/email-change/cancel", async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockAccountEmailChangeActions(exec, req.user.id);
+      await revokeActiveAccountEmailChangeTokens(exec, req.user.id);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/account/email-change/status", async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+    const active = await loadActiveAccountEmailChangeRequest(query, req.user.id);
+    if (!active) return res.json({ pending: false });
+    res.json({
+      pending: true,
+      newEmail: active.new_email,
+      expiresAt: active.expires_at,
+      requestSource: active.request_source,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Shared by both the self-service request and resend handlers above: sends
+// the confirmation email to the NEW address (fired here, AFTER the issuing
+// transaction has already committed - a network call must never hold a DB
+// lock, matching every other token flow in this file) and only marks the
+// token `sent` once that provider call genuinely succeeds. On failure, the
+// token row already exists and can be retried via resend - see
+// accountEmailChangeResendTooSoon's own "keyed off sent_at" reasoning.
+async function sendEmailChangeVerificationAndRespond(req, res, { to, recipientName, expiresAt, tokenId, rawToken }) {
+  const confirmUrl = `${resolveAppOrigin(req)}/confirm-email-change?token=${encodeURIComponent(rawToken)}`;
+  try {
+    await sendAccountEmailChangeVerification({ to, verificationUrl: confirmUrl, recipientName, expiresAt });
+    await markAccountEmailChangeTokenSent(query, tokenId);
+  } catch (emailError) {
+    console.error("Failed to send account email-change verification:", emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
+    return res.status(502).json({ error: "EMAIL_SEND_FAILED" });
+  }
+  const responseBody = { ok: true, newEmail: to, expiresAt };
+  if (!isProduction) {
+    // Automated tests and local development need the raw token to drive the
+    // confirm flow without a real inbox - never included in a production
+    // response or in any log line.
+    responseBody.devEmailChangeToken = rawToken;
+  }
+  return res.json(responseBody);
+}
+
+// Read-only check, used by the public confirm page before showing the
+// "confirm this email" button - never consumes the token and never changes
+// anything. Every invalid reason collapses to the exact same generic
+// { valid: false }, matching GET /password/reset/:token's own contract.
+router.get("/email-changes/:token", async (req, res, next) => {
+  try {
+    const tokenHash = hashEmailChangeToken(req.params.token);
+    const result = await query(
+      `select t.expires_at, t.consumed_at, t.revoked_at, t.new_email, u.is_active
+       from public.account_email_change_tokens t
+       join public.users u on u.id = t.user_id
+       where t.token_hash = $1
+       limit 1`,
+      [tokenHash],
+    );
+    const row = result.rows[0];
+    if (!row || row.consumed_at || row.revoked_at || new Date(row.expires_at) <= new Date() || !row.is_active) {
+      return res.json({ valid: false });
+    }
+    res.json({ valid: true, newEmail: row.new_email });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Public, unauthenticated (the confirmation link itself is the proof of
+// receipt - no session is required to click it). Transactional: resolve the
+// token's owner without mutation (purely for the lock key), lock, re-load
+// the token FOR UPDATE, re-check it and the account are still valid,
+// re-check the new address is STILL free (it may have been claimed by a
+// different account in the time since this token was issued), only THEN
+// write users.email, consume the token, defensively revoke any other
+// active token for this user, and delete every one of this user's existing
+// sessions - all in the same transaction, mirroring
+// POST /password/reset/:token's exact shape. Touches nothing else: not
+// password_hash, role_hint, user_global_roles, user_club_roles,
+// user_team_roles, athletes.user_id, athlete_memberships, user_athletes, or
+// workspace preference.
+router.post("/email-changes/:token/confirm", async (req, res, next) => {
+  const genericInvalid = () => res.status(404).json({ error: "This confirmation link is invalid or has expired." });
+  const client = await pool.connect();
+  try {
+    const tokenHash = hashEmailChangeToken(req.params.token);
+
+    const resolved = await query(`select user_id from public.account_email_change_tokens where token_hash = $1 limit 1`, [tokenHash]);
+    if (!resolved.rows[0]) return genericInvalid();
+
+    await client.query("begin");
+    const exec = (text, params) => client.query(text, params);
+    await lockAccountEmailChangeActions(exec, resolved.rows[0].user_id);
+
+    const tokenResult = await client.query(
+      `select id, user_id, new_email, expires_at, consumed_at, revoked_at
+       from public.account_email_change_tokens where token_hash = $1 limit 1 for update`,
+      [tokenHash],
+    );
+    const tokenRow = tokenResult.rows[0];
+    if (!tokenRow || tokenRow.consumed_at || tokenRow.revoked_at || new Date(tokenRow.expires_at) <= new Date()) {
+      await client.query("rollback");
+      return genericInvalid();
+    }
+
+    const userResult = await client.query(`select id, email, is_active from public.users where id = $1 limit 1 for update`, [tokenRow.user_id]);
+    const user = userResult.rows[0];
+    if (!user || !user.is_active) {
+      await client.query("rollback");
+      return genericInvalid();
+    }
+
+    // The whole reason this re-check exists: the address could have been
+    // claimed by a completely different account (a new signup, another
+    // user's own email change, an admin-created login) in the time between
+    // this token being issued and clicked. Never overwrite that other
+    // account's email - reject and leave both accounts exactly as they
+    // were. The token itself is left active (not consumed) so the original
+    // requester can pick a different address and try again via resend/a
+    // fresh request, rather than being forced to restart from a dead link.
+    const conflict = await client.query(`select id from public.users where lower(email) = $1 and id != $2 limit 1`, [tokenRow.new_email, user.id]);
+    if (conflict.rows[0]) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "EMAIL_ALREADY_IN_USE" });
+    }
+
+    const oldEmail = user.email;
+    try {
+      await client.query(`update public.users set email = $2, updated_at = now() where id = $1`, [user.id, tokenRow.new_email]);
+    } catch (updateError) {
+      // A genuine cross-account race: two DIFFERENT users can both pass the
+      // SELECT-based conflict check above when confirming toward the same
+      // new_email at nearly the same time - read-committed isolation means
+      // neither sees the other's still-uncommitted row. It's the UPDATE
+      // itself that Postgres actually serializes on, via the real
+      // users_email_key unique constraint (data integrity was never at
+      // risk - this only controls what the LOSING request sees). Convert
+      // that into the exact same controlled response the pre-check above
+      // produces, rather than letting a raw unique-violation surface as an
+      // uncontrolled 500. Rolling back (below, via the outer catch) leaves
+      // this token exactly as it was - still active, not consumed - same as
+      // the pre-check conflict path.
+      if (updateError?.code === "23505" && updateError?.constraint === "users_email_key") {
+        await client.query("rollback");
+        return res.status(409).json({ error: "EMAIL_ALREADY_IN_USE" });
+      }
+      throw updateError;
+    }
+    await client.query(`update public.account_email_change_tokens set consumed_at = now(), updated_at = now() where id = $1`, [tokenRow.id]);
+    // Defensive, normally a no-op - see revokeActivePasswordResetTokens's
+    // own header comment for the identical reasoning applied here.
+    await revokeActiveAccountEmailChangeTokens(exec, user.id);
+    // Every existing session for this account is invalidated - same rule a
+    // password reset already applies. The old email no longer works for
+    // login and any session established under it should not persist either;
+    // the caller signs back in with the new email afterward.
+    await client.query(`delete from public.auth_sessions where user_id = $1`, [user.id]);
+    await client.query("commit");
+
+    // Best-effort security notice to the OLD address, fired only after the
+    // change has already committed - a failure here must never roll back
+    // (or even appear to roll back, by returning an error for) a change
+    // that already genuinely happened. Sanitized log only, same guarantee
+    // every other email failure in this file upholds.
+    try {
+      await sendAccountEmailChangedNotice({ to: oldEmail, changedAt: new Date() });
+    } catch (emailError) {
+      console.error("Failed to send account email-changed notice:", emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
   }
 });
 

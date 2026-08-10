@@ -22,6 +22,10 @@ import {
   submitResetPassword as submitResetPasswordAction,
 } from "./password-reset-actions.js";
 import {
+  renderConfirmEmailChange as renderConfirmEmailChangeAction,
+  submitConfirmEmailChange as submitConfirmEmailChangeAction,
+} from "./email-change-actions.js";
+import {
   renderAthleteHeaderToolbarHtml,
   renderAthleteListHtml,
   renderAthleteSettingsHtml,
@@ -89,12 +93,14 @@ import {
   visibleTemplateScopes,
 } from "./navigation.js";
 import {
+  closeAthleteAccountModal,
   closeAthleteInviteModal,
   closeManageAccountModal,
   handleOrganizationAction,
   handleOrganizationFilterInput,
   handleOrganizationSelectChange,
   syncOrganizationAccessGroupMaster,
+  submitAthleteAccountEmailChangeForm,
   submitOrganizationAccessForm,
   submitOrganizationForm as submitOrganizationFormAction,
 } from "./organization-actions.js";
@@ -223,6 +229,10 @@ async function init() {
     await renderResetPasswordAction({ renderUserControls, setStatus });
     return;
   }
+  if (window.location.pathname === "/confirm-email-change") {
+    await renderConfirmEmailChangeAction({ renderUserControls, setStatus });
+    return;
+  }
   await loadSession();
   if (!state.currentUser) {
     renderLoginAction({ renderUserControls, setStatus });
@@ -336,6 +346,7 @@ function bindEvents() {
     closeMedia();
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
     if (state.organizationInvite.open) closeAthleteInviteModal(renderOrganizationPanel);
+    if (state.athleteAccountManage.open) closeAthleteAccountModal(renderOrganizationPanel);
     if (state.workspaceSwitcher.open) {
       state.workspaceSwitcher.open = false;
       renderWorkspaceSwitcher();
@@ -412,6 +423,13 @@ async function handleContentSubmit(event) {
   if (organizationAccessForm) {
     event.preventDefault();
     await submitOrganizationAccessForm(organizationAccessForm, { refreshOrganizationData, renderOrganizationPanel });
+    return;
+  }
+
+  const athleteAccountEmailChangeForm = event.target.closest("[data-organization-athlete-account-form='email-change-request']");
+  if (athleteAccountEmailChangeForm) {
+    event.preventDefault();
+    await submitAthleteAccountEmailChangeForm(athleteAccountEmailChangeForm, { renderOrganizationPanel });
     return;
   }
 
@@ -517,31 +535,65 @@ async function handleContentSubmit(event) {
     return;
   }
 
-  const credentialsForm = event.target.closest("[data-account-form='credentials']");
-  if (credentialsForm) {
+  // security/verified-email-change: password-only now - see
+  // PUT /api/auth/me/credentials's own header comment in
+  // backend/src/routes/auth.js for why this can never touch users.email,
+  // even via a hand-crafted request.
+  const passwordChangeForm = event.target.closest("[data-account-form='password-change']");
+  if (passwordChangeForm) {
     event.preventDefault();
-    const formData = new FormData(credentialsForm);
-    const error = credentialsForm.querySelector(".builder-error");
-    const success = credentialsForm.querySelector(".builder-success");
+    const formData = new FormData(passwordChangeForm);
+    const error = passwordChangeForm.querySelector(".builder-error");
+    const success = passwordChangeForm.querySelector(".builder-success");
     if (error) error.textContent = "";
     if (success) success.textContent = "";
-    const button = credentialsForm.querySelector("button[type='submit']");
-    if (button) button.disabled = true;
-    const email = String(formData.get("email") || "").trim();
+    const button = passwordChangeForm.querySelector("button[type='submit']");
     const newPassword = String(formData.get("newPassword") || "");
+    const confirmNewPassword = String(formData.get("confirmNewPassword") || "");
     const currentPassword = String(formData.get("currentPassword") || "");
+    if (newPassword !== confirmNewPassword) {
+      if (error) error.textContent = "New passwords do not match.";
+      return;
+    }
+    if (button) button.disabled = true;
     try {
-      const data = await api("/api/auth/me/credentials", {
+      await api("/api/auth/me/credentials", {
         method: "PUT",
-        body: JSON.stringify({ email: email || undefined, newPassword: newPassword || undefined, currentPassword }),
+        body: JSON.stringify({ newPassword, currentPassword }),
       });
-      state.currentUser = data.user;
-      credentialsForm.reset();
-      if (success) success.textContent = "Saved.";
-      renderUserControls();
+      passwordChangeForm.reset();
+      if (success) success.textContent = "Password changed. Other signed-in devices have been signed out.";
     } catch (submitError) {
-      if (error) error.textContent = submitError.message || "Could not save changes.";
+      if (error) error.textContent = submitError.message || "Could not change your password.";
     } finally {
+      if (button) button.disabled = false;
+    }
+    return;
+  }
+
+  // security/verified-email-change: only ever REQUESTS a verified change -
+  // users.email is untouched until the link sent to the new address is
+  // confirmed. See POST /api/auth/account/email-change/request.
+  const emailChangeRequestForm = event.target.closest("[data-account-form='email-change-request']");
+  if (emailChangeRequestForm) {
+    event.preventDefault();
+    const formData = new FormData(emailChangeRequestForm);
+    const error = emailChangeRequestForm.querySelector(".builder-error");
+    const success = emailChangeRequestForm.querySelector(".builder-success");
+    if (error) error.textContent = "";
+    if (success) success.textContent = "";
+    const button = emailChangeRequestForm.querySelector("button[type='submit']");
+    const newEmail = String(formData.get("newEmail") || "").trim();
+    const currentPassword = String(formData.get("currentPassword") || "");
+    if (button) button.disabled = true;
+    try {
+      await api("/api/auth/account/email-change/request", {
+        method: "POST",
+        body: JSON.stringify({ newEmail, currentPassword }),
+      });
+      await renderAthleteSettings();
+    } catch (submitError) {
+      if (error) error.textContent = emailChangeErrorMessage(submitError);
       if (button) button.disabled = false;
     }
     return;
@@ -1368,6 +1420,14 @@ async function handleContentClick(event) {
     goHome();
     return;
   }
+  if (type === "confirm-email-change") {
+    await submitConfirmEmailChangeAction(action);
+    return;
+  }
+  if (type === "email-change-resend" || type === "email-change-cancel") {
+    await submitEmailChangeAction(type, action);
+    return;
+  }
   if (type === "coach-home-open-athlete") {
     state.selectedAthleteId = action.dataset.athleteId;
     state.athletesExpanded = false;
@@ -1663,12 +1723,60 @@ function renderAthleteHeader(data) {
   renderTabs();
 }
 
-function renderAthleteSettings() {
+async function renderAthleteSettings() {
   const athlete = state.athletes.find((entry) => entry.athlete_id === state.selectedAthleteId);
   renderAthleteHeader({});
   els.context.textContent = "Athlete settings";
   els.title.textContent = "Settings";
-  els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser);
+  els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, null);
+  let emailChangeStatus = null;
+  try {
+    emailChangeStatus = await api("/api/auth/account/email-change/status");
+  } catch {
+    emailChangeStatus = null;
+  }
+  // Guard against a slow status fetch resolving after the user has already
+  // navigated off Settings - see the same pattern at every other
+  // state.activeTab === "..." check in this file.
+  if (state.activeTab !== "athlete-settings") return;
+  els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, emailChangeStatus);
+}
+
+// security/verified-email-change: the email-change endpoints return short
+// machine codes (see backend/src/routes/auth.js), not display text, since
+// the same codes are reused by the platform-admin-initiated endpoints in
+// organization.js. Map the ones a self-service athlete can actually trigger
+// to plain language here; anything unrecognized (eg. "Unauthorized" from an
+// expired session) falls back to the raw message, which is already
+// human-readable for every other error this app surfaces.
+const EMAIL_CHANGE_ERROR_MESSAGES = {
+  INVALID_CURRENT_PASSWORD: "Current password is incorrect.",
+  INVALID_EMAIL: "Enter a valid email address.",
+  EMAIL_UNCHANGED: "That's already your current login email.",
+  EMAIL_ALREADY_IN_USE: "That email is already in use by another account.",
+  EMAIL_SEND_FAILED: "Could not send the verification email. Please try again.",
+  RESEND_TOO_SOON: "Please wait a bit before requesting another link.",
+  NO_PENDING_EMAIL_CHANGE: "There is no pending email change to update.",
+};
+
+function emailChangeErrorMessage(error) {
+  return EMAIL_CHANGE_ERROR_MESSAGES[error?.message] || error?.message || "Something went wrong.";
+}
+
+async function submitEmailChangeAction(type, action) {
+  if (action.disabled) return;
+  const container = action.closest(".account-email-pending");
+  const error = container?.querySelector("[data-role='email-change-pending-error']");
+  if (error) error.textContent = "";
+  action.disabled = true;
+  try {
+    const endpoint = type === "email-change-resend" ? "/api/auth/account/email-change/resend" : "/api/auth/account/email-change/cancel";
+    await api(endpoint, { method: "POST" });
+    await renderAthleteSettings();
+  } catch (submitError) {
+    if (error) error.textContent = emailChangeErrorMessage(submitError);
+    action.disabled = false;
+  }
 }
 
 async function renderAthleteLibrary() {

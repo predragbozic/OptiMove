@@ -26,8 +26,20 @@ import {
 } from "../joinLinkContext.js";
 import { resolveAppOrigin } from "../appOrigin.js";
 import { revokeActiveEmailVerificationTokens, revokeActiveEmailVerificationTokensForJoinLink } from "../emailVerification.js";
+import { EmailConfigError, EmailSendError, sendAccountEmailChangeVerification, sendPasswordResetEmail } from "../email.js";
+import {
+  accountEmailChangeResendTooSoon,
+  issueAccountEmailChangeToken,
+  loadActiveAccountEmailChangeRequest,
+  loadLastAccountEmailChangeTokenSentAt,
+  lockAccountEmailChangeActions,
+  markAccountEmailChangeTokenSent,
+  revokeActiveAccountEmailChangeTokens,
+} from "../accountEmailChange.js";
+import { issuePasswordResetToken, lockPasswordResetActions } from "../passwordReset.js";
 
 const router = Router();
+const isProduction = process.env.NODE_ENV === "production";
 
 // Presentation/data-context filtering only - narrows which of the already-
 // authorized clubs/teams/athletes/users this response includes, based on the
@@ -614,6 +626,272 @@ async function setUserLoginStatus(req, targetUserId, active) {
   );
   return { status: 200, body: { ok: true, active: updated.rows[0].is_active, disabled: false } };
 }
+
+// --- Platform-admin-initiated verified login-email change
+// (security/verified-email-change) ---
+// Lets a platform admin start a login-email change for ANY account,
+// including an athlete-only account that never appears in this Users list
+// (no staff role of any kind) - the whole reason this lives in
+// organization.js rather than requiring the target to self-serve. Every
+// endpoint below is gated on isPlatformAdministrator(req.authz) - a real,
+// active public.user_global_roles row, never role_hint - matching every
+// other platform-admin-only action in this file. The admin never sets or
+// even sees the account's password here; only the target address's own
+// inbox can complete the change, via the exact same public confirm
+// endpoint (POST /api/auth/email-changes/:token/confirm) the self-service
+// flow uses. users.email is never written by any of these three endpoints -
+// only the confirm endpoint ever writes it.
+router.post("/users/:userId/email-change/request", async (req, res, next) => {
+  try {
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can start a login-email change for another account." });
+    const targetUserId = req.params.userId;
+    const newEmail = String(req.body?.newEmail || "").trim().toLowerCase();
+    if (!newEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return res.status(400).json({ error: "INVALID_EMAIL" });
+
+    const target = await query(`select id, email, display_name, full_name from public.users where id = $1 limit 1`, [targetUserId]);
+    const targetUser = target.rows[0];
+    if (!targetUser) return res.status(404).json({ error: "User not found." });
+    if (newEmail === String(targetUser.email).toLowerCase()) return res.status(400).json({ error: "EMAIL_UNCHANGED" });
+
+    const client = await pool.connect();
+    let rawToken;
+    let tokenId;
+    let expiresAt;
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockAccountEmailChangeActions(exec, targetUserId);
+      const existingOwner = await client.query(`select id from public.users where lower(email) = $1 limit 1`, [newEmail]);
+      if (existingOwner.rows[0]) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "EMAIL_ALREADY_IN_USE" });
+      }
+      // Audited: requested_by_user_id records the acting admin, not the
+      // account owner - see request_source='platform_admin' below and
+      // migrations/20260811_account_email_change.sql's own column comment.
+      const issued = await issueAccountEmailChangeToken(exec, {
+        userId: targetUserId,
+        newEmail,
+        requestedByUserId: req.user.id,
+        requestSource: "platform_admin",
+      });
+      rawToken = issued.rawToken;
+      tokenId = issued.tokenId;
+      expiresAt = issued.expiresAt;
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return await sendAdminEmailChangeVerificationAndRespond(req, res, {
+      to: newEmail,
+      recipientName: targetUser.display_name || targetUser.full_name || "",
+      expiresAt,
+      tokenId,
+      rawToken,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/users/:userId/email-change/resend", async (req, res, next) => {
+  try {
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can resend this link." });
+    const targetUserId = req.params.userId;
+    const client = await pool.connect();
+    let rawToken;
+    let tokenId;
+    let expiresAt;
+    let newEmail;
+    let recipientName;
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockAccountEmailChangeActions(exec, targetUserId);
+      const active = await loadActiveAccountEmailChangeRequest(exec, targetUserId);
+      if (!active) {
+        await client.query("commit");
+        return res.status(404).json({ error: "NO_PENDING_EMAIL_CHANGE" });
+      }
+      const existingOwner = await client.query(`select id from public.users where lower(email) = $1 and id != $2 limit 1`, [active.new_email, targetUserId]);
+      if (existingOwner.rows[0]) {
+        await client.query("commit");
+        return res.status(409).json({ error: "EMAIL_ALREADY_IN_USE" });
+      }
+      const lastSentAt = await loadLastAccountEmailChangeTokenSentAt(exec, targetUserId);
+      if (accountEmailChangeResendTooSoon(lastSentAt)) {
+        await client.query("commit");
+        return res.status(429).json({ error: "RESEND_TOO_SOON" });
+      }
+      const issued = await issueAccountEmailChangeToken(exec, {
+        userId: targetUserId,
+        newEmail: active.new_email,
+        requestedByUserId: active.requested_by_user_id,
+        requestSource: active.request_source,
+      });
+      rawToken = issued.rawToken;
+      tokenId = issued.tokenId;
+      expiresAt = issued.expiresAt;
+      newEmail = active.new_email;
+      const nameResult = await client.query(`select display_name, full_name from public.users where id = $1`, [targetUserId]);
+      recipientName = nameResult.rows[0]?.display_name || nameResult.rows[0]?.full_name || "";
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return await sendAdminEmailChangeVerificationAndRespond(req, res, { to: newEmail, recipientName, expiresAt, tokenId, rawToken });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/users/:userId/email-change/cancel", async (req, res, next) => {
+  try {
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can cancel this request." });
+    const targetUserId = req.params.userId;
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockAccountEmailChangeActions(exec, targetUserId);
+      await revokeActiveAccountEmailChangeTokens(exec, targetUserId);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Platform-admin-only account detail for the athlete-only "Account" card in
+// Settings -> Athletes (security/verified-email-change) - the ONLY place in
+// this file that ever returns a user's real login email to the client.
+// Deliberately a separate, narrowly-scoped endpoint rather than adding
+// u.email to loadManagedAthletes' shared query below: that query's JSON
+// payload is read by every viewer of the Athletes list (coaches, club/team
+// admins included), and a login email must never be visible to any of
+// them - only a platform admin, and only through this one call, gated the
+// same way as every other platform-admin-only endpoint in this file.
+router.get("/users/:userId/account", async (req, res, next) => {
+  try {
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can view this." });
+    const result = await query(`select id, email, is_active from public.users where id = $1 limit 1`, [req.params.userId]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).json({ error: "User not found." });
+    const pending = await loadActiveAccountEmailChangeRequest(query, user.id);
+    res.json({
+      email: user.email,
+      loginActive: user.is_active,
+      pendingEmailChange: pending
+        ? { newEmail: pending.new_email, expiresAt: pending.expires_at, requestSource: pending.request_source }
+        : null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/users/:userId/email-change/status", async (req, res, next) => {
+  try {
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can view this." });
+    const active = await loadActiveAccountEmailChangeRequest(query, req.params.userId);
+    if (!active) return res.json({ pending: false });
+    res.json({
+      pending: true,
+      newEmail: active.new_email,
+      expiresAt: active.expires_at,
+      requestSource: active.request_source,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Same content/dispatch as the self-service flow's own helper in
+// backend/src/routes/auth.js - duplicated rather than imported across route
+// files (matching this codebase's existing convention of not sharing route-
+// level helpers between auth.js and organization.js) since the two callers
+// differ only in how they authorize and where the row they read
+// display_name/full_name from comes from.
+async function sendAdminEmailChangeVerificationAndRespond(req, res, { to, recipientName, expiresAt, tokenId, rawToken }) {
+  const confirmUrl = `${resolveAppOrigin(req)}/confirm-email-change?token=${encodeURIComponent(rawToken)}`;
+  try {
+    await sendAccountEmailChangeVerification({ to, verificationUrl: confirmUrl, recipientName, expiresAt });
+    await markAccountEmailChangeTokenSent(query, tokenId);
+  } catch (emailError) {
+    console.error("Failed to send admin-initiated email-change verification:", emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
+    return res.status(502).json({ error: "EMAIL_SEND_FAILED" });
+  }
+  const responseBody = { ok: true, newEmail: to, expiresAt };
+  if (!isProduction) responseBody.devEmailChangeToken = rawToken;
+  return res.json(responseBody);
+}
+
+// Lets a platform admin trigger the existing self-service password-reset
+// flow on an account's behalf, without ever setting or seeing a password
+// themselves - reuses the exact same public.password_reset_tokens
+// issuance/lock/throttle helpers POST /api/auth/password/forgot uses, just
+// with the target resolved by id (an authenticated admin action) instead of
+// by a publicly-submitted email (which stays deliberately response-timing-
+// generic; this endpoint is authenticated and gated, so it can afford to
+// return a specific NO_LOGIN error instead).
+router.post("/users/:userId/password-reset/send", async (req, res, next) => {
+  try {
+    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can send a password reset link." });
+    const targetUserId = req.params.userId;
+    const target = await query(`select id, email, is_active, display_name, full_name from public.users where id = $1 limit 1`, [targetUserId]);
+    const targetUser = target.rows[0];
+    if (!targetUser) return res.status(404).json({ error: "User not found." });
+    if (!targetUser.is_active) return res.status(409).json({ error: "NO_LOGIN" });
+
+    const client = await pool.connect();
+    let rawToken;
+    let tokenId;
+    let expiresAt;
+    try {
+      await client.query("begin");
+      const exec = (text, params) => client.query(text, params);
+      await lockPasswordResetActions(exec, targetUserId);
+      const issued = await issuePasswordResetToken(exec, targetUserId);
+      rawToken = issued.rawToken;
+      tokenId = issued.tokenId;
+      expiresAt = issued.expiresAt;
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const resetUrl = `${resolveAppOrigin(req)}/reset-password?token=${encodeURIComponent(rawToken)}`;
+    try {
+      await sendPasswordResetEmail({ to: targetUser.email, resetUrl, recipientName: targetUser.display_name || targetUser.full_name || "", expiresAt });
+      await query(`update public.password_reset_tokens set sent_at = now(), updated_at = now() where id = $1`, [tokenId]);
+    } catch (emailError) {
+      console.error("Failed to send admin-triggered password reset:", emailError instanceof EmailConfigError || emailError instanceof EmailSendError ? emailError.message : "unexpected error");
+      return res.status(502).json({ error: "EMAIL_SEND_FAILED" });
+    }
+    const responseBody = { ok: true };
+    if (!isProduction) responseBody.devResetToken = rawToken;
+    res.json(responseBody);
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Allowed global roles - a "platform-wide" concept, structurally independent
 // of any club/team scope and of role_hint. Only an active platform_admin

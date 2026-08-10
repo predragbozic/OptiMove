@@ -177,6 +177,17 @@ export const createInitialState = () => ({
   organizationEditor: { open: false, type: "", row: null },
   organizationUserManage: { open: false, userId: "", pending: false, error: "" },
   organizationInvite: { open: false, athleteId: "", pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false },
+  // security/verified-email-change: platform-admin-only Account view for an
+  // athlete-only account (one with no staff role, so it never appears in
+  // the Users list above). Deliberately its own state slice fetching its
+  // own narrow GET /api/organization/users/:userId/account payload rather
+  // than reusing organizationUserManage/the bulk organization data - that
+  // payload is read by every viewer who can see the Athletes list (coaches,
+  // club/team admins), and it must never carry another account's login
+  // email to a non-platform-admin viewer. See renderAthleteAccountModal in
+  // organization-view.js and its backend counterpart in
+  // backend/src/routes/organization.js.
+  athleteAccountManage: { open: false, athleteId: "", userId: "", loading: false, data: null, error: "", message: "", pending: false },
   organizationJoinLinks: { pending: false, error: "", justCreatedId: "", justCreatedUrl: "", copiedId: "", reviewPendingId: "" },
   joinPage: { token: "", loading: true, error: "", link: null, submitted: false, statusToken: "", requiresLogin: false, prefillEmail: "", application: null },
   workspaceSwitcher: { open: false, pending: false, error: "" },

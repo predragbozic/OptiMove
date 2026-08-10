@@ -82,6 +82,25 @@ export async function destroySessionsForUser(userId) {
   await query("delete from public.auth_sessions where user_id = $1", [userId]);
 }
 
+// security/verified-email-change: used by the authenticated password-change
+// endpoint - a coach/athlete voluntarily changing their own password while
+// already logged in should not be logged out of the very session they used
+// to make the change, but every OTHER session (a different device/browser,
+// or a stolen one) must still be revoked, exactly as a full password reset
+// already does for ALL sessions. Hashes rawCurrentToken with the same
+// algorithm createSession/destroySession use so it can be excluded by
+// token_hash rather than needing a separate "this is the current session"
+// column.
+export async function destroyOtherSessionsForUser(userId, rawCurrentToken) {
+  if (!userId) return;
+  const currentHash = rawCurrentToken ? hashSessionToken(rawCurrentToken) : null;
+  if (currentHash) {
+    await query("delete from public.auth_sessions where user_id = $1 and token_hash != $2", [userId, currentHash]);
+  } else {
+    await query("delete from public.auth_sessions where user_id = $1", [userId]);
+  }
+}
+
 export async function getSessionUser(token) {
   if (!token) return null;
   const result = await query(

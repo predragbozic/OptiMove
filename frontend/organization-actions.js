@@ -137,6 +137,36 @@ export async function submitOrganizationAccessForm(form, { refreshOrganizationDa
   }
 }
 
+// Platform-admin "Start email change" form inside the athlete Account
+// modal (security/verified-email-change). Deliberately not routed through
+// the generic submitOrganizationForm above - that dispatcher maps form
+// types straight to REST resources 1:1, while this posts to a
+// user-id-scoped action endpoint and needs its own error vocabulary
+// (describeAthleteAccountError) and its own success handling (drop into the
+// modal's pending-request view instead of closing/resetting a plain form).
+export async function submitAthleteAccountEmailChangeForm(form, { renderOrganizationPanel }) {
+  const manage = state.athleteAccountManage;
+  if (!manage.userId || manage.pending) return;
+  const newEmail = String(new FormData(form).get("newEmail") || "").trim();
+  manage.pending = true;
+  manage.error = "";
+  manage.message = "";
+  void renderOrganizationPanel({ refresh: false });
+  try {
+    const result = await api(`/api/organization/users/${encodeURIComponent(manage.userId)}/email-change/request`, {
+      method: "POST",
+      body: JSON.stringify({ newEmail }),
+    });
+    manage.pending = false;
+    if (manage.data) manage.data.pendingEmailChange = { newEmail: result.newEmail, expiresAt: result.expiresAt, requestSource: "platform_admin" };
+    manage.message = "Verification link sent. The login email has not changed yet.";
+  } catch (submitError) {
+    manage.pending = false;
+    manage.error = describeAthleteAccountError(submitError);
+  }
+  void renderOrganizationPanel({ refresh: false });
+}
+
 export function handleOrganizationFilterInput(input) {
   return filterOrganizationSelect(input);
 }
@@ -290,6 +320,54 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   }
   if (type === "organization-manage-account-close") {
     closeManageAccountModal(renderOrganizationPanel);
+    return true;
+  }
+  if (type === "organization-athlete-account-open") {
+    const athleteId = action.dataset.athleteId || "";
+    const userId = action.dataset.userId || "";
+    if (!userId) return true;
+    state.athleteAccountManage = { open: true, athleteId, userId, loading: true, data: null, error: "", pending: false };
+    void renderOrganizationPanel({ refresh: false });
+    void loadAthleteAccount(userId, { renderOrganizationPanel });
+    return true;
+  }
+  if (type === "organization-athlete-account-close") {
+    closeAthleteAccountModal(renderOrganizationPanel);
+    return true;
+  }
+  if (type === "organization-athlete-account-resend") {
+    void performAthleteAccountAction(action, {
+      endpoint: `/api/organization/users/${encodeURIComponent(state.athleteAccountManage.userId)}/email-change/resend`,
+      method: "POST",
+      renderOrganizationPanel,
+      applyResult: (manage, result) => {
+        if (manage.data?.pendingEmailChange) manage.data.pendingEmailChange = { ...manage.data.pendingEmailChange, newEmail: result.newEmail, expiresAt: result.expiresAt };
+        manage.message = "A new verification link was sent.";
+      },
+    });
+    return true;
+  }
+  if (type === "organization-athlete-account-cancel") {
+    void performAthleteAccountAction(action, {
+      endpoint: `/api/organization/users/${encodeURIComponent(state.athleteAccountManage.userId)}/email-change/cancel`,
+      method: "POST",
+      renderOrganizationPanel,
+      applyResult: (manage) => {
+        if (manage.data) manage.data.pendingEmailChange = null;
+        manage.message = "The pending email change was cancelled.";
+      },
+    });
+    return true;
+  }
+  if (type === "organization-athlete-account-password-reset") {
+    void performAthleteAccountAction(action, {
+      endpoint: `/api/organization/users/${encodeURIComponent(state.athleteAccountManage.userId)}/password-reset/send`,
+      method: "POST",
+      renderOrganizationPanel,
+      applyResult: (manage) => {
+        manage.message = "A password reset link was sent.";
+      },
+    });
     return true;
   }
   if (type === "organization-global-role-toggle") {
@@ -841,6 +919,80 @@ export function closeManageAccountModal(renderOrganizationPanel) {
 export function closeAthleteInviteModal(renderOrganizationPanel) {
   state.organizationInvite = { open: false, athleteId: "", pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false };
   void renderOrganizationPanel({ refresh: false });
+}
+
+// Shared by the athlete Account modal's own close button/backdrop click (via
+// handleOrganizationAction above) and the global Escape handler in app.js.
+export function closeAthleteAccountModal(renderOrganizationPanel) {
+  state.athleteAccountManage = { open: false, athleteId: "", userId: "", loading: false, data: null, error: "", message: "", pending: false };
+  void renderOrganizationPanel({ refresh: false });
+}
+
+// Fetches the platform-admin-only account detail (security/verified-email-
+// change) after organization-athlete-account-open sets loading state and
+// renders once already - a network call must never block that first paint.
+// Guards against a slow response landing after the modal was closed or
+// reopened for a different account, same pattern as every other stale-
+// response guard in this file/app.js.
+async function loadAthleteAccount(userId, { renderOrganizationPanel }) {
+  try {
+    const data = await api(`/api/organization/users/${encodeURIComponent(userId)}/account`);
+    const manage = state.athleteAccountManage;
+    if (!manage.open || manage.userId !== userId) return;
+    manage.loading = false;
+    manage.data = data;
+    manage.error = "";
+    void renderOrganizationPanel({ refresh: false });
+  } catch (error) {
+    const manage = state.athleteAccountManage;
+    if (!manage.open || manage.userId !== userId) return;
+    manage.loading = false;
+    manage.error = describeAthleteAccountError(error);
+    void renderOrganizationPanel({ refresh: false });
+  }
+}
+
+// Shared executor for the Resend/Cancel/Send password reset buttons in the
+// athlete Account modal - blocks a repeat click while in flight, and on
+// success lets the caller patch state.athleteAccountManage.data directly
+// from the response (applyResult) rather than re-fetching the whole account
+// on every click.
+async function performAthleteAccountAction(action, { endpoint, method, renderOrganizationPanel, applyResult }) {
+  const manage = state.athleteAccountManage;
+  if (!manage.userId || manage.pending) return;
+  action.disabled = true;
+  manage.pending = true;
+  manage.error = "";
+  manage.message = "";
+  void renderOrganizationPanel({ refresh: false });
+  try {
+    const result = await api(endpoint, { method });
+    manage.pending = false;
+    applyResult?.(manage, result);
+    void renderOrganizationPanel({ refresh: false });
+  } catch (error) {
+    manage.pending = false;
+    manage.error = describeAthleteAccountError(error);
+    void renderOrganizationPanel({ refresh: false });
+  }
+}
+
+// Mirrors emailChangeErrorMessage in app.js (self-service flow) for the
+// admin-initiated codes returned by backend/src/routes/organization.js -
+// kept as a separate local copy rather than shared, matching this
+// codebase's existing convention of not cross-importing error-message
+// helpers between files.
+function describeAthleteAccountError(error) {
+  const messages = {
+    INVALID_EMAIL: "Enter a valid email address.",
+    EMAIL_UNCHANGED: "That's already this account's login email.",
+    EMAIL_ALREADY_IN_USE: "That email is already in use by another account.",
+    EMAIL_SEND_FAILED: "Could not send the verification email. Please try again.",
+    RESEND_TOO_SOON: "Please wait a bit before requesting another link.",
+    NO_PENDING_EMAIL_CHANGE: "There is no pending email change to update.",
+    NO_LOGIN: "This account's login is disabled - enable it before sending a password reset.",
+  };
+  return messages[error?.message] || error?.message || "Something went wrong. Please try again.";
 }
 
 // LAST_PLATFORM_ADMIN/LAST_CLUB_ADMIN are machine-readable error codes from

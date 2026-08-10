@@ -4255,6 +4255,42 @@ input:focus {
   line-height: 1.35;
 }
 
+.account-current-email {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+}
+
+.account-current-email span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-current-email strong {
+  font-size: 15px;
+  word-break: break-all;
+}
+
+.account-email-pending {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.account-email-pending .builder-success {
+  margin: 0;
+}
+
+.account-email-pending-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .summary-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;

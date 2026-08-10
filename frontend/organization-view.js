@@ -260,6 +260,7 @@ export function renderOrganizationBrowser(data) {
       ${section === "athletes" && state.organization.accessOpen ? renderAthleteAccessModal(visibleAthletes) : ""}
       ${state.organizationInvite.open ? renderAthleteInviteModal(activeAthletes) : ""}
       ${state.organizationUserManage.open ? renderManageAccountModal(data) : ""}
+      ${state.athleteAccountManage.open ? renderAthleteAccountModal(data) : ""}
     </section>
   `;
 }
@@ -1317,6 +1318,96 @@ export function renderManageAccountModal(data) {
   `;
 }
 
+// Platform-admin-only Account view for an athlete-only account
+// (security/verified-email-change) - reachable from Settings -> Athletes via
+// the new "Account" button in renderOrganizationRowV2, above. Fetches its
+// own narrow GET /api/organization/users/:userId/account payload (see that
+// endpoint's own comment in backend/src/routes/organization.js for why it is
+// deliberately NOT part of the bulk organization data every viewer reads).
+//
+// Only "Login email" (public.users.email) is shown here, never a "Contact
+// email" - despite section 2 of this feature's spec assuming athletes.email
+// exists as a separate contact field, a full-repo schema audit found no such
+// column anywhere (athletes only ever gain an email by way of becoming a
+// user, at which point it IS users.email). Fabricating a new column/field
+// for this PR would be an out-of-scope schema expansion, so this card only
+// ever shows the one real email a login-bearing athlete account has, always
+// under the explicit "Login email" label the spec requires, and never
+// labeled just "Email".
+export function renderAthleteAccountModal(data) {
+  const manage = state.athleteAccountManage;
+  const athlete = (data.athletes || []).find((row) => String(row.id) === String(manage.athleteId));
+  const title = athlete?.name || athlete?.full_name || "Athlete account";
+  const close = `<button class="plain-button icon-button" type="button" data-action="organization-athlete-account-close" aria-label="Close"><span class="button-icon">x</span></button>`;
+  return `
+    <div class="exercise-tag-overlay" role="presentation">
+      <button class="exercise-tag-backdrop" type="button" data-action="organization-athlete-account-close" aria-label="Close athlete account"></button>
+      <section class="panel exercise-tag-modal organization-manage-account-modal" role="dialog" aria-modal="true" aria-label="Athlete account">
+        <div class="builder-modal-head">
+          <div><p class="eyebrow">Account (platform admin)</p><h3>${escapeHtml(title)}</h3></div>
+          ${close}
+        </div>
+        ${manage.loading && !manage.data ? `<p class="muted">Loading account...</p>` : manage.data ? renderAthleteAccountModalBody(manage) : `<p class="builder-error">${escapeHtml(manage.error || "Could not load this account.")}</p>`}
+      </section>
+    </div>
+  `;
+}
+
+function renderAthleteAccountModalBody(manage) {
+  const account = manage.data;
+  const pending = manage.pending;
+  return `
+    ${manage.error ? `<p class="builder-error">${escapeHtml(manage.error)}</p>` : ""}
+    ${manage.message ? `<p class="builder-success">${escapeHtml(manage.message)}</p>` : ""}
+    <section class="manage-account-section">
+      <p class="eyebrow">Login</p>
+      <p class="account-current-email"><span>Login email</span> <strong>${escapeHtml(account.email || "")}</strong></p>
+      <div class="manage-account-row">
+        <span class="user-status-badge ${account.loginActive ? "is-active" : "is-disabled"}">${account.loginActive ? "Active login" : "Login disabled"}</span>
+        <button class="text-action" type="button" data-action="organization-athlete-account-password-reset" ${account.loginActive && !pending ? "" : "disabled"} title="${account.loginActive ? "Email this account a password reset link" : "This login is disabled"}">Send password reset</button>
+      </div>
+    </section>
+    <section class="manage-account-section">
+      <p class="eyebrow">Login email change</p>
+      ${renderAdminEmailChangeStatusHtml(account.pendingEmailChange, pending)}
+    </section>
+  `;
+}
+
+function renderAdminEmailChangeStatusHtml(pendingChange, actionPending) {
+  if (pendingChange) {
+    return `
+      <div class="account-email-pending" role="status">
+        <p class="builder-success">Not changed yet. Waiting for confirmation at <strong>${escapeHtml(pendingChange.newEmail || "")}</strong> - link expires ${escapeHtml(formatExpiryLabel(pendingChange.expiresAt))}.${pendingChange.requestSource === "platform_admin" ? " Started by a platform admin." : " Started by the account holder."}</p>
+        <div class="account-email-pending-actions">
+          <button class="text-action" type="button" data-action="organization-athlete-account-resend" ${actionPending ? "disabled" : ""}>Resend</button>
+          <button class="text-action danger-action" type="button" data-action="organization-athlete-account-cancel" ${actionPending ? "disabled" : ""}>Cancel request</button>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <form class="organization-form" data-organization-athlete-account-form="email-change-request">
+      <label class="search-field"><span>New login email</span><input name="newEmail" type="email" required autocomplete="off"></label>
+      <p class="muted">Changes the whole account's login identity. This affects every role the account holds. A confirmation link goes to the new address - nothing changes until they open it. The password is never set or seen here.</p>
+      <button class="plain-button" type="submit" ${actionPending ? "disabled" : ""}>Start email change</button>
+    </form>
+  `;
+}
+
+// Same formatting as athlete-view.js's own private formatExpiryLabel - kept
+// as a separate local copy rather than exported/shared, matching this
+// codebase's existing convention of not cross-importing small view-local
+// helpers between files.
+function formatExpiryLabel(expiresAt) {
+  if (!expiresAt) return "soon";
+  try {
+    return new Date(expiresAt).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" });
+  } catch {
+    return "soon";
+  }
+}
+
 function renderOrganizationList(title, rows, type, { isPlatformAdmin = false } = {}) {
   return `
     <section class="panel organization-list-card">
@@ -1354,6 +1445,7 @@ function renderOrganizationRowV2(row, type, { isPlatformAdmin = false } = {}) {
       <span class="organization-row-actions">
         ${isAthlete ? renderAthleteLoginToggle(row) : ""}
         ${isAthlete ? inviteTriggerHtml(row) : ""}
+        ${isAthlete && isPlatformAdmin && row.user_id ? `<button class="plain-button compact-button" type="button" data-action="organization-athlete-account-open" data-athlete-id="${escapeAttr(row.id)}" data-user-id="${escapeAttr(row.user_id)}">Account</button>` : ""}
         ${canEdit ? `<button class="plain-button icon-button" type="button" data-action="organization-edit" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Edit" title="Edit">${ICON_PENCIL}</button>` : ""}
         ${isAthlete
           ? renderAthleteArchiveActions(row, isPlatformAdmin)
