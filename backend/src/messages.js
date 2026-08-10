@@ -100,6 +100,99 @@ export async function ensureConversationForContactRequest(contactRequestId, acto
   return conversationId;
 }
 
+// feature/athlete-home-mvp: lets an athlete open (or start) a conversation
+// with a coach they genuinely train under, directly from the Coaches
+// view's "Message" button - no separate Contact modal/approval step, since
+// the trust relationship (an active public.user_athletes
+// relationship_type='coach' row) already exists and was established
+// elsewhere (an invite/assignment flow), unlike the cold-contact case
+// coach_contact_requests exists for. Mirrors coaches.js's own
+// is_my_coach column - same underlying rule, checked again here
+// server-side rather than trusted from the client.
+//
+// Idempotent by lookup: an existing conversation between these exact two
+// users (of any conversation_type - including one that started as a
+// coach_contact request the coach already accepted) is reused rather than
+// duplicated. Not wrapped in an advisory lock - same risk profile as
+// ensureConversationForContactRequest below, which has never needed one in
+// practice; the frontend's own disable-while-pending guard (see
+// coach-profile-actions.js) is what actually prevents a double-click from
+// firing two requests in the first place.
+export async function ensureDirectCoachConversation({ athleteUserId, coachUserId }) {
+  const relationship = await query(
+    `select 1
+     from public.athletes viewer_athlete
+     join public.user_athletes coach_rel
+       on coach_rel.athlete_id = viewer_athlete.id
+      and coach_rel.user_id = $2
+      and coach_rel.relationship_type = 'coach'
+      and coach_rel.is_active = true
+     where coalesce(viewer_athlete.is_active, true)
+       and (
+         viewer_athlete.user_id = $1
+         or exists (
+           select 1
+           from public.user_athletes athlete_link
+           where athlete_link.athlete_id = viewer_athlete.id
+             and athlete_link.user_id = $1
+             and athlete_link.relationship_type = 'athlete'
+             and athlete_link.is_active = true
+         )
+       )
+     limit 1`,
+    [athleteUserId, coachUserId],
+  );
+  if (!relationship.rows[0]) {
+    const error = new Error("You can only message a coach you currently train under.");
+    error.status = 403;
+    throw error;
+  }
+
+  const existing = await query(
+    `select c.id
+     from public.message_conversations c
+     join public.message_participants coach_mp
+       on coach_mp.conversation_id = c.id
+      and coach_mp.user_id = $1
+     join public.message_participants athlete_mp
+       on athlete_mp.conversation_id = c.id
+      and athlete_mp.user_id = $2
+     order by c.last_message_at desc nulls last, c.updated_at desc
+     limit 1`,
+    [coachUserId, athleteUserId],
+  );
+  if (existing.rows[0]?.id) {
+    const conversationId = existing.rows[0].id;
+    // Reopening a conversation either side previously blocked/hid must not
+    // silently resurrect a relationship the coach deliberately blocked -
+    // only clear the ATHLETE's own hidden flag, never touch blocked_at for
+    // either participant.
+    await query(
+      `update public.message_participants
+       set hidden_at = null
+       where conversation_id = $1
+         and user_id = $2`,
+      [conversationId, athleteUserId],
+    );
+    return conversationId;
+  }
+
+  const conversation = await query(
+    `insert into public.message_conversations (conversation_type, created_by_user_id, last_message_at)
+     values ('direct', $1, null)
+     returning id`,
+    [athleteUserId],
+  );
+  const conversationId = conversation.rows[0].id;
+  await query(
+    `insert into public.message_participants (conversation_id, user_id, participant_role, last_read_at)
+     values ($1, $2, 'owner', now()), ($1, $3, 'member', now())
+     on conflict (conversation_id, user_id) do nothing`,
+    [conversationId, coachUserId, athleteUserId],
+  );
+  return conversationId;
+}
+
 export async function userCanAccessConversation(userId, conversationId) {
   const result = await query(
     `select mp.conversation_id, mp.blocked_at,
