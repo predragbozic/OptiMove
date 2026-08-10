@@ -38,6 +38,12 @@ export const migrationPaths = [
   // token-table migration chronologically grouped, not because of any real
   // dependency between them.
   path.resolve(__dirname, "../../migrations/20260810_password_reset.sql"),
+  // Depends on public.users from create_access_schema.sql above. A separate
+  // table from both password_reset_tokens and email_verification_tokens
+  // right above (see this migration's own header comment for why) - ordered
+  // after them purely to keep every token-table migration chronologically
+  // grouped, not because of any real dependency between them.
+  path.resolve(__dirname, "../../migrations/20260811_account_email_change.sql"),
   path.resolve(__dirname, "../../create_builder_schema.sql"),
   path.resolve(__dirname, "../../create_exercise_user_state.sql"),
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),
