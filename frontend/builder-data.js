@@ -1,5 +1,6 @@
 import { api } from "./api.js";
-import { renderBuilderExerciseResult } from "./builder-exercises.js";
+import { renderBuilderExerciseResults } from "./builder-exercises.js";
+import { findBuilderNode } from "./builder-helpers.js";
 import { renderBuilder, renderBuilderSectionItems } from "./builder-view.js";
 import { applyClientExerciseFilters, exerciseSearchUrl, loadExerciseFilterOptions } from "./exercise-data.js";
 import { state } from "./state.js";
@@ -33,9 +34,12 @@ export async function loadBuilderExercises(options = {}) {
   // (sets/reps/instruction, scroll position) elsewhere on the same screen.
   const resultsContainer = document.querySelector(".builder-exercise-results");
   if (resultsContainer && !options.forceFullRender) {
-    resultsContainer.innerHTML = state.builder.exercises
-      .map((exercise) => renderBuilderExerciseResult(exercise, state.markedExerciseIds))
-      .join("") || `<div class="empty">No matching exercises.</div>`;
+    // The "Added N×" badge (see builderAddedCounts/renderBuilderExerciseResults
+    // in builder-exercises.js) must stay correct across a fresh search/filter,
+    // not just right after an add - re-derive it from whichever section is
+    // currently open, same as renderBuilderSectionPanel's own initial render.
+    const selectedSection = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
+    resultsContainer.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedSection);
   } else {
     renderBuilder();
   }

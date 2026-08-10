@@ -120,6 +120,19 @@ export const emptyBuilderState = (overrides = {}) => ({
   customExerciseOpen: false,
   customExerciseDose: { sets: "", reps: "", load: "" },
   nodePresets: [],
+  // feature/mobile-builder-section-workflow: explicit mobile-only UI state
+  // for the Exercise section editor - see builder-section.js/builder-
+  // exercises.js. Deliberately state-driven, never CSS :focus-within/:has()
+  // driven (see the audit note in scrollToLastAddedItem, builder-
+  // actions.js) - a real DOM focus/blur race during a tap was the root
+  // cause of "first tap only reflows" on mobile. Desktop's parallel
+  // library/added layout ignores all of these; they only affect the
+  // ≤560px single-column mode (see styles.css).
+  mobileMode: "add", // "add" | "added" - which of the two mobile modes is showing.
+  lastAddedItemId: "", // drives the sticky bar's "last added" thumbnail emphasis and Edit now.
+  addConfirmation: null, // { itemId, title } - transient inline "<title> added" banner + Edit now, cleared on next navigation/add.
+  editItemId: "", // set while a single item's Sets/Reps/Load/Instruction is open in Added-exercises mode.
+  editItemInstructionOpen: false, // Instruction starts collapsed per item; resets whenever editItemId changes.
   ...overrides,
 });
 

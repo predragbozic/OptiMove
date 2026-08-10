@@ -35,7 +35,7 @@ import {
 } from "./builder-actions.js";
 import { loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
-import { renderBuilder, renderBuilderSectionItems } from "./builder-view.js";
+import { renderBuilder, renderBuilderAddFeedback, renderBuilderSectionItems } from "./builder-view.js";
 import {
   handleCoachProfileAction,
   loadCoaches as loadCoachesAction,
@@ -555,7 +555,7 @@ async function handleContentSubmit(event) {
   if (error) error.textContent = "";
   if (submitButton) submitButton.disabled = true;
   try {
-    await submitBuilderFormAction(builderForm, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems });
+    await submitBuilderFormAction(builderForm, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback });
   } catch (builderError) {
     if (error) error.textContent = builderError.message || "Could not save this change.";
     else renderBuilderError(builderError);
@@ -747,7 +747,7 @@ async function handleContentChange(event) {
   const form = event.target.closest("[data-builder-autosave]");
   if (!form || !event.target.matches("input, textarea")) return;
   try {
-    await submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems });
+    await submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback });
   } catch (error) {
     renderBuilderError(error);
   }
@@ -2012,9 +2012,9 @@ function renderCopyPlanSource() {
 
 async function handleBuilderAction(action) {
   if (await handleBuilderPlanAction(action, { renderBuilder, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
-  if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderError })) return;
+  if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderError })) return;
   if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft })) return;
-  if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderError, refreshBuilderDraft })) return;
+  if (await handleBuilderItemAction(action, { renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback, renderBuilderError, refreshBuilderDraft })) return;
 }
 
 function renderBuilderError(error) {

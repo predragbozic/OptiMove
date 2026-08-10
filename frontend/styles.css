@@ -7249,6 +7249,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .exercise-quick-filters .exercise-filter-toggle { width: auto; border-color: rgba(31, 111, 104, .28); background: #eef8f6; color: #1f6f68; }
 .builder-exercise-results { display: grid; gap: 7px; max-height: 315px; overflow: auto; }
 .builder-exercise-result { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; align-items: center; border-radius: 6px; padding: 8px; cursor: default; }
+.builder-exercise-result.is-already-added { background: #f5faf9; }
 .builder-exercise-result.is-selected { border-color: #287e77; background: #e7f5f2; }
 .builder-exercise-result strong, .builder-exercise-result small { display: block; }
 .builder-exercise-result small { color: var(--muted, #667085); margin-top: 3px; }
@@ -7407,7 +7408,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-section-panel { width: auto; max-height: none; overflow: visible; box-shadow: none; }
 .builder-section-modal { position: relative; z-index: 1; width: min(1060px, 96vw); max-height: min(820px, 90dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
 .builder-section-modal .builder-section-panel { padding: 2px; }
-.builder-section-panel-head { padding-bottom: 14px; border-bottom: 1px solid var(--line, #dfe4e8); }
+.builder-section-panel-head { position: relative; padding-bottom: 14px; border-bottom: 1px solid var(--line, #dfe4e8); }
 .builder-section-editor-actions { display: flex; align-items: center; gap: 12px; }
 .builder-section-cancel-button, .builder-section-finish-button { display: flex; align-items: center; gap: 6px; }
 .builder-section-finish-button .builder-icon-svg { color: #2e9e4f; }
@@ -7514,6 +7515,15 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-section-modal .builder-section-panel-head { position: sticky; top: -14px; z-index: 2; margin: -14px -14px 14px; padding: 14px 14px 11px; background: #fff; }
   .builder-section-editor-actions { flex: 0 0 auto; }
   .builder-section-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  /* The sticky Added-exercises bar (position: sticky; bottom: 0 - see
+     .builder-mobile-sticky-bar below) floats over whatever content would
+     otherwise be at the bottom of the modal's scroll area once the panel
+     is taller than the visible viewport - without this, its last result
+     card/row would sit partly hidden behind the bar. This reserves enough
+     room to clear it (bar height + its own safe-area padding + a little
+     breathing room) so the very last item scrolls fully into view above
+     the bar, never behind it. */
+  .builder-section-grid { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
   .builder-section-added { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--line, #dfe4e8); }
   .exercise-filter-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
   .exercise-filter-field span { font-size: 10px; }
@@ -7981,29 +7991,33 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   fill: #1f6f68; stroke: #1f6f68; color: #1f6f68;
 }
 
+/* feature/mobile-builder-section-workflow: on desktop (default, no media
+   query matched) the section editor keeps its original parallel library/
+   added layout untouched - the compact mobile-only elements below (mode
+   tabs, compact Added cards, single-item edit view, sticky bar, add-
+   confirmation banner, mobile close icon) are all hidden by default and
+   only switched on inside the ≤560px media query further down. */
+.builder-added-list-compact,
+.builder-item-edit,
+.builder-mobile-mode-tabs,
+.builder-mobile-sticky-bar,
+.builder-add-confirmation,
+.builder-section-close-button {
+  display: none;
+}
+
 @media (max-width: 560px) {
-  /* Show just-added exercises above the search/results, scrollable sideways,
-     so adding an exercise gives immediate visible feedback on mobile. */
-  .builder-section-added {
-    order: -1 !important;
-    padding: 0 0 14px !important;
-    border-left: 0 !important;
-    border-top: 0 !important;
-    border-bottom: 1px solid var(--line, #dfe4e8) !important;
+  /* Exactly one of Add-exercises / Added-exercises is visible at a time,
+     driven by state.builder.mobileMode (see builder-actions.js) via the
+     data-mobile-mode attribute set in builder-section.js - never by CSS
+     :focus/:focus-within/:has(), which used to race a tap on "Add" (see
+     the removed rules this block replaces, below) and require a second
+     tap once the resulting mid-gesture reflow had settled. */
+  .builder-section-panel[data-mobile-mode="added"] .builder-section-library {
+    display: none;
   }
-
-  .builder-section-added .builder-items {
-    display: flex !important;
-    gap: 10px !important;
-    overflow-x: auto !important;
-    margin-top: 10px !important;
-    padding-bottom: 4px !important;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .builder-section-added .builder-item {
-    flex: 0 0 230px;
-    min-width: 230px;
+  .builder-section-panel[data-mobile-mode="add"] .builder-section-added {
+    display: none;
   }
 }
 
@@ -8039,25 +8053,47 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     display: none;
   }
 
-  .builder-section-editor-actions {
-    flex-wrap: nowrap;
-    width: 100%;
+  /* The desktop Copy/Cancel/Finish/Delete row is replaced on mobile by a
+     single small Close icon - there is nothing to roll back (every field
+     already autosaves), so a "Cancel" that implies undo would be
+     misleading. The sticky bar's Done button (see .builder-mobile-sticky-bar
+     below) is the always-reachable primary "I'm finished" action; this icon
+     is just a quick, low-emphasis way to back out the same way. */
+  .builder-section-editor-actions-desktop {
+    display: none;
+  }
+
+  .builder-section-close-button {
+    display: inline-flex;
+    position: absolute;
+    top: 0;
+    right: 0;
+  }
+
+  .builder-mobile-mode-tabs {
+    display: flex;
     gap: 6px;
+    margin: 10px 0 12px;
   }
 
-  .builder-section-editor-actions .builder-copy-icon,
-  .builder-section-editor-actions .builder-delete-icon {
-    flex: 0 0 auto;
-  }
-
-  .builder-section-cancel-button,
-  .builder-section-finish-button {
-    flex: 1 1 auto;
+  .builder-mobile-mode-tab {
+    flex: 1 1 0;
     min-width: 0;
-    padding: 7px 8px;
-    gap: 4px;
+    padding: 8px 6px;
+    border: 1px solid var(--line, #dfe4ea);
+    border-radius: 999px;
+    background: var(--surface, #fff);
+    color: var(--muted, #667085);
     font-size: 13px;
-    justify-content: center;
+    font-weight: 700;
+    text-align: center;
+    cursor: pointer;
+  }
+
+  .builder-mobile-mode-tab.is-active {
+    border-color: var(--accent, #1f6f68);
+    background: var(--accent, #1f6f68);
+    color: #fff;
   }
 
   .exercise-filter-field {
@@ -8100,46 +8136,240 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     margin: 0;
   }
 
-  /* While typing/filtering in the exercise library (not while editing an
-     already-added exercise's dose fields), collapse the section header and
-     the added-exercises strip so the results list gets as much of the space
-     above the keyboard as possible. Everything reappears on blur. */
-  .builder-section-panel:has(.builder-section-library:focus-within) .builder-section-panel-head,
-  .builder-section-panel:has(.builder-section-library:focus-within) .builder-section-added {
+  /* Inline "<title> added" confirmation + Edit now, shown above the results
+     list after a successful add - deliberately state-driven (state.builder.
+     addConfirmation, builder-actions.js), never CSS focus-driven, and never
+     a full-width toast that could cover a result the coach is about to tap
+     next. */
+  .builder-add-confirmation {
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: #eef8f6;
+    color: #1f6f68;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .builder-add-confirmation-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The modal normally sits bottom-anchored (a sheet) on mobile, so the
+     search field could still land mid-screen. Keep it pinned to the top
+     while in Add-exercises mode - tied to the stable data-mobile-mode
+     attribute (only changes on an explicit mode-switch tap), never to a
+     library-input focus state. A focus-driven version of this same rule
+     used to reflow the whole panel mid-tap (removed) and was the root
+     cause of the first tap on "Add" only settling the layout instead of
+     adding the exercise. */
+  .builder-section-overlay:has(.builder-section-panel[data-mobile-mode="add"]) {
+    align-items: start;
+  }
+
+  /* --- Added exercises: compact cards + single-item edit view --- */
+
+  .builder-added-list-desktop {
     display: none;
   }
 
-  .builder-section-panel:has(.builder-section-library:focus-within) .builder-panel-label {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    padding-top: 10px;
-    margin: -14px -14px 12px;
-    padding-left: 14px;
-    padding-right: 14px;
+  .builder-added-list-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+
+  .builder-added-card {
+    display: grid;
+    grid-template-columns: 20px 46px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--line, #dfe4ea);
+    border-radius: 8px;
     background: var(--surface, #fff);
   }
 
-  /* Typing in the search box or a quick-dose field: also hide the filters
-     row (neither field lives inside it, so it's always safe to hide) to
-     leave even more room for the results below. */
-  .builder-section-panel:has(input[data-builder-exercise-search]:focus) .exercise-quick-filters,
-  .builder-section-panel:has(input[data-builder-new-dose]:focus) .exercise-quick-filters {
-    display: none;
+  .builder-added-card-index {
+    color: var(--muted, #667085);
+    font-size: 12px;
+    font-weight: 800;
+    text-align: center;
   }
 
-  /* Typing in the search box specifically: the quick-dose row isn't needed
-     yet either (nothing to give a dose to until an exercise is picked). */
-  .builder-section-panel:has(input[data-builder-exercise-search]:focus) .builder-quick-dose {
-    display: none;
+  .builder-added-card-media,
+  .builder-added-card-media-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 46px;
+    border: 0;
+    border-radius: 6px;
+    background: var(--surface-soft, #f2f4f6);
+    color: var(--muted, #667085);
+    font-weight: 800;
+    padding: 0;
+    overflow: hidden;
   }
 
-  /* The modal normally sits bottom-anchored (a sheet) on mobile, so even
-     with the header/filters/dose collapsed above, the search field could
-     still land mid-screen rather than at the very top. Snap the modal to
-     the top of the screen while any exercise-library control has focus. */
-  .builder-section-overlay:has(.builder-section-library:focus-within) {
-    align-items: start;
+  .builder-added-card-media-image {
+    width: 46px;
+    height: 46px;
+    object-fit: cover;
+    object-position: center top;
+  }
+
+  .builder-added-card-body {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .builder-added-card-title {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    font-size: 13px;
+    line-height: 1.2;
+  }
+
+  .builder-added-card-dose {
+    color: var(--muted, #667085);
+    font-size: 11px;
+  }
+
+  .builder-added-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .builder-added-card-edit {
+    flex: 0 0 100%;
+    text-align: right;
+    font-size: 12px;
+  }
+
+  .builder-item-edit-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .builder-item-edit-position {
+    color: var(--muted, #667085);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .builder-item-edit-nav {
+    display: flex;
+    gap: 4px;
+  }
+
+  .builder-item-instruction-toggle {
+    font-size: 13px;
+  }
+
+  .builder-item-instruction-preview {
+    margin-top: 4px;
+    font-size: 12px;
+  }
+
+  /* --- Sticky Added-exercises bar --- */
+
+  .builder-mobile-sticky-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    position: sticky;
+    bottom: 0;
+    z-index: 4;
+    margin: 12px -14px -14px;
+    padding: 8px 14px calc(8px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line, #dfe4ea);
+    background: var(--surface, #fff);
+  }
+
+  .builder-sticky-bar-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+    font: inherit;
+  }
+
+  .builder-sticky-bar-thumbs {
+    display: flex;
+    flex: 0 0 auto;
+  }
+
+  .builder-sticky-thumb,
+  .builder-sticky-thumb-overflow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    margin-left: -8px;
+    border: 2px solid var(--surface, #fff);
+    border-radius: 999px;
+    background: var(--surface-soft, #f2f4f6);
+    color: var(--muted, #667085);
+    font-size: 10px;
+    font-weight: 800;
+    overflow: hidden;
+    cursor: pointer;
+  }
+
+  .builder-sticky-thumb:first-child {
+    margin-left: 0;
+  }
+
+  .builder-sticky-thumb-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+  }
+
+  .builder-sticky-bar-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .builder-sticky-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+  }
+
+  .builder-sticky-bar-done {
+    padding: 7px 14px;
+    font-size: 13px;
   }
 }
 

@@ -9,9 +9,9 @@ import {
   findBuilderSession,
   sessionLabel,
 } from "./builder-helpers.js";
-import { renderBuilderItems } from "./builder-exercises.js";
+import { renderBuilderAddConfirmation, renderBuilderExerciseResults, renderBuilderStickyBar } from "./builder-exercises.js";
 import { renderBuilderAthletePicker, renderBuilderInfoModal } from "./builder-modals.js";
-import { renderBuilderSectionOverlay } from "./builder-section.js";
+import { renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import {
   ICON_CHECK,
   ICON_TRASH,
@@ -201,10 +201,7 @@ export function renderBuilderSectionItems() {
     ? { itemId: activeForm.dataset.itemId, fieldName: active.getAttribute("name"), start: active.selectionStart, end: active.selectionEnd }
     : null;
 
-  container.innerHTML = `
-    <div class="builder-panel-label">Added to section <span>${selectedNode.items.length}</span></div>
-    ${renderBuilderItems(selectedNode) || `<div class="empty">Choose exercises from the library to build this section.</div>`}
-  `;
+  container.innerHTML = renderBuilderAddedPanelContent(state, selectedNode);
 
   if (scrollEl && scrollTop !== null) scrollEl.scrollTop = scrollTop;
   if (focusState) {
@@ -217,6 +214,44 @@ export function renderBuilderSectionItems() {
       }
     }
   }
+  return true;
+}
+
+// Called after a successful add (builder-pick-exercise/add-custom-exercise,
+// builder-actions.js). Patches exactly three things - the results list's
+// "Added N×" badges, the sticky bar's count/thumbnails, and the inline add-
+// confirmation banner - none of which share a DOM subtree with the search
+// input, quick-dose fields, or filters, so this can never blur/reset them.
+// Also refreshes the Added-mode panel (harmless no-op while it's hidden in
+// Add-exercises mode) so its data is current whenever the coach does switch
+// over. Returns false (caller falls back to renderBuilder()) if the section
+// editor isn't open.
+export function renderBuilderAddFeedback() {
+  const selectedNode = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
+  const panel = els.content.querySelector(".builder-section-panel");
+  if (!panel || !selectedNode || selectedNode.type !== "section") return false;
+
+  panel.dataset.mobileMode = state.builder.mobileMode;
+
+  const resultsEl = panel.querySelector(".builder-exercise-results");
+  if (resultsEl) resultsEl.innerHTML = renderBuilderExerciseResults(state.builder.exercises, state.markedExerciseIds, selectedNode);
+
+  const confirmationSlot = panel.querySelector(".builder-add-confirmation");
+  const confirmationHtml = renderBuilderAddConfirmation(state.builder.addConfirmation);
+  if (confirmationSlot) {
+    if (confirmationHtml) confirmationSlot.outerHTML = confirmationHtml;
+    else confirmationSlot.remove();
+  } else if (confirmationHtml && resultsEl) {
+    resultsEl.insertAdjacentHTML("beforebegin", confirmationHtml);
+  }
+
+  const stickyEl = panel.querySelector(".builder-mobile-sticky-bar");
+  if (stickyEl) stickyEl.outerHTML = renderBuilderStickyBar(selectedNode);
+
+  const modeTabAdded = panel.querySelector('.builder-mobile-mode-tab[data-mode="added"]');
+  if (modeTabAdded) modeTabAdded.textContent = `Added exercises (${selectedNode.items.length})`;
+
+  renderBuilderSectionItems();
   return true;
 }
 
