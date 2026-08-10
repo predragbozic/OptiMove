@@ -5,22 +5,31 @@ import { invalidateCoachHomeCache } from "./coach-home-data.js";
 import { emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
 
-// After adding an exercise, jump straight to it in the "Added to section" strip
-// instead of leaving the coach to scroll/search for it themselves. Blurring first
-// matters on mobile: the added-items strip is hidden by CSS while focus stays
-// inside the exercise library, so without this it would try to scroll to a
-// panel that's still display:none.
-function scrollToLastAddedItem(nodeId) {
+// feature/mobile-builder-section-workflow: replaces the old post-add
+// helper, which used to blur the search input and scroll to the (CSS-
+// hidden-until-blur) Added panel after every add - that's exactly what
+// interrupted adding several exercises in a row, and the same focus-driven
+// CSS it depended on is what caused the "first tap only reflows" bug (see
+// the audit note on styles.css's now-removed focus-within-based rules).
+// The coach now stays in Add-exercises mode, keyboard open, search/
+// filters/scroll untouched - this just records what to show in the
+// transient confirmation banner and the sticky bar, both of which live in
+// their own DOM subtree.
+function markExerciseJustAdded(nodeId, itemId) {
   const node = findBuilderNode(state.builder.draft, nodeId);
-  const lastItem = node?.items?.at(-1);
-  if (!lastItem) return;
-  const active = document.activeElement;
-  if (active?.closest?.(".builder-section-library")) active.blur();
-  requestAnimationFrame(() => {
-    const el = document.querySelector(`.builder-section-added [data-item-id="${CSS.escape(lastItem.id)}"]`);
-    el?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-  });
+  const item = node?.items?.find((candidate) => candidate.id === itemId) || node?.items?.at(-1);
+  if (!item) return;
+  state.builder.lastAddedItemId = item.id;
+  state.builder.addConfirmation = { itemId: item.id, title: item.title || "Exercise" };
+  clearTimeout(addConfirmationTimer);
+  addConfirmationTimer = setTimeout(() => {
+    if (state.builder.addConfirmation?.itemId !== item.id) return;
+    state.builder.addConfirmation = null;
+    handlersForConfirmationTimeout?.renderBuilderAddFeedback?.();
+  }, 4000);
 }
+let addConfirmationTimer = null;
+let handlersForConfirmationTimeout = null;
 
 function renderBuilderPreservingAthleteListScroll(handlers) {
   const list = document.querySelector("[data-builder-athlete-list]");
@@ -475,8 +484,21 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     return true;
   }
   if (type === "builder-finish-section") {
+    // Everything in the section editor already autosaves through its own
+    // PATCH/POST calls the moment it changes - there is nothing to roll
+    // back here, so this is the single real "I'm done" action regardless
+    // of which mobile control (header close icon, sticky-bar Done,
+    // backdrop, Escape) triggered it. See the header comment in
+    // builder-section.js for why the mobile header no longer shows a
+    // separate "Cancel" that implied otherwise.
     state.builder.selectedNodeId = "";
     state.builder.customExerciseOpen = false;
+    state.builder.mobileMode = "add";
+    state.builder.editItemId = "";
+    state.builder.editItemInstructionOpen = false;
+    state.builder.addConfirmation = null;
+    state.builder.lastAddedItemId = "";
+    clearTimeout(addConfirmationTimer);
     handlers.renderBuilder();
     return true;
   }
@@ -612,7 +634,63 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     state.builder.inlineAddType = "";
     state.builder.inlineAddSessionId = "";
     state.builder.inlineAddParentId = "";
+    // Every fresh entry into a (possibly different) section starts in
+    // Add-exercises mode with no stale edit-item/confirmation carried over
+    // from whatever was open before.
+    state.builder.mobileMode = "add";
+    state.builder.editItemId = "";
+    state.builder.editItemInstructionOpen = false;
+    state.builder.addConfirmation = null;
+    state.builder.lastAddedItemId = "";
+    clearTimeout(addConfirmationTimer);
     handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-set-mobile-mode") {
+    const mode = action.dataset.mode === "added" ? "added" : "add";
+    state.builder.mobileMode = mode;
+    if (mode === "add") {
+      state.builder.editItemId = "";
+      state.builder.editItemInstructionOpen = false;
+    }
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-edit-now") {
+    state.builder.mobileMode = "added";
+    state.builder.editItemId = state.builder.lastAddedItemId;
+    state.builder.editItemInstructionOpen = false;
+    state.builder.addConfirmation = null;
+    clearTimeout(addConfirmationTimer);
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-open-edit-item") {
+    state.builder.mobileMode = "added";
+    state.builder.editItemId = action.dataset.itemId || "";
+    state.builder.editItemInstructionOpen = false;
+    if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-close-edit-item") {
+    state.builder.editItemId = "";
+    state.builder.editItemInstructionOpen = false;
+    if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-edit-item-nav") {
+    const node = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
+    const currentIndex = node?.items.findIndex((item) => item.id === state.builder.editItemId) ?? -1;
+    const targetIndex = currentIndex + (action.dataset.direction === "next" ? 1 : -1);
+    if (!node || currentIndex < 0 || targetIndex < 0 || targetIndex >= node.items.length) return true;
+    state.builder.editItemId = node.items[targetIndex].id;
+    state.builder.editItemInstructionOpen = false;
+    if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-toggle-item-instruction") {
+    state.builder.editItemInstructionOpen = !state.builder.editItemInstructionOpen;
+    if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
     return true;
   }
   return false;
@@ -713,11 +791,23 @@ export async function handleBuilderDraftAction(action, handlers) {
 export async function handleBuilderItemAction(action, handlers) {
   const type = action.dataset.action;
   if (type === "builder-pick-exercise") {
+    // A single tap must always send exactly one POST, right now - no CSS
+    // reflow, focus change, or re-render happens before this fires (see the
+    // removed :has(.builder-section-library:focus-within) rules in
+    // styles.css). `action.disabled = true` below happens synchronously,
+    // before any await - a real <button> refuses further clicks once
+    // disabled, so a rapid duplicate tap on the SAME button during this
+    // request can never send a second POST; a separate, deliberate tap
+    // after this one finishes (button re-enabled again via the results-
+    // list re-render) is a normal, allowed second add.
+    if (action.disabled) return true;
     const section = findBuilderNode(state.builder.draft, state.builder.selectedNodeId);
     const panel = action.closest(".builder-section-panel");
     const doseInput = (name) => panel?.querySelector(`[data-builder-new-dose][name="${name}"]`);
     if (!section || section.type !== "section") return true;
     action.disabled = true;
+    const originalLabel = action.textContent;
+    action.textContent = "Adding…";
     try {
       setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(section.id)}/exercises`, {
         method: "POST",
@@ -728,9 +818,20 @@ export async function handleBuilderItemAction(action, handlers) {
           load: doseInput("load")?.value || "",
         })),
       }));
-      if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
-      scrollToLastAddedItem(section.id);
+      handlersForConfirmationTimeout = handlers;
+      markExerciseJustAdded(section.id);
+      // Deliberately NOT renderBuilder() (full re-render) here - that would
+      // recreate the search input's DOM node and silently drop keyboard
+      // focus. renderBuilderAddFeedback only ever touches the results list,
+      // sticky bar, and confirmation banner - all outside the library's
+      // search/filters/quick-dose subtree - so the coach can add several
+      // exercises in a row without the keyboard closing or losing their
+      // place. Falls back to a full render only if the section editor
+      // somehow isn't open (shouldn't normally happen).
+      if (!handlers.renderBuilderAddFeedback?.()) handlers.renderBuilder();
     } catch (error) {
+      action.disabled = false;
+      action.textContent = originalLabel;
       handlers.renderBuilderError(error);
     }
     return true;
@@ -757,6 +858,17 @@ export async function handleBuilderItemAction(action, handlers) {
   if (type === "builder-delete-item") {
     if (!window.confirm("Remove this exercise from the program?")) return true;
     await api(withBatchSyncUrl(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`), { method: "DELETE" });
+    // Removing exactly one duplicate/item must never disturb any other item
+    // (independent sets/reps/load/instruction, independent order) - if the
+    // just-removed item was open in the single-item edit view, fall back to
+    // the list rather than rendering a stale edit form for an id that no
+    // longer exists.
+    if (state.builder.editItemId === action.dataset.itemId) {
+      state.builder.editItemId = "";
+      state.builder.editItemInstructionOpen = false;
+    }
+    if (state.builder.lastAddedItemId === action.dataset.itemId) state.builder.lastAddedItemId = "";
+    if (state.builder.addConfirmation?.itemId === action.dataset.itemId) state.builder.addConfirmation = null;
     await handlers.refreshBuilderDraft({ sectionItemsOnly: true });
     return true;
   }
@@ -822,12 +934,14 @@ export async function submitBuilderForm(form, handlers) {
   if (mode === "add-exercise") {
     if (!data.exerciseId) return;
     setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/exercises`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
-    scrollToLastAddedItem(form.dataset.nodeId);
+    handlersForConfirmationTimeout = handlers;
+    markExerciseJustAdded(form.dataset.nodeId);
   }
   if (mode === "add-custom-exercise") {
     setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}/custom-exercise`, { method: "POST", body: JSON.stringify(withBatchSyncPayload(data)) }));
     state.builder.customExerciseOpen = false;
-    scrollToLastAddedItem(form.dataset.nodeId);
+    handlersForConfirmationTimeout = handlers;
+    markExerciseJustAdded(form.dataset.nodeId);
   }
   if (mode === "update-item") {
     setBuilderDraft(await queuedBuilderApi(`/api/builder/items/${encodeURIComponent(form.dataset.itemId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
