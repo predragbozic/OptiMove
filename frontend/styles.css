@@ -8277,8 +8277,28 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     gap: 4px;
   }
 
+  /* Full-width row, not a bare inline text link - the old .text-action
+     styling (padding:0, sized to its 13px text) gave this a tap target well
+     under the ~44px minimum a thumb can reliably hit, which is a plausible
+     real cause of "Instruction doesn't work" on an actual phone even though
+     the toggle's own click handler, state, and autosave all fire correctly
+     when triggered (verified separately). */
   .builder-item-instruction-toggle {
-    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    margin-bottom: 6px;
+    border: 1px solid var(--line, #dfe4ea);
+    border-radius: 8px;
+    background: var(--surface-soft, #f2f4f6);
+    color: #287e77;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
   }
 
   .builder-item-instruction-preview {
