@@ -444,7 +444,27 @@ router.post("/email-changes/:token/confirm", async (req, res, next) => {
     }
 
     const oldEmail = user.email;
-    await client.query(`update public.users set email = $2, updated_at = now() where id = $1`, [user.id, tokenRow.new_email]);
+    try {
+      await client.query(`update public.users set email = $2, updated_at = now() where id = $1`, [user.id, tokenRow.new_email]);
+    } catch (updateError) {
+      // A genuine cross-account race: two DIFFERENT users can both pass the
+      // SELECT-based conflict check above when confirming toward the same
+      // new_email at nearly the same time - read-committed isolation means
+      // neither sees the other's still-uncommitted row. It's the UPDATE
+      // itself that Postgres actually serializes on, via the real
+      // users_email_key unique constraint (data integrity was never at
+      // risk - this only controls what the LOSING request sees). Convert
+      // that into the exact same controlled response the pre-check above
+      // produces, rather than letting a raw unique-violation surface as an
+      // uncontrolled 500. Rolling back (below, via the outer catch) leaves
+      // this token exactly as it was - still active, not consumed - same as
+      // the pre-check conflict path.
+      if (updateError?.code === "23505" && updateError?.constraint === "users_email_key") {
+        await client.query("rollback");
+        return res.status(409).json({ error: "EMAIL_ALREADY_IN_USE" });
+      }
+      throw updateError;
+    }
     await client.query(`update public.account_email_change_tokens set consumed_at = now(), updated_at = now() where id = $1`, [tokenRow.id]);
     // Defensive, normally a no-op - see revokeActivePasswordResetTokens's
     // own header comment for the identical reasoning applied here.

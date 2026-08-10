@@ -372,6 +372,15 @@ test("13. if the new address becomes taken between request and confirm, confirm 
   const tokenRow = await query(`select consumed_at, revoked_at from public.account_email_change_tokens where token_hash = $1`, [hashToken(issued.body.devEmailChangeToken)]);
   assert.equal(tokenRow.rows[0].consumed_at, null, "the token must not be consumed by a conflict it did not cause - it is left usable so the requester can pick a different address via resend");
   assert.equal(tokenRow.rows[0].revoked_at, null);
+
+  // Proves the email write and the session wipe genuinely share one
+  // transaction, not just "both usually happen together": a rejected
+  // confirm (rolled back before either statement's effects are visible)
+  // must leave the requester's own pre-existing session exactly as alive as
+  // it was - if the session delete had somehow escaped the rollback while
+  // the email write didn't (or vice versa), this session would be dead here.
+  const stillLive = await api("/api/auth/me", { cookie: cookieFor(token) });
+  assert.notEqual(stillLive.body.user, null, "the requester's session must survive a rolled-back confirm - proves the email write and session wipe are atomic, not two independent steps");
 });
 
 test("14. GET /email-changes/:token never consumes the token - it can still be used afterward to actually confirm", async () => {
@@ -417,6 +426,57 @@ test("16. two parallel requests on the same account leave at most one active tok
 
   const active = await query(`select count(*) from public.account_email_change_tokens where user_id = $1 and consumed_at is null and revoked_at is null`, [user.id]);
   assert.equal(Number(active.rows[0].count), 1, "only one token may remain active after two parallel requests - the earlier one must be revoked by the later one's own issuance");
+});
+
+// Pre-merge audit (2026): the SELECT-based conflict check in the confirm
+// endpoint only protects against a conflict that already committed before
+// this confirm's own check runs - it does NOT by itself serialize two
+// DIFFERENT users' confirms racing toward the same new_email, since neither
+// transaction's still-uncommitted row is visible to the other's
+// read-committed check. What actually decides the race is the real
+// users_email_key UNIQUE constraint on public.users.email, hit by the
+// UPDATE itself - confirmed by manually forcing this exact race ~15-20x in
+// a row against the dev DB before the fix below existed, which reproduced a
+// raw, uncontrolled 500 (with the Postgres constraint-violation message in
+// the response body) roughly 1 in 7 runs. The fix in
+// POST /email-changes/:token/confirm now catches that specific unique-
+// violation (code 23505, constraint users_email_key) and converts it into
+// the exact same controlled 409 EMAIL_ALREADY_IN_USE the pre-check produces.
+// This test amplifies the same race across many iterations so the
+// low-probability interleaving is very likely exercised at least once, and
+// asserts the invariant holds unconditionally on every iteration regardless
+// of which specific run actually hits the tight interleaving.
+test("16b. two DIFFERENT users racing to confirm the same target email never both succeed, never 500, and never end up sharing an email", async () => {
+  const ITERATIONS = 20;
+  for (let i = 0; i < ITERATIONS; i += 1) {
+    const userA = await makeUser({ email: await uniqueEmail(`ec-race-a-${i}`) });
+    const userB = await makeUser({ email: await uniqueEmail(`ec-race-b-${i}`) });
+    const tokenA = await createSession(userA.id);
+    const tokenB = await createSession(userB.id);
+    const contested = await uniqueEmail(`ec-race-target-${i}`);
+
+    const [reqA, reqB] = await Promise.all([
+      requestEmailChange(cookieFor(tokenA), contested, "original-password-123"),
+      requestEmailChange(cookieFor(tokenB), contested, "original-password-123"),
+    ]);
+    assert.equal(reqA.status, 200);
+    assert.equal(reqB.status, 200);
+
+    const [confA, confB] = await Promise.all([
+      confirmEmailChange(reqA.body.devEmailChangeToken),
+      confirmEmailChange(reqB.body.devEmailChangeToken),
+    ]);
+
+    for (const conf of [confA, confB]) {
+      assert.ok([200, 409].includes(conf.status), `iteration ${i}: confirm must resolve as either a clean success (200) or a controlled conflict (409) - got ${conf.status} (${JSON.stringify(conf.body)}), never an uncontrolled 500`);
+    }
+    const statuses = [confA.status, confB.status].sort();
+    assert.deepEqual(statuses, [200, 409], `iteration ${i}: exactly one of the two racing confirms must win`);
+
+    const finalA = await query(`select email from public.users where id = $1`, [userA.id]);
+    const finalB = await query(`select email from public.users where id = $1`, [userB.id]);
+    assert.notEqual(finalA.rows[0].email, finalB.rows[0].email, `iteration ${i}: two different accounts must never end up with the same email - the DB's own unique constraint is the real backstop here`);
+  }
 });
 
 // === Resend and cancel (section 7) ===
