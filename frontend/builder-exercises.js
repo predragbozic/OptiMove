@@ -74,11 +74,22 @@ export function renderBuilderExerciseResults(exercises, markedExerciseIds, node)
   return exercises.map((exercise) => renderBuilderExerciseResult(exercise, markedExerciseIds, addedCounts.get(exercise.id) || 0)).join("") || `<div class="empty">No matching exercises.</div>`;
 }
 
-function renderAddedThumb(item, className) {
+// Container/image/fallback classes are passed explicitly rather than
+// derived by string suffix (the old `${className}-image` convention) -
+// different call sites style their thumbnail differently (compact mobile
+// card vs. the single-item edit view, which intentionally reuses desktop's
+// already-styled .builder-added-exercise-image/-fallback), and deriving the
+// image class from the container class silently produced an unstyled,
+// unsized <img> (class "builder-added-exercise-media-image", which has no
+// CSS rule anywhere) the one time those two didn't match - the image was in
+// the DOM with a correct src, but rendered at its raw intrinsic size inside
+// a small overflow:hidden button, so effectively nothing recognizable
+// showed through.
+function renderAddedThumb(item, { containerClass, imageClass, fallbackClass }) {
   if (item.imageUrl || item.videoUrl) {
-    return `<button type="button" class="${className}" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}">${item.imageUrl ? renderImage(item.imageUrl, `${className}-image`) : `<span class="${className}-fallback">Video</span>`}</button>`;
+    return `<button type="button" class="${containerClass}" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}">${item.imageUrl ? renderImage(item.imageUrl, imageClass) : `<span class="${fallbackClass}">Video</span>`}</button>`;
   }
-  return `<span class="${className}-fallback">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
+  return `<span class="${fallbackClass}">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
 
 // Desktop-only "Added to section" list: the original full-form-per-item
@@ -123,7 +134,7 @@ function renderBuilderAddedCard(item, index, total) {
     <form class="builder-added-card builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}">
       <div class="builder-added-card-top">
         <span class="builder-added-card-index">${index + 1}</span>
-        ${renderAddedThumb(item, "builder-added-card-media")}
+        ${renderAddedThumb(item, { containerClass: "builder-added-card-media", imageClass: "builder-added-card-media-image", fallbackClass: "builder-added-card-media-fallback" })}
         <strong class="builder-added-card-title">${escapeHtml(item.title || "Exercise")}</strong>
         <div class="builder-added-card-move">
           <button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button>
@@ -169,7 +180,7 @@ export function renderBuilderItemEdit(node, itemId, instructionOpen) {
       </div>
       <form class="builder-item builder-item-edit-form" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}">
         <div class="builder-item-head">
-          ${renderAddedThumb(item, "builder-added-exercise-media")}
+          ${renderAddedThumb(item, { containerClass: "builder-added-exercise-media", imageClass: "builder-added-exercise-image", fallbackClass: "builder-added-exercise-fallback" })}
           <div><strong>${escapeHtml(item.title || "Exercise")}</strong></div>
         </div>
         <div class="builder-dose-inputs builder-item-dose">
@@ -178,7 +189,7 @@ export function renderBuilderItemEdit(node, itemId, instructionOpen) {
           <label><span>Load</span><input name="load" value="${escapeAttr(item.load || "")}"></label>
         </div>
         <div class="builder-item-instruction">
-          <button class="text-action builder-item-instruction-toggle" type="button" data-action="builder-toggle-item-instruction" aria-expanded="${instructionOpen ? "true" : "false"}">Instruction ${instructionOpen ? "&#9652;" : "&#9662;"}</button>
+          <button class="builder-item-instruction-toggle" type="button" data-action="builder-toggle-item-instruction" aria-expanded="${instructionOpen ? "true" : "false"}"><span>Instruction</span><span aria-hidden="true">${instructionOpen ? "&#9652;" : "&#9662;"}</span></button>
           ${instructionOpen
             ? `<label class="search-field"><span class="visually-hidden">Instruction</span><textarea name="description" rows="3">${escapeHtml(item.description || "")}</textarea></label>`
             // Instruction is collapsed - no textarea in the DOM, so the

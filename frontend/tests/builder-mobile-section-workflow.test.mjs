@@ -171,13 +171,13 @@ test("2b. Instruction starts collapsed in the single-item edit view - no textare
   const node = { items: [makeItem({ id: "item-1", description: "Existing instruction text" })] };
   const closed = renderBuilderItemEdit(node, "item-1", false);
   assert.doesNotMatch(closed, /<textarea/, "the instruction textarea must not render while collapsed");
-  assert.match(closed, /Instruction &#9662;/);
+  assert.match(closed, /<span>Instruction<\/span><span aria-hidden="true">&#9662;<\/span>/);
   assert.match(closed, /Existing instruction text/, "a collapsed item with existing text should still show a short preview, just not the full editable textarea");
   assert.match(closed, /<input type="hidden" name="description" value="Existing instruction text">/, "regression guard: without this hidden field, autosaving Sets/Reps/Load while Instruction is collapsed would submit no 'description' key, and PATCH /items/:itemId writes all four columns unconditionally - silently wiping the existing instruction");
 
   const open = renderBuilderItemEdit(node, "item-1", true);
   assert.match(open, /<textarea/);
-  assert.match(open, /Instruction &#9652;/);
+  assert.match(open, /<span>Instruction<\/span><span aria-hidden="true">&#9652;<\/span>/);
   assert.doesNotMatch(open, /type="hidden" name="description"/, "the hidden fallback must not coexist with the real textarea, or FormData would carry two 'description' entries");
 });
 
@@ -477,6 +477,146 @@ test("16d. the quick-dose fields (Sets/Reps/Load, shown before an exercise is ad
 test("16e. dose-input placeholders render in a visibly lighter color than typed values, via a dedicated ::placeholder rule scoped to .builder-dose-inputs", async () => {
   const css = await readFile(path.join(frontendDir, "styles.css"), "utf8");
   assert.match(css, /\.builder-dose-inputs input::placeholder \{ color: #a7b0ba; opacity: 1;/, "the placeholder color must be explicitly set and lighter than the default (near-black) typed-value text, not left to a possibly-inconsistent browser default");
+});
+
+// --- hotfix/builder-edit-details-media-instruction: production bug reports ---
+// (1) the Edit-details thumbnail was invisible because renderAddedThumb
+//     derived its <img> class as `${containerClass}-image`, which for the
+//     single-item edit view's container class "builder-added-exercise-media"
+//     produced "builder-added-exercise-media-image" - a class with zero CSS
+//     rules anywhere, so the image rendered unstyled/unsized inside a small
+//     overflow:hidden button. (2) the Instruction toggle was a bare 13px
+//     text link with padding:0 - a touch target far under the ~44px minimum
+//     a thumb can reliably hit on a real phone.
+
+test("17a. Edit details' image uses the same already-styled CSS class the desktop list uses, not a derived class with no CSS rule", () => {
+  const item = makeItem({ id: "item-1", imageUrl: "https://drive.google.com/uc?id=abc123" });
+  const node = { items: [item] };
+  const html = renderBuilderItemEdit(node, "item-1", false);
+  assert.match(html, /class="builder-added-exercise-image"/, "must reuse the desktop-proven, fully-styled class");
+  assert.doesNotMatch(html, /builder-added-exercise-media-image/, "regression guard: this derived class has no CSS rule anywhere and silently produced an invisible image");
+});
+
+test("17b. the Edit-details image carries the exercise's real URL and Google Drive fallback sources", () => {
+  const item = makeItem({ id: "item-1", imageUrl: "https://drive.google.com/uc?id=abc123" });
+  const node = { items: [item] };
+  const html = renderBuilderItemEdit(node, "item-1", false);
+  assert.match(html, /data-image="https:\/\/drive\.google\.com\/uc\?id=abc123"/, "the open-media button must carry the real item URL");
+  assert.match(html, /src="https:\/\/drive\.google\.com\/thumbnail\?id=abc123&amp;sz=w1000"/, "the <img> itself must use media.js's first Drive-id-derived source");
+  assert.match(html, /data-fallbacks="\[&quot;https:\/\/lh3\.googleusercontent\.com\/d\/abc123=w1000&quot;,&quot;https:\/\/drive\.google\.com\/uc\?export=view&amp;id=abc123&quot;\]"/, "the remaining two Drive fallback sources from media.js must survive on the <img> for handleImageError to walk through");
+});
+
+test("17c. tapping the Edit-details thumbnail is wired to open-media, exactly like the working desktop and compact-card thumbnails", () => {
+  const item = makeItem({ id: "item-1", imageUrl: "https://drive.google.com/uc?id=abc123", title: "Box jump" });
+  const node = { items: [item] };
+  const html = renderBuilderItemEdit(node, "item-1", false);
+  const mediaButtonStart = html.indexOf('class="builder-added-exercise-media"');
+  assert.ok(mediaButtonStart !== -1, "could not find the thumbnail button");
+  const buttonMarkup = html.slice(mediaButtonStart, html.indexOf("</button>", mediaButtonStart) + 9);
+  assert.match(buttonMarkup, /data-action="open-media"/);
+  assert.match(buttonMarkup, /data-title="Box jump"/);
+});
+
+test("17d. the Instruction control is a full-width row with a real ≥44px touch target on mobile, not a bare inline text link", async () => {
+  const css = await readFile(path.join(frontendDir, "styles.css"), "utf8");
+  const ruleMatch = css.match(/\.builder-item-instruction-toggle\s*\{([^}]*)\}/);
+  assert.ok(ruleMatch, "could not find the .builder-item-instruction-toggle rule");
+  assert.match(ruleMatch[1], /min-height:\s*44px/, "regression guard: the old rule only set font-size:13px on a padding:0 .text-action, giving a tap target well under the ~44px minimum a thumb can reliably hit on a real device");
+  assert.match(ruleMatch[1], /width:\s*100%/, "the whole row, not just the text, must be tappable");
+});
+
+test("17e. one toggle action opens Instruction - the handler doesn't require a second tap or depend on which item id is passed", async () => {
+  state.builder.editItemInstructionOpen = false;
+  const action = fakeAction({ action: "builder-toggle-item-instruction" });
+  const handled = await handleBuilderWorkspaceAction(action, noopHandlers());
+  assert.equal(handled, true);
+  assert.equal(state.builder.editItemInstructionOpen, true, "a single call must open it");
+});
+
+test("17f. once open, the textarea is a real, enabled, focusable field - not disabled, readonly, or hidden behind pointer-events:none", async () => {
+  const item = makeItem({ id: "item-1", description: "Keep the core tight." });
+  const node = { items: [item] };
+  const html = renderBuilderItemEdit(node, "item-1", true);
+  const textareaMarkup = html.slice(html.indexOf("<textarea"), html.indexOf(">", html.indexOf("<textarea")) + 1);
+  assert.doesNotMatch(textareaMarkup, /\bdisabled\b/);
+  assert.doesNotMatch(textareaMarkup, /\breadonly\b/);
+  assert.doesNotMatch(textareaMarkup, /aria-hidden="true"/);
+  const css = await readFile(path.join(frontendDir, "styles.css"), "utf8");
+  assert.doesNotMatch(css, /\.builder-item-edit[^{]*\{[^}]*pointer-events:\s*none/, "nothing in .builder-item-edit's own styling may block pointer events from reaching its children");
+});
+
+test("17g. blur/change on the Instruction textarea sends exactly one PATCH to the correct item", async () => {
+  const targetItem = makeItem({ id: "item-1", description: "Old text" });
+  state.builder.draft = makeDraft([targetItem]);
+  const patched = { ...targetItem, description: "New text" };
+  const calls = installFetchMock([{ status: 200, body: makeDraft([patched]) }]);
+  const form = { dataset: { builderForm: "update-item", itemId: "item-1" } };
+  globalThis.FormData = class {
+    constructor() { this.entries = [["sets", ""], ["reps", ""], ["load", ""], ["description", "New text"]]; }
+    [Symbol.iterator]() { return this.entries[Symbol.iterator](); }
+  };
+  await submitBuilderForm(form, noopHandlers());
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/builder/items/item-1");
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(calls[0].body.description, "New text");
+});
+
+test("17h. after the server responds, the saved description is what a subsequent render shows - a later partial render never reverts to the pre-save text", async () => {
+  const targetItem = makeItem({ id: "item-1", description: "Old text" });
+  state.builder.draft = makeDraft([targetItem]);
+  const patched = { ...targetItem, description: "New text" };
+  installFetchMock([{ status: 200, body: makeDraft([patched]) }]);
+  const form = { dataset: { builderForm: "update-item", itemId: "item-1" } };
+  globalThis.FormData = class {
+    constructor() { this.entries = [["sets", ""], ["reps", ""], ["load", ""], ["description", "New text"]]; }
+    [Symbol.iterator]() { return this.entries[Symbol.iterator](); }
+  };
+  await submitBuilderForm(form, noopHandlers());
+  const savedItem = state.builder.draft.blocks[0].sessions[0].nodes[0].items[0];
+  assert.equal(savedItem.description, "New text");
+  const reRendered = renderBuilderItemEdit({ items: [savedItem] }, "item-1", false);
+  assert.match(reRendered, /New text/);
+  assert.doesNotMatch(reRendered, /Old text/);
+});
+
+test("17i. closing and reopening the single-item view shows the previously-saved instruction, collapsed with its preview text", () => {
+  const item = makeItem({ id: "item-1", description: "Saved from last session" });
+  const node = { items: [item] };
+  const html = renderBuilderItemEdit(node, "item-1", false);
+  assert.match(html, /builder-item-instruction-preview[^>]*>Saved from last session</);
+});
+
+test("17j. editing Sets/Reps/Load never erases the instruction - a duplicated item keeps its own dose and description completely independent of the other", async () => {
+  const first = makeItem({ id: "item-1", sets: "3", description: "First item's instruction" });
+  const second = makeItem({ id: "item-2", sets: "5", description: "Second item's instruction" });
+  state.builder.draft = makeDraft([first, second]);
+  const patchedFirst = { ...first, sets: "10" };
+  const calls = installFetchMock([{ status: 200, body: makeDraft([patchedFirst, second]) }]);
+  const form = { dataset: { builderForm: "update-item", itemId: "item-1" } };
+  // Instruction collapsed - only the hidden description fallback is present, exactly what the compact card and collapsed single-item view actually submit.
+  globalThis.FormData = class {
+    constructor() { this.entries = [["sets", "10"], ["reps", ""], ["load", ""], ["description", "First item's instruction"]]; }
+    [Symbol.iterator]() { return this.entries[Symbol.iterator](); }
+  };
+  await submitBuilderForm(form, noopHandlers());
+  assert.equal(calls[0].body.description, "First item's instruction", "the hidden field must carry the existing instruction through a dose-only edit");
+  const items = state.builder.draft.blocks[0].sessions[0].nodes[0].items;
+  assert.equal(items.find((i) => i.id === "item-1").sets, "10");
+  assert.equal(items.find((i) => i.id === "item-2").description, "Second item's instruction", "the untouched duplicate's own instruction must be completely unaffected");
+});
+
+test("17k. the sticky footer cannot cover an open Instruction textarea - it stays position:sticky/bottom:0 within the same scrolling modal that the section grid already reserves bottom clearance for", async () => {
+  const css = await readFile(path.join(frontendDir, "styles.css"), "utf8");
+  assert.match(css, /\.builder-mobile-sticky-bar\s*\{[^}]*position:\s*sticky;[^}]*bottom:\s*0;/s, "regression guard: the sticky bar must stay pinned via position:sticky, not get accidentally reparented to a fixed/absolute overlay that could sit on top of content regardless of scroll");
+  assert.match(css, /\.builder-section-grid\s*\{\s*padding-bottom:\s*calc\(72px/, "regression guard: the reserved bottom clearance in the scrollable grid (added so the last item/field can scroll clear of the sticky bar) must still be present");
+});
+
+test("17l. desktop's full-form image and inline Instruction textarea are completely unaffected by the Edit-details thumbnail fix", () => {
+  const item = makeItem({ title: "Box jump", imageUrl: "https://drive.google.com/uc?id=abc123", description: "Land soft." });
+  const html = renderBuilderItems({ items: [item] });
+  assert.match(html, /class="builder-added-exercise-image"/, "desktop's own inline markup (never routed through renderAddedThumb) must still emit its own already-correct class");
+  assert.match(html, /<textarea name="description"[^>]*>Land soft\.<\/textarea>/, "desktop must still show Instruction inline and unconditionally, with no toggle at all");
 });
 
 test("15a. an add error resets the button, leaves query/filters untouched, and a retry can still succeed", async () => {
