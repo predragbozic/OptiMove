@@ -81,14 +81,6 @@ function renderAddedThumb(item, className) {
   return `<span class="${className}-fallback">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`;
 }
 
-function doseSummary(item) {
-  const parts = [];
-  if (item.sets) parts.push(`${escapeHtml(String(item.sets))} sets`);
-  if (item.reps) parts.push(`${escapeHtml(String(item.reps))} reps`);
-  if (item.load) parts.push(escapeHtml(String(item.load)));
-  return parts.length ? parts.join(" &middot; ") : "No dose set yet";
-}
-
 // Desktop-only "Added to section" list: the original full-form-per-item
 // layout is left completely unchanged so desktop behavior/appearance never
 // moves (see the ≤560px CSS gate on .builder-added-list-compact/
@@ -112,25 +104,41 @@ export function renderBuilderItems(node) {
   `).join("")}</div>`;
 }
 
-// Mobile-only compact closed card - index, thumb, 2-line title, dose
-// summary, reorder/remove, and an "Edit details" button that opens the
-// single-item view below instead of showing every field inline.
+// Mobile-only compact card - index, thumb, 2-line title, reorder/remove,
+// and Sets/Reps/Load inline and immediately editable (autosaving through the
+// same [data-builder-autosave] "update-item" path as the desktop full form
+// and the single-item edit view below - see submitBuilderForm's
+// mode==="update-item" branch in builder-actions.js). The card is itself the
+// autosave <form>; a hidden "description" field always carries the item's
+// current instruction text forward on every submit, since the visible
+// Instruction textarea only ever lives in the single-item edit view - without
+// this hidden field, saving Sets/Reps/Load here would submit no
+// "description" key at all, and PATCH /items/:itemId writes all four
+// columns unconditionally (nullableText(undefined) -> null), silently
+// wiping any existing instruction. "Edit details" now opens the single-item
+// view strictly for Instruction, other detail review, and Previous/Next -
+// dose is never behind it.
 function renderBuilderAddedCard(item, index, total) {
   return `
-    <article class="builder-added-card" data-item-id="${escapeAttr(item.id)}">
-      <span class="builder-added-card-index">${index + 1}</span>
-      ${renderAddedThumb(item, "builder-added-card-media")}
-      <div class="builder-added-card-body">
+    <form class="builder-added-card builder-item" data-builder-form="update-item" data-builder-autosave data-item-id="${escapeAttr(item.id)}">
+      <div class="builder-added-card-top">
+        <span class="builder-added-card-index">${index + 1}</span>
+        ${renderAddedThumb(item, "builder-added-card-media")}
         <strong class="builder-added-card-title">${escapeHtml(item.title || "Exercise")}</strong>
-        <small class="builder-added-card-dose">${doseSummary(item)}</small>
-      </div>
-      <div class="builder-added-card-actions">
-        <button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button>
-        <button class="plain-button builder-icon-action builder-item-move-down" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" aria-label="Move down" title="Move down" ${index === total - 1 ? "disabled" : ""}>${ICON_ARROW_UP}</button>
+        <div class="builder-added-card-move">
+          <button class="plain-button builder-icon-action builder-item-move-up" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="up" aria-label="Move up" title="Move up" ${index === 0 ? "disabled" : ""}>${ICON_ARROW_UP}</button>
+          <button class="plain-button builder-icon-action builder-item-move-down" type="button" data-action="builder-move-item" data-item-id="${escapeAttr(item.id)}" data-direction="down" aria-label="Move down" title="Move down" ${index === total - 1 ? "disabled" : ""}>${ICON_ARROW_UP}</button>
+        </div>
         <button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="builder-delete-item" data-item-id="${escapeAttr(item.id)}" aria-label="Remove" title="Remove">${ICON_TRASH}</button>
-        <button class="text-action builder-added-card-edit" type="button" data-action="builder-open-edit-item" data-item-id="${escapeAttr(item.id)}">Edit details</button>
       </div>
-    </article>
+      <div class="builder-dose-inputs builder-added-card-dose-inputs">
+        <label><span>Sets</span><input name="sets" value="${escapeAttr(item.sets || "")}" placeholder="e.g. 3"></label>
+        <label><span>Reps</span><input name="reps" value="${escapeAttr(item.reps || "")}" placeholder="e.g. 8"></label>
+        <label><span>Load</span><input name="load" value="${escapeAttr(item.load || "")}" placeholder="e.g. 40 kg"></label>
+      </div>
+      <input type="hidden" name="description" value="${escapeAttr(item.description || "")}">
+      <button class="text-action builder-added-card-edit" type="button" data-action="builder-open-edit-item" data-item-id="${escapeAttr(item.id)}">Edit details</button>
+    </form>
   `;
 }
 
@@ -171,7 +179,17 @@ export function renderBuilderItemEdit(node, itemId, instructionOpen) {
         </div>
         <div class="builder-item-instruction">
           <button class="text-action builder-item-instruction-toggle" type="button" data-action="builder-toggle-item-instruction" aria-expanded="${instructionOpen ? "true" : "false"}">Instruction ${instructionOpen ? "&#9652;" : "&#9662;"}</button>
-          ${instructionOpen ? `<label class="search-field"><span class="visually-hidden">Instruction</span><textarea name="description" rows="3">${escapeHtml(item.description || "")}</textarea></label>` : (item.description ? `<p class="builder-item-instruction-preview muted">${escapeHtml(item.description)}</p>` : "")}
+          ${instructionOpen
+            ? `<label class="search-field"><span class="visually-hidden">Instruction</span><textarea name="description" rows="3">${escapeHtml(item.description || "")}</textarea></label>`
+            // Instruction is collapsed - no textarea in the DOM, so the
+            // autosave FormData would otherwise omit "description" entirely.
+            // PATCH /items/:itemId writes all four dose/description columns
+            // unconditionally on every save, so a missing key isn't "leave
+            // unchanged" - it's nullableText(undefined) -> null, silently
+            // wiping the instruction the next time Sets/Reps/Load autosaves.
+            // This hidden input keeps the current value in the submitted
+            // form even while collapsed.
+            : `<input type="hidden" name="description" value="${escapeAttr(item.description || "")}">${item.description ? `<p class="builder-item-instruction-preview muted">${escapeHtml(item.description)}</p>` : ""}`}
         </div>
         <small class="builder-autosave-hint">Changes save automatically.</small>
       </form>
@@ -180,27 +198,41 @@ export function renderBuilderItemEdit(node, itemId, instructionOpen) {
 }
 
 // Sticky bottom bar (mobile only) - always shows the running count, up to
-// four thumbnails of the most recently added items (+N if more), a jump-to-
-// list Edit action, and an always-reachable Done. Thumbnails never enter
-// the edit form - tapping one just previews that exercise's media.
+// four thumbnails of the most recently added items (+N if more), an
+// always-reachable Done, and one mode-aware action: "Edit" (jump to the
+// Added-exercises view) while in Add-exercises mode, or "Add exercises"
+// (back to the library) while already in Added-exercises mode. There is no
+// standing top-level mode-tabs pair any more (see the now-removed
+// .builder-mobile-mode-tabs in builder-section.js/styles.css) - this single
+// contextual control is the only way to switch modes on mobile, per the
+// coach's own preference: default straight into Add-exercises, Edit takes
+// you to Added, and Add exercises is only offered once you're already there.
+// Thumbnails never enter the edit form - tapping one just previews that
+// exercise's media.
 const STICKY_BAR_THUMB_LIMIT = 4;
 
-export function renderBuilderStickyBar(node) {
+export function renderBuilderStickyBar(node, mobileMode) {
   const items = node?.items || [];
   const count = items.length;
   const recent = items.slice(-STICKY_BAR_THUMB_LIMIT).reverse();
   const overflow = Math.max(0, count - STICKY_BAR_THUMB_LIMIT);
+  const isAdded = mobileMode === "added";
+  const summaryInner = `
+    <span class="builder-sticky-bar-thumbs">
+      ${recent.map((item) => `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}" role="button" tabindex="0" aria-label="Preview ${escapeAttr(item.title || "exercise")}">${item.imageUrl ? renderImage(item.imageUrl, "builder-sticky-thumb-image") : `<span class="builder-sticky-thumb-fallback">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`}</span>`).join("")}
+      ${overflow ? `<span class="builder-sticky-thumb-overflow">+${overflow}</span>` : ""}
+    </span>
+    <span class="builder-sticky-bar-label">Added exercises (${count})</span>
+  `;
   return `
     <div class="builder-mobile-sticky-bar">
-      <button class="builder-sticky-bar-summary" type="button" data-action="builder-set-mobile-mode" data-mode="added">
-        <span class="builder-sticky-bar-thumbs">
-          ${recent.map((item) => `<span class="builder-sticky-thumb" data-action="open-media" data-title="${escapeAttr(item.title || "Exercise media")}" data-image="${escapeAttr(item.imageUrl || "")}" data-video="${escapeAttr(item.videoUrl || "")}" role="button" tabindex="0" aria-label="Preview ${escapeAttr(item.title || "exercise")}">${item.imageUrl ? renderImage(item.imageUrl, "builder-sticky-thumb-image") : `<span class="builder-sticky-thumb-fallback">${escapeHtml((item.title || "Exercise").slice(0, 1).toUpperCase())}</span>`}</span>`).join("")}
-          ${overflow ? `<span class="builder-sticky-thumb-overflow">+${overflow}</span>` : ""}
-        </span>
-        <span class="builder-sticky-bar-label">Added exercises (${count})</span>
-      </button>
+      ${isAdded
+        ? `<span class="builder-sticky-bar-summary">${summaryInner}</span>`
+        : `<button class="builder-sticky-bar-summary" type="button" data-action="builder-set-mobile-mode" data-mode="added">${summaryInner}</button>`}
       <div class="builder-sticky-bar-actions">
-        <button class="text-action" type="button" data-action="builder-set-mobile-mode" data-mode="added">Edit</button>
+        ${isAdded
+          ? `<button class="text-action" type="button" data-action="builder-set-mobile-mode" data-mode="add">Add exercises</button>`
+          : `<button class="text-action" type="button" data-action="builder-set-mobile-mode" data-mode="added">Edit</button>`}
         <button class="plain-button builder-sticky-bar-done" type="button" data-action="builder-finish-section">Done</button>
       </div>
     </div>

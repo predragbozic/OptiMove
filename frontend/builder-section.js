@@ -49,10 +49,6 @@ function renderBuilderSectionPanel(state, selectedNode) {
         <div class="builder-section-editor-actions builder-section-editor-actions-desktop">${renderCopyNodeIconButton(selectedNode.id, "Copy section")}<button class="plain-button builder-section-cancel-button" type="button" data-action="builder-finish-section">${ICON_X}<span>Cancel</span></button><button class="plain-button builder-section-finish-button" type="button" data-action="builder-finish-section">${ICON_CHECK}<span>Finish</span></button>${renderDeleteIconButton("builder-delete-node", `data-node-id="${escapeAttr(selectedNode.id)}"`, "Delete section")}</div>
         <button class="plain-button icon-button builder-section-close-button" type="button" data-action="builder-finish-section" aria-label="Close section editor" title="Close - your changes are already saved">${ICON_X}</button>
       </div>
-      <div class="builder-mobile-mode-tabs" role="tablist" aria-label="Section editor mode">
-        <button class="builder-mobile-mode-tab ${state.builder.mobileMode === "add" ? "is-active" : ""}" type="button" role="tab" aria-selected="${state.builder.mobileMode === "add" ? "true" : "false"}" data-action="builder-set-mobile-mode" data-mode="add">Add exercises</button>
-        <button class="builder-mobile-mode-tab ${state.builder.mobileMode === "added" ? "is-active" : ""}" type="button" role="tab" aria-selected="${state.builder.mobileMode === "added" ? "true" : "false"}" data-action="builder-set-mobile-mode" data-mode="added">Added exercises (${selectedNode.items.length})</button>
-      </div>
       <div class="builder-section-grid">
         <section class="builder-section-library">
           <div class="builder-panel-label">Exercise library</div>
@@ -69,9 +65,9 @@ function renderBuilderSectionPanel(state, selectedNode) {
             <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
           `)}
           <div class="builder-dose-inputs builder-quick-dose">
-            <label><span>Sets</span><input data-builder-new-dose name="sets" placeholder="3"></label>
-            <label><span>Reps</span><input data-builder-new-dose name="reps" placeholder="8"></label>
-            <label><span>Load</span><input data-builder-new-dose name="load" placeholder="40 kg"></label>
+            <label><span>Sets</span><input data-builder-new-dose name="sets" placeholder="e.g. 3"></label>
+            <label><span>Reps</span><input data-builder-new-dose name="reps" placeholder="e.g. 8"></label>
+            <label><span>Load</span><input data-builder-new-dose name="load" placeholder="e.g. 40 kg"></label>
           </div>
           ${renderBuilderAddConfirmation(state.builder.addConfirmation)}
           <div class="builder-exercise-results">
@@ -82,7 +78,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
           ${renderBuilderAddedPanelContent(state, selectedNode)}
         </section>
       </div>
-      ${renderBuilderStickyBar(selectedNode)}
+      ${renderBuilderStickyBar(selectedNode, state.builder.mobileMode)}
       ${state.builder.customExerciseOpen ? renderCustomExerciseModal(selectedNode, state.builder.customExerciseDose) : ""}
       ${state.tagEditor.open ? renderExerciseTagModal(state.tagEditor) : ""}
     </div>
