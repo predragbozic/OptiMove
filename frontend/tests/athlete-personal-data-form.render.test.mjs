@@ -40,22 +40,45 @@ test("renderPersonalDataFormHtml shows an explicit error message when profile.er
   assert.ok(body.includes("Could not load your profile"));
 });
 
-test("the Personal data form exposes exactly firstName, lastName, and imageUrl - no other field name appears as an input", () => {
+test("the Personal data form exposes exactly the 7 audit-approved fields, in order, no other field name appears as an input", () => {
   const body = sliceFunction("renderPersonalDataFormHtml");
   const inputNames = [...body.matchAll(/name="(\w+)"/g)].map((m) => m[1]);
-  assert.deepEqual(inputNames, ["firstName", "lastName", "imageUrl"]);
+  assert.deepEqual(inputNames, ["firstName", "lastName", "birthDate", "phone", "country", "city", "imageUrl"]);
 });
 
-test("none of the excluded audit fields (birth date, phone, gender, address, internal IDs, role/status/membership) ever appear in this form", () => {
+test("none of the still-excluded audit fields (gender, address line, cover photo, contact email, internal IDs, role/status/membership) ever appear in this form", () => {
   const body = sliceFunction("renderPersonalDataFormHtml");
-  for (const forbidden of ["birthDate", "birth_date", "phone", "gender", "country", "city", "addressLine", "address_line", "athleteId", "athlete_id", "userId", "user_id", "clubId", "teamId", "isActive", "is_active", "role", "email"]) {
+  for (const forbidden of ["gender", "addressLine", "address_line", "coverImageUrl", "cover_image_url", "athleteId", "athlete_id", "userId", "user_id", "clubId", "teamId", "isActive", "is_active", "role", "email"]) {
     assert.ok(!body.includes(`name="${forbidden}"`), `${forbidden} must never be an editable field name in the Personal data form`);
   }
 });
 
-test("the imageUrl field is presented as a URL input, not disguised as a real upload widget", () => {
+test("birthDate is a real date input capped at today - no future date can even be picked in the browser", () => {
+  const body = sliceFunction("renderPersonalDataFormHtml");
+  assert.match(body, /name="birthDate"[^>]*type="date"/);
+  assert.match(body, /name="birthDate"[^>]*max="\$\{escapeAttr\(todayIsoUtc\(\)\)\}"/);
+});
+
+test("phone has no format/pattern restriction imposed - just a length cap matching the real DB column", () => {
+  const body = sliceFunction("renderPersonalDataFormHtml");
+  const phoneInputMatch = body.match(/<input name="phone"[^>]*>/);
+  assert.ok(phoneInputMatch);
+  assert.ok(!phoneInputMatch[0].includes("pattern="), "no regex pattern attribute may constrain phone to one country's format");
+  assert.match(phoneInputMatch[0], /maxlength="50"/);
+});
+
+test("country and city are plain trimmed text fields capped at the real 100-character DB column limit", () => {
+  const body = sliceFunction("renderPersonalDataFormHtml");
+  assert.match(body, /name="country"[^>]*maxlength="100"/);
+  assert.match(body, /name="city"[^>]*maxlength="100"/);
+});
+
+test("the imageUrl field is labeled 'Profile photo URL' and presented as a URL input, never as 'Upload photo' or disguised as a real upload widget", () => {
   const body = sliceFunction("renderPersonalDataFormHtml");
   assert.match(body, /name="imageUrl"[^>]*type="url"/);
+  assert.ok(body.includes("Profile photo URL"));
+  assert.ok(!/>\s*Upload photo\s*</.test(body), "must never claim to be a real upload");
+  assert.ok(body.toLowerCase().includes("no photo upload"), "must disclose that this is a temporary URL-only workaround");
 });
 
 test("the form submits via data-account-form='personal-data', the exact hook app.js's handleContentSubmit listens for", () => {

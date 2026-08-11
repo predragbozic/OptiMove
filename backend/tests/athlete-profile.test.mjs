@@ -235,7 +235,13 @@ test("7. firstName is required and length-limited; lastName may be empty but is 
   assert.equal(empty.status, 400);
   assert.ok(empty.body.errors.some((e) => e.includes("First name")));
 
-  const tooLong = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { firstName: "x".repeat(81) } });
+  // public.athletes.first_name/last_name are varchar(100) - confirmed via
+  // information_schema, not assumed - so 100 chars must pass and 101 must
+  // be rejected.
+  const atLimit = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { firstName: "x".repeat(100) } });
+  assert.equal(atLimit.status, 200, "exactly 100 characters (the real column limit) must be accepted");
+
+  const tooLong = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { firstName: "x".repeat(101) } });
   assert.equal(tooLong.status, 400);
 
   const blankLastName = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { lastName: "" } });
@@ -321,4 +327,214 @@ test("12. a PATCH with no allowed fields is rejected with 400 and no mutation", 
 
   const row = await query(`select first_name from public.athletes where user_id = $1`, [user.id]);
   assert.equal(row.rows[0].first_name, "Stays");
+});
+
+// === 13-19: second pass - birthDate/phone/country/city ===
+
+test("13. an athlete can read and write birthDate, phone, country, and city", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-newfields") });
+  await makeAthlete({ userId: user.id });
+  const token = await createSession(user.id);
+
+  const getRes = await api("/api/athlete-profile", { cookie: cookieFor(token) });
+  assert.equal(getRes.status, 200);
+  assert.equal(getRes.body.birthDate, "");
+  assert.equal(getRes.body.phone, "");
+  assert.equal(getRes.body.country, "");
+  assert.equal(getRes.body.city, "");
+
+  const patchRes = await api("/api/athlete-profile", {
+    method: "PATCH",
+    cookie: cookieFor(token),
+    body: { birthDate: "2000-05-15", phone: "+381 60 123 4567", country: "Serbia", city: "Belgrade" },
+  });
+  assert.equal(patchRes.status, 200);
+  assert.equal(patchRes.body.birthDate, "2000-05-15");
+  assert.equal(patchRes.body.phone, "+381 60 123 4567");
+  assert.equal(patchRes.body.country, "Serbia");
+  assert.equal(patchRes.body.city, "Belgrade");
+
+  const row = await query(`select birth_date, phone, country, city from public.athletes where user_id = $1`, [user.id]);
+  assert.equal(String(row.rows[0].birth_date), "2000-05-15");
+  assert.equal(row.rows[0].phone, "+381 60 123 4567");
+  assert.equal(row.rows[0].country, "Serbia");
+  assert.equal(row.rows[0].city, "Belgrade");
+
+  const rereadRes = await api("/api/athlete-profile", { cookie: cookieFor(token) });
+  assert.equal(rereadRes.body.birthDate, "2000-05-15");
+  assert.equal(rereadRes.body.phone, "+381 60 123 4567");
+});
+
+test("14. clearing optional values (empty string) stores null and GET reflects it back as empty", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-clear") });
+  await makeAthlete({ userId: user.id });
+  const token = await createSession(user.id);
+
+  await api("/api/athlete-profile", {
+    method: "PATCH",
+    cookie: cookieFor(token),
+    body: { birthDate: "1995-01-20", phone: "555-1234", country: "Croatia", city: "Zagreb" },
+  });
+
+  const clearRes = await api("/api/athlete-profile", {
+    method: "PATCH",
+    cookie: cookieFor(token),
+    body: { birthDate: "", phone: "", country: "", city: "" },
+  });
+  assert.equal(clearRes.status, 200);
+  assert.equal(clearRes.body.birthDate, "");
+  assert.equal(clearRes.body.phone, "");
+  assert.equal(clearRes.body.country, "");
+  assert.equal(clearRes.body.city, "");
+
+  const row = await query(`select birth_date, phone, country, city from public.athletes where user_id = $1`, [user.id]);
+  assert.equal(row.rows[0].birth_date, null, "birth_date must be stored as real SQL NULL, not an empty string (it's a date column)");
+  assert.equal(row.rows[0].phone, null);
+  assert.equal(row.rows[0].country, null);
+  assert.equal(row.rows[0].city, null);
+});
+
+test("15. birthDate rejects malformed and calendar-invalid dates, and never mutates on rejection", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-baddate") });
+  await makeAthlete({ userId: user.id });
+  const token = await createSession(user.id);
+
+  for (const bad of ["not-a-date", "2000/05/15", "2000-13-01", "2000-02-30", "15-05-2000"]) {
+    const res = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { birthDate: bad } });
+    assert.equal(res.status, 400, `expected ${bad} to be rejected`);
+  }
+
+  const row = await query(`select birth_date from public.athletes where user_id = $1`, [user.id]);
+  assert.equal(row.rows[0].birth_date, null, "no invalid date attempt may have mutated the row");
+});
+
+test("16. birthDate rejects any future date, accepts today, and never mutates on rejection", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-futuredate") });
+  await makeAthlete({ userId: user.id });
+  const token = await createSession(user.id);
+
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const future = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { birthDate: tomorrow } });
+  assert.equal(future.status, 400);
+
+  const row = await query(`select birth_date from public.athletes where user_id = $1`, [user.id]);
+  assert.equal(row.rows[0].birth_date, null);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayRes = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { birthDate: today } });
+  assert.equal(todayRes.status, 200, "today itself must be a valid (non-future) date of birth");
+});
+
+test("17. phone/country/city are rejected at the real DB column length limits, accepted right at the boundary", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-limits") });
+  await makeAthlete({ userId: user.id });
+  const token = await createSession(user.id);
+
+  // public.athletes.phone varchar(50); country/city varchar(100) - confirmed via information_schema.
+  const phoneOk = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { phone: "5".repeat(50) } });
+  assert.equal(phoneOk.status, 200);
+  const phoneTooLong = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { phone: "5".repeat(51) } });
+  assert.equal(phoneTooLong.status, 400);
+
+  const countryOk = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { country: "x".repeat(100) } });
+  assert.equal(countryOk.status, 200);
+  const countryTooLong = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { country: "x".repeat(101) } });
+  assert.equal(countryTooLong.status, 400);
+
+  const cityOk = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { city: "x".repeat(100) } });
+  assert.equal(cityOk.status, 200);
+  const cityTooLong = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { city: "x".repeat(101) } });
+  assert.equal(cityTooLong.status, 400);
+});
+
+test("18. phone imposes no country-specific format - digits, letters-free punctuation, spaces, and a leading + all pass as long as length is within limit", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-phoneformat") });
+  await makeAthlete({ userId: user.id });
+  const token = await createSession(user.id);
+
+  for (const phone of ["+1 (555) 123-4567", "060/123-456", "0912345678", "+44 7911 123456"]) {
+    const res = await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { phone } });
+    assert.equal(res.status, 200, `expected ${phone} to be accepted with no format restriction`);
+    assert.equal(res.body.phone, phone);
+  }
+});
+
+test("19. unknown/forbidden fields alongside the new allowed ones are still rejected with zero mutation", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-forbiddennew") });
+  await makeAthlete({ userId: user.id });
+  const token = await createSession(user.id);
+
+  const res = await api("/api/athlete-profile", {
+    method: "PATCH",
+    cookie: cookieFor(token),
+    body: { country: "Serbia", gender: "male", addressLine: "123 Main St", email: "new@test.local" },
+  });
+  assert.equal(res.status, 400);
+  assert.ok(res.body.errors.some((e) => e.includes("gender")));
+  assert.ok(res.body.errors.some((e) => e.includes("addressLine")));
+  assert.ok(res.body.errors.some((e) => e.includes("email")));
+
+  const row = await query(`select country from public.athletes where user_id = $1`, [user.id]);
+  assert.equal(row.rows[0].country, null, "the valid country field must NOT have been saved alongside the forbidden ones");
+});
+
+// === 20: the actual lost-update race the rewritten PATCH must prevent ===
+
+test("20. two concurrent partial PATCHes for DIFFERENT fields both survive - neither reverts the other's change", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-race") });
+  await makeAthlete({ userId: user.id, firstName: "RaceStart", lastName: "RaceStart" });
+  const token = await createSession(user.id);
+
+  // Seed country/city so this race exercises real pre-existing values, not
+  // just nulls.
+  await api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { country: "Serbia", city: "Belgrade" } });
+
+  const [countryResult, cityResult] = await Promise.all([
+    api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { country: "France" } }),
+    api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { city: "Paris" } }),
+  ]);
+  assert.equal(countryResult.status, 200);
+  assert.equal(cityResult.status, 200);
+
+  const row = await query(`select country, city from public.athletes where user_id = $1`, [user.id]);
+  assert.equal(row.rows[0].country, "France", "the country-only PATCH's change must have survived the concurrent city-only PATCH");
+  assert.equal(row.rows[0].city, "Paris", "the city-only PATCH's change must have survived the concurrent country-only PATCH");
+});
+
+test("21. a concurrent name-field PATCH and a country-field PATCH both land, and full_name/display_name stay correctly derived", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-race2") });
+  await makeAthlete({ userId: user.id, firstName: "Old", lastName: "Name" });
+  const token = await createSession(user.id);
+
+  const [nameResult, countryResult] = await Promise.all([
+    api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { firstName: "New", lastName: "Name" } }),
+    api("/api/athlete-profile", { method: "PATCH", cookie: cookieFor(token), body: { country: "Germany" } }),
+  ]);
+  assert.equal(nameResult.status, 200);
+  assert.equal(countryResult.status, 200);
+
+  const row = await query(`select first_name, last_name, full_name, display_name, country from public.athletes where user_id = $1`, [user.id]);
+  assert.equal(row.rows[0].first_name, "New");
+  assert.equal(row.rows[0].country, "Germany", "the concurrent country-only PATCH must not have been lost");
+  assert.equal(row.rows[0].full_name, "New Name", "full_name must reflect the name change regardless of interleaving with the country-only request");
+  assert.equal(row.rows[0].display_name, "New Name");
+});
+
+// === 22: still-unaffected verified flows (sanity re-check for this pass) ===
+
+test("22. Login email, password, role, status, and memberships remain untouched even with the new fields in the request", async () => {
+  const user = await makeUser({ email: await uniqueEmail("profile-security2") });
+  await makeAthlete({ userId: user.id });
+  const beforeUser = await query(`select email, password_hash, role_hint, is_active from public.users where id = $1`, [user.id]);
+  const token = await createSession(user.id);
+
+  const res = await api("/api/athlete-profile", {
+    method: "PATCH",
+    cookie: cookieFor(token),
+    body: { firstName: "Sec", lastName: "Check", birthDate: "1990-01-01", phone: "555-0000", country: "Spain", city: "Madrid" },
+  });
+  assert.equal(res.status, 200);
+
+  const afterUser = await query(`select email, password_hash, role_hint, is_active from public.users where id = $1`, [user.id]);
+  assert.deepEqual(afterUser.rows[0], beforeUser.rows[0], "public.users must be completely unchanged even with all 7 fields in one PATCH");
 });

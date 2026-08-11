@@ -63,16 +63,23 @@ test("clicking an athlete program card reuses the EXACT same state.selectedProgr
   assert.ok(body.includes("renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));"));
 });
 
-test("the personal-data form handler PATCHes /api/athlete-profile with exactly firstName/lastName/imageUrl and no other field", () => {
+test("the personal-data form handler PATCHes /api/athlete-profile with exactly the 7 allowed fields and no other field", () => {
   const start = appJsSource.indexOf("data-account-form='personal-data'");
   assert.ok(start >= 0);
-  const body = appJsSource.slice(start, start + 1600);
-  assert.match(body, /api\("\/api\/athlete-profile", \{\s*method: "PATCH",\s*body: JSON\.stringify\(\{ firstName, lastName, imageUrl \}\),/);
+  const body = appJsSource.slice(start, start + 2200);
+  assert.match(body, /api\("\/api\/athlete-profile", \{\s*method: "PATCH",\s*body: JSON\.stringify\(\{ firstName, lastName, birthDate, phone, country, city, imageUrl \}\),/);
+});
+
+test("every field read from the personal-data form via formData.get(...) is one of the 7 allowed fields - no stray input can smuggle an extra key into the PATCH body", () => {
+  const start = appJsSource.indexOf("data-account-form='personal-data'");
+  const body = appJsSource.slice(start, start + 2200);
+  const readFields = [...body.matchAll(/formData\.get\("(\w+)"\)/g)].map((m) => m[1]);
+  assert.deepEqual(new Set(readFields), new Set(["firstName", "lastName", "birthDate", "phone", "country", "city", "imageUrl"]));
 });
 
 test("a successful personal-data save invalidates the Home cache (so Home reflects the new name/photo on next visit)", () => {
   const start = appJsSource.indexOf("data-account-form='personal-data'");
-  const body = appJsSource.slice(start, start + 1600);
+  const body = appJsSource.slice(start, start + 2200);
   const patchIndex = body.indexOf("method: \"PATCH\"");
   const invalidateIndex = body.indexOf("invalidateAthleteHomeCache()");
   assert.ok(patchIndex >= 0 && invalidateIndex > patchIndex, "cache invalidation must happen only after the PATCH resolves, not before");
@@ -80,7 +87,7 @@ test("a successful personal-data save invalidates the Home cache (so Home reflec
 
 test("the personal-data handler guards against a stale re-render after the user has already navigated off Settings", () => {
   const start = appJsSource.indexOf("data-account-form='personal-data'");
-  const body = appJsSource.slice(start, start + 1600);
+  const body = appJsSource.slice(start, start + 2200);
   assert.ok(body.includes('state.activeTab === "athlete-settings"'));
   assert.ok(body.includes('if (state.activeTab !== "athlete-settings") return;'));
 });

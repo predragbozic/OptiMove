@@ -632,9 +632,13 @@ async function handleContentSubmit(event) {
   }
 
   // feature/athlete-programs-profile: PATCH /api/athlete-profile only ever
-  // touches public.athletes (first_name/last_name/image_url) - it never
-  // reaches users.email/password/role, so this can never interact with the
-  // Login email or Change password forms above/below it. On success,
+  // touches public.athletes (first_name/last_name/image_url/birth_date/
+  // phone/country/city) - it never reaches users.email/password/role, so
+  // this can never interact with the Login email or Change password forms
+  // above/below it. Every field here is on the endpoint's allowlist (see
+  // backend/src/routes/athleteProfile.js) - the body sent below is
+  // exhaustive, never spreads formData directly, so a stray/renamed input
+  // can't silently smuggle an extra field into the request. On success,
   // invalidate the Home cache (Home shows this same name/photo) so the
   // next visit to Home reflects the change instead of serving a stale
   // cached response - Home isn't on screen right now, so there's nothing
@@ -650,12 +654,16 @@ async function handleContentSubmit(event) {
     const button = personalDataForm.querySelector("button[type='submit']");
     const firstName = String(formData.get("firstName") || "").trim();
     const lastName = String(formData.get("lastName") || "").trim();
+    const birthDate = String(formData.get("birthDate") || "").trim();
+    const phone = String(formData.get("phone") || "").trim();
+    const country = String(formData.get("country") || "").trim();
+    const city = String(formData.get("city") || "").trim();
     const imageUrl = String(formData.get("imageUrl") || "").trim();
     if (button) button.disabled = true;
     try {
       const updated = await api("/api/athlete-profile", {
         method: "PATCH",
-        body: JSON.stringify({ firstName, lastName, imageUrl }),
+        body: JSON.stringify({ firstName, lastName, birthDate, phone, country, city, imageUrl }),
       });
       invalidateAthleteHomeCache();
       // Re-render in place with the server's own returned values (no extra

@@ -147,14 +147,26 @@ function renderPersonalDataFormHtml(profile) {
   return `
     <form class="organization-form athlete-personal-data-form" data-account-form="personal-data">
       <div class="athlete-personal-data-preview-row">${preview}</div>
-      <label class="search-field"><span>First name</span><input name="firstName" required maxlength="80" value="${escapeAttr(profile.firstName)}" autocomplete="given-name"></label>
-      <label class="search-field"><span>Last name</span><input name="lastName" maxlength="80" value="${escapeAttr(profile.lastName)}" autocomplete="family-name"></label>
-      <label class="search-field"><span>Photo URL</span><input name="imageUrl" type="url" maxlength="2000" placeholder="https://..." value="${escapeAttr(profile.imageUrl)}"></label>
+      <label class="search-field"><span>First name</span><input name="firstName" required maxlength="100" value="${escapeAttr(profile.firstName)}" autocomplete="given-name"></label>
+      <label class="search-field"><span>Last name</span><input name="lastName" maxlength="100" value="${escapeAttr(profile.lastName)}" autocomplete="family-name"></label>
+      <label class="search-field"><span>Date of birth</span><input name="birthDate" type="date" max="${escapeAttr(todayIsoUtc())}" value="${escapeAttr(profile.birthDate)}"></label>
+      <label class="search-field"><span>Phone</span><input name="phone" type="tel" maxlength="50" value="${escapeAttr(profile.phone)}" autocomplete="tel"></label>
+      <label class="search-field"><span>Country</span><input name="country" maxlength="100" value="${escapeAttr(profile.country)}" autocomplete="country-name"></label>
+      <label class="search-field"><span>City</span><input name="city" maxlength="100" value="${escapeAttr(profile.city)}" autocomplete="address-level2"></label>
+      <label class="search-field">
+        <span>Profile photo URL</span>
+        <input name="imageUrl" type="url" maxlength="2000" placeholder="https://..." value="${escapeAttr(profile.imageUrl)}">
+      </label>
+      <p class="muted athlete-personal-data-photo-hint">Paste a link to an image - there's no photo upload yet.</p>
       <p class="builder-error" aria-live="polite"></p>
       <p class="builder-success" aria-live="polite"></p>
       <button class="plain-button" type="submit">Save personal data</button>
     </form>
   `;
+}
+
+function todayIsoUtc() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function renderEmailChangeStatusHtml(status) {
