@@ -1,3 +1,4 @@
+import { ICON_CALENDAR, ICON_SPECIFIC_PROGRAMS } from "./athlete-home.js";
 import { renderImage } from "./media.js";
 import { ICON_ADD_ATHLETE } from "./organization-view.js";
 import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
@@ -42,16 +43,14 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
         ${athleteDetailsMarkup}
       </section>
       <nav class="tabs athlete-tabs" aria-label="Athlete views">
-        <button class="tab tab-with-icon" data-tab="weekly" data-open-calendar="true">
-          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="4" y="5" width="16" height="15" rx="2"></rect>
-            <path d="M8 3v4"></path>
-            <path d="M16 3v4"></path>
-            <path d="M4 10h16"></path>
-          </svg>
+        <button class="tab tab-with-icon" data-tab="weekly">
+          ${ICON_CALENDAR}
           <span>Weekly plans</span>
         </button>
-        <button class="tab" data-tab="programs">Specific programs</button>
+        <button class="tab tab-with-icon" data-tab="programs">
+          ${ICON_SPECIFIC_PROGRAMS}
+          <span>Specific programs</span>
+        </button>
       </nav>
       ${!isAthleteMode ? `<button class="plain-button icon-button athlete-toolbar-add-button" type="button" data-action="home-add-athlete" aria-label="Add athlete" title="Add athlete">${ICON_ADD_ATHLETE}</button>` : ""}
     </div>

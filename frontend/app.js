@@ -1124,16 +1124,17 @@ async function handleGlobalClick(event) {
   const tab = event.target.closest("[data-tab]");
   if (tab) {
     const nextTab = tab.dataset.tab;
-    if (nextTab === "weekly" && state.activeTab === "weekly" && state.lastWeeklyData) {
-      openWeeklyCalendarFromRail();
-      return;
-    }
     if (state.activeTab !== nextTab) pushAppHistory();
     state.activeTab = nextTab;
     state.selectedProgramId = null;
     state.selectedTemplateId = null;
     state.navStack = [];
-    if (state.activeTab === "weekly") state.openWeekCalendarOnLoad = tab.dataset.openCalendar === "true";
+    // ui/athlete-program-navigation-icons: clicking the Weekly plans tab
+    // must only switch views, never auto-open the calendar/month picker -
+    // that stays reachable only through the Weekly header's own date/period
+    // button (data-action="week-toggle", handleWeeklyAction) and the
+    // sidebar's #calendarToggle, both unaffected by this reset.
+    if (state.activeTab === "weekly") state.openWeekCalendarOnLoad = false;
     renderTabs();
     renderLibraryNav();
     loadActiveTab();
