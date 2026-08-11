@@ -516,6 +516,262 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   margin: 0;
 }
 
+/* feature/mobile-messages-fullscreen: new elements added to the thread
+   header for this feature - the mobile Back button and the mobile-only
+   3-dot overflow menu (Hide/Block/Unblock). Hidden by default (desktop);
+   the @media block below shows them and hides the always-visible desktop
+   Hide/Block buttons instead. */
+.message-back-button {
+  display: none;
+}
+
+.message-thread-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.message-thread-identity strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-thread-menu {
+  position: relative;
+  display: none;
+}
+
+.message-thread-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  min-width: 180px;
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+
+.message-thread-menu-item {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.message-thread-menu-item:hover,
+.message-thread-menu-item:focus-visible {
+  background: var(--surface-soft);
+}
+
+.message-row.is-blocked .message-row-main small {
+  font-style: italic;
+}
+
+/* feature/mobile-messages-fullscreen: the Hide-confirm modal reuses
+   .exit-confirm-modal/-backdrop/-dialog/-actions/-exit-button verbatim
+   (see that block below) - a second instance of the same styled confirm,
+   not a new visual language, and it inherits that class's z-index: 1100
+   directly (no override needed - Hide-confirm and the app-exit confirm
+   can never realistically be open at the same time). */
+
+/* feature/mobile-messages-fullscreen: the single centralized mobile
+   boundary for Messages. 760px is this codebase's own dominant existing
+   breakpoint (used more than any other max-width cutoff in this file, see
+   the other @media (max-width: 760px) blocks throughout), reused
+   deliberately instead of introducing a new one-off value. Below this
+   width Messages stops being a bounded floating panel and becomes a true
+   fullscreen app-level screen - list, then thread, never both - with its
+   own Back/Close navigation; nothing here applies above 760px, so the
+   existing desktop split-view is completely untouched. Applies to BOTH
+   shells identically (only :not(.login-mode) is excluded) since the
+   #messagePanel/#messageToggle markup is byte-identical between
+   athlete.html and index.html. */
+@media (max-width: 760px) {
+  .message-panel {
+    position: fixed;
+    inset: 0;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    z-index: 950;
+    width: 100vw;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  /* renderMessages() toggles this on <body> - it hides the app chrome
+     behind the fullscreen panel and locks background scroll, the same
+     class-toggle convention .mobile-nav-open already uses for the nav
+     drawer (see navigation.js's renderMobileNavState). */
+  body.messages-open:not(.login-mode) {
+    overflow: hidden;
+  }
+
+  body.messages-open:not(.login-mode) .sidebar,
+  body.messages-open:not(.login-mode) .mobile-nav-toggle,
+  body.messages-open:not(.login-mode) .mobile-nav-backdrop {
+    display: none;
+  }
+
+  /* #messagePanel is nested inside <header class="topbar"> in the markup
+     (same as #notificationPanel) - display:none on .topbar would remove
+     the whole subtree from rendering, including the fixed-position panel
+     nested inside it. visibility:hidden lets .message-panel opt back in
+     with visibility:visible (an inherited property, unlike display) while
+     still pulling the topbar out of the accessibility tree/tab order. */
+  body.messages-open:not(.login-mode) .topbar {
+    visibility: hidden;
+  }
+
+  body.messages-open:not(.login-mode) .message-panel {
+    visibility: visible;
+  }
+
+  .message-inbox-layout {
+    display: block;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .message-inbox-list,
+  .message-inbox-thread {
+    height: 100%;
+    border-right: 0;
+  }
+
+  .message-inbox-list {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .message-inbox-thread {
+    display: none;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  /* Exactly one screen visible at a time - driven by the exact same
+     state.messages.selectedId the desktop split-view already reads
+     (renderMessagePanelHtml adds "has-thread" to the wrapper whenever a
+     conversation is selected), no separate mobile-only state field. */
+  .message-inbox-layout.has-thread .message-inbox-list {
+    display: none;
+  }
+
+  .message-inbox-layout.has-thread .message-inbox-thread {
+    display: grid;
+  }
+
+  .message-inbox-head {
+    min-height: 56px;
+  }
+
+  .message-close-button {
+    display: inline-flex;
+  }
+
+  .message-inbox-head-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .message-list {
+    padding: 8px;
+    overflow: auto;
+  }
+
+  .message-row {
+    min-height: 56px;
+    gap: 10px;
+  }
+
+  .message-thread-head {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .message-back-button {
+    display: inline-flex;
+  }
+
+  .message-thread-action-inline {
+    display: none;
+  }
+
+  .message-thread-menu {
+    display: inline-block;
+  }
+
+  .message-thread {
+    padding: 10px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .message-bubble {
+    max-width: 82%;
+  }
+
+  .message-compose {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding-top: 8px;
+    padding-right: calc(10px + env(safe-area-inset-right, 0px));
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(10px + env(safe-area-inset-left, 0px));
+  }
+
+  .message-compose input {
+    min-height: 44px;
+    border-radius: 999px;
+    padding: 0 16px;
+  }
+
+  .message-send-button {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .message-close-button,
+  .message-back-button,
+  .message-thread-menu > button {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
 .panel-status {
   border-radius: 999px;
   background: var(--surface-soft);
@@ -6590,75 +6846,15 @@ input:focus {
     white-space: nowrap;
   }
 
-  .notification-panel,
-  .message-panel {
+  .notification-panel {
     right: auto;
     left: 0;
     width: min(320px, calc(100vw - 76px));
   }
-
-  .message-panel {
-    position: fixed;
-    top: 76px;
-    right: 10px;
-    left: calc(var(--rail-width) + 10px);
-    width: auto;
-    height: min(620px, calc(100dvh - 96px));
-    max-height: calc(100dvh - 96px);
-  }
-
-  .message-inbox-layout {
-    grid-template-columns: minmax(116px, 0.42fr) minmax(0, 1fr);
-    height: 100%;
-    min-height: min(520px, calc(100vh - 140px));
-  }
-
-  .message-list {
-    padding: 6px;
-  }
-
-  .message-row {
-    grid-template-columns: 30px minmax(0, 1fr);
-    gap: 7px;
-    padding: 7px;
-  }
-
-  .message-avatar {
-    width: 30px;
-    height: 30px;
-    border-radius: 7px;
-    font-size: 10px;
-  }
-
-  .message-row-meta {
-    grid-column: 2;
-    justify-items: start;
-  }
-
-  .message-row-meta time {
-    display: none;
-  }
-
-  .message-row-main strong {
-    font-size: 12px;
-  }
-
-  .message-row-main small {
-    font-size: 11px;
-  }
-
-  .message-thread {
-    padding: 8px;
-  }
-
-  .message-bubble {
-    max-width: 94%;
-    padding: 7px 8px;
-  }
-
-  .message-compose {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  /* feature/mobile-messages-fullscreen: Messages' own mobile behavior now
+     lives in one centralized @media (max-width: 760px) block near its
+     desktop CSS above, not scattered in here - see that block's own
+     comment for why 760px specifically. */
 
   body:not(.athlete-mode):not(.login-mode) .topbar {
     grid-template-columns: 1fr;

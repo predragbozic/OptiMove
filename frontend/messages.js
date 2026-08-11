@@ -3,6 +3,18 @@ import { els } from "./dom.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
+// feature/mobile-messages-fullscreen: below this width Messages becomes a
+// true fullscreen app-level screen (list, then thread) instead of the
+// desktop split-view panel - see the matching @media (max-width: 760px)
+// block in styles.css. 760px is this codebase's own dominant existing
+// breakpoint (already used more than any other cutoff), reused here
+// rather than introducing a one-off value. Exported so app.js's
+// handleAppBack()/Escape wiring can gate the new Back-priority branches
+// to mobile only, matching the desktop-untouched requirement.
+export function isMobileMessagesViewport() {
+  return !window.matchMedia("(min-width: 761px)").matches;
+}
+
 export async function loadMessages({ silent = false } = {}) {
   if (!state.currentUser) return;
   state.messages.loading = !silent;
@@ -19,26 +31,97 @@ export async function loadMessages({ silent = false } = {}) {
   }
 }
 
+// Tracks, across a re-render, whether the thread was scrolled near the
+// bottom before the DOM was replaced, and which conversation was showing -
+// a realtime update only auto-scrolls if the reader was already near the
+// bottom (or this is the very first render of a newly-opened
+// conversation); reading older messages further up is never disturbed.
+const NEAR_BOTTOM_THRESHOLD_PX = 80;
+
 export function renderMessages() {
   if (!els.messageToggle || !els.messagePanel) return;
   const isSignedIn = Boolean(state.currentUser);
   els.messageToggle.hidden = !isSignedIn;
-  els.messagePanel.hidden = !isSignedIn || !state.messages.open;
+  const panelOpen = isSignedIn && state.messages.open;
+  els.messagePanel.hidden = !panelOpen;
+  // Drives the mobile fullscreen shell (hides the sidebar/topbar behind
+  // Messages, locks page scroll) - see styles.css's own comment on this
+  // class. Harmless outside the mobile breakpoint, where the CSS for it
+  // doesn't apply at all.
+  document.body.classList.toggle("messages-open", panelOpen);
   const count = els.messageToggle.querySelector("[data-message-count]");
   if (count) {
     count.textContent = String(state.messages.unreadCount || 0);
     count.hidden = !state.messages.unreadCount;
   }
+
+  const previousThread = els.messagePanel.querySelector(".message-thread");
+  const previousConversationId = els.messagePanel.dataset.renderedConversationId || "";
+  const wasNearBottom = !previousThread
+    || previousThread.scrollHeight - previousThread.scrollTop - previousThread.clientHeight <= NEAR_BOTTOM_THRESHOLD_PX;
+
   els.messagePanel.innerHTML = renderMessagePanelHtml();
+
+  const currentConversationId = String(state.messages.selectedId || "");
+  els.messagePanel.dataset.renderedConversationId = currentConversationId;
+  const newThread = els.messagePanel.querySelector(".message-thread");
+  if (newThread) {
+    const isNewConversation = currentConversationId !== previousConversationId;
+    if (isNewConversation || wasNearBottom) {
+      newThread.scrollTop = newThread.scrollHeight;
+    }
+  }
+  wireComposer();
+}
+
+// The Send button's disabled state must react on every keystroke, but a
+// full renderMessages() per keystroke would replace the input's own DOM
+// node mid-typing (the same focus-loss problem solved for Specific
+// programs search) - so this only ever toggles one attribute directly,
+// never touches state, and is never itself the trigger for a re-render.
+function wireComposer() {
+  const form = els.messagePanel?.querySelector("[data-message-form]");
+  if (!form) return;
+  const input = form.querySelector("[name='body']");
+  const button = form.querySelector("button[type='submit']");
+  if (!input || !button) return;
+  const updateDisabled = () => {
+    button.disabled = !input.value.trim() || state.messages.sending;
+  };
+  updateDisabled();
+  input.addEventListener("input", updateDisabled);
 }
 
 export async function handleMessageAction(action) {
   const type = action?.dataset?.action || "";
   if (type === "messages-toggle") {
-    state.messages.open = !state.messages.open;
-    if (state.messages.open && state.notifications) state.notifications.open = false;
-    if (state.messages.open) await loadMessages({ silent: true });
-    else renderMessages();
+    const opening = !state.messages.open;
+    state.messages.open = opening;
+    if (opening) {
+      if (state.notifications) state.notifications.open = false;
+      // A generic open (topbar icon) always lands on the list on mobile -
+      // never silently restores whatever conversation was open before.
+      // Coaches -> Message keeps opening straight to a thread via the
+      // separate openMessageConversation() path below, unchanged.
+      if (isMobileMessagesViewport()) {
+        state.messages.selectedId = "";
+        state.messages.detail = null;
+      }
+      state.messages.menuOpen = false;
+      state.messages.hideConfirmOpen = false;
+      await loadMessages({ silent: true });
+    } else {
+      state.messages.menuOpen = false;
+      state.messages.hideConfirmOpen = false;
+      renderMessages();
+    }
+    return true;
+  }
+  if (type === "messages-close") {
+    state.messages.open = false;
+    state.messages.menuOpen = false;
+    state.messages.hideConfirmOpen = false;
+    renderMessages();
     return true;
   }
   if (type === "message-open") {
@@ -50,12 +133,23 @@ export async function handleMessageAction(action) {
   if (type === "message-back") {
     state.messages.selectedId = "";
     state.messages.detail = null;
+    state.messages.menuOpen = false;
+    // A stale thread-load/send error must never bleed into the list view
+    // once the athlete has already backed out of the thread it belonged
+    // to (the list has its own separate loading/error path in loadMessages).
+    state.messages.error = "";
+    renderMessages();
+    return true;
+  }
+  if (type === "message-menu-toggle") {
+    state.messages.menuOpen = !state.messages.menuOpen;
     renderMessages();
     return true;
   }
   if (type === "message-block" || type === "message-unblock") {
     const id = state.messages.selectedId;
     if (!id) return true;
+    state.messages.menuOpen = false;
     await api(`/api/messages/${encodeURIComponent(id)}/block`, {
       method: "POST",
       body: JSON.stringify({ blocked: type === "message-block" }),
@@ -64,10 +158,29 @@ export async function handleMessageAction(action) {
     await loadMessages({ silent: true });
     return true;
   }
+  // security/mobile-messages-fullscreen note: Hide now goes through a
+  // styled confirm step (hideConfirmOpen) instead of window.confirm - the
+  // actual backend call (POST /:id/hide) and its effect are byte-for-byte
+  // unchanged from before, only the confirmation UI changed.
   if (type === "message-hide") {
+    if (!state.messages.selectedId) return true;
+    state.messages.menuOpen = false;
+    state.messages.hideConfirmOpen = true;
+    renderMessages();
+    return true;
+  }
+  if (type === "message-hide-cancel") {
+    state.messages.hideConfirmOpen = false;
+    renderMessages();
+    return true;
+  }
+  if (type === "message-hide-confirm") {
     const id = state.messages.selectedId;
-    if (!id) return true;
-    if (!window.confirm("Hide this conversation from your inbox? New messages will bring it back.")) return true;
+    state.messages.hideConfirmOpen = false;
+    if (!id) {
+      renderMessages();
+      return true;
+    }
     await api(`/api/messages/${encodeURIComponent(id)}/hide`, { method: "POST" });
     state.messages.rows = (state.messages.rows || []).filter((row) => String(row.id) !== String(id));
     state.messages.selectedId = "";
@@ -76,6 +189,39 @@ export async function handleMessageAction(action) {
     return true;
   }
   return false;
+}
+
+// feature/mobile-messages-fullscreen: shared Back/Escape priority chain
+// for Messages - menu, then Hide-confirm, then thread-to-list, then
+// close-Messages - called identically from app.js's handleAppBack() and
+// its Escape keydown handler so the two never drift out of sync. The
+// thread-to-list/close-Messages steps only apply on mobile (desktop shows
+// both panels at once, so there is nothing for Back/Escape to do there);
+// closing an open menu or the Hide-confirm modal applies on any viewport,
+// matching how every other modal/menu in this app already responds to
+// Escape regardless of screen size.
+export function handleMessagesBack() {
+  if (state.messages.menuOpen) {
+    state.messages.menuOpen = false;
+    renderMessages();
+    return true;
+  }
+  if (state.messages.hideConfirmOpen) {
+    state.messages.hideConfirmOpen = false;
+    renderMessages();
+    return true;
+  }
+  if (!isMobileMessagesViewport() || !state.messages.open) return false;
+  if (state.messages.selectedId) {
+    state.messages.selectedId = "";
+    state.messages.detail = null;
+    state.messages.error = "";
+    renderMessages();
+    return true;
+  }
+  state.messages.open = false;
+  renderMessages();
+  return true;
 }
 
 export async function openMessageConversation(id) {
@@ -94,10 +240,11 @@ export async function refreshSelectedConversation({ silent = false } = {}) {
 
 export async function submitMessageForm(form) {
   const id = state.messages.selectedId;
-  if (!id) return;
+  if (!id || state.messages.sending) return;
   const input = form.querySelector("[name='body']");
   const body = String(input?.value || "").trim();
   if (!body) return;
+  state.messages.sending = true;
   const button = form.querySelector("button[type='submit']");
   if (button) button.disabled = true;
   try {
@@ -105,27 +252,43 @@ export async function submitMessageForm(form) {
       method: "POST",
       body: JSON.stringify({ body }),
     });
+    state.messages.draft = "";
     if (input) input.value = "";
     await openConversation(id);
     await loadMessages({ silent: true });
+    els.messagePanel?.querySelector("[name='body']")?.focus();
   } catch (error) {
+    // The typed text must survive a failed send - openConversation()/
+    // loadMessages() above are skipped on this path, but renderMessages()
+    // still fully replaces the panel's innerHTML to show the error, which
+    // would otherwise silently drop whatever was typed (see this branch's
+    // ONLY other write to `draft` above, which clears it - so a lost
+    // draft was previously indistinguishable from a successful send).
+    state.messages.draft = body;
     state.messages.error = error.message || "Could not send message.";
     renderMessages();
   } finally {
-    if (button) button.disabled = false;
+    state.messages.sending = false;
   }
 }
 
 export function closeMessagesIfOutside(target) {
+  if (state.messages.menuOpen && !target.closest(".message-thread-menu")) {
+    state.messages.menuOpen = false;
+    renderMessages();
+  }
   if (!state.messages.open) return;
   if (target.closest(".message-menu")) return;
   state.messages.open = false;
+  state.messages.menuOpen = false;
+  state.messages.hideConfirmOpen = false;
   renderMessages();
 }
 
 async function openConversation(id, { silent = false } = {}) {
   state.messages.selectedId = id;
   state.messages.loading = !silent;
+  state.messages.draft = "";
   if (!silent) renderMessages();
   try {
     const data = await api(`/api/messages/${encodeURIComponent(id)}`);
@@ -158,17 +321,23 @@ function renderMessagePanelHtml() {
     : rows;
   const listContent = state.messages.loading && !state.messages.selectedId
     ? `<p class="empty-note">Loading messages...</p>`
-    : state.messages.error
+    : state.messages.error && !state.messages.selectedId
       ? `<p class="form-error">${escapeHtml(state.messages.error)}</p>`
       : filteredRows.length
         ? filteredRows.map(renderConversationRow).join("")
         : `<p class="empty-note">${search ? "No conversations match this search." : "No messages yet."}</p>`;
+  const hasThread = Boolean(state.messages.selectedId);
   return `
-    <div class="message-inbox-layout">
+    <div class="message-inbox-layout${hasThread ? " has-thread" : ""}">
       <section class="message-inbox-list" aria-label="Conversations">
         <div class="notification-panel-head message-inbox-head">
-          <strong>Messages</strong>
-          <span class="panel-status">${filteredRows.length}/${rows.length}</span>
+          <span class="message-inbox-head-title">
+            <strong>Messages</strong>
+            ${state.messages.unreadCount ? `<span class="notification-count">${escapeHtml(String(state.messages.unreadCount))}</span>` : ""}
+          </span>
+          <button class="plain-button icon-button message-close-button" data-action="messages-close" type="button" aria-label="Close messages">
+            ${ICON_CLOSE}
+          </button>
         </div>
         <label class="message-search">
           <span>Search conversations</span>
@@ -177,9 +346,10 @@ function renderMessagePanelHtml() {
         <div class="message-list">${listContent}</div>
       </section>
       <section class="message-inbox-thread" aria-label="Conversation">
-        ${state.messages.selectedId ? renderConversationHtml() : renderConversationPlaceholder()}
+        ${hasThread ? renderConversationHtml() : renderConversationPlaceholder()}
       </section>
     </div>
+    ${renderHideConfirmHtml()}
   `;
 }
 
@@ -190,7 +360,7 @@ function renderConversationRow(row) {
   const date = row.last_message_created_at ? formatMessageDate(row.last_message_created_at) : "";
   const selected = String(row.id || "") === String(state.messages.selectedId || "");
   return `
-    <button class="message-row${unread ? " is-unread" : ""}${selected ? " is-selected" : ""}" data-action="message-open" data-conversation-id="${escapeAttr(row.id)}" type="button">
+    <button class="message-row${unread ? " is-unread" : ""}${selected ? " is-selected" : ""}${blocked ? " is-blocked" : ""}" data-action="message-open" data-conversation-id="${escapeAttr(row.id)}" type="button">
       <span class="message-avatar">${escapeHtml(initials(names))}</span>
       <span class="message-row-main">
         <strong>${escapeHtml(names)}</strong>
@@ -212,30 +382,71 @@ function renderConversationHtml() {
   const blockedByMe = Boolean(conversation?.blocked_by_me);
   const blockedByOther = Boolean(conversation?.blocked_by_other);
   const blocked = blockedByMe || blockedByOther;
+  const blockAction = blockedByMe ? "message-unblock" : "message-block";
+  const blockLabel = blockedByMe ? "Unblock" : "Block";
+  // A failed SEND must never erase already-loaded message history - only
+  // a genuine failure to load the thread in the first place (no messages
+  // at all yet) replaces this area with the error; once real messages
+  // exist, a send error surfaces as a small banner near the composer
+  // instead (see below), right where the retry action actually is.
   const body = state.messages.loading
     ? `<p class="empty-note">Loading conversation...</p>`
-    : state.messages.error
-      ? `<p class="form-error">${escapeHtml(state.messages.error)}</p>`
-      : messages.length
-        ? messages.map(renderMessageBubble).join("")
+    : messages.length
+      ? messages.map(renderMessageBubble).join("")
+      : state.messages.error
+        ? `<p class="form-error">${escapeHtml(state.messages.error)}</p>`
         : `<p class="empty-note">No messages yet.</p>`;
+  const draft = escapeAttr(state.messages.draft || "");
   return `
     <div class="notification-panel-head message-thread-head">
-      <strong>${escapeHtml(title)}</strong>
+      <button class="plain-button icon-button message-back-button" data-action="message-back" type="button" aria-label="Back to conversations">
+        ${ICON_BACK}
+      </button>
+      <span class="message-thread-identity">
+        <span class="message-avatar">${escapeHtml(initials(title))}</span>
+        <strong>${escapeHtml(title)}</strong>
+      </span>
       <span class="message-thread-actions">
-        <button class="plain-button compact-button" data-action="message-hide" type="button">Hide</button>
-        <button class="plain-button compact-button" data-action="${blockedByMe ? "message-unblock" : "message-block"}" type="button">
-          ${blockedByMe ? "Unblock" : "Block"}
-        </button>
+        <button class="plain-button compact-button message-thread-action-inline" data-action="message-hide" type="button">Hide</button>
+        <button class="plain-button compact-button message-thread-action-inline" data-action="${blockAction}" type="button">${blockLabel}</button>
+        <span class="message-thread-menu">
+          <button class="plain-button icon-button" data-action="message-menu-toggle" type="button" aria-haspopup="true" aria-expanded="${state.messages.menuOpen ? "true" : "false"}" aria-label="Conversation options">
+            ${ICON_DOTS}
+          </button>
+          <div class="message-thread-menu-dropdown" role="menu" ${state.messages.menuOpen ? "" : "hidden"}>
+            <button class="message-thread-menu-item" data-action="message-hide" type="button" role="menuitem">Hide conversation</button>
+            <button class="message-thread-menu-item" data-action="${blockAction}" type="button" role="menuitem">${blockLabel}</button>
+          </div>
+        </span>
       </span>
     </div>
     <div class="message-thread">${body}</div>
+    ${state.messages.error && messages.length ? `<p class="form-error message-thread-error">${escapeHtml(state.messages.error)}</p>` : ""}
     ${blocked
       ? `<p class="message-blocked-note">${blockedByMe ? "You blocked this conversation." : "This conversation is blocked by the other participant."}</p>`
       : `<form class="message-compose" data-message-form>
-          <input name="body" type="text" placeholder="Write a message..." autocomplete="off">
-          <button class="plain-button compact-button" type="submit">Send</button>
+          <input name="body" type="text" placeholder="Write a message..." autocomplete="off" value="${draft}">
+          <button class="plain-button compact-button message-send-button" type="submit" aria-label="Send message" disabled>
+            ${ICON_SEND}
+          </button>
         </form>`}
+  `;
+}
+
+function renderHideConfirmHtml() {
+  if (!state.messages.hideConfirmOpen) return "";
+  return `
+    <div class="exit-confirm-modal message-hide-confirm-modal">
+      <div class="exit-confirm-backdrop" data-action="message-hide-cancel"></div>
+      <div class="exit-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="messageHideConfirmTitle" aria-describedby="messageHideConfirmText">
+        <h3 id="messageHideConfirmTitle">Hide this conversation?</h3>
+        <p id="messageHideConfirmText">It will leave your inbox. New messages will bring it back.</p>
+        <div class="exit-confirm-actions">
+          <button class="plain-button" type="button" data-action="message-hide-cancel">Cancel</button>
+          <button class="plain-button exit-confirm-exit-button" type="button" data-action="message-hide-confirm">Hide</button>
+        </div>
+      </div>
+    </div>
   `;
 }
 
@@ -278,3 +489,8 @@ function formatMessageDate(value) {
   if (!value) return "";
   return new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+
+const ICON_CLOSE = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>`;
+const ICON_BACK = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+const ICON_DOTS = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"></circle><circle cx="12" cy="12" r="1.8" fill="currentColor"></circle><circle cx="19" cy="12" r="1.8" fill="currentColor"></circle></svg>`;
+const ICON_SEND = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 12l16-8-6.5 8L20 20 4 12z" fill="currentColor"></path></svg>`;
