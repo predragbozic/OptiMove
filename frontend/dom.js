@@ -24,4 +24,6 @@ export const els = {
   messagePanel: document.querySelector("#messagePanel"),
   workspaceToggle: document.querySelector("#workspaceToggle"),
   workspacePanel: document.querySelector("#workspacePanel"),
+  connectionIndicator: document.querySelector("#connectionIndicator"),
+  exitConfirmModal: document.querySelector("#exitConfirmModal"),
 };

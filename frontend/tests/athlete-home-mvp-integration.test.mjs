@@ -60,18 +60,37 @@ test("applyDefaultInitialTab() is called both from init()'s bootstrap path and t
   assert.ok(callSites.length >= 2, "must be called at least twice: init() bootstrap and the login-form submit handler - a fresh sign-in while already on /athlete never re-runs init()");
 });
 
-// === 2. Weekly plan stays a separate, explicitly-chosen tab ===
+// === 2. No separate Home nav item - the logo is the only way back to Home ===
 
-test("the athlete-home sidebar button is the FIRST item in athlete.html's primary nav, before Weekly plan", () => {
+test("hotfix/athlete-home-mobile-layout: athlete.html's sidebar has NO data-athlete-tab=\"athlete-home\" button - the logo is the only way back to Home", () => {
   const primarySection = athleteHtmlSource.slice(
     athleteHtmlSource.indexOf('class="sidebar-section sidebar-primary"'),
     athleteHtmlSource.indexOf('class="search-field" hidden'),
   );
-  const homeIndex = primarySection.indexOf('data-athlete-tab="athlete-home"');
-  const calendarIndex = primarySection.indexOf('data-athlete-tab="calendar"');
-  assert.ok(homeIndex >= 0, "athlete.html must have a data-athlete-tab=\"athlete-home\" button");
-  assert.ok(calendarIndex >= 0, "athlete.html must still have the separate Weekly plan (calendar) tab");
-  assert.ok(homeIndex < calendarIndex, "Home must be listed before Weekly plan in the sidebar");
+  assert.ok(!primarySection.includes('data-athlete-tab="athlete-home"'), "no dedicated Home button may exist in the athlete sidebar/drawer");
+  assert.ok(primarySection.includes('data-athlete-tab="calendar"'), "Weekly plan (calendar) must still be its own separate tab");
+});
+
+test("goHome() targets athlete-home (not weekly) for the athlete shell, and pushes real history only on an actual tab change", () => {
+  const body = functionBody("goHome");
+  assert.ok(body, "goHome() must exist");
+  assert.match(body, /isAthleteMode\(\)/);
+  assert.match(body, /state\.activeTab = "athlete-home"/);
+  assert.ok(!/state\.activeTab = "weekly"/.test(body), "goHome() must no longer send an athlete session to weekly");
+  assert.match(body, /if \(state\.activeTab !== "athlete-home"\) pushAppHistory\(\);/, "must push a real history entry only when actually leaving another tab for Home");
+});
+
+test("the athlete brand-mark button still calls goHome() via data-action=\"home\", from anywhere in the shell (goHome doesn't depend on the current tab)", () => {
+  assert.match(athleteHtmlSource, /class="brand-mark" type="button" data-action="home"/);
+  assert.match(appJsSource, /action\.dataset\.action === "home"\) goHome\(\);/);
+});
+
+test("the coach shell's own brand-home logo behavior is untouched", () => {
+  const marker = 'action.dataset.action === "brand-home"';
+  const start = appJsSource.indexOf(marker);
+  assert.ok(start >= 0);
+  const block = appJsSource.slice(start, start + 500);
+  assert.match(block, /state\.activeTab = "coach-home"/, "the coach shell's brand-home handler must still target coach-home, unchanged");
 });
 
 // === 3. Today's training / week day clicks open the correct day in Weekly plan ===
@@ -94,13 +113,22 @@ test("both athlete-home-open-today and athlete-home-open-day actions route throu
   );
 });
 
-// === 4. Active program click opens the correct program; View all opens the full list ===
+// === 4. Active specific programs was removed from Home entirely ===
 
-test("athlete-home-open-program sets state.selectedProgramId from the clicked card's real id before navigating to Specific programs", () => {
-  assert.match(
-    appJsSource,
-    /type === "athlete-home-open-program" \|\| type === "athlete-home-view-programs"\) \{\s*\n\s*state\.selectedProgramId = type === "athlete-home-open-program" \? \(action\.dataset\.programId \|\| null\) : null;/,
-  );
+test("hotfix/athlete-home-mobile-layout: the now-dead athlete-home-open-program/-view-programs action handlers were removed from app.js along with their buttons", () => {
+  assert.ok(!appJsSource.includes(`"athlete-home-open-program"`), "no button renders this action anymore - the handler must not linger as dead code");
+  assert.ok(!appJsSource.includes(`"athlete-home-view-programs"`));
+});
+
+test("the 4 quick actions route through the SAME data-athlete-tab tabs the sidebar itself uses - no new API call, no duplicated navigation logic", () => {
+  const body = functionBody("openWeeklyPlanOnDate"); // sanity: file still parses to here
+  assert.ok(body);
+  const marker = 'type === "athlete-home-quick-tab"';
+  const start = appJsSource.indexOf(marker);
+  assert.ok(start >= 0);
+  const block = appJsSource.slice(start, start + 700);
+  assert.match(block, /if \(state\.activeTab !== nextTab\) pushAppHistory\(\);/, "a real quick-action tab change must push real history too");
+  assert.match(block, /await loadActiveTab\(\);/, "must reuse the existing tab loader, never a bespoke fetch");
 });
 
 // === 5. Message button: opens the existing conversation, never a duplicate ===
@@ -216,4 +244,50 @@ test("closeMobileNav() only toggles state/re-renders - it never sets state.activ
   assert.ok(body, "closeMobileNav() must exist");
   assert.ok(!body.includes("state.activeTab"), "closeMobileNav must never change the active tab");
   assert.ok(!body.includes("loadActiveTab"), "closeMobileNav must never trigger navigation/loading");
+});
+
+// === 8. Athlete topbar: no permanent Online pill, hamburger never clipped ===
+
+test("the big #apiStatus pill is hidden in the athlete shell (always, not just on mobile) - coach shell's own #apiStatus rule is untouched", () => {
+  assert.match(stylesCssSource, /\.athlete-mode \.status-pill \{\s*\r?\n\s*display: none;\s*\r?\n\s*\}/);
+  // The coach shell has no equivalent blanket display:none rule for its own status-pill.
+  assert.ok(!/(?<!athlete-mode )\.status-pill \{\s*\r?\n\s*display: none;/.test(stylesCssSource.replace(/\.athlete-mode \.status-pill \{\s*\r?\n\s*display: none;\s*\r?\n\s*\}/, "")));
+});
+
+test("a small #connectionIndicator element exists in athlete.html, hidden by default (only shown on a real observed disconnect)", () => {
+  const marker = 'id="connectionIndicator"';
+  const start = athleteHtmlSource.indexOf(marker);
+  assert.ok(start >= 0, "athlete.html must have a #connectionIndicator element");
+  const tagStart = athleteHtmlSource.lastIndexOf("<", start);
+  const tagEnd = athleteHtmlSource.indexOf(">", start);
+  const tag = athleteHtmlSource.slice(tagStart, tagEnd + 1);
+  assert.match(tag, /\bhidden\b/, "must be hidden by default - never shown unless a real disconnect was observed");
+});
+
+test("realtime.js's startRealtimeInbox reports connection state via a real EventSource onopen/onerror signal, never an invented one", async () => {
+  const realtimeSource = await readFile(path.resolve(__dirname, "../realtime.js"), "utf8");
+  assert.match(realtimeSource, /realtimeSource\.onopen = \(\) => \{\s*\n\s*onConnectionChange\?\.\(true\);/);
+  assert.match(realtimeSource, /realtimeSource\.onerror = \(\) => \{[\s\S]*?onConnectionChange\?\.\(false\);/);
+});
+
+test("app.js wires the realtime connection callback to state.realtimeOffline and re-renders the indicator", () => {
+  assert.match(appJsSource, /startRealtimeInbox\(\(connected\) => \{\s*\n\s*state\.realtimeOffline = !connected;\s*\n\s*renderConnectionIndicator\(\);/);
+});
+
+test("renderConnectionIndicator is a no-op on the coach shell (guards on els.connectionIndicator, which is null there)", () => {
+  const body = functionBody("renderConnectionIndicator");
+  assert.ok(body, "renderConnectionIndicator() must exist");
+  assert.match(body, /if \(!els\.connectionIndicator\) return;/);
+});
+
+test("the athlete topbar-actions wrap and never force a single unbreakable row - the primary cause of the clipped hamburger", () => {
+  assert.match(stylesCssSource, /\.athlete-mode \.topbar-actions \{\s*\r?\n\s*flex-wrap: wrap;/);
+  assert.match(stylesCssSource, /\.athlete-mode \.mobile-nav-toggle \{\s*\r?\n\s*flex-shrink: 0;\s*\r?\n\s*\}/, "the hamburger itself must never be allowed to shrink/clip");
+});
+
+// === 9. Home content: no Active specific programs section, Today/This week preserved ===
+
+test("Athlete Home's own render module no longer imports or renders anything program-card-shaped", () => {
+  assert.ok(!appJsSource.includes("renderProgramsSection"));
+  assert.ok(!appJsSource.includes("renderProgramCard"));
 });

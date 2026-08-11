@@ -89,7 +89,30 @@ test("the week strip always renders exactly 7 days, marks today, and marks days 
   assert.match(html, /athlete-home-day has-training[^"]*"[^>]*data-date="2026-08-12"/);
 });
 
-test("no active programs: shows the explicit empty state, no fabricated progress, no 'View all' link", () => {
+// hotfix/athlete-home-mobile-layout: the "Active specific programs" section
+// was removed from Home entirely - an athlete already reaches every
+// assigned program through the Specific programs quick action/tab. This is
+// tested regardless of whether `data.programs` is empty, has a few rows, or
+// more than 3 - the section (and its card markup, view-all link, and any
+// program-open action) must never appear no matter what the backend sends.
+for (const programs of [{ rows: [], total: 0 }, { rows: [{ id: "p1", name: "Program A", imageUrl: "" }], total: 1 }, { rows: [{ id: "p1", name: "Program A", imageUrl: "" }, { id: "p2", name: "Program B", imageUrl: "" }, { id: "p3", name: "Program C", imageUrl: "" }], total: 5 }]) {
+  test(`Active specific programs never renders on Home (programs.total=${programs.total})`, () => {
+    const data = {
+      athlete: { name: "Test Athlete", imageUrl: "" },
+      today: { date: "2026-08-10", hasTraining: false, planId: null, planName: "", sessionCount: 0, itemCount: 0 },
+      week: emptyWeek(),
+      programs,
+    };
+    const html = renderAthleteHomeHtml({ data, error: "" });
+    assert.ok(!html.includes("Active specific programs"));
+    assert.ok(!html.includes("View all programs"));
+    assert.ok(!html.includes(`data-action="athlete-home-open-program"`));
+    assert.ok(!html.includes(`data-action="athlete-home-view-programs"`));
+    assert.ok(!html.includes("%"), "no fabricated progress percentage anywhere on Home");
+  });
+}
+
+test("exactly 4 quick actions: Calendar, Specific programs, Program Library, Settings, in that order - never a Home entry among them, never a duplicated large Coaches card", () => {
   const data = {
     athlete: { name: "Test Athlete", imageUrl: "" },
     today: { date: "2026-08-10", hasTraining: false, planId: null, planName: "", sessionCount: 0, itemCount: 0 },
@@ -97,50 +120,14 @@ test("no active programs: shows the explicit empty state, no fabricated progress
     programs: { rows: [], total: 0 },
   };
   const html = renderAthleteHomeHtml({ data, error: "" });
-  assert.ok(html.includes("No specific programs are assigned yet."));
-  assert.ok(!html.includes("View all programs"));
+  const targetTabs = [...html.matchAll(/data-action="athlete-home-quick-tab" data-target-tab="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(targetTabs, ["calendar", "programs", "athlete-library", "athlete-settings"]);
+  assert.ok(!targetTabs.includes("athlete-home"), "Home must never be one of its own quick actions");
+  assert.ok(!targetTabs.includes("coaches"), "Coaches must not be duplicated here - it's already a main nav item");
+  assert.ok(html.includes(">Calendar<"), "the Calendar action must be labeled Calendar, not Weekly plan");
 });
 
-test("active programs (<=3): each has an Open program button with its real id, never a progress percentage", () => {
-  const data = {
-    athlete: { name: "Test Athlete", imageUrl: "" },
-    today: { date: "2026-08-10", hasTraining: false, planId: null, planName: "", sessionCount: 0, itemCount: 0 },
-    week: emptyWeek(),
-    programs: {
-      rows: [
-        { id: "p1", name: "Program A", imageUrl: "" },
-        { id: "p2", name: "Program B", imageUrl: "" },
-      ],
-      total: 2,
-    },
-  };
-  const html = renderAthleteHomeHtml({ data, error: "" });
-  assert.ok(html.includes(`data-action="athlete-home-open-program" data-program-id="p1"`));
-  assert.ok(html.includes(`data-action="athlete-home-open-program" data-program-id="p2"`));
-  assert.ok(!html.includes("%"), "no fabricated progress percentage anywhere in the programs section");
-  assert.ok(!html.includes("View all programs"), "no View all link when every program is already shown");
-});
-
-test("more than 3 active programs: shows the 'View all programs' action, backend already caps rows at 3", () => {
-  const data = {
-    athlete: { name: "Test Athlete", imageUrl: "" },
-    today: { date: "2026-08-10", hasTraining: false, planId: null, planName: "", sessionCount: 0, itemCount: 0 },
-    week: emptyWeek(),
-    programs: {
-      rows: [
-        { id: "p1", name: "Program A", imageUrl: "" },
-        { id: "p2", name: "Program B", imageUrl: "" },
-        { id: "p3", name: "Program C", imageUrl: "" },
-      ],
-      total: 5,
-    },
-  };
-  const html = renderAthleteHomeHtml({ data, error: "" });
-  assert.ok(html.includes(`data-action="athlete-home-view-programs"`));
-  assert.ok(html.includes("View all programs"));
-});
-
-test("quick actions cover Weekly plan, Specific programs, Program Library, Settings - and never a duplicated large Coaches card", () => {
+test("each quick action carries the real nav-menu icon markup (not a plain text-only button)", () => {
   const data = {
     athlete: { name: "Test Athlete", imageUrl: "" },
     today: { date: "2026-08-10", hasTraining: false, planId: null, planName: "", sessionCount: 0, itemCount: 0 },
@@ -148,11 +135,8 @@ test("quick actions cover Weekly plan, Specific programs, Program Library, Setti
     programs: { rows: [], total: 0 },
   };
   const html = renderAthleteHomeHtml({ data, error: "" });
-  assert.ok(html.includes(`data-action="athlete-home-quick-tab" data-target-tab="calendar"`));
-  assert.ok(html.includes(`data-action="athlete-home-quick-tab" data-target-tab="programs"`));
-  assert.ok(html.includes(`data-action="athlete-home-quick-tab" data-target-tab="athlete-library"`));
-  assert.ok(html.includes(`data-action="athlete-home-quick-tab" data-target-tab="athlete-settings"`));
-  assert.ok(!html.includes(`data-target-tab="coaches"`), "Coaches must not be duplicated here - it's already a main nav item");
+  const iconCount = [...html.matchAll(/class="athlete-home-quick-action-icon"/g)].length;
+  assert.equal(iconCount, 4, "every quick action must carry its own icon");
 });
 
 test("header shows the athlete's real name and today's date, with a brief unobtrusive greeting - never fabricated data", () => {

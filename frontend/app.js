@@ -253,7 +253,10 @@ async function init() {
   ensureBackGuard();
   void loadNotifications({ silent: true });
   void loadMessages({ silent: true });
-  startRealtimeInbox();
+  startRealtimeInbox((connected) => {
+    state.realtimeOffline = !connected;
+    renderConnectionIndicator();
+  });
   startInboxPolling();
   await loadAthletes();
 }
@@ -365,6 +368,7 @@ function bindEvents() {
   document.addEventListener("error", handleImageError, true);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    if (state.athleteExitConfirmOpen) closeAthleteExitConfirm();
     if (state.mobileNavOpen) closeMobileNav();
     closeMedia();
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
@@ -891,6 +895,9 @@ async function signOut() {
     await api("/api/auth/logout", { method: "POST" });
   } finally {
     stopInboxPolling();
+    // Explicit even though the reload below tears it down anyway - the
+    // athlete Back-button guard must never be nominally active post-logout.
+    window.removeEventListener("popstate", handleBrowserBack);
     state.currentUser = null;
     // Defensive, not load-bearing: window.location.replace("/") below
     // already reloads the page (a fresh module evaluation resets
@@ -1026,12 +1033,20 @@ function handleImageError(event) {
   image.classList.add("image-missing");
 }
 
+// hotfix/athlete-home-mobile-layout: the athlete shell has no separate Home
+// nav button (removed from the sidebar/drawer) - the OptiMove logo is the
+// only way back to Home, from any athlete tab. Must work identically no
+// matter which athlete view is currently on screen.
 function goHome() {
   state.navStack = [];
   if (isAthleteMode()) {
-    state.activeTab = "weekly";
+    if (state.activeTab !== "athlete-home") pushAppHistory();
+    state.activeTab = "athlete-home";
     state.selectedProgramId = null;
     state.selectedTemplateId = null;
+    state.weekSelectorOpen = false;
+    state.openWeekCalendarOnLoad = false;
+    collapseRailAfterNav();
     renderTabs();
     renderLibraryNav();
     void loadActiveTab();
@@ -1111,6 +1126,14 @@ async function handleGlobalClick(event) {
     renderTabs();
     renderLibraryNav();
     await loadActiveTab();
+  }
+  if (action.dataset.action === "exit-confirm-stay") {
+    closeAthleteExitConfirm();
+    return;
+  }
+  if (action.dataset.action === "exit-confirm-exit") {
+    confirmAthleteExit();
+    return;
   }
   if (action.dataset.action === "sidebar-submenu-toggle") {
     const key = action.dataset.submenuKey || "";
@@ -1214,6 +1237,12 @@ function ensureBackGuard() {
   state.backGuardReady = true;
 }
 
+// hotfix/athlete-home-mobile-layout: for the athlete shell specifically, a
+// Back press with nothing internal left to close must never hand control
+// straight to the browser's native confirm() - it shows the styled
+// Exit OptiMove? modal instead (Stay/Exit), matching this app's own visual
+// language rather than an OS-level dialog. The coach shell's existing
+// window.confirm() flow below is completely untouched.
 function handleBrowserBack() {
   if (state.allowBrowserExit) return;
   if (state.appHistoryDepth > 0) {
@@ -1223,6 +1252,16 @@ function handleBrowserBack() {
   }
   if (handleAppBack()) {
     window.history.pushState({ optimoveGuard: true }, "", window.location.href);
+    return;
+  }
+  if (isAthleteMode()) {
+    // Re-arm the guard state immediately - the browser has already moved
+    // back one entry by the time this popstate handler runs, so this
+    // restores the address bar to where it was BEFORE showing the modal.
+    // Exit (confirmAthleteExit) is the only path that's allowed to
+    // actually move past this guard again.
+    window.history.pushState({ optimoveGuard: true }, "", window.location.href);
+    openAthleteExitConfirm();
     return;
   }
   if (window.confirm("Exit OptiMove?")) {
@@ -1236,6 +1275,16 @@ function handleBrowserBack() {
 function handleAppBack() {
   if (!els.mediaModal?.hidden) {
     closeMedia();
+    return true;
+  }
+
+  if (state.athleteExitConfirmOpen) {
+    closeAthleteExitConfirm();
+    return true;
+  }
+
+  if (state.mobileNavOpen) {
+    closeMobileNav();
     return true;
   }
 
@@ -1262,8 +1311,11 @@ function handleAppBack() {
     return true;
   }
 
-  if (state.activeTab !== "weekly") {
-    state.activeTab = "weekly";
+  // The athlete shell's own root/landing tab is athlete-home (no separate
+  // Home nav item exists - see goHome()); the coach shell's is unchanged.
+  const rootTab = isAthleteMode() ? "athlete-home" : "weekly";
+  if (state.activeTab !== rootTab) {
+    state.activeTab = rootTab;
     state.selectedProgramId = null;
     state.selectedTemplateId = null;
     state.openWeekCalendarOnLoad = false;
@@ -1274,6 +1326,39 @@ function handleAppBack() {
   }
 
   return false;
+}
+
+// hotfix/athlete-home-mobile-layout: the athlete-only "confirm before
+// leaving the app" flow, reusing the exact same allowBrowserExit/
+// window.history.back() mechanism the coach shell's native confirm()
+// already relies on above - Exit here is not a new exit path, just a
+// styled trigger for the same one.
+function openAthleteExitConfirm() {
+  if (!els.exitConfirmModal) return;
+  state.athleteExitConfirmOpen = true;
+  renderAthleteExitConfirmModal();
+}
+
+function closeAthleteExitConfirm() {
+  if (!state.athleteExitConfirmOpen) return;
+  state.athleteExitConfirmOpen = false;
+  renderAthleteExitConfirmModal();
+}
+
+// The only function that is ever allowed to set allowBrowserExit for the
+// athlete shell - a single real exit, never re-showing this same modal for
+// the resulting popstate (handleBrowserBack's very first line returns
+// immediately once allowBrowserExit is true).
+function confirmAthleteExit() {
+  state.athleteExitConfirmOpen = false;
+  renderAthleteExitConfirmModal();
+  state.allowBrowserExit = true;
+  window.history.back();
+}
+
+function renderAthleteExitConfirmModal() {
+  if (!els.exitConfirmModal) return;
+  els.exitConfirmModal.hidden = !state.athleteExitConfirmOpen;
 }
 
 async function loadAthletes() {
@@ -1303,7 +1388,7 @@ async function loadAthletes() {
 }
 
 async function loadActiveTab() {
-  if (isAthleteMode() && state.activeTab === "coach-home") state.activeTab = "weekly";
+  if (isAthleteMode() && state.activeTab === "coach-home") state.activeTab = "athlete-home";
   renderTabs();
   renderLibraryNav();
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
@@ -1367,6 +1452,7 @@ function renderAthleteHome({ data, error }) {
 // clicks, both of which need to land on a SPECIFIC date rather than
 // whatever week Calendar would otherwise default to.
 async function openWeeklyPlanOnDate(date) {
+  if (state.activeTab !== "weekly") pushAppHistory();
   state.selectedProgramId = null;
   state.selectedTemplateId = null;
   state.navStack = [];
@@ -1512,25 +1598,16 @@ async function handleContentClick(event) {
     await openWeeklyPlanOnDate(action.dataset.date || localDateIso());
     return;
   }
-  if (type === "athlete-home-open-program" || type === "athlete-home-view-programs") {
-    state.selectedProgramId = type === "athlete-home-open-program" ? (action.dataset.programId || null) : null;
-    state.selectedTemplateId = null;
-    state.navStack = [];
-    state.activeTab = "programs";
-    collapseRailAfterNav();
-    renderTabs();
-    renderLibraryNav();
-    await loadActiveTab();
-    return;
-  }
   if (type === "athlete-home-quick-tab") {
     const targetTab = action.dataset.targetTab || "weekly";
+    const nextTab = targetTab === "calendar" ? "weekly" : targetTab;
+    if (state.activeTab !== nextTab) pushAppHistory();
     state.selectedProgramId = null;
     state.selectedTemplateId = null;
     state.navStack = [];
     state.weekSelectorOpen = false;
     state.openWeekCalendarOnLoad = targetTab === "calendar";
-    state.activeTab = targetTab === "calendar" ? "weekly" : targetTab;
+    state.activeTab = nextTab;
     collapseRailAfterNav();
     renderTabs();
     renderLibraryNav();
@@ -2409,6 +2486,16 @@ function sameNodePosition(left, right) {
 
 function setStatus(text) {
   els.status.textContent = text;
+}
+
+// hotfix/athlete-home-mobile-layout: els.connectionIndicator only exists on
+// the athlete shell (athlete.html) - null on the coach shell, so this is a
+// no-op there. Reflects the real EventSource connection state reported by
+// realtime.js's onConnectionChange callback - never shown unless a real
+// disconnect was actually observed.
+function renderConnectionIndicator() {
+  if (!els.connectionIndicator) return;
+  els.connectionIndicator.hidden = !state.realtimeOffline;
 }
 
 function setLoading(text) {
