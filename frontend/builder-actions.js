@@ -2,6 +2,7 @@ import { api } from "./api.js";
 import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-data.js";
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { invalidateCoachHomeCache } from "./coach-home-data.js";
+import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
 
@@ -134,6 +135,11 @@ async function exitBuilderToPlanContext(plan, handlers) {
     // the active tab right now; the next time it IS entered, it must not
     // still show pre-mutation counts.
     invalidateCoachHomeCache();
+    // The athlete shell's own Home aggregates this exact same today/week
+    // data for the plan's athlete - same reasoning as invalidateCoachHomeCache
+    // above, just for the athlete-facing rollup instead of the coach-facing
+    // one.
+    invalidateAthleteHomeCache();
     return;
   }
   if (plan?.isTemplate || !plan?.athleteId) {
@@ -153,6 +159,10 @@ async function exitBuilderToPlanContext(plan, handlers) {
   // delete/submit/save that can change this exact athlete's specific-program
   // list; never trust a cached pre-exit payload here.
   await handlers.loadPrograms({ forceRefresh: true });
+  // Athlete Home's "active specific programs" section rolls up exactly this
+  // same per-athlete program list - invalidate it too, same reasoning as the
+  // weekly branch above.
+  invalidateAthleteHomeCache();
 }
 
 export async function handleBuilderPlanAction(action, handlers) {
@@ -747,11 +757,16 @@ export async function handleBuilderDraftAction(action, handlers) {
       // athlete - invalidate so the next visit reflects the deletion,
       // whether or not Home happens to be the active tab right now.
       invalidateCoachHomeCache();
+      // Same reasoning, for the athlete-facing Home rollup.
+      invalidateAthleteHomeCache();
     } else if (state.activeTab === "programs") {
       state.selectedProgramId = null;
       // Just deleted this plan - the cached specific-programs payload for
       // this athlete must never keep showing it.
       await handlers.loadPrograms({ forceRefresh: true });
+      // Athlete Home's "active specific programs" section rolls up exactly
+      // this same per-athlete program list.
+      invalidateAthleteHomeCache();
     } else {
       state.selectedTemplateId = null;
       // Just deleted this plan - the cached list must never keep showing it.

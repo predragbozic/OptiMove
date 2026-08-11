@@ -1,4 +1,4 @@
-import { canManageCoachProfile } from "./access.js";
+import { canManageCoachProfile, isAthleteMode } from "./access.js";
 import { renderImage } from "./media.js";
 import { programPriceLabel, ratingLabel } from "./program-library.js";
 import { escapeAttr, escapeHtml, programInitials, renderOption } from "./utils.js";
@@ -39,6 +39,13 @@ export function renderCoachesHtml(data) {
 function renderCoachCard(profile) {
   const tags = (profile.tags || []).slice(0, 4);
   const image = profile.photo_url || profile.cover_image_url || "";
+  // Only ever shown for the athlete's real, currently-active coach
+  // relationship (profile.is_my_coach - see coaches.js's coachListSql,
+  // deliberately excludes public/marketplace/club-directory profiles the
+  // athlete has merely browsed) - opens the existing Messages system
+  // directly (handleCoachProfileAction's "coach-message" action), never a
+  // separate Contact modal.
+  const showMessageButton = isAthleteMode() && profile.is_my_coach;
   return `
     <article class="coach-card">
       <button class="coach-card-hit" type="button" data-action="coach-open" data-profile-id="${escapeAttr(profile.id)}">
@@ -59,6 +66,9 @@ function renderCoachCard(profile) {
           </div>
         </div>
       </button>
+      ${showMessageButton ? `
+        <button class="plain-button compact-button coach-card-message-button" type="button" data-action="coach-message" data-coach-user-id="${escapeAttr(profile.user_id)}">Message</button>
+      ` : ""}
     </article>
   `;
 }

@@ -1,8 +1,28 @@
 import { Router } from "express";
 import { query } from "../db.js";
-import { sendConversationMessage, userCanAccessConversation } from "../messages.js";
+import { ensureDirectCoachConversation, sendConversationMessage, userCanAccessConversation } from "../messages.js";
 
 const router = Router();
+
+// feature/athlete-home-mvp: the ONLY way to open a conversation with a
+// specific person without going through the coach_contact_requests
+// approval detour - deliberately narrow (athlete -> a coach they actually
+// train under, checked again server-side in ensureDirectCoachConversation,
+// never trusted from the client) rather than a general "message any user"
+// endpoint. Returns the conversation id; the frontend then reuses the
+// exact same GET /api/messages/:conversationId / openMessageConversation
+// flow every other conversation already uses - no separate reply/thread
+// code path exists for this one.
+router.post("/direct", async (req, res, next) => {
+  try {
+    const coachUserId = String(req.body?.coachUserId || "").trim();
+    if (!coachUserId) return res.status(400).json({ error: "INVALID_COACH" });
+    const conversationId = await ensureDirectCoachConversation({ athleteUserId: req.user.id, coachUserId });
+    res.json({ conversationId });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get("/", async (req, res, next) => {
   try {

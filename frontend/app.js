@@ -50,6 +50,8 @@ import {
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
+import { renderAthleteHomeHtml } from "./athlete-home.js";
+import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { els } from "./dom.js";
 import {
   handleExerciseDetailAction,
@@ -81,6 +83,7 @@ import {
   closeMessagesIfOutside,
   handleMessageAction,
   loadMessages,
+  openMessageConversation,
   renderMessages,
   submitMessageForm,
 } from "./messages.js";
@@ -189,6 +192,7 @@ import {
   flattenDayGroups,
   groupItems,
   selectedWeeklyDay,
+  weekIndexForDate,
   weeklyCalendarDayMap,
   weeklyCalendarMonthRange,
 } from "./weekly-plan.js";
@@ -245,18 +249,36 @@ async function init() {
     window.location.replace("/athlete");
     return;
   }
-  if (isAthleteMode()) {
-    if (state.activeTab === "coach-home") state.activeTab = "weekly";
-    if (state.activeTab === "weekly") state.openWeekCalendarOnLoad = true;
-  } else if (state.activeTab === "weekly" && !state.selectedAthleteId) {
-    state.activeTab = "coach-home";
-  }
+  applyDefaultInitialTab();
   ensureBackGuard();
   void loadNotifications({ silent: true });
   void loadMessages({ silent: true });
   startRealtimeInbox();
   startInboxPolling();
   await loadAthletes();
+}
+
+// Called both from init()'s bootstrap path (a page load/reload with an
+// already-active session) and from the login-form submit handler in
+// handleGlobalSubmit (a fresh sign-in while already on /athlete, where
+// document.body already carries athlete-mode and so never takes the
+// window.location.replace("/athlete") branch that would otherwise force a
+// full reload through init() again) - both are real ways an athlete session
+// can begin, and each needs this decided exactly once, the same way.
+// state.activeTab is always fresh off state.js's own default ("weekly") the
+// first time either path runs it - it is never restored from a previous
+// session - so this only ever changes it once per sign-in.
+function applyDefaultInitialTab() {
+  if (isAthleteMode()) {
+    // Athlete Home is the athlete shell's own landing screen - Weekly plan
+    // remains a separate, explicitly-chosen tab (see the sidebar's own
+    // data-athlete-tab="calendar" button), so a sign-in must never land an
+    // athlete session on "weekly" the way it used to before this tab
+    // existed.
+    if (state.activeTab === "coach-home" || state.activeTab === "weekly") state.activeTab = "athlete-home";
+  } else if (state.activeTab === "weekly" && !state.selectedAthleteId) {
+    state.activeTab = "coach-home";
+  }
 }
 
 function bindEvents() {
@@ -343,6 +365,7 @@ function bindEvents() {
   document.addEventListener("error", handleImageError, true);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    if (state.mobileNavOpen) closeMobileNav();
     closeMedia();
     if (state.organizationUserManage.open) closeManageAccountModal(renderOrganizationPanel);
     if (state.organizationInvite.open) closeAthleteInviteModal(renderOrganizationPanel);
@@ -525,6 +548,7 @@ async function handleContentSubmit(event) {
         window.location.replace("/athlete");
         return;
       }
+      applyDefaultInitialTab();
       ensureBackGuard();
       await loadAthletes();
     } catch (loginError) {
@@ -1296,6 +1320,7 @@ async function loadActiveTab() {
   // refreshOrganizationData() directly and are untouched by this.
   if (state.activeTab === "organization") return renderOrganizationPanel({ refresh: false });
   if (state.activeTab === "coach-home") return loadCoachHome();
+  if (state.activeTab === "athlete-home") return loadAthleteHome();
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
   if (state.activeTab === "templates") return loadTemplates();
@@ -1321,6 +1346,46 @@ async function loadCoachHome({ forceRefresh = false } = {}) {
 
 function renderCoachHome({ rows, error }) {
   els.content.innerHTML = renderCoachHomeHtml({ rows, error });
+}
+
+async function loadAthleteHome({ forceRefresh = false } = {}) {
+  state.navStack = [];
+  els.context.textContent = "Home";
+  els.title.textContent = "Home";
+  els.toolbar.innerHTML = "";
+  return loadAthleteHomeData({ setLoading, renderAthleteHome, forceRefresh });
+}
+
+function renderAthleteHome({ data, error }) {
+  els.content.innerHTML = renderAthleteHomeHtml({ data, error });
+}
+
+// Mirrors weekly-actions.js's "week-day-select" branch exactly (same
+// selectedWeekIndex/viewedWeekStart/selectedWeekDay/pendingScrollDate/
+// weekCalendarMonth assignment), applied once loadWeekly() has resolved -
+// from Athlete Home's own "Open today's training" button and week-strip day
+// clicks, both of which need to land on a SPECIFIC date rather than
+// whatever week Calendar would otherwise default to.
+async function openWeeklyPlanOnDate(date) {
+  state.selectedProgramId = null;
+  state.selectedTemplateId = null;
+  state.navStack = [];
+  state.activeTab = "weekly";
+  state.openWeekCalendarOnLoad = false;
+  collapseRailAfterNav();
+  renderTabs();
+  renderLibraryNav();
+  await loadWeekly();
+  const weeks = state.lastWeeklyData?.weeks || [];
+  const weekIndex = weekIndexForDate(weeks, date);
+  state.selectedWeekIndex = weekIndex >= 0 ? weekIndex : 0;
+  state.viewedWeekStart = weekMondayIso(date);
+  state.selectedWeekDay = date;
+  state.pendingScrollDate = date;
+  state.weekSelectorOpen = false;
+  state.weekCalendarMonth = monthStartIso(date);
+  state.navStack = [];
+  renderWeeklyRoot(state.lastWeeklyData);
 }
 
 async function loadWeekly(options = {}) {
@@ -1443,6 +1508,35 @@ async function handleContentClick(event) {
     await loadWeekly();
     return;
   }
+  if (type === "athlete-home-open-today" || type === "athlete-home-open-day") {
+    await openWeeklyPlanOnDate(action.dataset.date || localDateIso());
+    return;
+  }
+  if (type === "athlete-home-open-program" || type === "athlete-home-view-programs") {
+    state.selectedProgramId = type === "athlete-home-open-program" ? (action.dataset.programId || null) : null;
+    state.selectedTemplateId = null;
+    state.navStack = [];
+    state.activeTab = "programs";
+    collapseRailAfterNav();
+    renderTabs();
+    renderLibraryNav();
+    await loadActiveTab();
+    return;
+  }
+  if (type === "athlete-home-quick-tab") {
+    const targetTab = action.dataset.targetTab || "weekly";
+    state.selectedProgramId = null;
+    state.selectedTemplateId = null;
+    state.navStack = [];
+    state.weekSelectorOpen = false;
+    state.openWeekCalendarOnLoad = targetTab === "calendar";
+    state.activeTab = targetTab === "calendar" ? "weekly" : targetTab;
+    collapseRailAfterNav();
+    renderTabs();
+    renderLibraryNav();
+    await loadActiveTab();
+    return;
+  }
   if (type === "weekly-create-plan") {
     if (isAthleteMode() || state.currentUser?.role === "athlete") return;
     const athleteId = state.selectedAthleteId;
@@ -1511,6 +1605,21 @@ async function handleContentClick(event) {
     return;
   }
   if (await handleExerciseEditorAction(state, exerciseEditorHandlers, action)) return;
+  if (type === "coach-message") {
+    const coachUserId = action.dataset.coachUserId || "";
+    if (!coachUserId || action.disabled) return;
+    action.disabled = true;
+    try {
+      const result = await api("/api/messages/direct", { method: "POST", body: JSON.stringify({ coachUserId }) });
+      await openMessageConversation(result.conversationId);
+    } catch (error) {
+      state.coaches = { ...state.coaches, error: error.message || "Could not open conversation." };
+      renderCoachContext();
+    } finally {
+      action.disabled = false;
+    }
+    return;
+  }
   if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleOrganizationAction(action, {

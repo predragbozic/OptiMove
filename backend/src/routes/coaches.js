@@ -212,6 +212,36 @@ function coachListSql({ includeOrder = true } = {}) {
       cp.video_url,
       cp.contact_enabled,
       cp.visibility,
+      -- feature/athlete-home-mvp: the same real, active coach relationship
+      -- (public.user_athletes, relationship_type='coach') that already
+      -- unlocks visibility of this profile in the WHERE clause below, for
+      -- an athlete viewer specifically - exposed as its own column so the
+      -- frontend can show a "Message" button only for a coach the viewer
+      -- genuinely trains under, never for a profile merely browsed from a
+      -- public/marketplace/club directory listing. A non-athlete viewer
+      -- (a coach browsing other coaches) always gets false here - messaging
+      -- a peer coach directly from this card is out of scope for this PR.
+      exists (
+        select 1
+        from public.athletes viewer_athlete
+        join public.user_athletes coach_rel
+          on coach_rel.athlete_id = viewer_athlete.id
+         and coach_rel.user_id = cp.user_id
+         and coach_rel.relationship_type = 'coach'
+         and coach_rel.is_active = true
+        where coalesce(viewer_athlete.is_active, true)
+          and (
+            viewer_athlete.user_id = $1
+            or exists (
+              select 1
+              from public.user_athletes athlete_link
+              where athlete_link.athlete_id = viewer_athlete.id
+                and athlete_link.user_id = $1
+                and athlete_link.relationship_type = 'athlete'
+                and athlete_link.is_active = true
+            )
+          )
+      ) as is_my_coach,
       coalesce(tags.tags, '[]'::jsonb) as tags,
       reviews.average_rating,
       coalesce(reviews.review_count, 0)::int as review_count,

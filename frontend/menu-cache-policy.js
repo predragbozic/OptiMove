@@ -115,6 +115,13 @@ export const MENU_CACHE_POLICIES = {
     rationale:
       "Wired into view-cache.js in perf/home-specific-programs-cache. Same loader shape and same athleteId-scoped endpoint family as Calendar (GET /api/athletes/:id/program-data?program=<name>) - context key is [...workspace parts, athleteId] (programs-data.js's programsContextKey), the exact same shape as weekly's. state.selectedProgramId (which of the athlete's already-fetched programs is on screen) never reaches the server and is deliberately excluded from the key, same reasoning as weekly's week/day/month selection. Invalidated via forceRefresh at the same two exit points weekly already uses (exitBuilderToPlanContext, builder-delete-source-plan in builder-actions.js) - a program's own Builder edit/duplicate/delete always routes through one of those. The athlete shell's own \"Specific programs\" tab (data-athlete-tab=\"programs\") sets this exact same state.activeTab and shares this exact same cache.",
   },
+  "athlete-home": {
+    label: "Home (athlete shell)",
+    policy: "cached",
+    namespace: "athlete-home",
+    rationale:
+      "Wired into view-cache.js in feature/athlete-home-mvp. GET /api/athlete-home is filtered exclusively by the caller's own req.authz.athleteId (never a client-supplied id) - the backend always computes \"today\"/\"this week\" itself from the server clock, so account+workspace is the whole context key (athlete-home-data.js's athleteHomeContextKey), the exact same shape as coach-home's. Invalidated at the same two builder-actions.js exit points weekly/programs already use (exitBuilderToPlanContext, builder-delete-source-plan) - both the weekly AND the programs branches now call invalidateAthleteHomeCache(), since this one view aggregates both today/this-week training AND active specific programs in a single payload, unlike coach-home (today/this-week only) or programs (specific programs only) individually.",
+  },
   "athlete-settings": {
     label: "Settings (athlete shell)",
     policy: "static",
