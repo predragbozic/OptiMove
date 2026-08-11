@@ -3278,6 +3278,37 @@ input:focus {
   font-weight: 900;
 }
 
+/* feature/athlete-programs-profile: the athlete's own Specific programs
+   panel - reuses .program-library-row/-card/... above directly (same
+   grid-auto-flow: column + overflow-x: auto + scroll-snap-type: x
+   proximity rail already used for Program Library/Exercise Library/the
+   week selector), so no new carousel mechanism is introduced. */
+.athlete-programs-panel {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.athlete-programs-search {
+  max-width: 320px;
+}
+
+.athlete-program-cards-rail-container {
+  min-width: 0;
+}
+
+.athlete-programs-no-match {
+  margin: 4px 0;
+}
+
+@media (min-width: 761px) {
+  .athlete-program-cards-rail {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(auto-fill, 230px);
+    overflow-x: visible;
+  }
+}
+
 .program-library-creator small,
 .program-created-by small {
   display: block;
@@ -4295,6 +4326,25 @@ input:focus {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.35;
+}
+
+/* feature/athlete-programs-profile: Personal data form inside the existing
+   .athlete-setting-list article - reuses .organization-form/.search-field
+   and the existing .avatar/.avatar-fallback classes, no new form styling
+   system introduced. */
+.athlete-personal-data-form {
+  margin-top: 6px;
+}
+
+.athlete-personal-data-preview-row {
+  display: flex;
+  margin-bottom: 8px;
+}
+
+.athlete-personal-data-preview {
+  width: 56px;
+  height: 56px;
+  font-size: 18px;
 }
 
 .account-current-email {

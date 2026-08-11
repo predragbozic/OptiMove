@@ -76,19 +76,28 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
 // (renderAthleteSettings in app.js) fetches this after the initial render
 // and re-renders with it, mirroring how every other async-status panel in
 // this app is patched in.
-export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatus) {
+// feature/athlete-programs-profile: profile is null while GET
+// /api/athlete-profile is still loading, { error: true } if it failed, or
+// { firstName, lastName, imageUrl } once loaded - the exact same
+// null -> loaded two-pass pattern renderAthleteSettings() already uses for
+// emailChangeStatus below. Only these 3 fields are ever shown/editable
+// here - see backend/src/routes/athleteProfile.js's own header comment for
+// exactly which real athletes.* columns were audited and excluded (no
+// birth_date/phone/gender/address - confirmed zero consumers anywhere in
+// the app today).
+export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatus, profile) {
   return `
     <section class="content-section athlete-simple-view">
       <section class="panel athlete-settings-card">
         <div>
           <p class="eyebrow">Profile</p>
           <h3>${escapeHtml(athlete?.athlete || "Athlete profile")}</h3>
-          <p class="muted">Your coach controls program assignment. Personal data and notifications will live here.</p>
+          <p class="muted">Your coach controls program assignment and club/team membership - only your own basic profile fields below are yours to edit.</p>
         </div>
         <div class="athlete-setting-list">
-          <article>
+          <article class="athlete-personal-data">
             <strong>Personal data</strong>
-            <span>Photo, contact details, and basic profile information.</span>
+            ${renderPersonalDataFormHtml(profile)}
           </article>
           <article>
             <strong>Notifications</strong>
@@ -121,6 +130,30 @@ export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatu
         </form>
       </section>
     </section>
+  `;
+}
+
+function renderPersonalDataFormHtml(profile) {
+  if (!profile) {
+    return `<span class="muted">Loading your profile...</span>`;
+  }
+  if (profile.error) {
+    return `<span class="muted">Could not load your profile. Try reopening Settings.</span>`;
+  }
+  const initials = initialsFor([profile.firstName, profile.lastName].filter(Boolean).join(" ") || "Athlete");
+  const preview = profile.imageUrl
+    ? renderImage(profile.imageUrl, "avatar athlete-personal-data-preview", initials)
+    : `<span class="avatar-fallback athlete-personal-data-preview">${escapeHtml(initials)}</span>`;
+  return `
+    <form class="organization-form athlete-personal-data-form" data-account-form="personal-data">
+      <div class="athlete-personal-data-preview-row">${preview}</div>
+      <label class="search-field"><span>First name</span><input name="firstName" required maxlength="80" value="${escapeAttr(profile.firstName)}" autocomplete="given-name"></label>
+      <label class="search-field"><span>Last name</span><input name="lastName" maxlength="80" value="${escapeAttr(profile.lastName)}" autocomplete="family-name"></label>
+      <label class="search-field"><span>Photo URL</span><input name="imageUrl" type="url" maxlength="2000" placeholder="https://..." value="${escapeAttr(profile.imageUrl)}"></label>
+      <p class="builder-error" aria-live="polite"></p>
+      <p class="builder-success" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Save personal data</button>
+    </form>
   `;
 }
 

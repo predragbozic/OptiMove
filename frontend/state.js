@@ -151,6 +151,11 @@ export const createInitialState = () => ({
   programLibrarySection: "programs",
   templateScope: "my_programs",
   selectedProgramId: null,
+  // feature/athlete-programs-profile: client-side-only search text for the
+  // athlete's own Specific programs card rail - never sent to the server,
+  // reset to "" on every fresh entry into the tab (see programs-data.js's
+  // loadPrograms), not on background cache refreshes.
+  athleteProgramsSearchQuery: "",
   selectedTemplateId: null,
   selectedWeekIndex: 0,
   selectedWeekDay: "",

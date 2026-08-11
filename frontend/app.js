@@ -31,6 +31,10 @@ import {
   renderAthleteSettingsHtml,
 } from "./athlete-view.js";
 import {
+  renderAthleteProgramCardsRailHtml,
+  renderAthleteProgramsPanelHtml,
+} from "./athlete-programs-view.js";
+import {
   handleBuilderDraftAction,
   handleBuilderItemAction,
   handleBuilderPlanAction,
@@ -622,6 +626,54 @@ async function handleContentSubmit(event) {
       await renderAthleteSettings();
     } catch (submitError) {
       if (error) error.textContent = emailChangeErrorMessage(submitError);
+      if (button) button.disabled = false;
+    }
+    return;
+  }
+
+  // feature/athlete-programs-profile: PATCH /api/athlete-profile only ever
+  // touches public.athletes (first_name/last_name/image_url) - it never
+  // reaches users.email/password/role, so this can never interact with the
+  // Login email or Change password forms above/below it. On success,
+  // invalidate the Home cache (Home shows this same name/photo) so the
+  // next visit to Home reflects the change instead of serving a stale
+  // cached response - Home isn't on screen right now, so there's nothing
+  // to update in place there, only its cache entry.
+  const personalDataForm = event.target.closest("[data-account-form='personal-data']");
+  if (personalDataForm) {
+    event.preventDefault();
+    const formData = new FormData(personalDataForm);
+    const error = personalDataForm.querySelector(".builder-error");
+    const success = personalDataForm.querySelector(".builder-success");
+    if (error) error.textContent = "";
+    if (success) success.textContent = "";
+    const button = personalDataForm.querySelector("button[type='submit']");
+    const firstName = String(formData.get("firstName") || "").trim();
+    const lastName = String(formData.get("lastName") || "").trim();
+    const imageUrl = String(formData.get("imageUrl") || "").trim();
+    if (button) button.disabled = true;
+    try {
+      const updated = await api("/api/athlete-profile", {
+        method: "PATCH",
+        body: JSON.stringify({ firstName, lastName, imageUrl }),
+      });
+      invalidateAthleteHomeCache();
+      // Re-render in place with the server's own returned values (no extra
+      // profile fetch, no loading-placeholder flash) so the avatar preview,
+      // name inputs, and a success message all update in one pass - Home
+      // itself isn't on screen right now, so its cache invalidation above
+      // is what makes ITS greeting/photo correct on the next visit there.
+      if (state.activeTab === "athlete-settings") {
+        const emailChangeStatus = await api("/api/auth/account/email-change/status").catch(() => null);
+        if (state.activeTab !== "athlete-settings") return;
+        const athlete = state.athletes.find((entry) => entry.athlete_id === state.selectedAthleteId);
+        els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, emailChangeStatus, updated);
+        const savedForm = els.content.querySelector("[data-account-form='personal-data']");
+        const savedSuccess = savedForm?.querySelector(".builder-success");
+        if (savedSuccess) savedSuccess.textContent = "Personal data saved.";
+      }
+    } catch (submitError) {
+      if (error) error.textContent = submitError.message || "Could not save your personal data.";
       if (button) button.disabled = false;
     }
     return;
@@ -1914,18 +1966,16 @@ async function renderAthleteSettings() {
   renderAthleteHeader({});
   els.context.textContent = "Athlete settings";
   els.title.textContent = "Settings";
-  els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, null);
-  let emailChangeStatus = null;
-  try {
-    emailChangeStatus = await api("/api/auth/account/email-change/status");
-  } catch {
-    emailChangeStatus = null;
-  }
-  // Guard against a slow status fetch resolving after the user has already
-  // navigated off Settings - see the same pattern at every other
-  // state.activeTab === "..." check in this file.
+  els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, null, null);
+  const [emailChangeStatus, profile] = await Promise.all([
+    api("/api/auth/account/email-change/status").catch(() => null),
+    api("/api/athlete-profile").catch(() => ({ error: true })),
+  ]);
+  // Guard against a slow fetch resolving after the user has already
+  // navigated off Settings (or switched workspace) - see the same pattern
+  // at every other state.activeTab === "..." check in this file.
   if (state.activeTab !== "athlete-settings") return;
-  els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, emailChangeStatus);
+  els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, emailChangeStatus, profile);
 }
 
 // security/verified-email-change: the email-change endpoints return short
@@ -2050,6 +2100,19 @@ function scrollCalendarToDate(date) {
 
 function renderProgramToolbar(programs) {
   els.toolbar.querySelector(".program-toolbar")?.remove();
+  els.toolbar.querySelector(".athlete-programs-panel")?.remove();
+
+  // feature/athlete-programs-profile: athlete mode gets visual template
+  // cards; the coach side of this same tab (managing a specific athlete's
+  // programs) keeps the original chip toolbar below, completely
+  // unchanged - this only branches the athlete's OWN view.
+  if (isAthleteMode()) {
+    if (!programs.length) return;
+    els.toolbar.insertAdjacentHTML("beforeend", renderAthleteProgramsPanelHtml(programs, state.selectedProgramId, state.athleteProgramsSearchQuery));
+    wireAthleteProgramsPanel(programs);
+    return;
+  }
+
   els.toolbar.insertAdjacentHTML("beforeend", renderProgramToolbarHtml(programs, state.selectedProgramId, renderPlanMoreMenu));
   els.toolbar.querySelectorAll(".program-toolbar .chip").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2059,6 +2122,38 @@ function renderProgramToolbar(programs) {
       renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
     });
   });
+}
+
+function wireAthleteProgramsPanel(programs) {
+  const panel = els.toolbar.querySelector(".athlete-programs-panel");
+  if (!panel) return;
+  const railContainer = panel.querySelector(".athlete-program-cards-rail-container");
+
+  function renderRail() {
+    if (!railContainer) return;
+    railContainer.innerHTML = renderAthleteProgramCardsRailHtml(programs, state.selectedProgramId, state.athleteProgramsSearchQuery);
+    railContainer.querySelectorAll("[data-action='athlete-program-open']").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.selectedProgramId = button.dataset.programId;
+        state.navStack = [];
+        renderProgramToolbar(programs);
+        renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
+      });
+    });
+  }
+
+  // The search input is rendered once by renderAthleteProgramsPanelHtml and
+  // deliberately never replaced here - only railContainer's innerHTML is
+  // touched on each keystroke, so the input never loses keyboard focus
+  // mid-search. No API call is made for any of this; it filters the
+  // already-loaded `programs` array in memory.
+  const searchInput = panel.querySelector("[data-action='athlete-programs-search']");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      state.athleteProgramsSearchQuery = searchInput.value;
+      renderRail();
+    });
+  }
 }
 function renderProgramRoot(program) {
   if (!program) return renderEmpty("This athlete has no specific programs.");

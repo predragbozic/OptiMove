@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import athletesRouter from "./routes/athletes.js";
 import athleteHomeRouter from "./routes/athleteHome.js";
+import athleteProfileRouter from "./routes/athleteProfile.js";
 import authRouter from "./routes/auth.js";
 import plansRouter from "./routes/plans.js";
 import templatesRouter from "./routes/templates.js";
@@ -62,6 +63,7 @@ app.get("/api/health", async (_req, res, next) => {
 app.use("/api/auth", authRouter);
 app.use("/api/athletes", requireAuth, athletesRouter);
 app.use("/api/athlete-home", requireAuth, athleteHomeRouter);
+app.use("/api/athlete-profile", requireAuth, athleteProfileRouter);
 app.use("/api/admin/athletes", requireAuth, athletesRouter);
 app.use("/api/plans", requireAuth, plansRouter);
 app.use("/api/templates", requireAuth, templatesRouter);

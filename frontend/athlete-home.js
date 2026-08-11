@@ -113,7 +113,7 @@ function renderWeekDay(day) {
 // duplicated navigation logic.
 function renderQuickActions() {
   const actions = [
-    ["calendar", "Calendar", ICON_CALENDAR],
+    ["calendar", "Weekly plan", ICON_CALENDAR],
     ["programs", "Specific programs", ICON_SPECIFIC_PROGRAMS],
     ["athlete-library", "Program Library", ICON_PROGRAM_LIBRARY],
     ["athlete-settings", "Settings", ICON_SETTINGS],

@@ -34,6 +34,12 @@ export async function loadPrograms(
     return;
   }
   state.navStack = [];
+  // A fresh entry into the tab always starts from an empty search - this
+  // only runs once per real navigation into Specific programs (a
+  // loadCachedView background refresh re-invokes applyData directly, not
+  // this outer function), so it never wipes text the athlete is actively
+  // typing.
+  state.athleteProgramsSearchQuery = "";
   const athleteId = state.selectedAthleteId;
   await loadCachedView({
     namespace: PROGRAMS_CACHE_NAMESPACE,
