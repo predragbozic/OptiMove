@@ -493,4 +493,9 @@ function formatMessageDate(value) {
 const ICON_CLOSE = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>`;
 const ICON_BACK = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
 const ICON_DOTS = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"></circle><circle cx="12" cy="12" r="1.8" fill="currentColor"></circle><circle cx="19" cy="12" r="1.8" fill="currentColor"></circle></svg>`;
-const ICON_SEND = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 12l16-8-6.5 8L20 20 4 12z" fill="currentColor"></path></svg>`;
+// hotfix/mobile-messages-test-regression: the previous path (M4 12l16-8-6.5
+// 8L20 20 4 12z) rendered with its tip pointing toward the lower-left, the
+// opposite of a standard send arrow. This is the well-known Material Design
+// "send" glyph - a paper plane with its tip pointing due right at (23,12),
+// vertically centered in the 24x24 viewBox.
+const ICON_SEND = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="currentColor"></path></svg>`;

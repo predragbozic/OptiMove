@@ -198,7 +198,13 @@ test("submitMessageForm sets sending=true synchronously before the API call, so 
 
 test("a failed send preserves the typed text in state.messages.draft, and restores it into the re-rendered input's value attribute", () => {
   const submitBody = sliceFunction("submitMessageForm", 1300);
-  assert.match(submitBody, /catch \(error\) \{\s*\n(\s*\/\/.*\n)*\s*state\.messages\.draft = body;/);
+  // `.` never matches CR in JS regex (ECMAScript's LineTerminator set - LF,
+  // CR, LS, PS - is excluded from the dot), so `.*\n` cannot cross this
+  // file's CRLF line endings inside the multi-line comment block between
+  // `catch (error) {` and the draft-preserving assignment. [^\r\n]* with an
+  // explicit \r? before each \n handles CRLF (and would still handle LF-only
+  // files, since \r? is optional).
+  assert.match(submitBody, /catch \(error\) \{\r?\n(\s*\/\/[^\r\n]*\r?\n)*\s*state\.messages\.draft = body;/);
   const conversationBody = sliceFunction("renderConversationHtml", 3800);
   assert.match(conversationBody, /const draft = escapeAttr\(state\.messages\.draft \|\| ""\);/);
   assert.match(conversationBody, /<input name="body" type="text" placeholder="Write a message\.\.\." autocomplete="off" value="\$\{draft\}">/);
@@ -249,7 +255,7 @@ test("going back to the list (message-back and the mobile Back/Escape path) clea
 // === Scroll-to-bottom / near-bottom realtime behavior ===
 
 test("renderMessages() scrolls to the bottom on a newly-opened conversation OR when the reader was already near the bottom - never forces scroll otherwise", () => {
-  const body = sliceFunction("renderMessages", 1600);
+  const body = sliceFunction("renderMessages", 1700);
   assert.match(body, /const wasNearBottom = !previousThread\s*\n\s*\|\| previousThread\.scrollHeight - previousThread\.scrollTop - previousThread\.clientHeight <= NEAR_BOTTOM_THRESHOLD_PX;/);
   assert.match(body, /const isNewConversation = currentConversationId !== previousConversationId;/);
   assert.match(body, /if \(isNewConversation \|\| wasNearBottom\) \{\s*\n\s*newThread\.scrollTop = newThread\.scrollHeight;/);
@@ -366,4 +372,131 @@ test("styles.css: no rule inside the mobile Messages block sets a width/inset wi
       assert.ok(Number(num) <= 100, `unexpected viewport-width declaration that could overflow: ${decl}`);
     }
   }
+});
+
+// === hotfix/mobile-messages-test-regression: compact conversation list ===
+// Root cause of the "1-2 rows stretch to fill the screen" bug: .message-list
+// is display:grid with implicit auto row tracks; sitting inside the mobile
+// .message-inbox-list's minmax(0, 1fr) row gives it a DEFINITE height, and
+// grid's default align-content (normal -> stretch here) stretches those few
+// row tracks to fill that height. align-content: start is the fix - see the
+// comment on the base .message-list rule in styles.css.
+
+function cssSource() {
+  const cssPath = fileURLToPath(new URL("../styles.css", import.meta.url));
+  return readFileSync(cssPath, "utf8");
+}
+
+function ruleBody(css, selector) {
+  const start = css.indexOf(selector);
+  assert.ok(start >= 0, `${selector} rule must exist in styles.css`);
+  return css.slice(start, css.indexOf("}", start));
+}
+
+test("styles.css: .message-list uses align-content: start so 1-2 rows pack at the top instead of stretching to fill the available height", () => {
+  const body = ruleBody(cssSource(), ".message-list {");
+  assert.match(body, /align-content:\s*start;/);
+});
+
+test("styles.css: on mobile, .message-inbox-list is a 3-row grid (header, search, minmax(0, 1fr) list) with overflow hidden - only the inner .message-list can ever scroll", () => {
+  const css = cssSource();
+  const mediaStart = css.indexOf("@media (max-width: 760px) {");
+  const mediaEnd = css.indexOf("\n}\n\n.panel-status", mediaStart);
+  const block = css.slice(mediaStart, mediaEnd);
+  const listBody = ruleBody(block, ".message-inbox-list {");
+  assert.match(listBody, /grid-template-rows:\s*auto auto minmax\(0, 1fr\);/);
+  assert.match(listBody, /overflow:\s*hidden;/);
+});
+
+test("styles.css: on mobile, .message-list itself is the only scrollable region (overflow-y: auto, overflow-x: hidden)", () => {
+  const css = cssSource();
+  const mediaStart = css.indexOf("@media (max-width: 760px) {");
+  const mediaEnd = css.indexOf("\n}\n\n.panel-status", mediaStart);
+  const block = css.slice(mediaStart, mediaEnd);
+  const listBody = ruleBody(block, ".message-list {");
+  assert.match(listBody, /overflow-y:\s*auto;/);
+  assert.match(listBody, /overflow-x:\s*hidden;/);
+});
+
+test("styles.css: on mobile, .message-row's compact height falls within the required ~68-76px range", () => {
+  const css = cssSource();
+  const mediaStart = css.indexOf("@media (max-width: 760px) {");
+  const mediaEnd = css.indexOf("\n}\n\n.panel-status", mediaStart);
+  const block = css.slice(mediaStart, mediaEnd);
+  const rowBody = ruleBody(block, ".message-row {");
+  const match = rowBody.match(/min-height:\s*(\d+)px/);
+  assert.ok(match, "min-height must be set on the mobile .message-row rule");
+  const value = Number(match[1]);
+  assert.ok(value >= 68 && value <= 76, `expected .message-row min-height within 68-76px, got ${value}px`);
+});
+
+test("styles.css: long name/last-message text is clipped with ellipsis, not wrapped, so a long conversation entry can never grow a row's height", () => {
+  const body = ruleBody(cssSource(), ".message-row-main strong,");
+  assert.match(body, /white-space:\s*nowrap;/);
+  assert.match(body, /overflow:\s*hidden;/);
+  assert.match(body, /text-overflow:\s*ellipsis;/);
+});
+
+// === Send icon orientation ===
+
+test("ICON_SEND's path data is the Material Design 'send' glyph, tip pointing due right at x=23 (the rightmost point), vertically centered - not the previous inverted path", () => {
+  assert.match(source, /const ICON_SEND = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2\.01 21L23 12 2\.01 3 2 10l15 2-15 2z" fill="currentColor">/);
+  assert.ok(!source.includes("M4 12l16-8-6.5 8L20 20 4 12z"), "the old inverted send-icon path must be fully removed");
+});
+
+test("ICON_SEND's path's rightmost point (the arrow tip) sits at the vertical center of the 24x24 viewBox, confirming it points right rather than left/down", () => {
+  const match = source.match(/const ICON_SEND = `<svg viewBox="0 0 24 24"[^`]*?<path d="([^"]+)"/);
+  assert.ok(match, "ICON_SEND path data must be extractable");
+  const d = match[1];
+  const numbers = d.match(/-?\d+(?:\.\d+)?/g).map(Number);
+  const points = [];
+  for (let i = 0; i + 1 < numbers.length; i += 2) points.push([numbers[i], numbers[i + 1]]);
+  const rightmost = points.reduce((a, b) => (b[0] > a[0] ? b : a));
+  assert.equal(rightmost[0], 23, "the tip (rightmost x) should be at x=23");
+  assert.equal(rightmost[1], 12, "the tip should be vertically centered (y=12) in the 24-tall viewBox");
+});
+
+test("the Send button is not rotated as a whole - only ICON_SEND's own path data changed, .message-send-button carries no transform/rotate rule", () => {
+  const css = cssSource();
+  assert.ok(!/\.message-send-button\s*\{[^}]*transform/.test(css), "the button itself must not be rotated - only the icon's path was corrected");
+});
+
+test("mobile Send button stays a circular >=44x44px icon-only button with aria-label, no text label added", () => {
+  const css = cssSource();
+  const mediaStart = css.indexOf("@media (max-width: 760px) {");
+  const mediaEnd = css.indexOf("\n}\n\n.panel-status", mediaStart);
+  const block = css.slice(mediaStart, mediaEnd);
+  const body = ruleBody(block, ".message-send-button {");
+  assert.match(body, /width:\s*44px;/);
+  assert.match(body, /height:\s*44px;/);
+  assert.match(body, /border-radius:\s*50%;/, "button must actually render circular, not just be 44x44 square - the mobile rule must be scoped specifically enough (e.g. .message-compose .message-send-button) to beat .plain-button's later, equal-specificity border-radius: var(--radius) in the cascade");
+  const composeBody = sliceFunction("renderConversationHtml", 3800);
+  assert.ok(!/message-send-button"[^>]*>\s*Send\s*</.test(composeBody), "the button must stay icon-only, never gaining literal 'Send' text");
+});
+
+test("desktop and mobile share the exact same Send button markup (single source, no separate desktop text button that needs preserving)", () => {
+  const composeBody = sliceFunction("renderConversationHtml", 3800);
+  const sendButtonMatches = composeBody.match(/class="plain-button compact-button message-send-button"/g) || [];
+  assert.equal(sendButtonMatches.length, 1, "there must be exactly one Send button rendered - the same markup serves both desktop and mobile via CSS, not a duplicated desktop-only button");
+});
+
+// === Compact list scenarios (1, 2, 20 conversations) ===
+// renderConversationRow/renderMessagePanelHtml are pure string-template
+// functions with no per-row inline height - the actual "does it stay
+// compact" behavior is entirely CSS-driven (asserted above via
+// align-content/overflow/min-height), so these confirm the row markup
+// itself carries no inline sizing that could fight the CSS fix.
+
+test("renderConversationRow never sets an inline height/flex-grow style that could override the CSS-driven compact row height", () => {
+  const start = source.indexOf("function renderConversationRow(");
+  assert.ok(start >= 0);
+  const body = source.slice(start, start + 900);
+  assert.ok(!/style="[^"]*height/.test(body), "no inline height style should exist on a conversation row");
+});
+
+test("the same .message-row markup is reused regardless of conversation count - list length only changes how many rows are joined, never their template", () => {
+  const start = source.indexOf("function renderMessagePanelHtml(");
+  assert.ok(start >= 0);
+  const body = source.slice(start, start + 1800);
+  assert.match(body, /\.map\(renderConversationRow\)\.join\(""\)|rows\.map\(/);
 });
