@@ -76,19 +76,28 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
 // (renderAthleteSettings in app.js) fetches this after the initial render
 // and re-renders with it, mirroring how every other async-status panel in
 // this app is patched in.
-export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatus) {
+// feature/athlete-programs-profile: profile is null while GET
+// /api/athlete-profile is still loading, { error: true } if it failed, or
+// { firstName, lastName, imageUrl } once loaded - the exact same
+// null -> loaded two-pass pattern renderAthleteSettings() already uses for
+// emailChangeStatus below. Only these 3 fields are ever shown/editable
+// here - see backend/src/routes/athleteProfile.js's own header comment for
+// exactly which real athletes.* columns were audited and excluded (no
+// birth_date/phone/gender/address - confirmed zero consumers anywhere in
+// the app today).
+export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatus, profile) {
   return `
     <section class="content-section athlete-simple-view">
       <section class="panel athlete-settings-card">
         <div>
           <p class="eyebrow">Profile</p>
           <h3>${escapeHtml(athlete?.athlete || "Athlete profile")}</h3>
-          <p class="muted">Your coach controls program assignment. Personal data and notifications will live here.</p>
+          <p class="muted">Your coach controls program assignment and club/team membership - only your own basic profile fields below are yours to edit.</p>
         </div>
         <div class="athlete-setting-list">
-          <article>
+          <article class="athlete-personal-data">
             <strong>Personal data</strong>
-            <span>Photo, contact details, and basic profile information.</span>
+            ${renderPersonalDataFormHtml(profile)}
           </article>
           <article>
             <strong>Notifications</strong>
@@ -122,6 +131,42 @@ export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatu
       </section>
     </section>
   `;
+}
+
+function renderPersonalDataFormHtml(profile) {
+  if (!profile) {
+    return `<span class="muted">Loading your profile...</span>`;
+  }
+  if (profile.error) {
+    return `<span class="muted">Could not load your profile. Try reopening Settings.</span>`;
+  }
+  const initials = initialsFor([profile.firstName, profile.lastName].filter(Boolean).join(" ") || "Athlete");
+  const preview = profile.imageUrl
+    ? renderImage(profile.imageUrl, "avatar athlete-personal-data-preview", initials)
+    : `<span class="avatar-fallback athlete-personal-data-preview">${escapeHtml(initials)}</span>`;
+  return `
+    <form class="organization-form athlete-personal-data-form" data-account-form="personal-data">
+      <div class="athlete-personal-data-preview-row">${preview}</div>
+      <label class="search-field"><span>First name</span><input name="firstName" required maxlength="100" value="${escapeAttr(profile.firstName)}" autocomplete="given-name"></label>
+      <label class="search-field"><span>Last name</span><input name="lastName" maxlength="100" value="${escapeAttr(profile.lastName)}" autocomplete="family-name"></label>
+      <label class="search-field"><span>Date of birth</span><input name="birthDate" type="date" max="${escapeAttr(todayIsoUtc())}" value="${escapeAttr(profile.birthDate)}"></label>
+      <label class="search-field"><span>Phone</span><input name="phone" type="tel" maxlength="50" value="${escapeAttr(profile.phone)}" autocomplete="tel"></label>
+      <label class="search-field"><span>Country</span><input name="country" maxlength="100" value="${escapeAttr(profile.country)}" autocomplete="country-name"></label>
+      <label class="search-field"><span>City</span><input name="city" maxlength="100" value="${escapeAttr(profile.city)}" autocomplete="address-level2"></label>
+      <label class="search-field">
+        <span>Profile photo URL</span>
+        <input name="imageUrl" type="url" maxlength="2000" placeholder="https://..." value="${escapeAttr(profile.imageUrl)}">
+      </label>
+      <p class="muted athlete-personal-data-photo-hint">Paste a link to an image - there's no photo upload yet.</p>
+      <p class="builder-error" aria-live="polite"></p>
+      <p class="builder-success" aria-live="polite"></p>
+      <button class="plain-button" type="submit">Save personal data</button>
+    </form>
+  `;
+}
+
+function todayIsoUtc() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function renderEmailChangeStatusHtml(status) {

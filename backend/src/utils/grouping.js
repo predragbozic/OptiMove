@@ -101,6 +101,19 @@ export function buildPrograms(programSummaries, itemRowsByPlanId) {
       note: "",
       icon: "",
       durationLabel: program.duration_days ? `${program.duration_days} days` : "",
+      // feature/athlete-programs-profile: these already come straight off
+      // plans.v_plan_summary (the caller queries `select *`, see
+      // routes/athletes.js) - no new query. cover_image_url/library_category
+      // are real columns on plans.plans but are only ever populated for
+      // templates today, never for an athlete's assigned/specific program
+      // (confirmed empty for all 27 real rows in dev), so they render as ""
+      // for essentially every real program right now; session_count/
+      // item_count are always-computed aggregates from the view and are
+      // reliable.
+      imageUrl: program.cover_image_url || "",
+      category: program.library_category || "",
+      sessionCount: numberOrNull(program.session_count) || 0,
+      itemCount: numberOrNull(program.item_count) || 0,
       data,
     };
   });

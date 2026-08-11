@@ -112,7 +112,7 @@ for (const programs of [{ rows: [], total: 0 }, { rows: [{ id: "p1", name: "Prog
   });
 }
 
-test("exactly 4 quick actions: Calendar, Specific programs, Program Library, Settings, in that order - never a Home entry among them, never a duplicated large Coaches card", () => {
+test("exactly 4 quick actions: Weekly plan, Specific programs, Program Library, Settings, in that order - never a Home entry among them, never a duplicated large Coaches card", () => {
   const data = {
     athlete: { name: "Test Athlete", imageUrl: "" },
     today: { date: "2026-08-10", hasTraining: false, planId: null, planName: "", sessionCount: 0, itemCount: 0 },
@@ -124,7 +124,8 @@ test("exactly 4 quick actions: Calendar, Specific programs, Program Library, Set
   assert.deepEqual(targetTabs, ["calendar", "programs", "athlete-library", "athlete-settings"]);
   assert.ok(!targetTabs.includes("athlete-home"), "Home must never be one of its own quick actions");
   assert.ok(!targetTabs.includes("coaches"), "Coaches must not be duplicated here - it's already a main nav item");
-  assert.ok(html.includes(">Calendar<"), "the Calendar action must be labeled Calendar, not Weekly plan");
+  assert.ok(html.includes(">Weekly plan<"), "the calendar-tab action must be labeled Weekly plan, matching the sidebar's own wording for the same tab");
+  assert.ok(!html.includes(">Calendar<"), "the quick action must not say Calendar anymore - only real calendar UI (month picker) may use that word");
 });
 
 test("each quick action carries the real nav-menu icon markup (not a plain text-only button)", () => {
