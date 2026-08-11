@@ -211,6 +211,9 @@ export const createInitialState = () => ({
   allowBrowserExit: false,
   weekCalendarMonth: "",
   openWeekCalendarOnLoad: false,
+  // hotfix/athlete-home-mobile-layout
+  athleteExitConfirmOpen: false,
+  realtimeOffline: false,
 });
 
 export const state = createInitialState();

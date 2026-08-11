@@ -2157,6 +2157,48 @@ button {
   display: none;
 }
 
+/* hotfix/athlete-home-mobile-layout */
+
+/* The big "Online"/"Loading"/"Error" pill (#apiStatus) is not a user
+   action and doesn't need to permanently occupy topbar space in the
+   athlete shell - a real connectivity problem still surfaces via
+   .connection-indicator below, and a load error still shows in the
+   content area itself (renderError). The coach shell's own #apiStatus
+   is untouched - this selector only ever matches inside .athlete-mode. */
+.athlete-mode .status-pill {
+  display: none;
+}
+
+.connection-indicator {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #5c1a1a;
+  color: #ffd7d7;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.athlete-mode .topbar-actions {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.athlete-mode .mobile-nav-toggle {
+  flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+  .athlete-mode .athlete-topbar {
+    padding: 0 12px 8px;
+  }
+
+  .athlete-mode .topbar-actions {
+    justify-content: flex-start;
+    gap: 6px;
+  }
+}
+
 .sidebar {
   position: sticky;
   top: 0;
@@ -5826,6 +5868,61 @@ input:focus {
   display: none;
 }
 
+/* hotfix/athlete-home-mobile-layout: athlete-shell-only Back confirmation. */
+.exit-confirm-modal[hidden] {
+  display: none;
+}
+
+.exit-confirm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.exit-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.exit-confirm-dialog {
+  position: relative;
+  width: min(360px, 92vw);
+  padding: 22px;
+  border-radius: var(--radius);
+  background: var(--surface, #fff);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
+  text-align: center;
+}
+
+.exit-confirm-dialog h3 {
+  margin: 0 0 8px;
+}
+
+.exit-confirm-dialog p {
+  margin: 0 0 18px;
+  color: var(--muted, #667085);
+}
+
+.exit-confirm-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.exit-confirm-actions .plain-button {
+  flex: 1 1 0;
+  min-height: 44px;
+}
+
+.exit-confirm-exit-button {
+  border-color: #c53030;
+  background: #c53030;
+  color: #fff;
+}
+
 .media-modal {
   position: fixed;
   inset: 0;
@@ -9052,93 +9149,73 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   background: var(--accent, #1f7a6f);
 }
 
-.athlete-home-programs {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-}
-
-.athlete-home-program-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px;
-}
-
-.athlete-home-program-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--line, #dfe4ea);
-  border-radius: var(--radius, 10px);
-  background: var(--surface, #fff);
-  min-width: 0;
-}
-
-.athlete-home-program-image {
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
-  object-fit: cover;
-  flex: 0 0 auto;
-}
-
-.athlete-home-program-fallback {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
-  background: var(--surface-soft, #f7f8fa);
-  color: var(--muted, #667085);
-  font-size: 12px;
-  font-weight: 800;
-  flex: 0 0 auto;
-}
-
-.athlete-home-program-body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.athlete-home-program-body strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.athlete-home-program-body .plain-button {
-  min-height: 44px;
-  align-self: flex-start;
-}
-
 .athlete-home-quick-actions {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.athlete-home-quick-actions-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+/* hotfix/athlete-home-mobile-layout: a fixed 2x2 grid on phones (the
+   required layout), opening up to more columns only once there's real
+   room for them - never a single overflowing row. */
+.athlete-home-quick-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
-.athlete-home-quick-actions-row .plain-button {
-  min-height: 44px;
-  flex: 1 1 140px;
+@media (min-width: 640px) {
+  .athlete-home-quick-actions-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.athlete-home-quick-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 88px;
+  padding: 14px 8px;
+  border: 1px solid var(--line, #dfe4ea);
+  border-radius: var(--radius, 10px);
+  background: var(--surface, #fff);
+  color: var(--text, inherit);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.athlete-home-quick-action:hover {
+  border-color: var(--accent, #1f7a6f);
+}
+
+/* Larger than the sidebar's own .rail-icon (24px, see .athlete-mode
+   .rail-icon) - a quick action is a bigger, easier target than the menu
+   entry it mirrors, not a same-size duplicate of it. */
+.athlete-home-quick-action-icon {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.athlete-home-quick-action-label {
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 @media (max-width: 480px) {
   .athlete-home-day-name {
     font-size: 9px;
-  }
-
-  .athlete-home-program-cards {
-    grid-template-columns: 1fr;
   }
 }
