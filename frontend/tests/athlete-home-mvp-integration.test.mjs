@@ -235,7 +235,7 @@ test("Escape closes the mobile nav drawer without navigating - checked before an
   const marker = 'document.addEventListener("keydown", (event) => {';
   const start = appJsSource.indexOf(marker);
   assert.ok(start >= 0);
-  const block = appJsSource.slice(start, start + 400);
+  const block = appJsSource.slice(start, start + 600);
   assert.match(block, /if \(state\.mobileNavOpen\) closeMobileNav\(\);/);
 });
 

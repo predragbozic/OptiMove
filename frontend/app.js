@@ -86,6 +86,7 @@ import { closeMedia, handleFullscreenChange, handleMediaAction } from "./media-m
 import {
   closeMessagesIfOutside,
   handleMessageAction,
+  handleMessagesBack,
   loadMessages,
   openMessageConversation,
   renderMessages,
@@ -372,6 +373,10 @@ function bindEvents() {
   document.addEventListener("error", handleImageError, true);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    // feature/mobile-messages-fullscreen: same priority chain as
+    // handleAppBack() above, sharing the exact same function so the two
+    // can never drift apart - see handleMessagesBack()'s own comment.
+    if (handleMessagesBack()) return;
     if (state.athleteExitConfirmOpen) closeAthleteExitConfirm();
     if (state.mobileNavOpen) closeMobileNav();
     closeMedia();
@@ -1337,6 +1342,13 @@ function handleAppBack() {
     closeMedia();
     return true;
   }
+
+  // feature/mobile-messages-fullscreen: menu -> Hide-confirm -> thread-to-
+  // list -> close-Messages, in that exact priority order - see
+  // handleMessagesBack()'s own comment in messages.js for why this lives
+  // there (shared with the Escape handler below) and why only the last
+  // two steps are gated to mobile.
+  if (handleMessagesBack()) return true;
 
   if (state.athleteExitConfirmOpen) {
     closeAthleteExitConfirm();

@@ -206,7 +206,15 @@ export const createInitialState = () => ({
   },
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
-  messages: { open: false, rows: [], unreadCount: 0, selectedId: "", detail: null, loading: false, error: "", search: "" },
+  // feature/mobile-messages-fullscreen: menuOpen is the mobile thread
+  // header's 3-dot overflow menu (Hide/Block live there on mobile instead
+  // of always-visible buttons); hideConfirmOpen drives the styled confirm
+  // modal that replaced window.confirm for Hide (used on both desktop and
+  // mobile); sending guards against a rapid double-submit; draft holds the
+  // composer text ONLY across an error re-render (never written on every
+  // keystroke - see wireComposer in messages.js) so a failed send never
+  // loses what was typed.
+  messages: { open: false, rows: [], unreadCount: 0, selectedId: "", detail: null, loading: false, error: "", search: "", menuOpen: false, hideConfirmOpen: false, sending: false, draft: "" },
   navStack: [],
   exerciseDetail: { ids: [], currentId: null },
   exerciseLayout: "horizontal",
