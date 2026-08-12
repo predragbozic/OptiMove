@@ -119,7 +119,7 @@ test("5. organizationContextKey/loadTemplates/loadCoaches/searchExercises all ke
 test("6. signOut clears the entire view cache before/alongside its hard reload", () => {
   const start = appJsSource.indexOf("async function signOut()");
   assert.ok(start >= 0, "signOut must still exist in app.js");
-  const window = appJsSource.slice(start, start + 1000);
+  const window = appJsSource.slice(start, start + 1200);
   assert.ok(window.includes("clearAllViewCache()"), "signOut must clear the view cache, not just state.currentUser");
   const clearIndex = window.indexOf("clearAllViewCache()");
   // Searches for the redirect starting AFTER clearIndex - a comment earlier

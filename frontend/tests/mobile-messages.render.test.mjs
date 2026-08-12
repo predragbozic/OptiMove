@@ -299,31 +299,32 @@ test("the thread header has a Back button wired to the existing message-back act
 });
 
 // === Search: focus preservation and no extra API calls ===
-// This behavior lives in app.js's handleContentInput, not in messages.js,
-// and predates this phase - included here because the user's test list
-// explicitly requires it, and this phase's changes must not have disturbed
-// it (renderMessages() is still called synchronously, not through a
-// network round-trip, on every keystroke).
+// hotfix/mobile-messages-test-regression: this behavior USED to be asserted
+// against app.js's handleContentInput - but that branch could never
+// actually fire (#messagePanel lives outside #content, see the "Search
+// input wiring" section further down), so those old assertions were
+// checking dead code, not real behavior. The handling now lives in
+// messages.js's exported handleMessagesPanelInput; see
+// mobile-messages.search.test.mjs for the real jsdom-based behavior proof
+// (actual dispatched input events, actual focus/caret survival) and the
+// "Search input wiring" tests below for the app.js integration.
 
-test("app.js: message search is handled entirely client-side on input - re-renders from local state only, no api() call in the branch", () => {
-  const appPath = fileURLToPath(new URL("../app.js", import.meta.url));
-  const appSource = readFileSync(appPath, "utf8");
-  const start = appSource.indexOf('const messageSearch = event.target.closest("[data-message-search]");');
-  assert.ok(start >= 0, "handleContentInput must still special-case [data-message-search]");
-  const branch = appSource.slice(start, start + 500);
-  assert.match(branch, /state\.messages\.search = messageSearch\.value;/);
-  assert.match(branch, /renderMessages\(\);/);
-  assert.ok(!/\bapi\(/.test(branch), "typing in the message search box must never issue a network request");
+test("messages.js: message search is handled entirely client-side on input - re-renders from local state only, no api() call in the branch", () => {
+  const start = source.indexOf("export function handleMessagesPanelInput(");
+  assert.ok(start >= 0, "handleMessagesPanelInput must exist in messages.js");
+  const body = source.slice(start, source.indexOf("\n}\n", start));
+  assert.match(body, /state\.messages\.search = input\.value;/);
+  assert.match(body, /renderMessages\(\);/);
+  assert.ok(!/\bapi\(/.test(body), "typing in the message search box must never issue a network request");
 });
 
-test("app.js: message search restores focus and cursor position after the re-render, so typing never gets interrupted", () => {
-  const appPath = fileURLToPath(new URL("../app.js", import.meta.url));
-  const appSource = readFileSync(appPath, "utf8");
-  const start = appSource.indexOf('const messageSearch = event.target.closest("[data-message-search]");');
-  const branch = appSource.slice(start, start + 500);
-  assert.match(branch, /requestAnimationFrame\(\(\) => \{/);
-  assert.match(branch, /nextInput\.focus\(\);/);
-  assert.match(branch, /nextInput\.setSelectionRange\(cursor, cursor\);/);
+test("messages.js: message search restores focus and cursor position after the re-render, so typing never gets interrupted", () => {
+  const start = source.indexOf("export function handleMessagesPanelInput(");
+  assert.ok(start >= 0);
+  const body = source.slice(start, source.indexOf("\n}\n", start));
+  assert.match(body, /requestAnimationFrame\(\(\) => \{/);
+  assert.match(body, /nextInput\.focus\(\);/);
+  assert.match(body, /nextInput\.setSelectionRange\(cursor, cursor\);/);
 });
 
 // === Fullscreen shell / safe-area CSS ===
@@ -499,4 +500,102 @@ test("the same .message-row markup is reused regardless of conversation count - 
   assert.ok(start >= 0);
   const body = source.slice(start, start + 1800);
   assert.match(body, /\.map\(renderConversationRow\)\.join\(""\)|rows\.map\(/);
+});
+
+// === Search input wiring (structural checks - real event-dispatch behavior
+// is covered by mobile-messages.search.test.mjs's jsdom-based tests) ===
+// #messagePanel lives in the topbar's <header>, not inside #content, so
+// app.js's single delegated `input` listener on els.content (handleContentInput)
+// could never see the search input's events. The fix moves that handling
+// into messages.js's own exported handleMessagesPanelInput, wired as a
+// SEPARATE, equally one-time delegated listener directly on els.messagePanel
+// inside bindEvents() (called once at startup) - never re-added per render.
+
+function appSource() {
+  const appPath = fileURLToPath(new URL("../app.js", import.meta.url));
+  return readFileSync(appPath, "utf8");
+}
+
+test("app.js: handleContentInput no longer contains the dead message-search branch (it could never fire - #messagePanel is outside #content)", () => {
+  const app = appSource();
+  const start = app.indexOf("function handleContentInput(");
+  assert.ok(start >= 0, "handleContentInput must exist");
+  const body = app.slice(start, app.indexOf("\n}\n", start));
+  assert.ok(!body.includes("data-message-search"), "the dead branch must be removed from handleContentInput, not left as unreachable code");
+});
+
+test("app.js: bindEvents() wires handleMessagesPanelInput as exactly one delegated listener directly on els.messagePanel", () => {
+  const app = appSource();
+  const bindStart = app.indexOf("function bindEvents(");
+  assert.ok(bindStart >= 0);
+  const bindEnd = app.indexOf("\n}\n", bindStart);
+  const body = app.slice(bindStart, bindEnd);
+  const matches = body.match(/els\.messagePanel\?\.addEventListener\("input", handleMessagesPanelInput\)/g) || [];
+  assert.equal(matches.length, 1, "must be wired exactly once, inside bindEvents() which itself runs exactly once at startup - never inside a render function");
+});
+
+test("app.js: handleMessagesPanelInput is never passed to addEventListener anywhere outside bindEvents() - proves no render path re-adds it", () => {
+  const app = appSource();
+  const wiringCalls = app.match(/addEventListener\([^)]*handleMessagesPanelInput\)/g) || [];
+  assert.equal(wiringCalls.length, 1, `expected exactly one addEventListener(...) call wiring handleMessagesPanelInput, found ${wiringCalls.length}`);
+});
+
+test("app.js: signOut() calls resetMessagesState() before its hard reload, so a typed search can never survive into the next login", () => {
+  const app = appSource();
+  const start = app.indexOf("async function signOut(");
+  assert.ok(start >= 0);
+  const body = app.slice(start, app.indexOf("\n}\n", start));
+  assert.match(body, /resetMessagesState\(\);\s*\n\s*window\.location\.replace\("\/"\);/, "resetMessagesState() must run before the reload");
+});
+
+test("app.js: the login submit handler calls resetMessagesState() defensively, mirroring the existing organization.data/clearAllViewCache reset there", () => {
+  const app = appSource();
+  const loginIdx = app.indexOf('const form = event.target.closest("#loginForm");');
+  assert.ok(loginIdx >= 0);
+  const body = app.slice(loginIdx, loginIdx + 1500);
+  const orgResetIdx = body.indexOf("state.organization.data = null;");
+  const messagesResetIdx = body.indexOf("resetMessagesState();");
+  assert.ok(orgResetIdx >= 0 && messagesResetIdx > orgResetIdx, "resetMessagesState() must be called alongside the existing defensive per-login resets");
+});
+
+// === Participant avatars ===
+// Live-DOM rendering behavior (which element renders, src/alt/data-initials
+// values) is covered by mobile-messages.avatars.test.mjs's jsdom tests.
+// These are the parts only reachable via source inspection: app.js's
+// runtime image-error fallback (never fires in the jsdom tests since jsdom
+// doesn't actually fetch/fail image loads) and the CSS sizing contract.
+
+test("app.js: handleImageError has a .message-avatar-photo branch that rebuilds the initials fallback from data-initials, not alt", () => {
+  const app = appSource();
+  const start = app.indexOf('if (image.classList.contains("message-avatar-photo")) {');
+  assert.ok(start >= 0, "handleImageError must special-case a failed message-avatar-photo load");
+  const body = app.slice(start, start + 300);
+  assert.match(body, /fallback\.className = "message-avatar";/);
+  assert.match(body, /fallback\.textContent = image\.dataset\.initials \|\| "\?";/);
+  assert.match(body, /image\.replaceWith\(fallback\);/);
+});
+
+test("messages.js: renderAvatarMarkup renders alt=\"\" (decorative) with the real initials carried via data-initials", () => {
+  const start = source.indexOf("function renderAvatarMarkup(");
+  assert.ok(start >= 0);
+  const body = source.slice(start, source.indexOf("\n}\n", start));
+  assert.match(body, /alt=""/);
+  assert.match(body, /data-initials="\$\{escapeAttr\(initialsText\)\}"/);
+});
+
+test("styles.css: the photo avatar uses object-fit: cover and shares the base .message-avatar circular sizing", () => {
+  const css = cssSource();
+  const baseBody = ruleBody(css, ".message-avatar {");
+  assert.match(baseBody, /border-radius:\s*50%;/, "the avatar (photo or initials) must be circular");
+  const photoBody = ruleBody(css, ".message-avatar-photo {");
+  assert.match(photoBody, /object-fit:\s*cover;/);
+});
+
+test("styles.css: .message-row's avatar column is sized to 44px, matching the .message-row .message-avatar override", () => {
+  const css = cssSource();
+  const rowBody = ruleBody(css, ".message-row {");
+  assert.match(rowBody, /grid-template-columns:\s*44px/, "the fixed first grid column must match the enlarged list avatar, or it would be clipped/misaligned");
+  const rowAvatarBody = ruleBody(css, ".message-row .message-avatar {");
+  assert.match(rowAvatarBody, /width:\s*44px;/);
+  assert.match(rowAvatarBody, /height:\s*44px;/);
 });
