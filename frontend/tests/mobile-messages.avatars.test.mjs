@@ -29,6 +29,18 @@ dom.window.matchMedia = (query) => ({
 const { els } = await import("../dom.js");
 const { state } = await import("../state.js");
 const { renderMessages } = await import("../messages.js");
+const { imageSources } = await import("../media.js");
+
+// hotfix/messages-avatar-display: the exact URL SHAPE a real athlete row's
+// athletes.image_url actually has in this app - a Google Drive "share"
+// link produced by Drive's own "Copy link" action, not a fabricated
+// "example.test" URL. Requesting this URL directly as an <img src> fails
+// (it's a Drive viewer page, not raw image bytes) - this is the literal
+// bug report: the photo shows correctly in Athlete/Coach profile (which
+// already runs every image URL through media.js's imageSources() before
+// using it) but showed initials in Messages (which used to put this raw
+// URL straight into <img src> with no transform and no fallback).
+const REAL_DRIVE_SHARE_URL = "https://drive.google.com/file/d/1tgQ7FfupKdaW_fr1N48A4acLqyb-1Ylh/view?usp=drive_link";
 
 function rowWithParticipant(id, participant, overrides = {}) {
   return {
@@ -139,6 +151,52 @@ test("both the photo and initials avatar variants share the identical message-av
   const avatars = els.messagePanel.querySelectorAll(".message-row .message-avatar");
   assert.equal(avatars.length, 2);
   avatars.forEach((el) => assert.ok(el.classList.contains("message-avatar")));
+});
+
+// === Google Drive share-link photos (the actual reported bug) ===
+
+test("a conversation row resolves a real Google Drive share-link imageUrl to a fetchable thumbnail src, not the raw un-embeddable viewer URL", () => {
+  state.messages.rows = [rowWithParticipant("c1", { userId: "u2", name: "Radovan Pankov", email: "radovan@example.com", imageUrl: REAL_DRIVE_SHARE_URL })];
+  renderMessages();
+  const img = els.messagePanel.querySelector(".message-row .message-avatar-photo");
+  assert.ok(img, "a Drive share link must still render as an <img>, never silently drop to initials");
+  const [expectedSrc] = imageSources(REAL_DRIVE_SHARE_URL);
+  assert.equal(img.getAttribute("src"), expectedSrc);
+  assert.notEqual(img.getAttribute("src"), REAL_DRIVE_SHARE_URL, "the raw Drive viewer URL is not a fetchable image and must never be used as src directly");
+});
+
+test("a conversation row's Drive-link avatar carries the remaining real image endpoints as data-fallbacks, so a failed primary load has somewhere real to go before ever falling back to initials", () => {
+  state.messages.rows = [rowWithParticipant("c1", { userId: "u2", name: "Radovan Pankov", email: "radovan@example.com", imageUrl: REAL_DRIVE_SHARE_URL })];
+  renderMessages();
+  const img = els.messagePanel.querySelector(".message-row .message-avatar-photo");
+  const allSources = imageSources(REAL_DRIVE_SHARE_URL);
+  const fallbacks = JSON.parse(img.dataset.fallbacks || "[]");
+  assert.deepEqual(fallbacks, allSources.slice(1), "every remaining real Drive image endpoint must be queued, in order");
+  assert.equal(fallbacks.length, 2, "a Drive URL resolves to 3 total candidate endpoints (thumbnail, googleusercontent, uc?export=view) - 1 src + 2 fallbacks");
+});
+
+test("the thread header resolves the same Drive share-link the same way as the list row", () => {
+  openThreadWith({ userId: "u2", name: "Radovan Pankov", email: "radovan@example.com", imageUrl: REAL_DRIVE_SHARE_URL });
+  const img = els.messagePanel.querySelector(".message-thread-identity .message-avatar-photo");
+  const [expectedSrc] = imageSources(REAL_DRIVE_SHARE_URL);
+  assert.equal(img.getAttribute("src"), expectedSrc);
+});
+
+test("a plain, already-direct image URL (not a Drive link) is completely unaffected by the Drive transform - same src, no fallbacks queued", () => {
+  const directUrl = "https://example.test/direct-photo.jpg";
+  state.messages.rows = [rowWithParticipant("c1", { userId: "u2", name: "Direct Photo", email: "direct@example.com", imageUrl: directUrl })];
+  renderMessages();
+  const img = els.messagePanel.querySelector(".message-row .message-avatar-photo");
+  assert.equal(img.getAttribute("src"), directUrl);
+  assert.equal(img.dataset.fallbacks, undefined, "a non-Drive URL has only one candidate source, so no data-fallbacks attribute should be emitted at all");
+});
+
+test("messages.js resolves a Drive share link through the identical imageSources() helper media.js exposes to Athlete Home/Athlete profile/Coach profile - a photo that works there is guaranteed to resolve to the same src here", () => {
+  state.messages.rows = [rowWithParticipant("c1", { userId: "u2", name: "Radovan Pankov", email: "radovan@example.com", imageUrl: REAL_DRIVE_SHARE_URL })];
+  renderMessages();
+  const img = els.messagePanel.querySelector(".message-row .message-avatar-photo");
+  const [athleteHomeWouldUse] = imageSources(REAL_DRIVE_SHARE_URL);
+  assert.equal(img.getAttribute("src"), athleteHomeWouldUse, "Messages and Athlete Home/profile must resolve the exact same stored URL to the exact same src - one shared transform, not two divergent ones");
 });
 
 // === Search and avatars work together ===
