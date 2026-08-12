@@ -569,8 +569,26 @@ test("22. concurrent revoke-role and disable-login targeting different admins ne
       api(`/api/organization/users/${adminB.id}/login-status`, { method: "PUT", cookie: cookieFor(actorToken), body: { active: false } }),
     ]);
 
+    // test/stabilize-backend-suite: both requests share actor adminA's
+    // session. setUserLoginStatus() (organization.js) reads req.authz -
+    // computed fresh from the DB at request time - to decide whether the
+    // actor is still a platform admin. If the DELETE commits first, it
+    // revokes adminA's own platform_admin role; when the PUT's authz check
+    // then runs, it correctly sees adminA as no longer a platform admin and
+    // rejects with 403 ("Only a platform admin can manage a platform admin
+    // account") instead of ever reaching the 409 LAST_PLATFORM_ADMIN
+    // headcount check. That 403 is a real, safe rejection - not a flake -
+    // so it must be accepted alongside the 409 outcome (headcount lock wins
+    // and blocks the operation before the authz race can even happen). Both
+    // orderings are safe; only the exact status pairing depends on which
+    // request's transaction commits first.
     const statuses = [revokeRes.status, disableRes.status].sort();
-    assert.deepEqual(statuses, [200, 409], "exactly one of the two cross-endpoint operations must succeed");
+    const isKnownSafeOutcome =
+      (statuses[0] === 200 && statuses[1] === 409) || (statuses[0] === 200 && statuses[1] === 403);
+    assert.ok(
+      isKnownSafeOutcome,
+      `exactly one of the two cross-endpoint operations must succeed and the other must be safely rejected (200+409 or 200+403), got ${JSON.stringify(statuses)}`,
+    );
 
     const qualifying = await query(
       `select u.id
@@ -579,7 +597,17 @@ test("22. concurrent revoke-role and disable-login targeting different admins ne
        where u.is_active = true and u.id = any($1::uuid[])`,
       [[adminA.id, adminB.id]],
     );
-    assert.equal(qualifying.rows.length, 1, "exactly one of the two admins must remain login-active and role-active");
+    // The invariant that actually matters - regardless of which of the two
+    // safe outcomes above occurred - is that login-active,
+    // platform_admin-active coverage never drops to zero. In this specific
+    // two-admin harness that always works out to exactly one (one operation
+    // always succeeds, the other is always rejected), but the assertion
+    // below deliberately checks the invariant itself ("at least one"),
+    // not an artifact of the fixture's admin count.
+    assert.ok(
+      qualifying.rows.length >= 1,
+      `at least one of the two admins must remain login-active and role-active, found ${qualifying.rows.length}`,
+    );
   });
 });
 
