@@ -9,8 +9,8 @@ import { runCleanupSteps } from "./_test-cleanup.mjs";
 
 // hotfix/mobile-messages-test-regression: GET /api/messages and
 // GET /api/messages/:conversationId now include an `imageUrl` field per
-// participant, sourced from coach_profiles.photo_url (coach priority) or
-// athletes.image_url - see the audit comment at the top of
+// participant, sourced from athletes.image_url (athlete priority) or
+// coach_profiles.photo_url - see the audit comment at the top of
 // src/routes/messages.js for why these two columns and not
 // users.image_url/image_mime_type (unused dead columns, verified via a
 // repo-wide grep before writing this).
@@ -192,9 +192,12 @@ test("an athlete row that exists but has a null image_url also gets an empty ima
   assert.equal(participant.imageUrl, "");
 });
 
-// === Multi-role priority: coach photo wins over athlete photo ===
+// === Multi-role priority: athlete photo wins over coach photo ===
+// A user with a real athlete profile must see their own athlete photo in
+// Messages, even if they also hold a coach_profiles row with a different
+// photo - see the priority comment at the top of src/routes/messages.js.
 
-test("a multi-role participant (both an athlete row and a coach_profiles row, both with photos) returns the COACH photo, per the documented priority", async () => {
+test("a multi-role participant (both an athlete row and a coach_profiles row, with DIFFERENT photos) returns the ATHLETE photo, per the documented priority", async () => {
   const viewer = await makeUser({ email: await uniqueEmail("avatar-viewer-7") });
   const multiRoleUser = await makeUser({ email: await uniqueEmail("avatar-multi-1") });
   await makeAthleteFor(multiRoleUser.id, { imageUrl: "https://example.test/athlete-side.jpg" });
@@ -204,10 +207,11 @@ test("a multi-role participant (both an athlete row and a coach_profiles row, bo
 
   const res = await api("/api/messages", { cookie: cookieFor(token) });
   const participant = participantById(res.body.conversations[0].participants, multiRoleUser.id);
-  assert.equal(participant.imageUrl, "https://example.test/coach-side.jpg");
+  assert.equal(participant.imageUrl, "https://example.test/athlete-side.jpg");
+  assert.notEqual(participant.imageUrl, "https://example.test/coach-side.jpg");
 });
 
-test("a multi-role participant with ONLY an athlete photo (no coach_profiles row) falls back to the athlete photo", async () => {
+test("a multi-role participant with ONLY an athlete photo (no coach_profiles row) uses the athlete photo", async () => {
   const viewer = await makeUser({ email: await uniqueEmail("avatar-viewer-8") });
   const athleteOnlyUser = await makeUser({ email: await uniqueEmail("avatar-athlete-only") });
   await makeAthleteFor(athleteOnlyUser.id, { imageUrl: "https://example.test/athlete-only.jpg" });
@@ -217,6 +221,19 @@ test("a multi-role participant with ONLY an athlete photo (no coach_profiles row
   const res = await api("/api/messages", { cookie: cookieFor(token) });
   const participant = participantById(res.body.conversations[0].participants, athleteOnlyUser.id);
   assert.equal(participant.imageUrl, "https://example.test/athlete-only.jpg");
+});
+
+test("a multi-role participant with an athlete row that has NO photo, but a coach_profiles row that DOES, falls back to the coach photo", async () => {
+  const viewer = await makeUser({ email: await uniqueEmail("avatar-viewer-11") });
+  const multiRoleUser = await makeUser({ email: await uniqueEmail("avatar-multi-2") });
+  await makeAthleteFor(multiRoleUser.id, { imageUrl: null });
+  await makeCoachProfileFor(multiRoleUser.id, { photoUrl: "https://example.test/coach-fallback.jpg" });
+  await makeConversationBetween(viewer.id, multiRoleUser.id);
+  const token = await createSession(viewer.id);
+
+  const res = await api("/api/messages", { cookie: cookieFor(token) });
+  const participant = participantById(res.body.conversations[0].participants, multiRoleUser.id);
+  assert.equal(participant.imageUrl, "https://example.test/coach-fallback.jpg");
 });
 
 // === No leak of a non-participant's photo ===

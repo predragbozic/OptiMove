@@ -5,24 +5,25 @@ import { ensureDirectCoachConversation, sendConversationMessage, userCanAccessCo
 const router = Router();
 
 // hotfix/mobile-messages-test-regression: participant photo sourcing.
-// Audited every candidate column before picking these two: coach_profiles.
-// photo_url (the self-service profile photo coaches already manage) and
-// athletes.image_url (the equivalent self-service field athletes manage via
-// Settings' Personal data form). users.image_url/image_mime_type also exist
+// Audited every candidate column before picking these two: athletes.
+// image_url (the self-service field athletes manage via Settings' Personal
+// data form) and coach_profiles.photo_url (the equivalent self-service
+// profile photo coaches manage). users.image_url/image_mime_type also exist
 // in the schema but have zero application code anywhere reading or writing
 // them - dead columns from an earlier design, not a real, currently-used
-// avatar source, so they are deliberately not used here.
+// avatar source, so they are deliberately not used here. No role_hint
+// involved anywhere in this priority - both columns are looked up directly
+// off the real athletes/coach_profiles tables.
 // coach_profiles.user_id and athletes.user_id are both uniquely indexed
 // (coach_profiles_user_id_key, athletes_user_id_unique), so a plain LEFT
 // JOIN on either can never multiply a participant's row.
 // Priority for a multi-role account (both an active athlete row AND a
-// coach_profiles row): coach photo wins. Rationale - coach_profiles.photo_url
-// is already this app's public-facing "professional identity" photo (used
-// in the Coaches directory elsewhere), which is the more relevant identity
-// in a messaging context than the athlete roster photo. This is a judgment
-// call, not a hard requirement; if that ever needs to flip, both queries
-// below use the identical `coalesce(cp.photo_url, ath.image_url, '')`
-// expression, so swapping the order updates both call sites at once.
+// coach_profiles row): ATHLETE photo wins. A user with a real athlete
+// profile must see their own athlete photo in Messages, even if they also
+// hold a coach profile with a different photo. Both queries below use the
+// identical `coalesce(ath.image_url, cp.photo_url, '')` expression, so
+// changing the priority again only ever means editing this one expression
+// in both places.
 // Both LEFT JOINs are added to the SAME per-conversation participants
 // lateral subquery that already existed (building the participants array),
 // not a new subquery - the query still runs exactly once per conversation
@@ -88,7 +89,7 @@ router.get("/", async (req, res, next) => {
            'name', coalesce(nullif(u.display_name, ''), nullif(u.full_name, ''), u.email),
            'email', u.email,
            'role', u.role_hint,
-           'imageUrl', coalesce(cp.photo_url, ath.image_url, '')
+           'imageUrl', coalesce(ath.image_url, cp.photo_url, '')
          ) order by u.email) as participants
          from public.message_participants mp
          join public.users u on u.id = mp.user_id
@@ -132,7 +133,7 @@ router.get("/:conversationId", async (req, res, next) => {
              'name', coalesce(nullif(u.display_name, ''), nullif(u.full_name, ''), u.email),
              'email', u.email,
              'role', u.role_hint,
-             'imageUrl', coalesce(cp.photo_url, ath.image_url, '')
+             'imageUrl', coalesce(ath.image_url, cp.photo_url, '')
            ) order by u.email) as participants
            from public.message_participants all_mp
            join public.users u on u.id = all_mp.user_id
