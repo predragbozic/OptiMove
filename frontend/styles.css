@@ -2992,8 +2992,21 @@ input:focus {
 }
 
 .athlete-tabs .tab {
-  min-height: 43px;
+  min-height: 44px;
   white-space: normal;
+}
+
+/* ui/athlete-program-navigation-icons: Weekly plans / Specific programs
+   reuse the same icon markup as the Athlete Home Quick actions
+   (ICON_CALENDAR / ICON_SPECIFIC_PROGRAMS, athlete-home.js) rather than a
+   second copy of the SVG paths - sized down here to match this tab
+   context's existing .tab-icon dimensions instead of the larger Quick
+   action grid size. */
+.tab-with-icon .athlete-home-quick-action-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  stroke-width: 2;
 }
 
 .chip-row {
