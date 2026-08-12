@@ -87,9 +87,11 @@ import {
   closeMessagesIfOutside,
   handleMessageAction,
   handleMessagesBack,
+  handleMessagesPanelInput,
   loadMessages,
   openMessageConversation,
   renderMessages,
+  resetMessagesState,
   submitMessageForm,
 } from "./messages.js";
 import {
@@ -365,6 +367,13 @@ function bindEvents() {
   els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("input", handleContentInput);
   els.content.addEventListener("change", handleContentChange);
+  // hotfix/mobile-messages-test-regression: #messagePanel lives in the
+  // topbar's <header>, not inside #content, so the search input's `input`
+  // events can never reach the listener above - a separate, equally
+  // one-time delegated listener directly on the persistent #messagePanel
+  // node. Attached once here (bindEvents runs once at startup), never
+  // per-render - see handleMessagesPanelInput's own comment in messages.js.
+  els.messagePanel?.addEventListener("input", handleMessagesPanelInput);
   els.content.addEventListener("focusin", handleContentFocusIn);
   els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
   els.content.addEventListener("touchend", handleSwipeEnd, { passive: true });
@@ -546,6 +555,7 @@ async function handleContentSubmit(event) {
       // behavior changes later.
       state.organization.data = null;
       clearAllViewCache();
+      resetMessagesState();
       // /login only returns the compatible base user shape - reload the
       // full /me shape (capabilities/activeWorkspace/availableWorkspaces)
       // before deciding which shell to land in below.
@@ -735,20 +745,6 @@ function handleContentFocusIn(event) {
 }
 
 function handleContentInput(event) {
-  const messageSearch = event.target.closest("[data-message-search]");
-  if (messageSearch) {
-    const cursor = messageSearch.selectionStart;
-    state.messages.search = messageSearch.value;
-    renderMessages();
-    requestAnimationFrame(() => {
-      const nextInput = els.messagePanel?.querySelector("[data-message-search]");
-      if (!nextInput) return;
-      nextInput.focus();
-      if (Number.isInteger(cursor)) nextInput.setSelectionRange(cursor, cursor);
-    });
-    return;
-  }
-
   const orgFilter = event.target.closest("[data-org-select-filter]");
   if (orgFilter) {
     handleOrganizationFilterInput(orgFilter);
@@ -970,8 +966,11 @@ async function signOut() {
     // Coaches/Organization/Program Library/Exercise Library/Builder-drafts
     // data could survive into the next session regardless. Cleared
     // explicitly anyway so that invariant is self-evident here, not just an
-    // accident of the reload, in case that ever changes.
+    // accident of the reload, in case that ever changes. Same reasoning for
+    // resetMessagesState() - a typed-but-not-yet-cleared search must never
+    // be attributable to whichever account logs in next.
     clearAllViewCache();
+    resetMessagesState();
     window.location.replace("/");
   }
 }
@@ -1069,6 +1068,18 @@ function handleImageError(event) {
     const fallback = document.createElement("span");
     fallback.className = "avatar-fallback";
     fallback.textContent = image.alt || "?";
+    image.replaceWith(fallback);
+    return;
+  }
+
+  // hotfix/mobile-messages-test-regression: message-avatar-photo's alt is
+  // deliberately empty (decorative - the participant's name always sits
+  // right next to it), so unlike the generic .avatar branch above, the
+  // fallback text comes from data-initials, not image.alt.
+  if (image.classList.contains("message-avatar-photo")) {
+    const fallback = document.createElement("span");
+    fallback.className = "message-avatar";
+    fallback.textContent = image.dataset.initials || "?";
     image.replaceWith(fallback);
     return;
   }

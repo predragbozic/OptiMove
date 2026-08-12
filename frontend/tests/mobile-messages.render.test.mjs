@@ -198,7 +198,13 @@ test("submitMessageForm sets sending=true synchronously before the API call, so 
 
 test("a failed send preserves the typed text in state.messages.draft, and restores it into the re-rendered input's value attribute", () => {
   const submitBody = sliceFunction("submitMessageForm", 1300);
-  assert.match(submitBody, /catch \(error\) \{\s*\n(\s*\/\/.*\n)*\s*state\.messages\.draft = body;/);
+  // `.` never matches CR in JS regex (ECMAScript's LineTerminator set - LF,
+  // CR, LS, PS - is excluded from the dot), so `.*\n` cannot cross this
+  // file's CRLF line endings inside the multi-line comment block between
+  // `catch (error) {` and the draft-preserving assignment. [^\r\n]* with an
+  // explicit \r? before each \n handles CRLF (and would still handle LF-only
+  // files, since \r? is optional).
+  assert.match(submitBody, /catch \(error\) \{\r?\n(\s*\/\/[^\r\n]*\r?\n)*\s*state\.messages\.draft = body;/);
   const conversationBody = sliceFunction("renderConversationHtml", 3800);
   assert.match(conversationBody, /const draft = escapeAttr\(state\.messages\.draft \|\| ""\);/);
   assert.match(conversationBody, /<input name="body" type="text" placeholder="Write a message\.\.\." autocomplete="off" value="\$\{draft\}">/);
@@ -249,7 +255,7 @@ test("going back to the list (message-back and the mobile Back/Escape path) clea
 // === Scroll-to-bottom / near-bottom realtime behavior ===
 
 test("renderMessages() scrolls to the bottom on a newly-opened conversation OR when the reader was already near the bottom - never forces scroll otherwise", () => {
-  const body = sliceFunction("renderMessages", 1600);
+  const body = sliceFunction("renderMessages", 1700);
   assert.match(body, /const wasNearBottom = !previousThread\s*\n\s*\|\| previousThread\.scrollHeight - previousThread\.scrollTop - previousThread\.clientHeight <= NEAR_BOTTOM_THRESHOLD_PX;/);
   assert.match(body, /const isNewConversation = currentConversationId !== previousConversationId;/);
   assert.match(body, /if \(isNewConversation \|\| wasNearBottom\) \{\s*\n\s*newThread\.scrollTop = newThread\.scrollHeight;/);
@@ -293,31 +299,32 @@ test("the thread header has a Back button wired to the existing message-back act
 });
 
 // === Search: focus preservation and no extra API calls ===
-// This behavior lives in app.js's handleContentInput, not in messages.js,
-// and predates this phase - included here because the user's test list
-// explicitly requires it, and this phase's changes must not have disturbed
-// it (renderMessages() is still called synchronously, not through a
-// network round-trip, on every keystroke).
+// hotfix/mobile-messages-test-regression: this behavior USED to be asserted
+// against app.js's handleContentInput - but that branch could never
+// actually fire (#messagePanel lives outside #content, see the "Search
+// input wiring" section further down), so those old assertions were
+// checking dead code, not real behavior. The handling now lives in
+// messages.js's exported handleMessagesPanelInput; see
+// mobile-messages.search.test.mjs for the real jsdom-based behavior proof
+// (actual dispatched input events, actual focus/caret survival) and the
+// "Search input wiring" tests below for the app.js integration.
 
-test("app.js: message search is handled entirely client-side on input - re-renders from local state only, no api() call in the branch", () => {
-  const appPath = fileURLToPath(new URL("../app.js", import.meta.url));
-  const appSource = readFileSync(appPath, "utf8");
-  const start = appSource.indexOf('const messageSearch = event.target.closest("[data-message-search]");');
-  assert.ok(start >= 0, "handleContentInput must still special-case [data-message-search]");
-  const branch = appSource.slice(start, start + 500);
-  assert.match(branch, /state\.messages\.search = messageSearch\.value;/);
-  assert.match(branch, /renderMessages\(\);/);
-  assert.ok(!/\bapi\(/.test(branch), "typing in the message search box must never issue a network request");
+test("messages.js: message search is handled entirely client-side on input - re-renders from local state only, no api() call in the branch", () => {
+  const start = source.indexOf("export function handleMessagesPanelInput(");
+  assert.ok(start >= 0, "handleMessagesPanelInput must exist in messages.js");
+  const body = source.slice(start, source.indexOf("\n}\n", start));
+  assert.match(body, /state\.messages\.search = input\.value;/);
+  assert.match(body, /renderMessages\(\);/);
+  assert.ok(!/\bapi\(/.test(body), "typing in the message search box must never issue a network request");
 });
 
-test("app.js: message search restores focus and cursor position after the re-render, so typing never gets interrupted", () => {
-  const appPath = fileURLToPath(new URL("../app.js", import.meta.url));
-  const appSource = readFileSync(appPath, "utf8");
-  const start = appSource.indexOf('const messageSearch = event.target.closest("[data-message-search]");');
-  const branch = appSource.slice(start, start + 500);
-  assert.match(branch, /requestAnimationFrame\(\(\) => \{/);
-  assert.match(branch, /nextInput\.focus\(\);/);
-  assert.match(branch, /nextInput\.setSelectionRange\(cursor, cursor\);/);
+test("messages.js: message search restores focus and cursor position after the re-render, so typing never gets interrupted", () => {
+  const start = source.indexOf("export function handleMessagesPanelInput(");
+  assert.ok(start >= 0);
+  const body = source.slice(start, source.indexOf("\n}\n", start));
+  assert.match(body, /requestAnimationFrame\(\(\) => \{/);
+  assert.match(body, /nextInput\.focus\(\);/);
+  assert.match(body, /nextInput\.setSelectionRange\(cursor, cursor\);/);
 });
 
 // === Fullscreen shell / safe-area CSS ===
@@ -366,4 +373,229 @@ test("styles.css: no rule inside the mobile Messages block sets a width/inset wi
       assert.ok(Number(num) <= 100, `unexpected viewport-width declaration that could overflow: ${decl}`);
     }
   }
+});
+
+// === hotfix/mobile-messages-test-regression: compact conversation list ===
+// Root cause of the "1-2 rows stretch to fill the screen" bug: .message-list
+// is display:grid with implicit auto row tracks; sitting inside the mobile
+// .message-inbox-list's minmax(0, 1fr) row gives it a DEFINITE height, and
+// grid's default align-content (normal -> stretch here) stretches those few
+// row tracks to fill that height. align-content: start is the fix - see the
+// comment on the base .message-list rule in styles.css.
+
+function cssSource() {
+  const cssPath = fileURLToPath(new URL("../styles.css", import.meta.url));
+  return readFileSync(cssPath, "utf8");
+}
+
+function ruleBody(css, selector) {
+  const start = css.indexOf(selector);
+  assert.ok(start >= 0, `${selector} rule must exist in styles.css`);
+  return css.slice(start, css.indexOf("}", start));
+}
+
+test("styles.css: .message-list uses align-content: start so 1-2 rows pack at the top instead of stretching to fill the available height", () => {
+  const body = ruleBody(cssSource(), ".message-list {");
+  assert.match(body, /align-content:\s*start;/);
+});
+
+test("styles.css: on mobile, .message-inbox-list is a 3-row grid (header, search, minmax(0, 1fr) list) with overflow hidden - only the inner .message-list can ever scroll", () => {
+  const css = cssSource();
+  const mediaStart = css.indexOf("@media (max-width: 760px) {");
+  const mediaEnd = css.indexOf("\n}\n\n.panel-status", mediaStart);
+  const block = css.slice(mediaStart, mediaEnd);
+  const listBody = ruleBody(block, ".message-inbox-list {");
+  assert.match(listBody, /grid-template-rows:\s*auto auto minmax\(0, 1fr\);/);
+  assert.match(listBody, /overflow:\s*hidden;/);
+});
+
+test("styles.css: on mobile, .message-list itself is the only scrollable region (overflow-y: auto, overflow-x: hidden)", () => {
+  const css = cssSource();
+  const mediaStart = css.indexOf("@media (max-width: 760px) {");
+  const mediaEnd = css.indexOf("\n}\n\n.panel-status", mediaStart);
+  const block = css.slice(mediaStart, mediaEnd);
+  const listBody = ruleBody(block, ".message-list {");
+  assert.match(listBody, /overflow-y:\s*auto;/);
+  assert.match(listBody, /overflow-x:\s*hidden;/);
+});
+
+test("styles.css: on mobile, .message-row's compact height falls within the required ~68-76px range", () => {
+  const css = cssSource();
+  const mediaStart = css.indexOf("@media (max-width: 760px) {");
+  const mediaEnd = css.indexOf("\n}\n\n.panel-status", mediaStart);
+  const block = css.slice(mediaStart, mediaEnd);
+  const rowBody = ruleBody(block, ".message-row {");
+  const match = rowBody.match(/min-height:\s*(\d+)px/);
+  assert.ok(match, "min-height must be set on the mobile .message-row rule");
+  const value = Number(match[1]);
+  assert.ok(value >= 68 && value <= 76, `expected .message-row min-height within 68-76px, got ${value}px`);
+});
+
+test("styles.css: long name/last-message text is clipped with ellipsis, not wrapped, so a long conversation entry can never grow a row's height", () => {
+  const body = ruleBody(cssSource(), ".message-row-main strong,");
+  assert.match(body, /white-space:\s*nowrap;/);
+  assert.match(body, /overflow:\s*hidden;/);
+  assert.match(body, /text-overflow:\s*ellipsis;/);
+});
+
+// === Send icon orientation ===
+
+test("ICON_SEND's path data is the Material Design 'send' glyph, tip pointing due right at x=23 (the rightmost point), vertically centered - not the previous inverted path", () => {
+  assert.match(source, /const ICON_SEND = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2\.01 21L23 12 2\.01 3 2 10l15 2-15 2z" fill="currentColor">/);
+  assert.ok(!source.includes("M4 12l16-8-6.5 8L20 20 4 12z"), "the old inverted send-icon path must be fully removed");
+});
+
+test("ICON_SEND's path's rightmost point (the arrow tip) sits at the vertical center of the 24x24 viewBox, confirming it points right rather than left/down", () => {
+  const match = source.match(/const ICON_SEND = `<svg viewBox="0 0 24 24"[^`]*?<path d="([^"]+)"/);
+  assert.ok(match, "ICON_SEND path data must be extractable");
+  const d = match[1];
+  const numbers = d.match(/-?\d+(?:\.\d+)?/g).map(Number);
+  const points = [];
+  for (let i = 0; i + 1 < numbers.length; i += 2) points.push([numbers[i], numbers[i + 1]]);
+  const rightmost = points.reduce((a, b) => (b[0] > a[0] ? b : a));
+  assert.equal(rightmost[0], 23, "the tip (rightmost x) should be at x=23");
+  assert.equal(rightmost[1], 12, "the tip should be vertically centered (y=12) in the 24-tall viewBox");
+});
+
+test("the Send button is not rotated as a whole - only ICON_SEND's own path data changed, .message-send-button carries no transform/rotate rule", () => {
+  const css = cssSource();
+  assert.ok(!/\.message-send-button\s*\{[^}]*transform/.test(css), "the button itself must not be rotated - only the icon's path was corrected");
+});
+
+test("mobile Send button stays a circular >=44x44px icon-only button with aria-label, no text label added", () => {
+  const css = cssSource();
+  const mediaStart = css.indexOf("@media (max-width: 760px) {");
+  const mediaEnd = css.indexOf("\n}\n\n.panel-status", mediaStart);
+  const block = css.slice(mediaStart, mediaEnd);
+  const body = ruleBody(block, ".message-send-button {");
+  assert.match(body, /width:\s*44px;/);
+  assert.match(body, /height:\s*44px;/);
+  assert.match(body, /border-radius:\s*50%;/, "button must actually render circular, not just be 44x44 square - the mobile rule must be scoped specifically enough (e.g. .message-compose .message-send-button) to beat .plain-button's later, equal-specificity border-radius: var(--radius) in the cascade");
+  const composeBody = sliceFunction("renderConversationHtml", 3800);
+  assert.ok(!/message-send-button"[^>]*>\s*Send\s*</.test(composeBody), "the button must stay icon-only, never gaining literal 'Send' text");
+});
+
+test("desktop and mobile share the exact same Send button markup (single source, no separate desktop text button that needs preserving)", () => {
+  const composeBody = sliceFunction("renderConversationHtml", 3800);
+  const sendButtonMatches = composeBody.match(/class="plain-button compact-button message-send-button"/g) || [];
+  assert.equal(sendButtonMatches.length, 1, "there must be exactly one Send button rendered - the same markup serves both desktop and mobile via CSS, not a duplicated desktop-only button");
+});
+
+// === Compact list scenarios (1, 2, 20 conversations) ===
+// renderConversationRow/renderMessagePanelHtml are pure string-template
+// functions with no per-row inline height - the actual "does it stay
+// compact" behavior is entirely CSS-driven (asserted above via
+// align-content/overflow/min-height), so these confirm the row markup
+// itself carries no inline sizing that could fight the CSS fix.
+
+test("renderConversationRow never sets an inline height/flex-grow style that could override the CSS-driven compact row height", () => {
+  const start = source.indexOf("function renderConversationRow(");
+  assert.ok(start >= 0);
+  const body = source.slice(start, start + 900);
+  assert.ok(!/style="[^"]*height/.test(body), "no inline height style should exist on a conversation row");
+});
+
+test("the same .message-row markup is reused regardless of conversation count - list length only changes how many rows are joined, never their template", () => {
+  const start = source.indexOf("function renderMessagePanelHtml(");
+  assert.ok(start >= 0);
+  const body = source.slice(start, start + 1800);
+  assert.match(body, /\.map\(renderConversationRow\)\.join\(""\)|rows\.map\(/);
+});
+
+// === Search input wiring (structural checks - real event-dispatch behavior
+// is covered by mobile-messages.search.test.mjs's jsdom-based tests) ===
+// #messagePanel lives in the topbar's <header>, not inside #content, so
+// app.js's single delegated `input` listener on els.content (handleContentInput)
+// could never see the search input's events. The fix moves that handling
+// into messages.js's own exported handleMessagesPanelInput, wired as a
+// SEPARATE, equally one-time delegated listener directly on els.messagePanel
+// inside bindEvents() (called once at startup) - never re-added per render.
+
+function appSource() {
+  const appPath = fileURLToPath(new URL("../app.js", import.meta.url));
+  return readFileSync(appPath, "utf8");
+}
+
+test("app.js: handleContentInput no longer contains the dead message-search branch (it could never fire - #messagePanel is outside #content)", () => {
+  const app = appSource();
+  const start = app.indexOf("function handleContentInput(");
+  assert.ok(start >= 0, "handleContentInput must exist");
+  const body = app.slice(start, app.indexOf("\n}\n", start));
+  assert.ok(!body.includes("data-message-search"), "the dead branch must be removed from handleContentInput, not left as unreachable code");
+});
+
+test("app.js: bindEvents() wires handleMessagesPanelInput as exactly one delegated listener directly on els.messagePanel", () => {
+  const app = appSource();
+  const bindStart = app.indexOf("function bindEvents(");
+  assert.ok(bindStart >= 0);
+  const bindEnd = app.indexOf("\n}\n", bindStart);
+  const body = app.slice(bindStart, bindEnd);
+  const matches = body.match(/els\.messagePanel\?\.addEventListener\("input", handleMessagesPanelInput\)/g) || [];
+  assert.equal(matches.length, 1, "must be wired exactly once, inside bindEvents() which itself runs exactly once at startup - never inside a render function");
+});
+
+test("app.js: handleMessagesPanelInput is never passed to addEventListener anywhere outside bindEvents() - proves no render path re-adds it", () => {
+  const app = appSource();
+  const wiringCalls = app.match(/addEventListener\([^)]*handleMessagesPanelInput\)/g) || [];
+  assert.equal(wiringCalls.length, 1, `expected exactly one addEventListener(...) call wiring handleMessagesPanelInput, found ${wiringCalls.length}`);
+});
+
+test("app.js: signOut() calls resetMessagesState() before its hard reload, so a typed search can never survive into the next login", () => {
+  const app = appSource();
+  const start = app.indexOf("async function signOut(");
+  assert.ok(start >= 0);
+  const body = app.slice(start, app.indexOf("\n}\n", start));
+  assert.match(body, /resetMessagesState\(\);\s*\n\s*window\.location\.replace\("\/"\);/, "resetMessagesState() must run before the reload");
+});
+
+test("app.js: the login submit handler calls resetMessagesState() defensively, mirroring the existing organization.data/clearAllViewCache reset there", () => {
+  const app = appSource();
+  const loginIdx = app.indexOf('const form = event.target.closest("#loginForm");');
+  assert.ok(loginIdx >= 0);
+  const body = app.slice(loginIdx, loginIdx + 1500);
+  const orgResetIdx = body.indexOf("state.organization.data = null;");
+  const messagesResetIdx = body.indexOf("resetMessagesState();");
+  assert.ok(orgResetIdx >= 0 && messagesResetIdx > orgResetIdx, "resetMessagesState() must be called alongside the existing defensive per-login resets");
+});
+
+// === Participant avatars ===
+// Live-DOM rendering behavior (which element renders, src/alt/data-initials
+// values) is covered by mobile-messages.avatars.test.mjs's jsdom tests.
+// These are the parts only reachable via source inspection: app.js's
+// runtime image-error fallback (never fires in the jsdom tests since jsdom
+// doesn't actually fetch/fail image loads) and the CSS sizing contract.
+
+test("app.js: handleImageError has a .message-avatar-photo branch that rebuilds the initials fallback from data-initials, not alt", () => {
+  const app = appSource();
+  const start = app.indexOf('if (image.classList.contains("message-avatar-photo")) {');
+  assert.ok(start >= 0, "handleImageError must special-case a failed message-avatar-photo load");
+  const body = app.slice(start, start + 300);
+  assert.match(body, /fallback\.className = "message-avatar";/);
+  assert.match(body, /fallback\.textContent = image\.dataset\.initials \|\| "\?";/);
+  assert.match(body, /image\.replaceWith\(fallback\);/);
+});
+
+test("messages.js: renderAvatarMarkup renders alt=\"\" (decorative) with the real initials carried via data-initials", () => {
+  const start = source.indexOf("function renderAvatarMarkup(");
+  assert.ok(start >= 0);
+  const body = source.slice(start, source.indexOf("\n}\n", start));
+  assert.match(body, /alt=""/);
+  assert.match(body, /data-initials="\$\{escapeAttr\(initialsText\)\}"/);
+});
+
+test("styles.css: the photo avatar uses object-fit: cover and shares the base .message-avatar circular sizing", () => {
+  const css = cssSource();
+  const baseBody = ruleBody(css, ".message-avatar {");
+  assert.match(baseBody, /border-radius:\s*50%;/, "the avatar (photo or initials) must be circular");
+  const photoBody = ruleBody(css, ".message-avatar-photo {");
+  assert.match(photoBody, /object-fit:\s*cover;/);
+});
+
+test("styles.css: .message-row's avatar column is sized to 44px, matching the .message-row .message-avatar override", () => {
+  const css = cssSource();
+  const rowBody = ruleBody(css, ".message-row {");
+  assert.match(rowBody, /grid-template-columns:\s*44px/, "the fixed first grid column must match the enlarged list avatar, or it would be clipped/misaligned");
+  const rowAvatarBody = ruleBody(css, ".message-row .message-avatar {");
+  assert.match(rowAvatarBody, /width:\s*44px;/);
+  assert.match(rowAvatarBody, /height:\s*44px;/);
 });

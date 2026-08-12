@@ -303,6 +303,15 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   display: grid;
   gap: 6px;
   padding: 8px;
+  /* hotfix/mobile-messages-test-regression: with only 1-2 rows, a grid
+     container sitting inside a definite-height track (the mobile
+     .message-inbox-list's minmax(0, 1fr) row - see below) stretches its
+     implicit auto row tracks to fill that height by default
+     (align-content: normal computes to stretch here), which is exactly the
+     reported bug - a lone conversation row growing to fill the screen.
+     align-content: start packs rows at the top instead and leaves any
+     leftover space empty below the last row. */
+  align-content: start;
 }
 
 .message-inbox-layout {
@@ -359,7 +368,7 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
 .message-row {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   width: 100%;
@@ -390,11 +399,31 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   justify-content: center;
   width: 38px;
   height: 38px;
-  border-radius: 8px;
+  border-radius: 50%;
   background: var(--brand-soft);
   color: var(--brand);
   font-size: 12px;
   font-weight: 900;
+  flex-shrink: 0;
+}
+
+/* hotfix/mobile-messages-test-regression: participant photo - object-fit:
+   cover crops to fill the circle rather than distorting/letterboxing, and
+   both this and the plain initials .message-avatar span above use the
+   identical box (same class), so a row/header's height never differs
+   between a participant with a photo and one without. */
+.message-avatar-photo {
+  object-fit: cover;
+}
+
+/* .message-row's 44x44 requirement only applies to the list avatar - the
+   thread header avatar stays at the base 38px (already inside the required
+   36-40px range). Sizing the avatar, not the row, keeps the row's height
+   entirely CSS Grid/align-items-driven exactly as before this change - see
+   .message-row's own align-items: center. */
+.message-row .message-avatar {
+  width: 44px;
+  height: 44px;
 }
 
 .message-row-main {
@@ -659,6 +688,13 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
   .message-inbox-list {
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr);
+    /* Only .message-list (the 1fr track) should ever scroll on mobile - the
+       base rule's overflow:auto here is meant for desktop, where head/
+       search/list aren't split into a grid at all. With the grid sizing
+       exact (auto + auto + 1fr = 100%), this container itself never
+       actually needs to scroll; hidden makes that explicit instead of
+       relying on there happening to be no overflow. */
+    overflow: hidden;
   }
 
   .message-inbox-thread {
@@ -694,11 +730,12 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
 
   .message-list {
     padding: 8px;
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .message-row {
-    min-height: 56px;
+    min-height: 72px;
     gap: 10px;
   }
 
@@ -746,7 +783,13 @@ body:not(.athlete-mode):not(.login-mode) .brand-mark {
     padding: 0 16px;
   }
 
-  .message-send-button {
+  /* hotfix/mobile-messages-test-regression: .plain-button (later in the
+     cascade, unconditional) sets border-radius: var(--radius) at equal
+     specificity to a bare .message-send-button selector, so the button was
+     losing its circular shape on mobile despite being 44x44px. Scoping to
+     .message-compose .message-send-button raises specificity enough to win
+     regardless of source order. */
+  .message-compose .message-send-button {
     width: 44px;
     height: 44px;
     min-height: 44px;

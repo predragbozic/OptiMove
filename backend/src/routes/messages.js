@@ -4,6 +4,31 @@ import { ensureDirectCoachConversation, sendConversationMessage, userCanAccessCo
 
 const router = Router();
 
+// hotfix/mobile-messages-test-regression: participant photo sourcing.
+// Audited every candidate column before picking these two: athletes.
+// image_url (the self-service field athletes manage via Settings' Personal
+// data form) and coach_profiles.photo_url (the equivalent self-service
+// profile photo coaches manage). users.image_url/image_mime_type also exist
+// in the schema but have zero application code anywhere reading or writing
+// them - dead columns from an earlier design, not a real, currently-used
+// avatar source, so they are deliberately not used here. No role_hint
+// involved anywhere in this priority - both columns are looked up directly
+// off the real athletes/coach_profiles tables.
+// coach_profiles.user_id and athletes.user_id are both uniquely indexed
+// (coach_profiles_user_id_key, athletes_user_id_unique), so a plain LEFT
+// JOIN on either can never multiply a participant's row.
+// Priority for a multi-role account (both an active athlete row AND a
+// coach_profiles row): ATHLETE photo wins. A user with a real athlete
+// profile must see their own athlete photo in Messages, even if they also
+// hold a coach profile with a different photo. Both queries below use the
+// identical `coalesce(ath.image_url, cp.photo_url, '')` expression, so
+// changing the priority again only ever means editing this one expression
+// in both places.
+// Both LEFT JOINs are added to the SAME per-conversation participants
+// lateral subquery that already existed (building the participants array),
+// not a new subquery - the query still runs exactly once per conversation
+// row, same as before this change, so no N+1 is introduced.
+
 // feature/athlete-home-mvp: the ONLY way to open a conversation with a
 // specific person without going through the coach_contact_requests
 // approval detour - deliberately narrow (athlete -> a coach they actually
@@ -63,10 +88,13 @@ router.get("/", async (req, res, next) => {
            'userId', u.id,
            'name', coalesce(nullif(u.display_name, ''), nullif(u.full_name, ''), u.email),
            'email', u.email,
-           'role', u.role_hint
+           'role', u.role_hint,
+           'imageUrl', coalesce(ath.image_url, cp.photo_url, '')
          ) order by u.email) as participants
          from public.message_participants mp
          join public.users u on u.id = mp.user_id
+         left join public.coach_profiles cp on cp.user_id = u.id
+         left join public.athletes ath on ath.user_id = u.id
          where mp.conversation_id = c.id
        ) participants on true
        where me.user_id = $1
@@ -104,10 +132,13 @@ router.get("/:conversationId", async (req, res, next) => {
              'userId', u.id,
              'name', coalesce(nullif(u.display_name, ''), nullif(u.full_name, ''), u.email),
              'email', u.email,
-             'role', u.role_hint
+             'role', u.role_hint,
+             'imageUrl', coalesce(ath.image_url, cp.photo_url, '')
            ) order by u.email) as participants
            from public.message_participants all_mp
            join public.users u on u.id = all_mp.user_id
+           left join public.coach_profiles cp on cp.user_id = u.id
+           left join public.athletes ath on ath.user_id = u.id
            where all_mp.conversation_id = c.id
          ) participants on true
          where c.id = $1`,

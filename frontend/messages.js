@@ -308,17 +308,70 @@ async function openConversation(id, { silent = false } = {}) {
   }
 }
 
+// hotfix/mobile-messages-test-regression: pure and exported so the search
+// behavior (name/email/last-message matching, case-insensitivity, trimming,
+// empty-search-returns-everything) can be unit tested with plain fixture
+// data, with no DOM involved at all - the DOM-dependent part of search is
+// only the event wiring in handleMessagesPanelInput below.
+export function filterConversationRows(rows, search) {
+  const term = String(search || "").trim().toLowerCase();
+  if (!term) return rows;
+  return rows.filter((row) => {
+    const participants = (row.participants || []).map((participant) => `${participant.name || ""} ${participant.email || ""}`).join(" ");
+    const haystack = `${conversationNames(row)} ${participants} ${row.last_message || ""}`.toLowerCase();
+    return haystack.includes(term);
+  });
+}
+
+// hotfix/mobile-messages-test-regression: [data-message-search] lives inside
+// #messagePanel, which itself lives in the topbar's <header>, not inside
+// #content - so app.js's single delegated `input` listener on els.content
+// (handleContentInput) could never see this input's events, and typing into
+// the search box silently did nothing. Wired as ONE delegated listener
+// directly on els.messagePanel in app.js's bindEvents() (called once at
+// startup), the same "render everything, then restore focus/caret manually"
+// pattern already used for every other search box in this app (see e.g.
+// Program Library's own search handling in handleContentInput) - a full
+// renderMessages() replaces #messagePanel's innerHTML (including the input
+// node itself), so focus and caret position have to be reapplied by hand on
+// the NEW node after the DOM settles, on the next animation frame.
+export function handleMessagesPanelInput(event) {
+  const input = event.target.closest("[data-message-search]");
+  if (!input) return;
+  const cursor = input.selectionStart;
+  state.messages.search = input.value;
+  renderMessages();
+  requestAnimationFrame(() => {
+    const nextInput = els.messagePanel?.querySelector("[data-message-search]");
+    if (!nextInput) return;
+    nextInput.focus();
+    if (Number.isInteger(cursor)) nextInput.setSelectionRange(cursor, cursor);
+  });
+}
+
+// hotfix/mobile-messages-test-regression: called on logout (before the hard
+// reload, which already wipes everything - defensive, not load-bearing, see
+// signOut()'s own comment for why this codebase adds these anyway) and on
+// login (before the next session's data loads), so a search typed by one
+// user can never survive into the next session's Messages panel.
+export function resetMessagesState() {
+  state.messages.search = "";
+  state.messages.open = false;
+  state.messages.rows = [];
+  state.messages.unreadCount = 0;
+  state.messages.selectedId = "";
+  state.messages.detail = null;
+  state.messages.error = "";
+  state.messages.menuOpen = false;
+  state.messages.hideConfirmOpen = false;
+  state.messages.draft = "";
+}
+
 function renderMessagePanelHtml() {
   if (!state.currentUser) return "";
   const rows = state.messages.rows || [];
-  const search = String(state.messages.search || "").trim().toLowerCase();
-  const filteredRows = search
-    ? rows.filter((row) => {
-      const participants = (row.participants || []).map((participant) => `${participant.name || ""} ${participant.email || ""}`).join(" ");
-      const haystack = `${conversationNames(row)} ${participants} ${row.last_message || ""}`.toLowerCase();
-      return haystack.includes(search);
-    })
-    : rows;
+  const search = String(state.messages.search || "").trim();
+  const filteredRows = filterConversationRows(rows, search);
   const listContent = state.messages.loading && !state.messages.selectedId
     ? `<p class="empty-note">Loading messages...</p>`
     : state.messages.error && !state.messages.selectedId
@@ -355,13 +408,14 @@ function renderMessagePanelHtml() {
 
 function renderConversationRow(row) {
   const names = conversationNames(row);
+  const imageUrl = conversationImageUrl(row);
   const unread = Number(row.unread_count || 0);
   const blocked = row.blocked_by_me || row.blocked_by_other;
   const date = row.last_message_created_at ? formatMessageDate(row.last_message_created_at) : "";
   const selected = String(row.id || "") === String(state.messages.selectedId || "");
   return `
     <button class="message-row${unread ? " is-unread" : ""}${selected ? " is-selected" : ""}${blocked ? " is-blocked" : ""}" data-action="message-open" data-conversation-id="${escapeAttr(row.id)}" type="button">
-      <span class="message-avatar">${escapeHtml(initials(names))}</span>
+      ${renderAvatarMarkup(imageUrl, names)}
       <span class="message-row-main">
         <strong>${escapeHtml(names)}</strong>
         <small>${blocked ? "Blocked conversation" : escapeHtml(row.last_message || "No messages yet.")}</small>
@@ -379,6 +433,7 @@ function renderConversationHtml() {
   const conversation = detail?.conversation;
   const messages = detail?.messages || [];
   const title = conversation ? conversationNames(conversation) : "Conversation";
+  const threadImageUrl = conversation ? conversationImageUrl(conversation) : "";
   const blockedByMe = Boolean(conversation?.blocked_by_me);
   const blockedByOther = Boolean(conversation?.blocked_by_other);
   const blocked = blockedByMe || blockedByOther;
@@ -403,7 +458,7 @@ function renderConversationHtml() {
         ${ICON_BACK}
       </button>
       <span class="message-thread-identity">
-        <span class="message-avatar">${escapeHtml(initials(title))}</span>
+        ${renderAvatarMarkup(threadImageUrl, title)}
         <strong>${escapeHtml(title)}</strong>
       </span>
       <span class="message-thread-actions">
@@ -469,11 +524,44 @@ function renderMessageBubble(message) {
   `;
 }
 
-function conversationNames(row) {
+// hotfix/mobile-messages-test-regression: extracted from conversationNames
+// so the image lookup below can reuse the exact same "who is the other
+// person" logic - this app's conversations are always exactly 2 people
+// (direct/coach_contact - see ensureDirectCoachConversation's own "exactly
+// 2 participants" invariant in backend/src/messages.js), so `others` is
+// always a single-element array in practice, but this stays general in
+// case a group conversation type is ever added.
+function otherParticipants(row) {
   const participants = row.participants || [];
   const others = participants.filter((participant) => String(participant.userId) !== String(state.currentUser?.id));
-  const names = (others.length ? others : participants).map((participant) => participant.name || participant.email).filter(Boolean);
+  return others.length ? others : participants;
+}
+
+function conversationNames(row) {
+  const names = otherParticipants(row).map((participant) => participant.name || participant.email).filter(Boolean);
   return names.join(", ") || row.title || "Conversation";
+}
+
+// Same participant object conversationNames() already resolved - just its
+// imageUrl instead of its name, so a row/thread-header never looks up or
+// displays a photo for anyone other than the person it's already showing
+// the name of.
+function conversationImageUrl(row) {
+  const [first] = otherParticipants(row);
+  return first?.imageUrl || "";
+}
+
+// hotfix/mobile-messages-test-regression: alt="" (decorative) rather than
+// the person's name - in both call sites below the name is rendered as
+// visible text immediately next to this avatar, so a non-empty alt would
+// make a screen reader announce the name twice. The real fallback text
+// (initials) travels via data-initials instead of alt, consumed by
+// app.js's handleImageError .message-avatar-photo branch if the photo URL
+// 404s or otherwise fails to load.
+function renderAvatarMarkup(imageUrl, name) {
+  const initialsText = initials(name);
+  if (!imageUrl) return `<span class="message-avatar">${escapeHtml(initialsText)}</span>`;
+  return `<img class="message-avatar message-avatar-photo" src="${escapeAttr(imageUrl)}" alt="" data-initials="${escapeAttr(initialsText)}">`;
 }
 
 function initials(name) {
@@ -493,4 +581,9 @@ function formatMessageDate(value) {
 const ICON_CLOSE = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>`;
 const ICON_BACK = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
 const ICON_DOTS = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"></circle><circle cx="12" cy="12" r="1.8" fill="currentColor"></circle><circle cx="19" cy="12" r="1.8" fill="currentColor"></circle></svg>`;
-const ICON_SEND = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 12l16-8-6.5 8L20 20 4 12z" fill="currentColor"></path></svg>`;
+// hotfix/mobile-messages-test-regression: the previous path (M4 12l16-8-6.5
+// 8L20 20 4 12z) rendered with its tip pointing toward the lower-left, the
+// opposite of a standard send arrow. This is the well-known Material Design
+// "send" glyph - a paper plane with its tip pointing due right at (23,12),
+// vertically centered in the 24x24 viewBox.
+const ICON_SEND = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="currentColor"></path></svg>`;
