@@ -364,6 +364,7 @@ function bindEvents() {
   });
   els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("input", handleContentInput);
+  els.messagePanel?.addEventListener("input", handleMessagePanelInput);
   els.content.addEventListener("change", handleContentChange);
   els.content.addEventListener("focusin", handleContentFocusIn);
   els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
@@ -734,21 +735,27 @@ function handleContentFocusIn(event) {
   requestAnimationFrame(() => field.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
-function handleContentInput(event) {
+// els.messagePanel lives inside <header class="topbar">, not inside
+// els.content (see frontend/index.html / athlete.html), so an "input"
+// listener on els.content never sees keystrokes from its search field -
+// this gets its own listener on els.messagePanel instead (bindEvents()),
+// mirroring how handleGlobalSubmit already covers [data-message-form]
+// separately from handleContentSubmit for the same reason.
+function handleMessagePanelInput(event) {
   const messageSearch = event.target.closest("[data-message-search]");
-  if (messageSearch) {
-    const cursor = messageSearch.selectionStart;
-    state.messages.search = messageSearch.value;
-    renderMessages();
-    requestAnimationFrame(() => {
-      const nextInput = els.messagePanel?.querySelector("[data-message-search]");
-      if (!nextInput) return;
-      nextInput.focus();
-      if (Number.isInteger(cursor)) nextInput.setSelectionRange(cursor, cursor);
-    });
-    return;
-  }
+  if (!messageSearch) return;
+  const cursor = messageSearch.selectionStart;
+  state.messages.search = messageSearch.value;
+  renderMessages();
+  requestAnimationFrame(() => {
+    const nextInput = els.messagePanel?.querySelector("[data-message-search]");
+    if (!nextInput) return;
+    nextInput.focus();
+    if (Number.isInteger(cursor)) nextInput.setSelectionRange(cursor, cursor);
+  });
+}
 
+function handleContentInput(event) {
   const orgFilter = event.target.closest("[data-org-select-filter]");
   if (orgFilter) {
     handleOrganizationFilterInput(orgFilter);
