@@ -2,6 +2,7 @@ import { api } from "./api.js";
 import { els } from "./dom.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { imageSources } from "./media.js";
 
 // feature/mobile-messages-fullscreen: below this width Messages becomes a
 // true fullscreen app-level screen (list, then thread) instead of the
@@ -551,17 +552,36 @@ function conversationImageUrl(row) {
   return first?.imageUrl || "";
 }
 
-// hotfix/mobile-messages-test-regression: alt="" (decorative) rather than
-// the person's name - in both call sites below the name is rendered as
-// visible text immediately next to this avatar, so a non-empty alt would
-// make a screen reader announce the name twice. The real fallback text
-// (initials) travels via data-initials instead of alt, consumed by
-// app.js's handleImageError .message-avatar-photo branch if the photo URL
-// 404s or otherwise fails to load.
+// hotfix/messages-avatar-display: participants[].imageUrl often holds a
+// Google Drive "share" link (https://drive.google.com/file/d/ID/view?...) -
+// the same raw value stored in athletes.image_url/coach_profiles.photo_url.
+// That URL is a Drive VIEWER page, not a fetchable image: requesting it as
+// a plain <img src> (no session/auth, no Drive UI) fails to load, and with
+// no fallback queued this used to drop straight to initials even though
+// the exact same stored URL renders correctly everywhere else in the app
+// (Athlete Home, Athlete/Coach profile) - because those call sites already
+// run the URL through media.js's imageSources()/renderImage() first. This
+// now does the same: imageSources() turns one Drive share link into 3 real
+// image endpoints (thumbnail, googleusercontent, uc?export=view); the
+// first becomes src, the rest become data-fallbacks, and app.js's generic
+// handleImageError (which already drives every other avatar/thumbnail in
+// this app) walks that chain on load failure before ever giving up to
+// initials. A non-Drive URL is unaffected - imageSources() returns it
+// unchanged as the sole source, so behavior for a plain direct image URL
+// is identical to before this change.
+//
+// alt="" (decorative) rather than the person's name - in both call sites
+// below the name is rendered as visible text immediately next to this
+// avatar, so a non-empty alt would make a screen reader announce the name
+// twice. The real fallback text (initials) travels via data-initials
+// instead of alt, consumed by app.js's handleImageError
+// .message-avatar-photo branch once every real photo source has failed.
 function renderAvatarMarkup(imageUrl, name) {
   const initialsText = initials(name);
-  if (!imageUrl) return `<span class="message-avatar">${escapeHtml(initialsText)}</span>`;
-  return `<img class="message-avatar message-avatar-photo" src="${escapeAttr(imageUrl)}" alt="" data-initials="${escapeAttr(initialsText)}">`;
+  const sources = imageSources(imageUrl);
+  if (!sources.length) return `<span class="message-avatar">${escapeHtml(initialsText)}</span>`;
+  const fallbacks = sources.slice(1);
+  return `<img class="message-avatar message-avatar-photo" src="${escapeAttr(sources[0])}" alt="" data-initials="${escapeAttr(initialsText)}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}>`;
 }
 
 function initials(name) {
