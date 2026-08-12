@@ -439,6 +439,7 @@ test("14. revoking an invite stops its token from working", async () => {
   const token = await createSession(admin.id);
 
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(token), body: { athleteId: athlete, email: `revoke-target-${Date.now()}@test.local`, contextType: "platform", contextId: null } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
 
   const revoke = await api(`/api/organization/athlete-invites/${created.body.invite.id}`, { method: "DELETE", cookie: cookieFor(token) });
@@ -455,6 +456,7 @@ test("15. an expired invite is rejected with the same generic message as everyth
   const token = await createSession(admin.id);
 
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(token), body: { athleteId: athlete, email: `expired-target-${Date.now()}@test.local`, contextType: "platform", contextId: null } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
   await query(`update public.athlete_invites set expires_at = now() - interval '1 hour' where id = $1`, [created.body.invite.id]);
 
@@ -469,6 +471,7 @@ test("16. a revoked invite and an unknown token produce the identical generic re
   const token = await createSession(admin.id);
 
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(token), body: { athleteId: athlete, email: `generic-target-${Date.now()}@test.local`, contextType: "platform", contextId: null } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
   await api(`/api/organization/athlete-invites/${created.body.invite.id}`, { method: "DELETE", cookie: cookieFor(token) });
 
@@ -485,6 +488,7 @@ test("17. an already-accepted invite cannot be revoked, but a repeated revoke of
   const email = `revoke-accepted-${Date.now()}@test.local`;
 
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(token), body: { athleteId: athlete, email, contextType: "platform", contextId: null } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
   const accept = await api(`/api/auth/invites/${encodeURIComponent(rawToken)}/accept`, { method: "POST", body: { password: "somepassword123" } });
   assert.equal(accept.status, 200);
@@ -537,6 +541,7 @@ test("18b. the inviter losing their own club_admin role also invalidates a techn
   const token = await createSession(admin.id);
 
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(token), body: { athleteId: athlete, email: `lostrole-${Date.now()}@test.local`, contextType: "club", contextId: club } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
 
   await query(`update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, [admin.id, club]);
@@ -554,6 +559,7 @@ test("19. a brand-new email creates a new account on accept", async () => {
   const email = `newaccount-target-${Date.now()}@test.local`;
 
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(token), body: { athleteId: athlete, email, contextType: "platform", contextId: null } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
   const accept = await api(`/api/auth/invites/${encodeURIComponent(rawToken)}/accept`, { method: "POST", body: { password: "somepassword123" } });
   assert.equal(accept.status, 200);
@@ -572,6 +578,7 @@ test("20. an existing email never has its password changed by accept - it return
   const token = await createSession(admin.id);
 
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(token), body: { athleteId: athlete, email: existing.email, contextType: "platform", contextId: null } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
   const accept = await api(`/api/auth/invites/${encodeURIComponent(rawToken)}/accept`, { method: "POST", body: { password: "somepassword123" } });
   assert.equal(accept.status, 409);
@@ -590,10 +597,12 @@ test("21. logging in and using /link connects the athlete profile without any pa
   const existingToken = await createSession(existing.id);
 
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(adminToken), body: { athleteId: athlete, email: existing.email, contextType: "platform", contextId: null } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
 
   const mismatchAthlete = await makeAthlete("Mismatch Target");
   const mismatchInvite = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(adminToken), body: { athleteId: mismatchAthlete, email: `someone-else-${Date.now()}@test.local`, contextType: "platform", contextId: null } });
+  assert.equal(mismatchInvite.status, 201, JSON.stringify(mismatchInvite.body));
   const mismatchToken = decodeURIComponent(mismatchInvite.body.inviteUrl.split("token=")[1]);
   const mismatchRes = await api(`/api/auth/invites/${encodeURIComponent(mismatchToken)}/link`, { method: "POST", cookie: cookieFor(existingToken) });
   assert.equal(mismatchRes.status, 403, "linking must be rejected when the invite's email does not match the logged-in account's email");
@@ -612,6 +621,7 @@ test("21. logging in and using /link connects the athlete profile without any pa
   const raceAthlete = await makeAthlete("Race Already Linked Target");
   const raceEmail = `race-linked-${Date.now()}@test.local`;
   const raceInvite = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(adminToken), body: { athleteId: raceAthlete, email: raceEmail, contextType: "platform", contextId: null } });
+  assert.equal(raceInvite.status, 201, JSON.stringify(raceInvite.body));
   const raceToken = decodeURIComponent(raceInvite.body.inviteUrl.split("token=")[1]);
   const raceOwner = await makeUser({ email: `invite-race-owner-${Date.now()}@test.local`, roleHint: "user" });
   await query(`update public.athletes set user_id = $1 where id = $2`, [raceOwner.id, raceAthlete]);
@@ -635,6 +645,7 @@ test("22. a coach/admin account that accepts an invite for its own athlete profi
   const staffToken = await createSession(staffAdmin.id);
 
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(platformAdminToken), body: { athleteId: athlete, email: staffAdmin.email, contextType: "platform", contextId: null } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
   const link = await api(`/api/auth/invites/${encodeURIComponent(rawToken)}/link`, { method: "POST", cookie: cookieFor(staffToken) });
   assert.equal(link.status, 200);
@@ -682,6 +693,7 @@ test("24. one token cannot be accepted twice", async () => {
   const athlete = await makeAthlete("Once Only Target");
   const token = await createSession(admin.id);
   const created = await api(inviteEndpoint(), { method: "POST", cookie: cookieFor(token), body: { athleteId: athlete, email: `onceonly-target-${Date.now()}@test.local`, contextType: "platform", contextId: null } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   const rawToken = decodeURIComponent(created.body.inviteUrl.split("token=")[1]);
 
   const first = await api(`/api/auth/invites/${encodeURIComponent(rawToken)}/accept`, { method: "POST", body: { password: "somepassword123" } });

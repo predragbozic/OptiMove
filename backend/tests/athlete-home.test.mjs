@@ -92,8 +92,36 @@ function mondayOfIso(dateIso) {
   return d.toISOString().slice(0, 10);
 }
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+// test/stabilize-backend-suite: this USED to be `new Date().toISOString().
+// slice(0, 10)` - always the process's UTC calendar date. The actual
+// endpoint (src/routes/athleteHome.js) determines "today" exclusively via
+// Postgres's own `current_date`, which is evaluated in the DB SESSION's
+// configured TIMEZONE - on this dev machine that's Europe/Budapest (UTC+2),
+// confirmed via `SHOW TIMEZONE` and not set anywhere in this app's own code
+// (no TZ in DATABASE_URL, no SET TIMEZONE in db.js) - it's whatever the
+// Postgres server/OS defaults to. Europe/Budapest's calendar day rolls over
+// 2 hours BEFORE UTC's does (00:00 local = 22:00 UTC the previous day), so
+// for that ~2-hour window every day (22:00-24:00 UTC), a UTC-computed
+// fixture date was one calendar day BEHIND what the app itself considered
+// "today" - the app would never see the fixture's training as today's,
+// making test 5 fail deterministically (not randomly) whenever it happened
+// to run in that window. Fixed by reading current_date from the SAME
+// connection/session the app's own queries run through, so the fixture and
+// the app can never disagree about what day "today" is, regardless of the
+// wall-clock moment the test happens to run at.
+//
+// This does NOT fix the underlying product question of whether "today"
+// SHOULD be keyed off the DB server's ambient timezone at all (a real risk
+// if this app is ever deployed on infrastructure with a different default
+// TZ than its users - e.g. a UTC-default cloud Postgres would make
+// "today's training" wrong for hours every day for real Balkans-based
+// users). That is a separate, already-flagged investigation
+// (background task task_6d767ecf) and is deliberately NOT addressed here -
+// this file only needs the test to agree with whatever "today" the app
+// currently computes, not to change what that computation should be.
+async function todayIso() {
+  const result = await query(`select current_date::text as today`);
+  return result.rows[0].today;
 }
 
 // v_weekly_plan_items inner-joins plan_days -> plan_sessions -> plan_items,
@@ -209,7 +237,8 @@ test("5. today's training exists: hasTraining is true with real session/item cou
   const coach = await makeCoach();
   const user = await makeUser({ email: await uniqueEmail("home-today-yes") });
   const athleteId = await makeAthlete({ userId: user.id });
-  const planId = await makeWeeklyTrainingDay({ athleteId, coachId: coach.id, date: todayIso() });
+  const today = await todayIso();
+  const planId = await makeWeeklyTrainingDay({ athleteId, coachId: coach.id, date: today });
   const token = await createSession(user.id);
 
   const res = await api("/api/athlete-home", { cookie: cookieFor(token) });
@@ -218,11 +247,48 @@ test("5. today's training exists: hasTraining is true with real session/item cou
   assert.equal(res.body.today.sessionCount, 1);
   assert.equal(res.body.today.itemCount, 1);
   assert.equal(res.body.today.planId, planId);
-  assert.equal(res.body.today.date, todayIso());
-  const todayInWeek = res.body.week.days.find((day) => day.date === todayIso());
+  assert.equal(res.body.today.date, today);
+  const todayInWeek = res.body.week.days.find((day) => day.date === today);
   assert.ok(todayInWeek);
   assert.equal(todayInWeek.isToday, true);
   assert.equal(todayInWeek.hasTraining, true);
+});
+
+// test/stabilize-backend-suite: these two don't wait for a specific
+// wall-clock moment to prove the fix - they construct the exact mismatch
+// deterministically (a plan dated exactly at current_date vs. exactly one
+// day before it), so they reliably pass at ANY time of day, including
+// during the UTC/DB-timezone mismatch window described in todayIso()'s
+// comment above.
+
+test("5b. a plan dated exactly at the DB's own current_date is always today's training - reliable regardless of the process's local/UTC clock or time of day", async () => {
+  const coach = await makeCoach();
+  const user = await makeUser({ email: await uniqueEmail("home-today-tz-proof") });
+  const athleteId = await makeAthlete({ userId: user.id });
+  const today = await todayIso();
+  const planId = await makeWeeklyTrainingDay({ athleteId, coachId: coach.id, date: today });
+  const token = await createSession(user.id);
+
+  const res = await api("/api/athlete-home", { cookie: cookieFor(token) });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.today.hasTraining, true, "a plan dated exactly at current_date must always show as today's training");
+  assert.equal(res.body.today.planId, planId);
+  assert.equal(res.body.today.date, today);
+});
+
+test("5c. proof of the original bug's exact mechanism: a plan dated ONE DAY BEFORE current_date is never today's training - this is exactly the value a UTC-computed fixture date could produce during the UTC/DB-timezone mismatch window", async () => {
+  const coach = await makeCoach();
+  const user = await makeUser({ email: await uniqueEmail("home-today-tz-mismatch") });
+  const athleteId = await makeAthlete({ userId: user.id });
+  const today = await todayIso();
+  const yesterday = await query(`select (current_date - interval '1 day')::date::text as d`);
+  await makeWeeklyTrainingDay({ athleteId, coachId: coach.id, date: yesterday.rows[0].d });
+  const token = await createSession(user.id);
+
+  const res = await api("/api/athlete-home", { cookie: cookieFor(token) });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.today.hasTraining, false, "a plan dated the day before current_date must never count as today's - this is why the fixture date must come from the same source (the DB) the app itself uses for 'today', never a separately-computed UTC date");
+  assert.equal(res.body.today.date, today);
 });
 
 test("6. today's training does not exist: hasTraining is false, no plan reference, no error", async () => {
@@ -275,7 +341,7 @@ test("9. one athlete's training and programs never leak into another athlete's H
   const coach = await makeCoach();
   const userA = await makeUser({ email: await uniqueEmail("home-leak-a") });
   const athleteA = await makeAthlete({ userId: userA.id, name: "Leak A" });
-  await makeWeeklyTrainingDay({ athleteId: athleteA, coachId: coach.id, date: todayIso() });
+  await makeWeeklyTrainingDay({ athleteId: athleteA, coachId: coach.id, date: await todayIso() });
   await makeProgramPlan({ athleteId: athleteA, coachId: coach.id, name: "A's Secret Program" });
 
   const userB = await makeUser({ email: await uniqueEmail("home-leak-b") });
