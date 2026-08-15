@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 const filePath = fileURLToPath(new URL("../app.js", import.meta.url));
 const appJsSource = readFileSync(filePath, "utf8");
 
-function sliceFunction(name, windowSize = 1400) {
+function sliceFunction(name, windowSize = 1700) {
   const start = appJsSource.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `${name} must exist in app.js`);
   return appJsSource.slice(start, start + windowSize);

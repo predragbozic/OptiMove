@@ -123,7 +123,7 @@ export const MENU_CACHE_POLICIES = {
       "Wired into view-cache.js in feature/athlete-home-mvp. GET /api/athlete-home is filtered exclusively by the caller's own req.authz.athleteId (never a client-supplied id) - the backend always computes \"today\"/\"this week\" itself from the server clock, so account+workspace is the whole context key (athlete-home-data.js's athleteHomeContextKey), the exact same shape as coach-home's. Invalidated at the same two builder-actions.js exit points weekly/programs already use (exitBuilderToPlanContext, builder-delete-source-plan) - both the weekly AND the programs branches now call invalidateAthleteHomeCache(), since this one view aggregates both today/this-week training AND active specific programs in a single payload, unlike coach-home (today/this-week only) or programs (specific programs only) individually.",
   },
   "athlete-settings": {
-    label: "Settings (athlete shell)",
+    label: "Account (athlete shell)",
     policy: "static",
     namespace: null,
     rationale:

@@ -176,6 +176,28 @@ export function renderProgramToolbarHtml(programs, selectedProgramId, renderPlan
   `;
 }
 
+// hotfix/athlete-mobile-navigation: athlete-mode only - the rail of
+// program cards (athlete-programs-view.js) and this detail both live on
+// the same screen (master-detail, not a separate route), so there's
+// normally nothing to "go back" from. On mobile, once the detail is long
+// enough to scroll, the rail scrolls out of view above it - this bar gives
+// a one-tap way back up to it without a re-fetch (data-action="athlete-
+// program-back" just scrolls to the top of the page, see handleContentClick
+// in app.js; the rail/search state was never torn down). Desktop hides it
+// via CSS (.athlete-program-open-header below) since the rail is already
+// visible there without scrolling.
+function renderProgramOpenHeaderHtml(program) {
+  if (!isAthleteMode()) return "";
+  return `
+    <div class="athlete-program-open-header">
+      <button class="athlete-program-back-button" type="button" data-action="athlete-program-back" aria-label="Back to Specific programs">
+        <span class="button-icon">←</span> Back
+      </button>
+      <span class="athlete-program-open-name">${escapeHtml(program.name)}</span>
+    </div>
+  `;
+}
+
 export function renderProgramRootHtml({
   copyPlanModal,
   data,
@@ -187,6 +209,7 @@ export function renderProgramRootHtml({
   renderProgramDayCard,
 }) {
   return `
+    ${renderProgramOpenHeaderHtml(program)}
     <section class="panel">
       <div class="section-heading">
         <div>
