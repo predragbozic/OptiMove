@@ -1682,6 +1682,15 @@ async function handleContentClick(event) {
     await openWeeklyPlanOnDate(action.dataset.date || localDateIso());
     return;
   }
+  if (type === "athlete-program-back") {
+    // The rail (athlete-programs-view.js) and this detail are the same
+    // screen, not separate routes - state.selectedProgramId, the search
+    // text, and the already-loaded programs are all untouched, so "back"
+    // is just scrolling the rail back into view under the sticky topbar,
+    // no re-render/re-fetch needed.
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
   if (type === "athlete-home-quick-tab") {
     const targetTab = action.dataset.targetTab || "weekly";
     const nextTab = targetTab === "calendar" ? "weekly" : targetTab;
@@ -1690,7 +1699,9 @@ async function handleContentClick(event) {
     state.selectedTemplateId = null;
     state.navStack = [];
     state.weekSelectorOpen = false;
-    state.openWeekCalendarOnLoad = targetTab === "calendar";
+    // hotfix/athlete-mobile-navigation: no longer targetTab === "calendar" -
+    // see athlete-mobile-navigation.test.mjs for why.
+    state.openWeekCalendarOnLoad = false;
     state.activeTab = nextTab;
     collapseRailAfterNav();
     renderTabs();
@@ -1993,11 +2004,19 @@ function renderAthleteHeader(data) {
   renderTabs();
 }
 
+// hotfix/athlete-mobile-navigation: labeled "Account" (not "Settings")
+// throughout the athlete shell - an athlete doesn't configure anything the
+// way a coach does on the coach shell's own, separate Settings/organization
+// panel (renderOrganizationPanel, untouched), they only ever edit their own
+// personal data/login/password here. state.activeTab's internal value
+// ("athlete-settings") and every data-athlete-tab/data-target-tab wired to
+// it are deliberately left unrenamed - this is a user-facing label change
+// only, not a route/id rename.
 async function renderAthleteSettings() {
   const athlete = state.athletes.find((entry) => entry.athlete_id === state.selectedAthleteId);
   renderAthleteHeader({});
-  els.context.textContent = "Athlete settings";
-  els.title.textContent = "Settings";
+  els.context.textContent = "Athlete account";
+  els.title.textContent = "Account";
   els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, null, null);
   const [emailChangeStatus, profile] = await Promise.all([
     api("/api/auth/account/email-change/status").catch(() => null),
@@ -2186,6 +2205,19 @@ function wireAthleteProgramsPanel(programs) {
       renderRail();
     });
   }
+
+  // hotfix/athlete-mobile-navigation: renderRail() is where the card-open
+  // click listeners actually get attached, but until now it was only ever
+  // invoked from the search input's own "input" handler above - never once
+  // on initial mount. The cards from renderAthleteProgramsPanelHtml() (the
+  // caller's insertAdjacentHTML, before this function ever runs) were
+  // already in the DOM with correct markup, just with no click listener at
+  // all, so every tap silently did nothing. That's invisible for athletes
+  // with >ATHLETE_PROGRAMS_SEARCH_THRESHOLD programs (the search box exists
+  // and typing into it happens to wire the buttons as a side effect) but
+  // permanently broken for the common case of 3 or fewer programs, where no
+  // search box is rendered and renderRail() would otherwise never run.
+  renderRail();
 }
 function renderProgramRoot(program) {
   if (!program) return renderEmpty("This athlete has no specific programs.");

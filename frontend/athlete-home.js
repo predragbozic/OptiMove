@@ -121,7 +121,7 @@ function renderQuickActions() {
     ["calendar", "Weekly plan", ICON_CALENDAR],
     ["programs", "Specific programs", ICON_SPECIFIC_PROGRAMS],
     ["athlete-library", "Program Library", ICON_PROGRAM_LIBRARY],
-    ["athlete-settings", "Settings", ICON_SETTINGS],
+    ["athlete-settings", "Account", ICON_SETTINGS],
   ];
   return `
     <section class="athlete-home-quick-actions">

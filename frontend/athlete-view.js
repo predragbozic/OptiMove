@@ -84,8 +84,36 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
 // exactly which real athletes.* columns were audited and excluded (no
 // birth_date/phone/gender/address - confirmed zero consumers anywhere in
 // the app today).
+// hotfix/athlete-mobile-navigation: a compact identity strip - photo/
+// initials + name + the same "My program" eyebrow renderAthleteHeaderToolbarHtml
+// already uses, not new copy - shown only on Athlete Settings. On mobile it
+// sticks directly under the main topbar (see .athlete-settings-identity in
+// styles.css) while the rest of Settings scrolls underneath, so the athlete
+// always knows whose profile they're editing without keeping the full,
+// much taller .athlete-settings-card hero (with its multi-line description)
+// pinned on screen. Desktop is unaffected - this is hidden there in CSS,
+// since desktop already has the persistent sidebar for identity/orientation.
+function renderAthleteSettingsIdentityHtml(athlete, profile) {
+  const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || athlete?.athlete || "Athlete";
+  const imageUrl = profile && !profile.error ? profile.imageUrl : athlete?.athlete_image_url;
+  const initials = initialsFor(name);
+  const avatarMarkup = imageUrl
+    ? renderImage(imageUrl, "avatar athlete-settings-identity-avatar", initials)
+    : `<span class="avatar-fallback athlete-settings-identity-avatar">${escapeHtml(initials)}</span>`;
+  return `
+    <div class="athlete-settings-identity">
+      ${avatarMarkup}
+      <span class="athlete-settings-identity-copy">
+        <span class="athlete-settings-identity-eyebrow">My program</span>
+        <span class="athlete-settings-identity-name">${escapeHtml(name)}</span>
+      </span>
+    </div>
+  `;
+}
+
 export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatus, profile) {
   return `
+    ${renderAthleteSettingsIdentityHtml(athlete, profile)}
     <section class="content-section athlete-simple-view">
       <section class="panel athlete-settings-card">
         <div>
@@ -137,7 +165,7 @@ function renderPersonalDataFormHtml(profile) {
     return `<span class="muted">Loading your profile...</span>`;
   }
   if (profile.error) {
-    return `<span class="muted">Could not load your profile. Try reopening Settings.</span>`;
+    return `<span class="muted">Could not load your profile. Try reopening Account.</span>`;
   }
   const initials = initialsFor([profile.firstName, profile.lastName].filter(Boolean).join(" ") || "Athlete");
   const preview = profile.imageUrl

@@ -2377,6 +2377,35 @@ button {
   display: none;
 }
 
+/* hotfix/athlete-mobile-navigation: OptiMove identity as a functional home
+   button, same data-action="home" the sidebar's own .brand-mark already
+   uses (see handleGlobalClick in app.js). Hidden here by default - desktop
+   keeps the sidebar brand-mark as the only home affordance, this only ever
+   becomes visible inside the mobile sticky topbar (@media max-width: 760px
+   below), which is also the only place goHome() matters as quick, one-tap
+   navigation (desktop's sidebar is always on-screen already). */
+.athlete-topbar-brand {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 38px;
+  min-height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+
+/* height-constrained, width: auto - matches how every other topbar icon is
+   sized (.topbar-icon svg, 23px) without stretching brand-logo.png off its
+   native aspect ratio. */
+.athlete-topbar-brand-icon {
+  display: block;
+  width: auto;
+  height: 23px;
+}
+
 .athlete-mode .topbar-actions {
   width: 100%;
 }
@@ -2488,10 +2517,6 @@ button {
 }
 
 @media (max-width: 480px) {
-  .athlete-mode .athlete-topbar {
-    padding: 0 12px 8px;
-  }
-
   .athlete-mode .topbar-actions {
     justify-content: flex-start;
     gap: 6px;
@@ -2994,6 +3019,20 @@ input:focus {
 .athlete-tabs .tab {
   min-height: 44px;
   white-space: normal;
+}
+
+/* hotfix/athlete-mobile-navigation: the generic .tab.is-active rule (solid
+   var(--accent) fill, white text) is correct for chip-style filter tabs
+   elsewhere in the app, but reads as a heavy green block here - the spec
+   asks for the same restrained signal Home's own "today" indicator already
+   uses (.athlete-home-day.is-today: a 2px accent border, no fill), not a
+   colored background. Scoped to .tab-with-icon so every other .tab.is-active
+   usage in the app (coach chip toolbars, template tabs, etc.) is untouched. */
+.athlete-tabs .tab-with-icon.is-active {
+  border-color: var(--accent);
+  border-width: 2px;
+  background: var(--surface);
+  color: var(--text);
 }
 
 /* ui/athlete-program-navigation-icons: Weekly plans / Specific programs
@@ -4614,6 +4653,79 @@ input:focus {
 .athlete-settings-card {
   display: grid;
   gap: 18px;
+}
+
+/* hotfix/athlete-mobile-navigation: hidden by default (desktop has no need
+   for it - the sidebar already gives permanent orientation, and the
+   existing .athlete-settings-card hero below already shows full identity
+   inline). Only shown, sticky, inside the mobile @media (max-width: 760px)
+   block below. */
+.athlete-settings-identity {
+  display: none;
+  align-items: center;
+  gap: 10px;
+}
+
+/* hotfix/athlete-mobile-navigation: hidden by default - desktop already
+   shows the programs rail and the open program together without scrolling
+   one out of view, so there's nothing to "go back" to. Only shown, sticky,
+   inside the mobile @media (max-width: 760px) block below. */
+.athlete-program-open-header {
+  display: none;
+  align-items: center;
+  gap: 10px;
+}
+
+.athlete-program-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 800;
+}
+
+.athlete-program-open-name {
+  min-width: 0;
+  font-weight: 800;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.athlete-settings-identity-avatar {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+.athlete-settings-identity-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.athlete-settings-identity-eyebrow {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.athlete-settings-identity-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .athlete-setting-list {
@@ -8047,6 +8159,131 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     place-items: center;
   }
 
+  /* hotfix/athlete-mobile-navigation: the Athlete shell's first row
+     (hamburger, OptiMove home mark, Messages/notifications/sign-out) stays
+     pinned to the top of the viewport while the page scrolls, instead of
+     scrolling away with the content below it - position: sticky (not
+     fixed) keeps it in normal document flow, so it never needs to overlap
+     or hide anything under it. Scoped to .athlete-mode only - the coach
+     shell's .topbar is untouched, and desktop (>760px) keeps the existing
+     non-sticky .athlete-topbar rule above. z-index: 45 sits below the
+     mobile nav drawer/backdrop (60/55 above) so opening the hamburger menu
+     still overlays correctly on top of this bar. */
+  .athlete-mode .athlete-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 45;
+    /* Overrides the generic .topbar rule below (@media max-width: 640px,
+       flex-direction: column) - the athlete topbar's one row (brand +
+       hamburger + actions) must never stack vertically. */
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    align-items: center;
+    min-height: 52px;
+    padding: calc(8px + env(safe-area-inset-top, 0px)) calc(10px + env(safe-area-inset-right, 0px)) 8px calc(10px + env(safe-area-inset-left, 0px));
+    background: rgba(255, 255, 255, 0.86);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .athlete-topbar-brand {
+    display: inline-flex;
+  }
+
+  .athlete-mode .topbar-actions {
+    width: auto;
+    flex: 0 1 auto;
+    flex-wrap: nowrap;
+  }
+
+  /* The workspace switcher is only ever interactive (has data-action) for
+     an athlete with more than one available workspace - a rare multi-role
+     case (see renderWorkspaceSwitcher in workspace-actions.js). For the
+     common single-role athlete it's a static, non-clickable "ATHLETE"
+     label that exists purely to be read, not tapped - real content on a
+     320px row belongs to hamburger/notifications/messages/sign-out, so it
+     is dropped entirely there. Where it IS the only way to switch
+     workspace, it stays, just compacted to fit the same row instead of
+     forcing the topbar into two lines. */
+  .athlete-mode .workspace-toggle:not([data-action]) {
+    display: none;
+  }
+
+  .athlete-mode .workspace-toggle[data-action="workspace-toggle"] {
+    min-height: 38px;
+    padding: 0 8px;
+    gap: 3px;
+    font-size: 10px;
+  }
+
+  /* hotfix/athlete-mobile-navigation: stacks directly under the sticky
+     .athlete-topbar (measured height ~57px including its border) instead
+     of under it - the two form one continuous pinned header while Settings
+     content scrolls underneath both. z-index: 40 stays below the topbar's
+     45 and the nav drawer/backdrop's 60/55. */
+  .athlete-settings-identity {
+    display: flex;
+    position: sticky;
+    top: calc(57px + env(safe-area-inset-top, 0px));
+    z-index: 40;
+    padding: 8px calc(10px + env(safe-area-inset-right, 0px)) 8px calc(10px + env(safe-area-inset-left, 0px));
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* hotfix/athlete-mobile-navigation: Weekly plan's own contextual row -
+     the existing Prev/date-range/Today/Next controls (unchanged, same
+     data-action="week-toggle" opens the calendar, still only on an
+     explicit tap - see handleGlobalClick) - stacks under the sticky topbar
+     the same way .athlete-settings-identity does. The hero card and
+     Weekly/Specific tabs above it (in #viewToolbar, not #content) are NOT
+     sticky and scroll away normally, same as the day columns below. */
+  /* position: sticky only has room to move within its containing block
+     (normally its immediate parent) - .week-nav-wrap, which holds only the
+     nav row itself plus the optional calendar picker, is the exact same
+     height as .week-nav-panel whenever the picker is closed, leaving zero
+     room for it to visually detach and stick. display: contents removes
+     .week-nav-wrap as a box (DOM/JS untouched, just how it's laid out) so
+     .week-nav-panel's containing block becomes .content-section instead -
+     which also holds the full day-columns panel below, giving it the
+     height it actually needs to stick while that scrolls underneath. */
+  .athlete-mode .week-nav-wrap {
+    display: contents;
+  }
+
+  .athlete-mode .week-nav-panel {
+    position: sticky;
+    top: calc(57px + env(safe-area-inset-top, 0px));
+    z-index: 40;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    padding-top: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* Specific program's own contextual row - Back (scrolls to the rail,
+     see the athlete-program-back handler in app.js) + the open program's
+     truncated name. #content (its parent) holds the full program detail
+     below it, so - unlike .week-nav-panel above - no display: contents
+     fix is needed here for it to have room to stick. */
+  .athlete-program-open-header {
+    display: flex;
+    position: sticky;
+    top: calc(57px + env(safe-area-inset-top, 0px));
+    z-index: 40;
+    padding: 8px calc(10px + env(safe-area-inset-right, 0px)) 8px calc(10px + env(safe-area-inset-left, 0px));
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+
   body:not(.login-mode) #railToggle {
     display: none;
   }
@@ -8117,6 +8354,17 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
      ever appeared. */
   body.mobile-nav-open:not(.login-mode) .sidebar-submenu.is-open .sidebar-subnav {
     display: grid !important;
+  }
+
+  /* hotfix/athlete-mobile-navigation: .athlete-mode .brand centers its
+     single 44px column (justify-content: center) - correct for the narrow
+     desktop icon rail, but once the drawer opens into a full-width menu
+     list every other row below it (brand-title/sidebar-nav-button, both
+     justify-content: flex-start below) is left-aligned, so a centered logo
+     above them looked out of place instead of reading as the menu's own
+     header. */
+  body.mobile-nav-open:not(.login-mode) .brand {
+    justify-content: flex-start !important;
   }
 
   body.mobile-nav-open:not(.login-mode) .brand-title,
