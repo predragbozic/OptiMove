@@ -150,7 +150,12 @@ test("athlete.html: the sidebar nav button label reads Account, but its data-ath
 });
 
 test("athlete-home.js: the Home quick action for athlete-settings is labeled Account, while its target-tab id (athlete-settings) is untouched - reuses the existing data-athlete-tab click handling, no new route", () => {
-  assert.match(athleteHomeSource, /\["athlete-settings", "Account", ICON_SETTINGS\]/);
+  assert.match(athleteHomeSource, /\["athlete-settings", "Account", ICON_ACCOUNT\]/);
+});
+
+test("athlete-home.js and athlete.html both use a person/profile icon (head + shoulders) for Account, not the settings gear - the quick action mirrors the sidebar's own Account icon, same convention as every other quick action", () => {
+  assert.match(athleteHomeSource, /const ICON_ACCOUNT = `<svg[^`]*<circle cx="12" cy="8" r="4"><\/circle><path d="M4 20c0-4\.4 3\.6-7 8-7s8 2\.6 8 7"><\/path><\/svg>`;/);
+  assert.match(athleteHtmlSource, /<circle cx="12" cy="8" r="4"><\/circle>\s*\n\s*<path d="M4 20c0-4\.4 3\.6-7 8-7s8 2\.6 8 7"><\/path>/);
 });
 
 test("app.js: renderAthleteSettings() sets the screen title to Account, and the coach shell's separate renderOrganizationPanel() Settings title is untouched", () => {
@@ -184,6 +189,19 @@ test("app.js: the athlete-home-quick-tab handler never opens the calendar, even 
   assert.ok(!block.includes("state.openWeekCalendarOnLoad = targetTab"), "openWeekCalendarOnLoad must never be derived from targetTab again - this quick action must never auto-open the calendar regardless of its internal tab id");
 });
 
+test("app.js: the els.athleteTabs sidebar/drawer nav link handler (data-athlete-tab, a completely separate click path from handleGlobalClick's [data-tab] toolbar handler - a different dataset attribute, never caught by that fix) has the exact same bug fixed the same way - found live in the drawer's own \"Weekly plan\" link during browser verification", () => {
+  const start = appJsSource.indexOf("els.athleteTabs.forEach((button) => {");
+  assert.ok(start >= 0);
+  const block = appJsSource.slice(start, start + 700);
+  assert.match(block, /state\.weekSelectorOpen = false;/);
+  assert.match(block, /state\.openWeekCalendarOnLoad = false;/);
+  assert.ok(!block.includes("state.openWeekCalendarOnLoad = targetTab"), "the sidebar/drawer Weekly plan link must never auto-open the calendar either");
+});
+
+test("app.js: no code anywhere still derives openWeekCalendarOnLoad from a tab id equal to \"calendar\" - the only remaining targetTab === \"calendar\" comparisons are the harmless tab-id-to-\"weekly\"-remap, not a calendar-open trigger", () => {
+  assert.ok(!appJsSource.includes('openWeekCalendarOnLoad = targetTab === "calendar"'));
+});
+
 // === Goal 6: sticky contextual rows for Weekly plan / open Specific program ===
 
 test("styles.css: .week-nav-wrap is display: contents on mobile so .week-nav-panel's containing block becomes .content-section (tall enough to actually have room to stick), not the wrap itself (exactly as tall as the nav row alone whenever the calendar picker is closed)", () => {
@@ -212,13 +230,23 @@ test("program-view.js: the open-program header truncates the program name with e
   assert.match(block, /text-overflow:\s*ellipsis;/);
 });
 
-test("app.js: the athlete-program-back action scrolls back to the rail without any re-fetch, re-render, or state.selectedProgramId mutation - the rail/search state was never torn down", () => {
+test("app.js: the athlete-program-back action restores the scroll position captured when the program was opened (not always page top), without any re-fetch, re-render, or state.selectedProgramId mutation - the rail/search state was never torn down", () => {
   const start = appJsSource.indexOf('if (type === "athlete-program-back")');
   assert.ok(start >= 0);
-  const block = appJsSource.slice(start, start + 500);
-  assert.match(block, /window\.scrollTo\(\{ top: 0, behavior: "smooth" \}\);/);
+  const block = appJsSource.slice(start, start + 700);
+  assert.match(block, /window\.scrollTo\(\{ top: state\.athleteProgramsListScrollY \|\| 0, behavior: "smooth" \}\);/);
   assert.ok(!block.includes("api("), "returning to the list must never issue a network request");
   assert.ok(!block.includes("state.selectedProgramId ="), "returning to the list must not clear or change the open program's selection");
+});
+
+test("app.js: wireAthleteProgramsPanel captures the actual scroll position at the moment a card is opened, so athlete-program-back can restore it - not a hardcoded value", () => {
+  const body = sliceFunction(appJsSource, "wireAthleteProgramsPanel", 2600);
+  assert.match(body, /state\.athleteProgramsListScrollY = window\.scrollY;/);
+});
+
+test("state.js: athleteProgramsListScrollY starts at 0 in the initial state shape", () => {
+  const stateSource = readSource("../state.js");
+  assert.match(stateSource, /athleteProgramsListScrollY:\s*0,/);
 });
 
 test("styles.css: .athlete-program-open-header and .week-nav-panel are hidden/non-sticky outside the mobile block - desktop (where the rail/hero are already always visible) is unaffected", () => {

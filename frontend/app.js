@@ -349,7 +349,9 @@ function bindEvents() {
       state.selectedTemplateId = null;
       state.navStack = [];
       state.weekSelectorOpen = false;
-      state.openWeekCalendarOnLoad = targetTab === "calendar";
+      // hotfix/athlete-mobile-navigation: was targetTab === "calendar" -
+      // same bug as athlete-home-quick-tab, see athlete-mobile-navigation.test.mjs.
+      state.openWeekCalendarOnLoad = false;
       state.activeTab = targetTab === "calendar" ? "weekly" : targetTab;
       collapseRailAfterNav();
       renderTabs();
@@ -1687,8 +1689,10 @@ async function handleContentClick(event) {
     // screen, not separate routes - state.selectedProgramId, the search
     // text, and the already-loaded programs are all untouched, so "back"
     // is just scrolling the rail back into view under the sticky topbar,
-    // no re-render/re-fetch needed.
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    // no re-render/re-fetch needed. Restores the scroll position captured
+    // in wireAthleteProgramsPanel's card click, not always page top - the
+    // athlete may have scrolled the list before tapping a card further down.
+    window.scrollTo({ top: state.athleteProgramsListScrollY || 0, behavior: "smooth" });
     return;
   }
   if (type === "athlete-home-quick-tab") {
@@ -2185,6 +2189,7 @@ function wireAthleteProgramsPanel(programs) {
     railContainer.innerHTML = renderAthleteProgramCardsRailHtml(programs, state.selectedProgramId, state.athleteProgramsSearchQuery);
     railContainer.querySelectorAll("[data-action='athlete-program-open']").forEach((button) => {
       button.addEventListener("click", () => {
+        state.athleteProgramsListScrollY = window.scrollY;
         state.selectedProgramId = button.dataset.programId;
         state.navStack = [];
         renderProgramToolbar(programs);
