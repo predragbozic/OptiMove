@@ -119,8 +119,6 @@ export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatu
     <section class="content-section athlete-simple-view">
       <section class="panel athlete-settings-card">
         <div>
-          <p class="eyebrow">Profile</p>
-          <h3>${escapeHtml(athlete?.athlete || "Athlete profile")}</h3>
           <p class="muted">Your coach controls program assignment and club/team membership - only your own basic profile fields below are yours to edit.</p>
         </div>
         <div class="athlete-setting-list">
