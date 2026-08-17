@@ -37,7 +37,12 @@ export function renderCoachesHtml(data) {
 }
 
 function renderCoachCard(profile) {
-  const tags = (profile.tags || []).slice(0, 4);
+  // hotfix/athlete-mobile-navigation: was 4 - on the now-compact card
+  // (small photo + text beside it, not a full-width image) 4 pills
+  // routinely wrapped to 2 ragged lines. 2 keeps the card compact; the
+  // full tag list is still shown in the detail modal (coach-tag-row
+  // there is untouched, only this card's copy is capped).
+  const tags = (profile.tags || []).slice(0, 2);
   const image = profile.photo_url || profile.cover_image_url || "";
   // Only ever shown for the athlete's real, currently-active coach
   // relationship (profile.is_my_coach - see coaches.js's coachListSql,

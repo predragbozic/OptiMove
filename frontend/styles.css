@@ -3142,27 +3142,21 @@ input:focus {
 
 .coach-card-hit {
   width: 100%;
-  height: 100%;
-  display: grid;
-  /* hotfix/athlete-mobile-navigation: was a fixed 145px row - on a card
-     that's often 300-450px wide (repeat(auto-fill, minmax(240px, 1fr))
-     above), that read as a wide, short strip instead of a portrait/square
-     photo. auto lets the row follow .coach-card-media's own aspect-ratio
-     (1/1) below instead of a fixed pixel height. */
-  grid-template-rows: auto 1fr;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
+  /* hotfix/athlete-mobile-navigation: was a tall vertical layout (image
+     row on top, full card width, up to 278px+ square) - a small photo
+     beside the text instead, the same idea as .coach-profile-title in the
+     detail modal (flex row, 76px photo) so the card and the profile it
+     opens use the same visual language, not two different scales for the
+     "same" photo. */
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 0;
+  background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
-}
-
-.coach-card-hit:hover {
-  border-color: rgba(31, 125, 113, .45);
-  box-shadow: var(--shadow-soft);
 }
 
 .coach-card-media {
@@ -3170,7 +3164,10 @@ input:focus {
   display: grid;
   place-items: center;
   overflow: hidden;
-  aspect-ratio: 1 / 1;
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
   background: linear-gradient(135deg, rgba(31, 125, 113, .2), rgba(20, 42, 55, .12));
 }
 
@@ -3193,30 +3190,45 @@ input:focus {
 .coach-card-initials {
   display: grid;
   place-items: center;
-  width: 76px;
-  height: 76px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, .8);
+  width: 100%;
+  height: 100%;
   color: var(--ink);
   font-weight: 900;
-  font-size: 24px;
+  font-size: 18px;
 }
 
 .coach-card-body {
   display: grid;
-  gap: 8px;
-  padding: 14px;
+  gap: 3px;
+  min-width: 0;
+  padding: 0;
+}
+
+.coach-card-body .eyebrow {
+  margin: 0;
 }
 
 .coach-card-body h4 {
   margin: 0;
-  font-size: 20px;
+  font-size: 15px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coach-card-body .muted {
+  margin: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .coach-card-club {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
 }
 
@@ -3233,6 +3245,11 @@ input:focus {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.coach-card-body .coach-tag-row span {
+  padding: 2px 7px;
+  font-size: 10px;
 }
 
 .coach-card-meta,
@@ -9594,11 +9611,26 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .coach-card {
   display: flex;
   flex-direction: column;
+  /* hotfix/athlete-mobile-navigation: the border/background used to live
+     on .coach-card-hit alone, so the Message button (its own sibling,
+     added below) rendered as a separate, unbordered element floating
+     under the card instead of reading as part of it. Now the whole
+     card - photo+text row and the Message button - is one bordered box. */
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.coach-card:has(.coach-card-hit:hover) {
+  border-color: rgba(31, 125, 113, .45);
+  box-shadow: var(--shadow-soft);
 }
 
 .coach-card-message-button {
-  min-height: 44px;
-  margin: 0 14px 14px;
+  min-height: 40px;
+  margin: 0 12px 12px;
+  align-self: flex-end;
 }
 
 .athlete-home {

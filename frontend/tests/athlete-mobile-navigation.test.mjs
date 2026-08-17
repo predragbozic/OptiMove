@@ -292,11 +292,29 @@ test("scope guard: index.html's own Settings label (organization/coach settings)
   assert.match(indexHtmlSource, /<span>Settings<\/span>/);
 });
 
-// === Found during final visual pass: Coach profiles card image was a fixed 145px-tall strip, wide and short at typical card widths ===
+// === Found during final visual pass: Coach profiles card image was a fixed 145px-tall strip, then (still too big per user feedback) a full-width square - now a small avatar beside the text, matching the detail modal's own 76px photo scale ===
 
-test("styles.css: .coach-card-media is a 1:1 square (aspect-ratio), and .coach-card-hit's media row no longer forces a fixed 145px height", () => {
+test("styles.css: .coach-card-media is a small fixed avatar (64px, smaller than the 76px .coach-profile-photo used in the detail view it opens), not a full-width image", () => {
   const mediaBlock = cssBlock(cssSource, ".coach-card-media {");
-  assert.match(mediaBlock, /aspect-ratio:\s*1\s*\/\s*1;/);
+  assert.match(mediaBlock, /width:\s*64px;/);
+  assert.match(mediaBlock, /height:\s*64px;/);
+  const profilePhotoBlock = cssBlockLast(cssSource, ".coach-profile-photo {");
+  assert.match(profilePhotoBlock, /width:\s*76px;/);
+});
+
+test("styles.css: .coach-card-hit lays the photo out beside the text (flex row), not stacked above it", () => {
   const hitBlock = cssBlockLast(cssSource, ".coach-card-hit {");
-  assert.match(hitBlock, /grid-template-rows:\s*auto 1fr;/);
+  assert.match(hitBlock, /display:\s*flex;/);
+});
+
+test("styles.css: the card's border/background moved to .coach-card itself, so the Message button (its own sibling below .coach-card-hit) reads as part of the same bordered card, not a floating element under it", () => {
+  const cardBlock = cssBlock(cssSource, ".coach-card {");
+  assert.match(cardBlock, /border:\s*1px solid var\(--line\);/);
+  const hitBlock = cssBlockLast(cssSource, ".coach-card-hit {");
+  assert.match(hitBlock, /border:\s*0;/);
+});
+
+test("coach-profiles.js: the compact card caps visible tags at 2 (was 4) to avoid ragged wrapping now that the card is narrow - the full tag list is still shown in the detail modal, untouched", () => {
+  const coachProfilesSource = readSource("../coach-profiles.js");
+  assert.match(coachProfilesSource, /const tags = \(profile\.tags \|\| \[\]\)\.slice\(0, 2\);/);
 });
