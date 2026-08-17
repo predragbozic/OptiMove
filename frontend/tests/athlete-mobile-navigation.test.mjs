@@ -110,6 +110,19 @@ test("styles.css: the mobile-nav drawer's brand row is left-aligned once the dra
   assert.match(cssSource, /body\.mobile-nav-open:not\(\.login-mode\) \.brand \{\s*justify-content:\s*flex-start\s*!important;\s*\}/);
 });
 
+// === Found during final visual pass: Account page showed the athlete's name/photo up to 3x (toolbar hero+tabs, compact identity row, Profile heading) ===
+
+test("app.js: renderAthleteSettings() clears the toolbar instead of populating it with the Weekly/Specific hero+tabs (renderAthleteHeader) - that toolbar exists to switch between those two views, which doesn't apply once already on Account", () => {
+  const body = sliceFunction(appJsSource, "renderAthleteSettings", 700);
+  assert.match(body, /els\.toolbar\.innerHTML = "";/);
+  assert.ok(!body.includes("renderAthleteHeader({});"), "must not populate the toolbar with the Weekly/Specific hero+tabs anymore");
+});
+
+test("athlete-view.js: the compact identity row is labeled \"Profile\", matching the .athlete-settings-card panel's own eyebrow below it - not \"My program\", which belonged to the now-removed toolbar hero", () => {
+  const body = sliceFunction(athleteViewSource, "renderAthleteSettingsIdentityHtml", 900);
+  assert.match(body, /<span class="athlete-settings-identity-eyebrow">Profile<\/span>/);
+});
+
 // === Goal 2: Athlete Settings compact sticky identity row ===
 
 test("athlete-view.js: renderAthleteSettingsHtml renders the compact identity row before the full-size hero card, not in place of it", () => {
@@ -159,7 +172,7 @@ test("athlete-home.js and athlete.html both use a person/profile icon (head + sh
 });
 
 test("app.js: renderAthleteSettings() sets the screen title to Account, and the coach shell's separate renderOrganizationPanel() Settings title is untouched", () => {
-  const settingsBody = sliceFunction(appJsSource, "renderAthleteSettings", 400);
+  const settingsBody = sliceFunction(appJsSource, "renderAthleteSettings", 700);
   assert.match(settingsBody, /els\.title\.textContent = "Account";/);
   const orgBody = sliceFunction(appJsSource, "renderOrganizationPanel", 400);
   assert.match(orgBody, /els\.title\.textContent = "Settings";/);
@@ -215,6 +228,12 @@ test("styles.css: .week-nav-panel sticks at the same offset as the Settings iden
   assert.match(block, /top:\s*calc\(57px \+ env\(safe-area-inset-top, 0px\)\);/);
 });
 
+test("styles.css: .week-calendar-picker sticks directly below .week-nav-panel (not left in normal flow, which rendered it near the top of the page - disconnected from wherever the nav row was actually pinned once scrolled) - found live: opening the calendar while scrolled down left the athlete unsure it had opened at all", () => {
+  const block = cssBlock(cssSource, ".athlete-mode .week-calendar-picker {");
+  assert.match(block, /position:\s*sticky;/);
+  assert.match(block, /top:\s*calc\(118px \+ env\(safe-area-inset-top, 0px\)\);/);
+});
+
 test("program-view.js: renderProgramRootHtml prepends an athlete-only Back+name header, hidden entirely for the coach shell (isAthleteMode() guard)", () => {
   const body = sliceFunction(programViewSource, "renderProgramOpenHeaderHtml", 700);
   assert.match(body, /if \(!isAthleteMode\(\)\) return "";/);
@@ -265,4 +284,13 @@ test("scope guard: index.html has no athlete-topbar-brand / athlete-settings-ide
 test("scope guard: index.html's own Settings label (organization/coach settings) is untouched - still reads Settings, not Account", () => {
   const indexHtmlSource = readSource("../index.html");
   assert.match(indexHtmlSource, /<span>Settings<\/span>/);
+});
+
+// === Found during final visual pass: Coach profiles card image was a fixed 145px-tall strip, wide and short at typical card widths ===
+
+test("styles.css: .coach-card-media is a 1:1 square (aspect-ratio), and .coach-card-hit's media row no longer forces a fixed 145px height", () => {
+  const mediaBlock = cssBlock(cssSource, ".coach-card-media {");
+  assert.match(mediaBlock, /aspect-ratio:\s*1\s*\/\s*1;/);
+  const hitBlock = cssBlockLast(cssSource, ".coach-card-hit {");
+  assert.match(hitBlock, /grid-template-rows:\s*auto 1fr;/);
 });

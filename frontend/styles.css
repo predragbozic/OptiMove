@@ -3144,7 +3144,12 @@ input:focus {
   width: 100%;
   height: 100%;
   display: grid;
-  grid-template-rows: 145px 1fr;
+  /* hotfix/athlete-mobile-navigation: was a fixed 145px row - on a card
+     that's often 300-450px wide (repeat(auto-fill, minmax(240px, 1fr))
+     above), that read as a wide, short strip instead of a portrait/square
+     photo. auto lets the row follow .coach-card-media's own aspect-ratio
+     (1/1) below instead of a fixed pixel height. */
+  grid-template-rows: auto 1fr;
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -3165,6 +3170,7 @@ input:focus {
   display: grid;
   place-items: center;
   overflow: hidden;
+  aspect-ratio: 1 / 1;
   background: linear-gradient(135deg, rgba(31, 125, 113, .2), rgba(20, 42, 55, .12));
 }
 
@@ -8265,6 +8271,23 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     padding-top: 8px;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--line);
+  }
+
+  /* hotfix/athlete-mobile-navigation: .week-calendar-picker is
+     .week-nav-panel's sibling inside .week-nav-wrap (display: contents
+     above), so in normal flow it renders right after the nav row's
+     UNSTUCK position - near the top of the page, not below wherever the
+     nav row is currently pinned once scrolled. Without this, opening the
+     calendar while scrolled down rendered the picker far from the button
+     that opened it, requiring a confusing scroll to find it. Sticky at
+     the nav row's own height below it keeps the picker visually anchored
+     to the button the athlete just tapped, regardless of scroll position. */
+  .athlete-mode .week-calendar-picker {
+    position: sticky;
+    top: calc(118px + env(safe-area-inset-top, 0px));
+    z-index: 39;
+    background: var(--bg);
+    padding-top: 8px;
   }
 
   /* Specific program's own contextual row - Back (scrolls to the rail,

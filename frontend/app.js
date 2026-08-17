@@ -2018,7 +2018,12 @@ function renderAthleteHeader(data) {
 // only, not a route/id rename.
 async function renderAthleteSettings() {
   const athlete = state.athletes.find((entry) => entry.athlete_id === state.selectedAthleteId);
-  renderAthleteHeader({});
+  // hotfix/athlete-mobile-navigation: no longer renderAthleteHeader({}) -
+  // that hero+Weekly/Specific-tabs toolbar exists to switch between those
+  // two views, which doesn't apply once already on Account, and duplicated
+  // the athlete's name/photo the compact sticky identity row below already
+  // shows (renderAthleteSettingsIdentityHtml in athlete-view.js).
+  els.toolbar.innerHTML = "";
   els.context.textContent = "Athlete account";
   els.title.textContent = "Account";
   els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, null, null);

@@ -85,14 +85,16 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
 // birth_date/phone/gender/address - confirmed zero consumers anywhere in
 // the app today).
 // hotfix/athlete-mobile-navigation: a compact identity strip - photo/
-// initials + name + the same "My program" eyebrow renderAthleteHeaderToolbarHtml
-// already uses, not new copy - shown only on Athlete Settings. On mobile it
-// sticks directly under the main topbar (see .athlete-settings-identity in
-// styles.css) while the rest of Settings scrolls underneath, so the athlete
-// always knows whose profile they're editing without keeping the full,
-// much taller .athlete-settings-card hero (with its multi-line description)
-// pinned on screen. Desktop is unaffected - this is hidden there in CSS,
-// since desktop already has the persistent sidebar for identity/orientation.
+// initials + name, labeled "Profile" (matching the .athlete-settings-card
+// panel's own eyebrow below it, not "My program" - that belonged to the
+// now-removed Weekly/Specific toolbar hero this replaces on Account, see
+// renderAthleteSettings() in app.js). Sticks directly under the main
+// topbar on mobile (see .athlete-settings-identity in styles.css) while
+// the rest of Settings scrolls underneath, so the athlete always knows
+// whose profile they're editing without keeping the full, much taller
+// .athlete-settings-card hero (with its multi-line description) pinned on
+// screen. Desktop is unaffected - this is hidden there in CSS, since
+// desktop already has the persistent sidebar for identity/orientation.
 function renderAthleteSettingsIdentityHtml(athlete, profile) {
   const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || athlete?.athlete || "Athlete";
   const imageUrl = profile && !profile.error ? profile.imageUrl : athlete?.athlete_image_url;
@@ -104,7 +106,7 @@ function renderAthleteSettingsIdentityHtml(athlete, profile) {
     <div class="athlete-settings-identity">
       ${avatarMarkup}
       <span class="athlete-settings-identity-copy">
-        <span class="athlete-settings-identity-eyebrow">My program</span>
+        <span class="athlete-settings-identity-eyebrow">Profile</span>
         <span class="athlete-settings-identity-name">${escapeHtml(name)}</span>
       </span>
     </div>
