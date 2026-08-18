@@ -359,12 +359,28 @@ async function makeLegacyConflict(client, overrides = {}) {
      values ('weekly', $1, $2, $3, date '2026-07-20', $4, $5, $6, true) returning id`,
     [coach.id, athlete.id, overrides.name || "KOmpetitive 2026-07-20", overrides.status || "active", overrides.sourceType || "builder", overrides.sourceRef ?? null],
   );
-  const day = await client.query("insert into plans.plan_days (plan_id, date, day_order) values ($1, date '2026-07-20', 1) returning id", [plan.rows[0].id]);
-  const session = await client.query("insert into plans.plan_sessions (plan_day_id, session_order) values ($1, 1) returning id", [day.rows[0].id]);
+  let sessionId = null;
+  for (let i = 0; i < 7; i += 1) {
+    const day = await client.query(
+      "insert into plans.plan_days (plan_id, date, day_order, day_note) values ($1, date '2026-07-20' + $2::int, $3, $4) returning id",
+      [plan.rows[0].id, i, i + 1, i === 6 ? "MD legacy note" : null],
+    );
+    if (i === 0) {
+      const session = await client.query("insert into plans.plan_sessions (plan_day_id, session_order, am_pm, bta) values ($1, 1, 'AM', 'Legacy session note') returning id", [day.rows[0].id]);
+      sessionId = session.rows[0].id;
+    }
+  }
+  const node = await client.query(
+    "insert into plans.plan_nodes (plan_session_id, node_type, name, note, node_order) values ($1, 'section', 'Legacy section', 'Legacy node note', 1) returning id",
+    [sessionId],
+  );
   const exercise = (await client.query("select id from library.exercises where exercise_code is not null limit 1")).rows[0];
   const itemCount = overrides.itemCount ?? 7;
   for (let i = 1; i <= itemCount; i += 1) {
-    await client.query("insert into plans.plan_items (plan_session_id, item_type, exercise_id, title, item_order) values ($1, 'exercise', $2, $3, $4)", [session.rows[0].id, exercise.id, `Legacy ${i}`, i]);
+    await client.query(
+      "insert into plans.plan_items (plan_session_id, plan_node_id, item_type, exercise_id, title, description, note, sets, reps, load, item_order) values ($1, $2, 'exercise', $3, $4, $5, $6, $7, $8, $9, $10)",
+      [sessionId, node.rows[0].id, exercise.id, `Legacy ${i}`, `Legacy instruction ${i}`, `Legacy note ${i}`, `${i}`, `${i + 1}`, `${i * 10}kg`, i],
+    );
   }
   return plan.rows[0].id;
 }
@@ -435,6 +451,30 @@ test("Pankov program migration backs up and replaces the expected legacy 2026-07
     await restoreFirstBackup(client);
     const restored = await client.query("select name, status, source_type, source_ref from plans.plans where id = $1", [legacyId]);
     assert.deepEqual(restored.rows[0], { name: "KOmpetitive 2026-07-20", status: "active", source_type: "builder", source_ref: null });
+    const restoredSignature = await client.query(
+      `select count(distinct pd.id)::int days,
+              count(distinct ps.id)::int sessions,
+              count(distinct pn.id)::int nodes,
+              count(distinct pi.id) filter (where pi.item_type = 'exercise')::int exercise_items,
+              count(distinct pi.exercise_id)::int exercise_refs,
+              bool_and(pi.description like 'Legacy instruction %' and pi.note like 'Legacy note %' and pi.sets is not null and pi.reps is not null and pi.load is not null)
+                filter (where pi.item_type = 'exercise') dose_note_data_restored
+       from plans.plans p
+       left join plans.plan_days pd on pd.plan_id = p.id
+       left join plans.plan_sessions ps on ps.plan_day_id = pd.id
+       left join plans.plan_nodes pn on pn.plan_session_id = ps.id
+       left join plans.plan_items pi on pi.plan_session_id = ps.id
+       where p.id = $1`,
+      [legacyId],
+    );
+    assert.deepEqual(restoredSignature.rows[0], {
+      days: 7,
+      sessions: 1,
+      nodes: 1,
+      exercise_items: 7,
+      exercise_refs: 1,
+      dose_note_data_restored: true,
+    });
   });
 });
 
