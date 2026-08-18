@@ -19,6 +19,57 @@ import {
 
 const SOURCE_TYPE = "multi_athlete_cleaned_import";
 const PACKAGE_DATE = "2026-08-18";
+const BACKUP_DIR = path.resolve("tools/backups");
+const APPROVED_REPLACEMENTS = new Map([
+  ["milos-milovic-102-cleaned-2026-08-18|2026-06-08", {
+    athleteId: "102",
+    weekStart: "2026-06-08",
+    planId: "ab3e6829-867f-4354-9e26-17512a708d0c",
+    status: "draft",
+    sourceType: "xlsx_weekly_import",
+    checksum: "289df1b838c057cd4132de68aaea38c34a8ccf4d46c050d2f89b4e5e4e47be69",
+  }],
+  ["milos-milovic-102-cleaned-2026-08-18|2026-06-15", {
+    athleteId: "102",
+    weekStart: "2026-06-15",
+    planId: "f96a45fc-ef37-479b-b1f5-d41640eb5d0c",
+    status: "draft",
+    sourceType: "xlsx_weekly_import",
+    checksum: "80f3e59e087e8d8da5be36c9666ab9b104f159d58a4a73f96149b5f1bd5e4db7",
+  }],
+  ["milos-milovic-102-cleaned-2026-08-18|2026-06-22", {
+    athleteId: "102",
+    weekStart: "2026-06-22",
+    planId: "b563a71f-f9e7-4f7d-9f4d-8b6b6dbfcdb8",
+    status: "draft",
+    sourceType: "xlsx_weekly_import",
+    checksum: "c5dc46f7b2ae07fcf311524b5f81ed9a8bd8354d8dbfb0e8e2259740383b6d16",
+  }],
+  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-05-04", {
+    athleteId: "103",
+    weekStart: "2026-05-04",
+    planId: "1c4a8dc9-4db3-4efa-8a13-029137019929",
+    status: "draft",
+    sourceType: "xlsx_weekly_import",
+    checksum: "3ca5576ccea42a8c2ba0ad6ca3a19fef1158578d87c47298ceef2da56cd8d4c7",
+  }],
+  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-06-08", {
+    athleteId: "103",
+    weekStart: "2026-06-08",
+    planId: "7879c375-7f52-455b-bf41-806126deec99",
+    status: "draft",
+    sourceType: "xlsx_weekly_import",
+    checksum: "84fc203c52cb3e3c37251fbb08f9cd2f9ecab1155b1a46afa0617bad8d969ff7",
+  }],
+  ["nikola-petkovic-107-cleaned-2026-08-18|2026-06-08", {
+    athleteId: "107",
+    weekStart: "2026-06-08",
+    planId: "b7a0d4b5-2d53-4510-b1e4-0281a197c7ef",
+    status: "draft",
+    sourceType: "xlsx_weekly_import",
+    checksum: "1ecaf4bd0cb2d936e1b75a87a6d8e89387ca3a7b0bd39e3a0787ba38a96e5fbd",
+  }],
+]);
 
 function readManifest(filePath) {
   if (!filePath) throw new Error("--manifest <path> is required.");
@@ -35,6 +86,43 @@ function weekName(weekStart) {
 
 function stableHash(value) {
   return createHash("sha1").update(JSON.stringify(value), "utf8").digest("hex").slice(0, 10);
+}
+
+function sha256(value) {
+  return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function backupChecksum(value) {
+  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+
+function localDateString(value) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
+function jsonReady(value, key = "") {
+  if (value instanceof Date) {
+    if (["week_start", "start_date", "available_until", "date"].includes(key)) return localDateString(value);
+    return value.toISOString();
+  }
+  if (Array.isArray(value)) return value.map((item) => jsonReady(item, key));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [entryKey, jsonReady(entryValue, entryKey)]));
+  }
+  return value;
+}
+
+function nullish(value) {
+  const text = cleanText(value);
+  return text || null;
 }
 
 function compareTuple(left, right) {
@@ -343,7 +431,14 @@ async function packageDbCounts(client, pkg) {
        count(distinct pi.id)::int as total_items,
        count(distinct pi.id) filter (where pi.plan_session_id is null)::int as orphan_items,
        count(distinct pi.id) filter (where pi.item_type = 'exercise' and pi.exercise_id is null)::int as invalid_exercise_refs,
-       greatest(count(p.id) - count(distinct p.source_ref), 0)::int as duplicate_source_refs
+       (select coalesce(sum(ref_count - 1), 0)::int
+        from (
+          select source_ref, count(*)::int as ref_count
+          from plans.plans
+          where source_type = $1 and source_ref = any($2::text[])
+          group by source_ref
+          having count(*) > 1
+        ) duplicates) as duplicate_source_refs
      from plans.plans p
      left join plans.plan_days pd on pd.plan_id = p.id
      left join plans.plan_sessions ps on ps.plan_day_id = pd.id
@@ -365,6 +460,213 @@ async function packageDbCounts(client, pkg) {
     invalidExerciseRefs: Number(row.invalid_exercise_refs),
     duplicateSourceRefs: Number(row.duplicate_source_refs),
   };
+}
+
+async function tableExists(client, regclass) {
+  const result = await client.query("select to_regclass($1) as table_name", [regclass]);
+  return Boolean(result.rows[0]?.table_name);
+}
+
+async function queryRows(client, sql, params = []) {
+  return (await client.query(sql, params)).rows;
+}
+
+async function normalizeExistingPlan(client, planId) {
+  const items = await client.query(
+    `select pd.date::date::text as date, pd.day_note,
+            ps.session_order, ps.am_pm, ps.bta,
+            pn.node_type, pn.name as node_name, pn.node_order,
+            parent.node_type as parent_node_type, parent.name as parent_node_name,
+            pi.item_type, pi.title, pi.description, pi.note, pi.image_url, pi.video_url,
+            pi.sets, pi.reps, pi.load, pi.item_order, pi.exercise_order,
+            pi.domain_name, pi.category_name, pi.section_name,
+            e.exercise_code, e.name as exercise_name, e.slug as exercise_slug
+     from plans.plan_items pi
+     join plans.plan_sessions ps on ps.id = pi.plan_session_id
+     join plans.plan_days pd on pd.id = ps.plan_day_id
+     left join plans.plan_nodes pn on pn.id = pi.plan_node_id
+     left join plans.plan_nodes parent on parent.id = pn.parent_id
+     left join library.exercises e on e.id = pi.exercise_id
+     where pd.plan_id = $1
+     order by pd.date, ps.session_order nulls last, ps.am_pm, ps.bta, pn.node_order nulls last, pi.item_order nulls last, pi.created_at`,
+    [planId],
+  );
+  const normalizedItems = items.rows.map((row) => ({
+    date: row.date,
+    dayNote: nullish(row.day_note),
+    session: {
+      amPm: nullish(row.am_pm),
+      bta: nullish(row.bta),
+    },
+    sectionPath: {
+      domain: nullish(row.domain_name),
+      category: nullish(row.category_name || (row.parent_node_type === "category" ? row.parent_node_name : null)),
+      section: nullish(row.section_name || (row.node_type === "section" ? row.node_name : null)),
+    },
+    itemType: row.item_type,
+    title: nullish(row.title),
+    description: nullish(row.description),
+    note: nullish(row.note),
+    media: {
+      imageUrl: nullish(row.image_url),
+      videoUrl: nullish(row.video_url),
+    },
+    dose: {
+      sets: nullish(row.sets),
+      reps: nullish(row.reps),
+      load: nullish(row.load),
+    },
+    order: {
+      itemOrder: row.item_order === null ? null : Number(row.item_order),
+      exerciseOrder: row.exercise_order === null ? null : Number(row.exercise_order),
+      categoryOrder: null,
+      sectionOrder: null,
+    },
+    exercise: row.item_type === "exercise" ? {
+      keyType: row.exercise_code ? "code" : "title",
+      key: row.exercise_code ? String(row.exercise_code) : normalize(row.exercise_name || row.title),
+      expectedName: row.exercise_name || row.title,
+      slug: row.exercise_slug || null,
+    } : null,
+  }));
+  const days = new Set(normalizedItems.map((item) => item.date));
+  const sessions = new Set(normalizedItems.map((item) => `${item.date}|${item.session.amPm || ""}|${item.session.bta || ""}`));
+  const sections = new Set(normalizedItems.map((item) => `${item.date}|${item.session.amPm || ""}|${item.session.bta || ""}|${item.sectionPath.category || ""}|${item.sectionPath.section || ""}`).filter((key) => !key.endsWith("||")));
+  return {
+    counts: {
+      days: days.size,
+      sessions: sessions.size,
+      sections: sections.size,
+      exerciseItems: normalizedItems.filter((item) => item.itemType === "exercise").length,
+      noteItems: normalizedItems.filter((item) => item.itemType === "note").length,
+      totalItems: normalizedItems.length,
+    },
+    items: normalizedItems,
+  };
+}
+
+async function loadPlanBackupPayload(client, planId, guard, normalizedChecksum) {
+  const planRows = await queryRows(client, "select * from plans.plans where id = $1", [planId]);
+  const days = await queryRows(client, "select * from plans.plan_days where plan_id = $1 order by block_order nulls last, block_index, day_order, created_at", [planId]);
+  const sessions = await queryRows(client, "select ps.* from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1 order by pd.block_order nulls last, pd.block_index, ps.session_order nulls last, ps.created_at", [planId]);
+  const nodes = await queryRows(client, "select pn.* from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1 order by ps.session_order nulls last, pn.node_order nulls last, pn.created_at", [planId]);
+  const items = await queryRows(client, "select pi.* from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1 order by ps.session_order nulls last, pi.item_order nulls last, pi.created_at", [planId]);
+  const itemExerciseRefs = await queryRows(
+    client,
+    `select pi.id as plan_item_id, pi.exercise_id, e.exercise_code, e.slug, e.name
+     from plans.plan_items pi
+     join plans.plan_sessions ps on ps.id = pi.plan_session_id
+     join plans.plan_days pd on pd.id = ps.plan_day_id
+     left join library.exercises e on e.id = pi.exercise_id
+     where pd.plan_id = $1
+     order by ps.session_order nulls last, pi.item_order nulls last, pi.created_at`,
+    [planId],
+  );
+  const programTags = await queryRows(client, "select * from library.program_tags where plan_id = $1 order by created_at, tag_id", [planId]);
+  const editDrafts = await queryRows(client, "select * from plans.plans where edit_source_plan_id = $1 order by created_at", [planId]);
+  const optionalTables = {};
+  for (const tableName of ["library.program_reviews", "library.program_access", "library.program_usage_events", "reviews.plan_reviews", "reviews.plan_comments"]) {
+    if (!(await tableExists(client, tableName))) {
+      optionalTables[tableName] = { tableMissing: true };
+      continue;
+    }
+    if (tableName === "library.program_access") {
+      optionalTables[tableName] = await queryRows(client, "select * from library.program_access where plan_id = $1 or related_plan_id = $1 order by created_at", [planId]);
+    } else if (tableName === "library.program_usage_events") {
+      optionalTables[tableName] = await queryRows(
+        client,
+        `select pue.*
+         from library.program_usage_events pue
+         join library.program_access pa on pa.id = pue.program_access_id
+         where pa.plan_id = $1 or pa.related_plan_id = $1
+         order by pue.created_at`,
+        [planId],
+      );
+    } else {
+      optionalTables[tableName] = await queryRows(client, `select * from ${tableName} where plan_id = $1 order by created_at`, [planId]);
+    }
+  }
+  const payload = jsonReady({
+    backupFormat: "optimove-plan-backup/v1",
+    packageId: "multi-athlete-cleaned-2026-08-18",
+    exportedAt: new Date().toISOString(),
+    originalPlanUuid: planId,
+    normalizedChecksum,
+    expectedGuard: guard,
+    tables: {
+      "plans.plans": planRows,
+      "plans.plan_days": days,
+      "plans.plan_sessions": sessions,
+      "plans.plan_nodes": nodes,
+      "plans.plan_items": items,
+      "plans.plan_items.exercise_refs": itemExerciseRefs,
+      "library.program_tags": programTags,
+      "plans.plans.edit_drafts": editDrafts,
+      ...optionalTables,
+    },
+    counts: {
+      plans: planRows.length,
+      days: days.length,
+      sessions: sessions.length,
+      nodes: nodes.length,
+      items: items.length,
+      exerciseItems: items.filter((row) => row.item_type === "exercise").length,
+      noteItems: items.filter((row) => row.item_type === "note").length,
+      programTags: programTags.length,
+      editDrafts: editDrafts.length,
+      programAccess: Array.isArray(optionalTables["library.program_access"]) ? optionalTables["library.program_access"].length : null,
+      programUsageEvents: Array.isArray(optionalTables["library.program_usage_events"]) ? optionalTables["library.program_usage_events"].length : null,
+    },
+  });
+  return { ...payload, sha256: backupChecksum(payload) };
+}
+
+function writePlanBackup(backup) {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const safeWeek = backup.expectedGuard.weekStart;
+  const outputPath = path.join(BACKUP_DIR, `multi-athlete-conflict-plan-${backup.originalPlanUuid}-${safeWeek}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+  fs.writeFileSync(outputPath, `${JSON.stringify(backup, null, 2)}\n`, "utf8");
+  return outputPath;
+}
+
+async function deletePlanTree(client, planId) {
+  if (await tableExists(client, "library.program_usage_events")) {
+    await client.query(
+      `delete from library.program_usage_events pue
+       using library.program_access pa
+       where pue.program_access_id = pa.id and (pa.plan_id = $1 or pa.related_plan_id = $1)`,
+      [planId],
+    );
+  }
+  await client.query("delete from library.program_tags where plan_id = $1", [planId]);
+  if (await tableExists(client, "library.program_reviews")) await client.query("delete from library.program_reviews where plan_id = $1", [planId]);
+  if (await tableExists(client, "library.program_access")) await client.query("delete from library.program_access where plan_id = $1 or related_plan_id = $1", [planId]);
+  if (await tableExists(client, "reviews.plan_reviews")) await client.query("delete from reviews.plan_reviews where plan_id = $1", [planId]);
+  if (await tableExists(client, "reviews.plan_comments")) await client.query("delete from reviews.plan_comments where plan_id = $1", [planId]);
+  await client.query("delete from plans.plan_items pi using plans.plan_sessions ps, plans.plan_days pd where pi.plan_session_id = ps.id and ps.plan_day_id = pd.id and pd.plan_id = $1", [planId]);
+  await client.query("delete from plans.plan_nodes pn using plans.plan_sessions ps, plans.plan_days pd where pn.plan_session_id = ps.id and ps.plan_day_id = pd.id and pd.plan_id = $1", [planId]);
+  await client.query("delete from plans.plan_sessions ps using plans.plan_days pd where ps.plan_day_id = pd.id and pd.plan_id = $1", [planId]);
+  await client.query("delete from plans.plan_days where plan_id = $1", [planId]);
+  await client.query("delete from plans.plans where id = $1", [planId]);
+}
+
+function approvedReplacementFor(manifest, conflict) {
+  const key = `${manifest.packageId}|${conflict.incoming.weekStart}`;
+  const guard = APPROVED_REPLACEMENTS.get(key);
+  if (!guard) return null;
+  const matches = conflict.existing.filter((row) => row.id === guard.planId);
+  if (matches.length !== 1 || conflict.existing.length !== 1) return null;
+  return guard;
+}
+
+function approvedConflicts(report, manifest, allowReplacement) {
+  if (!allowReplacement) return [];
+  const approved = [];
+  for (const conflict of report.weeklyConflicts) {
+    const guard = approvedReplacementFor(manifest, conflict);
+    if (guard) approved.push({ conflict, guard });
+  }
+  return approved;
 }
 
 async function dryRun(client, manifest, pkg, dbIndex, customRegistry) {
@@ -407,11 +709,12 @@ async function dryRun(client, manifest, pkg, dbIndex, customRegistry) {
   };
 }
 
-function assertCanApply(report) {
+function assertCanApply(report, manifest, options = {}) {
   const problems = [];
   if (report.validationProblems.length) problems.push(...report.validationProblems);
   if (report.unresolvedRows.length) problems.push(`unresolved rows: ${report.unresolvedRows.length}`);
-  if (report.weeklyConflicts.length) problems.push(`weekly conflicts: ${report.weeklyConflicts.length}`);
+  const approved = approvedConflicts(report, manifest, options.replaceApprovedConflicts);
+  if (report.weeklyConflicts.length !== approved.length) problems.push(`weekly conflicts: ${report.weeklyConflicts.length}, approved for replacement: ${approved.length}`);
   if (report.exerciseMapping["missing-code"]) problems.push(`missing exercise codes: ${report.exerciseMapping["missing-code"]}`);
   const expectedWeeks = Number(report.expectedCounts.weeks || report.totals.weeks);
   if (report.existingPackagePlans.length && report.existingPackagePlans.length !== expectedWeeks) {
@@ -451,12 +754,59 @@ async function ensureCustomExercises(client, customDefinitions, coachId) {
   return changes;
 }
 
-async function applyPackage(client, manifest, pkg, dryRunReport, customRegistry) {
-  assertCanApply(dryRunReport);
+async function replaceApprovedConflicts(client, manifest, refreshedDryRun, athlete) {
+  const approved = approvedConflicts(refreshedDryRun, manifest, true);
+  const replacements = [];
+  for (const { conflict, guard } of approved) {
+    const locked = await client.query(
+      `select p.id, p.name, p.status, p.source_type, p.source_ref, p.week_start::date::text as week_start,
+              a.athlete_id, a.source_external_id
+       from plans.plans p
+       join public.athletes a on a.id = p.athlete_id
+       where p.id = $1
+       for update`,
+      [guard.planId],
+    );
+    if (locked.rowCount !== 1) throw new Error(`Approved replacement guard failed: plan ${guard.planId} was not found.`);
+    const plan = locked.rows[0];
+    const foundAthleteIds = [plan.athlete_id, plan.source_external_id].filter((value) => value !== null && value !== undefined).map(String);
+    const problems = [];
+    if (!foundAthleteIds.includes(String(guard.athleteId))) problems.push(`athlete expected ${guard.athleteId}, found athlete_id/source_external_id ${foundAthleteIds.join("/")}`);
+    if (String(athlete.id) !== String(conflict.existing[0].athlete_id || athlete.id)) problems.push("athlete UUID changed during replacement check");
+    if (plan.week_start !== guard.weekStart) problems.push(`week_start expected ${guard.weekStart}, found ${plan.week_start}`);
+    if (plan.status !== guard.status) problems.push(`status expected ${guard.status}, found ${plan.status}`);
+    if (plan.source_type !== guard.sourceType) problems.push(`source_type expected ${guard.sourceType}, found ${plan.source_type}`);
+    if (problems.length) throw new Error(`Approved replacement guard failed for ${guard.planId}: ${problems.join("; ")}`);
+
+    const normalized = await normalizeExistingPlan(client, guard.planId);
+    const normalizedChecksum = sha256(normalized);
+    if (normalizedChecksum !== guard.checksum) {
+      throw new Error(`Approved replacement checksum failed for ${guard.planId}: expected ${guard.checksum}, found ${normalizedChecksum}`);
+    }
+    const backup = await loadPlanBackupPayload(client, guard.planId, guard, normalizedChecksum);
+    const backupPath = writePlanBackup(backup);
+    await deletePlanTree(client, guard.planId);
+    replacements.push({
+      packageId: manifest.packageId,
+      weekStart: guard.weekStart,
+      oldPlanId: guard.planId,
+      oldPlanName: plan.name,
+      normalizedChecksum,
+      backupPath,
+      backupSha256: backup.sha256,
+      incomingSourceRef: conflict.incoming.sourceRef,
+    });
+  }
+  return replacements;
+}
+
+async function applyPackage(client, manifest, pkg, dryRunReport, customRegistry, options = {}) {
+  assertCanApply(dryRunReport, manifest, options);
   const expectedWeeks = Number(dryRunReport.expectedCounts.weeks || dryRunReport.totals.weeks);
   const changes = {
     customExercisesCreated: [],
     customExercisesExisting: [],
+    replacedConflicts: [],
     plansInserted: [],
     plansExisting: [],
     daysInserted: 0,
@@ -474,13 +824,20 @@ async function applyPackage(client, manifest, pkg, dryRunReport, customRegistry)
     const athlete = resolveAthlete(manifest, dbIndex);
     const coach = resolveCoach(manifest, dbIndex);
     const refreshedDryRun = await dryRun(client, manifest, pkg, dbIndex, customRegistry);
-    assertCanApply(refreshedDryRun);
+    assertCanApply(refreshedDryRun, manifest, options);
 
     if (refreshedDryRun.existingPackagePlans.length === expectedWeeks) {
       changes.plansExisting = refreshedDryRun.existingPackagePlans;
       await client.query("commit");
       return { ...changes, dbCountsAfterCommit: await packageDbCounts(client, pkg), idempotentSkip: true };
     }
+
+    if (options.replaceApprovedConflicts && refreshedDryRun.weeklyConflicts.length) {
+      changes.replacedConflicts = await replaceApprovedConflicts(client, manifest, refreshedDryRun, athlete);
+    }
+
+    const afterReplacementDryRun = await dryRun(client, manifest, pkg, await loadDbIndex(client), customRegistry);
+    assertCanApply(afterReplacementDryRun, manifest, { replaceApprovedConflicts: false });
 
     const customForPackage = customRegistry.definitions.filter((custom) => custom.packageIds.includes(manifest.packageId));
     const customChanges = await ensureCustomExercises(client, customForPackage, coach.id);
@@ -670,7 +1027,10 @@ async function main() {
     report.workbook = { path: workbookPath, sheets: sheetReports };
     if (args.applyLocal) {
       report.mode = "apply-local";
-      report.apply = await applyPackage(client, manifest, pkg, report, customRegistry);
+      report.replaceApprovedConflicts = args.replaceApprovedConflicts !== undefined;
+      report.apply = await applyPackage(client, manifest, pkg, report, customRegistry, {
+        replaceApprovedConflicts: args.replaceApprovedConflicts !== undefined,
+      });
     }
     console.log(JSON.stringify(report, null, 2));
   } finally {
