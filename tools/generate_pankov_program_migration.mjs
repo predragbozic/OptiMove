@@ -350,7 +350,6 @@ begin
   end if;
   if v_conflict_count = 1 then
     select p.*,
-           (select count(*)::int from plans.plan_days pd where pd.plan_id = p.id) as days,
            (select count(*)::int from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = p.id) as sessions,
            (select count(*)::int from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = p.id and pi.item_type = 'exercise') as exercise_items
     into v_conflict
@@ -366,7 +365,6 @@ begin
       v_conflict.name = 'KOmpetitive 2026-07-20'
       and v_conflict.source_type = 'builder'
       and v_conflict.source_ref is null
-      and v_conflict.days = 7
       and v_conflict.sessions = 1
       and v_conflict.exercise_items = 7
     ) then
