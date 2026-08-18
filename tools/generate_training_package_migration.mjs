@@ -10,6 +10,7 @@ const COACH_EMAIL = "predrag.bozic@rzsport.gov.rs";
 const LOCAL_ENV_PATH = path.resolve("backend/.env");
 const MIGRATION_DIR = path.resolve("migrations");
 const MANIFEST_DIR = path.resolve("tools/manifests");
+const BACKUP_DIR = path.resolve("tools/backups");
 
 const ATHLETES = [
   { file: "milos_milovic", manifest: "milos-milovic-102-cleaned-2026-08-18.json", sourceExternalId: "102", expected: { plans: 14, days: 34, sessions: 50, sectionNodes: 169, exerciseItems: 953, noteItems: 36 } },
@@ -29,12 +30,12 @@ const PREREQ_FILE = "20260818_seed_multi_athlete_01_custom_exercises.sql";
 const ZIJA_FILE = "20260818_seed_multi_athlete_02_zija_murina.sql";
 
 const APPROVED_REPLACEMENTS = new Map([
-  ["milos-milovic-102-cleaned-2026-08-18|2026-06-08", { athleteExternalId: "102", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", checksum: "289df1b838c057cd4132de68aaea38c34a8ccf4d46c050d2f89b4e5e4e47be69", counts: { days: 4, sessions: 4, exerciseItems: 98, noteItems: 0, totalItems: 98 } }],
-  ["milos-milovic-102-cleaned-2026-08-18|2026-06-15", { athleteExternalId: "102", weekStart: "2026-06-15", status: "draft", sourceType: "xlsx_weekly_import", checksum: "80f3e59e087e8d8da5be36c9666ab9b104f159d58a4a73f96149b5f1bd5e4db7", counts: { days: 6, sessions: 6, exerciseItems: 179, noteItems: 0, totalItems: 179 } }],
-  ["milos-milovic-102-cleaned-2026-08-18|2026-06-22", { athleteExternalId: "102", weekStart: "2026-06-22", status: "draft", sourceType: "xlsx_weekly_import", checksum: "c5dc46f7b2ae07fcf311524b5f81ed9a8bd8354d8dbfb0e8e2259740383b6d16", counts: { days: 1, sessions: 1, exerciseItems: 26, noteItems: 0, totalItems: 26 } }],
-  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-05-04", { athleteExternalId: "103", weekStart: "2026-05-04", status: "draft", sourceType: "xlsx_weekly_import", checksum: "3ca5576ccea42a8c2ba0ad6ca3a19fef1158578d87c47298ceef2da56cd8d4c7", counts: { days: 6, sessions: 9, exerciseItems: 121, noteItems: 0, totalItems: 126 } }],
-  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-06-08", { athleteExternalId: "103", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", checksum: "84fc203c52cb3e3c37251fbb08f9cd2f9ecab1155b1a46afa0617bad8d969ff7", counts: { days: 5, sessions: 5, exerciseItems: 135, noteItems: 0, totalItems: 135 } }],
-  ["nikola-petkovic-107-cleaned-2026-08-18|2026-06-08", { athleteExternalId: "107", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", checksum: "1ecaf4bd0cb2d936e1b75a87a6d8e89387ca3a7b0bd39e3a0787ba38a96e5fbd", counts: { days: 1, sessions: 2, exerciseItems: 28, noteItems: 0, totalItems: 28 } }],
+  ["milos-milovic-102-cleaned-2026-08-18|2026-06-08", { athleteExternalId: "102", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-08", checksum: "289df1b838c057cd4132de68aaea38c34a8ccf4d46c050d2f89b4e5e4e47be69", counts: { days: 4, sessions: 4, exerciseItems: 98, noteItems: 0, totalItems: 98 } }],
+  ["milos-milovic-102-cleaned-2026-08-18|2026-06-15", { athleteExternalId: "102", weekStart: "2026-06-15", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-15", checksum: "80f3e59e087e8d8da5be36c9666ab9b104f159d58a4a73f96149b5f1bd5e4db7", counts: { days: 6, sessions: 6, exerciseItems: 179, noteItems: 0, totalItems: 179 } }],
+  ["milos-milovic-102-cleaned-2026-08-18|2026-06-22", { athleteExternalId: "102", weekStart: "2026-06-22", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-22", checksum: "c5dc46f7b2ae07fcf311524b5f81ed9a8bd8354d8dbfb0e8e2259740383b6d16", counts: { days: 1, sessions: 1, exerciseItems: 26, noteItems: 0, totalItems: 26 } }],
+  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-05-04", { athleteExternalId: "103", weekStart: "2026-05-04", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 103 week 2026-05-04", checksum: "3ca5576ccea42a8c2ba0ad6ca3a19fef1158578d87c47298ceef2da56cd8d4c7", counts: { days: 6, sessions: 9, exerciseItems: 121, noteItems: 0, totalItems: 126 } }],
+  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-06-08", { athleteExternalId: "103", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 103 week 2026-06-08", checksum: "84fc203c52cb3e3c37251fbb08f9cd2f9ecab1155b1a46afa0617bad8d969ff7", counts: { days: 5, sessions: 5, exerciseItems: 135, noteItems: 0, totalItems: 135 } }],
+  ["nikola-petkovic-107-cleaned-2026-08-18|2026-06-08", { athleteExternalId: "107", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 107 week 2026-06-08", checksum: "1ecaf4bd0cb2d936e1b75a87a6d8e89387ca3a7b0bd39e3a0787ba38a96e5fbd", counts: { days: 1, sessions: 2, exerciseItems: 28, noteItems: 0, totalItems: 28 } }],
 ]);
 
 function sqlString(value) {
@@ -62,6 +63,169 @@ function readManifest(fileName) {
 
 function checksum(value) {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+}
+
+function cleanValue(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function numericText(value) {
+  const text = cleanValue(value);
+  if (text === null) return null;
+  const number = Number(text);
+  return Number.isFinite(number) ? String(number) : text;
+}
+
+function backupRows(backup, table) {
+  return backup.tables?.[table] || [];
+}
+
+function legacySectionKey(item) {
+  return [
+    localDate(item.date),
+    cleanValue(item.session_order),
+    cleanValue(item.domain_name),
+    cleanValue(item.category_name),
+    cleanValue(item.section_name),
+  ].join("|");
+}
+
+function normalizeBackupPlan(backup) {
+  const days = backupRows(backup, "plans.plan_days");
+  const sessions = backupRows(backup, "plans.plan_sessions");
+  const nodes = backupRows(backup, "plans.plan_nodes");
+  const items = backupRows(backup, "plans.plan_items");
+  const exerciseRefs = backupRows(backup, "plans.plan_items.exercise_refs");
+  const dayById = new Map(days.map((row) => [row.id, row]));
+  const sessionById = new Map(sessions.map((row) => [row.id, row]));
+  const nodeById = new Map(nodes.map((row) => [row.id, row]));
+  const exerciseByItemId = new Map(exerciseRefs.map((row) => [row.plan_item_id, row]));
+  const sectionKeys = new Set();
+
+  const normalizedItems = items.map((item) => {
+    const session = sessionById.get(item.plan_session_id) || {};
+    const day = dayById.get(session.plan_day_id) || {};
+    const node = nodeById.get(item.plan_node_id) || {};
+    const exercise = exerciseByItemId.get(item.id) || {};
+    const date = localDate(day.date);
+    const normalized = {
+      date,
+      day_note: cleanValue(day.day_note),
+      session_order: numericText(session.session_order),
+      am_pm: cleanValue(session.am_pm),
+      bta: cleanValue(session.bta),
+      node_type: cleanValue(node.node_type),
+      node_name: cleanValue(node.name),
+      node_order: numericText(node.node_order),
+      item_type: cleanValue(item.item_type),
+      title: cleanValue(item.title),
+      description: cleanValue(item.description),
+      short_note: cleanValue(item.short_note),
+      note: cleanValue(item.note),
+      image_url: cleanValue(item.image_url),
+      video_url: cleanValue(item.video_url),
+      sets: cleanValue(item.sets),
+      reps: cleanValue(item.reps),
+      load: cleanValue(item.load),
+      item_order: numericText(item.item_order),
+      exercise_order: numericText(item.exercise_order),
+      source_row_ref: cleanValue(item.source_row_ref),
+      domain_name: cleanValue(item.domain_name),
+      category_name: cleanValue(item.category_name),
+      section_name: cleanValue(item.section_name),
+      domain_color: cleanValue(item.domain_color),
+      category_color: cleanValue(item.category_color),
+      section_color: cleanValue(item.section_color),
+      domain_icon_url: cleanValue(item.domain_icon_url),
+      category_icon_url: cleanValue(item.category_icon_url),
+      section_icon_url: cleanValue(item.section_icon_url),
+      domain_short_note: cleanValue(item.domain_short_note),
+      category_short_note: cleanValue(item.category_short_note),
+      section_short_note: cleanValue(item.section_short_note),
+      domain_note: cleanValue(item.domain_note),
+      category_note: cleanValue(item.category_note),
+      section_note: cleanValue(item.section_note),
+      domain_order: numericText(item.domain_order),
+      category_order: numericText(item.category_order),
+      section_order: numericText(item.section_order),
+      exercise_key_type: null,
+      exercise_key: null,
+      exercise_expected_name: null,
+    };
+    if (normalized.item_type === "exercise") {
+      if (cleanValue(exercise.exercise_code)) {
+        normalized.exercise_key_type = "code";
+        normalized.exercise_key = cleanValue(exercise.exercise_code);
+      } else if (cleanValue(exercise.slug)) {
+        normalized.exercise_key_type = "slug";
+        normalized.exercise_key = cleanValue(exercise.slug);
+      } else {
+        normalized.exercise_key_type = "title";
+        normalized.exercise_key = normalized.title;
+      }
+      normalized.exercise_expected_name = cleanValue(exercise.name);
+    }
+    sectionKeys.add(legacySectionKey({ ...normalized, date }));
+    return normalized;
+  }).sort((a, b) => JSON.stringify([
+    a.date,
+    Number(a.session_order || 0),
+    a.am_pm || "",
+    a.bta || "",
+    Number(a.node_order || 0),
+    Number(a.item_order || 0),
+    a.source_row_ref || "",
+    a.title || "",
+  ]).localeCompare(JSON.stringify([
+    b.date,
+    Number(b.session_order || 0),
+    b.am_pm || "",
+    b.bta || "",
+    Number(b.node_order || 0),
+    Number(b.item_order || 0),
+    b.source_row_ref || "",
+    b.title || "",
+  ])));
+
+  return {
+    counts: {
+      days: days.length,
+      sessions: sessions.length,
+      sections: sectionKeys.size,
+      exerciseItems: normalizedItems.filter((item) => item.item_type === "exercise").length,
+      noteItems: normalizedItems.filter((item) => item.item_type === "note").length,
+      totalItems: normalizedItems.length,
+    },
+    items: normalizedItems,
+  };
+}
+
+function findReplacementBackup(replacement) {
+  if (!fs.existsSync(BACKUP_DIR)) throw new Error(`Missing backup directory ${BACKUP_DIR}`);
+  const candidates = fs.readdirSync(BACKUP_DIR)
+    .filter((file) => file.startsWith("multi-athlete-conflict-plan-") && file.endsWith(".json"))
+    .map((file) => {
+      const fullPath = path.join(BACKUP_DIR, file);
+      const backup = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+      return { file, fullPath, backup };
+    })
+    .filter(({ backup }) => backup.normalizedChecksum === replacement.checksum && backup.expectedGuard?.athleteId === replacement.athleteExternalId && backup.expectedGuard?.weekStart === replacement.weekStart)
+    .sort((a, b) => a.file.localeCompare(b.file));
+  if (candidates.length === 0) throw new Error(`Missing approved backup for athlete ${replacement.athleteExternalId} week ${replacement.weekStart}`);
+  const { backup } = candidates.at(-1);
+  const plan = backupRows(backup, "plans.plans")[0];
+  if (!plan || plan.source_ref !== replacement.sourceRef) {
+    throw new Error(`Backup source_ref mismatch for athlete ${replacement.athleteExternalId} week ${replacement.weekStart}`);
+  }
+  const normalized = normalizeBackupPlan(backup);
+  for (const [key, value] of Object.entries(replacement.counts)) {
+    if (normalized.counts[key] !== value) {
+      throw new Error(`Backup count mismatch for athlete ${replacement.athleteExternalId} week ${replacement.weekStart}: ${key} expected ${value}, found ${normalized.counts[key]}`);
+    }
+  }
+  return { ...replacement, counts: normalized.counts, normalized };
 }
 
 async function query(client, sql, params = []) {
@@ -112,7 +276,10 @@ async function extractPayload(client, athleteConfig) {
     { keyType: item.exercise_key_type, key: item.exercise_key, expectedName: item.exercise_expected_name },
   ])).values()].sort((a, b) => `${a.keyType}:${a.key}`.localeCompare(`${b.keyType}:${b.key}`));
 
-  const replacements = plans.map((plan) => APPROVED_REPLACEMENTS.get(`${packageId}|${plan.week_start}`)).filter(Boolean);
+  const replacements = plans
+    .map((plan) => APPROVED_REPLACEMENTS.get(`${packageId}|${plan.week_start}`))
+    .filter(Boolean)
+    .map(findReplacementBackup);
   return {
     packageId,
     sourceType: SOURCE_TYPE,
@@ -308,6 +475,150 @@ begin
 end;
 $validate$;
 
+drop function if exists public.${fnPrefix}_normalize_legacy_plan(uuid);
+create function public.${fnPrefix}_normalize_legacy_plan(p_plan_id uuid)
+returns jsonb
+language sql
+stable
+as $normalize$
+  with item_rows as (
+    select
+      pd.date::text as date,
+      nullif(btrim(pd.day_note), '') as day_note,
+      nullif(ps.session_order::text, '') as session_order,
+      nullif(btrim(ps.am_pm), '') as am_pm,
+      nullif(btrim(ps.bta), '') as bta,
+      nullif(btrim(pn.node_type), '') as node_type,
+      nullif(btrim(pn.name), '') as node_name,
+      nullif(pn.node_order::text, '') as node_order,
+      nullif(btrim(pi.item_type), '') as item_type,
+      nullif(btrim(pi.title), '') as title,
+      nullif(btrim(pi.description), '') as description,
+      nullif(btrim(pi.short_note), '') as short_note,
+      nullif(btrim(pi.note), '') as note,
+      nullif(btrim(pi.image_url), '') as image_url,
+      nullif(btrim(pi.video_url), '') as video_url,
+      nullif(btrim(pi.sets), '') as sets,
+      nullif(btrim(pi.reps), '') as reps,
+      nullif(btrim(pi.load), '') as load,
+      nullif(pi.item_order::text, '') as item_order,
+      nullif(pi.exercise_order::text, '') as exercise_order,
+      nullif(btrim(pi.source_row_ref), '') as source_row_ref,
+      nullif(btrim(pi.domain_name), '') as domain_name,
+      nullif(btrim(pi.category_name), '') as category_name,
+      nullif(btrim(pi.section_name), '') as section_name,
+      nullif(btrim(pi.domain_color), '') as domain_color,
+      nullif(btrim(pi.category_color), '') as category_color,
+      nullif(btrim(pi.section_color), '') as section_color,
+      nullif(btrim(pi.domain_icon_url), '') as domain_icon_url,
+      nullif(btrim(pi.category_icon_url), '') as category_icon_url,
+      nullif(btrim(pi.section_icon_url), '') as section_icon_url,
+      nullif(btrim(pi.domain_short_note), '') as domain_short_note,
+      nullif(btrim(pi.category_short_note), '') as category_short_note,
+      nullif(btrim(pi.section_short_note), '') as section_short_note,
+      nullif(btrim(pi.domain_note), '') as domain_note,
+      nullif(btrim(pi.category_note), '') as category_note,
+      nullif(btrim(pi.section_note), '') as section_note,
+      nullif(pi.domain_order::text, '') as domain_order,
+      nullif(pi.category_order::text, '') as category_order,
+      nullif(pi.section_order::text, '') as section_order,
+      case
+        when pi.item_type = 'exercise' and e.exercise_code is not null then 'code'
+        when pi.item_type = 'exercise' and e.slug is not null then 'slug'
+        when pi.item_type = 'exercise' then 'title'
+        else null
+      end as exercise_key_type,
+      case
+        when pi.item_type = 'exercise' and e.exercise_code is not null then e.exercise_code::text
+        when pi.item_type = 'exercise' and e.slug is not null then e.slug
+        when pi.item_type = 'exercise' then nullif(btrim(pi.title), '')
+        else null
+      end as exercise_key,
+      case when pi.item_type = 'exercise' then nullif(btrim(e.name), '') else null end as exercise_expected_name,
+      pd.block_order as sort_block_order,
+      pd.block_index as sort_block_index,
+      ps.session_order as sort_session_order,
+      pn.node_order as sort_node_order,
+      pi.item_order as sort_item_order,
+      pi.created_at as sort_created_at
+    from plans.plan_items pi
+    join plans.plan_sessions ps on ps.id = pi.plan_session_id
+    join plans.plan_days pd on pd.id = ps.plan_day_id
+    left join plans.plan_nodes pn on pn.id = pi.plan_node_id
+    left join library.exercises e on e.id = pi.exercise_id
+    where pd.plan_id = p_plan_id
+  ),
+  normalized_items as (
+    select jsonb_build_object(
+      'date', date,
+      'day_note', day_note,
+      'session_order', session_order,
+      'am_pm', am_pm,
+      'bta', bta,
+      'node_type', node_type,
+      'node_name', node_name,
+      'node_order', node_order,
+      'item_type', item_type,
+      'title', title,
+      'description', description,
+      'short_note', short_note,
+      'note', note,
+      'image_url', image_url,
+      'video_url', video_url,
+      'sets', sets,
+      'reps', reps,
+      'load', load,
+      'item_order', item_order,
+      'exercise_order', exercise_order,
+      'source_row_ref', source_row_ref,
+      'domain_name', domain_name,
+      'category_name', category_name,
+      'section_name', section_name,
+      'domain_color', domain_color,
+      'category_color', category_color,
+      'section_color', section_color,
+      'domain_icon_url', domain_icon_url,
+      'category_icon_url', category_icon_url,
+      'section_icon_url', section_icon_url,
+      'domain_short_note', domain_short_note,
+      'category_short_note', category_short_note,
+      'section_short_note', section_short_note,
+      'domain_note', domain_note,
+      'category_note', category_note,
+      'section_note', section_note,
+      'domain_order', domain_order,
+      'category_order', category_order,
+      'section_order', section_order,
+      'exercise_key_type', exercise_key_type,
+      'exercise_key', exercise_key,
+      'exercise_expected_name', exercise_expected_name
+    ) as item,
+    date,
+    sort_block_order,
+    sort_block_index,
+    sort_session_order,
+    am_pm,
+    bta,
+    sort_node_order,
+    sort_item_order,
+    source_row_ref,
+    title,
+    sort_created_at
+    from item_rows
+  )
+  select jsonb_build_object(
+    'counts', jsonb_build_object(
+      'days', (select count(*)::int from plans.plan_days where plan_id = p_plan_id),
+      'sessions', (select count(*)::int from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = p_plan_id),
+      'sections', (select count(distinct concat_ws('|', date, session_order, domain_name, category_name, section_name))::int from item_rows),
+      'exerciseItems', (select count(*)::int from item_rows where item_type = 'exercise'),
+      'noteItems', (select count(*)::int from item_rows where item_type = 'note'),
+      'totalItems', (select count(*)::int from item_rows)
+    ),
+    'items', coalesce((select jsonb_agg(item order by date, sort_block_order nulls last, sort_block_index nulls last, sort_session_order nulls last, am_pm nulls last, bta nulls last, sort_node_order nulls last, sort_item_order nulls last, source_row_ref nulls last, title nulls last, sort_created_at nulls last) from normalized_items), '[]'::jsonb)
+  );
+$normalize$;
+
 do $$
 declare
   v_migration_id constant text := ${sqlString(`20260818_seed_multi_athlete_${payload.athleteExternalId}_programs`)};
@@ -338,6 +649,7 @@ declare
   v_conflict_count integer;
   v_conflict record;
   v_replacement jsonb;
+  v_normalized jsonb;
   v_backup_payload jsonb;
   v_backup_checksum text;
 begin
@@ -399,17 +711,26 @@ begin
       if v_replacement is null then
         raise exception '%: unexpected weekly conflict for %, plan %, source_type %, status %', v_package_id, r->>'week_start', v_conflict.id, v_conflict.source_type, v_conflict.status;
       end if;
-      if not (v_conflict.status = v_replacement->>'status' and v_conflict.source_type = v_replacement->>'sourceType' and v_conflict.source_ref is null) then
-        raise exception '%: legacy conflict metadata mismatch for %, plan %', v_package_id, r->>'week_start', v_conflict.id;
+      if not (
+        v_conflict.status = v_replacement->>'status'
+        and v_conflict.source_type = v_replacement->>'sourceType'
+        and v_conflict.source_ref = v_replacement->>'sourceRef'
+      ) then
+        raise exception '%: legacy conflict metadata/source_ref mismatch for %, plan %', v_package_id, r->>'week_start', v_conflict.id;
       end if;
       if not (
         v_conflict.legacy_days = (v_replacement#>>'{counts,days}')::int
         and v_conflict.legacy_sessions = (v_replacement#>>'{counts,sessions}')::int
+        and public.${fnPrefix}_normalize_legacy_plan(v_conflict.id)#>>'{counts,sections}' = v_replacement#>>'{counts,sections}'
         and v_conflict.legacy_exercise_items = (v_replacement#>>'{counts,exerciseItems}')::int
         and v_conflict.legacy_note_items = (v_replacement#>>'{counts,noteItems}')::int
         and v_conflict.legacy_total_items = (v_replacement#>>'{counts,totalItems}')::int
       ) then
         raise exception '%: legacy conflict count/checksum guard mismatch for %, expected checksum %', v_package_id, r->>'week_start', v_replacement->>'checksum';
+      end if;
+      v_normalized := public.${fnPrefix}_normalize_legacy_plan(v_conflict.id);
+      if v_normalized is distinct from (v_replacement->'normalized') then
+        raise exception '%: legacy conflict normalized checksum mismatch for %, expected checksum %', v_package_id, r->>'week_start', v_replacement->>'checksum';
       end if;
 
       v_backup_payload := jsonb_build_object(
@@ -419,7 +740,8 @@ begin
         'exportedAt', now(),
         'originalPlanUuid', v_conflict.id,
         'normalizedChecksum', v_replacement->>'checksum',
-        'expectedGuard', v_replacement,
+        'expectedGuard', v_replacement - 'normalized',
+        'normalizedContent', v_normalized,
         'tables', jsonb_build_object(
           'plans.plans', (select jsonb_agg(to_jsonb(p) order by p.id) from plans.plans p where p.id = v_conflict.id),
           'plans.plan_days', (select coalesce(jsonb_agg(to_jsonb(pd) order by pd.block_order nulls last, pd.block_index, pd.day_order, pd.created_at), '[]'::jsonb) from plans.plan_days pd where pd.plan_id = v_conflict.id),
@@ -509,6 +831,7 @@ begin
 end $$;
 
 drop function public.${fnPrefix}_validate_package(text, jsonb, jsonb, uuid);
+drop function public.${fnPrefix}_normalize_legacy_plan(uuid);
 
 commit;
 `;
