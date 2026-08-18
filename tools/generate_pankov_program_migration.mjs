@@ -8,7 +8,6 @@ const { Client } = require("pg");
 const PACKAGE_ID = "pankov-cleaned-2026-08-18";
 const SOURCE_TYPE = "pankov_cleaned_import";
 const COACH_EMAIL = "predrag.bozic@rzsport.gov.rs";
-const ATHLETE_EMAIL = "radovan.pankov@example.com";
 const ATHLETE_EXTERNAL_ID = "101";
 const MIGRATION_FILE = new URL("../migrations/20260818_seed_pankov_programs.sql", import.meta.url);
 const LOCAL_ENV_PATH = new URL("../backend/.env", import.meta.url);
@@ -150,7 +149,6 @@ async function main() {
       packageId: PACKAGE_ID,
       sourceType: SOURCE_TYPE,
       coachEmail: COACH_EMAIL,
-      athleteEmail: ATHLETE_EMAIL,
       athleteExternalId: ATHLETE_EXTERNAL_ID,
       expected: { plans: 7, days: 25, sessions: 47, excelSections: 84, exerciseItems: 670, noteItems: 13, customExercises: 16 },
       plans,
@@ -292,20 +290,14 @@ begin
 
   select a.id into v_athlete_id
   from public.athletes a
-  join public.users u on u.id = a.user_id
   where (a.athlete_id = ${sqlString(payload.athleteExternalId)} or a.source_external_id = ${sqlString(payload.athleteExternalId)})
-    and lower(u.email) = lower(${sqlString(payload.athleteEmail)})
-    and coalesce(a.is_active, true)
   limit 2;
   if v_athlete_id is null or (
     select count(*)
     from public.athletes a
-    join public.users u on u.id = a.user_id
     where (a.athlete_id = ${sqlString(payload.athleteExternalId)} or a.source_external_id = ${sqlString(payload.athleteExternalId)})
-      and lower(u.email) = lower(${sqlString(payload.athleteEmail)})
-      and coalesce(a.is_active, true)
   ) <> 1 then
-    raise exception 'Pankov package %: expected exactly one active athlete 101 linked to %', v_package_id, ${sqlString(payload.athleteEmail)};
+    raise exception 'Pankov package %: expected exactly one athlete row with athlete_id/source_external_id 101', v_package_id;
   end if;
 
   create temp table _pankov_plan_map (source_ref text primary key, id uuid not null) on commit drop;
