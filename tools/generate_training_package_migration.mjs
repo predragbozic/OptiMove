@@ -4,6 +4,7 @@ import path from "path";
 import process from "process";
 import { createHash } from "crypto";
 import { Client, parseArgs, readEnvFile, safeDbLabel } from "./training_package_core.mjs";
+import { legacySignatureChecksum } from "./legacy_plan_signature.mjs";
 
 const SOURCE_TYPE = "multi_athlete_cleaned_import";
 const COACH_EMAIL = "predrag.bozic@rzsport.gov.rs";
@@ -152,7 +153,6 @@ function normalizeBackupPlan(backup) {
       section_order: numericText(item.section_order),
       exercise_key_type: null,
       exercise_key: null,
-      exercise_expected_name: null,
     };
     if (normalized.item_type === "exercise") {
       if (cleanValue(exercise.exercise_code)) {
@@ -165,7 +165,6 @@ function normalizeBackupPlan(backup) {
         normalized.exercise_key_type = "title";
         normalized.exercise_key = normalized.title;
       }
-      normalized.exercise_expected_name = cleanValue(exercise.name);
     }
     sectionKeys.add(legacySectionKey({ ...normalized, date }));
     return normalized;
@@ -211,7 +210,7 @@ function findReplacementBackup(replacement) {
       const backup = JSON.parse(fs.readFileSync(fullPath, "utf8"));
       return { file, fullPath, backup };
     })
-    .filter(({ backup }) => backup.normalizedChecksum === replacement.checksum && backup.expectedGuard?.athleteId === replacement.athleteExternalId && backup.expectedGuard?.weekStart === replacement.weekStart)
+    .filter(({ backup }) => backup.expectedGuard?.athleteId === replacement.athleteExternalId && backup.expectedGuard?.weekStart === replacement.weekStart)
     .sort((a, b) => a.file.localeCompare(b.file));
   if (candidates.length === 0) throw new Error(`Missing approved backup for athlete ${replacement.athleteExternalId} week ${replacement.weekStart}`);
   const { backup } = candidates.at(-1);
@@ -225,7 +224,7 @@ function findReplacementBackup(replacement) {
       throw new Error(`Backup count mismatch for athlete ${replacement.athleteExternalId} week ${replacement.weekStart}: ${key} expected ${value}, found ${normalized.counts[key]}`);
     }
   }
-  return { ...replacement, counts: normalized.counts, normalized };
+  return { ...replacement, auditChecksum: backup.normalizedChecksum || null, checksum: legacySignatureChecksum(normalized), counts: normalized.counts, normalized };
 }
 
 async function query(client, sql, params = []) {
@@ -534,13 +533,11 @@ as $normalize$
         when pi.item_type = 'exercise' then nullif(btrim(pi.title), '')
         else null
       end as exercise_key,
-      case when pi.item_type = 'exercise' then nullif(btrim(e.name), '') else null end as exercise_expected_name,
       pd.block_order as sort_block_order,
       pd.block_index as sort_block_index,
       ps.session_order as sort_session_order,
       pn.node_order as sort_node_order,
-      pi.item_order as sort_item_order,
-      pi.created_at as sort_created_at
+      pi.item_order as sort_item_order
     from plans.plan_items pi
     join plans.plan_sessions ps on ps.id = pi.plan_session_id
     join plans.plan_days pd on pd.id = ps.plan_day_id
@@ -590,8 +587,7 @@ as $normalize$
       'category_order', category_order,
       'section_order', section_order,
       'exercise_key_type', exercise_key_type,
-      'exercise_key', exercise_key,
-      'exercise_expected_name', exercise_expected_name
+      'exercise_key', exercise_key
     ) as item,
     date,
     sort_block_order,
@@ -602,8 +598,11 @@ as $normalize$
     sort_node_order,
     sort_item_order,
     source_row_ref,
+    exercise_key_type,
+    exercise_key,
     title,
-    sort_created_at
+    description,
+    note
     from item_rows
   )
   select jsonb_build_object(
@@ -615,7 +614,7 @@ as $normalize$
       'noteItems', (select count(*)::int from item_rows where item_type = 'note'),
       'totalItems', (select count(*)::int from item_rows)
     ),
-    'items', coalesce((select jsonb_agg(item order by date, sort_block_order nulls last, sort_block_index nulls last, sort_session_order nulls last, am_pm nulls last, bta nulls last, sort_node_order nulls last, sort_item_order nulls last, source_row_ref nulls last, title nulls last, sort_created_at nulls last) from normalized_items), '[]'::jsonb)
+    'items', coalesce((select jsonb_agg(item order by date, sort_block_order nulls last, sort_block_index nulls last, sort_session_order nulls last, am_pm nulls last, bta nulls last, sort_node_order nulls last, sort_item_order nulls last, source_row_ref nulls last, exercise_key_type nulls last, exercise_key nulls last, title nulls last, description nulls last, note nulls last) from normalized_items), '[]'::jsonb)
   );
 $normalize$;
 
@@ -650,6 +649,9 @@ declare
   v_conflict record;
   v_replacement jsonb;
   v_normalized jsonb;
+  v_actual_checksum text;
+  v_expected_sql_checksum text;
+  v_diff_components text[];
   v_backup_payload jsonb;
   v_backup_checksum text;
 begin
@@ -729,8 +731,38 @@ begin
         raise exception '%: legacy conflict count/checksum guard mismatch for %, expected checksum %', v_package_id, r->>'week_start', v_replacement->>'checksum';
       end if;
       v_normalized := public.${fnPrefix}_normalize_legacy_plan(v_conflict.id);
+      v_actual_checksum := encode(digest(v_normalized::text, 'sha256'), 'hex');
+      v_expected_sql_checksum := encode(digest((v_replacement->'normalized')::text, 'sha256'), 'hex');
       if v_normalized is distinct from (v_replacement->'normalized') then
-        raise exception '%: legacy conflict normalized checksum mismatch for %, expected checksum %', v_package_id, r->>'week_start', v_replacement->>'checksum';
+        select array_remove(array[
+          case when v_normalized->'counts' is distinct from v_replacement->'normalized'->'counts' then 'counts' end,
+          case when jsonb_array_length(coalesce(v_normalized->'items', '[]'::jsonb)) is distinct from jsonb_array_length(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) then 'items.length' end,
+          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'date', value->>'session_order', value->>'node_order', value->>'item_order', value->>'source_row_ref') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
+             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'date', value->>'session_order', value->>'node_order', value->>'item_order', value->>'source_row_ref') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'order_or_source_rows' end,
+          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'exercise_key_type', value->>'exercise_key') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
+             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'exercise_key_type', value->>'exercise_key') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'exercise_keys' end,
+          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'sets', value->>'reps', value->>'load') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
+             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'sets', value->>'reps', value->>'load') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'dose' end,
+          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'title', value->>'description', value->>'short_note', value->>'note') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
+             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'title', value->>'description', value->>'short_note', value->>'note') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'text_or_notes' end,
+          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'domain_name', value->>'category_name', value->>'section_name', value->>'domain_order', value->>'category_order', value->>'section_order') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
+             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'domain_name', value->>'category_name', value->>'section_name', value->>'domain_order', value->>'category_order', value->>'section_order') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'sections' end,
+          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'image_url', value->>'video_url') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
+             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'image_url', value->>'video_url') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'media' end
+        ], null) into v_diff_components;
+        raise exception '%: legacy conflict normalized checksum mismatch for %, plan %, status %, source_type %, source_ref %, expected checksum %, expected_sql_checksum %, actual checksum %, expected_counts %, actual_counts %, differing_components %',
+          v_package_id,
+          r->>'week_start',
+          v_conflict.id,
+          v_conflict.status,
+          v_conflict.source_type,
+          coalesce(v_conflict.source_ref, '<null>'),
+          v_replacement->>'checksum',
+          v_expected_sql_checksum,
+          v_actual_checksum,
+          v_replacement->'normalized'->'counts',
+          v_normalized->'counts',
+          coalesce(array_to_string(v_diff_components, ','), '<unknown>');
       end if;
 
       v_backup_payload := jsonb_build_object(
@@ -740,6 +772,7 @@ begin
         'exportedAt', now(),
         'originalPlanUuid', v_conflict.id,
         'normalizedChecksum', v_replacement->>'checksum',
+        'legacyAuditChecksum', v_replacement->>'auditChecksum',
         'expectedGuard', v_replacement - 'normalized',
         'normalizedContent', v_normalized,
         'tables', jsonb_build_object(
