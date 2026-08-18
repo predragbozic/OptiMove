@@ -239,3 +239,18 @@ test("the account_email_change_tokens migration file can be applied twice with n
   assert.ok(constraintNames.includes("account_email_change_tokens_new_email_lower_check"), "new_email must be constrained to lowercase");
   assert.ok(constraintNames.includes("account_email_change_tokens_not_both_consumed_and_revoked_check"), "consumed_at and revoked_at must never both be set");
 });
+
+test("the Pankov exercise seed migration is registered in the deploy migration runner, after create_builder_schema.sql", () => {
+  const seedIndex = migrationPaths.findIndex((p) => path.basename(p) === "20260818_seed_pankov_exercises.sql");
+  assert.notEqual(seedIndex, -1, "migrationPaths must include the Pankov exercise seed migration file");
+
+  const builderSchemaIndex = migrationPaths.findIndex((p) => path.basename(p) === "create_builder_schema.sql");
+  assert.ok(
+    seedIndex > builderSchemaIndex,
+    "the Pankov seed migration depends on library.exercises and library.tags and must run after create_builder_schema.sql",
+  );
+
+  for (const migrationPath of migrationPaths) {
+    assert.ok(existsSync(migrationPath), `migration path must resolve to a real file: ${migrationPath}`);
+  }
+});
