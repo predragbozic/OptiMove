@@ -278,6 +278,7 @@ declare
   v_parent_node_id uuid;
   v_node_id uuid;
   v_exercise_id uuid;
+  v_exercise_match_count integer;
   v_actual record;
 begin
   select id into v_coach_id
@@ -437,7 +438,26 @@ begin
     if r->>'keyType' = 'code' then
       select id into v_exercise_id from library.exercises where exercise_code = r->>'key' and coalesce(is_active, true);
     else
-      select id into v_exercise_id from library.exercises where slug = r->>'key' and name = r->>'expectedName' and coalesce(is_active, true);
+      select count(*), min(id::text)::uuid into v_exercise_match_count, v_exercise_id
+      from library.exercises
+      where slug = r->>'key'
+        and name = r->>'expectedName'
+        and coalesce(is_active, true);
+      if v_exercise_match_count > 1 then
+        raise exception 'Pankov package %: required exercise %:% matched multiple rows', v_package_id, r->>'keyType', r->>'key';
+      end if;
+      if v_exercise_id is null and r->>'key' = 'kontinuirano-trcanje-12km-h-100m-30s-1000m-5min-custom-98677b' then
+        select count(*), min(id::text)::uuid into v_exercise_match_count, v_exercise_id
+        from library.exercises
+        where exercise_code is null
+          and name = r->>'expectedName'
+          and owner_user_id = v_coach_id
+          and owner_scope = 'user'
+          and coalesce(is_active, true);
+        if v_exercise_match_count <> 1 then
+          raise exception 'Pankov package %: expected exactly one seeded running custom exercise by name/owner, found %', v_package_id, v_exercise_match_count;
+        end if;
+      end if;
     end if;
     if v_exercise_id is null then
       raise exception 'Pankov package %: required exercise %:% was not found', v_package_id, r->>'keyType', r->>'key';

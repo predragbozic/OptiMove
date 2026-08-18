@@ -10,8 +10,12 @@ import { migrationPaths } from "../src/migrate.js";
 const { Client } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationPath = path.resolve(__dirname, "../../migrations/20260818_seed_pankov_programs.sql");
+const exerciseMigrationPath = path.resolve(__dirname, "../../migrations/20260818_seed_pankov_exercises.sql");
 const packageId = "pankov-cleaned-2026-08-18";
 const sourceType = "pankov_cleaned_import";
+const runningPackageKey = "custom:pankov-exercises-2026-08-18:kontinuirano-trcanje-12km-h-100m-30s-1000m-5min";
+const exerciseSeedRunningSlug = "kontinuirano-trcanje-12km-h-100m-30s-1000m-5min-custom-pankov-exercises-2026-08-18";
+const programRunningSlug = "kontinuirano-trcanje-12km-h-100m-30s-1000m-5min-custom-98677b";
 const sourceRefs = ["2026-06-15", "2026-06-22", "2026-06-29", "2026-07-06", "2026-07-13", "2026-07-20", "2026-07-27"].map((week) => `${packageId}:weekly:${week}`);
 
 const createdDatabases = [];
@@ -114,6 +118,138 @@ async function createMinimalSchema(client) {
     );
     create unique index exercises_exercise_code_unique on library.exercises (exercise_code) where exercise_code is not null;
     create unique index exercises_slug_unique on library.exercises (slug) where slug is not null;
+    create table library.places (
+      id uuid primary key default gen_random_uuid(),
+      name varchar(255) not null,
+      slug varchar(180),
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.complexity_levels (
+      id uuid primary key default gen_random_uuid(),
+      name varchar(255) not null,
+      slug varchar(180),
+      rank integer,
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.starting_positions (
+      id uuid primary key default gen_random_uuid(),
+      name varchar(255) not null,
+      slug varchar(180),
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.attractors (
+      id uuid primary key default gen_random_uuid(),
+      kind varchar(40),
+      name varchar(255) not null,
+      slug varchar(180),
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.domains (
+      id uuid primary key default gen_random_uuid(),
+      name varchar(255) not null,
+      slug varchar(180),
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.categories (
+      id uuid primary key default gen_random_uuid(),
+      name varchar(255) not null,
+      slug varchar(180),
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.sections (
+      id uuid primary key default gen_random_uuid(),
+      name varchar(255) not null,
+      slug varchar(180),
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.body_parts (
+      id uuid primary key default gen_random_uuid(),
+      name varchar(255) not null,
+      slug varchar(180),
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.movement_patterns (
+      id uuid primary key default gen_random_uuid(),
+      name varchar(255) not null,
+      slug varchar(180),
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.tags (
+      id uuid primary key default gen_random_uuid(),
+      name varchar(255) not null,
+      slug varchar(180),
+      owner_scope varchar(20),
+      owner_user_id uuid references public.users(id) on delete set null,
+      created_by_user_id uuid references public.users(id) on delete set null,
+      is_active boolean not null default true
+    );
+    create table library.exercise_domains (
+      exercise_id uuid references library.exercises(id) on delete cascade,
+      domain_id uuid references library.domains(id) on delete cascade,
+      is_primary boolean not null default false,
+      sort_order integer not null default 0,
+      primary key (exercise_id, domain_id)
+    );
+    create table library.exercise_categories (
+      exercise_id uuid references library.exercises(id) on delete cascade,
+      category_id uuid references library.categories(id) on delete cascade,
+      is_primary boolean not null default false,
+      sort_order integer not null default 0,
+      primary key (exercise_id, category_id)
+    );
+    create table library.exercise_sections (
+      exercise_id uuid references library.exercises(id) on delete cascade,
+      section_id uuid references library.sections(id) on delete cascade,
+      is_primary boolean not null default false,
+      sort_order integer not null default 0,
+      primary key (exercise_id, section_id)
+    );
+    create table library.exercise_body_parts (
+      exercise_id uuid references library.exercises(id) on delete cascade,
+      body_part_id uuid references library.body_parts(id) on delete cascade,
+      is_primary boolean not null default false,
+      sort_order integer not null default 0,
+      primary key (exercise_id, body_part_id)
+    );
+    create table library.exercise_movement_patterns (
+      exercise_id uuid references library.exercises(id) on delete cascade,
+      movement_pattern_id uuid references library.movement_patterns(id) on delete cascade,
+      is_primary boolean not null default false,
+      sort_order integer not null default 0,
+      primary key (exercise_id, movement_pattern_id)
+    );
+    create table library.exercise_tags (
+      exercise_id uuid references library.exercises(id) on delete cascade,
+      tag_id uuid references library.tags(id) on delete cascade,
+      primary key (exercise_id, tag_id)
+    );
     create table plans.plans (
       id uuid primary key default gen_random_uuid(),
       plan_type varchar(40) not null,
@@ -273,7 +409,9 @@ async function createMinimalSchema(client) {
 }
 
 function extractJson(sql, variableName) {
-  const marker = `${variableName} jsonb := '`;
+  const markers = [`${variableName} jsonb := '`, `${variableName} constant jsonb := '`];
+  const marker = markers.find((candidate) => sql.includes(candidate));
+  assert.ok(marker, `${variableName} must exist in migration SQL`);
   const start = sql.indexOf(marker);
   assert.notEqual(start, -1, `${variableName} must exist in migration SQL`);
   let index = start + marker.length;
@@ -298,6 +436,21 @@ async function migrationSql() {
   return readFile(migrationPath, "utf8");
 }
 
+async function exerciseMigrationSql() {
+  return readFile(exerciseMigrationPath, "utf8");
+}
+
+async function exerciseSeedPackageData() {
+  return extractJson(await exerciseMigrationSql(), "package_data");
+}
+
+async function runningExerciseSeedRow() {
+  const rows = await exerciseSeedPackageData();
+  const row = rows.find((item) => item.package_key === runningPackageKey);
+  assert.ok(row, "running custom exercise must exist in exercise seed package");
+  return row;
+}
+
 async function seedOwnerAthleteAndExercises(client, options = {}) {
   const sql = await migrationSql();
   const required = extractJson(sql, "v_required_exercises");
@@ -307,8 +460,10 @@ async function seedOwnerAthleteAndExercises(client, options = {}) {
   await client.query(`insert into public.athletes (athlete_id, source_external_id, full_name, display_name, user_id) values ('101', '101', 'Radovan Pankov', 'Radovan Pankov', $1)`, [athleteUser.rows[0].id]);
   for (const item of required) {
     if (item.keyType === "code") {
+      if (options.skipPankovExerciseSeedCodes && Number(item.key) >= 1188 && Number(item.key) <= 1218) continue;
       await client.query("insert into library.exercises (owner_scope, exercise_code, slug, name) values ('system', $1, $2, $3)", [item.key, `code-${item.key}`, `Exercise ${item.key}`]);
     } else if (!String(item.key).startsWith(`${packageId}:custom:`)) {
+      if (options.skipRunningCustomSlug && item.key === programRunningSlug) continue;
       await client.query("insert into library.exercises (owner_scope, owner_user_id, created_by_user_id, exercise_code, slug, name) select 'user', u.id, u.id, null, $1, $2 from public.users u where u.email = 'predrag.bozic@rzsport.gov.rs'", [item.key, item.expectedName]);
     }
   }
@@ -316,6 +471,67 @@ async function seedOwnerAthleteAndExercises(client, options = {}) {
 
 async function applyMigration(client) {
   await client.query(await migrationSql());
+}
+
+async function applyExerciseMigration(client) {
+  await client.query(await exerciseMigrationSql());
+}
+
+async function insertExistingRunningCustom(client, slug) {
+  const seed = await runningExerciseSeedRow();
+  const coach = (await client.query("select id from public.users where lower(email) = lower('predrag.bozic@rzsport.gov.rs')")).rows[0];
+  let placeId = null;
+  if (seed.place) {
+    const place = await client.query(
+      "insert into library.places (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active) values ($1, $2, 'user', $3, $3, true) returning id",
+      [seed.place, seed.place.toLowerCase(), coach.id],
+    );
+    placeId = place.rows[0].id;
+  }
+  let complexityId = null;
+  if (seed.complexity) {
+    const complexity = await client.query(
+      "insert into library.complexity_levels (name, slug, rank, owner_scope, owner_user_id, created_by_user_id, is_active) values ($1, $2, 1, 'user', $3, $3, true) returning id",
+      [seed.complexity, seed.complexity.toLowerCase(), coach.id],
+    );
+    complexityId = complexity.rows[0].id;
+  }
+  const exercise = await client.query(
+    `insert into library.exercises (
+       owner_scope, owner_user_id, created_by_user_id, exercise_code, slug, name, aim, execution_notes,
+       instruction, video_url, image_url, image_mime_type, place_id, complexity_level_id, is_active
+     ) values ('user', $1, $1, null, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true) returning id`,
+    [
+      coach.id,
+      slug,
+      seed.name,
+      seed.aim,
+      seed.execution_notes,
+      seed.instruction,
+      seed.video_url,
+      seed.image_url,
+      seed.image_mime_type,
+      placeId,
+      complexityId,
+    ],
+  );
+  return { id: exercise.rows[0].id, name: seed.name };
+}
+
+async function runningCustomRows(client) {
+  const seed = await runningExerciseSeedRow();
+  return (await client.query(
+    `select e.id, e.slug, e.name
+     from library.exercises e
+     join public.users u on u.id = e.owner_user_id
+     where e.exercise_code is null
+       and e.name = $1
+       and e.owner_scope = 'user'
+       and lower(u.email) = lower('predrag.bozic@rzsport.gov.rs')
+       and coalesce(e.is_active, true)
+     order by e.slug`,
+    [seed.name],
+  )).rows;
 }
 
 async function expectMigrationRejects(client, expected) {
@@ -417,6 +633,92 @@ async function insertJsonRow(client, table, row) {
     cols.map((col) => row[col]),
   );
 }
+
+test("Pankov exercise seed and program seed resolve the running custom exercise sequentially", async () => {
+  await withDatabase(async (client) => {
+    await seedOwnerAthleteAndExercises(client, { skipPankovExerciseSeedCodes: true, skipRunningCustomSlug: true });
+    assert.equal((await runningCustomRows(client)).length, 0);
+
+    await applyExerciseMigration(client);
+    const seededRunning = await runningCustomRows(client);
+    assert.equal(seededRunning.length, 1);
+    assert.equal(seededRunning[0].slug, exerciseSeedRunningSlug);
+
+    await applyMigration(client);
+    assert.equal(
+      (await client.query(
+        `select count(*)::int c
+         from plans.plans p
+         join plans.plan_days pd on pd.plan_id = p.id
+         join plans.plan_sessions ps on ps.plan_day_id = pd.id
+         join plans.plan_items pi on pi.plan_session_id = ps.id
+         where p.source_type = $1 and p.source_ref = any($2::text[]) and pi.item_type = 'exercise'`,
+        [sourceType, sourceRefs],
+      )).rows[0].c,
+      670,
+    );
+    assert.equal(
+      (await client.query(
+        `select count(*)::int c
+         from plans.plans p
+         join plans.plan_days pd on pd.plan_id = p.id
+         join plans.plan_sessions ps on ps.plan_day_id = pd.id
+         join plans.plan_items pi on pi.plan_session_id = ps.id
+         where p.source_type = $1 and p.source_ref = any($2::text[]) and pi.exercise_id = $3`,
+        [sourceType, sourceRefs, seededRunning[0].id],
+      )).rows[0].c,
+      2,
+    );
+
+    await applyExerciseMigration(client);
+    await applyMigration(client);
+    assert.equal((await runningCustomRows(client)).length, 1);
+    assert.deepEqual(await packageCounts(client), {
+      plans: 7,
+      days: 25,
+      sessions: 47,
+      exercise_items: 670,
+      note_items: 13,
+      custom_exercises: 16,
+      source_refs: 7,
+      all_draft: true,
+      all_athlete_101: true,
+    });
+  }, { seed: false });
+});
+
+test("Pankov seeds reuse an existing exact running custom exercise with a different slug", async () => {
+  await withDatabase(async (client) => {
+    await seedOwnerAthleteAndExercises(client, { skipPankovExerciseSeedCodes: true, skipRunningCustomSlug: true });
+    const existing = await insertExistingRunningCustom(client, "preexisting-running-different-slug");
+
+    await applyExerciseMigration(client);
+    const rows = await runningCustomRows(client);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, existing.id);
+    assert.equal(rows[0].slug, "preexisting-running-different-slug");
+
+    await applyMigration(client);
+    assert.equal(
+      (await client.query(
+        `select count(*)::int c
+         from plans.plans p
+         join plans.plan_days pd on pd.plan_id = p.id
+         join plans.plan_sessions ps on ps.plan_day_id = pd.id
+         join plans.plan_items pi on pi.plan_session_id = ps.id
+         where p.source_type = $1 and p.source_ref = any($2::text[]) and pi.exercise_id = $3`,
+        [sourceType, sourceRefs, existing.id],
+      )).rows[0].c,
+      2,
+    );
+
+    await applyExerciseMigration(client);
+    await applyMigration(client);
+    assert.equal((await runningCustomRows(client)).length, 1);
+    assert.equal((await client.query("select count(*)::int c from library.exercises where slug = $1", [exerciseSeedRunningSlug])).rows[0].c, 0);
+    assert.equal((await client.query("select count(*)::int c from plans.plan_items where item_type = 'exercise'")).rows[0].c, 670);
+  }, { seed: false });
+});
 
 test("Pankov program migration inserts the full package and is idempotent", async () => {
   await withDatabase(async (client) => {
