@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { legacySignatureChecksum, canonicalizeLegacySignature } from "../../tools/legacy_plan_signature.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationDir = path.resolve(__dirname, "../../migrations");
@@ -46,6 +47,19 @@ function decodeSqlJson(sql, variableName) {
   const match = sql.match(pattern);
   assert.ok(match, `expected ${variableName} JSON payload`);
   return JSON.parse(match[1].replace(/''/g, "'"));
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function firstReplacementWithItems(migrations) {
+  for (const sql of migrations) {
+    const replacements = decodeSqlJson(sql, "v_replacements");
+    const replacement = replacements.find((candidate) => candidate.normalized?.items?.length);
+    if (replacement) return replacement;
+  }
+  assert.fail("expected at least one legacy replacement fixture");
 }
 
 async function readMigration(file) {
@@ -139,6 +153,15 @@ test("program migrations embed final package counts and stable exercise resoluti
       assert.equal(replacement.sourceType, "xlsx_weekly_import");
       assert.ok(replacement.normalized, `${key} must embed normalized legacy content`);
       assert.deepEqual(replacement.normalized.counts, replacement.counts);
+      assert.equal(replacement.checksum, legacySignatureChecksum(replacement.normalized), `${key} checksum must match shared canonical legacy signature`);
+      assert.ok(replacement.auditChecksum, `${key} must retain previous audit checksum for diagnostics`);
+      for (const item of replacement.normalized.items) {
+        assert.equal(item.id, undefined, `${key} normalized item must not include item UUID`);
+        assert.equal(item.exercise_id, undefined, `${key} normalized item must not include exercise UUID`);
+        assert.equal(item.created_at, undefined, `${key} normalized item must not include created_at`);
+        assert.equal(item.updated_at, undefined, `${key} normalized item must not include updated_at`);
+        assert.equal(item.exercise_expected_name, undefined, `${key} normalized item must not depend on library exercise name`);
+      }
     }
     assert.doesNotMatch(sql, /DATABASE_URL|postgres:\/\/|supabase\.co|password/i);
     assert.doesNotMatch(sql, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i, "program migration must not embed local UUIDs");
@@ -163,6 +186,12 @@ test("legacy conflict guard uses audited source_ref and normalized content befor
     assert.match(sql, /v_normalized := public\.multi_seed_\d+_normalize_legacy_plan\(v_conflict\.id\)/);
     assert.match(sql, /v_normalized is distinct from \(v_replacement->'normalized'\)/);
     assert.match(sql, /legacy conflict normalized checksum mismatch/);
+    assert.match(sql, /actual checksum/);
+    assert.match(sql, /expected_counts/);
+    assert.match(sql, /actual_counts/);
+    assert.match(sql, /differing_components/);
+    assert.doesNotMatch(sql, /sort_created_at|pi\.created_at as sort_created_at/);
+    assert.doesNotMatch(sql, /case when pi\.item_type = 'exercise' then nullif\(btrim\(e\.name\)/);
 
     const metadataIndex = sql.indexOf("legacy conflict metadata/source_ref mismatch");
     const checksumIndex = sql.indexOf("legacy conflict normalized checksum mismatch");
@@ -172,6 +201,49 @@ test("legacy conflict guard uses audited source_ref and normalized content befor
     assert.ok(checksumIndex > metadataIndex && checksumIndex < backupIndex, `${file} normalized guard must run before backup`);
     assert.ok(backupIndex < deleteIndex, `${file} backup must be written before deletes`);
   }
+});
+
+test("legacy normalized signature ignores UUIDs, timestamps and physical row order", async () => {
+  const migrations = await Promise.all(migrationFiles.slice(2, 5).map(readMigration));
+  const replacement = firstReplacementWithItems(migrations);
+  const baseline = legacySignatureChecksum(replacement.normalized);
+
+  const withEnvironmentOnlyChanges = clone(replacement.normalized);
+  withEnvironmentOnlyChanges.items = withEnvironmentOnlyChanges.items.map((item, index) => ({
+    ...item,
+    id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    exercise_id: `11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`,
+    created_at: `2026-08-${String((index % 20) + 1).padStart(2, "0")}T12:00:00.000Z`,
+    updated_at: `2026-09-${String((index % 20) + 1).padStart(2, "0")}T12:00:00.000Z`,
+    exercise_expected_name: `Environment name ${index}`,
+  })).reverse();
+
+  assert.equal(legacySignatureChecksum(withEnvironmentOnlyChanges), baseline);
+  assert.deepEqual(canonicalizeLegacySignature(withEnvironmentOnlyChanges), canonicalizeLegacySignature(replacement.normalized));
+});
+
+test("legacy normalized signature changes for business content changes", async () => {
+  const migrations = await Promise.all(migrationFiles.slice(2, 5).map(readMigration));
+  const replacement = firstReplacementWithItems(migrations);
+  const baseline = legacySignatureChecksum(replacement.normalized);
+
+  const doseChanged = clone(replacement.normalized);
+  doseChanged.items[0].sets = `${doseChanged.items[0].sets || ""} changed`;
+  assert.notEqual(legacySignatureChecksum(doseChanged), baseline);
+
+  const exerciseChanged = clone(replacement.normalized);
+  exerciseChanged.items[0].exercise_key = `${exerciseChanged.items[0].exercise_key || "missing"}-changed`;
+  assert.notEqual(legacySignatureChecksum(exerciseChanged), baseline);
+
+  const instructionChanged = clone(replacement.normalized);
+  instructionChanged.items[0].description = `${instructionChanged.items[0].description || ""} changed`;
+  assert.notEqual(legacySignatureChecksum(instructionChanged), baseline);
+
+  const noteItem = replacement.normalized.items.findIndex((item) => item.item_type === "note" || item.note);
+  const noteChanged = clone(replacement.normalized);
+  const index = noteItem >= 0 ? noteItem : 0;
+  noteChanged.items[index].note = `${noteChanged.items[index].note || ""} changed`;
+  assert.notEqual(legacySignatureChecksum(noteChanged), baseline);
 });
 
 test("legacy conflict negative cases rollback before backup/delete", async () => {
