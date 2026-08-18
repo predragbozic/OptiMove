@@ -1,0 +1,24 @@
+{
+  "packageId": "player-name-101-cleaned-YYYY-MM-DD",
+  "excelPath": "Program_cleaned.xlsx",
+  "rowSelection": {
+    "sheet": "Sheet1",
+    "athlete": "Exact Excel athlete name",
+    "athleteId": "101"
+  },
+  "targetAthlete": {
+    "sourceExternalId": "101",
+    "expectedNameForAuditOnly": "Exact local athlete display name"
+  },
+  "ownerCoach": "coach@example.com",
+  "defaultStatus": "draft",
+  "weeklyConflictRule": "skip unless --replace-conflicting-week and --confirmed-plan-id are supplied",
+  "exerciseMapping": {
+    "code": "Resolve by exact exercise_code only",
+    "title": "Resolve by exact normalized title only when exactly one active match exists",
+    "custom": "Create one custom exercise per unique unresolved title with package-specific stable slug"
+  },
+  "notes": {
+    "strategy": "Preserve as note item when the plan item model supports notes"
+  }
+}

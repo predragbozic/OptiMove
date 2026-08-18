@@ -1,0 +1,30 @@
+{
+  "packageId": "nikola-vujinivic-103-cleaned-2026-08-18",
+  "excelPath": "Program_cleaned.xlsx",
+  "registryManifestPaths": [
+    "milos-milovic-102-cleaned-2026-08-18.json",
+    "nikola-vujinivic-103-cleaned-2026-08-18.json",
+    "nikola-petkovic-107-cleaned-2026-08-18.json",
+    "zija-murina-131-cleaned-2026-08-18.json"
+  ],
+  "rowSelection": {
+    "sheet": "Sheet1",
+    "athlete": "Nikola VUJINIVIĆ",
+    "athleteId": "103"
+  },
+  "targetAthlete": {
+    "sourceExternalId": "103",
+    "expectedNameForAuditOnly": "Nikola VUJINIVIĆ"
+  },
+  "ownerCoach": "predrag.bozic@rzsport.gov.rs",
+  "defaultStatus": "draft",
+  "sourceRefPattern": "nikola-vujinivic-103-cleaned-2026-08-18:weekly:<weekStart>",
+  "expectedCounts": {
+    "rows": 741,
+    "weeks": 13,
+    "days": 30,
+    "sessions": 48,
+    "exerciseItems": 702,
+    "noteItems": 39
+  }
+}
