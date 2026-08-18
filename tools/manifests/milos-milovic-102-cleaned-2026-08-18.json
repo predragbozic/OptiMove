@@ -1,0 +1,30 @@
+{
+  "packageId": "milos-milovic-102-cleaned-2026-08-18",
+  "excelPath": "Program_cleaned.xlsx",
+  "registryManifestPaths": [
+    "milos-milovic-102-cleaned-2026-08-18.json",
+    "nikola-vujinivic-103-cleaned-2026-08-18.json",
+    "nikola-petkovic-107-cleaned-2026-08-18.json",
+    "zija-murina-131-cleaned-2026-08-18.json"
+  ],
+  "rowSelection": {
+    "sheet": "Sheet1",
+    "athlete": "Miloš MILOVIĆ",
+    "athleteId": "102"
+  },
+  "targetAthlete": {
+    "sourceExternalId": "102",
+    "expectedNameForAuditOnly": "Miloš MILOVIĆ"
+  },
+  "ownerCoach": "predrag.bozic@rzsport.gov.rs",
+  "defaultStatus": "draft",
+  "sourceRefPattern": "milos-milovic-102-cleaned-2026-08-18:weekly:<weekStart>",
+  "expectedCounts": {
+    "rows": 989,
+    "weeks": 14,
+    "days": 34,
+    "sessions": 50,
+    "exerciseItems": 953,
+    "noteItems": 36
+  }
+}
