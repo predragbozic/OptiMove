@@ -97,20 +97,14 @@ begin
 
   select a.id into v_athlete_id
   from public.athletes a
-  join public.users u on u.id = a.user_id
   where (a.athlete_id = '101' or a.source_external_id = '101')
-    and lower(u.email) = lower('radovan.pankov@example.com')
-    and coalesce(a.is_active, true)
   limit 2;
   if v_athlete_id is null or (
     select count(*)
     from public.athletes a
-    join public.users u on u.id = a.user_id
     where (a.athlete_id = '101' or a.source_external_id = '101')
-      and lower(u.email) = lower('radovan.pankov@example.com')
-      and coalesce(a.is_active, true)
   ) <> 1 then
-    raise exception 'Pankov package %: expected exactly one active athlete 101 linked to %', v_package_id, 'radovan.pankov@example.com';
+    raise exception 'Pankov package %: expected exactly one athlete row with athlete_id/source_external_id 101', v_package_id;
   end if;
 
   create temp table _pankov_plan_map (source_ref text primary key, id uuid not null) on commit drop;

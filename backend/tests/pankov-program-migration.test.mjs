@@ -34,7 +34,7 @@ function ident(value) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
 
-async function withDatabase(fn) {
+async function withDatabase(fn, options = {}) {
   const name = `optimove_pankov_migration_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
   const admin = new Client({ connectionString: adminUrl().toString() });
   await admin.connect();
@@ -45,7 +45,7 @@ async function withDatabase(fn) {
   await client.connect();
   try {
     await createMinimalSchema(client);
-    await seedOwnerAthleteAndExercises(client);
+    if (options.seed !== false) await seedOwnerAthleteAndExercises(client);
     return await fn(client);
   } finally {
     await client.end();
@@ -298,11 +298,12 @@ async function migrationSql() {
   return readFile(migrationPath, "utf8");
 }
 
-async function seedOwnerAthleteAndExercises(client) {
+async function seedOwnerAthleteAndExercises(client, options = {}) {
   const sql = await migrationSql();
   const required = extractJson(sql, "v_required_exercises");
   await client.query(`insert into public.users (email, full_name, display_name, role_hint) values ('predrag.bozic@rzsport.gov.rs', 'Predrag Bozic', 'Predrag Bozic', 'coach')`);
-  const athleteUser = await client.query(`insert into public.users (email, full_name, display_name, role_hint) values ('radovan.pankov@example.com', 'Radovan Pankov', 'Radovan Pankov', 'athlete') returning id`);
+  const athleteEmail = options.athleteEmail ?? "radovan.pankov@example.com";
+  const athleteUser = await client.query(`insert into public.users (email, full_name, display_name, role_hint) values ($1, 'Radovan Pankov', 'Radovan Pankov', 'athlete') returning id`, [athleteEmail]);
   await client.query(`insert into public.athletes (athlete_id, source_external_id, full_name, display_name, user_id) values ('101', '101', 'Radovan Pankov', 'Radovan Pankov', $1)`, [athleteUser.rows[0].id]);
   for (const item of required) {
     if (item.keyType === "code") {
@@ -439,6 +440,21 @@ test("Pankov program migration inserts the full package and is idempotent", asyn
   });
 });
 
+test("Pankov program migration resolves target athlete only by athlete_id/source_external_id 101", async () => {
+  await withDatabase(async (client) => {
+    await seedOwnerAthleteAndExercises(client, { athleteEmail: "changed-athlete-101@example.test" });
+    await applyMigration(client);
+    assert.equal((await client.query("select count(*)::int c from plans.plans where source_type = $1", [sourceType])).rows[0].c, 7);
+  }, { seed: false });
+
+  await withDatabase(async (client) => {
+    await seedOwnerAthleteAndExercises(client, { athleteEmail: "not-radovan-anymore@example.test" });
+    await client.query("delete from public.users where email = 'radovan.pankov@example.com'");
+    await applyMigration(client);
+    assert.equal((await client.query("select count(*)::int c from plans.plans where source_type = $1", [sourceType])).rows[0].c, 7);
+  }, { seed: false });
+});
+
 test("Pankov program migration backs up and replaces the expected legacy 2026-07-20 conflict", async () => {
   await withDatabase(async (client) => {
     const legacyId = await makeLegacyConflict(client);
@@ -488,7 +504,13 @@ test("Pankov program migration rolls back unexpected conflicts and missing prere
 
   await withDatabase(async (client) => {
     await client.query("delete from public.athletes");
-    await expectMigrationRejects(client, /expected exactly one active athlete 101/);
+    await expectMigrationRejects(client, /expected exactly one athlete row with athlete_id\/source_external_id 101/);
+    assert.equal((await client.query("select count(*)::int c from plans.plans where source_type = $1", [sourceType])).rows[0].c, 0);
+  });
+
+  await withDatabase(async (client) => {
+    await client.query("insert into public.athletes (athlete_id, source_external_id, full_name, display_name) values ('101', 'duplicate-101', 'Duplicate 101', 'Duplicate 101')");
+    await expectMigrationRejects(client, /expected exactly one athlete row with athlete_id\/source_external_id 101/);
     assert.equal((await client.query("select count(*)::int c from plans.plans where source_type = $1", [sourceType])).rows[0].c, 0);
   });
 
