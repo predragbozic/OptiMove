@@ -45,6 +45,9 @@ export const migrationPaths = [
   // grouped, not because of any real dependency between them.
   path.resolve(__dirname, "../../migrations/20260811_account_email_change.sql"),
   path.resolve(__dirname, "../../create_builder_schema.sql"),
+  // Depends on library.exercises and exercise taxonomy from the base schema,
+  // plus library.tags from create_builder_schema.sql directly above.
+  path.resolve(__dirname, "../../migrations/20260818_seed_pankov_exercises.sql"),
   path.resolve(__dirname, "../../create_exercise_user_state.sql"),
   path.resolve(__dirname, "../../create_coach_profiles_schema.sql"),
   path.resolve(__dirname, "../../create_reviews_schema.sql"),
