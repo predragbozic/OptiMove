@@ -214,6 +214,22 @@ test("program migrations embed final package counts and stable exercise resoluti
   assert.deepEqual(replacementSourceRefs, legacyConflictSourceRefs);
 });
 
+test("Miloš program seed resolves the Pankov running custom exercise without depending on the stale slug", async () => {
+  const exerciseSeedSql = await readMigration("20260818_seed_pankov_exercises.sql");
+  const milosSql = await readMigration("20260818_seed_multi_athlete_03_milos_milovic_programs.sql");
+  const required = decodeSqlJson(milosSql, "v_required_exercises");
+  const running = required.find((exercise) => exercise.key === "kontinuirano-trcanje-12km-h-100m-30s-1000m-5min-custom-98677b");
+
+  assert.ok(running, "Miloš package still references the legacy local running slug key");
+  assert.equal(running.keyType, "slug");
+  assert.equal(running.expectedName, "Kontinuirano trčanje (12km/h, 100m 30s, 1000m 5min)");
+  assert.match(exerciseSeedSql, /"slug": "kontinuirano-trcanje-12km-h-100m-30s-1000m-5min-custom-pankov-exercises-2026-08-18"/);
+  assert.doesNotMatch(exerciseSeedSql, /kontinuirano-trcanje-12km-h-100m-30s-1000m-5min-custom-98677b/);
+  assert.match(milosSql, /r->>'key' = 'kontinuirano-trcanje-12km-h-100m-30s-1000m-5min-custom-98677b'/);
+  assert.match(milosSql, /exercise_code is null\s+and name = r->>'expectedName'\s+and owner_user_id = v_coach_id\s+and owner_scope = 'user'/);
+  assert.match(milosSql, /if v_match_count <> 1 then raise exception '%: required exercise %:% expected exactly one match, found %'/);
+});
+
 test("legacy conflict guard uses approved UUID, audited metadata, dependencies, and backup before delete", async () => {
   for (const file of migrationFiles.slice(2, 5)) {
     const sql = await readMigration(file);
