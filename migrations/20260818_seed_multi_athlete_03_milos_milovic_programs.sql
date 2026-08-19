@@ -525,6 +525,15 @@ begin
       select count(*), min(id::text)::uuid into v_match_count, v_exercise_id from library.exercises where exercise_code = r->>'key' and coalesce(is_active, true);
     else
       select count(*), min(id::text)::uuid into v_match_count, v_exercise_id from library.exercises where slug = r->>'key' and name = r->>'expectedName' and coalesce(is_active, true);
+      if v_match_count = 0 and r->>'key' = 'kontinuirano-trcanje-12km-h-100m-30s-1000m-5min-custom-98677b' then
+        select count(*), min(id::text)::uuid into v_match_count, v_exercise_id
+        from library.exercises
+        where exercise_code is null
+          and name = r->>'expectedName'
+          and owner_user_id = v_coach_id
+          and owner_scope = 'user'
+          and coalesce(is_active, true);
+      end if;
     end if;
     if v_match_count <> 1 then raise exception '%: required exercise %:% expected exactly one match, found %', v_package_id, r->>'keyType', r->>'key', v_match_count; end if;
     insert into _multi_exercise_map (key_type, key, id) values (r->>'keyType', r->>'key', v_exercise_id);
