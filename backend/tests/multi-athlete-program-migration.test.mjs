@@ -34,6 +34,7 @@ const legacyConflictSourceRefs = new Map([
   ["102|2026-06-08", "Plan-program.xlsx athlete 102 week 2026-06-08"],
   ["102|2026-06-15", "Plan-program.xlsx athlete 102 week 2026-06-15"],
   ["102|2026-06-22", "Plan-program.xlsx athlete 102 week 2026-06-22"],
+  ["102|2026-07-27", null],
   ["103|2026-05-04", "Plan-program.xlsx athlete 103 week 2026-05-04"],
   ["103|2026-06-08", "Plan-program.xlsx athlete 103 week 2026-06-08"],
   ["107|2026-06-08", "Plan-program.xlsx athlete 107 week 2026-06-08"],
@@ -43,6 +44,7 @@ const approvedLegacyPlanIds = new Map([
   ["102|2026-06-08", "ab3e6829-867f-4354-9e26-17512a708d0c"],
   ["102|2026-06-15", "f96a45fc-ef37-479b-b1f5-d41640eb5d0c"],
   ["102|2026-06-22", "b563a71f-f9e7-4f7d-9f4d-8b6b6dbfcdb8"],
+  ["102|2026-07-27", "ffb64c80-85ad-4658-9141-cb63574544ad"],
   ["103|2026-05-04", "1c4a8dc9-4db3-4efa-8a13-029137019929"],
   ["103|2026-06-08", "7879c375-7f52-455b-bf41-806126deec99"],
   ["107|2026-06-08", "b7a0d4b5-2d53-4510-b1e4-0281a197c7ef"],
@@ -174,24 +176,33 @@ test("program migrations embed final package counts and stable exercise resoluti
       replacementSourceRefs.set(key, replacement.sourceRef);
       assert.equal(replacement.sourceRef, legacyConflictSourceRefs.get(key), `${key} must use the audited legacy source_ref`);
       assert.equal(replacement.approvedPlanId, approvedLegacyPlanIds.get(key), `${key} must use the approved legacy plan UUID`);
-      assert.equal(replacement.status, "draft");
-      assert.equal(replacement.sourceType, "xlsx_weekly_import");
-      assert.ok(replacement.normalized, `${key} must embed normalized legacy content`);
-      assert.deepEqual(replacement.normalized.counts, replacement.counts);
-      assert.equal(replacement.checksum, await sqlLegacyPlanChecksum(client, replacement.normalized), `${key} checksum must match SQL canonical legacy signature`);
-      assert.ok(replacement.auditChecksum, `${key} must retain previous audit checksum for diagnostics`);
-      for (const item of replacement.normalized.items) {
-        assert.equal(item.id, undefined, `${key} normalized item must not include item UUID`);
-        assert.equal(item.exercise_id, undefined, `${key} normalized item must not include exercise UUID`);
-        assert.equal(item.created_at, undefined, `${key} normalized item must not include created_at`);
-        assert.equal(item.updated_at, undefined, `${key} normalized item must not include updated_at`);
-        assert.equal(item.exercise_expected_name, undefined, `${key} normalized item must not depend on library exercise name`);
+      if (key === "102|2026-07-27") {
+        assert.equal(replacement.status, "active");
+        assert.equal(replacement.sourceType, "builder");
+        assert.equal(replacement.backupRequired, false);
+        assert.equal(replacement.normalized, null);
+        assert.equal(replacement.checksum, null);
+        assert.deepEqual(replacement.counts, { days: 4, sessions: 8, sections: 25, exerciseItems: 117, noteItems: 8, totalItems: 125 });
+      } else {
+        assert.equal(replacement.status, "draft");
+        assert.equal(replacement.sourceType, "xlsx_weekly_import");
+        assert.ok(replacement.normalized, `${key} must embed normalized legacy content`);
+        assert.deepEqual(replacement.normalized.counts, replacement.counts);
+        assert.equal(replacement.checksum, await sqlLegacyPlanChecksum(client, replacement.normalized), `${key} checksum must match SQL canonical legacy signature`);
+        assert.ok(replacement.auditChecksum, `${key} must retain previous audit checksum for diagnostics`);
+        for (const item of replacement.normalized.items) {
+          assert.equal(item.id, undefined, `${key} normalized item must not include item UUID`);
+          assert.equal(item.exercise_id, undefined, `${key} normalized item must not include exercise UUID`);
+          assert.equal(item.created_at, undefined, `${key} normalized item must not include created_at`);
+          assert.equal(item.updated_at, undefined, `${key} normalized item must not include updated_at`);
+          assert.equal(item.exercise_expected_name, undefined, `${key} normalized item must not depend on library exercise name`);
+        }
       }
     }
     assert.doesNotMatch(sql, /DATABASE_URL|postgres:\/\/|supabase\.co|password/i);
     const embeddedUuids = [...sql.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)].map((match) => match[0].toLowerCase());
     const allowedUuids = new Set(replacements.map((replacement) => replacement.approvedPlanId.toLowerCase()));
-    assert.deepEqual([...new Set(embeddedUuids)].sort(), [...allowedUuids].sort(), "program migration may embed only the six approved legacy plan UUIDs");
+    assert.deepEqual([...new Set(embeddedUuids)].sort(), [...allowedUuids].sort(), "program migration may embed only the approved legacy plan UUIDs");
   }
   });
 
@@ -199,7 +210,7 @@ test("program migrations embed final package counts and stable exercise resoluti
   assert.equal(mapping.code + mapping.slug, 2608);
   assert.equal(mapping.note, 128);
   assert.equal(sourceRefs.size, 54);
-  assert.equal(replacementGuards, 6);
+  assert.equal(replacementGuards, 7);
   assert.deepEqual(replacementSourceRefs, legacyConflictSourceRefs);
 });
 
@@ -209,7 +220,7 @@ test("legacy conflict guard uses approved UUID, audited metadata, dependencies, 
     const replacements = decodeSqlJson(sql, "v_replacements");
     if (replacements.length === 0) continue;
 
-    assert.match(sql, /v_conflict\.source_ref = v_replacement->>'sourceRef'/, `${file} must compare exact audited source_ref`);
+    assert.match(sql, /v_conflict\.source_ref is not distinct from v_replacement->>'sourceRef'/, `${file} must compare exact audited source_ref including null`);
     assert.match(sql, /v_conflict\.id = \(v_replacement->>'approvedPlanId'\)::uuid/, `${file} must compare exact approved legacy UUID`);
     assert.match(sql, /v_conflict\.created_by_user_id = v_coach_id/, `${file} must require Predrag as creator`);
     assert.match(sql, /program access\/assignment dependencies/, `${file} must reject assigned/accessed legacy plans`);
@@ -226,6 +237,9 @@ test("legacy conflict guard uses approved UUID, audited metadata, dependencies, 
     assert.match(sql, /'expectedChecksum', v_replacement->>'checksum'/);
     assert.match(sql, /'differingComponents'/);
     assert.match(sql, /expectedComponentChecksums/);
+    if (file.includes("milos_milovic")) {
+      assert.match(sql, /approved_builder_active_no_expected_content/, `${file} must audit the approved active builder replacement without a local expected payload`);
+    }
     assert.doesNotMatch(sql, /sort_created_at|pi\.created_at as sort_created_at/);
     assert.doesNotMatch(sql, /case when pi\.item_type = 'exercise' then nullif\(btrim\(e\.name\)/);
 
@@ -314,9 +328,9 @@ test("legacy conflict negative cases rollback before backup/delete", async () =>
 
     assert.match(sql, /if v_conflict_count > 1 then raise exception '%: more than one weekly conflict found/, `${file} must reject unexpected second plan`);
     assert.match(sql, /v_conflict\.id = \(v_replacement->>'approvedPlanId'\)::uuid/, `${file} must reject wrong UUID`);
-    assert.match(sql, /v_conflict\.status = v_replacement->>'status'/, `${file} must reject active or assigned-status slot`);
+    assert.match(sql, /v_conflict\.status = v_replacement->>'status'/, `${file} must reject wrong status slot`);
     assert.match(sql, /v_conflict\.source_type = v_replacement->>'sourceType'/, `${file} must reject unexpected source_type`);
-    assert.match(sql, /v_conflict\.source_ref = v_replacement->>'sourceRef'/, `${file} must reject same athlete/week with different source_ref`);
+    assert.match(sql, /v_conflict\.source_ref is not distinct from v_replacement->>'sourceRef'/, `${file} must reject same athlete/week with different source_ref`);
     assert.match(sql, /legacy conflict count guard mismatch/, `${file} must reject changed counts`);
     assert.match(sql, /program access\/assignment dependencies/, `${file} must reject assigned/accessed plans`);
     assert.match(sql, /backup validation failed/, `${file} must rollback if backup validation fails`);
