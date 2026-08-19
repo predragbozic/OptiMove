@@ -153,6 +153,20 @@ test("program migrations embed final package counts and stable exercise resoluti
     assert.equal(items.filter((item) => item.item_type === "exercise").length, expected.exerciseItems);
     assert.equal(items.filter((item) => item.item_type === "note").length, expected.noteItems);
 
+    const nodeRefs = new Set(nodes.map((node) => `${node.plan_source_ref}|${node.date}|${node.session_order}|${node.node_ref}`));
+    assert.equal(nodeRefs.size, nodes.length, `${file} must use unique stable node_ref values, not title/order keys`);
+    for (const node of nodes) {
+      assert.match(node.node_ref, /^n\d+$/, `${file} node_ref must be an import-local stable ordinal`);
+      if (node.parent_node_ref) {
+        assert.ok(nodeRefs.has(`${node.plan_source_ref}|${node.date}|${node.session_order}|${node.parent_node_ref}`), `${file} parent_node_ref must point to an embedded node`);
+      }
+    }
+    for (const item of items) {
+      if (item.node_name) {
+        assert.ok(nodeRefs.has(`${item.plan_source_ref}|${item.date}|${item.session_order}|${item.node_ref}`), `${file} item row ${item.source_row_ref} must point to an embedded node_ref`);
+      }
+    }
+
     for (const plan of plans) {
       assert.equal(plan.source_ref, `${plan.source_ref.split(":weekly:")[0]}:weekly:${plan.week_start}`);
       assert.equal(sourceRefs.has(plan.source_ref), false, `duplicate source_ref ${plan.source_ref}`);
@@ -212,6 +226,26 @@ test("program migrations embed final package counts and stable exercise resoluti
   assert.equal(sourceRefs.size, 54);
   assert.equal(replacementGuards, 7);
   assert.deepEqual(replacementSourceRefs, legacyConflictSourceRefs);
+});
+
+test("node map keys allow repeated section names/orders under different parents", async () => {
+  const sql = await readMigration("20260818_seed_multi_athlete_06_zija_murina_programs.sql");
+  const nodes = decodeSqlJson(sql, "v_nodes");
+  const duplicateSprints = nodes.filter((node) =>
+    node.plan_source_ref === "zija-murina-131-cleaned-2026-08-18:weekly:2026-08-17"
+    && node.date === "2026-08-22"
+    && node.session_order === "1"
+    && node.node_type === "section"
+    && node.name === "Sprints"
+    && node.node_order === "1"
+  );
+
+  assert.equal(duplicateSprints.length, 2, "fixture must cover the Render duplicate Sprints section case");
+  assert.equal(new Set(duplicateSprints.map((node) => node.node_ref)).size, 2);
+  assert.match(sql, /create temp table _multi_node_map \(plan_source_ref text not null, date date not null, session_order numeric not null, node_ref text not null, id uuid not null, primary key \(plan_source_ref, date, session_order, node_ref\)\)/);
+  assert.match(sql, /insert into _multi_node_map values \(r->>'plan_source_ref', \(r->>'date'\)::date, \(r->>'session_order'\)::numeric, r->>'node_ref', v_node_id\)/);
+  assert.match(sql, /select id into v_node_id from _multi_node_map where plan_source_ref = r->>'plan_source_ref' and date = \(r->>'date'\)::date and session_order = \(r->>'session_order'\)::numeric and node_ref = r->>'node_ref'/);
+  assert.doesNotMatch(sql, /primary key \(plan_source_ref, date, session_order, node_type, name, node_order\)/);
 });
 
 test("Miloš program seed resolves the Pankov running custom exercise without depending on the stale slug", async () => {

@@ -250,8 +250,24 @@ async function extractPayload(client, athleteConfig) {
   const plans = await query(client, `select name, note, icon_url, color, week_start, start_date, duration_days, program_order, source_ref, source_external_id, visibility, library_scope, owner_type, access_model, can_copy, can_edit_copy, can_assign_to_athlete, athlete_can_view_directly, requires_approval, is_template, is_active from plans.plans where source_type = $1 and source_ref = any($2::text[]) order by week_start`, [SOURCE_TYPE, sourceRefs]);
   const days = await query(client, `select p.source_ref as plan_source_ref, pd.date, pd.day_note, pd.day_order, pd.source_row_ref, pd.block_index, pd.block_name, pd.block_type, pd.block_order from plans.plans p join plans.plan_days pd on pd.plan_id = p.id where p.source_type = $1 and p.source_ref = any($2::text[]) order by p.week_start, pd.block_order nulls last, pd.block_index, pd.date`, [SOURCE_TYPE, sourceRefs]);
   const sessions = await query(client, `select p.source_ref as plan_source_ref, pd.date, ps.am_pm, ps.bta, ps.session_order, ps.session_time from plans.plans p join plans.plan_days pd on pd.plan_id = p.id join plans.plan_sessions ps on ps.plan_day_id = pd.id where p.source_type = $1 and p.source_ref = any($2::text[]) order by p.week_start, pd.block_order nulls last, pd.block_index, ps.session_order`, [SOURCE_TYPE, sourceRefs]);
-  const nodes = await query(client, `select p.source_ref as plan_source_ref, pd.date, ps.session_order, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order, parent.node_type as parent_node_type, parent.name as parent_name, parent.node_order as parent_node_order from plans.plans p join plans.plan_days pd on pd.plan_id = p.id join plans.plan_sessions ps on ps.plan_day_id = pd.id join plans.plan_nodes pn on pn.plan_session_id = ps.id left join plans.plan_nodes parent on parent.id = pn.parent_id where p.source_type = $1 and p.source_ref = any($2::text[]) order by p.week_start, pd.block_order nulls last, pd.block_index, ps.session_order, pn.node_order`, [SOURCE_TYPE, sourceRefs]);
-  const items = (await query(client, `select p.source_ref as plan_source_ref, pd.date, ps.session_order, pn.node_type, pn.name as node_name, pn.node_order, pi.item_type, pi.title, pi.description, pi.short_note, pi.note, pi.image_url, pi.video_url, pi.sets, pi.reps, pi.load, pi.item_order, pi.exercise_order, pi.source_row_ref, pi.domain_name, pi.category_name, pi.section_name, pi.domain_color, pi.category_color, pi.section_color, pi.domain_icon_url, pi.category_icon_url, pi.section_icon_url, pi.domain_short_note, pi.category_short_note, pi.section_short_note, pi.domain_note, pi.category_note, pi.section_note, pi.domain_order, pi.category_order, pi.section_order, e.exercise_code, e.slug as exercise_slug, e.name as exercise_name from plans.plans p join plans.plan_days pd on pd.plan_id = p.id join plans.plan_sessions ps on ps.plan_day_id = pd.id join plans.plan_items pi on pi.plan_session_id = ps.id left join plans.plan_nodes pn on pn.id = pi.plan_node_id left join library.exercises e on e.id = pi.exercise_id where p.source_type = $1 and p.source_ref = any($2::text[]) order by p.week_start, pd.block_order nulls last, pd.block_index, ps.session_order, pi.item_order`, [SOURCE_TYPE, sourceRefs])).map((row) => {
+  const rawNodes = await query(client, `select pn.id as source_node_id, parent.id as source_parent_node_id, p.source_ref as plan_source_ref, pd.date, ps.session_order, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order, parent.node_type as parent_node_type, parent.name as parent_name, parent.node_order as parent_node_order from plans.plans p join plans.plan_days pd on pd.plan_id = p.id join plans.plan_sessions ps on ps.plan_day_id = pd.id join plans.plan_nodes pn on pn.plan_session_id = ps.id left join plans.plan_nodes parent on parent.id = pn.parent_id where p.source_type = $1 and p.source_ref = any($2::text[]) order by p.week_start, pd.block_order nulls last, pd.block_index, ps.session_order, pn.node_order, pn.created_at, pn.id`, [SOURCE_TYPE, sourceRefs]);
+  const nodeRefById = new Map();
+  const nodeCounters = new Map();
+  const nodes = rawNodes.map((node) => {
+    const counterKey = `${node.plan_source_ref}|${node.date}|${node.session_order}`;
+    const next = (nodeCounters.get(counterKey) || 0) + 1;
+    nodeCounters.set(counterKey, next);
+    const node_ref = `n${next}`;
+    nodeRefById.set(node.source_node_id, node_ref);
+    return { ...node, node_ref };
+  }).map((node) => {
+    const parent_node_ref = node.source_parent_node_id ? nodeRefById.get(node.source_parent_node_id) : null;
+    const { source_node_id, source_parent_node_id, ...cleanNode } = node;
+    return { ...cleanNode, parent_node_ref };
+  });
+  const items = (await query(client, `select p.source_ref as plan_source_ref, pd.date, ps.session_order, pn.id as source_node_id, pn.node_type, pn.name as node_name, pn.node_order, pi.item_type, pi.title, pi.description, pi.short_note, pi.note, pi.image_url, pi.video_url, pi.sets, pi.reps, pi.load, pi.item_order, pi.exercise_order, pi.source_row_ref, pi.domain_name, pi.category_name, pi.section_name, pi.domain_color, pi.category_color, pi.section_color, pi.domain_icon_url, pi.category_icon_url, pi.section_icon_url, pi.domain_short_note, pi.category_short_note, pi.section_short_note, pi.domain_note, pi.category_note, pi.section_note, pi.domain_order, pi.category_order, pi.section_order, e.exercise_code, e.slug as exercise_slug, e.name as exercise_name from plans.plans p join plans.plan_days pd on pd.plan_id = p.id join plans.plan_sessions ps on ps.plan_day_id = pd.id join plans.plan_items pi on pi.plan_session_id = ps.id left join plans.plan_nodes pn on pn.id = pi.plan_node_id left join library.exercises e on e.id = pi.exercise_id where p.source_type = $1 and p.source_ref = any($2::text[]) order by p.week_start, pd.block_order nulls last, pd.block_index, ps.session_order, pi.item_order`, [SOURCE_TYPE, sourceRefs])).map((row) => {
+    row.node_ref = row.source_node_id ? nodeRefById.get(row.source_node_id) : null;
+    delete row.source_node_id;
     if (row.item_type === "exercise") {
       if (row.exercise_code) {
         row.exercise_key_type = "code";
@@ -766,7 +782,7 @@ begin
   create temp table _multi_plan_map (source_ref text primary key, id uuid not null) on commit drop;
   create temp table _multi_day_map (plan_source_ref text not null, date date not null, id uuid not null, primary key (plan_source_ref, date)) on commit drop;
   create temp table _multi_session_map (plan_source_ref text not null, date date not null, session_order numeric not null, id uuid not null, primary key (plan_source_ref, date, session_order)) on commit drop;
-  create temp table _multi_node_map (plan_source_ref text not null, date date not null, session_order numeric not null, node_type text not null, name text not null, node_order numeric not null, id uuid not null, primary key (plan_source_ref, date, session_order, node_type, name, node_order)) on commit drop;
+  create temp table _multi_node_map (plan_source_ref text not null, date date not null, session_order numeric not null, node_ref text not null, id uuid not null, primary key (plan_source_ref, date, session_order, node_ref)) on commit drop;
   create temp table _multi_exercise_map (key_type text not null, key text not null, id uuid not null, primary key (key_type, key)) on commit drop;
 
   select count(*) into v_existing_package_count from plans.plans where source_type = v_source_type and source_ref in (select value->>'source_ref' from jsonb_array_elements(v_plans) value);
@@ -986,20 +1002,20 @@ begin
   for r in select * from jsonb_array_elements(v_nodes) loop
     select id into v_session_id from _multi_session_map where plan_source_ref = r->>'plan_source_ref' and date = (r->>'date')::date and session_order = (r->>'session_order')::numeric;
     v_parent_node_id := null;
-    if nullif(r->>'parent_name', '') is not null then
-      select id into v_parent_node_id from _multi_node_map where plan_source_ref = r->>'plan_source_ref' and date = (r->>'date')::date and session_order = (r->>'session_order')::numeric and node_type = r->>'parent_node_type' and name = r->>'parent_name' and node_order = (r->>'parent_node_order')::numeric;
+    if nullif(r->>'parent_node_ref', '') is not null then
+      select id into v_parent_node_id from _multi_node_map where plan_source_ref = r->>'plan_source_ref' and date = (r->>'date')::date and session_order = (r->>'session_order')::numeric and node_ref = r->>'parent_node_ref';
     end if;
     insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
     values (v_session_id, v_parent_node_id, r->>'node_type', r->>'name', nullif(r->>'color', ''), nullif(r->>'icon_url', ''), nullif(r->>'short_note', ''), nullif(r->>'note', ''), (r->>'node_order')::numeric)
     returning id into v_node_id;
-    insert into _multi_node_map values (r->>'plan_source_ref', (r->>'date')::date, (r->>'session_order')::numeric, r->>'node_type', r->>'name', (r->>'node_order')::numeric, v_node_id);
+    insert into _multi_node_map values (r->>'plan_source_ref', (r->>'date')::date, (r->>'session_order')::numeric, r->>'node_ref', v_node_id);
   end loop;
 
   for r in select * from jsonb_array_elements(v_items) loop
     select id into v_session_id from _multi_session_map where plan_source_ref = r->>'plan_source_ref' and date = (r->>'date')::date and session_order = (r->>'session_order')::numeric;
     v_node_id := null;
-    if nullif(r->>'node_name', '') is not null then
-      select id into v_node_id from _multi_node_map where plan_source_ref = r->>'plan_source_ref' and date = (r->>'date')::date and session_order = (r->>'session_order')::numeric and node_type = r->>'node_type' and name = r->>'node_name' and node_order = (r->>'node_order')::numeric;
+    if nullif(r->>'node_ref', '') is not null then
+      select id into v_node_id from _multi_node_map where plan_source_ref = r->>'plan_source_ref' and date = (r->>'date')::date and session_order = (r->>'session_order')::numeric and node_ref = r->>'node_ref';
     end if;
     v_exercise_id := null;
     if r->>'item_type' = 'exercise' then
