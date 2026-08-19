@@ -5,7 +5,8 @@ import { readFile } from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { legacySignatureChecksum, canonicalizeLegacySignature } from "../../tools/legacy_plan_signature.mjs";
+import pg from "pg";
+import { sqlLegacyPlanChecksum, sqlLegacyPlanComponents } from "../../tools/legacy_plan_sql_signature.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationDir = path.resolve(__dirname, "../../migrations");
@@ -38,6 +39,8 @@ const legacyConflictSourceRefs = new Map([
   ["107|2026-06-08", "Plan-program.xlsx athlete 107 week 2026-06-08"],
 ]);
 
+const { Client } = pg;
+
 function filePath(file) {
   return path.join(migrationDir, file);
 }
@@ -51,6 +54,17 @@ function decodeSqlJson(sql, variableName) {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+async function withSignatureClient(fn) {
+  assert.ok(process.env.DATABASE_URL, "DATABASE_URL is required for SQL legacy signature tests");
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end();
+  }
 }
 
 function firstReplacementWithItems(migrations) {
@@ -107,6 +121,7 @@ test("program migrations embed final package counts and stable exercise resoluti
   let replacementGuards = 0;
   const replacementSourceRefs = new Map();
 
+  await withSignatureClient(async (client) => {
   for (const file of migrationFiles.slice(2)) {
     const sql = await readMigration(file);
     const expected = decodeSqlJson(sql, "v_expected");
@@ -153,7 +168,7 @@ test("program migrations embed final package counts and stable exercise resoluti
       assert.equal(replacement.sourceType, "xlsx_weekly_import");
       assert.ok(replacement.normalized, `${key} must embed normalized legacy content`);
       assert.deepEqual(replacement.normalized.counts, replacement.counts);
-      assert.equal(replacement.checksum, legacySignatureChecksum(replacement.normalized), `${key} checksum must match shared canonical legacy signature`);
+      assert.equal(replacement.checksum, await sqlLegacyPlanChecksum(client, replacement.normalized), `${key} checksum must match SQL canonical legacy signature`);
       assert.ok(replacement.auditChecksum, `${key} must retain previous audit checksum for diagnostics`);
       for (const item of replacement.normalized.items) {
         assert.equal(item.id, undefined, `${key} normalized item must not include item UUID`);
@@ -166,6 +181,7 @@ test("program migrations embed final package counts and stable exercise resoluti
     assert.doesNotMatch(sql, /DATABASE_URL|postgres:\/\/|supabase\.co|password/i);
     assert.doesNotMatch(sql, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i, "program migration must not embed local UUIDs");
   }
+  });
 
   assert.deepEqual(totals, { plans: 54, days: 112, sessions: 180, sectionNodes: 452, exerciseItems: 2608, noteItems: 128 });
   assert.equal(mapping.code + mapping.slug, 2608);
@@ -184,29 +200,36 @@ test("legacy conflict guard uses audited source_ref and normalized content befor
     assert.match(sql, /v_conflict\.source_ref = v_replacement->>'sourceRef'/, `${file} must compare exact audited source_ref`);
     assert.doesNotMatch(sql, /source_ref is null/i, `${file} must not allow null legacy source_ref`);
     assert.match(sql, /v_normalized := public\.multi_seed_\d+_normalize_legacy_plan\(v_conflict\.id\)/);
+    assert.match(sql, /INTERNAL_CANONICALIZATION_MISMATCH/);
+    assert.match(sql, /v_expected_components := public\.multi_seed_\d+_legacy_plan_component_checksums\(v_replacement->'normalized'\)/);
     assert.match(sql, /v_normalized is distinct from \(v_replacement->'normalized'\)/);
     assert.match(sql, /legacy conflict normalized checksum mismatch/);
     assert.match(sql, /actual checksum/);
     assert.match(sql, /expected_counts/);
     assert.match(sql, /actual_counts/);
     assert.match(sql, /differing_components/);
+    assert.match(sql, /expected_component_checksums/);
+    assert.match(sql, /actual_component_checksums/);
     assert.doesNotMatch(sql, /sort_created_at|pi\.created_at as sort_created_at/);
     assert.doesNotMatch(sql, /case when pi\.item_type = 'exercise' then nullif\(btrim\(e\.name\)/);
 
+    const invariantIndex = sql.indexOf("INTERNAL_CANONICALIZATION_MISMATCH");
+    const conflictCountIndex = sql.indexOf("select count(*) into v_conflict_count");
     const metadataIndex = sql.indexOf("legacy conflict metadata/source_ref mismatch");
     const checksumIndex = sql.indexOf("legacy conflict normalized checksum mismatch");
     const backupIndex = sql.indexOf("insert into public.data_migration_backups");
     const deleteIndex = sql.indexOf("delete from plans.plan_items");
+    assert.ok(invariantIndex > 0 && invariantIndex < conflictCountIndex, `${file} internal canonicalization guard must run before reading conflicting plan`);
+    assert.ok(conflictCountIndex < backupIndex, `${file} conflict read must still happen before backup`);
     assert.ok(metadataIndex > 0 && metadataIndex < backupIndex, `${file} metadata guard must run before backup`);
     assert.ok(checksumIndex > metadataIndex && checksumIndex < backupIndex, `${file} normalized guard must run before backup`);
     assert.ok(backupIndex < deleteIndex, `${file} backup must be written before deletes`);
   }
 });
 
-test("legacy normalized signature ignores UUIDs, timestamps and physical row order", async () => {
+test("legacy SQL signature ignores UUIDs and timestamps", async () => {
   const migrations = await Promise.all(migrationFiles.slice(2, 5).map(readMigration));
   const replacement = firstReplacementWithItems(migrations);
-  const baseline = legacySignatureChecksum(replacement.normalized);
 
   const withEnvironmentOnlyChanges = clone(replacement.normalized);
   withEnvironmentOnlyChanges.items = withEnvironmentOnlyChanges.items.map((item, index) => ({
@@ -216,34 +239,53 @@ test("legacy normalized signature ignores UUIDs, timestamps and physical row ord
     created_at: `2026-08-${String((index % 20) + 1).padStart(2, "0")}T12:00:00.000Z`,
     updated_at: `2026-09-${String((index % 20) + 1).padStart(2, "0")}T12:00:00.000Z`,
     exercise_expected_name: `Environment name ${index}`,
-  })).reverse();
+  }));
 
-  assert.equal(legacySignatureChecksum(withEnvironmentOnlyChanges), baseline);
-  assert.deepEqual(canonicalizeLegacySignature(withEnvironmentOnlyChanges), canonicalizeLegacySignature(replacement.normalized));
+  await withSignatureClient(async (client) => {
+    assert.equal(await sqlLegacyPlanChecksum(client, withEnvironmentOnlyChanges), await sqlLegacyPlanChecksum(client, replacement.normalized));
+  });
 });
 
-test("legacy normalized signature changes for business content changes", async () => {
+test("legacy SQL component checksums change for business content changes", async () => {
   const migrations = await Promise.all(migrationFiles.slice(2, 5).map(readMigration));
   const replacement = firstReplacementWithItems(migrations);
-  const baseline = legacySignatureChecksum(replacement.normalized);
 
   const doseChanged = clone(replacement.normalized);
   doseChanged.items[0].sets = `${doseChanged.items[0].sets || ""} changed`;
-  assert.notEqual(legacySignatureChecksum(doseChanged), baseline);
 
   const exerciseChanged = clone(replacement.normalized);
   exerciseChanged.items[0].exercise_key = `${exerciseChanged.items[0].exercise_key || "missing"}-changed`;
-  assert.notEqual(legacySignatureChecksum(exerciseChanged), baseline);
 
   const instructionChanged = clone(replacement.normalized);
   instructionChanged.items[0].description = `${instructionChanged.items[0].description || ""} changed`;
-  assert.notEqual(legacySignatureChecksum(instructionChanged), baseline);
 
   const noteItem = replacement.normalized.items.findIndex((item) => item.item_type === "note" || item.note);
   const noteChanged = clone(replacement.normalized);
   const index = noteItem >= 0 ? noteItem : 0;
   noteChanged.items[index].note = `${noteChanged.items[index].note || ""} changed`;
-  assert.notEqual(legacySignatureChecksum(noteChanged), baseline);
+
+  const sectionChanged = clone(replacement.normalized);
+  sectionChanged.items[0].section_name = `${sectionChanged.items[0].section_name || ""} changed`;
+
+  await withSignatureClient(async (client) => {
+    const baseline = await sqlLegacyPlanComponents(client, replacement.normalized);
+    const dose = await sqlLegacyPlanComponents(client, doseChanged);
+    const exercise = await sqlLegacyPlanComponents(client, exerciseChanged);
+    const instruction = await sqlLegacyPlanComponents(client, instructionChanged);
+    const note = await sqlLegacyPlanComponents(client, noteChanged);
+    const section = await sqlLegacyPlanComponents(client, sectionChanged);
+
+    assert.notEqual(dose.full, baseline.full);
+    assert.notEqual(dose.dose, baseline.dose);
+    assert.notEqual(exercise.full, baseline.full);
+    assert.notEqual(exercise.exercise_keys, baseline.exercise_keys);
+    assert.notEqual(instruction.full, baseline.full);
+    assert.notEqual(instruction.text_notes, baseline.text_notes);
+    assert.notEqual(note.full, baseline.full);
+    assert.notEqual(note.text_notes, baseline.text_notes);
+    assert.notEqual(section.full, baseline.full);
+    assert.notEqual(section.sections, baseline.sections);
+  });
 });
 
 test("legacy conflict negative cases rollback before backup/delete", async () => {

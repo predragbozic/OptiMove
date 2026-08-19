@@ -201,6 +201,96 @@ as $normalize$
   );
 $normalize$;
 
+drop function if exists public.multi_seed_131_legacy_plan_component_checksums(jsonb);
+create function public.multi_seed_131_legacy_plan_component_checksums(p_normalized jsonb)
+returns jsonb
+language sql
+immutable
+as $components$
+  with items as (
+    select value, ord
+    from jsonb_array_elements(coalesce(p_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord)
+  ),
+  canonical_items as (
+    select jsonb_build_object(
+      'date', value->'date',
+      'day_note', value->'day_note',
+      'session_order', value->'session_order',
+      'am_pm', value->'am_pm',
+      'bta', value->'bta',
+      'node_type', value->'node_type',
+      'node_name', value->'node_name',
+      'node_order', value->'node_order',
+      'item_type', value->'item_type',
+      'title', value->'title',
+      'description', value->'description',
+      'short_note', value->'short_note',
+      'note', value->'note',
+      'image_url', value->'image_url',
+      'video_url', value->'video_url',
+      'sets', value->'sets',
+      'reps', value->'reps',
+      'load', value->'load',
+      'item_order', value->'item_order',
+      'exercise_order', value->'exercise_order',
+      'source_row_ref', value->'source_row_ref',
+      'domain_name', value->'domain_name',
+      'category_name', value->'category_name',
+      'section_name', value->'section_name',
+      'domain_color', value->'domain_color',
+      'category_color', value->'category_color',
+      'section_color', value->'section_color',
+      'domain_icon_url', value->'domain_icon_url',
+      'category_icon_url', value->'category_icon_url',
+      'section_icon_url', value->'section_icon_url',
+      'domain_short_note', value->'domain_short_note',
+      'category_short_note', value->'category_short_note',
+      'section_short_note', value->'section_short_note',
+      'domain_note', value->'domain_note',
+      'category_note', value->'category_note',
+      'section_note', value->'section_note',
+      'domain_order', value->'domain_order',
+      'category_order', value->'category_order',
+      'section_order', value->'section_order',
+      'exercise_key_type', value->'exercise_key_type',
+      'exercise_key', value->'exercise_key'
+    ) as item, ord
+    from items
+  ),
+  canonical_payload as (
+    select jsonb_build_object(
+      'counts', jsonb_build_object(
+        'days', coalesce(p_normalized#>'{counts,days}', '0'::jsonb),
+        'sessions', coalesce(p_normalized#>'{counts,sessions}', '0'::jsonb),
+        'sections', coalesce(p_normalized#>'{counts,sections}', '0'::jsonb),
+        'exerciseItems', coalesce(p_normalized#>'{counts,exerciseItems}', '0'::jsonb),
+        'noteItems', coalesce(p_normalized#>'{counts,noteItems}', '0'::jsonb),
+        'totalItems', coalesce(p_normalized#>'{counts,totalItems}', '0'::jsonb)
+      ),
+      'items', coalesce((select jsonb_agg(item order by ord) from canonical_items), '[]'::jsonb)
+    ) as payload
+  ),
+  component_payloads as (
+    select
+      coalesce((select jsonb_agg(jsonb_build_array(value->>'date', value->>'session_order', value->>'node_order', value->>'item_order', value->>'source_row_ref') order by ord) from items), '[]'::jsonb) as order_source_rows,
+      coalesce((select jsonb_agg(jsonb_build_array(value->>'exercise_key_type', value->>'exercise_key') order by ord) from items), '[]'::jsonb) as exercise_keys,
+      coalesce((select jsonb_agg(jsonb_build_array(value->>'sets', value->>'reps', value->>'load') order by ord) from items), '[]'::jsonb) as dose,
+      coalesce((select jsonb_agg(jsonb_build_array(value->>'title', value->>'description', value->>'short_note', value->>'note') order by ord) from items), '[]'::jsonb) as text_notes,
+      coalesce((select jsonb_agg(jsonb_build_array(value->>'domain_name', value->>'category_name', value->>'section_name', value->>'domain_order', value->>'category_order', value->>'section_order') order by ord) from items), '[]'::jsonb) as sections,
+      coalesce((select jsonb_agg(jsonb_build_array(value->>'image_url', value->>'video_url') order by ord) from items), '[]'::jsonb) as media
+  )
+  select jsonb_build_object(
+    'full', encode(digest(canonical_payload.payload::text, 'sha256'), 'hex'),
+    'order_source_rows', encode(digest(order_source_rows::text, 'sha256'), 'hex'),
+    'exercise_keys', encode(digest(exercise_keys::text, 'sha256'), 'hex'),
+    'dose', encode(digest(dose::text, 'sha256'), 'hex'),
+    'text_notes', encode(digest(text_notes::text, 'sha256'), 'hex'),
+    'sections', encode(digest(sections::text, 'sha256'), 'hex'),
+    'media', encode(digest(media::text, 'sha256'), 'hex')
+  )
+  from component_payloads, canonical_payload;
+$components$;
+
 do $$
 declare
   v_migration_id constant text := '20260818_seed_multi_athlete_131_programs';
@@ -234,6 +324,8 @@ declare
   v_normalized jsonb;
   v_actual_checksum text;
   v_expected_sql_checksum text;
+  v_expected_components jsonb;
+  v_actual_components jsonb;
   v_diff_components text[];
   v_backup_payload jsonb;
   v_backup_checksum text;
@@ -264,6 +356,21 @@ begin
   end if;
 
   for r in select * from jsonb_array_elements(v_plans) loop
+    select value into v_replacement from jsonb_array_elements(v_replacements) value where value->>'weekStart' = r->>'week_start';
+    if v_replacement is not null then
+      v_expected_components := public.multi_seed_131_legacy_plan_component_checksums(v_replacement->'normalized');
+      v_expected_sql_checksum := v_expected_components->>'full';
+      if v_replacement->>'checksum' is distinct from v_expected_sql_checksum then
+        raise exception '%: INTERNAL_CANONICALIZATION_MISMATCH for %, expected checksum %, expected_sql_checksum %, legacy_audit_checksum %, counts %',
+          v_package_id,
+          r->>'week_start',
+          v_replacement->>'checksum',
+          v_expected_sql_checksum,
+          coalesce(v_replacement->>'auditChecksum', '<none>'),
+          v_replacement->'counts';
+      end if;
+    end if;
+
     select count(*) into v_conflict_count
     from plans.plans p
     where p.athlete_id = v_athlete_id
@@ -292,7 +399,6 @@ begin
         and not (p.source_type = v_source_type and p.source_ref = r->>'source_ref')
       for update;
 
-      select value into v_replacement from jsonb_array_elements(v_replacements) value where value->>'weekStart' = r->>'week_start';
       if v_replacement is null then
         raise exception '%: unexpected weekly conflict for %, plan %, source_type %, status %', v_package_id, r->>'week_start', v_conflict.id, v_conflict.source_type, v_conflict.status;
       end if;
@@ -314,26 +420,22 @@ begin
         raise exception '%: legacy conflict count/checksum guard mismatch for %, expected checksum %', v_package_id, r->>'week_start', v_replacement->>'checksum';
       end if;
       v_normalized := public.multi_seed_131_normalize_legacy_plan(v_conflict.id);
-      v_actual_checksum := encode(digest(v_normalized::text, 'sha256'), 'hex');
-      v_expected_sql_checksum := encode(digest((v_replacement->'normalized')::text, 'sha256'), 'hex');
+      v_actual_components := public.multi_seed_131_legacy_plan_component_checksums(v_normalized);
+      v_expected_components := public.multi_seed_131_legacy_plan_component_checksums(v_replacement->'normalized');
+      v_actual_checksum := v_actual_components->>'full';
+      v_expected_sql_checksum := v_expected_components->>'full';
       if v_normalized is distinct from (v_replacement->'normalized') then
         select array_remove(array[
           case when v_normalized->'counts' is distinct from v_replacement->'normalized'->'counts' then 'counts' end,
           case when jsonb_array_length(coalesce(v_normalized->'items', '[]'::jsonb)) is distinct from jsonb_array_length(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) then 'items.length' end,
-          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'date', value->>'session_order', value->>'node_order', value->>'item_order', value->>'source_row_ref') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
-             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'date', value->>'session_order', value->>'node_order', value->>'item_order', value->>'source_row_ref') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'order_or_source_rows' end,
-          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'exercise_key_type', value->>'exercise_key') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
-             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'exercise_key_type', value->>'exercise_key') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'exercise_keys' end,
-          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'sets', value->>'reps', value->>'load') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
-             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'sets', value->>'reps', value->>'load') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'dose' end,
-          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'title', value->>'description', value->>'short_note', value->>'note') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
-             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'title', value->>'description', value->>'short_note', value->>'note') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'text_or_notes' end,
-          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'domain_name', value->>'category_name', value->>'section_name', value->>'domain_order', value->>'category_order', value->>'section_order') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
-             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'domain_name', value->>'category_name', value->>'section_name', value->>'domain_order', value->>'category_order', value->>'section_order') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'sections' end,
-          case when (select coalesce(jsonb_agg(jsonb_build_array(value->>'image_url', value->>'video_url') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_normalized->'items', '[]'::jsonb)) with ordinality as t(value, ord))
-             is distinct from (select coalesce(jsonb_agg(jsonb_build_array(value->>'image_url', value->>'video_url') order by ord), '[]'::jsonb) from jsonb_array_elements(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) with ordinality as t(value, ord)) then 'media' end
+          case when v_actual_components->>'order_source_rows' is distinct from v_expected_components->>'order_source_rows' then 'order_source_rows' end,
+          case when v_actual_components->>'exercise_keys' is distinct from v_expected_components->>'exercise_keys' then 'exercise_keys' end,
+          case when v_actual_components->>'dose' is distinct from v_expected_components->>'dose' then 'dose' end,
+          case when v_actual_components->>'text_notes' is distinct from v_expected_components->>'text_notes' then 'text_notes' end,
+          case when v_actual_components->>'sections' is distinct from v_expected_components->>'sections' then 'sections' end,
+          case when v_actual_components->>'media' is distinct from v_expected_components->>'media' then 'media' end
         ], null) into v_diff_components;
-        raise exception '%: legacy conflict normalized checksum mismatch for %, plan %, status %, source_type %, source_ref %, expected checksum %, expected_sql_checksum %, actual checksum %, expected_counts %, actual_counts %, differing_components %',
+        raise exception '%: legacy conflict normalized checksum mismatch for %, plan %, status %, source_type %, source_ref %, expected checksum %, expected_sql_checksum %, actual checksum %, expected_counts %, actual_counts %, expected_component_checksums %, actual_component_checksums %, differing_components %',
           v_package_id,
           r->>'week_start',
           v_conflict.id,
@@ -345,6 +447,8 @@ begin
           v_actual_checksum,
           v_replacement->'normalized'->'counts',
           v_normalized->'counts',
+          v_expected_components - 'full',
+          v_actual_components - 'full',
           coalesce(array_to_string(v_diff_components, ','), '<unknown>');
       end if;
 
@@ -448,5 +552,6 @@ end $$;
 
 drop function public.multi_seed_131_validate_package(text, jsonb, jsonb, uuid);
 drop function public.multi_seed_131_normalize_legacy_plan(uuid);
+drop function public.multi_seed_131_legacy_plan_component_checksums(jsonb);
 
 commit;
