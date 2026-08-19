@@ -31,12 +31,12 @@ const PREREQ_FILE = "20260818_seed_multi_athlete_01_custom_exercises.sql";
 const ZIJA_FILE = "20260818_seed_multi_athlete_02_zija_murina.sql";
 
 const APPROVED_REPLACEMENTS = new Map([
-  ["milos-milovic-102-cleaned-2026-08-18|2026-06-08", { athleteExternalId: "102", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-08", checksum: "289df1b838c057cd4132de68aaea38c34a8ccf4d46c050d2f89b4e5e4e47be69", counts: { days: 4, sessions: 4, exerciseItems: 98, noteItems: 0, totalItems: 98 } }],
-  ["milos-milovic-102-cleaned-2026-08-18|2026-06-15", { athleteExternalId: "102", weekStart: "2026-06-15", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-15", checksum: "80f3e59e087e8d8da5be36c9666ab9b104f159d58a4a73f96149b5f1bd5e4db7", counts: { days: 6, sessions: 6, exerciseItems: 179, noteItems: 0, totalItems: 179 } }],
-  ["milos-milovic-102-cleaned-2026-08-18|2026-06-22", { athleteExternalId: "102", weekStart: "2026-06-22", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-22", checksum: "c5dc46f7b2ae07fcf311524b5f81ed9a8bd8354d8dbfb0e8e2259740383b6d16", counts: { days: 1, sessions: 1, exerciseItems: 26, noteItems: 0, totalItems: 26 } }],
-  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-05-04", { athleteExternalId: "103", weekStart: "2026-05-04", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 103 week 2026-05-04", checksum: "3ca5576ccea42a8c2ba0ad6ca3a19fef1158578d87c47298ceef2da56cd8d4c7", counts: { days: 6, sessions: 9, exerciseItems: 121, noteItems: 0, totalItems: 126 } }],
-  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-06-08", { athleteExternalId: "103", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 103 week 2026-06-08", checksum: "84fc203c52cb3e3c37251fbb08f9cd2f9ecab1155b1a46afa0617bad8d969ff7", counts: { days: 5, sessions: 5, exerciseItems: 135, noteItems: 0, totalItems: 135 } }],
-  ["nikola-petkovic-107-cleaned-2026-08-18|2026-06-08", { athleteExternalId: "107", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 107 week 2026-06-08", checksum: "1ecaf4bd0cb2d936e1b75a87a6d8e89387ca3a7b0bd39e3a0787ba38a96e5fbd", counts: { days: 1, sessions: 2, exerciseItems: 28, noteItems: 0, totalItems: 28 } }],
+  ["milos-milovic-102-cleaned-2026-08-18|2026-06-08", { approvedPlanId: "ab3e6829-867f-4354-9e26-17512a708d0c", athleteExternalId: "102", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-08", checksum: "289df1b838c057cd4132de68aaea38c34a8ccf4d46c050d2f89b4e5e4e47be69", counts: { days: 4, sessions: 4, exerciseItems: 98, noteItems: 0, totalItems: 98 } }],
+  ["milos-milovic-102-cleaned-2026-08-18|2026-06-15", { approvedPlanId: "f96a45fc-ef37-479b-b1f5-d41640eb5d0c", athleteExternalId: "102", weekStart: "2026-06-15", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-15", checksum: "80f3e59e087e8d8da5be36c9666ab9b104f159d58a4a73f96149b5f1bd5e4db7", counts: { days: 6, sessions: 6, exerciseItems: 179, noteItems: 0, totalItems: 179 } }],
+  ["milos-milovic-102-cleaned-2026-08-18|2026-06-22", { approvedPlanId: "b563a71f-f9e7-4f7d-9f4d-8b6b6dbfcdb8", athleteExternalId: "102", weekStart: "2026-06-22", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-22", checksum: "c5dc46f7b2ae07fcf311524b5f81ed9a8bd8354d8dbfb0e8e2259740383b6d16", counts: { days: 1, sessions: 1, exerciseItems: 26, noteItems: 0, totalItems: 26 } }],
+  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-05-04", { approvedPlanId: "1c4a8dc9-4db3-4efa-8a13-029137019929", athleteExternalId: "103", weekStart: "2026-05-04", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 103 week 2026-05-04", checksum: "3ca5576ccea42a8c2ba0ad6ca3a19fef1158578d87c47298ceef2da56cd8d4c7", counts: { days: 6, sessions: 9, exerciseItems: 121, noteItems: 0, totalItems: 126 } }],
+  ["nikola-vujinivic-103-cleaned-2026-08-18|2026-06-08", { approvedPlanId: "7879c375-7f52-455b-bf41-806126deec99", athleteExternalId: "103", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 103 week 2026-06-08", checksum: "84fc203c52cb3e3c37251fbb08f9cd2f9ecab1155b1a46afa0617bad8d969ff7", counts: { days: 5, sessions: 5, exerciseItems: 135, noteItems: 0, totalItems: 135 } }],
+  ["nikola-petkovic-107-cleaned-2026-08-18|2026-06-08", { approvedPlanId: "b7a0d4b5-2d53-4510-b1e4-0281a197c7ef", athleteExternalId: "107", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 107 week 2026-06-08", checksum: "1ecaf4bd0cb2d936e1b75a87a6d8e89387ca3a7b0bd39e3a0787ba38a96e5fbd", counts: { days: 1, sessions: 2, exerciseItems: 28, noteItems: 0, totalItems: 28 } }],
 ]);
 
 function sqlString(value) {
@@ -744,6 +744,8 @@ declare
   v_expected_components jsonb;
   v_actual_components jsonb;
   v_diff_components text[];
+  v_dependency_count integer;
+  v_backup_match_count integer;
   v_backup_payload jsonb;
   v_backup_checksum text;
 begin
@@ -791,7 +793,6 @@ begin
     select count(*) into v_conflict_count
     from plans.plans p
     where p.athlete_id = v_athlete_id
-      and p.created_by_user_id = v_coach_id
       and p.plan_type = 'weekly'
       and p.week_start = (r->>'week_start')::date
       and coalesce(p.is_active, true)
@@ -808,7 +809,6 @@ begin
       into v_conflict
       from plans.plans p
       where p.athlete_id = v_athlete_id
-        and p.created_by_user_id = v_coach_id
         and p.plan_type = 'weekly'
         and p.week_start = (r->>'week_start')::date
         and coalesce(p.is_active, true)
@@ -820,11 +820,16 @@ begin
         raise exception '%: unexpected weekly conflict for %, plan %, source_type %, status %', v_package_id, r->>'week_start', v_conflict.id, v_conflict.source_type, v_conflict.status;
       end if;
       if not (
-        v_conflict.status = v_replacement->>'status'
+        v_conflict.id = (v_replacement->>'approvedPlanId')::uuid
+        and v_conflict.athlete_id = v_athlete_id
+        and v_conflict.created_by_user_id = v_coach_id
+        and v_conflict.week_start = (v_replacement->>'weekStart')::date
+        and v_conflict.status = v_replacement->>'status'
         and v_conflict.source_type = v_replacement->>'sourceType'
         and v_conflict.source_ref = v_replacement->>'sourceRef'
+        and not coalesce(v_conflict.is_edit_draft, false)
       ) then
-        raise exception '%: legacy conflict metadata/source_ref mismatch for %, plan %', v_package_id, r->>'week_start', v_conflict.id;
+        raise exception '%: legacy conflict identity/metadata mismatch for %, plan %', v_package_id, r->>'week_start', v_conflict.id;
       end if;
       if not (
         v_conflict.legacy_days = (v_replacement#>>'{counts,days}')::int
@@ -834,39 +839,32 @@ begin
         and v_conflict.legacy_note_items = (v_replacement#>>'{counts,noteItems}')::int
         and v_conflict.legacy_total_items = (v_replacement#>>'{counts,totalItems}')::int
       ) then
-        raise exception '%: legacy conflict count/checksum guard mismatch for %, expected checksum %', v_package_id, r->>'week_start', v_replacement->>'checksum';
+        raise exception '%: legacy conflict count guard mismatch for %, expected checksum %', v_package_id, r->>'week_start', v_replacement->>'checksum';
       end if;
       v_normalized := public.${fnPrefix}_normalize_legacy_plan(v_conflict.id);
       v_actual_components := public.${fnPrefix}_legacy_plan_component_checksums(v_normalized);
       v_expected_components := public.${fnPrefix}_legacy_plan_component_checksums(v_replacement->'normalized');
       v_actual_checksum := v_actual_components->>'full';
       v_expected_sql_checksum := v_expected_components->>'full';
-      if v_normalized is distinct from (v_replacement->'normalized') then
-        select array_remove(array[
-          case when v_normalized->'counts' is distinct from v_replacement->'normalized'->'counts' then 'counts' end,
-          case when jsonb_array_length(coalesce(v_normalized->'items', '[]'::jsonb)) is distinct from jsonb_array_length(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) then 'items.length' end,
-          case when v_actual_components->>'order_source_rows' is distinct from v_expected_components->>'order_source_rows' then 'order_source_rows' end,
-          case when v_actual_components->>'exercise_keys' is distinct from v_expected_components->>'exercise_keys' then 'exercise_keys' end,
-          case when v_actual_components->>'dose' is distinct from v_expected_components->>'dose' then 'dose' end,
-          case when v_actual_components->>'text_notes' is distinct from v_expected_components->>'text_notes' then 'text_notes' end,
-          case when v_actual_components->>'sections' is distinct from v_expected_components->>'sections' then 'sections' end,
-          case when v_actual_components->>'media' is distinct from v_expected_components->>'media' then 'media' end
-        ], null) into v_diff_components;
-        raise exception '%: legacy conflict normalized checksum mismatch for %, plan %, status %, source_type %, source_ref %, expected checksum %, expected_sql_checksum %, actual checksum %, expected_counts %, actual_counts %, expected_component_checksums %, actual_component_checksums %, differing_components %',
-          v_package_id,
-          r->>'week_start',
-          v_conflict.id,
-          v_conflict.status,
-          v_conflict.source_type,
-          coalesce(v_conflict.source_ref, '<null>'),
-          v_replacement->>'checksum',
-          v_expected_sql_checksum,
-          v_actual_checksum,
-          v_replacement->'normalized'->'counts',
-          v_normalized->'counts',
-          v_expected_components - 'full',
-          v_actual_components - 'full',
-          coalesce(array_to_string(v_diff_components, ','), '<unknown>');
+      select array_remove(array[
+        case when v_normalized->'counts' is distinct from v_replacement->'normalized'->'counts' then 'counts' end,
+        case when jsonb_array_length(coalesce(v_normalized->'items', '[]'::jsonb)) is distinct from jsonb_array_length(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) then 'items.length' end,
+        case when v_actual_components->>'order_source_rows' is distinct from v_expected_components->>'order_source_rows' then 'order_source_rows' end,
+        case when v_actual_components->>'exercise_keys' is distinct from v_expected_components->>'exercise_keys' then 'exercise_keys' end,
+        case when v_actual_components->>'dose' is distinct from v_expected_components->>'dose' then 'dose' end,
+        case when v_actual_components->>'text_notes' is distinct from v_expected_components->>'text_notes' then 'text_notes' end,
+        case when v_actual_components->>'sections' is distinct from v_expected_components->>'sections' then 'sections' end,
+        case when v_actual_components->>'media' is distinct from v_expected_components->>'media' then 'media' end
+      ], null) into v_diff_components;
+      if to_regclass('library.program_access') is not null then
+        execute 'select count(*)::int from library.program_access where plan_id = $1 or related_plan_id = $1' into v_dependency_count using v_conflict.id;
+        if v_dependency_count <> 0 then
+          raise exception '%: approved legacy conflict % has program access/assignment dependencies (% rows); refusing replacement', v_package_id, v_conflict.id, v_dependency_count;
+        end if;
+      end if;
+      select count(*)::int into v_dependency_count from plans.plans ep where ep.edit_source_plan_id = v_conflict.id and coalesce(ep.is_active, true);
+      if v_dependency_count <> 0 then
+        raise exception '%: approved legacy conflict % has active edit draft dependencies (% rows); refusing replacement', v_package_id, v_conflict.id, v_dependency_count;
       end if;
 
       v_backup_payload := jsonb_build_object(
@@ -875,7 +873,14 @@ begin
         'packageId', v_package_id,
         'exportedAt', now(),
         'originalPlanUuid', v_conflict.id,
-        'normalizedChecksum', v_replacement->>'checksum',
+        'reason', 'approved_authoritative_cleaned_replacement',
+        'normalizedChecksum', v_actual_checksum,
+        'actualChecksum', v_actual_checksum,
+        'actualComponentChecksums', v_actual_components - 'full',
+        'expectedChecksum', v_replacement->>'checksum',
+        'expectedSqlChecksum', v_expected_sql_checksum,
+        'expectedComponentChecksums', v_expected_components - 'full',
+        'differingComponents', coalesce(to_jsonb(v_diff_components), '[]'::jsonb),
         'legacyAuditChecksum', v_replacement->>'auditChecksum',
         'expectedGuard', v_replacement - 'normalized',
         'normalizedContent', v_normalized,
@@ -887,6 +892,8 @@ begin
           'plans.plan_items', (select coalesce(jsonb_agg(to_jsonb(pi) order by ps.session_order nulls last, pi.item_order nulls last, pi.created_at), '[]'::jsonb) from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = v_conflict.id),
           'plans.plan_items.exercise_refs', (select coalesce(jsonb_agg(jsonb_build_object('plan_item_id', pi.id, 'exercise_id', pi.exercise_id, 'exercise_code', e.exercise_code, 'slug', e.slug, 'name', e.name) order by ps.session_order nulls last, pi.item_order nulls last, pi.created_at), '[]'::jsonb) from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id left join library.exercises e on e.id = pi.exercise_id where pd.plan_id = v_conflict.id),
           'library.program_tags', (select coalesce(jsonb_agg(to_jsonb(pt) order by pt.created_at, pt.tag_id), '[]'::jsonb) from library.program_tags pt where pt.plan_id = v_conflict.id),
+          'library.program_reviews', (select case when to_regclass('library.program_reviews') is null then jsonb_build_object('tableMissing', true) else coalesce((select jsonb_agg(to_jsonb(pr) order by pr.created_at) from library.program_reviews pr where pr.plan_id = v_conflict.id), '[]'::jsonb) end),
+          'library.program_access', (select case when to_regclass('library.program_access') is null then jsonb_build_object('tableMissing', true) else coalesce((select jsonb_agg(to_jsonb(pa) order by pa.created_at) from library.program_access pa where pa.plan_id = v_conflict.id or pa.related_plan_id = v_conflict.id), '[]'::jsonb) end),
           'plans.plans.edit_drafts', (select coalesce(jsonb_agg(to_jsonb(ep) order by ep.created_at), '[]'::jsonb) from plans.plans ep where ep.edit_source_plan_id = v_conflict.id)
         )
       );
@@ -894,8 +901,21 @@ begin
       insert into public.data_migration_backups (migration_id, package_id, entity_type, original_entity_id, payload, checksum)
       values (v_migration_id, v_package_id, 'plans.plans', v_conflict.id, v_backup_payload, v_backup_checksum)
       on conflict (migration_id, original_entity_id) do nothing;
+      select count(*)::int into v_backup_match_count
+      from public.data_migration_backups
+      where migration_id = v_migration_id
+        and original_entity_id = v_conflict.id
+        and checksum = v_backup_checksum
+        and payload->>'actualChecksum' = v_actual_checksum
+        and payload->>'reason' = 'approved_authoritative_cleaned_replacement';
+      if v_backup_match_count <> 1 then
+        raise exception '%: backup validation failed for approved legacy conflict %, refusing replacement', v_package_id, v_conflict.id;
+      end if;
 
       delete from library.program_tags where plan_id = v_conflict.id;
+      if to_regclass('library.program_reviews') is not null then
+        delete from library.program_reviews where plan_id = v_conflict.id;
+      end if;
       delete from plans.plan_items pi using plans.plan_sessions ps, plans.plan_days pd where pi.plan_session_id = ps.id and ps.plan_day_id = pd.id and pd.plan_id = v_conflict.id;
       delete from plans.plan_nodes pn using plans.plan_sessions ps, plans.plan_days pd where pn.plan_session_id = ps.id and ps.plan_day_id = pd.id and pd.plan_id = v_conflict.id;
       delete from plans.plan_sessions ps using plans.plan_days pd where ps.plan_day_id = pd.id and pd.plan_id = v_conflict.id;
