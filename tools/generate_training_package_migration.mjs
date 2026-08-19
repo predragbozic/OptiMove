@@ -34,6 +34,7 @@ const APPROVED_REPLACEMENTS = new Map([
   ["milos-milovic-102-cleaned-2026-08-18|2026-06-08", { approvedPlanId: "ab3e6829-867f-4354-9e26-17512a708d0c", athleteExternalId: "102", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-08", checksum: "289df1b838c057cd4132de68aaea38c34a8ccf4d46c050d2f89b4e5e4e47be69", counts: { days: 4, sessions: 4, exerciseItems: 98, noteItems: 0, totalItems: 98 } }],
   ["milos-milovic-102-cleaned-2026-08-18|2026-06-15", { approvedPlanId: "f96a45fc-ef37-479b-b1f5-d41640eb5d0c", athleteExternalId: "102", weekStart: "2026-06-15", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-15", checksum: "80f3e59e087e8d8da5be36c9666ab9b104f159d58a4a73f96149b5f1bd5e4db7", counts: { days: 6, sessions: 6, exerciseItems: 179, noteItems: 0, totalItems: 179 } }],
   ["milos-milovic-102-cleaned-2026-08-18|2026-06-22", { approvedPlanId: "b563a71f-f9e7-4f7d-9f4d-8b6b6dbfcdb8", athleteExternalId: "102", weekStart: "2026-06-22", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 102 week 2026-06-22", checksum: "c5dc46f7b2ae07fcf311524b5f81ed9a8bd8354d8dbfb0e8e2259740383b6d16", counts: { days: 1, sessions: 1, exerciseItems: 26, noteItems: 0, totalItems: 26 } }],
+  ["milos-milovic-102-cleaned-2026-08-18|2026-07-27", { approvedPlanId: "ffb64c80-85ad-4658-9141-cb63574544ad", athleteExternalId: "102", weekStart: "2026-07-27", status: "active", sourceType: "builder", sourceRef: null, checksum: null, counts: { days: 4, sessions: 8, sections: 25, exerciseItems: 117, noteItems: 8, totalItems: 125 }, backupRequired: false }],
   ["nikola-vujinivic-103-cleaned-2026-08-18|2026-05-04", { approvedPlanId: "1c4a8dc9-4db3-4efa-8a13-029137019929", athleteExternalId: "103", weekStart: "2026-05-04", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 103 week 2026-05-04", checksum: "3ca5576ccea42a8c2ba0ad6ca3a19fef1158578d87c47298ceef2da56cd8d4c7", counts: { days: 6, sessions: 9, exerciseItems: 121, noteItems: 0, totalItems: 126 } }],
   ["nikola-vujinivic-103-cleaned-2026-08-18|2026-06-08", { approvedPlanId: "7879c375-7f52-455b-bf41-806126deec99", athleteExternalId: "103", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 103 week 2026-06-08", checksum: "84fc203c52cb3e3c37251fbb08f9cd2f9ecab1155b1a46afa0617bad8d969ff7", counts: { days: 5, sessions: 5, exerciseItems: 135, noteItems: 0, totalItems: 135 } }],
   ["nikola-petkovic-107-cleaned-2026-08-18|2026-06-08", { approvedPlanId: "b7a0d4b5-2d53-4510-b1e4-0281a197c7ef", athleteExternalId: "107", weekStart: "2026-06-08", status: "draft", sourceType: "xlsx_weekly_import", sourceRef: "Plan-program.xlsx athlete 107 week 2026-06-08", checksum: "1ecaf4bd0cb2d936e1b75a87a6d8e89387ca3a7b0bd39e3a0787ba38a96e5fbd", counts: { days: 1, sessions: 2, exerciseItems: 28, noteItems: 0, totalItems: 28 } }],
@@ -202,6 +203,9 @@ function normalizeBackupPlan(backup) {
 }
 
 async function findReplacementBackup(client, replacement) {
+  if (replacement.backupRequired === false) {
+    return { ...replacement, auditChecksum: null, checksum: null, normalized: null };
+  }
   if (!fs.existsSync(BACKUP_DIR)) throw new Error(`Missing backup directory ${BACKUP_DIR}`);
   const candidates = fs.readdirSync(BACKUP_DIR)
     .filter((file) => file.startsWith("multi-athlete-conflict-plan-") && file.endsWith(".json"))
@@ -777,9 +781,14 @@ begin
   for r in select * from jsonb_array_elements(v_plans) loop
     select value into v_replacement from jsonb_array_elements(v_replacements) value where value->>'weekStart' = r->>'week_start';
     if v_replacement is not null then
-      v_expected_components := public.${fnPrefix}_legacy_plan_component_checksums(v_replacement->'normalized');
-      v_expected_sql_checksum := v_expected_components->>'full';
-      if v_replacement->>'checksum' is distinct from v_expected_sql_checksum then
+      if v_replacement ? 'normalized' and v_replacement->'normalized' is not null and v_replacement->'normalized' <> 'null'::jsonb then
+        v_expected_components := public.${fnPrefix}_legacy_plan_component_checksums(v_replacement->'normalized');
+        v_expected_sql_checksum := v_expected_components->>'full';
+      else
+        v_expected_components := '{}'::jsonb;
+        v_expected_sql_checksum := null;
+      end if;
+      if v_replacement->>'checksum' is not null and v_replacement->>'checksum' is distinct from v_expected_sql_checksum then
         raise exception '%: INTERNAL_CANONICALIZATION_MISMATCH for %, expected checksum %, expected_sql_checksum %, legacy_audit_checksum %, counts %',
           v_package_id,
           r->>'week_start',
@@ -826,12 +835,12 @@ begin
         and v_conflict.week_start = (v_replacement->>'weekStart')::date
         and v_conflict.status = v_replacement->>'status'
         and v_conflict.source_type = v_replacement->>'sourceType'
-        and v_conflict.source_ref = v_replacement->>'sourceRef'
+        and v_conflict.source_ref is not distinct from v_replacement->>'sourceRef'
         and not coalesce(v_conflict.is_edit_draft, false)
       ) then
         raise exception '%: legacy conflict identity/metadata mismatch for %, plan %', v_package_id, r->>'week_start', v_conflict.id;
       end if;
-      if not (
+      if coalesce((v_replacement->>'backupRequired')::boolean, true) and not (
         v_conflict.legacy_days = (v_replacement#>>'{counts,days}')::int
         and v_conflict.legacy_sessions = (v_replacement#>>'{counts,sessions}')::int
         and public.${fnPrefix}_normalize_legacy_plan(v_conflict.id)#>>'{counts,sections}' = v_replacement#>>'{counts,sections}'
@@ -843,19 +852,27 @@ begin
       end if;
       v_normalized := public.${fnPrefix}_normalize_legacy_plan(v_conflict.id);
       v_actual_components := public.${fnPrefix}_legacy_plan_component_checksums(v_normalized);
-      v_expected_components := public.${fnPrefix}_legacy_plan_component_checksums(v_replacement->'normalized');
+      if v_replacement ? 'normalized' and v_replacement->'normalized' is not null and v_replacement->'normalized' <> 'null'::jsonb then
+        v_expected_components := public.${fnPrefix}_legacy_plan_component_checksums(v_replacement->'normalized');
+      else
+        v_expected_components := '{}'::jsonb;
+      end if;
       v_actual_checksum := v_actual_components->>'full';
       v_expected_sql_checksum := v_expected_components->>'full';
-      select array_remove(array[
-        case when v_normalized->'counts' is distinct from v_replacement->'normalized'->'counts' then 'counts' end,
-        case when jsonb_array_length(coalesce(v_normalized->'items', '[]'::jsonb)) is distinct from jsonb_array_length(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) then 'items.length' end,
-        case when v_actual_components->>'order_source_rows' is distinct from v_expected_components->>'order_source_rows' then 'order_source_rows' end,
-        case when v_actual_components->>'exercise_keys' is distinct from v_expected_components->>'exercise_keys' then 'exercise_keys' end,
-        case when v_actual_components->>'dose' is distinct from v_expected_components->>'dose' then 'dose' end,
-        case when v_actual_components->>'text_notes' is distinct from v_expected_components->>'text_notes' then 'text_notes' end,
-        case when v_actual_components->>'sections' is distinct from v_expected_components->>'sections' then 'sections' end,
-        case when v_actual_components->>'media' is distinct from v_expected_components->>'media' then 'media' end
-      ], null) into v_diff_components;
+      if v_replacement ? 'normalized' and v_replacement->'normalized' is not null and v_replacement->'normalized' <> 'null'::jsonb then
+        select array_remove(array[
+          case when v_normalized->'counts' is distinct from v_replacement->'normalized'->'counts' then 'counts' end,
+          case when jsonb_array_length(coalesce(v_normalized->'items', '[]'::jsonb)) is distinct from jsonb_array_length(coalesce(v_replacement->'normalized'->'items', '[]'::jsonb)) then 'items.length' end,
+          case when v_actual_components->>'order_source_rows' is distinct from v_expected_components->>'order_source_rows' then 'order_source_rows' end,
+          case when v_actual_components->>'exercise_keys' is distinct from v_expected_components->>'exercise_keys' then 'exercise_keys' end,
+          case when v_actual_components->>'dose' is distinct from v_expected_components->>'dose' then 'dose' end,
+          case when v_actual_components->>'text_notes' is distinct from v_expected_components->>'text_notes' then 'text_notes' end,
+          case when v_actual_components->>'sections' is distinct from v_expected_components->>'sections' then 'sections' end,
+          case when v_actual_components->>'media' is distinct from v_expected_components->>'media' then 'media' end
+        ], null) into v_diff_components;
+      else
+        v_diff_components := array['approved_builder_active_no_expected_content'];
+      end if;
       if to_regclass('library.program_access') is not null then
         execute 'select count(*)::int from library.program_access where plan_id = $1 or related_plan_id = $1' into v_dependency_count using v_conflict.id;
         if v_dependency_count <> 0 then
