@@ -118,21 +118,30 @@ test("2. Save shows a 'Saving…' state immediately, before the request resolves
   await pending;
 });
 
-test("3. a second Save click while the first is still in flight does not send a second request", async () => {
+test("3. a second Save click while the first request is genuinely still unresolved does not send a second request", async () => {
   state.builder.draft = makeDraft();
-  const calls = installFetchMock([{ status: 200, body: makeDraft() }]);
+  const { calls, release } = installHeldFetchMock();
   const action = fakeAction({ action: "builder-submit-plan" }, { textContent: "Save and finish" });
 
-  await handleBuilderDraftAction(action, noopHandlers());
-  assert.equal(calls.length, 1);
+  // Fire the first click and let it run up to (and including) the fetch
+  // call, WITHOUT awaiting it - the mock's single fetch is now genuinely
+  // pending (it won't resolve until release() below), a real concurrent
+  // situation, not one call finishing before the next starts.
+  const firstCall = handleBuilderDraftAction(action, noopHandlers());
+  await Promise.resolve();
+  assert.equal(action.disabled, true, "the button must already be disabled before the second click can even be dispatched");
+  assert.equal(calls.length, 1, "the first click must have already reached the fetch call");
 
-  // Simulate the button still being disabled (a real <button disabled>
-  // physically cannot dispatch a second click) - the handler itself must
-  // also refuse to act on a disabled action, not rely solely on the DOM.
-  action.disabled = true;
-  const handledAgain = await handleBuilderDraftAction(action, noopHandlers());
+  // The second click happens WHILE the first request is still in flight -
+  // a real <button disabled> physically cannot dispatch this, but the
+  // handler itself must also refuse it, not rely solely on the DOM.
+  const secondCall = handleBuilderDraftAction(action, noopHandlers());
+  const handledAgain = await secondCall;
   assert.equal(handledAgain, true, "the action type is still recognized (so no unrelated fallback path runs)");
-  assert.equal(calls.length, 1, "a click while already disabled/mid-save must never fire a second, parallel submit");
+  assert.equal(calls.length, 1, "a click while the first request is still genuinely unresolved must never fire a second, parallel submit");
+
+  release(makeDraft());
+  await firstCall;
 });
 
 test("4. a failed save leaves the in-memory draft completely untouched, shows an error, and restores the button for a retry", async () => {

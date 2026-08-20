@@ -1283,7 +1283,17 @@ async function planHasBuilderContentWithClient(client, planId) {
   return result.rows[0]?.has_content === true;
 }
 
-async function planHasWeeklyTrainingContentWithClient(client, planId) {
+// A weekly plan counts as having content if it has at least one real
+// plan_item OR at least one meaningfully-named plan_node - a coach who
+// plans an entirely organizational day (e.g. an empty "Massage" domain,
+// with no exercises under it) has still made a real planning decision, and
+// submitting must not silently delete it. The plan_nodes.name IS NOT NULL
+// column can never actually be blank today (POST /sessions/:sessionId/nodes
+// rejects an empty name with 400 at creation time), but the
+// nullif(trim(...)) guard is kept anyway so a node would still have to earn
+// a real user-given name to count, rather than relying solely on that
+// write-path validation remaining unchanged forever.
+export async function planHasWeeklyTrainingContentWithClient(client, planId) {
   const result = await client.query(
     `select exists (
        select 1
@@ -1291,6 +1301,13 @@ async function planHasWeeklyTrainingContentWithClient(client, planId) {
        join plans.plan_sessions ps on ps.id = pi.plan_session_id
        join plans.plan_days pd on pd.id = ps.plan_day_id
        where pd.plan_id = $1
+     ) or exists (
+       select 1
+       from plans.plan_nodes pn
+       join plans.plan_sessions ps on ps.id = pn.plan_session_id
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       where pd.plan_id = $1
+         and nullif(trim(coalesce(pn.name, '')), '') is not null
      ) as has_content`,
     [planId],
   );

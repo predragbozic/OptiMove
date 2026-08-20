@@ -1,93 +1,30 @@
-create or replace view plans.v_plan_summary as
-select
-  p.id as plan_id,
-  p.plan_type,
-  p.is_template,
-  p.name as plan_name,
-  p.status,
-  p.source_type,
-  p.source_external_id,
-  p.week_start,
-  case
-    when p.week_start is not null then p.week_start + interval '6 days'
-    else null
-  end::date as week_end,
-  p.start_date,
-  case
-    when p.start_date is not null and p.duration_days is not null
-      then p.start_date + (p.duration_days - 1) * interval '1 day'
-    else null
-  end::date as valid_until,
-  p.duration_days,
-  p.program_order,
-  a.id as athlete_uuid,
-  a.athlete_id,
-  a.source_external_id as athlete_source_external_id,
-  a.full_name as athlete_name,
-  a.image_url as athlete_image_url,
-  count(distinct pd.id) as block_or_day_count,
-  count(distinct ps.id) as session_count,
-  count(pi.id) as item_count,
-  count(pi.exercise_id) as matched_exercise_count,
-  count(pi.id) - count(pi.exercise_id) as item_without_exercise_id_count,
-  p.library_scope,
-  p.library_category,
-  p.cover_image_url,
-  p.is_free,
-  p.price_cents,
-  p.available_until,
-  p.owner_type,
-  p.visibility,
-  p.access_model,
-  p.access_duration_days,
-  p.subscription_period,
-  p.can_copy,
-  p.can_edit_copy,
-  p.can_assign_to_athlete,
-  p.athlete_can_view_directly,
-  p.requires_approval
-from plans.plans p
-left join public.athletes a on a.id = p.athlete_id
-left join plans.plan_days pd on pd.plan_id = p.id
-left join plans.plan_sessions ps on ps.plan_day_id = pd.id
-left join plans.plan_items pi on pi.plan_session_id = ps.id
-where coalesce(p.is_active, true)
-  and not coalesce(p.is_edit_draft, false)
-group by
-  p.id,
-  a.id;
+-- Makes empty domains/categories/sections (e.g. a "Massage" domain with no
+-- exercises under it) visible in the Weekly Plan calendar. Previously
+-- plans.v_weekly_plan_items was built entirely from an INNER JOIN against
+-- plan_items, so a plan_node with zero items contributed zero rows - its
+-- name never reached the frontend, however deep it was nested.
+--
+-- This is the migrations_v2 counterpart of the create_plan_read_views.sql
+-- change already applied there for future fresh-bootstrap purposes - the
+-- Strategy B runner (backend/src/migrate.js) no longer replays legacy SQL
+-- files like create_plan_read_views.sql against an already-cutover
+-- database, so the view change has to ship through here to actually reach
+-- OPTIMOVE. Both statements below are byte-for-byte identical to the
+-- corresponding view definitions in create_plan_read_views.sql.
+--
+-- CREATE OR REPLACE VIEW is idempotent: re-running this migration (or
+-- re-running the whole runner) redefines the same view to the same
+-- definition and changes nothing.
 
--- Walks each plan_item's plan_node_id up the plan_nodes tree (section -> category ->
--- domain) so readers can group/identify domain/category/section by their real node id
--- instead of by the denormalized text name. Two different nodes that happen to share a
--- name (e.g. two sections both called "Warming up") must never visually merge.
-create or replace view plans.v_plan_item_node_ancestry as
-with recursive node_chain as (
-  select id, parent_id, node_type, id as leaf_id
-  from plans.plan_nodes
-  union all
-  select pn.id, pn.parent_id, pn.node_type, nc.leaf_id
-  from plans.plan_nodes pn
-  join node_chain nc on pn.id = nc.parent_id
-)
-select
-  leaf_id as plan_node_id,
-  max(case when node_type = 'domain' then id::text end)::uuid as domain_node_id,
-  max(case when node_type = 'category' then id::text end)::uuid as category_node_id,
-  max(case when node_type = 'section' then id::text end)::uuid as section_node_id
-from node_chain
-group by leaf_id;
-
--- Same ancestor walk as v_plan_item_node_ancestry above, but also carries
--- each ancestor level's OWN name/color/icon_url/short_note/note/node_order
--- (straight from plans.plan_nodes) and the node's own plan_session_id. Used
--- exclusively to represent an EMPTY domain/category/section (a leaf node -
--- no plan_items and no child plan_nodes anywhere under it) in
--- v_weekly_plan_items below: such a node has no plan_item row to snapshot
--- domain/category/section text from, so its display name/color/etc must
--- come directly from plan_nodes instead. Populated items keep using their
--- own plan_items snapshot columns unchanged - this view is never consulted
--- for those.
+-- Full ancestor chain detail (own name/color/icon_url/short_note/note/
+-- node_order per level, plus the node's own plan_session_id) for every
+-- plan_node - used exclusively to represent an EMPTY domain/category/
+-- section (a leaf node - no plan_items and no child plan_nodes anywhere
+-- under it) in plans.v_weekly_plan_items below: such a node has no
+-- plan_item row to snapshot domain/category/section text from, so its
+-- display name/color/etc must come directly from plan_nodes instead.
+-- Populated items keep using their own plan_items snapshot columns
+-- unchanged - this view is never consulted for those.
 create or replace view plans.v_plan_node_ancestry_detail as
 with recursive node_chain as (
   select id, parent_id, node_type, name, color, icon_url, short_note, note, node_order, plan_session_id, id as leaf_id
@@ -289,91 +226,3 @@ order by
   day_order,
   session_order,
   item_order;
-
-create or replace view plans.v_program_plan_items as
-select
-  p.id as plan_id,
-  p.name as plan_name,
-  p.plan_type,
-  p.is_template,
-  p.program_order,
-  p.start_date,
-  p.duration_days,
-  case
-    when p.start_date is not null and p.duration_days is not null
-      then p.start_date + (p.duration_days - 1) * interval '1 day'
-    else null
-  end::date as valid_until,
-  p.source_type,
-  p.source_external_id,
-  a.id as athlete_uuid,
-  a.athlete_id,
-  a.source_external_id as athlete_source_external_id,
-  a.full_name as athlete_name,
-  a.image_url as athlete_image_url,
-  pd.id as plan_block_id,
-  pd.block_index,
-  pd.block_name,
-  pd.block_type,
-  pd.block_order,
-  pd.day_note,
-  ps.id as plan_session_id,
-  ps.am_pm,
-  ps.bta,
-  ps.session_order,
-  pi.id as plan_item_id,
-  pi.item_type,
-  pi.item_order,
-  pi.domain_order,
-  pi.category_order,
-  pi.section_order,
-  pi.exercise_order,
-  pi.domain_name,
-  pi.domain_color,
-  pi.domain_icon_url,
-  pi.domain_short_note,
-  pi.domain_note,
-  pi.category_name,
-  pi.category_color,
-  pi.category_icon_url,
-  pi.category_short_note,
-  pi.category_note,
-  pi.section_name,
-  pi.section_color,
-  pi.section_icon_url,
-  pi.section_short_note,
-  pi.section_note,
-  pi.title,
-  pi.description,
-  pi.image_url,
-  pi.video_url,
-  pi.sets,
-  pi.reps,
-  pi.load,
-  e.id as exercise_id,
-  e.exercise_code,
-  e.name as library_exercise_name,
-  pi.source_row_ref,
-  ps.session_time,
-  pi.plan_node_id,
-  na.domain_node_id,
-  na.category_node_id,
-  na.section_node_id
-from plans.plans p
-left join public.athletes a on a.id = p.athlete_id
-join plans.plan_days pd on pd.plan_id = p.id
-join plans.plan_sessions ps on ps.plan_day_id = pd.id
-join plans.plan_items pi on pi.plan_session_id = ps.id
-left join library.exercises e on e.id = pi.exercise_id
-left join plans.v_plan_item_node_ancestry na on na.plan_node_id = pi.plan_node_id
-where p.plan_type = 'program'
-  and coalesce(p.is_active, true)
-  and not coalesce(p.is_edit_draft, false)
-order by
-  p.is_template,
-  coalesce(a.source_external_id, p.source_external_id),
-  p.program_order,
-  p.name,
-  pd.block_index,
-  ps.session_order,
-  pi.item_order;
