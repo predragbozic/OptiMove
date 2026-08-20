@@ -78,6 +78,52 @@ select
 from node_chain
 group by leaf_id;
 
+-- Same ancestor walk as v_plan_item_node_ancestry above, but also carries
+-- each ancestor level's OWN name/color/icon_url/short_note/note/node_order
+-- (straight from plans.plan_nodes) and the node's own plan_session_id. Used
+-- exclusively to represent an EMPTY domain/category/section (a leaf node -
+-- no plan_items and no child plan_nodes anywhere under it) in
+-- v_weekly_plan_items below: such a node has no plan_item row to snapshot
+-- domain/category/section text from, so its display name/color/etc must
+-- come directly from plan_nodes instead. Populated items keep using their
+-- own plan_items snapshot columns unchanged - this view is never consulted
+-- for those.
+create or replace view plans.v_plan_node_ancestry_detail as
+with recursive node_chain as (
+  select id, parent_id, node_type, name, color, icon_url, short_note, note, node_order, plan_session_id, id as leaf_id
+  from plans.plan_nodes
+  union all
+  select pn.id, pn.parent_id, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order, pn.plan_session_id, nc.leaf_id
+  from plans.plan_nodes pn
+  join node_chain nc on pn.id = nc.parent_id
+)
+select
+  leaf_id as plan_node_id,
+  (array_agg(plan_session_id))[1] as plan_session_id,
+  max(case when node_type = 'domain' then id::text end)::uuid as domain_node_id,
+  max(case when node_type = 'domain' then name end)::character varying(255) as domain_name,
+  max(case when node_type = 'domain' then color end)::character varying(32) as domain_color,
+  max(case when node_type = 'domain' then icon_url end) as domain_icon_url,
+  max(case when node_type = 'domain' then short_note end) as domain_short_note,
+  max(case when node_type = 'domain' then note end) as domain_note,
+  max(case when node_type = 'domain' then node_order end) as domain_order,
+  max(case when node_type = 'category' then id::text end)::uuid as category_node_id,
+  max(case when node_type = 'category' then name end)::character varying(255) as category_name,
+  max(case when node_type = 'category' then color end)::character varying(32) as category_color,
+  max(case when node_type = 'category' then icon_url end) as category_icon_url,
+  max(case when node_type = 'category' then short_note end) as category_short_note,
+  max(case when node_type = 'category' then note end) as category_note,
+  max(case when node_type = 'category' then node_order end) as category_order,
+  max(case when node_type = 'section' then id::text end)::uuid as section_node_id,
+  max(case when node_type = 'section' then name end)::character varying(255) as section_name,
+  max(case when node_type = 'section' then color end)::character varying(32) as section_color,
+  max(case when node_type = 'section' then icon_url end) as section_icon_url,
+  max(case when node_type = 'section' then short_note end) as section_short_note,
+  max(case when node_type = 'section' then note end) as section_note,
+  max(case when node_type = 'section' then node_order end) as section_order
+from node_chain
+group by leaf_id;
+
 create or replace view plans.v_weekly_plan_items as
 select
   p.id as plan_id,
@@ -145,13 +191,96 @@ left join plans.v_plan_item_node_ancestry na on na.plan_node_id = pi.plan_node_i
 where p.plan_type = 'weekly'
   and coalesce(p.is_active, true)
   and not coalesce(p.is_edit_draft, false)
-order by
-  a.source_external_id,
+
+union all
+
+-- Empty domains/categories/sections: a leaf plan_node (no child plan_nodes)
+-- with zero plan_items anywhere on it. Represented as one row with
+-- item_type set to the node's own node_type ('domain'/'category'/'section')
+-- and every exercise-specific column null - frontend/exercise-view.js's
+-- isExerciseItem() already treats an item_type of 'domain'/'category'/
+-- 'section' as non-exercise, organizational content (see
+-- renderOrganizationSummaryHtml), so this needs no frontend change: it is
+-- not a fake/empty exercise, it is the row shape the frontend already
+-- expects for a structure with no exercises under it. Never emitted for a
+-- node that has any child node or any item, however deep, so a populated
+-- section's ancestors are represented only via their real item rows, exactly
+-- as before.
+select
+  p.id as plan_id,
+  p.name as plan_name,
   p.week_start,
+  (p.week_start + interval '6 days')::date as week_end,
+  a.id as athlete_uuid,
+  a.athlete_id,
+  a.source_external_id as athlete_source_external_id,
+  a.full_name as athlete_name,
+  a.image_url as athlete_image_url,
+  pd.id as plan_day_id,
   pd.date,
+  pd.day_note,
   pd.day_order,
+  ps.id as plan_session_id,
+  ps.am_pm,
+  ps.bta,
   ps.session_order,
-  pi.item_order;
+  null::uuid as plan_item_id,
+  pn.node_type::character varying(30) as item_type,
+  null::numeric as item_order,
+  nad.domain_order,
+  nad.category_order,
+  nad.section_order,
+  null::numeric as exercise_order,
+  nad.domain_name,
+  nad.domain_color,
+  nad.domain_icon_url,
+  nad.domain_short_note,
+  nad.domain_note,
+  nad.category_name,
+  nad.category_color,
+  nad.category_icon_url,
+  nad.category_short_note,
+  nad.category_note,
+  nad.section_name,
+  nad.section_color,
+  nad.section_icon_url,
+  nad.section_short_note,
+  nad.section_note,
+  null::character varying(255) as title,
+  null::text as description,
+  null::text as image_url,
+  null::text as video_url,
+  null::character varying(80) as sets,
+  null::character varying(80) as reps,
+  null::character varying(80) as load,
+  null::uuid as exercise_id,
+  null::character varying(100) as exercise_code,
+  null::character varying(255) as library_exercise_name,
+  null::text as source_row_ref,
+  ps.session_time,
+  pn.id as plan_node_id,
+  nad.domain_node_id,
+  nad.category_node_id,
+  nad.section_node_id
+from plans.plan_nodes pn
+join plans.v_plan_node_ancestry_detail nad on nad.plan_node_id = pn.id
+join plans.plan_sessions ps on ps.id = pn.plan_session_id
+join plans.plan_days pd on pd.id = ps.plan_day_id
+join plans.plans p on p.id = pd.plan_id
+join public.athletes a on a.id = p.athlete_id
+where p.plan_type = 'weekly'
+  and coalesce(p.is_active, true)
+  and not coalesce(p.is_edit_draft, false)
+  and not exists (select 1 from plans.plan_items pi2 where pi2.plan_node_id = pn.id)
+  and not exists (select 1 from plans.plan_nodes child where child.parent_id = pn.id)
+
+order by
+  athlete_source_external_id,
+  week_start,
+  date,
+  day_order,
+  session_order,
+  item_order;
 
 create or replace view plans.v_program_plan_items as
 select

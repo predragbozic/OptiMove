@@ -711,7 +711,19 @@ export async function handleBuilderDraftAction(action, handlers) {
   if (type === "builder-submit-plan") {
     const draft = state.builder.draft;
     if (!draft) return true;
+    // action.disabled = true happens synchronously, before any await - a
+    // real <button> refuses further clicks once disabled, so a rapid
+    // double-click can never fire a second, parallel submit for the same
+    // draft (matches the same guard already used for Add above). The
+    // "Saving…" label change is the visible confirmation of that state -
+    // Builder itself never closes/navigates away until the request settles,
+    // whether the button label changed or not, but a coach staring at an
+    // unchanged "Save and finish" button after clicking it has no way to
+    // tell a slow save from a swallowed click.
+    if (action.disabled) return true;
     action.disabled = true;
+    const originalLabel = action.textContent;
+    action.textContent = "Saving…";
     try {
       const currentDraft = state.builder.draft || draft;
       const result = await api(`/api/builder/plans/${encodeURIComponent(currentDraft.plan.id)}/submit`, {
@@ -729,6 +741,15 @@ export async function handleBuilderDraftAction(action, handlers) {
       setBuilderDraft(result);
       handlers.renderBuilder();
     } catch (error) {
+      // A failed save must not look like a success (no navigation, no
+      // "Saved" state) and must not lose the coach's local edits -
+      // state.builder.draft is never touched on this path (setBuilderDraft
+      // is only reached after a successful response above), so whatever the
+      // coach had open is exactly as they left it; restoring the button
+      // (same pattern as the Add-exercise error path above) makes a retry
+      // available immediately instead of leaving it stuck on "Saving…".
+      action.disabled = false;
+      action.textContent = originalLabel;
       handlers.renderBuilderError(error);
     }
     return true;
@@ -783,7 +804,7 @@ export async function handleBuilderDraftAction(action, handlers) {
   if (deleteTargets[type]) {
     const [label, url] = deleteTargets[type];
     if (!window.confirm(`Delete this ${label}? This cannot be undone.`)) return true;
-    await api(type === "builder-delete-plan" ? url : withBatchSyncUrl(url), { method: "DELETE" });
+    const result = await api(type === "builder-delete-plan" ? url : withBatchSyncUrl(url), { method: "DELETE" });
     if (type === "builder-delete-plan") {
       // The just-deleted plan may well have been the one showing in the
       // cached drafts list (unless it was an is_edit_draft row, already
@@ -797,7 +818,12 @@ export async function handleBuilderDraftAction(action, handlers) {
     }
     state.builder.selectedNodeId = "";
     state.builder.selectedSessionId = "";
-    await handlers.refreshBuilderDraft();
+    // DELETE /blocks|sessions|nodes/:id already responds with the fresh
+    // draft (respondWithDraft on the backend) - using it directly instead
+    // of discarding it and firing a separate refreshBuilderDraft() GET for
+    // the exact same plan removes a redundant round-trip on every delete.
+    setBuilderDraft(result);
+    handlers.renderBuilder();
     return true;
   }
   return false;
@@ -872,7 +898,7 @@ export async function handleBuilderItemAction(action, handlers) {
   }
   if (type === "builder-delete-item") {
     if (!window.confirm("Remove this exercise from the program?")) return true;
-    await api(withBatchSyncUrl(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`), { method: "DELETE" });
+    const result = await api(withBatchSyncUrl(`/api/builder/items/${encodeURIComponent(action.dataset.itemId)}`), { method: "DELETE" });
     // Removing exactly one duplicate/item must never disturb any other item
     // (independent sets/reps/load/instruction, independent order) - if the
     // just-removed item was open in the single-item edit view, fall back to
@@ -884,7 +910,10 @@ export async function handleBuilderItemAction(action, handlers) {
     }
     if (state.builder.lastAddedItemId === action.dataset.itemId) state.builder.lastAddedItemId = "";
     if (state.builder.addConfirmation?.itemId === action.dataset.itemId) state.builder.addConfirmation = null;
-    await handlers.refreshBuilderDraft({ sectionItemsOnly: true });
+    // DELETE /items/:id already responds with the fresh draft - see the
+    // matching comment on the block/session/node delete branch above.
+    setBuilderDraft(result);
+    if (!handlers.renderBuilderSectionItems?.()) handlers.renderBuilder();
     return true;
   }
   return false;

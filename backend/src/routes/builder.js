@@ -340,14 +340,7 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
         "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order) values ($1, $2, $3, $4, $5) returning id",
         [newBlockId, session.am_pm, session.bta, session.session_time, session.session_order],
       );
-      const nodes = await client.query("select * from plans.plan_nodes where plan_session_id = $1 order by node_order", [session.id]);
-      if (nodes.rowCount) {
-        for (const root of nodes.rows.filter((node) => !node.parent_id)) {
-          await copyNodeTreeWithClient(client, root.id, createdSession.rows[0].id, null);
-        }
-      } else {
-        await copyLegacySession(client, session.id, createdSession.rows[0].id);
-      }
+      await copySessionContent(client, session.id, createdSession.rows[0].id);
     }
     await client.query("commit");
     client.release();
@@ -725,8 +718,16 @@ function wantsBatchSync(req, plan) {
 async function respondWithDraft(req, res, user, plan, options = {}) {
   const currentPlan = await getEditablePlan(req, plan.id);
   const targetPlan = currentPlan || plan;
-  if (wantsBatchSync(req, targetPlan)) await syncBatchFromPlan(targetPlan, user);
-  const freshPlan = await getEditablePlan(req, targetPlan.id);
+  // getEditablePlan() only needs to be called again if syncBatchFromPlan()
+  // actually ran and could have changed the plan row it reads back (e.g.
+  // builder_batch_id) - on every other mutation (the overwhelming majority)
+  // targetPlan is already fresh, so re-fetching it a second time here was a
+  // redundant round-trip on every single Builder edit.
+  let freshPlan = targetPlan;
+  if (wantsBatchSync(req, targetPlan)) {
+    await syncBatchFromPlan(targetPlan, user);
+    freshPlan = await getEditablePlan(req, targetPlan.id);
+  }
   const draft = await buildDraft(freshPlan || targetPlan);
   if (options.status) return res.status(options.status).json(draft);
   return res.json(draft);
@@ -894,14 +895,7 @@ async function copyProgramTree(client, sourcePlanId, targetPlanId) {
         "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, $2, $3, $4) returning id",
         [createdDay.rows[0].id, session.am_pm, session.bta, session.session_order],
       );
-      const nodes = await client.query("select * from plans.plan_nodes where plan_session_id = $1 order by node_order", [session.id]);
-      if (nodes.rowCount) {
-        for (const root of nodes.rows.filter((node) => !node.parent_id)) {
-          await copyNodeTreeWithClient(client, root.id, createdSession.rows[0].id, null);
-        }
-      } else {
-        await copyLegacySession(client, session.id, createdSession.rows[0].id);
-      }
+      await copySessionContent(client, session.id, createdSession.rows[0].id);
     }
   }
 }
@@ -970,14 +964,7 @@ async function copyDaySessions(client, sourceDayId, targetDayId) {
       "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, $2, $3, $4) returning id",
       [targetDayId, session.am_pm, session.bta, session.session_order],
     );
-    const nodes = await client.query("select * from plans.plan_nodes where plan_session_id = $1 order by node_order", [session.id]);
-    if (nodes.rowCount) {
-      for (const root of nodes.rows.filter((node) => !node.parent_id)) {
-        await copyNodeTreeWithClient(client, root.id, createdSession.rows[0].id, null);
-      }
-    } else {
-      await copyLegacySession(client, session.id, createdSession.rows[0].id);
-    }
+    await copySessionContent(client, session.id, createdSession.rows[0].id);
   }
 }
 
@@ -1115,24 +1102,86 @@ async function materializeLegacyPlan(client, planId) {
   }
 }
 
-async function copyNodeTreeWithClient(client, sourceId, targetSessionId, targetParentId) {
-  const nodeResult = await client.query("select * from plans.plan_nodes where id = $1", [sourceId]);
-  const source = nodeResult.rows[0];
-  if (!source) return;
-  const order = await nextNodeOrderWithClient(client, targetSessionId, targetParentId);
-  const created = await client.query(
-    `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
-    [targetSessionId, targetParentId, source.node_type, source.name, source.color, source.icon_url, source.short_note, source.note, order],
-  );
-  const targetNodeId = created.rows[0].id;
-  const items = await client.query("select * from plans.plan_items where plan_node_id = $1 order by item_order", [sourceId]);
-  for (const item of items.rows) await copyPlanItem(client, item, targetSessionId, targetNodeId);
-  const children = await client.query("select id from plans.plan_nodes where parent_id = $1 order by node_order", [sourceId]);
-  for (const child of children.rows) await copyNodeTreeWithClient(client, child.id, targetSessionId, targetNodeId);
-}
+// Copies an entire session's node/item tree from source to target in a
+// small, constant number of batched round-trips, instead of the one
+// round-trip per node PLUS one round-trip per item that the recursive
+// copyNodeTreeWithClient()/copyPlanItem() functions this replaced used to
+// need (a program with dozens of domains/categories/sections/exercises
+// meant hundreds of sequential awaited queries for a single block/program/
+// weekly-plan copy - the dominant cost in both "open an existing program
+// for editing" and "save"/"re-save", both of which copy the whole tree via
+// this same path). Falls back to copyLegacySession() for a session that has
+// items but no node tree yet (an import that was never opened in the
+// Builder), exactly as the three callers' own pre-inlined checks used to.
+//
+// Node order is preserved exactly as-is from the source (node_order is a
+// numeric column used only for sorting, tolerant of arbitrary/fractional
+// values elsewhere in the app for exactly this reason - e.g. "move between"
+// - so copying it verbatim instead of recomputing a fresh sequential value
+// changes nothing observable) instead of recomputing a fresh value per node
+// with an extra query, which is what this replaced.
+export async function copySessionContent(client, sourceSessionId, targetSessionId) {
+  const nodesResult = await client.query("select * from plans.plan_nodes where plan_session_id = $1 order by node_order", [sourceSessionId]);
+  if (!nodesResult.rowCount) {
+    await copyLegacySession(client, sourceSessionId, targetSessionId);
+    return;
+  }
 
-async function copyPlanItem(client, item, targetSessionId, targetNodeId) {
+  const nodesByParent = new Map();
+  for (const sourceNode of nodesResult.rows) {
+    const parentKey = sourceNode.parent_id || "root";
+    if (!nodesByParent.has(parentKey)) nodesByParent.set(parentKey, []);
+    nodesByParent.get(parentKey).push(sourceNode);
+  }
+
+  // Insert level by level (root nodes, then their children, then
+  // grandchildren, ...) so each level's parent_id can be resolved from the
+  // PREVIOUS level's real ids in one batched INSERT per level.
+  const sourceIdToTargetId = new Map();
+  let parentKeysAtThisLevel = ["root"];
+  while (parentKeysAtThisLevel.length) {
+    const levelNodes = parentKeysAtThisLevel.flatMap((parentKey) => nodesByParent.get(parentKey) || []);
+    if (!levelNodes.length) break;
+    const values = [];
+    const params = [];
+    let column = 0;
+    levelNodes.forEach((sourceNode) => {
+      const targetParentId = sourceNode.parent_id ? sourceIdToTargetId.get(sourceNode.parent_id) : null;
+      const row = [targetSessionId, targetParentId, sourceNode.node_type, sourceNode.name, sourceNode.color, sourceNode.icon_url, sourceNode.short_note, sourceNode.note, sourceNode.node_order];
+      values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
+      params.push(...row);
+    });
+    const created = await client.query(
+      `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
+       values ${values.join(", ")} returning id`,
+      params,
+    );
+    levelNodes.forEach((sourceNode, index) => sourceIdToTargetId.set(sourceNode.id, created.rows[index].id));
+    parentKeysAtThisLevel = levelNodes.map((sourceNode) => sourceNode.id);
+  }
+
+  const itemsResult = await client.query(
+    "select * from plans.plan_items where plan_session_id = $1 and plan_node_id is not null order by item_order",
+    [sourceSessionId],
+  );
+  if (!itemsResult.rowCount) return;
+  const values = [];
+  const params = [];
+  let column = 0;
+  itemsResult.rows.forEach((item) => {
+    const targetNodeId = sourceIdToTargetId.get(item.plan_node_id);
+    if (!targetNodeId) return; // orphaned reference - copyNodeTreeWithClient never reached these either
+    const row = [
+      targetSessionId, targetNodeId, item.item_type, item.exercise_id, item.title, item.description, item.short_note, item.note, item.image_url, item.video_url,
+      item.sets, item.reps, item.load, item.item_order, item.exercise_order, item.source_row_ref,
+      item.domain_name, item.category_name, item.section_name, item.domain_color, item.category_color, item.section_color,
+      item.domain_icon_url, item.category_icon_url, item.section_icon_url, item.domain_short_note, item.category_short_note, item.section_short_note,
+      item.domain_note, item.category_note, item.section_note, item.domain_order, item.category_order, item.section_order,
+    ];
+    values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
+    params.push(...row);
+  });
+  if (!values.length) return;
   await client.query(
     `insert into plans.plan_items (
       plan_session_id, plan_node_id, item_type, exercise_id, title, description, short_note, note, image_url, video_url,
@@ -1140,20 +1189,8 @@ async function copyPlanItem(client, item, targetSessionId, targetNodeId) {
       domain_name, category_name, section_name, domain_color, category_color, section_color,
       domain_icon_url, category_icon_url, section_icon_url, domain_short_note, category_short_note, section_short_note,
       domain_note, category_note, section_note, domain_order, category_order, section_order
-    ) values (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-      $11, $12, $13, $14, $15, $16,
-      $17, $18, $19, $20, $21, $22,
-      $23, $24, $25, $26, $27, $28,
-      $29, $30, $31, $32, $33, $34
-    )`,
-    [
-      targetSessionId, targetNodeId, item.item_type, item.exercise_id, item.title, item.description, item.short_note, item.note, item.image_url, item.video_url,
-      item.sets, item.reps, item.load, item.item_order, item.exercise_order, item.source_row_ref,
-      item.domain_name, item.category_name, item.section_name, item.domain_color, item.category_color, item.section_color,
-      item.domain_icon_url, item.category_icon_url, item.section_icon_url, item.domain_short_note, item.category_short_note, item.section_short_note,
-      item.domain_note, item.category_note, item.section_note, item.domain_order, item.category_order, item.section_order,
-    ],
+    ) values ${values.join(", ")}`,
+    params,
   );
 }
 
@@ -1463,11 +1500,6 @@ async function nextOrder(table, field, value, orderColumn) {
 
 async function nextNodeOrder(sessionId, parentId) {
   const result = await query("select coalesce(max(node_order), 0) + 1 as next_value from plans.plan_nodes where plan_session_id = $1 and parent_id is not distinct from $2", [sessionId, parentId]);
-  return Number(result.rows[0].next_value);
-}
-
-async function nextNodeOrderWithClient(client, sessionId, parentId) {
-  const result = await client.query("select coalesce(max(node_order), 0) + 1 as next_value from plans.plan_nodes where plan_session_id = $1 and parent_id is not distinct from $2", [sessionId, parentId]);
   return Number(result.rows[0].next_value);
 }
 
