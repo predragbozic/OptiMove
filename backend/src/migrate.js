@@ -802,13 +802,27 @@ export async function applyNewMigration(client, migrationsRoot, migrationPath) {
   }
 }
 
+// Mirrors backend/src/db.js's pool ssl option exactly (Supabase requires
+// TLS but its certificate chain isn't in Node's default trust store) - this
+// runner uses its own dedicated pg.Client instead of that pool (see the
+// timeout comments above), so it has to carry the same rule itself rather
+// than inheriting it. Keyed off the actual databaseUrl being connected to
+// (not process.env.DATABASE_URL directly) so it stays correct when
+// runMigrations() is called with an overridden databaseUrl, e.g. in tests.
+export function buildPgClientConfig(databaseUrl) {
+  return {
+    connectionString: databaseUrl,
+    ssl: databaseUrl.includes("supabase.com") ? { rejectUnauthorized: false } : undefined,
+  };
+}
+
 // =========================================================================
 // Main entry point.
 // =========================================================================
 export async function runMigrations({ databaseUrl = process.env.DATABASE_URL, migrationsRoot = MIGRATIONS_V2_ROOT } = {}) {
   const expectedDbName = parseAndValidateDatabaseUrl(databaseUrl);
 
-  const client = new pg.Client({ connectionString: databaseUrl });
+  const client = new pg.Client(buildPgClientConfig(databaseUrl));
   await client.connect();
 
   try {

@@ -12,9 +12,10 @@
 // first cutover, idempotent repeated startup, empty-database abort (no
 // CREATE), wrong metadata relkind, metadata shape, advisory-lock
 // concurrency, a migration applying exactly once, rollback of a failed
-// migration, per-migration lock_timeout/statement_timeout, and the two
+// migration, per-migration lock_timeout/statement_timeout, the two
 // targeted preflight-timeout tests for the read-only-preflight timeout gap
-// fixed in this same change.
+// fixed in this same change, and the Supabase SSL client-config regression
+// found in PR #49 review.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
@@ -380,4 +381,28 @@ test("Finding #3 fix, test 2/2: preflight session statement_timeout aborts a slo
 
   await client.end();
   delete process.env.MIGRATION_STATEMENT_TIMEOUT_MS;
+});
+
+// ==================== PR #49 review fix: Supabase SSL config regression ====================
+// The runner's dedicated pg.Client (used instead of the app's pool - see the
+// timeout comments in migrate.js for why) must carry the same
+// `ssl: { rejectUnauthorized: false }` for Supabase connection strings that
+// backend/src/db.js's pool already applies, or a Supabase-hosted deploy
+// would fail to connect (or silently skip the certificate check it's
+// relying on) the moment this runner replaced the old pool-based one.
+test("Supabase SSL config: buildPgClientConfig() sets rejectUnauthorized:false for a supabase.com URL, and no ssl option otherwise", () => {
+  const supabaseConfig = runner.buildPgClientConfig("postgresql://user:pass@db.abcdefgh.supabase.com:5432/postgres");
+  assert.deepEqual(supabaseConfig.ssl, { rejectUnauthorized: false });
+
+  const localConfig = runner.buildPgClientConfig(DATABASE_URL);
+  assert.equal(localConfig.ssl, undefined);
+
+  // Confirm the config actually flows into a real pg.Client's connection
+  // parameters, not just the plain object this function returns -
+  // construction alone does not open a network connection.
+  const supabaseClient = new pg.Client(supabaseConfig);
+  assert.deepEqual(supabaseClient.connectionParameters.ssl, { rejectUnauthorized: false });
+
+  const localClient = new pg.Client(localConfig);
+  assert.equal(localClient.connectionParameters.ssl, false);
 });
