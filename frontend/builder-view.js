@@ -152,21 +152,80 @@ function renderBuilderDraftsPanel() {
 }
 
 const BUILDER_SCROLL_SELECTORS = [".builder-section-modal", ".builder-exercise-results"];
+const BUILDER_BLOCK_GRID_SELECTOR = ".builder-block-grid";
+
+// renderBuilder() replaces els.content's entire innerHTML on every call
+// (renderBuilderInner() below), including .builder-block-grid - the row of
+// block columns that scrolls horizontally. Reassigning innerHTML destroys
+// and recreates that element, which resets scrollLeft to 0 with no DOM
+// state to preserve it from. Every add/edit of a block, domain, category,
+// or section routes through this same renderBuilder() call, so all of them
+// need their horizontal position restored the same way.
+//
+// lastRenderedPlanId/lastRenderedBlockIds are intentionally module-level
+// (not local to one call): by the time renderBuilder() runs, the mutation
+// that triggered it has already updated state.builder.draft (setBuilderDraft
+// happens before the render call in every action handler), so there is no
+// "before" snapshot available within a single call to diff against - only
+// what was remembered from the PREVIOUS render. Comparing against that is
+// also what makes it safe to tell "one block was appended" apart from
+// "a completely different plan was loaded into the Builder" (block count
+// grew by exactly one AND every previous block is still present, vs. an
+// unrelated set of ids) - the former gets the new block scrolled minimally
+// into view, the latter intentionally does not restore a leftover scroll
+// position from whatever plan was open before.
+let lastRenderedPlanId = null;
+let lastRenderedBlockIds = null;
+
+function addedBlockId(previousIds, currentIds) {
+  if (!previousIds || !previousIds.length) return null;
+  if (currentIds.length !== previousIds.length + 1) return null;
+  if (!previousIds.every((id) => currentIds.includes(id))) return null;
+  return currentIds.find((id) => !previousIds.includes(id)) || null;
+}
 
 function captureBuilderScrollState() {
-  return BUILDER_SCROLL_SELECTORS.map((selector) => {
+  const vertical = BUILDER_SCROLL_SELECTORS.map((selector) => {
     const el = els.content.querySelector(selector);
     return { selector, top: el ? el.scrollTop : null };
   });
+
+  const grid = els.content.querySelector(BUILDER_BLOCK_GRID_SELECTOR);
+  const currentPlanId = state.builder.draft?.plan?.id || null;
+  const currentBlockIds = (state.builder.draft?.blocks || []).map((block) => block.id);
+  const samePlan = currentPlanId !== null && currentPlanId === lastRenderedPlanId;
+  const horizontal = grid
+    ? { left: grid.scrollLeft, samePlan, addedBlockId: samePlan ? addedBlockId(lastRenderedBlockIds, currentBlockIds) : null }
+    : null;
+
+  lastRenderedPlanId = currentPlanId;
+  lastRenderedBlockIds = currentBlockIds;
+
+  return { vertical, horizontal };
 }
 
 function restoreBuilderScrollState(captured) {
   requestAnimationFrame(() => {
-    captured.forEach(({ selector, top }) => {
+    captured.vertical.forEach(({ selector, top }) => {
       if (top === null) return;
       const el = els.content.querySelector(selector);
       if (el) el.scrollTop = top;
     });
+
+    if (!captured.horizontal) return;
+    const grid = els.content.querySelector(BUILDER_BLOCK_GRID_SELECTOR);
+    if (!grid) return;
+
+    if (captured.horizontal.addedBlockId) {
+      const newBlockEl = [...grid.querySelectorAll("[data-block-id]")]
+        .find((el) => el.dataset.blockId === captured.horizontal.addedBlockId);
+      if (newBlockEl) {
+        newBlockEl.scrollIntoView({ inline: "nearest", block: "nearest" });
+        return;
+      }
+    }
+
+    if (captured.horizontal.samePlan) grid.scrollLeft = captured.horizontal.left;
   });
 }
 
