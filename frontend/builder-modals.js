@@ -58,19 +58,28 @@ export function renderCopyPlanModal(state) {
   const selectedAthletes = state.athletes.filter((athlete) => selectedIds.has(String(athlete.athlete_id)));
   const selectedCount = selectedAthletes.length;
   const isWeeklyCopy = state.builder.copyPlanType === "weekly";
+  const isAssign = state.builder.copyIntent === "assign";
+  // Assigning always targets one or more specific athletes - "reusable
+  // template" (no athlete) isn't a valid outcome of "Assign to athlete", so
+  // it must require a selection exactly like the weekly-copy case already
+  // does, and never offer the "keep unassigned" option.
+  const requiresAthlete = isWeeklyCopy || isAssign;
   return `
     <div class="builder-modal-overlay">
-      <button class="builder-modal-backdrop" type="button" data-action="builder-close-copy-plan" aria-label="Close copy setup"></button>
-      <section class="panel builder-compact-modal builder-copy-plan-modal" role="dialog" aria-modal="true" aria-label="Create editable copy">
+      <button class="builder-modal-backdrop" type="button" data-action="builder-close-copy-plan" aria-label="Close ${isAssign ? "assignment" : "copy"} setup"></button>
+      <section class="panel builder-compact-modal builder-copy-plan-modal" role="dialog" aria-modal="true" aria-label="${isAssign ? "Assign to athlete" : "Create editable copy"}">
         <div class="builder-modal-head">
           <div>
-            <p class="eyebrow">Editable copy</p>
+            <p class="eyebrow">${isAssign ? "Assign to athlete" : "Editable copy"}</p>
             <h3>${escapeHtml(state.builder.copyPlanName || "Program")}</h3>
-            <p class="muted">${isWeeklyCopy ? "Choose athletes and the new week. Each athlete gets an independent copy." : "Choose athletes for specific copies, or keep the copy reusable as a template."}</p>
+            <p class="muted">${isAssign
+              ? "The athlete gets an independent copy of the latest saved version of this template. Editing the template later never changes it."
+              : isWeeklyCopy ? "Choose athletes and the new week. Each athlete gets an independent copy." : "Choose athletes for specific copies, or keep the copy reusable as a template."}</p>
           </div>
           <button class="plain-button icon-button" type="button" data-action="builder-close-copy-plan" aria-label="Close"><span class="button-icon">x</span></button>
         </div>
-        ${isWeeklyCopy ? `<label class="search-field builder-copy-week"><span>Target week</span><input data-builder-copy-week-start type="date" value="${escapeAttr(state.builder.copyWeekStart || weekMondayIso(localDateIso()))}"><small>The copied week will begin on Monday.</small></label>` : `<button class="builder-athlete-option ${selectedCount ? "" : "is-selected"}" type="button" data-action="builder-select-copy-athlete" data-athlete-id=""><span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Keep this editable copy unassigned</small></span></button>`}
+        ${isWeeklyCopy ? `<label class="search-field builder-copy-week"><span>Target week</span><input data-builder-copy-week-start type="date" value="${escapeAttr(state.builder.copyWeekStart || weekMondayIso(localDateIso()))}"><small>The copied week will begin on Monday.</small></label>` : ""}
+        ${!isWeeklyCopy && !isAssign ? `<button class="builder-athlete-option ${selectedCount ? "" : "is-selected"}" type="button" data-action="builder-select-copy-athlete" data-athlete-id=""><span class="builder-athlete-trigger-icon">+</span><span><strong>Reusable template</strong><small>Keep this editable copy unassigned</small></span></button>` : ""}
         <div class="builder-athlete-options">
           ${state.athletes.map((athlete) => {
             const isSelected = selectedIds.has(String(athlete.athlete_id));
@@ -84,8 +93,8 @@ export function renderCopyPlanModal(state) {
           }).join("")}
         </div>
         <div class="builder-copy-plan-footer">
-          <span class="muted">${selectedCount ? `${selectedCount} athlete${selectedCount === 1 ? "" : "s"} selected` : isWeeklyCopy ? "Choose at least one athlete" : "Reusable template"}</span>
-          <button class="plain-button" type="button" data-action="builder-confirm-duplicate-plan" ${isWeeklyCopy && !selectedCount ? "disabled" : ""}>Create editable copy</button>
+          <span class="muted">${selectedCount ? `${selectedCount} athlete${selectedCount === 1 ? "" : "s"} selected` : requiresAthlete ? "Choose at least one athlete" : "Reusable template"}</span>
+          <button class="plain-button" type="button" data-action="builder-confirm-duplicate-plan" ${requiresAthlete && !selectedCount ? "disabled" : ""}>${isAssign ? "Assign" : "Create editable copy"}</button>
         </div>
       </section>
     </div>

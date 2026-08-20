@@ -94,7 +94,7 @@ test("app.js: handleAppBack() calls handleMessagesBack() first, right after the 
   const appJsPath = fileURLToPath(new URL("../app.js", import.meta.url));
   const appJs = readFileSync(appJsPath, "utf8");
   const fnStart = appJs.indexOf("function handleAppBack() {");
-  const body = appJs.slice(fnStart, fnStart + 700);
+  const body = appJs.slice(fnStart, fnStart + 1000);
   const mediaModalIdx = body.indexOf("els.mediaModal");
   const messagesBackIdx = body.indexOf("handleMessagesBack()");
   const exitConfirmIdx = body.indexOf("athleteExitConfirmOpen");
@@ -106,7 +106,7 @@ test("app.js: the Escape keydown handler calls handleMessagesBack() first and re
   const appJs = readFileSync(appJsPath, "utf8");
   const marker = 'document.addEventListener("keydown", (event) => {';
   const start = appJs.indexOf(marker);
-  const block = appJs.slice(start, start + 400);
+  const block = appJs.slice(start, start + 650);
   assert.match(block, /if \(handleMessagesBack\(\)\) return;/);
   const escapeCheckIdx = block.indexOf('event.key !== "Escape"');
   const messagesBackIdx = block.indexOf("handleMessagesBack()");

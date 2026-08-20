@@ -176,28 +176,15 @@ export function renderProgramToolbarHtml(programs, selectedProgramId, renderPlan
   `;
 }
 
-// hotfix/athlete-mobile-navigation: athlete-mode only - the rail of
-// program cards (athlete-programs-view.js) and this detail both live on
-// the same screen (master-detail, not a separate route), so there's
-// normally nothing to "go back" from. On mobile, once the detail is long
-// enough to scroll, the rail scrolls out of view above it - this bar gives
-// a one-tap way back up to it without a re-fetch (data-action="athlete-
-// program-back" just scrolls to the top of the page, see handleContentClick
-// in app.js; the rail/search state was never torn down). Desktop hides it
-// via CSS (.athlete-program-open-header below) since the rail is already
-// visible there without scrolling.
-function renderProgramOpenHeaderHtml(program) {
-  if (!isAthleteMode()) return "";
-  return `
-    <div class="athlete-program-open-header">
-      <button class="athlete-program-back-button" type="button" data-action="athlete-program-back" aria-label="Back to Specific programs">
-        <span class="button-icon">←</span> Back
-      </button>
-      <span class="athlete-program-open-name">${escapeHtml(program.name)}</span>
-    </div>
-  `;
-}
-
+// Specific Program detail overlay - reuses the same overlay/backdrop/modal
+// CSS convention as the Template preview modal (program-preview.js), so a
+// click on a Specific Program card/chip opens a full overlay ABOVE the
+// still-intact list (coach chip toolbar or athlete card rail, both live in
+// els.toolbar and are never touched by this), instead of replacing it
+// inline - Back/Escape/backdrop-click close the overlay only (see
+// handleAppBack/the Escape handler and the specific-program-close action in
+// app.js), which never re-renders els.toolbar, so whatever filter/search/
+// scroll state was there survives automatically (it was never disturbed).
 export function renderProgramRootHtml({
   copyPlanModal,
   data,
@@ -209,19 +196,27 @@ export function renderProgramRootHtml({
   renderProgramDayCard,
 }) {
   return `
-    ${renderProgramOpenHeaderHtml(program)}
-    <section class="panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Specific program</p>
-          <h3>${escapeHtml(program.name)}</h3>
+    <div class="program-preview-overlay specific-program-overlay">
+      <button class="program-preview-backdrop" type="button" data-action="specific-program-close" aria-label="Close specific program"></button>
+      <section class="program-preview-modal specific-program-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(program.name || "Specific program")}">
+        <div class="program-preview-head">
+          <div>
+            <p class="eyebrow">Specific program</p>
+            <h3>${escapeHtml(program.name)}</h3>
+          </div>
+          <div class="builder-source-actions">
+            <span class="item-badge">${data.rows?.length || 0} items</span>
+            ${renderPlanMoreMenu(program.id, "program")}
+            <button class="plain-button icon-button" type="button" data-action="specific-program-close" aria-label="Close"><span class="button-icon">x</span></button>
+          </div>
         </div>
-        <div class="builder-source-actions"><span class="item-badge">${data.rows?.length || 0} items</span>${renderPlanMoreMenu(program.id, "program")}</div>
-      </div>
-      ${isMicrocycle
-        ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
-        : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
-    </section>
+        <div class="program-preview-body">
+          ${isMicrocycle
+            ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
+            : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
+        </div>
+      </section>
+    </div>
     ${copyPlanModal}
   `;
 }

@@ -240,48 +240,66 @@ test("styles.css: .week-calendar-picker sticks directly below .week-nav-panel (n
   assert.match(block, /top:\s*calc\(118px \+ env\(safe-area-inset-top, 0px\)\);/);
 });
 
-test("program-view.js: renderProgramRootHtml prepends an athlete-only Back+name header, hidden entirely for the coach shell (isAthleteMode() guard)", () => {
-  const body = sliceFunction(programViewSource, "renderProgramOpenHeaderHtml", 700);
-  assert.match(body, /if \(!isAthleteMode\(\)\) return "";/);
-  assert.match(body, /data-action="athlete-program-back"/);
-  const rootBody = sliceFunction(programViewSource, "renderProgramRootHtml", 700);
-  assert.match(rootBody, /\$\{renderProgramOpenHeaderHtml\(program\)\}/);
+// Programs overhaul item 2: the Specific Program detail is now a real
+// full-overlay (program-preview-overlay/-backdrop/-modal, same convention
+// as the Template preview modal), for BOTH the athlete card rail and the
+// coach chip toolbar - not an athlete-only inline back-header sharing the
+// same scroll position as the list. See app.js's openSpecificProgramOverlay/
+// closeSpecificProgramOverlay and program-view.js's renderProgramRootHtml.
+test("program-view.js: renderProgramRootHtml wraps the detail in the overlay/backdrop/modal, with a close action available for both coach and athlete (no isAthleteMode() gate)", () => {
+  const body = sliceFunction(programViewSource, "renderProgramRootHtml", 1400);
+  assert.match(body, /class="program-preview-overlay specific-program-overlay"/);
+  assert.match(body, /data-action="specific-program-close"/);
+  assert.match(body, /role="dialog" aria-modal="true"/);
+  assert.ok(!body.includes("isAthleteMode"), "the overlay itself must not be athlete-only - both shells get the same close affordance");
 });
 
-test("program-view.js: the open-program header truncates the program name with ellipsis instead of wrapping/overflowing", () => {
-  const block = cssBlock(cssSource, ".athlete-program-open-name {");
-  assert.match(block, /white-space:\s*nowrap;/);
+test("styles.css: the Specific Program overlay is edge-to-edge on mobile (practically the whole screen), not just the template preview's 12px-margin sizing", () => {
+  const block = cssBlockLast(cssSource, ".specific-program-modal {");
+  assert.match(block, /width:\s*100vw;/);
+  assert.match(block, /height:\s*100dvh;/);
+  assert.match(block, /border:\s*0;/);
+});
+
+test("styles.css: opening the Specific Program overlay locks background scroll (body.specific-program-open)", () => {
+  const block = cssBlock(cssSource, "body.specific-program-open {");
   assert.match(block, /overflow:\s*hidden;/);
-  assert.match(block, /text-overflow:\s*ellipsis;/);
 });
 
-test("app.js: the athlete-program-back action restores the scroll position captured when the program was opened (not always page top), without any re-fetch, re-render, or state.selectedProgramId mutation - the rail/search state was never torn down", () => {
-  const start = appJsSource.indexOf('if (type === "athlete-program-back")');
+test("app.js: specific-program-close routes through closeSpecificProgramOverlay(), which never issues a network request", () => {
+  const start = appJsSource.indexOf('if (type === "specific-program-close")');
   assert.ok(start >= 0);
-  const block = appJsSource.slice(start, start + 700);
-  assert.match(block, /window\.scrollTo\(\{ top: state\.athleteProgramsListScrollY \|\| 0, behavior: "smooth" \}\);/);
-  assert.ok(!block.includes("api("), "returning to the list must never issue a network request");
-  assert.ok(!block.includes("state.selectedProgramId ="), "returning to the list must not clear or change the open program's selection");
+  const block = appJsSource.slice(start, start + 200);
+  assert.match(block, /closeSpecificProgramOverlay\(\);/);
+  const fnBody = sliceFunction(appJsSource, "closeSpecificProgramOverlay", 700);
+  assert.ok(!fnBody.includes("api("), "closing the overlay must never issue a network request");
+  assert.ok(!fnBody.includes("state.selectedProgramId ="), "closing the overlay must not clear or change the open program's selection - the list keeps highlighting it");
+  assert.ok(!fnBody.includes("els.toolbar"), "closing must never touch els.toolbar - that's what keeps the list's filter/search/scroll state intact for free");
 });
 
-test("app.js: wireAthleteProgramsPanel captures the actual scroll position at the moment a card is opened, so athlete-program-back can restore it - not a hardcoded value", () => {
+test("app.js: wireAthleteProgramsPanel opens the overlay on card click (openSpecificProgramOverlay), replacing the old scroll-capture-only behavior", () => {
   const body = sliceFunction(appJsSource, "wireAthleteProgramsPanel", 2600);
-  assert.match(body, /state\.athleteProgramsListScrollY = window\.scrollY;/);
+  assert.match(body, /openSpecificProgramOverlay\(\);/);
+  assert.ok(!body.includes("athleteProgramsListScrollY"), "the old manual scroll-position bookkeeping is gone - the fixed-position overlay + body scroll-lock preserves the background scroll position for free");
 });
 
-test("state.js: athleteProgramsListScrollY starts at 0 in the initial state shape", () => {
-  const stateSource = readSource("../state.js");
-  assert.match(stateSource, /athleteProgramsListScrollY:\s*0,/);
+test("app.js: the coach chip toolbar also opens the overlay on click (openSpecificProgramOverlay), matching the athlete rail exactly", () => {
+  const start = appJsSource.indexOf('els.toolbar.querySelectorAll(".program-toolbar .chip")');
+  assert.ok(start >= 0);
+  const block = appJsSource.slice(start, start + 400);
+  assert.match(block, /openSpecificProgramOverlay\(\);/);
 });
 
-test("styles.css: .athlete-program-open-header and .week-nav-panel are hidden/non-sticky outside the mobile block - desktop (where the rail/hero are already always visible) is unaffected", () => {
-  const baseBlock = cssBlock(cssSource, ".athlete-program-open-header {");
-  assert.match(baseBlock, /display:\s*none;/);
+test("app.js: handleAppBack() closes an open Specific Program overlay before falling through to any other Back handling", () => {
+  const start = appJsSource.indexOf("function handleAppBack()");
+  assert.ok(start >= 0);
+  const block = appJsSource.slice(start, start + 900);
+  assert.match(block, /if \(closeSpecificProgramOverlay\(\)\) return true;/);
 });
 
 // === Scope guard: coach shell (index.html) untouched by any athlete-only change ===
 
-test("scope guard: index.html has no athlete-topbar-brand / athlete-settings-identity / athlete-program-open-header markup - these are athlete-shell only", () => {
+test("scope guard: index.html has no athlete-topbar-brand / athlete-settings-identity markup - these are athlete-shell only", () => {
   const indexHtmlSource = readSource("../index.html");
   assert.ok(!indexHtmlSource.includes("athlete-topbar-brand"));
   assert.ok(!indexHtmlSource.includes("athlete-settings-identity"));

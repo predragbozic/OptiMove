@@ -117,11 +117,6 @@ export function selectedWeeklyDay(week, selectedWeekDay) {
   return weekContainsDate(week, today) ? today : week.weekStart;
 }
 
-export function defaultWeekIndex(weeks) {
-  if (!weeks.length) return 0;
-  return weeks.length - 1;
-}
-
 export function todayWeekIndex(weeks) {
   if (!weeks.length) return 0;
   const today = localDateIso();

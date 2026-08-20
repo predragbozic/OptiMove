@@ -3772,6 +3772,35 @@ input:focus {
   z-index: 1250;
 }
 
+/* Specific Program overlay (program-view.js's renderProgramRootHtml) reuses
+   .program-preview-overlay/-backdrop/-modal/-head above for visual
+   consistency with the Template preview modal - this only adds the body
+   scroll-lock and a stricter "practically the whole screen" mobile size
+   than the template preview's own 12px-margin mobile rule (styles.css,
+   @media max-width:760px, .program-preview-modal) needs, since that one was
+   never required to go fully edge-to-edge. */
+body.specific-program-open {
+  overflow: hidden;
+}
+
+.specific-program-modal {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+@media (max-width: 760px) {
+  .specific-program-overlay {
+    padding: 0;
+  }
+
+  .specific-program-modal {
+    width: 100vw;
+    max-height: 100dvh;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+}
+
 .program-info-modal {
   position: relative;
   z-index: 1;
@@ -4687,39 +4716,6 @@ input:focus {
   display: none;
   align-items: center;
   gap: 10px;
-}
-
-/* hotfix/athlete-mobile-navigation: hidden by default - desktop already
-   shows the programs rail and the open program together without scrolling
-   one out of view, so there's nothing to "go back" to. Only shown, sticky,
-   inside the mobile @media (max-width: 760px) block below. */
-.athlete-program-open-header {
-  display: none;
-  align-items: center;
-  gap: 10px;
-}
-
-.athlete-program-back-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  min-height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-  font-weight: 800;
-}
-
-.athlete-program-open-name {
-  min-width: 0;
-  font-weight: 800;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .athlete-settings-identity-avatar {
@@ -8305,23 +8301,6 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     z-index: 39;
     background: var(--bg);
     padding-top: 8px;
-  }
-
-  /* Specific program's own contextual row - Back (scrolls to the rail,
-     see the athlete-program-back handler in app.js) + the open program's
-     truncated name. #content (its parent) holds the full program detail
-     below it, so - unlike .week-nav-panel above - no display: contents
-     fix is needed here for it to have room to stick. */
-  .athlete-program-open-header {
-    display: flex;
-    position: sticky;
-    top: calc(57px + env(safe-area-inset-top, 0px));
-    z-index: 40;
-    padding: 8px calc(10px + env(safe-area-inset-right, 0px)) 8px calc(10px + env(safe-area-inset-left, 0px));
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border-bottom: 1px solid var(--line);
   }
 
   body:not(.login-mode) #railToggle {

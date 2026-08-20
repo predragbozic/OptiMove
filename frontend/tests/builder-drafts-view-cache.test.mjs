@@ -146,9 +146,16 @@ test("8. draft-list-membership mutations (create/delete/submit) still invalidate
   const createIndex = builderActionsSource.indexOf('await api("/api/builder/plans", { method: "POST"');
   assert.ok(createIndex >= 0);
   assert.ok(builderActionsSource.slice(createIndex, createIndex + 500).includes("invalidateBuilderDraftsCache()"), "creating a new draft must invalidate the cached drafts list");
-  const submitIndex = builderActionsSource.indexOf("/submit`");
-  assert.ok(submitIndex >= 0);
-  assert.ok(builderActionsSource.slice(submitIndex, submitIndex + 500).includes("invalidateBuilderDraftsCache()"), "submitting a draft (it leaves 'draft' status) must invalidate the cached drafts list");
+  // Scoped to the builder-submit-plan handler specifically - "Assign to
+  // athlete" (builder-confirm-duplicate-plan) also calls a `/submit`
+  // endpoint now (applying an edit-draft before duplicating it), so a bare
+  // indexOf("/submit`") would find that one first instead, since it's
+  // defined earlier in this file.
+  const submitHandlerIndex = builderActionsSource.indexOf('if (type === "builder-submit-plan")');
+  assert.ok(submitHandlerIndex >= 0);
+  const submitHandlerBody = builderActionsSource.slice(submitHandlerIndex, submitHandlerIndex + 1600);
+  assert.match(submitHandlerBody, /\/submit`/);
+  assert.ok(submitHandlerBody.includes("invalidateBuilderDraftsCache()"), "submitting a draft (it leaves 'draft' status) must invalidate the cached drafts list");
 });
 
 test("9. duplicating a plan (/duplicate) invalidates the cached drafts list, since it always creates a new status='draft' row", () => {
