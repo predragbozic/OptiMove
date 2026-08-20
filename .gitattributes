@@ -1,0 +1,7 @@
+# Scoped narrowly to the migration-runner v3.2 PR's own new files, so this
+# doesn't touch the line-ending status of any pre-existing tracked file
+# (core.autocrlf=true is set locally; a repo-wide rule here would risk
+# normalization churn across unrelated files).
+migrations_v2/** text eol=lf
+backend/src/migrate.js text eol=lf
+backend/tests/migration-runner-*.test.mjs text eol=lf
