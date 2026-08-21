@@ -104,6 +104,17 @@ function queuedBuilderApi(url, options) {
   return result;
 }
 
+// Shared by the initial "Paste day" click and the overwrite-confirm dialog's
+// own confirm button - the only difference between them is whether
+// confirmOverwrite is set, so this is the one place that builds the request
+// for either caller.
+function requestDayPaste(sourceDayId, targetDayId, confirmOverwrite) {
+  return queuedBuilderApi(`/api/builder/days/${encodeURIComponent(sourceDayId)}/copy-into/${encodeURIComponent(targetDayId)}`, {
+    method: "POST",
+    body: JSON.stringify(withBatchSyncPayload(confirmOverwrite ? { confirmOverwrite: true } : {})),
+  });
+}
+
 function withBatchSyncUrl(url) {
   return shouldSyncBuilderBatch() ? `${url}${url.includes("?") ? "&" : "?"}syncBatch=1` : url;
 }
@@ -691,6 +702,59 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     try {
       setBuilderDraft(await queuedBuilderApi(`/api/builder/blocks/${encodeURIComponent(clipboard.blockId)}/copy`, { method: "POST" }));
       state.builder.blockAddOpen = false;
+      handlers.renderBuilder();
+    } catch (error) {
+      action.disabled = false;
+      handlers.renderBuilderError(error);
+    }
+    return true;
+  }
+  if (type === "builder-copy-day") {
+    const dayId = action.dataset.dayId || "";
+    const block = (state.builder.draft?.blocks || []).find((candidate) => candidate.id === dayId);
+    if (!block) return true;
+    state.builder.clipboard = { type: "day", dayId: block.id, name: block.name || block.date || "Day" };
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-paste-day") {
+    const clipboard = state.builder.clipboard;
+    if (!clipboard || clipboard.type !== "day") return true;
+    const targetDayId = action.dataset.dayId || "";
+    if (!targetDayId || targetDayId === clipboard.dayId) return true;
+    action.disabled = true;
+    try {
+      setBuilderDraft(await requestDayPaste(clipboard.dayId, targetDayId, false));
+      handlers.renderBuilder();
+    } catch (error) {
+      action.disabled = false;
+      // 409 means the target day already has content - hand off to the
+      // styled overwrite-confirm dialog (same pattern as messages.js's
+      // hideConfirmOpen) instead of surfacing this as a plain error.
+      if (error?.status === 409) {
+        state.builder.overwriteDayConfirm = { sourceDayId: clipboard.dayId, targetDayId };
+        handlers.renderBuilder();
+        return true;
+      }
+      handlers.renderBuilderError(error);
+    }
+    return true;
+  }
+  if (type === "builder-overwrite-day-cancel") {
+    state.builder.overwriteDayConfirm = null;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-overwrite-day-confirm") {
+    const pending = state.builder.overwriteDayConfirm;
+    state.builder.overwriteDayConfirm = null;
+    if (!pending) {
+      handlers.renderBuilder();
+      return true;
+    }
+    action.disabled = true;
+    try {
+      setBuilderDraft(await requestDayPaste(pending.sourceDayId, pending.targetDayId, true));
       handlers.renderBuilder();
     } catch (error) {
       action.disabled = false;

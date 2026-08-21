@@ -363,6 +363,50 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
   }
 });
 
+// Content-only day-to-day paste, weekly plans only: replaces the target
+// day's sessions/nodes/items with the source day's, but never touches
+// either day's own date/day_order row (a weekly plan always keeps its
+// fixed 7 calendar days - this moves what's ON a day, not the day itself).
+// Also the backend half of Phase 2 (copying a block from another plan into
+// a weekly day) - dayId there just resolves to a program/template's block
+// row instead of another day in the same plan; everything past ownership
+// resolution is identical, which is why this takes two independently
+// resolved ids rather than assuming a shared source plan.
+router.post("/days/:dayId/copy-into/:targetDayId", async (req, res, next) => {
+  let client;
+  try {
+    const source = await getEditableBlock(req, req.params.dayId);
+    if (!source) return res.status(404).json({ error: "Day not found." });
+    const target = await getEditableBlock(req, req.params.targetDayId);
+    if (!target) return res.status(404).json({ error: "Target day not found." });
+    if (source.plan.id !== target.plan.id) return res.status(400).json({ error: "Both days must belong to the same weekly plan." });
+    if (target.plan.plan_type !== "weekly") return res.status(400).json({ error: "Day paste is only available for weekly plans." });
+    if (source.id === target.id) return res.status(400).json({ error: "Choose a different day to paste into." });
+
+    client = await pool.connect();
+    const hasContent = await dayHasContentWithClient(client, target.id);
+    if (hasContent && req.body?.confirmOverwrite !== true) {
+      client.release();
+      client = null;
+      return res.status(409).json({ error: "This day already has content. Paste again to confirm the overwrite." });
+    }
+
+    await client.query("begin");
+    await deleteDayContentWithClient(client, target.id);
+    await copyDaySessions(client, source.id, target.id);
+    await client.query("commit");
+    client.release();
+    client = null;
+    return respondWithDraft(req, res, req.user, target.plan);
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+      client.release();
+    }
+    next(error);
+  }
+});
+
 router.patch("/blocks/:blockId", async (req, res, next) => {
   try {
     const block = await getEditableBlock(req, req.params.blockId);
@@ -1272,6 +1316,18 @@ async function deleteBlockTree(blockId) {
 async function deleteBlockTreeWithClient(client, blockId) {
   await deleteDayContentWithClient(client, blockId);
   await client.query("delete from plans.plan_days where id = $1", [blockId]);
+}
+
+// Any session at all counts as "has content" - even an empty session is a
+// real planning decision a paste would silently destroy. Deliberately
+// simpler than planHasBuilderContentWithClient/planHasWeeklyTrainingContentWithClient
+// below (which also weigh day_note/block_name for a whole PLAN's "is this
+// basically empty" question) - a day-to-day paste only ever replaces
+// sessions/nodes/items, never the day's own date/day_note/day_order, so
+// only sessions are relevant here.
+async function dayHasContentWithClient(client, dayId) {
+  const result = await client.query("select exists (select 1 from plans.plan_sessions where plan_day_id = $1) as has_content", [dayId]);
+  return result.rows[0]?.has_content === true;
 }
 
 async function deleteDayContentWithClient(client, dayId) {

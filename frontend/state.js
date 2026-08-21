@@ -121,6 +121,13 @@ export const emptyBuilderState = (overrides = {}) => ({
   // new copy (which the "copy" intent still does).
   assignResult: null,
   clipboard: null,
+  // Set when a day/block paste is refused with 409 (target day already has
+  // content) - {targetDayId, sourceDayId} for the confirm dialog to re-issue
+  // the same POST with confirmOverwrite: true. Same "just enough to redo the
+  // action" shape as messages.js's hideConfirmOpen pattern, not a generic
+  // pending-action payload, since day-paste can target any of several days
+  // (unlike a single "currently selected conversation").
+  overwriteDayConfirm: null,
   showNote: false,
   addNodeOpen: false,
   sessionQuickAdd: { blockId: "", amPm: "", bta: "", time: "" },
