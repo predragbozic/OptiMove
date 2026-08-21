@@ -1,6 +1,5 @@
 import { ICON_CALENDAR, ICON_SPECIFIC_PROGRAMS } from "./athlete-home.js";
 import { renderImage } from "./media.js";
-import { ICON_ADD_ATHLETE } from "./organization-view.js";
 import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
 
 function avatarMarkup(athlete) {
@@ -52,7 +51,6 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
           <span>Specific programs</span>
         </button>
       </nav>
-      ${!isAthleteMode ? `<button class="plain-button icon-button athlete-toolbar-add-button" type="button" data-action="home-add-athlete" aria-label="Add athlete" title="Add athlete">${ICON_ADD_ATHLETE}</button>` : ""}
     </div>
   `;
 }
