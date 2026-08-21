@@ -1,4 +1,5 @@
 import { renderImage } from "./media.js";
+import { ICON_ADD_ATHLETE } from "./organization-view.js";
 import { escapeAttr, escapeHtml, programInitials } from "./utils.js";
 
 export function renderCoachHomeHtml({ rows, error }) {
@@ -8,9 +9,14 @@ export function renderCoachHomeHtml({ rows, error }) {
     <section class="content-section coach-home">
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       <section class="panel coach-home-summary">
-        <p class="eyebrow">Today</p>
-        <h3>${withTraining.length} of ${(rows || []).length} athletes training today</h3>
-        <p class="muted">Based on scheduled weekly plan sessions for today's date.</p>
+        <div class="coach-home-summary-head">
+          <div>
+            <p class="eyebrow">Today</p>
+            <h3>${withTraining.length} of ${(rows || []).length} athletes training today</h3>
+            <p class="muted">Based on scheduled weekly plan sessions for today's date.</p>
+          </div>
+          <button class="plain-button icon-button athlete-toolbar-add-button" type="button" data-action="home-add-athlete" aria-label="Add athlete" title="Add athlete">${ICON_ADD_ATHLETE}</button>
+        </div>
       </section>
       <section class="coach-home-list">
         <div class="organization-list-head"><p class="eyebrow">Training today</p><strong>${withTraining.length}</strong></div>
