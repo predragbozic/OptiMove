@@ -10,7 +10,7 @@ import {
   sessionLabel,
 } from "./builder-helpers.js";
 import { renderBuilderAddConfirmation, renderBuilderExerciseResults, renderBuilderStickyBar } from "./builder-exercises.js";
-import { renderBuilderAthletePicker, renderBuilderInfoModal } from "./builder-modals.js";
+import { renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import {
   ICON_CHECK,
@@ -399,10 +399,12 @@ function renderBuilderInner() {
           ${isEditDraft
             ? `<button class="plain-button builder-cancel-button" type="button" data-action="builder-cancel" title="Discard this edit draft and keep the original unchanged.">${ICON_X}<span>Cancel</span></button>`
             : `<span class="builder-saved-indicator" title="Every change saves automatically."><svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M5 4h11l3 3v13H5V4z"></path><path d="M8 4v5h8V4"></path><path d="M7 14h10v6H7z"></path></svg><span>Saved</span></span><button class="plain-button icon-button builder-exit-button" type="button" data-action="builder-cancel" aria-label="Exit editor" title="Exit — find this draft again later from where you started it.">${ICON_X}</button>`}
+          ${draft.plan.isTemplate && !isWeekly ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(draft.plan.id)}" data-plan-type="program" data-intent="assign" data-is-edit-draft="${isEditDraft ? "true" : "false"}">${ICON_CHECK}<span>Assign to athlete</span></button>` : ""}
           ${draft.plan.status === "draft" ? `<button class="plain-button builder-finish-button" type="button" data-action="builder-submit-plan">${ICON_CHECK}<span>${saveLabel}</span></button>` : `<span class="builder-finished-label">Saved</span>`}
           ${isEditDraft ? "" : `<button class="plain-button icon-button danger-action" type="button" data-action="builder-delete-plan" aria-label="Discard draft" title="Permanently discard this draft and everything in it.">${ICON_TRASH}</button>`}
         </div>
       </header>
+      ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : ""}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       <div class="builder-layout">
@@ -430,6 +432,20 @@ function renderBuilderInner() {
       ${state.builder.structureModalOpen && selectedSession ? renderBuilderStructureModal(selectedSession, selectedNode, structureContext) : ""}
       ${selectedNode?.type === "section" ? renderBuilderSectionOverlay(state, selectedNode) : ""}
       ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}
+      ${renderCopyPlanModal(state)}
     </section>
+  `;
+}
+
+export function renderBuilderAssignResultBanner(result) {
+  const entries = result.entries || [];
+  return `
+    <div class="builder-copy-hint builder-assign-result">
+      <span>Assigned to ${entries.length} athlete${entries.length === 1 ? "" : "s"} - the template is unchanged and stays open.</span>
+      <div class="builder-assign-result-links">
+        ${entries.map((entry) => `<button class="plain-button compact-button" type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(entry.planId)}">Open ${escapeHtml(entry.athleteName)}'s program</button>`).join("")}
+      </div>
+      <button class="text-action" type="button" data-action="builder-dismiss-assign-result">Dismiss</button>
+    </div>
   `;
 }

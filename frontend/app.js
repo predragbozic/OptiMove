@@ -388,6 +388,9 @@ function bindEvents() {
     // handleAppBack() above, sharing the exact same function so the two
     // can never drift apart - see handleMessagesBack()'s own comment.
     if (handleMessagesBack()) return;
+    // No unsaved-changes state exists inside the Specific Program overlay
+    // today (it's a read-only detail view), so Escape can always close it.
+    closeSpecificProgramOverlay();
     if (state.athleteExitConfirmOpen) closeAthleteExitConfirm();
     if (state.mobileNavOpen) closeMobileNav();
     closeMedia();
@@ -1357,6 +1360,13 @@ function handleAppBack() {
     return true;
   }
 
+  // A Specific Program open as an internal overlay must close on Back
+  // before the browser is ever allowed to leave the app/tab - there is no
+  // "unsaved changes" state inside this read-only detail view today, so
+  // closing here is always safe (see closeSpecificProgramOverlay's own
+  // comment for what "close" actually touches - never els.toolbar).
+  if (closeSpecificProgramOverlay()) return true;
+
   // feature/mobile-messages-fullscreen: menu -> Hide-confirm -> thread-to-
   // list -> close-Messages, in that exact priority order - see
   // handleMessagesBack()'s own comment in messages.js for why this lives
@@ -1684,15 +1694,8 @@ async function handleContentClick(event) {
     await openWeeklyPlanOnDate(action.dataset.date || localDateIso());
     return;
   }
-  if (type === "athlete-program-back") {
-    // The rail (athlete-programs-view.js) and this detail are the same
-    // screen, not separate routes - state.selectedProgramId, the search
-    // text, and the already-loaded programs are all untouched, so "back"
-    // is just scrolling the rail back into view under the sticky topbar,
-    // no re-render/re-fetch needed. Restores the scroll position captured
-    // in wireAthleteProgramsPanel's card click, not always page top - the
-    // athlete may have scrolled the list before tapping a card further down.
-    window.scrollTo({ top: state.athleteProgramsListScrollY || 0, behavior: "smooth" });
+  if (type === "specific-program-close") {
+    closeSpecificProgramOverlay();
     return;
   }
   if (type === "athlete-home-quick-tab") {
@@ -1838,6 +1841,19 @@ function renderTabs() {
   const tabsContainer = tabs[0]?.closest(".tabs");
   if (tabsContainer) tabsContainer.hidden = isLibraryTab;
   tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.activeTab));
+  // Every navigation path away from the Programs tab (every tab/library-tab/
+  // athlete-tab click handler, roughly a dozen call sites) already calls
+  // renderTabs() right after resetting state.selectedProgramId - this is
+  // the one choke point all of them share, so it's the safe place to also
+  // force-close a still-open Specific Program overlay rather than editing
+  // every one of those call sites (and risking missing one, which would
+  // leave document.body's scroll-lock class stuck on forever). Only a
+  // state/class reset - never renderProgramRoot(), since loadActiveTab()
+  // is about to replace els.content with the new tab's own content anyway.
+  if (state.activeTab !== "programs" && state.specificProgramOverlayOpen) {
+    state.specificProgramOverlayOpen = false;
+    document.body.classList.remove("specific-program-open");
+  }
 }
 
 function renderAthleteListState() {
@@ -2178,6 +2194,7 @@ function renderProgramToolbar(programs) {
     button.addEventListener("click", () => {
       state.selectedProgramId = button.dataset.programId;
       state.navStack = [];
+      openSpecificProgramOverlay();
       renderProgramToolbar(programs);
       renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
     });
@@ -2194,9 +2211,9 @@ function wireAthleteProgramsPanel(programs) {
     railContainer.innerHTML = renderAthleteProgramCardsRailHtml(programs, state.selectedProgramId, state.athleteProgramsSearchQuery);
     railContainer.querySelectorAll("[data-action='athlete-program-open']").forEach((button) => {
       button.addEventListener("click", () => {
-        state.athleteProgramsListScrollY = window.scrollY;
         state.selectedProgramId = button.dataset.programId;
         state.navStack = [];
+        openSpecificProgramOverlay();
         renderProgramToolbar(programs);
         renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
       });
@@ -2231,6 +2248,18 @@ function wireAthleteProgramsPanel(programs) {
 }
 function renderProgramRoot(program) {
   if (!program) return renderEmpty("This athlete has no specific programs.");
+  // The overlay only ever opens from an explicit click (see the chip/card
+  // click handlers below) - a program can be "selected" (highlighted in
+  // the still-visible list, targeted by the more-menu) without its overlay
+  // being open, e.g. right after Back/Escape closed it, or on a fresh tab
+  // entry. Every other call site here (background refreshes, renderCopyPlanSource,
+  // exitBuilderToPlanContext) just re-supplies whichever program is
+  // currently selected/refreshed - none of them should force the overlay
+  // open on their own.
+  if (!state.specificProgramOverlayOpen) {
+    els.content.innerHTML = `<div class="empty-state">Select a program to view its details.</div>`;
+    return;
+  }
   const data = program.data || {};
   const isMicrocycle = data.mode === "microcycle";
   const groups = isMicrocycle
@@ -2250,6 +2279,29 @@ function renderProgramRoot(program) {
     renderProgramDayCard,
   });
 }
+
+function openSpecificProgramOverlay() {
+  state.specificProgramOverlayOpen = true;
+  document.body.classList.add("specific-program-open");
+}
+
+// Closes the Specific Program overlay without touching els.toolbar (the
+// still-visible chip toolbar or athlete card rail) at all - whatever
+// filter/search/scroll state was there survives simply because nothing
+// here ever re-renders it. Returns false (no-op) when nothing was open, so
+// callers in the Back/Escape cascades can tell whether they handled
+// anything. selectedProgramId is deliberately left untouched (same
+// contract the old athlete-program-back scroll-restore already had) - it
+// still highlights the last-opened program and targets the more-menu.
+function closeSpecificProgramOverlay() {
+  if (!state.specificProgramOverlayOpen) return false;
+  state.specificProgramOverlayOpen = false;
+  document.body.classList.remove("specific-program-open");
+  const programs = state.lastProgramBundle?.programs || [];
+  renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId) || null);
+  return true;
+}
+
 function programDayGroupNodes(dayGroups) {
   return (dayGroups || []).map((group, index) => makeNode("dayGroup", group.dayNote || `Block ${index + 1}`, groupItems(group), {
     subtitle: countLabel(groupItems(group)),
@@ -2470,6 +2522,10 @@ async function loadBuilder() {
 function renderCopyPlanSource() {
   if (state.activeTab === "weekly") return renderWeeklyRoot(state.lastWeeklyData);
   if (state.activeTab === "programs") return renderProgramRoot((state.lastProgramBundle?.programs || []).find((program) => program.id === state.selectedProgramId));
+  // "Assign to athlete" (see builder-view.js) opens this same copy modal
+  // from INSIDE the open Builder - re-rendering the Builder itself (not the
+  // Templates list) is the only way the modal actually appears on that path.
+  if (state.activeTab === "builder") return renderBuilder();
   return loadTemplates();
 }
 

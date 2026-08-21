@@ -104,6 +104,22 @@ export const emptyBuilderState = (overrides = {}) => ({
   copyAthleteIds: [],
   copyPlanType: "program",
   copyWeekStart: "",
+  // "copy" (existing "Copy" action from a plan's more-menu) vs "assign"
+  // (the open-Builder "Assign to athlete" button) - both share this same
+  // modal/state and the same /duplicate endpoint; intent only changes the
+  // modal's wording, whether "reusable template" is offered, and what
+  // happens after a successful confirm (see builder-actions.js).
+  copyIntent: "copy",
+  // Set when the plan being copied/assigned is an edit-draft (draft.plan.isEditDraft) -
+  // confirming an "assign" for one of these must apply the edit-draft to its
+  // original first (same /submit endpoint "Apply changes" already uses), so
+  // the assigned copy can never silently contain a stale pre-edit version.
+  copyIsEditDraft: false,
+  // Set after a successful "assign" confirm - { planId, athleteNames } - shown
+  // as a dismissible confirmation banner in the still-open template Builder,
+  // with an "Open program" affordance, instead of navigating away into the
+  // new copy (which the "copy" intent still does).
+  assignResult: null,
   clipboard: null,
   showNote: false,
   addNodeOpen: false,
@@ -151,6 +167,12 @@ export const createInitialState = () => ({
   programLibrarySection: "programs",
   templateScope: "my_programs",
   selectedProgramId: null,
+  // Whether the Specific Program detail is showing as the full overlay
+  // (see program-view.js's renderProgramRootHtml / handleAppBack in app.js)
+  // - decoupled from selectedProgramId itself so a click keeps highlighting/
+  // targeting the more-menu exactly as before, while the overlay only ever
+  // opens from an explicit click, never automatically on tab entry.
+  specificProgramOverlayOpen: false,
   // feature/athlete-programs-profile: client-side-only search text for the
   // athlete's own Specific programs card rail - never sent to the server,
   // reset to "" on every fresh entry into the tab (see programs-data.js's
@@ -224,7 +246,6 @@ export const createInitialState = () => ({
   allowBrowserExit: false,
   weekCalendarMonth: "",
   openWeekCalendarOnLoad: false,
-  athleteProgramsListScrollY: 0,
   // hotfix/athlete-home-mobile-layout
   athleteExitConfirmOpen: false,
   realtimeOffline: false,

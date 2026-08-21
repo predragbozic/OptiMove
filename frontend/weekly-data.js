@@ -1,9 +1,9 @@
 import { api } from "./api.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
-import { localDateIso, monthStartIso } from "./utils.js";
+import { localDateIso, monthStartIso, weekMondayIso } from "./utils.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
-import { defaultWeekIndex } from "./weekly-plan.js";
+import { todayWeekIndex } from "./weekly-plan.js";
 
 const WEEKLY_CACHE_NAMESPACE = "weekly";
 
@@ -60,7 +60,22 @@ export async function loadWeekly(
       state.lastWeeklyData = data;
       if (!appliedInitialPickerState) {
         appliedInitialPickerState = true;
-        state.selectedWeekIndex = defaultWeekIndex(data.weeks || []);
+        // Only seed the "today / current week" default on a genuine
+        // first-ever view of Calendar this session (state.viewedWeekStart
+        // still empty, same signal renderWeeklyRoot's own fallback in
+        // app.js uses). loadWeekly() re-runs every time the user re-enters
+        // the Weekly tab and on background cache refreshes - once
+        // viewedWeekStart has been set (by this block, "Today", manual
+        // week/day navigation, or openWeeklyPlanOnDate), those later calls
+        // must leave it alone, or a manually selected week would keep
+        // getting silently reset back on every tab re-entry.
+        if (!state.viewedWeekStart) {
+          const weeks = data.weeks || [];
+          const today = localDateIso();
+          state.selectedWeekIndex = todayWeekIndex(weeks);
+          state.viewedWeekStart = weekMondayIso(today);
+          state.selectedWeekDay = today;
+        }
         state.weekSelectorOpen = shouldOpenWeekCalendar;
         if (state.weekSelectorOpen) {
           const activeWeek = data.weeks?.[state.selectedWeekIndex] || data.weeks?.[0];

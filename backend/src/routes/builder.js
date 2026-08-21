@@ -216,7 +216,15 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     await client.query("commit");
     client.release();
     client = null;
-    res.status(201).json(await buildDraft(await getEditablePlan(req, createdIds[0])));
+    // "assignments" lists every plan this call created (not just the first) -
+    // required for a multi-athlete duplicate (e.g. the open-Builder "Assign
+    // to athlete" flow, frontend/builder-actions.js) to be able to confirm
+    // and link to EACH resulting Specific Program, not only the first one.
+    // Purely additive: existing callers of this endpoint only ever read the
+    // top-level plan/blocks/batch fields (the first created plan's own
+    // draft shape, unchanged), so this doesn't affect them.
+    const assignments = targets.map((target, index) => ({ athleteId: target?.externalId || null, planId: createdIds[index] }));
+    res.status(201).json({ ...(await buildDraft(await getEditablePlan(req, createdIds[0]))), assignments });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}

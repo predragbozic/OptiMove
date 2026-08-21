@@ -47,6 +47,8 @@ function resetBuilderCopyState() {
   state.builder.copyAthleteIds = [];
   state.builder.copyPlanType = "program";
   state.builder.copyWeekStart = "";
+  state.builder.copyIntent = "copy";
+  state.builder.copyIsEditDraft = false;
 }
 
 function getBuilderBatchId(draft = state.builder.draft) {
@@ -179,6 +181,11 @@ export async function handleBuilderPlanAction(action, handlers) {
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
+      // A stale "Assigned to ..." banner from whatever was open before must
+      // not follow the coach into a different plan (including - the common
+      // case right after an assign - the newly assigned Specific Program
+      // itself, opened via the banner's own "Open new Specific Program").
+      state.builder.assignResult = null;
       state.activeTab = "builder";
       state.navStack = [];
       handlers.renderTabs();
@@ -198,18 +205,32 @@ export async function handleBuilderPlanAction(action, handlers) {
     return true;
   }
   if (type === "builder-duplicate-plan") {
+    const intent = action.dataset.intent === "assign" ? "assign" : "copy";
     state.builder.copyPlanId = action.dataset.planId || "";
-    state.builder.copyPlanName = action.closest(".section-heading")?.querySelector("h3")?.textContent || "Program";
+    // "Assign to athlete" is only ever triggered from the open Builder, for
+    // the plan currently being edited - use its own name directly rather
+    // than the more-menu's DOM-scraping fallback below, which has no
+    // ".section-heading h3" ancestor to find from inside the Builder.
+    state.builder.copyPlanName = intent === "assign"
+      ? (state.builder.draft?.plan.name || "Template")
+      : (action.closest(".section-heading")?.querySelector("h3")?.textContent || "Program");
     state.builder.copyAthleteId = "";
     state.builder.copyAthleteIds = [];
     state.builder.copyPlanType = action.dataset.planType === "weekly" ? "weekly" : "program";
     state.builder.copyWeekStart = state.builder.copyPlanType === "weekly" ? weekMondayIso(localDateIso()) : "";
+    state.builder.copyIntent = intent;
+    state.builder.copyIsEditDraft = action.dataset.isEditDraft === "true";
     await handlers.renderCopyPlanSource();
     return true;
   }
   if (type === "builder-close-copy-plan") {
     resetBuilderCopyState();
     await handlers.renderCopyPlanSource();
+    return true;
+  }
+  if (type === "builder-dismiss-assign-result") {
+    state.builder.assignResult = null;
+    handlers.renderBuilder();
     return true;
   }
   if (type === "builder-select-copy-athlete") {
@@ -228,19 +249,69 @@ export async function handleBuilderPlanAction(action, handlers) {
     return true;
   }
   if (type === "builder-confirm-duplicate-plan") {
+    // Same double-click guard as builder-submit-plan: action.disabled is set
+    // synchronously below, before any await, so a real <button> refuses a
+    // second click on its own - this early return only covers a
+    // programmatic re-dispatch (e.g. a held Enter key) that could reach the
+    // handler again before the DOM has reflowed the disabled attribute.
+    if (action.disabled) return true;
     action.disabled = true;
+    const isAssign = state.builder.copyIntent === "assign";
+    const originalLabel = action.textContent;
+    if (isAssign) action.textContent = "Assigning…";
     try {
       const athleteIds = state.builder.copyAthleteIds?.length
         ? state.builder.copyAthleteIds
         : (state.builder.copyAthleteId ? [state.builder.copyAthleteId] : []);
-      setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(state.builder.copyPlanId)}/duplicate`, {
+      let duplicateSourceId = state.builder.copyPlanId;
+      if (isAssign && state.builder.copyIsEditDraft) {
+        // This template is currently open as an edit-draft (draft.plan.isEditDraft) -
+        // its edits only reach the real template when applied (the same
+        // /submit endpoint "Apply changes" already uses). Applying first
+        // guarantees the assigned copy can never silently contain a stale
+        // pre-edit version. setBuilderDraft() here matters: applying deletes
+        // the edit-draft row server-side and returns the now-updated
+        // original, so the coach's open Builder must switch to reflect that
+        // exact same swap "Apply changes" itself performs, or every
+        // subsequent action here would 404 against the deleted edit-draft id.
+        const applied = await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(state.builder.copyPlanId)}/submit`, {
+          method: "POST",
+          body: JSON.stringify(withBatchSyncPayload({})),
+        });
+        setBuilderDraft(applied, { preserveBatch: false });
+        duplicateSourceId = applied.plan.id;
+      }
+      const created = await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(duplicateSourceId)}/duplicate`, {
         method: "POST",
         body: JSON.stringify({ athleteId: athleteIds[0] || "", athleteIds, weekStart: state.builder.copyWeekStart }),
-      }), { preserveBatch: false });
+      });
       // /duplicate always creates a brand new status='draft' row (see
       // backend/src/routes/builder.js) - the cached drafts list must never
       // be missing it just because it happened to be cached before this copy.
       invalidateBuilderDraftsCache();
+      if (isAssign) {
+        // Unlike a plain "Copy", assigning a template doesn't navigate the
+        // coach away into the new copy - the template they were just
+        // editing stays open exactly as it was (see the setBuilderDraft(applied)
+        // swap above for the one case where its identity legitimately
+        // changed), with a dismissible confirmation offering to open the
+        // new Specific Program instead. /duplicate creates one plan PER
+        // selected athlete (created.assignments, one entry per athlete/planId
+        // pair) - the confirmation must offer a separate "Open" link for
+        // EACH one, not just the first-created plan (created.plan.id), or a
+        // 2+-athlete assign would silently strand every copy but the first
+        // with no way to reach it from here.
+        state.builder.assignResult = {
+          entries: (created.assignments || []).map((entry) => {
+            const athlete = state.athletes.find((candidate) => String(candidate.athlete_id) === String(entry.athleteId));
+            return { planId: entry.planId, athleteName: athlete?.athlete || "Athlete" };
+          }),
+        };
+        resetBuilderCopyState();
+        handlers.renderBuilder();
+        return true;
+      }
+      setBuilderDraft(created, { preserveBatch: false });
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
@@ -253,6 +324,7 @@ export async function handleBuilderPlanAction(action, handlers) {
       await handlers.loadBuilderExercises();
     } catch (error) {
       action.disabled = false;
+      action.textContent = originalLabel;
       if (isNotFoundError(error)) {
         forgetBatchPlan(state.builder.copyPlanId);
         state.builder.error = "That athlete copy is no longer available in this group.";
