@@ -184,6 +184,41 @@ test("1+2+3. assigning creates an independent Specific Program with the identica
   assert.equal(rowB.status, "draft");
 });
 
+test("3b. a single /duplicate call with two athleteIds creates BOTH Specific Programs and returns an assignments entry for each - not just the first plan", async () => {
+  // The frontend "Assign to athlete" flow (frontend/builder-actions.js)
+  // sends one /duplicate call with every selected athlete's id and reads
+  // back created.assignments to link to EACH resulting Specific Program in
+  // its confirmation banner - res.body.plan/blocks/batch alone only ever
+  // describe the FIRST created plan, so this response field is what makes
+  // a multi-athlete assign actually usable end to end.
+  const coach = await makeCoach("multi-assign");
+  const athleteA = await makeAthlete(coach.id);
+  const athleteB = await makeAthlete(coach.id);
+  const template = await makeTemplate(coach.id);
+
+  const res = await api(`/api/builder/plans/${template.id}/duplicate`, {
+    method: "POST",
+    cookie: coach.cookie,
+    body: { athleteIds: [athleteA.externalId, athleteB.externalId] },
+  });
+  assert.equal(res.status, 201);
+
+  assert.ok(Array.isArray(res.body.assignments), "the response must include an assignments array");
+  assert.equal(res.body.assignments.length, 2, "one assignments entry per requested athlete");
+  const byAthlete = Object.fromEntries(res.body.assignments.map((entry) => [entry.athleteId, entry.planId]));
+  assert.equal(byAthlete[athleteA.externalId], res.body.plan.id, "the first assignments entry must match the top-level plan (the first created)");
+  assert.ok(byAthlete[athleteB.externalId], "the second athlete's plan id must also be present");
+  assert.notEqual(byAthlete[athleteA.externalId], byAthlete[athleteB.externalId], "each athlete must get its own independent plan id");
+  [byAthlete[athleteA.externalId], byAthlete[athleteB.externalId]].forEach((id) => cleanupPlanIds.add(id));
+
+  const rowA = await planRow(byAthlete[athleteA.externalId]);
+  const rowB = await planRow(byAthlete[athleteB.externalId]);
+  assert.equal(rowA.athlete_id, athleteA.id, "the plan linked to athlete A's assignments entry must actually belong to athlete A");
+  assert.equal(rowB.athlete_id, athleteB.id, "the plan linked to athlete B's assignments entry must actually belong to athlete B");
+  assert.equal(rowA.is_template, false);
+  assert.equal(rowB.is_template, false);
+});
+
 test("4. the template itself is completely unchanged after being assigned", async () => {
   const coach = await makeCoach("unchanged");
   const athlete = await makeAthlete(coach.id);

@@ -437,13 +437,14 @@ function renderBuilderInner() {
   `;
 }
 
-function renderBuilderAssignResultBanner(result) {
-  const names = result.athleteNames || [];
-  const who = names.length ? names.join(", ") : `${names.length || 1} athlete${names.length === 1 ? "" : "s"}`;
+export function renderBuilderAssignResultBanner(result) {
+  const entries = result.entries || [];
   return `
     <div class="builder-copy-hint builder-assign-result">
-      <span>Assigned to <strong>${escapeHtml(who)}</strong> - the template is unchanged and stays open.</span>
-      <button class="plain-button compact-button" type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(result.planId)}">Open new Specific Program</button>
+      <span>Assigned to ${entries.length} athlete${entries.length === 1 ? "" : "s"} - the template is unchanged and stays open.</span>
+      <div class="builder-assign-result-links">
+        ${entries.map((entry) => `<button class="plain-button compact-button" type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(entry.planId)}">Open ${escapeHtml(entry.athleteName)}'s program</button>`).join("")}
+      </div>
       <button class="text-action" type="button" data-action="builder-dismiss-assign-result">Dismiss</button>
     </div>
   `;

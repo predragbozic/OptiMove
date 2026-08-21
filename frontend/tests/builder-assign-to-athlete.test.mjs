@@ -31,6 +31,7 @@ globalThis.window = { confirm: () => true };
 const { handleBuilderPlanAction } = await import("../builder-actions.js");
 const { state, emptyBuilderState } = await import("../state.js");
 const { renderCopyPlanModal } = await import("../builder-modals.js");
+const { renderBuilderAssignResultBanner } = await import("../builder-view.js");
 
 const originalFetch = globalThis.fetch;
 
@@ -124,7 +125,15 @@ test("3. confirming assign for a non-edit-draft template calls /duplicate direct
   state.builder.copyIsEditDraft = false;
   state.builder.copyAthleteIds = ["athlete-a"];
   const calls = installFetchMock((url) => {
-    if (url.endsWith("/duplicate")) return { status: 201, body: templateDraft({ plan: { id: "assigned-1", isTemplate: false, athleteId: "athlete-a" } }) };
+    if (url.endsWith("/duplicate")) {
+      return {
+        status: 201,
+        body: {
+          ...templateDraft({ plan: { id: "assigned-1", isTemplate: false, athleteId: "athlete-a" } }),
+          assignments: [{ athleteId: "athlete-a", planId: "assigned-1" }],
+        },
+      };
+    }
     throw new Error(`unexpected fetch ${url}`);
   });
   const action = fakeAction({ action: "builder-confirm-duplicate-plan" }, { textContent: "Assign" });
@@ -138,8 +147,7 @@ test("3. confirming assign for a non-edit-draft template calls /duplicate direct
   assert.equal(state.activeTab, "builder", "assigning must never navigate away from the open template");
   assert.equal(state.builder.draft.plan.id, "template-1", "the open template's identity must be completely unchanged");
   assert.ok(state.builder.assignResult, "a confirmation result must be recorded");
-  assert.equal(state.builder.assignResult.planId, "assigned-1");
-  assert.deepEqual(state.builder.assignResult.athleteNames, ["Ana Athlete"]);
+  assert.deepEqual(state.builder.assignResult.entries, [{ planId: "assigned-1", athleteName: "Ana Athlete" }]);
   assert.equal(state.builder.copyPlanId, "", "the copy/assign modal state must be reset (closed) after success");
 });
 
@@ -151,7 +159,15 @@ test("4. confirming assign for an EDIT-DRAFT template applies it first (/submit)
   state.builder.copyAthleteIds = ["athlete-a"];
   const calls = installFetchMock((url) => {
     if (url.endsWith("/editdraft-1/submit")) return { status: 200, body: templateDraft({ plan: { id: "template-1", isEditDraft: false, name: "Strength Template (edited)" } }) };
-    if (url.endsWith("/template-1/duplicate")) return { status: 201, body: templateDraft({ plan: { id: "assigned-2", isTemplate: false } }) };
+    if (url.endsWith("/template-1/duplicate")) {
+      return {
+        status: 201,
+        body: {
+          ...templateDraft({ plan: { id: "assigned-2", isTemplate: false } }),
+          assignments: [{ athleteId: "athlete-a", planId: "assigned-2" }],
+        },
+      };
+    }
     throw new Error(`unexpected fetch ${url}`);
   });
   const action = fakeAction({ action: "builder-confirm-duplicate-plan" }, { textContent: "Assign" });
@@ -163,10 +179,52 @@ test("4. confirming assign for an EDIT-DRAFT template applies it first (/submit)
 
   assert.equal(state.builder.draft.plan.id, "template-1", "the open Builder must switch to the now-applied original - the edit-draft row no longer exists server-side");
   assert.equal(state.builder.draft.plan.isEditDraft, false);
-  assert.ok(state.builder.assignResult);
+  assert.deepEqual(state.builder.assignResult.entries, [{ planId: "assigned-2", athleteName: "Ana Athlete" }]);
 });
 
-test("5. the button shows 'Assigning…' immediately, before the request resolves, and a second click while it's in flight sends nothing more", async () => {
+test("5. assigning to TWO athletes creates both Specific Programs and offers an Open link for each in the result - not just the first one", async () => {
+  state.builder.draft = templateDraft();
+  state.builder.copyPlanId = "template-1";
+  state.builder.copyIntent = "assign";
+  state.builder.copyIsEditDraft = false;
+  state.builder.copyAthleteIds = ["athlete-a", "athlete-b"];
+  let requestBody = null;
+  const calls = installFetchMock((url, method, body) => {
+    if (url.endsWith("/duplicate")) {
+      requestBody = body;
+      return {
+        status: 201,
+        body: {
+          ...templateDraft({ plan: { id: "assigned-a", isTemplate: false, athleteId: "athlete-a" } }),
+          assignments: [
+            { athleteId: "athlete-a", planId: "assigned-a" },
+            { athleteId: "athlete-b", planId: "assigned-b" },
+          ],
+        },
+      };
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const action = fakeAction({ action: "builder-confirm-duplicate-plan" }, { textContent: "Assign" });
+
+  await handleBuilderPlanAction(action, noopHandlers());
+  assert.equal(calls.length, 1, "one /duplicate call creates both plans server-side - the frontend never loops per athlete");
+  assert.deepEqual(requestBody.athleteIds, ["athlete-a", "athlete-b"]);
+
+  assert.equal(state.builder.assignResult.entries.length, 2, "both created Specific Programs must be recorded, not just created.plan (the first one)");
+  assert.deepEqual(state.builder.assignResult.entries, [
+    { planId: "assigned-a", athleteName: "Ana Athlete" },
+    { planId: "assigned-b", athleteName: "Bojan Athlete" },
+  ]);
+
+  const banner = renderBuilderAssignResultBanner(state.builder.assignResult);
+  const openButtons = banner.match(/data-action="builder-edit-plan" data-plan-id="[^"]+"/g) || [];
+  assert.equal(openButtons.length, 2, "the banner must render one Open link per assigned athlete");
+  assert.match(banner, /data-plan-id="assigned-a"/);
+  assert.match(banner, /data-plan-id="assigned-b"/);
+});
+
+test("6. the button shows 'Assigning…' immediately, before the request resolves, and a second click while it's in flight sends nothing more", async () => {
   state.builder.draft = templateDraft();
   state.builder.copyPlanId = "template-1";
   state.builder.copyIntent = "assign";
@@ -190,7 +248,7 @@ test("5. the button shows 'Assigning…' immediately, before the request resolve
   await first;
 });
 
-test("6. a failed assign (non-edit-draft) leaves the open template completely untouched, restores the button, and never sets a confirmation", async () => {
+test("7. a failed assign (non-edit-draft) leaves the open template completely untouched, restores the button, and never sets a confirmation", async () => {
   state.builder.draft = templateDraft();
   state.builder.copyPlanId = "template-1";
   state.builder.copyIntent = "assign";
@@ -211,7 +269,7 @@ test("6. a failed assign (non-edit-draft) leaves the open template completely un
   assert.equal(state.builder.assignResult, null);
 });
 
-test("7. a failed assign AFTER a successful apply (edit-draft case) still keeps the just-applied edits - nothing is lost, only the assignment itself needs a retry", async () => {
+test("8. a failed assign AFTER a successful apply (edit-draft case) still keeps the just-applied edits - nothing is lost, only the assignment itself needs a retry", async () => {
   state.builder.draft = templateDraft({ plan: { id: "editdraft-1", isEditDraft: true, editSourcePlanId: "template-1" } });
   state.builder.copyPlanId = "editdraft-1";
   state.builder.copyIntent = "assign";
@@ -230,7 +288,7 @@ test("7. a failed assign AFTER a successful apply (edit-draft case) still keeps 
   assert.equal(state.builder.draft.plan.isEditDraft, false);
 });
 
-test("8. the existing plain 'Copy' flow (intent left as default 'copy') is completely unaffected - still navigates into the new plan, no assign banner", async () => {
+test("9. the existing plain 'Copy' flow (intent left as default 'copy') is completely unaffected - still navigates into the new plan, no assign banner", async () => {
   state.builder.draft = templateDraft();
   state.builder.copyPlanId = "template-1";
   state.builder.copyPlanType = "program";
@@ -251,7 +309,7 @@ test("8. the existing plain 'Copy' flow (intent left as default 'copy') is compl
   assert.equal(state.builder.assignResult, null, "no assign confirmation banner for a plain Copy");
 });
 
-test("9. renderCopyPlanModal: assign intent hides 'Reusable template', requires an athlete, and labels the confirm button 'Assign'", () => {
+test("10. renderCopyPlanModal: assign intent hides 'Reusable template', requires an athlete, and labels the confirm button 'Assign'", () => {
   state.builder.copyPlanId = "template-1";
   state.builder.copyPlanName = "Strength Template";
   state.builder.copyPlanType = "program";
@@ -267,7 +325,7 @@ test("9. renderCopyPlanModal: assign intent hides 'Reusable template', requires 
   assert.doesNotMatch(withSelection, /data-action="builder-confirm-duplicate-plan" disabled/);
 });
 
-test("10. renderCopyPlanModal: plain copy intent is unchanged - still offers 'Reusable template' and labels the confirm button 'Create editable copy'", () => {
+test("11. renderCopyPlanModal: plain copy intent is unchanged - still offers 'Reusable template' and labels the confirm button 'Create editable copy'", () => {
   state.builder.copyPlanId = "template-1";
   state.builder.copyPlanName = "Strength Template";
   state.builder.copyPlanType = "program";

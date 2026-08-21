@@ -7947,6 +7947,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .builder-source-actions .plain-button { min-height: 34px; padding: 6px 10px; font-size: 13px; }
 .builder-copy-hint { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid #b9d8d4; border-radius: 6px; background: #eef8f6; color: #1f6f68; font-size: 13px; }
+/* One "Open <athlete>'s program" link per assigned athlete (see
+   renderBuilderAssignResultBanner) - can be several for a multi-athlete
+   assign, so this wraps as its own row instead of fighting the base
+   .builder-copy-hint's space-between layout for room. */
+.builder-assign-result { flex-wrap: wrap; }
+.builder-assign-result-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .builder-finish-button { min-height: 36px; padding: 7px 12px; }
 .builder-cancel-button, .builder-finish-button { display: flex; align-items: center; gap: 6px; }
 .builder-finish-button .builder-icon-svg { color: #2e9e4f; }

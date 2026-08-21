@@ -295,11 +295,17 @@ export async function handleBuilderPlanAction(action, handlers) {
         // editing stays open exactly as it was (see the setBuilderDraft(applied)
         // swap above for the one case where its identity legitimately
         // changed), with a dismissible confirmation offering to open the
-        // new Specific Program instead.
-        const assignedAthletes = state.athletes.filter((athlete) => athleteIds.map(String).includes(String(athlete.athlete_id)));
+        // new Specific Program instead. /duplicate creates one plan PER
+        // selected athlete (created.assignments, one entry per athlete/planId
+        // pair) - the confirmation must offer a separate "Open" link for
+        // EACH one, not just the first-created plan (created.plan.id), or a
+        // 2+-athlete assign would silently strand every copy but the first
+        // with no way to reach it from here.
         state.builder.assignResult = {
-          planId: created.plan.id,
-          athleteNames: assignedAthletes.map((athlete) => athlete.athlete).filter(Boolean),
+          entries: (created.assignments || []).map((entry) => {
+            const athlete = state.athletes.find((candidate) => String(candidate.athlete_id) === String(entry.athleteId));
+            return { planId: entry.planId, athleteName: athlete?.athlete || "Athlete" };
+          }),
         };
         resetBuilderCopyState();
         handlers.renderBuilder();
