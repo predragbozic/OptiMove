@@ -246,12 +246,22 @@ test("styles.css: .week-calendar-picker sticks directly below .week-nav-panel (n
 // coach chip toolbar - not an athlete-only inline back-header sharing the
 // same scroll position as the list. See app.js's openSpecificProgramOverlay/
 // closeSpecificProgramOverlay and program-view.js's renderProgramRootHtml.
-test("program-view.js: renderProgramRootHtml wraps the detail in the overlay/backdrop/modal, with a close action available for both coach and athlete (no isAthleteMode() gate)", () => {
-  const body = sliceFunction(programViewSource, "renderProgramRootHtml", 1400);
-  assert.match(body, /class="program-preview-overlay specific-program-overlay"/);
-  assert.match(body, /data-action="specific-program-close"/);
-  assert.match(body, /role="dialog" aria-modal="true"/);
-  assert.ok(!body.includes("isAthleteMode"), "the overlay itself must not be athlete-only - both shells get the same close affordance");
+// fix/specific-program-overlay-node-scroll: the overlay/backdrop/modal
+// markup itself now lives in the shared renderProgramOverlayShellHtml
+// helper (used by both renderProgramRootHtml's root day/block view AND
+// renderProgramNodeOverlayHtml's drilled-in node view - see the pure-
+// function tests in specific-program-overlay.test.mjs for actual rendered
+// output from both), so the literal markup is checked on the helper here,
+// with renderProgramRootHtml itself checked only for delegating to it.
+test("program-view.js: renderProgramRootHtml delegates to the shared overlay/backdrop/modal shell, with a close action available for both coach and athlete (no isAthleteMode() gate)", () => {
+  const shellBody = sliceFunction(programViewSource, "renderProgramOverlayShellHtml", 1400);
+  assert.match(shellBody, /class="program-preview-overlay specific-program-overlay"/);
+  assert.match(shellBody, /data-action="specific-program-close"/);
+  assert.match(shellBody, /role="dialog" aria-modal="true"/);
+  assert.ok(!shellBody.includes("isAthleteMode"), "the overlay itself must not be athlete-only - both shells get the same close affordance");
+
+  const rootBody = sliceFunction(programViewSource, "renderProgramRootHtml", 1400);
+  assert.match(rootBody, /renderProgramOverlayShellHtml\(/, "the root view must render through the shared shell, not its own copy of the overlay markup");
 });
 
 test("styles.css: the Specific Program overlay is edge-to-edge on mobile (practically the whole screen), not just the template preview's 12px-margin sizing", () => {
@@ -290,11 +300,43 @@ test("app.js: the coach chip toolbar also opens the overlay on click (openSpecif
   assert.match(block, /openSpecificProgramOverlay\(\);/);
 });
 
-test("app.js: handleAppBack() closes an open Specific Program overlay before falling through to any other Back handling", () => {
+// fix/specific-program-overlay-node-scroll: closeSpecificProgramOverlay()
+// used to run BEFORE the navStack-pop check, so Back from a node drilled
+// into from inside the overlay (a domain/category/section) skipped straight
+// past "step up one level" and closed the whole overlay instead - reported
+// live as exercises "disappearing" after drilling in and pressing Back
+// (or Escape, which shares this same function). navStack must now be
+// popped first so the overlay only fully closes once the user is already
+// back at its own root (day/block) list.
+test("app.js: handleAppBack() steps up one navStack level (staying inside an open Specific Program overlay) before ever closing the overlay itself", () => {
   const start = appJsSource.indexOf("function handleAppBack()");
   assert.ok(start >= 0);
-  const block = appJsSource.slice(start, start + 900);
+  const block = appJsSource.slice(start, start + 2200);
   assert.match(block, /if \(closeSpecificProgramOverlay\(\)\) return true;/);
+  const navStackPopIndex = block.search(/if \(state\.navStack\.length\) \{\s*state\.navStack\.pop\(\);/);
+  const closeOverlayIndex = block.indexOf("if (closeSpecificProgramOverlay()) return true;");
+  assert.ok(navStackPopIndex >= 0, "navStack.pop() branch must exist in handleAppBack()");
+  assert.ok(navStackPopIndex < closeOverlayIndex, "popping navStack must be checked before closing the overlay, or Back from a drilled-in node closes the overlay instead of stepping up one level");
+});
+
+// fix/specific-program-overlay-node-scroll: renderNode() (reached by
+// clicking any domain/category/section tile - the same "node" action used
+// by Weekly, Templates, AND the Specific Program overlay) used to always
+// replace els.content with the bare node-detail markup. That is still
+// correct for Weekly/Templates (full-page, no overlay), but for the
+// Specific Program overlay it silently dropped the overlay's own
+// backdrop/modal/scroll-container wrapper - reported live as broken scroll
+// and, once drilled deeper, exercises not being visible at all. renderNode
+// must now keep using that wrapper (renderProgramNodeOverlayHtml) whenever
+// state.specificProgramOverlayOpen is true, and only fall back to the bare
+// markup otherwise.
+test("app.js: renderNode() keeps the Specific Program overlay's own chrome when drilling into a node, falling back to bare markup only outside the overlay", () => {
+  const body = sliceFunction(appJsSource, "renderNode", 1400);
+  assert.match(body, /state\.specificProgramOverlayOpen/, "renderNode must branch on whether the overlay is open");
+  assert.match(body, /renderProgramNodeOverlayHtml\(/, "must render through the shared overlay-chrome helper when the overlay is open");
+  const bareAssignIndex = body.search(/els\.content\.innerHTML = detailHtml;/);
+  const overlayAssignIndex = body.search(/els\.content\.innerHTML = renderProgramNodeOverlayHtml\(/);
+  assert.ok(bareAssignIndex >= 0 && overlayAssignIndex >= 0 && overlayAssignIndex < bareAssignIndex, "the overlay-wrapped render must be attempted before falling back to the bare (non-overlay) markup");
 });
 
 // === Scope guard: coach shell (index.html) untouched by any athlete-only change ===

@@ -170,6 +170,7 @@ import {
   renderNodeDetailHtml,
   renderNodeButtonHtml,
   renderProgramDayCardHtml,
+  renderProgramNodeOverlayHtml,
   renderProgramRootHtml,
   renderProgramToolbarHtml,
   renderWeeklyRootHtml,
@@ -1360,13 +1361,6 @@ function handleAppBack() {
     return true;
   }
 
-  // A Specific Program open as an internal overlay must close on Back
-  // before the browser is ever allowed to leave the app/tab - there is no
-  // "unsaved changes" state inside this read-only detail view today, so
-  // closing here is always safe (see closeSpecificProgramOverlay's own
-  // comment for what "close" actually touches - never els.toolbar).
-  if (closeSpecificProgramOverlay()) return true;
-
   // feature/mobile-messages-fullscreen: menu -> Hide-confirm -> thread-to-
   // list -> close-Messages, in that exact priority order - see
   // handleMessagesBack()'s own comment in messages.js for why this lives
@@ -1389,11 +1383,27 @@ function handleAppBack() {
     return true;
   }
 
+  // Drilled into a node (domain/category/section) from inside the Specific
+  // Program overlay: step back ONE level and stay inside the overlay - this
+  // must run before the overlay-close check below, otherwise Back from a
+  // drilled-in node used to skip straight past the section/exercise list
+  // and close the whole overlay instead of just stepping up one level
+  // (reported live as exercises "disappearing" - the overlay closed under
+  // the user rather than showing the level above).
   if (state.navStack.length) {
     state.navStack.pop();
     renderCurrentNode();
     return true;
   }
+
+  // A Specific Program open as an internal overlay must close on Back
+  // before the browser is ever allowed to leave the app/tab - there is no
+  // "unsaved changes" state inside this read-only detail view today, so
+  // closing here is always safe (see closeSpecificProgramOverlay's own
+  // comment for what "close" actually touches - never els.toolbar). Only
+  // reached once navStack is empty (see above) - i.e. the user is already
+  // at the overlay's own root day/block list.
+  if (closeSpecificProgramOverlay()) return true;
 
   if (state.weekSelectorOpen) {
     state.weekSelectorOpen = false;
@@ -2317,7 +2327,7 @@ function renderNode(node) {
   const next = nextNodes(node);
   const crumbs = state.navStack.map((entry) => entry.label);
   const siblingState = nodeSiblingState();
-  els.content.innerHTML = renderNodeDetailHtml({
+  const detailHtml = renderNodeDetailHtml({
     crumbs,
     next,
     node,
@@ -2325,6 +2335,23 @@ function renderNode(node) {
     siblingState,
     terminalHtml: next.length ? "" : renderTerminalNode(node),
   });
+
+  // Drilling into a domain/category/section from inside the Specific
+  // Program overlay must stay inside the overlay's own chrome (backdrop,
+  // header, scrollable .program-preview-body) - plainly swapping els.content
+  // for the bare node-detail markup (the old behavior, still correct for
+  // Weekly/Templates which are full-page, not modal) dropped the overlay
+  // wrapper entirely while body.specific-program-open kept page scroll
+  // locked, making anything below the fold unreachable. See
+  // renderProgramNodeOverlayHtml's own comment in program-view.js.
+  const program = state.specificProgramOverlayOpen
+    ? (state.lastProgramBundle?.programs || []).find((entry) => entry.id === state.selectedProgramId)
+    : null;
+  if (program) {
+    els.content.innerHTML = renderProgramNodeOverlayHtml({ nodeDetailHtml: detailHtml, program, renderPlanMoreMenu });
+    return;
+  }
+  els.content.innerHTML = detailHtml;
 }
 function renderTerminalNode(node) {
   if (!(node.items || []).some(isExerciseItem)) return renderOrganizationSummary(node);
