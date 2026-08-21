@@ -914,11 +914,27 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
   await createWeeklyDays(client, targetPlanId, targetWeekStart);
   const sourceDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [sourcePlanId]);
   const targetDays = await client.query("select * from plans.plan_days where plan_id = $1 order by day_order, block_index", [targetPlanId]);
-  const targetByDay = new Map(targetDays.rows.map((day) => [weeklyDayKey(day), day]));
+  // Match by weekday alone (day_order normalized to 1=Monday..7=Sunday, the
+  // exact convention createWeeklyDays() above just used to create all 7 of
+  // targetPlanId's day rows: for loop index 0-6 it inserts day_order =
+  // block_index = block_order = index+1 and date = weekStart + index, i.e.
+  // date = weekStart + (day_order - 1)) - NOT by the old day_order+block_index
+  // compound key. block_index was never a reliable second axis here: it's
+  // set equal to day_order by createWeeklyDays(), but some existing weekly
+  // plans (older/imported ones) carry a block_index that doesn't follow
+  // that (e.g. null), so the old key routinely failed to match a source day
+  // to the target weekday slot that (by day_order alone) was already
+  // sitting right there - falling into the "insert a new day" branch below
+  // for a date that createWeeklyDays() had, by construction, already
+  // inserted, and crashing the whole copy on plan_days_plan_date_unique.
+  const targetByWeekday = new Map(targetDays.rows.map((day) => [normalizedWeekday(day.day_order), day]));
   for (const sourceDay of sourceDays.rows) {
-    const targetKey = weeklyDayKey(sourceDay);
-    let targetDay = targetByDay.get(targetKey);
+    const weekday = normalizedWeekday(sourceDay.day_order);
+    let targetDay = targetByWeekday.get(weekday);
     if (!targetDay) {
+      // Defensive only - createWeeklyDays() above always creates a row for
+      // every weekday 1-7 in this same transaction, so every normalized
+      // weekday should already have a match.
       const created = await client.query(
         `insert into plans.plan_days (plan_id, date, day_note, day_order, block_index, block_name, block_type, block_order)
          values ($1, $2::date + ($3::integer - 1), $4, $3, $5, $6, $7, $8)
@@ -926,7 +942,7 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
         [
           targetPlanId,
           targetWeekStart,
-          sourceDay.day_order,
+          weekday,
           sourceDay.day_note,
           sourceDay.block_index,
           sourceDay.block_name,
@@ -935,7 +951,7 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
         ],
       );
       targetDay = created.rows[0];
-      targetByDay.set(targetKey, targetDay);
+      targetByWeekday.set(weekday, targetDay);
     }
     await client.query(
       `update plans.plan_days
@@ -949,7 +965,7 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
       [
         targetDay.id,
         targetWeekStart,
-        sourceDay.day_order,
+        weekday,
         sourceDay.block_name,
         sourceDay.block_type,
         sourceDay.day_note,
@@ -961,8 +977,14 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
   }
 }
 
-function weeklyDayKey(day) {
-  return `${Number(day.day_order) || 0}:${Number(day.block_index) || 0}`;
+// A weekly plan's day_order is meant to be the 1-indexed weekday within its
+// week (1=Monday..7=Sunday) - see createWeeklyDays() above, the only place
+// that creates a weekly plan's day_order values from scratch. Always clamps
+// into 1-7 rather than trusting the raw value, since some existing plans
+// (older/imported ones) carry day_order outside that range (0, negative, >7).
+function normalizedWeekday(dayOrder) {
+  const raw = Number(dayOrder) || 0;
+  return (((raw - 1) % 7 + 7) % 7) + 1;
 }
 
 async function copyDaySessions(client, sourceDayId, targetDayId) {
