@@ -170,10 +170,26 @@ async function exitBuilderToPlanContext(plan, handlers) {
 export async function handleBuilderPlanAction(action, handlers) {
   const type = action.dataset.action;
   if (type === "builder-edit-plan") {
+    // Same double-click guard/pending-label pattern as
+    // builder-confirm-duplicate-plan below. This button has no CSS
+    // :disabled styling of its own (.plan-more-menu-popover button never
+    // defined one - unlike .plain-button:disabled elsewhere), so the old
+    // bare action.disabled = true was invisible: the button looked
+    // completely unchanged for however long POST /edit + loadBuilderExercises()
+    // took, so a coach with no on-screen sign their click had registered
+    // would click Edit again (and again) - reported live ("nemamo vizuelni
+    // osecaj da smo kliknuli pa pokusavamo vise puta"). Swapping the label
+    // text is the same fix already used for "Assigning..." on the copy/
+    // assign confirm button, and is impossible to miss the way a subtle
+    // opacity change would be.
+    if (action.disabled) return true;
     const planId = action.dataset.planId || "";
     const batchPlans = state.builder.draft?.batch?.plans || [];
     const isBatchPlanSwitch = batchPlans.some((plan) => String(plan.id) === String(planId));
     action.disabled = true;
+    const label = action.querySelector("span");
+    const originalLabel = label?.textContent;
+    if (label) label.textContent = "Opening…";
     try {
       setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}/edit`, { method: "POST" }), {
         preserveBatch: isBatchPlanSwitch,
@@ -194,6 +210,7 @@ export async function handleBuilderPlanAction(action, handlers) {
       await handlers.loadBuilderExercises();
     } catch (error) {
       action.disabled = false;
+      if (label) label.textContent = originalLabel;
       if (isNotFoundError(error)) {
         forgetBatchPlan(planId);
         state.builder.error = "That athlete copy is no longer available in this group.";

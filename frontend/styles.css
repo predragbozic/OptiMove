@@ -4606,6 +4606,11 @@ body.specific-program-open {
   background: var(--surface-soft);
 }
 
+.plan-more-menu-popover button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .plan-more-menu-popover .danger-action {
   color: #b42318;
 }
@@ -8026,7 +8031,18 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-custom-exercise-form { display: grid; gap: 12px; }
 .builder-custom-exercise-form .search-field { margin: 0; }
 .builder-upload-note { margin: 0; color: var(--muted, #667085); font-size: 12px; line-height: 1.4; }
-.builder-modal-overlay { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; padding: 20px; }
+/* z-index: 1300 - must clear every overlay it can be opened from, not just
+   the plain Builder page (whose own sticky bits sit around z-index 40-90).
+   "Copy"/"Assign to athlete" open this exact modal (renderCopyPlanModal)
+   from INSIDE the Specific Program / Template preview overlay
+   (.program-preview-overlay, z-index 1200) and its own info popup
+   (.program-info-overlay, z-index 1250) - at the old z-index: 45 this modal
+   rendered fully behind both, so it appeared instantly but was completely
+   invisible and unclickable, making "Copy" look like it hung (reported
+   live: "prozor ostaje u pozadini, vrlo brzo se pojavi ali ostaje u
+   pozadini" - the modal WAS there, just stacked under the still-open
+   overlay, which also intercepted every click across the full viewport). */
+.builder-modal-overlay { position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center; padding: 20px; }
 .builder-modal-backdrop { position: absolute; inset: 0; border: 0; background: rgba(13, 27, 36, .46); }
 .builder-compact-modal, .builder-structure-modal, .builder-info-modal { position: relative; z-index: 1; width: min(480px, 96vw); max-height: min(720px, 88dvh); overflow: auto; box-shadow: 0 22px 70px rgba(14, 28, 37, .28); }
 .builder-structure-modal { width: min(760px, 96vw); }
