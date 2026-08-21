@@ -101,6 +101,30 @@ export function renderCopyPlanModal(state) {
   `;
 }
 
+// Same .exit-confirm-modal/-backdrop/-dialog/-actions/-exit-button pattern
+// messages.js's renderHideConfirmHtml already uses for its own "are you
+// sure?" prompt (frontend/styles.css:6369-6422) - not window.confirm, and
+// not a third one-off style. state.builder.overwriteDayConfirm carries just
+// enough to redo the paste (sourceDayId/targetDayId), set by builder-actions.js
+// when POST /days/:id/copy-into/:targetId comes back 409 (target day
+// already has sessions).
+export function renderOverwriteDayConfirmHtml(state) {
+  if (!state.builder.overwriteDayConfirm) return "";
+  return `
+    <div class="exit-confirm-modal builder-overwrite-day-confirm-modal">
+      <div class="exit-confirm-backdrop" data-action="builder-overwrite-day-cancel"></div>
+      <div class="exit-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="builderOverwriteDayTitle" aria-describedby="builderOverwriteDayText">
+        <h3 id="builderOverwriteDayTitle">Replace this day's content?</h3>
+        <p id="builderOverwriteDayText">This day already has sessions. Pasting will remove them and put the copied day in their place.</p>
+        <div class="exit-confirm-actions">
+          <button class="plain-button" type="button" data-action="builder-overwrite-day-cancel">Cancel</button>
+          <button class="plain-button exit-confirm-exit-button" type="button" data-action="builder-overwrite-day-confirm">Replace</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 export function renderBuilderInfoModal(kind) {
   const programInfo = kind === "program";
   return `

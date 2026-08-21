@@ -25,6 +25,21 @@ function renderCopyBlockIconButton(blockId) {
   return `<button class="plain-button builder-icon-action builder-copy-icon" type="button" data-action="builder-copy-block" data-block-id="${escapeAttr(blockId)}" aria-label="Copy block" title="Copy block">${ICON_COPY}</button>`;
 }
 
+function renderCopyDayIconButton(dayId) {
+  return `<button class="plain-button builder-icon-action builder-copy-icon" type="button" data-action="builder-copy-day" data-day-id="${escapeAttr(dayId)}" aria-label="Copy day" title="Copy day">${ICON_COPY}</button>`;
+}
+
+// Only rendered on days OTHER than the one currently in the clipboard - a
+// day pasting onto itself is meaningless, and the backend already rejects
+// it (source id === target id), so this just keeps the button from
+// appearing somewhere it can never succeed.
+function renderPasteDayIconButton(dayId, context) {
+  const clipboard = context.clipboard;
+  if (clipboard?.type !== "day" || clipboard.dayId === dayId) return "";
+  const title = `Paste "${clipboard.name || "day"}"`;
+  return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-day" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
+}
+
 export function renderDeleteIconButton(action, dataAttrs, label) {
   return `<button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="${escapeAttr(action)}" ${dataAttrs} aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_TRASH}</button>`;
 }
@@ -167,7 +182,9 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
           <form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="${escapeAttr(namePlaceholder)}" aria-label="${escapeAttr(nameLabel)}"></form>
           ${secondary ? `<span class="builder-block-secondary">${escapeHtml(secondary)}</span>` : ""}
         </div>
-        ${isWeekly ? "" : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
+        ${isWeekly
+          ? `<div class="builder-block-head-actions">${renderCopyDayIconButton(block.id)}${renderPasteDayIconButton(block.id, context)}</div>`
+          : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
       </div>
       <div class="builder-sessions">
         ${block.sessions.length ? block.sessions.map((session) => `

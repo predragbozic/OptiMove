@@ -10,7 +10,7 @@ import {
   sessionLabel,
 } from "./builder-helpers.js";
 import { renderBuilderAddConfirmation, renderBuilderExerciseResults, renderBuilderStickyBar } from "./builder-exercises.js";
-import { renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal } from "./builder-modals.js";
+import { renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import {
   ICON_CHECK,
@@ -433,6 +433,7 @@ function renderBuilderInner() {
       ${selectedNode?.type === "section" ? renderBuilderSectionOverlay(state, selectedNode) : ""}
       ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}
       ${renderCopyPlanModal(state)}
+      ${renderOverwriteDayConfirmHtml(state)}
     </section>
   `;
 }
