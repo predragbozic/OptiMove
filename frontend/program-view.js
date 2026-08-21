@@ -185,16 +185,18 @@ export function renderProgramToolbarHtml(programs, selectedProgramId, renderPlan
 // handleAppBack/the Escape handler and the specific-program-close action in
 // app.js), which never re-renders els.toolbar, so whatever filter/search/
 // scroll state was there survives automatically (it was never disturbed).
-export function renderProgramRootHtml({
-  copyPlanModal,
-  data,
-  groups,
-  isMicrocycle,
-  program,
-  renderNodeButton,
-  renderPlanMoreMenu,
-  renderProgramDayCard,
-}) {
+// Shared chrome for the Specific Program overlay - the backdrop, modal
+// frame, header (program name + close), and the single scrollable
+// .program-preview-body. Used both for the overlay's own root (day/block
+// list, via renderProgramRootHtml) and for drilling into a node from
+// inside it (via renderProgramNodeOverlayHtml in app.js's renderNode()) -
+// previously only the root used this chrome, so navigating into a
+// domain/category/section replaced it with the bare (non-modal)
+// .node-detail-panel, silently dropping the overlay's own scroll container
+// while body.specific-program-open kept the page itself locked - reported
+// live as "scroll doesn't work" / exercises not visible after opening a
+// program and drilling into it.
+function renderProgramOverlayShellHtml({ bodyHtml, headRight, program }) {
   return `
     <div class="program-preview-overlay specific-program-overlay">
       <button class="program-preview-backdrop" type="button" data-action="specific-program-close" aria-label="Close specific program"></button>
@@ -205,20 +207,48 @@ export function renderProgramRootHtml({
             <h3>${escapeHtml(program.name)}</h3>
           </div>
           <div class="builder-source-actions">
-            <span class="item-badge">${data.rows?.length || 0} items</span>
-            ${renderPlanMoreMenu(program.id, "program")}
-            <button class="plain-button icon-button" type="button" data-action="specific-program-close" aria-label="Close"><span class="button-icon">x</span></button>
+            ${headRight}
           </div>
         </div>
         <div class="program-preview-body">
-          ${isMicrocycle
-            ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
-            : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`}
+          ${bodyHtml}
         </div>
       </section>
     </div>
-    ${copyPlanModal}
   `;
+}
+
+export function renderProgramRootHtml({
+  copyPlanModal,
+  data,
+  groups,
+  isMicrocycle,
+  program,
+  renderNodeButton,
+  renderPlanMoreMenu,
+  renderProgramDayCard,
+}) {
+  const headRight = `
+    <span class="item-badge">${data.rows?.length || 0} items</span>
+    ${renderPlanMoreMenu(program.id, "program")}
+    <button class="plain-button icon-button" type="button" data-action="specific-program-close" aria-label="Close"><span class="button-icon">x</span></button>
+  `;
+  const bodyHtml = isMicrocycle
+    ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
+    : `<div class="program-day-grid">${groups.map(renderProgramDayCard).join("")}</div>`;
+  return `${renderProgramOverlayShellHtml({ bodyHtml, headRight, program })}${copyPlanModal}`;
+}
+
+// Same overlay chrome as renderProgramRootHtml, but with a drilled-in node's
+// own detail markup (breadcrumb, grid/exercise list, Back/Home footer) as
+// the body - see the comment on renderProgramOverlayShellHtml above for why
+// this needs to exist at all.
+export function renderProgramNodeOverlayHtml({ nodeDetailHtml, program, renderPlanMoreMenu }) {
+  const headRight = `
+    ${renderPlanMoreMenu(program.id, "program")}
+    <button class="plain-button icon-button" type="button" data-action="specific-program-close" aria-label="Close"><span class="button-icon">x</span></button>
+  `;
+  return renderProgramOverlayShellHtml({ bodyHtml: nodeDetailHtml, headRight, program });
 }
 
 export function renderNodeDetailHtml({ crumbs, next, node, renderNodeButton, siblingState, terminalHtml }) {
