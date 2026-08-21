@@ -132,6 +132,31 @@ select
 from node_chain
 group by leaf_id;
 
+-- Every node's LIVE hierarchical position, as an array of node_order values
+-- walked from the root down to that node (domain -> category -> section, or
+-- any shorter chain - a section can be a root node directly under the
+-- session). node_order is scoped per-parent (see nextOrder() in
+-- backend/src/routes/builder.js), so comparing these arrays element-by-
+-- element (PostgreSQL's native array comparison is lexicographic)
+-- reproduces the exact same order Builder's own read path already gets by
+-- walking the live tree - not the denormalized domain_order/category_order/
+-- section_order snapshot columns on plan_items, which go stale the moment a
+-- node is moved (reordering only updates plan_nodes.node_order - it never
+-- touches the snapshot columns on items that already existed under moved
+-- siblings).
+create or replace view plans.v_plan_node_sort_path as
+with recursive node_chain as (
+  select id, array[coalesce(node_order, 0)]::numeric[] as sort_path
+  from plans.plan_nodes
+  where parent_id is null
+  union all
+  select pn.id, nc.sort_path || coalesce(pn.node_order, 0)
+  from plans.plan_nodes pn
+  join node_chain nc on pn.parent_id = nc.id
+)
+select id as plan_node_id, sort_path
+from node_chain;
+
 create or replace view plans.v_weekly_plan_items as
 select
   p.id as plan_id,
@@ -188,7 +213,8 @@ select
   pi.plan_node_id,
   na.domain_node_id,
   na.category_node_id,
-  na.section_node_id
+  na.section_node_id,
+  nsp.sort_path as hierarchy_sort_path
 from plans.plans p
 join public.athletes a on a.id = p.athlete_id
 join plans.plan_days pd on pd.plan_id = p.id
@@ -196,6 +222,7 @@ join plans.plan_sessions ps on ps.plan_day_id = pd.id
 join plans.plan_items pi on pi.plan_session_id = ps.id
 left join library.exercises e on e.id = pi.exercise_id
 left join plans.v_plan_item_node_ancestry na on na.plan_node_id = pi.plan_node_id
+left join plans.v_plan_node_sort_path nsp on nsp.plan_node_id = pi.plan_node_id
 where p.plan_type = 'weekly'
   and coalesce(p.is_active, true)
   and not coalesce(p.is_edit_draft, false)
@@ -269,26 +296,40 @@ select
   pn.id as plan_node_id,
   nad.domain_node_id,
   nad.category_node_id,
-  nad.section_node_id
+  nad.section_node_id,
+  nsp.sort_path as hierarchy_sort_path
 from plans.plan_nodes pn
 join plans.v_plan_node_ancestry_detail nad on nad.plan_node_id = pn.id
 join plans.plan_sessions ps on ps.id = pn.plan_session_id
 join plans.plan_days pd on pd.id = ps.plan_day_id
 join plans.plans p on p.id = pd.plan_id
 join public.athletes a on a.id = p.athlete_id
+left join plans.v_plan_node_sort_path nsp on nsp.plan_node_id = pn.id
 where p.plan_type = 'weekly'
   and coalesce(p.is_active, true)
   and not coalesce(p.is_edit_draft, false)
   and not exists (select 1 from plans.plan_items pi2 where pi2.plan_node_id = pn.id)
   and not exists (select 1 from plans.plan_nodes child where child.parent_id = pn.id)
 
+-- hierarchy_sort_path clusters every row (populated item or empty-node
+-- placeholder) by its LIVE position in the domain/category/section tree,
+-- matching Builder's own read order exactly (backend/src/routes/builder.js's
+-- buildDraft() orders by the same live plan_nodes.node_order, not the
+-- denormalized snapshot columns above). item_order remains the tie-breaker
+-- for items sharing one section (their hierarchy_sort_path is identical -
+-- it's per plan_node_id, not per item). plan_item_id/plan_node_id are a
+-- final deterministic tie-breaker so two exactly-equal item_order values (or
+-- two NULLs) can never produce PostgreSQL's undefined tie order.
 order by
   athlete_source_external_id,
   week_start,
   date,
   day_order,
   session_order,
-  item_order;
+  hierarchy_sort_path,
+  item_order,
+  plan_item_id,
+  plan_node_id;
 
 create or replace view plans.v_program_plan_items as
 select

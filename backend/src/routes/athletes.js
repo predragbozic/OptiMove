@@ -189,12 +189,19 @@ router.get("/:athleteId/program-data", async (req, res, next) => {
 });
 
 async function loadWeeklyData(athleteId) {
+  // Mirrors plans.v_weekly_plan_items's own internal ORDER BY exactly (see
+  // migrations_v2/202608231000_weekly_plan_items_hierarchy_order.sql) - a
+  // `select *` from a view does NOT guarantee its rows arrive pre-sorted to
+  // the caller, so this outer query must re-apply the same order, hierarchy
+  // included, or the view's fix would be silently undone here. day_order is
+  // included too (was missing before) as the same day_order/date pairing
+  // the view itself sorts by.
   const items = await query(
     `
     select *
     from plans.v_weekly_plan_items
     where athlete_source_external_id = $1 or athlete_id = $1
-    order by week_start, date, session_order, item_order
+    order by week_start, date, day_order, session_order, hierarchy_sort_path, item_order, plan_item_id, plan_node_id
     `,
     [athleteId],
   );
