@@ -9,12 +9,18 @@ const router = Router();
 router.get("/:planId/weekly", async (req, res, next) => {
   try {
     if (!(await canAccessPlan(query, req, req.params.planId))) return res.status(403).json({ error: "Forbidden" });
+    // Mirrors plans.v_weekly_plan_items's own internal ORDER BY exactly (see
+    // migrations_v2/202608231000_weekly_plan_items_hierarchy_order.sql) -
+    // same reasoning as loadWeeklyData() in athletes.js: a `select *` from a
+    // view is not guaranteed pre-sorted for the caller, so this outer query
+    // must re-apply the same order (day_order + hierarchy included) or the
+    // view's fix would be silently undone here.
     const result = await query(
       `
       select *
       from plans.v_weekly_plan_items
       where plan_id = $1
-      order by date, session_order, item_order
+      order by date, day_order, session_order, hierarchy_sort_path, item_order, plan_item_id, plan_node_id
       `,
       [req.params.planId],
     );
