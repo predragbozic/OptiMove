@@ -14,6 +14,14 @@ import assert from "node:assert/strict";
 // 4. deleting a block/session/node/item reuses the DELETE response's
 //    already-fresh draft instead of discarding it and firing a second GET
 //    for the exact same plan.
+// 5. Edit (builder-edit-plan) shows an "Opening…" state immediately (before
+//    the request resolves) and never fires a second, parallel /edit request
+//    if clicked again while the first is still in flight - the same fix as
+//    Save above, for the exact bug reported live ("kada stavim edit imamo
+//    neko cekanje a nemamo vizuelni osecaj da smo kliknuli pa pokusavamo
+//    vise puta"): action.disabled alone was invisible on this button
+//    (.plan-more-menu-popover button never had :disabled styling), so a
+//    coach saw no sign their click registered and tried again.
 
 const fakeElements = new Map();
 function fakeElement() {
@@ -63,7 +71,15 @@ function installHeldFetchMock() {
 }
 
 function fakeAction(dataset, { disabled = false, textContent = "" } = {}) {
-  return { dataset, disabled, textContent };
+  // querySelector("span") stands in for the button's label element - the
+  // Edit button swaps this to "Opening..." while its request is in flight
+  // (see builder-actions.js) so a coach gets visible feedback that the
+  // click registered, not just the disabled attribute (which had no
+  // :disabled styling on this button and was invisible in practice). Memoized
+  // (not a fresh object per call) so the handler's own reference and a
+  // test's later assertion on it see the same mutations.
+  const label = { textContent: "" };
+  return { dataset, disabled, textContent, querySelector: () => label };
 }
 
 function makeDraft(planId = "plan-1", overrides = {}) {
@@ -191,4 +207,36 @@ test("6. deleting an item reuses the DELETE response's fresh draft instead of fi
   assert.equal(calls.length, 1, "deleting an item must not fetch the plan a second time when the DELETE response already carries the fresh draft");
   assert.equal(calls[0].method, "DELETE");
   assert.equal(state.builder.draft.plan.name, "Updated after item delete");
+});
+
+test("7. Edit shows an 'Opening…' state immediately, before the request resolves", async () => {
+  const { release } = installHeldFetchMock();
+  const action = fakeAction({ action: "builder-edit-plan", planId: "plan-1" });
+  const label = action.querySelector("span");
+
+  const pending = handleBuilderPlanAction(action, noopHandlers());
+  await Promise.resolve(); // let the synchronous part of the handler run before the fetch settles
+  assert.equal(action.disabled, true, "the button must be disabled the instant Edit is clicked, not after the response lands");
+  assert.equal(label.textContent, "Opening…", "the coach must see immediate feedback that opening the program is in progress, not just a disabled attribute with no visible styling");
+
+  release(makeDraft());
+  await pending;
+});
+
+test("8. a second Edit click while the first request is genuinely still unresolved does not send a second request", async () => {
+  const { calls, release } = installHeldFetchMock();
+  const action = fakeAction({ action: "builder-edit-plan", planId: "plan-1" });
+
+  const firstCall = handleBuilderPlanAction(action, noopHandlers());
+  await Promise.resolve();
+  assert.equal(action.disabled, true, "the button must already be disabled before the second click can even be dispatched");
+  assert.equal(calls.length, 1, "the first click must have already reached the fetch call");
+
+  const secondCall = handleBuilderPlanAction(action, noopHandlers());
+  const handledAgain = await secondCall;
+  assert.equal(handledAgain, true, "the action type is still recognized (so no unrelated fallback path runs)");
+  assert.equal(calls.length, 1, "a click while the first request is still genuinely unresolved must never fire a second, parallel /edit request");
+
+  release(makeDraft());
+  await firstCall;
 });
