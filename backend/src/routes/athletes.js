@@ -122,12 +122,19 @@ router.get("/:athleteId/program-data", async (req, res, next) => {
     if (!(await canAccessAthlete(query, req, athleteId))) return res.status(403).json({ error: "Forbidden" });
     const requestedProgram = String(req.query.program || "");
 
+    // status = 'active' here (unlike GET /:athleteId/plans above, which
+    // intentionally shows every status - the cross-plan-copy picker needs
+    // to offer even an in-progress weekly plan as a copy source) so
+    // hasWeekly reflects what loadWeeklyData() below will actually render -
+    // v_weekly_plan_items itself now hides 'draft' weekly plans from the
+    // Calendar until "Save and finish".
     const weeklyPlans = await query(
       `
       select *
       from plans.v_plan_summary
       where (athlete_source_external_id = $1 or athlete_id = $1)
         and plan_type = 'weekly'
+        and status = 'active'
       order by week_start
       `,
       [athleteId],
