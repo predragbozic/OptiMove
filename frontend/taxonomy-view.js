@@ -1,4 +1,5 @@
 import { builderIconGlyph } from "./builder-helpers.js";
+import { renderImage } from "./media.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -191,18 +192,27 @@ function renderNodePresetAddForm(type, data) {
   `;
 }
 
-// Presets set via the Builder's old icon:<name> glyph codes (icon:target,
-// icon:bolt, etc. - builderIconOptions() in builder-helpers.js) are not real
-// image URLs, so the http(s):// check below never matches them. The
-// Builder's own rendering (renderPresetPickerIcon/renderBuilderNodeIcon,
-// builder-structure.js) already falls back to builderIconGlyph() for these -
-// this screen returned nothing at all for the exact same values, which is
-// why a preset's icon showed correctly everywhere it's actually used (the
-// Builder's preset picker, the plan tree) but not here, in the list where
-// it's managed.
+// Two distinct root causes fixed here for the same live bug report (a
+// preset's icon showed correctly everywhere it's actually used - the
+// Builder's preset picker, the plan tree/Calendar - but never in this
+// Settings list where the preset itself is managed):
+// 1. A coach-pasted icon URL is very often a Google Drive share link (same
+//    as exercise images elsewhere in the app), which does NOT work as a
+//    bare <img src>. renderImage (media.js) is what the plan tree/Calendar
+//    already use to render this exact same node.iconUrl value - it converts
+//    a Drive link into its real thumbnail URL with a multi-source fallback
+//    chain the existing global image-error handler (app.js) walks through
+//    on load failure. A plain <img src="..."> here (the previous version)
+//    never got any of that conversion.
+// 2. Presets set via the Builder's older icon:<name> glyph codes
+//    (icon:target, icon:bolt, etc. - builderIconOptions() in builder-
+//    helpers.js) are not real image URLs at all - the Builder's own
+//    rendering (renderPresetPickerIcon/renderBuilderNodeIcon, builder-
+//    structure.js) falls back to builderIconGlyph() for these; this screen
+//    returned nothing for them too.
 function renderTaxonomyIcon(iconUrl) {
   if (!iconUrl) return "";
-  if (/^https?:\/\//i.test(iconUrl)) return `<img class="taxonomy-icon" src="${escapeAttr(iconUrl)}" alt="">`;
+  if (/^https?:\/\//i.test(iconUrl)) return renderImage(iconUrl, "taxonomy-icon");
   return `<span class="taxonomy-icon taxonomy-icon-glyph">${escapeHtml(builderIconGlyph(iconUrl))}</span>`;
 }
 
