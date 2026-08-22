@@ -107,9 +107,9 @@ router.post("/plans", async (req, res, next) => {
     for (const target of targets) {
       const isTemplate = planType === "program" && !target;
       const created = await client.query(
-        `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, week_start, builder_batch_id)
-         values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, 'draft', 'builder', $9, $10) returning id`,
-        [planType, req.user.id, target?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), isTemplate, weekStart, batchId],
+        `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, cover_image_url, visibility, is_template, status, source_type, week_start, builder_batch_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, 'private', $9, 'draft', 'builder', $10, $11) returning id`,
+        [planType, req.user.id, target?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), nullableText(req.body?.coverImageUrl), isTemplate, weekStart, batchId],
       );
       createdIds.push(created.rows[0].id);
       if (planType === "weekly") await createWeeklyDays(client, created.rows[0].id, weekStart);
@@ -793,6 +793,7 @@ async function buildDraft(plan) {
       note: plan.note || "",
       iconUrl: plan.icon_url || "",
       color: plan.color || "",
+      coverImageUrl: plan.cover_image_url || "",
       visibility: plan.visibility || "private",
       isTemplate: plan.is_template,
       athleteId: plan.athlete_source_external_id || plan.athlete_id || "",
@@ -1466,7 +1467,7 @@ async function deleteNodeTree(nodeId) {
 
 async function getEditablePlan(req, planId) {
   const result = await query(
-    `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.visibility, p.is_template, p.status,
+    `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.cover_image_url, p.visibility, p.is_template, p.status,
             p.source_type, p.start_date, p.duration_days, p.athlete_id as athlete_uuid, p.is_edit_draft, p.edit_source_plan_id,
             p.builder_batch_id,
             a.athlete_id, a.source_external_id as athlete_source_external_id,
