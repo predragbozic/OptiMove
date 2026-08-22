@@ -30,6 +30,7 @@ import {
   renderAthleteListHtml,
   renderAthleteSettingsHtml,
 } from "./athlete-view.js";
+import { renderCoachAccountHtml } from "./coach-account.js";
 import {
   renderAthleteProgramCardsRailHtml,
   renderAthleteProgramsPanelHtml,
@@ -644,7 +645,7 @@ async function handleContentSubmit(event) {
         method: "POST",
         body: JSON.stringify({ newEmail, currentPassword }),
       });
-      await renderAthleteSettings();
+      await refreshAccountSettingsView();
     } catch (submitError) {
       if (error) error.textContent = emailChangeErrorMessage(submitError);
       if (button) button.disabled = false;
@@ -1498,6 +1499,7 @@ async function loadActiveTab() {
   renderTabs();
   renderLibraryNav();
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
+  if (state.activeTab === "coach-account") return renderCoachAccount();
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();
   // Switching between Settings sub-tabs (Overview/Users/Clubs/Teams/Athletes/
   // Tags & Presets/Join links) keeps state.activeTab === "organization" the
@@ -1834,6 +1836,7 @@ function renderCurrentNode() {
   if (state.activeTab === "builder") return renderBuilder();
   if (state.activeTab === "exercises") return renderExercises(state.lastExerciseResults);
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
+  if (state.activeTab === "coach-account") return renderCoachAccount();
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();
 }
 
@@ -2064,6 +2067,20 @@ async function renderAthleteSettings() {
   els.content.innerHTML = renderAthleteSettingsHtml(athlete, state.currentUser, emailChangeStatus, profile);
 }
 
+// Coach-mode counterpart of renderAthleteSettings() above - same two-pass
+// (render immediately, then patch in emailChangeStatus once it loads)
+// pattern, just without the athlete-only personal-data/photo fetch since a
+// coach has no athlete profile row of their own.
+async function renderCoachAccount() {
+  els.toolbar.innerHTML = "";
+  els.context.textContent = "Account";
+  els.title.textContent = "Account";
+  els.content.innerHTML = renderCoachAccountHtml(state.currentUser, null);
+  const emailChangeStatus = await api("/api/auth/account/email-change/status").catch(() => null);
+  if (state.activeTab !== "coach-account") return;
+  els.content.innerHTML = renderCoachAccountHtml(state.currentUser, emailChangeStatus);
+}
+
 // security/verified-email-change: the email-change endpoints return short
 // machine codes (see backend/src/routes/auth.js), not display text, since
 // the same codes are reused by the platform-admin-initiated endpoints in
@@ -2085,6 +2102,16 @@ function emailChangeErrorMessage(error) {
   return EMAIL_CHANGE_ERROR_MESSAGES[error?.message] || error?.message || "Something went wrong.";
 }
 
+// The email-change-request/resend/cancel forms are shared verbatim between
+// the athlete Account page and the coach Account page (both render through
+// renderAccountEmailPasswordSectionsHtml, athlete-view.js) - re-render
+// whichever one is actually on screen after a successful call, instead of
+// hardcoding the athlete-only renderAthleteSettings().
+async function refreshAccountSettingsView() {
+  if (state.activeTab === "coach-account") return renderCoachAccount();
+  return renderAthleteSettings();
+}
+
 async function submitEmailChangeAction(type, action) {
   if (action.disabled) return;
   const container = action.closest(".account-email-pending");
@@ -2094,7 +2121,7 @@ async function submitEmailChangeAction(type, action) {
   try {
     const endpoint = type === "email-change-resend" ? "/api/auth/account/email-change/resend" : "/api/auth/account/email-change/cancel";
     await api(endpoint, { method: "POST" });
-    await renderAthleteSettings();
+    await refreshAccountSettingsView();
   } catch (submitError) {
     if (error) error.textContent = emailChangeErrorMessage(submitError);
     action.disabled = false;

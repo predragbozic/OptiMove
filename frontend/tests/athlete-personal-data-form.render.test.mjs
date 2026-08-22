@@ -86,12 +86,15 @@ test("the form submits via data-account-form='personal-data', the exact hook app
   assert.ok(body.includes(`data-account-form="personal-data"`));
 });
 
-test("the Personal data article sits structurally before the separate Login email and Change password account cards, and is clearly its own section", () => {
+test("the Personal data article sits structurally before the shared Login email/Change password account sections", () => {
+  // renderAccountEmailPasswordSectionsHtml (Login email + Change password) is
+  // shared with the coach Account page (coach-account.js), so it's its own
+  // exported function now, called from here rather than inlined - the
+  // Personal data article must still come first, then the call into it.
   const settingsBody = sliceFunction("renderAthleteSettingsHtml");
   const personalIndex = settingsBody.indexOf("athlete-personal-data");
-  const loginIndex = settingsBody.indexOf("Login email");
-  const passwordIndex = settingsBody.indexOf("Change password");
-  assert.ok(personalIndex >= 0 && loginIndex > personalIndex && passwordIndex > loginIndex);
+  const sharedSectionsCallIndex = settingsBody.indexOf("renderAccountEmailPasswordSectionsHtml(currentUser, emailChangeStatus)");
+  assert.ok(personalIndex >= 0 && sharedSectionsCallIndex > personalIndex);
 });
 
 test("renderAthleteSettingsHtml passes the new profile parameter straight into renderPersonalDataFormHtml - no separate fetch or fabricated data inline", () => {
@@ -99,7 +102,10 @@ test("renderAthleteSettingsHtml passes the new profile parameter straight into r
   assert.match(settingsBody, /renderPersonalDataFormHtml\(profile\)/);
 });
 
-test("the Login email card still reads strictly from currentUser.email, untouched by the new profile parameter", () => {
-  const settingsBody = sliceFunction("renderAthleteSettingsHtml");
-  assert.ok(settingsBody.includes("currentUser?.email"));
+test("within the shared account sections, Login email still comes before Change password, and reads strictly from currentUser.email", () => {
+  const sharedBody = sliceFunction("renderAccountEmailPasswordSectionsHtml");
+  const loginIndex = sharedBody.indexOf("Login email");
+  const passwordIndex = sharedBody.indexOf("Change password");
+  assert.ok(loginIndex >= 0 && passwordIndex > loginIndex);
+  assert.ok(sharedBody.includes("currentUser?.email"));
 });
