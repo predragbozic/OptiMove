@@ -345,8 +345,8 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
     const sourceSessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [block.id]);
     for (const session of sourceSessions.rows) {
       const createdSession = await client.query(
-        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order) values ($1, $2, $3, $4, $5) returning id",
-        [newBlockId, session.am_pm, session.bta, session.session_time, session.session_order],
+        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name) values ($1, $2, $3, $4, $5, $6) returning id",
+        [newBlockId, session.am_pm, session.bta, session.session_time, session.session_order, session.name],
       );
       await copySessionContent(client, session.id, createdSession.rows[0].id);
     }
@@ -472,8 +472,8 @@ router.post("/blocks/:blockId/sessions", async (req, res, next) => {
     if (!block) return res.status(404).json({ error: "Program block not found" });
     const order = await nextOrder("plans.plan_sessions", "plan_day_id", block.id, "session_order");
     await query(
-      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order) values ($1, $2, $3, $4, $5)`,
-      [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), phaseValue(req.body?.bta, ["B", "T", "A"]), sessionTimeValue(req.body?.time), order],
+      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name) values ($1, $2, $3, $4, $5, $6)`,
+      [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), phaseValue(req.body?.bta, ["B", "T", "A"]), sessionTimeValue(req.body?.time), order, nullableText(req.body?.name)],
     );
     return respondWithDraft(req, res, req.user, block.plan, { status: 201 });
   } catch (error) { next(error); }
@@ -484,8 +484,8 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
     const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
     await query(
-      "update plans.plan_sessions set session_time = $2, updated_at = now() where id = $1",
-      [session.id, sessionTimeValue(req.body?.time)],
+      "update plans.plan_sessions set session_time = $2, name = $3, updated_at = now() where id = $1",
+      [session.id, sessionTimeValue(req.body?.time), nullableText(req.body?.name)],
     );
     return respondWithDraft(req, res, req.user, session.plan);
   } catch (error) { next(error); }
@@ -759,7 +759,7 @@ router.delete("/items/:itemId", async (req, res, next) => {
 async function buildDraft(plan) {
   const result = await query(
     `select pd.id as block_id, pd.block_index, pd.block_name, pd.block_type, pd.date, pd.day_order, pd.day_note,
-            ps.id as session_id, ps.am_pm, ps.bta, ps.session_time, ps.session_order,
+            ps.id as session_id, ps.am_pm, ps.bta, ps.session_time, ps.session_order, ps.name as session_name,
             pn.id as node_id, pn.parent_id, pn.node_type, pn.name as node_name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order,
             pi.id as item_id, pi.exercise_id, pi.title, pi.description, pi.image_url, pi.video_url, pi.sets, pi.reps, pi.load, pi.item_order
      from plans.plan_days pd
@@ -775,7 +775,7 @@ async function buildDraft(plan) {
     const block = blocks.get(row.block_id);
     if (!row.session_id) return;
     let session = block.sessions.find((value) => value.id === row.session_id);
-    if (!session) { session = { id: row.session_id, amPm: row.am_pm || "", bta: row.bta || "", time: row.session_time ? String(row.session_time).slice(0, 5) : "", nodes: [] }; block.sessions.push(session); }
+    if (!session) { session = { id: row.session_id, amPm: row.am_pm || "", bta: row.bta || "", time: row.session_time ? String(row.session_time).slice(0, 5) : "", name: row.session_name || "", nodes: [] }; block.sessions.push(session); }
     if (!row.node_id) return;
     let node = session.nodes.find((value) => value.id === row.node_id);
     if (!node) {
@@ -991,8 +991,8 @@ async function copyProgramTree(client, sourcePlanId, targetPlanId) {
     const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [day.id]);
     for (const session of sessions.rows) {
       const createdSession = await client.query(
-        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, $2, $3, $4) returning id",
-        [createdDay.rows[0].id, session.am_pm, session.bta, session.session_order],
+        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name) values ($1, $2, $3, $4, $5) returning id",
+        [createdDay.rows[0].id, session.am_pm, session.bta, session.session_order, session.name],
       );
       await copySessionContent(client, session.id, createdSession.rows[0].id);
     }
@@ -1082,8 +1082,8 @@ async function copyDaySessions(client, sourceDayId, targetDayId) {
   const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [sourceDayId]);
   for (const session of sessions.rows) {
     const createdSession = await client.query(
-      "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, $2, $3, $4) returning id",
-      [targetDayId, session.am_pm, session.bta, session.session_order],
+      "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name) values ($1, $2, $3, $4, $5) returning id",
+      [targetDayId, session.am_pm, session.bta, session.session_order, session.name],
     );
     await copySessionContent(client, session.id, createdSession.rows[0].id);
   }
