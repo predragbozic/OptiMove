@@ -223,6 +223,17 @@ export async function handleBuilderPlanAction(action, handlers) {
       state.navStack = [];
       handlers.renderTabs();
       handlers.renderLibraryNav();
+      // Paint the Builder shell immediately - loadBuilderExercises() below
+      // makes two of its own serial network calls (exercise filter options,
+      // then a search) that only ever populate the exercise-library results
+      // panel, not the rest of the screen. Previously nothing rendered until
+      // loadBuilderExercises() itself fell through to a renderBuilder() call,
+      // so the coach stared at the old screen for both round trips before
+      // Edit did anything visible. Rendering here first also means the
+      // ".builder-exercise-results" container already exists once
+      // loadBuilderExercises() runs, so it takes its cheap results-only
+      // update path instead of doing a second full render.
+      handlers.renderBuilder();
       void loadBuilderNodePresets().catch(() => {});
       await handlers.loadBuilderExercises();
     } catch (error) {
@@ -354,6 +365,10 @@ export async function handleBuilderPlanAction(action, handlers) {
       state.navStack = [];
       handlers.renderTabs();
       handlers.renderLibraryNav();
+      // Same reasoning as builder-edit-plan above - paint the new copy's
+      // Builder shell before awaiting the exercise-library panel's own
+      // fetches, instead of leaving the screen unchanged until they resolve.
+      handlers.renderBuilder();
       void loadBuilderNodePresets().catch(() => {});
       await handlers.loadBuilderExercises();
     } catch (error) {

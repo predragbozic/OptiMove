@@ -893,12 +893,35 @@ async function handleContentChange(event) {
 
   const form = event.target.closest("[data-builder-autosave]");
   if (!form || !event.target.matches("input, textarea")) return;
+  // update-item forms (Sets/Reps/Load/Instruction) are the one autosave form
+  // with several sibling fields a coach tabs through quickly (Sets -> Reps ->
+  // Load). Each field's own blur fires this "change" handler independently -
+  // saving immediately on every single one meant a fast Tab-Tab-Tab could
+  // have an earlier field's save+DOM-rebuild (renderBuilderSectionItems,
+  // builder-view.js) land WHILE the coach is already typing into the next
+  // field, resetting it back to its last-saved (not yet including what was
+  // just typed) value mid-keystroke - reported live as "kao da izbacuje pa
+  // unese upis, kasni". Debouncing per item coalesces a whole Sets/Reps/Load
+  // pass into one save+rebuild after the coach actually pauses, and since
+  // FormData is only read once the debounced call finally fires, it always
+  // captures whatever is currently in the DOM - never stale.
+  if (form.dataset.builderForm === "update-item") {
+    const key = form.dataset.itemId || form;
+    clearTimeout(builderAutosaveTimers.get(key));
+    builderAutosaveTimers.set(key, setTimeout(() => {
+      builderAutosaveTimers.delete(key);
+      submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback }).catch(renderBuilderError);
+    }, BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS));
+    return;
+  }
   try {
     await submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback });
   } catch (error) {
     renderBuilderError(error);
   }
 }
+const builderAutosaveTimers = new Map();
+const BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS = 500;
 
 let builderSearchTimer = null;
 function debounceBuilderSearch() {
