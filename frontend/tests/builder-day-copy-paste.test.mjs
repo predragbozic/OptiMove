@@ -50,3 +50,20 @@ test("5. non-weekly blocks (program/template) are completely unaffected - still 
   assert.match(html, /data-action="builder-copy-block" data-block-id="block-1"/);
   assert.match(html, /data-action="builder-delete-block"/);
 });
+
+// Phase 2: a clipboard holding a block copied from a DIFFERENT plan
+// (Template/Specific Program, picked via builder-modals.js's block picker)
+// must be pasteable the exact same way a same-plan copied day is - the
+// Paste button doesn't care where the clipboard's content came from.
+test("6. a cross-plan-block clipboard shows the Paste day button on every weekly day - no self-exclusion, since its id belongs to a different plan entirely", () => {
+  const clipboard = { type: "cross-plan-block", sourcePlanId: "template-1", blockId: "block-9", name: "Ankle rehab" };
+  const html = renderBuilderBlock(emptyBlock({ id: "day-2" }), "", "", true, baseContext({ clipboard }));
+  assert.match(html, /data-action="builder-paste-day" data-day-id="day-2"/);
+  assert.match(html, /Paste &quot;Ankle rehab&quot;|Paste "Ankle rehab"/);
+});
+
+test("7. a cross-plan-block clipboard never leaks a Paste button into a non-weekly block", () => {
+  const clipboard = { type: "cross-plan-block", sourcePlanId: "template-1", blockId: "block-9", name: "Ankle rehab" };
+  const html = renderBuilderBlock(emptyBlock({ id: "block-1" }), "", "", false, baseContext({ clipboard }));
+  assert.doesNotMatch(html, /data-action="builder-paste-day"/);
+});

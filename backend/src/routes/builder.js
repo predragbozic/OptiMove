@@ -363,25 +363,27 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
   }
 });
 
-// Content-only day-to-day paste, weekly plans only: replaces the target
-// day's sessions/nodes/items with the source day's, but never touches
-// either day's own date/day_order row (a weekly plan always keeps its
-// fixed 7 calendar days - this moves what's ON a day, not the day itself).
-// Also the backend half of Phase 2 (copying a block from another plan into
-// a weekly day) - dayId there just resolves to a program/template's block
-// row instead of another day in the same plan; everything past ownership
-// resolution is identical, which is why this takes two independently
-// resolved ids rather than assuming a shared source plan.
-router.post("/days/:dayId/copy-into/:targetDayId", async (req, res, next) => {
+// Content-only paste into a weekly day - replaces the target day's
+// sessions/nodes/items with the source's, but never touches either day's
+// own date/day_order row (a weekly plan always keeps its fixed 7 calendar
+// days - this moves what's ON a day, not the day itself). Shared by both
+// "days/:dayId/copy-into" (Phase 1: another day of the SAME weekly plan)
+// and "blocks/:blockId/copy-into" (Phase 2: a block from a DIFFERENT
+// Template or Specific Program) below - once source/target are resolved,
+// the copy itself doesn't care which one it was.
+async function respondCopyIntoDay(req, res, next, source, target) {
   let client;
   try {
-    const source = await getEditableBlock(req, req.params.dayId);
-    if (!source) return res.status(404).json({ error: "Day not found." });
-    const target = await getEditableBlock(req, req.params.targetDayId);
     if (!target) return res.status(404).json({ error: "Target day not found." });
-    if (source.plan.id !== target.plan.id) return res.status(400).json({ error: "Both days must belong to the same weekly plan." });
     if (target.plan.plan_type !== "weekly") return res.status(400).json({ error: "Day paste is only available for weekly plans." });
-    if (source.id === target.id) return res.status(400).json({ error: "Choose a different day to paste into." });
+    if (!source) return res.status(404).json({ error: "Source not found." });
+    if (source.plan.id === target.plan.id && source.id === target.id) return res.status(400).json({ error: "Choose a different day to paste into." });
+    // Cross-plan is only supported FROM a program/template INTO a weekly
+    // day (Phase 2) - copying a day from a DIFFERENT weekly plan isn't a
+    // feature yet (Phase 1 covers same-plan day-to-day only).
+    if (source.plan.id !== target.plan.id && source.plan.plan_type === "weekly") {
+      return res.status(400).json({ error: "Copying a day from a different weekly plan isn't supported yet - only from a Template or Specific Program." });
+    }
 
     client = await pool.connect();
     const hasContent = await dayHasContentWithClient(client, target.id);
@@ -405,6 +407,51 @@ router.post("/days/:dayId/copy-into/:targetDayId", async (req, res, next) => {
     }
     next(error);
   }
+}
+
+router.post("/days/:dayId/copy-into/:targetDayId", async (req, res, next) => {
+  const source = await getEditableBlock(req, req.params.dayId);
+  const target = await getEditableBlock(req, req.params.targetDayId);
+  return respondCopyIntoDay(req, res, next, source, target);
+});
+
+// Phase 2: copy a block from a Template or another Specific Program (any
+// plan the coach has read/copy access to, via getCopySourceBlock below -
+// not necessarily one they can edit, e.g. a marketplace template) into a
+// day of the weekly plan currently open in the Builder.
+router.post("/blocks/:blockId/copy-into/:targetDayId", async (req, res, next) => {
+  const source = await getCopySourceBlock(req, req.params.blockId);
+  const target = await getEditableBlock(req, req.params.targetDayId);
+  return respondCopyIntoDay(req, res, next, source, target);
+});
+
+// Lightweight per-block summary (id, label, session/item counts) for a
+// plan the coach has read/copy access to - powers the "pick a block to
+// copy" picker without fetching that plan's entire node/item tree the way
+// buildDraft() would.
+router.get("/plans/:planId/blocks", async (req, res, next) => {
+  try {
+    const plan = await getCopySource(req, req.params.planId);
+    if (!plan || !canCopyFromPlan(req, plan)) return res.status(404).json({ error: "Program not found." });
+    const result = await query(
+      `select pd.id, pd.block_index, pd.block_name, pd.day_note,
+              (select count(*)::int from plans.plan_sessions ps where ps.plan_day_id = pd.id) as session_count,
+              (select count(*)::int from plans.plan_items pi join plans.plan_sessions ps2 on ps2.id = pi.plan_session_id where ps2.plan_day_id = pd.id) as item_count
+       from plans.plan_days pd
+       where pd.plan_id = $1
+       order by pd.block_order nulls last, pd.block_index nulls last, pd.day_order nulls last`,
+      [plan.id],
+    );
+    res.json({
+      blocks: result.rows.map((row) => ({
+        id: row.id,
+        name: row.block_name || (row.block_index != null ? `Block ${row.block_index}` : "Day"),
+        note: row.day_note || "",
+        sessionCount: row.session_count,
+        itemCount: row.item_count,
+      })),
+    });
+  } catch (error) { next(error); }
 });
 
 router.patch("/blocks/:blockId", async (req, res, next) => {
@@ -1450,6 +1497,24 @@ async function getCopySource(req, planId) {
     [planId],
   );
   return result.rows[0] || null;
+}
+
+// Same "this template opted out of being copied" rule POST /plans/:id/duplicate
+// already enforces (line ~166 above) - reused here so Phase 2's block-copy
+// picker/paste can never bypass it just because it reads at the block level
+// instead of the whole-plan level.
+function canCopyFromPlan(req, plan) {
+  if (!plan) return false;
+  if (plan.is_template && plan.can_copy === false && !canAccessAllAthletes(req) && String(plan.created_by_user_id) !== String(req.user.id)) return false;
+  return true;
+}
+
+async function getCopySourceBlock(req, blockId) {
+  const result = await query("select pd.id, pd.plan_id from plans.plan_days pd where pd.id = $1", [blockId]);
+  const row = result.rows[0]; if (!row) return null;
+  const plan = await getCopySource(req, row.plan_id);
+  if (!plan || !canCopyFromPlan(req, plan)) return null;
+  return { id: row.id, plan };
 }
 
 async function requirePlan(req, planId, res) {

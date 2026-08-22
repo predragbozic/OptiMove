@@ -105,9 +105,11 @@ export function renderCopyPlanModal(state) {
 // messages.js's renderHideConfirmHtml already uses for its own "are you
 // sure?" prompt (frontend/styles.css:6369-6422) - not window.confirm, and
 // not a third one-off style. state.builder.overwriteDayConfirm carries just
-// enough to redo the paste (sourceDayId/targetDayId), set by builder-actions.js
-// when POST /days/:id/copy-into/:targetId comes back 409 (target day
-// already has sessions).
+// enough to redo the paste (sourceType/sourceId/targetDayId), set by
+// builder-actions.js when POST /days/:id/copy-into/:targetId or
+// POST /blocks/:id/copy-into/:targetId comes back 409 (target day already
+// has sessions) - sourceType tells the retry which of those two endpoints
+// to call again with confirmOverwrite: true.
 export function renderOverwriteDayConfirmHtml(state) {
   if (!state.builder.overwriteDayConfirm) return "";
   return `
@@ -121,6 +123,120 @@ export function renderOverwriteDayConfirmHtml(state) {
           <button class="plain-button exit-confirm-exit-button" type="button" data-action="builder-overwrite-day-confirm">Replace</button>
         </div>
       </div>
+    </div>
+  `;
+}
+
+// Phase 2: "Copy a block from another plan" picker (opened from a weekly
+// day's header, frontend/builder-structure.js). A small wizard rather than
+// one big form, since there's no existing "browse plans" screen inside the
+// Builder to fall back on (frontend/builder-modals.js's renderCopyPlanModal
+// only ever operates on ONE already-selected plan): choose a source type ->
+// (if Specific program) choose an athlete -> choose that athlete's program
+// (or, for Template, choose straight from the coach's template library) ->
+// choose a block. Choosing a block sets state.builder.clipboard to
+// {type: "cross-plan-block", sourcePlanId, blockId, name} and closes this -
+// from there it's the exact same Paste-day button/overwrite-confirm flow
+// Phase 1 already built (renderPasteDayIconButton doesn't care whether the
+// clipboard's source was a same-plan day or a cross-plan block).
+export function renderBlockPickerModal(state) {
+  const picker = state.builder.blockPicker;
+  if (!picker.open) return "";
+  const title = picker.planName
+    || (picker.sourceType === "program" ? (picker.athleteId ? "Choose a program" : "Choose an athlete") : picker.sourceType === "template" ? "Choose a template" : "Copy from another plan");
+  return `
+    <div class="builder-modal-overlay">
+      <button class="builder-modal-backdrop" type="button" data-action="builder-close-block-picker" aria-label="Close copy from another plan"></button>
+      <section class="panel builder-compact-modal builder-block-picker-modal" role="dialog" aria-modal="true" aria-label="Copy a block from another plan">
+        <div class="builder-modal-head">
+          <div>
+            <p class="eyebrow">Copy from another plan</p>
+            <h3>${escapeHtml(title)}</h3>
+          </div>
+          <button class="plain-button icon-button" type="button" data-action="builder-close-block-picker" aria-label="Close"><span class="button-icon">x</span></button>
+        </div>
+        ${picker.error ? `<p class="builder-error" role="alert">${escapeHtml(picker.error)}</p>` : ""}
+        ${renderBlockPickerBody(state, picker)}
+      </section>
+    </div>
+  `;
+}
+
+function renderBlockPickerOption({ action, dataAttrs = "", label, meta }) {
+  return `
+    <button class="builder-block-picker-option" type="button" data-action="${escapeAttr(action)}" ${dataAttrs}>
+      <strong>${escapeHtml(label)}</strong>
+      ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
+    </button>
+  `;
+}
+
+function renderBlockPickerBody(state, picker) {
+  if (picker.planId) {
+    if (picker.blocksLoading) return `<p class="muted">Loading blocks...</p>`;
+    return `
+      <div class="builder-block-picker-list">
+        ${picker.blocks.length
+          ? picker.blocks.map((block) => renderBlockPickerOption({
+              action: "builder-block-picker-choose-block",
+              dataAttrs: `data-block-id="${escapeAttr(block.id)}" data-block-name="${escapeAttr(block.name)}"`,
+              label: block.name,
+              meta: `${block.sessionCount} ${block.sessionCount === 1 ? "session" : "sessions"} - ${block.itemCount} ${block.itemCount === 1 ? "exercise" : "exercises"}`,
+            })).join("")
+          : `<p class="muted">This plan has no blocks yet.</p>`}
+      </div>
+      <button class="text-action" type="button" data-action="builder-block-picker-back-to-plans">Choose a different plan</button>
+    `;
+  }
+  if (picker.sourceType === "template") {
+    if (picker.templatesLoading) return `<p class="muted">Loading templates...</p>`;
+    return `
+      <div class="builder-block-picker-list">
+        ${picker.templates.length
+          ? picker.templates.map((template) => renderBlockPickerOption({
+              action: "builder-block-picker-choose-plan",
+              dataAttrs: `data-plan-id="${escapeAttr(template.plan_id)}" data-plan-name="${escapeAttr(template.plan_name)}"`,
+              label: template.plan_name,
+              meta: `${template.block_or_day_count || 0} blocks - ${template.item_count || 0} exercises`,
+            })).join("")
+          : `<p class="muted">No templates found.</p>`}
+      </div>
+      <button class="text-action" type="button" data-action="builder-block-picker-back-to-source">Choose a different source</button>
+    `;
+  }
+  if (picker.sourceType === "program") {
+    if (!picker.athleteId) {
+      return `
+        <div class="builder-athlete-options">
+          ${(state.athletes || []).map((athlete) => `
+            <button class="builder-athlete-option" type="button" data-action="builder-block-picker-choose-athlete" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
+              ${athlete.athlete_image_url || athlete.image_url ? renderImage(athlete.athlete_image_url || athlete.image_url, "builder-athlete-avatar") : `<span class="builder-athlete-trigger-icon">${escapeHtml(initialsFor(athlete.athlete))}</span>`}
+              <span><strong>${escapeHtml(athlete.athlete)}</strong><small>ID ${escapeHtml(athlete.athlete_id)}</small></span>
+            </button>
+          `).join("")}
+        </div>
+        <button class="text-action" type="button" data-action="builder-block-picker-back-to-source">Choose a different source</button>
+      `;
+    }
+    if (picker.athletePlansLoading) return `<p class="muted">Loading programs...</p>`;
+    return `
+      <div class="builder-block-picker-list">
+        ${picker.athletePlans.length
+          ? picker.athletePlans.map((plan) => renderBlockPickerOption({
+              action: "builder-block-picker-choose-plan",
+              dataAttrs: `data-plan-id="${escapeAttr(plan.plan_id)}" data-plan-name="${escapeAttr(plan.plan_name)}"`,
+              label: plan.plan_name,
+              meta: `${plan.block_or_day_count || 0} blocks - ${plan.item_count || 0} exercises`,
+            })).join("")
+          : `<p class="muted">This athlete has no specific programs.</p>`}
+      </div>
+      <button class="text-action" type="button" data-action="builder-block-picker-back-to-athletes">Choose a different athlete</button>
+    `;
+  }
+  return `
+    <div class="builder-block-picker-source-choice">
+      ${renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="template"`, label: "Template", meta: "A reusable program from your library" })}
+      ${renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="program"`, label: "Specific program", meta: "An athlete's own assigned program" })}
     </div>
   `;
 }
