@@ -880,9 +880,11 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     handlers.renderBuilder();
     try {
       const result = await api(`/api/athletes/${encodeURIComponent(athleteId)}/plans`);
-      state.builder.blockPicker.athletePlans = (result.plans || []).filter((plan) => plan.plan_type === "program" && !plan.is_template);
+      state.builder.blockPicker.athletePlans = state.builder.blockPicker.sourceType === "weekly"
+        ? (result.plans || []).filter((plan) => plan.plan_type === "weekly")
+        : (result.plans || []).filter((plan) => plan.plan_type === "program" && !plan.is_template);
     } catch (error) {
-      state.builder.blockPicker.error = error.message || "Could not load this athlete's programs.";
+      state.builder.blockPicker.error = error.message || "Could not load this athlete's plans.";
     }
     state.builder.blockPicker.athletePlansLoading = false;
     handlers.renderBuilder();

@@ -368,22 +368,24 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
 // sessions/nodes/items with the source's, but never touches either day's
 // own date/day_order row (a weekly plan always keeps its fixed 7 calendar
 // days - this moves what's ON a day, not the day itself). Shared by both
-// "days/:dayId/copy-into" (Phase 1: another day of the SAME weekly plan)
-// and "blocks/:blockId/copy-into" (Phase 2: a block from a DIFFERENT
-// Template or Specific Program) below - once source/target are resolved,
-// the copy itself doesn't care which one it was.
-async function respondCopyIntoDay(req, res, next, source, target) {
+// "days/:dayId/copy-into" (Phase 1: another day of the SAME weekly plan -
+// both source and target resolved with WRITE access, allowCrossPlan stays
+// false here on purpose: this route is "rearrange within the plan you're
+// editing", never a channel to pull from a plan you merely have read/copy
+// access to) and "blocks/:blockId/copy-into" (a block/day from a DIFFERENT
+// Template, Specific Program, or - as of the "Weekly plan" source option -
+// another Weekly plan; source resolved with READ/copy access via
+// getCopySourceBlock, so allowCrossPlan is true there) below - once
+// source/target are resolved, the copy itself doesn't care which one it was.
+async function respondCopyIntoDay(req, res, next, source, target, { allowCrossPlan = false } = {}) {
   let client;
   try {
     if (!target) return res.status(404).json({ error: "Target day not found." });
     if (target.plan.plan_type !== "weekly") return res.status(400).json({ error: "Day paste is only available for weekly plans." });
     if (!source) return res.status(404).json({ error: "Source not found." });
     if (source.plan.id === target.plan.id && source.id === target.id) return res.status(400).json({ error: "Choose a different day to paste into." });
-    // Cross-plan is only supported FROM a program/template INTO a weekly
-    // day (Phase 2) - copying a day from a DIFFERENT weekly plan isn't a
-    // feature yet (Phase 1 covers same-plan day-to-day only).
-    if (source.plan.id !== target.plan.id && source.plan.plan_type === "weekly") {
-      return res.status(400).json({ error: "Copying a day from a different weekly plan isn't supported yet - only from a Template or Specific Program." });
+    if (!allowCrossPlan && source.plan.id !== target.plan.id) {
+      return res.status(400).json({ error: "Pasting between different plans' days isn't supported on this route - use 'Copy from another plan' instead." });
     }
 
     client = await pool.connect();
@@ -416,14 +418,15 @@ router.post("/days/:dayId/copy-into/:targetDayId", async (req, res, next) => {
   return respondCopyIntoDay(req, res, next, source, target);
 });
 
-// Phase 2: copy a block from a Template or another Specific Program (any
-// plan the coach has read/copy access to, via getCopySourceBlock below -
-// not necessarily one they can edit, e.g. a marketplace template) into a
-// day of the weekly plan currently open in the Builder.
+// Phase 2 (+ later, "Weekly plan" as a source): copy a block/day from a
+// Template, Specific Program, or another Weekly plan (any plan the coach
+// has read/copy access to, via getCopySourceBlock below - not necessarily
+// one they can edit, e.g. a marketplace template) into a day of the weekly
+// plan currently open in the Builder.
 router.post("/blocks/:blockId/copy-into/:targetDayId", async (req, res, next) => {
   const source = await getCopySourceBlock(req, req.params.blockId);
   const target = await getEditableBlock(req, req.params.targetDayId);
-  return respondCopyIntoDay(req, res, next, source, target);
+  return respondCopyIntoDay(req, res, next, source, target, { allowCrossPlan: true });
 });
 
 // Lightweight per-block summary (id, label, session/item counts) for a

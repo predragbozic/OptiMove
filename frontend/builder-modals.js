@@ -143,7 +143,9 @@ export function renderBlockPickerModal(state) {
   const picker = state.builder.blockPicker;
   if (!picker.open) return "";
   const title = picker.planName
-    || (picker.sourceType === "program" ? (picker.athleteId ? "Choose a program" : "Choose an athlete") : picker.sourceType === "template" ? "Choose a template" : "Copy from another plan");
+    || (picker.sourceType === "program" ? (picker.athleteId ? "Choose a program" : "Choose an athlete")
+      : picker.sourceType === "weekly" ? (picker.athleteId ? "Choose a weekly plan" : "Choose an athlete")
+      : picker.sourceType === "template" ? "Choose a template" : "Copy from another plan");
   return `
     <div class="builder-modal-overlay">
       <button class="builder-modal-backdrop" type="button" data-action="builder-close-block-picker" aria-label="Close copy from another plan"></button>
@@ -204,7 +206,8 @@ function renderBlockPickerBody(state, picker) {
       <button class="text-action" type="button" data-action="builder-block-picker-back-to-source">Choose a different source</button>
     `;
   }
-  if (picker.sourceType === "program") {
+  if (picker.sourceType === "program" || picker.sourceType === "weekly") {
+    const isWeeklySource = picker.sourceType === "weekly";
     if (!picker.athleteId) {
       return `
         <div class="builder-athlete-options">
@@ -218,7 +221,7 @@ function renderBlockPickerBody(state, picker) {
         <button class="text-action" type="button" data-action="builder-block-picker-back-to-source">Choose a different source</button>
       `;
     }
-    if (picker.athletePlansLoading) return `<p class="muted">Loading programs...</p>`;
+    if (picker.athletePlansLoading) return `<p class="muted">Loading ${isWeeklySource ? "weekly plans" : "programs"}...</p>`;
     return `
       <div class="builder-block-picker-list">
         ${picker.athletePlans.length
@@ -226,9 +229,9 @@ function renderBlockPickerBody(state, picker) {
               action: "builder-block-picker-choose-plan",
               dataAttrs: `data-plan-id="${escapeAttr(plan.plan_id)}" data-plan-name="${escapeAttr(plan.plan_name)}"`,
               label: plan.plan_name,
-              meta: `${plan.block_or_day_count || 0} blocks - ${plan.item_count || 0} exercises`,
+              meta: `${plan.block_or_day_count || 0} ${isWeeklySource ? "days" : "blocks"} - ${plan.item_count || 0} exercises`,
             })).join("")
-          : `<p class="muted">This athlete has no specific programs.</p>`}
+          : `<p class="muted">This athlete has no ${isWeeklySource ? "weekly plans" : "specific programs"}.</p>`}
       </div>
       <button class="text-action" type="button" data-action="builder-block-picker-back-to-athletes">Choose a different athlete</button>
     `;
@@ -237,6 +240,7 @@ function renderBlockPickerBody(state, picker) {
     <div class="builder-block-picker-source-choice">
       ${renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="template"`, label: "Template", meta: "A reusable program from your library" })}
       ${renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="program"`, label: "Specific program", meta: "An athlete's own assigned program" })}
+      ${renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="weekly"`, label: "Weekly plan", meta: "An athlete's own weekly plan" })}
     </div>
   `;
 }

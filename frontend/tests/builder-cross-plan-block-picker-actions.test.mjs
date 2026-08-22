@@ -128,6 +128,31 @@ test("5. choosing an athlete fetches their plans and keeps only real (non-templa
   assert.deepEqual(state.builder.blockPicker.athletePlans.map((plan) => plan.plan_id), ["p1"], "must filter out templates and weekly plans - only real Specific Programs belong in this step");
 });
 
+// "Weekly plan" as a cross-plan source (round 2 of Builder feedback) - the
+// same GET /api/athletes/:athleteId/plans call as "Specific program"
+// (already returns every plan type - see the response shape in test 5
+// above), just filtered to plan_type === "weekly" instead.
+
+test("5b. choosing an athlete under sourceType 'weekly' fetches their plans and keeps only weekly plans", async () => {
+  const calls = installFetchMock([{
+    status: 200,
+    body: {
+      plans: [
+        { plan_id: "p1", plan_name: "Real program", plan_type: "program", is_template: false },
+        { plan_id: "tpl1", plan_name: "A template", plan_type: "program", is_template: true },
+        { plan_id: "w1", plan_name: "A weekly plan", plan_type: "weekly", is_template: false },
+      ],
+    },
+  }]);
+  state.builder.blockPicker = { ...state.builder.blockPicker, open: true, sourceType: "weekly" };
+  const action = fakeAction({ action: "builder-block-picker-choose-athlete", athleteId: "42" });
+
+  await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.equal(calls[0].url, "/api/athletes/42/plans");
+  assert.deepEqual(state.builder.blockPicker.athletePlans.map((plan) => plan.plan_id), ["w1"], "must filter out programs and templates - only weekly plans belong in this step");
+});
+
 test("6. choosing a plan fetches its lightweight block list", async () => {
   const calls = installFetchMock([{ status: 200, body: { blocks: [{ id: "b1", name: "Phase 1", sessionCount: 2, itemCount: 20 }] } }]);
   state.builder.blockPicker = { ...state.builder.blockPicker, open: true, sourceType: "template" };

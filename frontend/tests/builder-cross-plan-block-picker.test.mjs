@@ -22,10 +22,11 @@ test("1. closed picker renders nothing", () => {
   assert.equal(renderBlockPickerModal(state), "");
 });
 
-test("2. step 1 (no sourceType chosen yet) offers Template and Specific program as the two source choices", () => {
+test("2. step 1 (no sourceType chosen yet) offers Template, Specific program, and Weekly plan as source choices", () => {
   const html = renderBlockPickerModal(baseState());
   assert.match(html, /data-action="builder-block-picker-choose-source-type" data-source-type="template"/);
   assert.match(html, /data-action="builder-block-picker-choose-source-type" data-source-type="program"/);
+  assert.match(html, /data-action="builder-block-picker-choose-source-type" data-source-type="weekly"/);
 });
 
 test("3. Template step lists state.builder.blockPicker.templates, wired to choose-plan", () => {
@@ -87,7 +88,34 @@ test("10. an error (e.g. a failed fetch) is shown, not silently swallowed", () =
   assert.match(html, /Could not load templates\./);
 });
 
-test("11. the close button and backdrop are always present, wired to builder-close-block-picker", () => {
+// "Weekly plan" as a cross-plan source (round 2 of Builder feedback) -
+// reuses the exact same athlete-picker step as "Specific program" (test 6
+// above); only the wording and, at the action-handler level, the
+// plan_type filter differ - see builder-cross-plan-block-picker-actions
+// .test.mjs.
+
+test("12. Weekly plan step with no athlete chosen yet lists state.athletes, wired to choose-athlete, same as the Specific program step", () => {
+  const html = renderBlockPickerModal(baseState({ sourceType: "weekly" }, { athletes: [{ athlete_id: "42", athlete: "Vahan" }] }));
+  assert.match(html, /data-action="builder-block-picker-choose-athlete" data-athlete-id="42"/);
+  assert.match(html, /Vahan/);
+});
+
+test("13. Weekly plan step, once an athlete is chosen, lists that athlete's weekly plans (state.builder.blockPicker.athletePlans), wired to choose-plan, labeled in days not blocks", () => {
+  const html = renderBlockPickerModal(baseState({
+    sourceType: "weekly",
+    athleteId: "42",
+    athletePlans: [{ plan_id: "w1", plan_name: "Weekly plan 2026-11-02", block_or_day_count: 7, item_count: 12 }],
+  }));
+  assert.match(html, /data-action="builder-block-picker-choose-plan" data-plan-id="w1" data-plan-name="Weekly plan 2026-11-02"/);
+  assert.match(html, /7 days - 12 exercises/);
+});
+
+test("14. Weekly plan step with zero results shows an explicit, correctly-worded empty state", () => {
+  const html = renderBlockPickerModal(baseState({ sourceType: "weekly", athleteId: "42", athletePlans: [] }));
+  assert.match(html, /This athlete has no weekly plans\./);
+});
+
+test("15. the close button and backdrop are always present, wired to builder-close-block-picker", () => {
   const html = renderBlockPickerModal(baseState());
   const closeCount = (html.match(/data-action="builder-close-block-picker"/g) || []).length;
   assert.equal(closeCount, 2, "backdrop + header close button");
