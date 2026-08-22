@@ -99,6 +99,35 @@ test("3. builder-paste-day on success POSTs to the copy-into endpoint and applie
   assert.equal(state.builder.draft.plan.name, "Updated");
 });
 
+// "Copy this whole session" (Phase F2's block picker) sets a
+// "cross-plan-session" clipboard - unlike day paste, session paste is
+// always an append (a day can already hold multiple sessions), so there is
+// no self-collision guard and no overwrite-confirm path to test here.
+
+test("3b. builder-paste-session on success POSTs to the session copy-into endpoint and applies the returned draft", async () => {
+  state.builder.clipboard = { type: "cross-plan-session", sessionId: "session-1", name: "AM / Training" };
+  const calls = installFetchMock([{ status: 200, body: makeDraft("plan-1", { name: "Updated" }) }]);
+  const action = fakeAction({ action: "builder-paste-session", dayId: "day-2" });
+
+  const handled = await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.equal(handled, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/builder/sessions/session-1/copy-into/day-2");
+  assert.equal(calls[0].method, "POST");
+  assert.equal(state.builder.draft.plan.name, "Updated");
+});
+
+test("3c. builder-paste-session does nothing if the clipboard isn't holding a cross-plan-session", async () => {
+  state.builder.clipboard = { type: "day", dayId: "day-1", name: "Monday" };
+  const calls = installFetchMock([]);
+  const action = fakeAction({ action: "builder-paste-session", dayId: "day-2" });
+
+  await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.equal(calls.length, 0);
+});
+
 test("4. builder-paste-day refuses to paste a day onto itself without ever calling the API", async () => {
   state.builder.clipboard = { type: "day", dayId: "day-1", name: "Monday" };
   const calls = installFetchMock([]);

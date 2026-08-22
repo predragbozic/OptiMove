@@ -1,3 +1,4 @@
+import { builderIconGlyph, sessionLabel } from "./builder-helpers.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { renderImage } from "./media.js";
 import { escapeAttr, escapeHtml, initialsFor, localDateIso, weekMondayIso } from "./utils.js";
@@ -142,7 +143,7 @@ export function renderOverwriteDayConfirmHtml(state) {
 export function renderBlockPickerModal(state) {
   const picker = state.builder.blockPicker;
   if (!picker.open) return "";
-  const title = picker.planName
+  const title = picker.sessionName || picker.blockName || picker.planName
     || (picker.sourceType === "program" ? (picker.athleteId ? "Choose a program" : "Choose an athlete")
       : picker.sourceType === "weekly" ? (picker.athleteId ? "Choose a weekly plan" : "Choose an athlete")
       : picker.sourceType === "template" ? "Choose a template" : "Copy from another plan");
@@ -173,14 +174,81 @@ function renderBlockPickerOption({ action, dataAttrs = "", label, meta }) {
   `;
 }
 
+// Combines the session's own custom name (if any) with the same AM/PM +
+// training-phase badge text sessionLabel() (builder-helpers.js) already
+// renders throughout the real Builder tree, additive not replacing - the
+// same convention Phase 3's session-name feature established everywhere
+// else this label appears.
+function pickerSessionLabel(session) {
+  const badge = sessionLabel(session);
+  return session.name ? `${session.name} (${badge})` : badge;
+}
+
+function renderPickerNodeIcon(iconUrl) {
+  if (iconUrl && /^https?:\/\//i.test(iconUrl)) return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="">`;
+  return builderIconGlyph(iconUrl);
+}
+
+// Read-only, recursive - deliberately NOT reusing renderBuilderNodeTree
+// (builder-structure.js), which is heavily entangled with live edit-mode
+// state (inline-add forms, move/copy/delete actions, the paste clipboard).
+// Every node here is directly clickable to copy just that node+its
+// subtree, same interaction as the Builder's own tree, just without any of
+// the editing chrome.
+function renderPickerNodeTree(nodes, parentId) {
+  const children = nodes.filter((node) => (node.parentId || "") === parentId);
+  if (!children.length) return "";
+  return `
+    <div class="builder-block-picker-node-tree">
+      ${children.map((node) => `
+        <div class="builder-block-picker-node builder-node-${escapeAttr(node.type)}">
+          <button class="builder-block-picker-node-row" type="button" data-action="builder-block-picker-choose-node" data-node-id="${escapeAttr(node.id)}" data-node-type="${escapeAttr(node.type)}" data-node-name="${escapeAttr(node.name)}" data-item-count="${escapeAttr(node.itemCount)}">
+            <span class="builder-node-icon">${renderPickerNodeIcon(node.iconUrl)}</span>
+            <span>${escapeHtml(node.name)}</span>
+            ${node.type === "section" ? `<small>${node.itemCount} ${node.itemCount === 1 ? "exercise" : "exercises"}</small>` : ""}
+          </button>
+          ${renderPickerNodeTree(nodes, node.id)}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderBlockPickerBody(state, picker) {
+  if (picker.sessionId) {
+    if (picker.nodesLoading) return `<p class="muted">Loading structure...</p>`;
+    return `
+      <button class="plain-button builder-block-picker-copy-whole" type="button" data-action="builder-block-picker-copy-whole-session">${ICON_CHECK}<span>Copy this whole session</span></button>
+      ${picker.nodes.length
+        ? renderPickerNodeTree(picker.nodes, "")
+        : `<p class="muted">This session has no domains, categories, or sections yet.</p>`}
+      <button class="text-action" type="button" data-action="builder-block-picker-back-to-sessions">Choose a different session</button>
+    `;
+  }
+  if (picker.blockId) {
+    if (picker.sessionsLoading) return `<p class="muted">Loading sessions...</p>`;
+    return `
+      <button class="plain-button builder-block-picker-copy-whole" type="button" data-action="builder-block-picker-copy-whole-block">${ICON_CHECK}<span>Copy this whole day</span></button>
+      <div class="builder-block-picker-list">
+        ${picker.sessions.length
+          ? picker.sessions.map((session) => renderBlockPickerOption({
+              action: "builder-block-picker-drill-session",
+              dataAttrs: `data-session-id="${escapeAttr(session.id)}" data-session-name="${escapeAttr(pickerSessionLabel(session))}"`,
+              label: pickerSessionLabel(session),
+              meta: `${session.itemCount} ${session.itemCount === 1 ? "exercise" : "exercises"}`,
+            })).join("")
+          : `<p class="muted">This day has no sessions yet.</p>`}
+      </div>
+      <button class="text-action" type="button" data-action="builder-block-picker-back-to-blocks">Choose a different day</button>
+    `;
+  }
   if (picker.planId) {
     if (picker.blocksLoading) return `<p class="muted">Loading blocks...</p>`;
     return `
       <div class="builder-block-picker-list">
         ${picker.blocks.length
           ? picker.blocks.map((block) => renderBlockPickerOption({
-              action: "builder-block-picker-choose-block",
+              action: "builder-block-picker-drill-block",
               dataAttrs: `data-block-id="${escapeAttr(block.id)}" data-block-name="${escapeAttr(block.name)}"`,
               label: block.name,
               meta: `${block.sessionCount} ${block.sessionCount === 1 ? "session" : "sessions"} - ${block.itemCount} ${block.itemCount === 1 ? "exercise" : "exercises"}`,

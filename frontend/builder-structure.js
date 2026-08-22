@@ -67,6 +67,18 @@ function renderPasteDayIconButton(dayId, context) {
   return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-day" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
 }
 
+// Phase F2: "Copy this whole session" (block picker) sets a new
+// "cross-plan-session" clipboard type - no same-plan equivalent exists to
+// piggyback on (a session has only ever been created one at a time), so
+// this is its own button appending a new session to the target day rather
+// than overwriting anything, unlike Paste day.
+function renderPasteSessionIconButton(dayId, context) {
+  const clipboard = context.clipboard;
+  if (clipboard?.type !== "cross-plan-session") return "";
+  const title = `Paste session "${clipboard.name || "Session"}"`;
+  return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-session" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
+}
+
 export function renderDeleteIconButton(action, dataAttrs, label) {
   return `<button class="plain-button builder-icon-action builder-delete-icon" type="button" data-action="${escapeAttr(action)}" ${dataAttrs} aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_TRASH}</button>`;
 }
@@ -243,7 +255,7 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
           ${secondary ? `<span class="builder-block-secondary">${escapeHtml(secondary)}</span>` : ""}
         </div>
         ${isWeekly
-          ? `<div class="builder-block-head-actions">${renderCopyDayIconButton(block.id)}${renderPasteDayIconButton(block.id, context)}</div>`
+          ? `<div class="builder-block-head-actions">${renderCopyDayIconButton(block.id)}${renderPasteDayIconButton(block.id, context)}${renderPasteSessionIconButton(block.id, context)}</div>`
           : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
       </div>
       <div class="builder-sessions">

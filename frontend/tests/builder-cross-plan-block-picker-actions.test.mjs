@@ -166,14 +166,86 @@ test("6. choosing a plan fetches its lightweight block list", async () => {
   assert.deepEqual(state.builder.blockPicker.blocks, [{ id: "b1", name: "Phase 1", sessionCount: 2, itemCount: 20 }]);
 });
 
-test("7. choosing a block sets the clipboard to a cross-plan-block entry and closes the whole picker", async () => {
+test("7. drilling into a block fetches its session list and keeps the picker open (no clipboard set yet)", async () => {
+  const calls = installFetchMock([{ status: 200, body: { sessions: [{ id: "s1", amPm: "AM", bta: "T", name: "", itemCount: 5 }] } }]);
   state.builder.blockPicker = { ...state.builder.blockPicker, open: true, sourceType: "template", planId: "t1", planName: "My template", blocks: [{ id: "b1", name: "Phase 1" }] };
-  const action = fakeAction({ action: "builder-block-picker-choose-block", blockId: "b1", blockName: "Phase 1" });
+  const action = fakeAction({ action: "builder-block-picker-drill-block", blockId: "b1", blockName: "Phase 1" });
+
+  await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.equal(calls[0].url, "/api/builder/blocks/b1/sessions");
+  assert.equal(state.builder.blockPicker.blockId, "b1");
+  assert.equal(state.builder.blockPicker.blockName, "Phase 1");
+  assert.deepEqual(state.builder.blockPicker.sessions, [{ id: "s1", amPm: "AM", bta: "T", name: "", itemCount: 5 }]);
+  assert.equal(state.builder.blockPicker.open, true, "drilling in must not close the picker - the coach is browsing, not done yet");
+  assert.equal(state.builder.clipboard, null, "no clipboard yet - only 'copy whole day' or picking further should set it");
+});
+
+test("7b. 'Copy this whole day' sets the clipboard to a cross-plan-block entry and closes the whole picker (the old choose-block behavior)", async () => {
+  state.builder.blockPicker = { ...state.builder.blockPicker, open: true, sourceType: "template", planId: "t1", planName: "My template", blockId: "b1", blockName: "Phase 1" };
+  const action = fakeAction({ action: "builder-block-picker-copy-whole-block" });
 
   await handleBuilderWorkspaceAction(action, noopHandlers());
 
   assert.deepEqual(state.builder.clipboard, { type: "cross-plan-block", sourcePlanId: "t1", blockId: "b1", name: "Phase 1" });
   assert.equal(state.builder.blockPicker.open, false, "the picker must close once a block is chosen - the coach is done with it");
+});
+
+test("7c. drilling into a session fetches its node tree and keeps the picker open (no clipboard set yet)", async () => {
+  const calls = installFetchMock([{ status: 200, body: { nodes: [{ id: "d1", parentId: "", type: "domain", name: "Strength", iconUrl: "", itemCount: 0 }] } }]);
+  state.builder.blockPicker = { ...state.builder.blockPicker, open: true, sourceType: "template", planId: "t1", blockId: "b1", blockName: "Phase 1", sessions: [{ id: "s1" }] };
+  const action = fakeAction({ action: "builder-block-picker-drill-session", sessionId: "s1", sessionName: "AM / Training" });
+
+  await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.equal(calls[0].url, "/api/builder/sessions/s1/nodes");
+  assert.equal(state.builder.blockPicker.sessionId, "s1");
+  assert.equal(state.builder.blockPicker.sessionName, "AM / Training");
+  assert.deepEqual(state.builder.blockPicker.nodes, [{ id: "d1", parentId: "", type: "domain", name: "Strength", iconUrl: "", itemCount: 0 }]);
+  assert.equal(state.builder.blockPicker.open, true);
+  assert.equal(state.builder.clipboard, null);
+});
+
+test("7d. 'Copy this whole session' sets the clipboard to a cross-plan-session entry and closes the whole picker", async () => {
+  state.builder.blockPicker = { ...state.builder.blockPicker, open: true, sourceType: "template", planId: "t1", blockId: "b1", sessionId: "s1", sessionName: "AM / Training" };
+  const action = fakeAction({ action: "builder-block-picker-copy-whole-session" });
+
+  await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.deepEqual(state.builder.clipboard, { type: "cross-plan-session", sessionId: "s1", name: "AM / Training" });
+  assert.equal(state.builder.blockPicker.open, false);
+});
+
+test("7e. choosing a node sets the clipboard to that node's own type (same shape same-plan node copy already uses) and closes the whole picker", async () => {
+  state.builder.blockPicker = { ...state.builder.blockPicker, open: true, sourceType: "template", planId: "t1", blockId: "b1", sessionId: "s1", nodes: [{ id: "sec1", type: "section", name: "Squat", itemCount: 3 }] };
+  const action = fakeAction({ action: "builder-block-picker-choose-node", nodeId: "sec1", nodeType: "section", nodeName: "Squat", itemCount: "3" });
+
+  await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.deepEqual(state.builder.clipboard, { type: "section", nodeId: "sec1", name: "Squat", itemCount: 3 });
+  assert.equal(state.builder.blockPicker.open, false);
+});
+
+test("7f. builder-block-picker-back-to-blocks clears sessionId/sessions but keeps blockId/blockName", async () => {
+  state.builder.blockPicker = { ...state.builder.blockPicker, open: true, sourceType: "template", planId: "t1", blockId: "b1", blockName: "Phase 1", sessions: [{ id: "s1" }], sessionId: "s1", nodes: [{ id: "d1" }] };
+  const action = fakeAction({ action: "builder-block-picker-back-to-sessions" });
+
+  await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.equal(state.builder.blockPicker.sessionId, "");
+  assert.equal(state.builder.blockPicker.nodes.length, 0);
+  assert.equal(state.builder.blockPicker.blockId, "b1", "stepping back to the session list must not also lose the already-chosen day");
+});
+
+test("7g. builder-block-picker-back-to-blocks clears blockId/sessions but keeps planId/planName", async () => {
+  state.builder.blockPicker = { ...state.builder.blockPicker, open: true, sourceType: "template", planId: "t1", planName: "My template", blockId: "b1", blockName: "Phase 1", sessions: [{ id: "s1" }] };
+  const action = fakeAction({ action: "builder-block-picker-back-to-blocks" });
+
+  await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.equal(state.builder.blockPicker.blockId, "");
+  assert.equal(state.builder.blockPicker.sessions.length, 0);
+  assert.equal(state.builder.blockPicker.planId, "t1", "stepping back to the block list must not also lose the already-chosen plan");
 });
 
 test("8. a failed fetch during any step surfaces on blockPicker.error instead of throwing or silently doing nothing", async () => {

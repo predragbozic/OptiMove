@@ -809,6 +809,27 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     }
     return true;
   }
+  // Session paste is append-only (a day can already hold multiple
+  // sessions, e.g. AM+PM) - the backend endpoint has no confirmOverwrite
+  // path, so unlike Paste day this never needs the overwrite-confirm dialog.
+  if (type === "builder-paste-session") {
+    const clipboard = state.builder.clipboard;
+    if (!clipboard || clipboard.type !== "cross-plan-session") return true;
+    const targetDayId = action.dataset.dayId || "";
+    if (!targetDayId) return true;
+    action.disabled = true;
+    try {
+      setBuilderDraft(await queuedBuilderApi(`/api/builder/sessions/${encodeURIComponent(clipboard.sessionId)}/copy-into/${encodeURIComponent(targetDayId)}`, {
+        method: "POST",
+        body: JSON.stringify(withBatchSyncPayload({})),
+      }));
+      handlers.renderBuilder();
+    } catch (error) {
+      action.disabled = false;
+      handlers.renderBuilderError(error);
+    }
+    return true;
+  }
   if (type === "builder-overwrite-day-cancel") {
     state.builder.overwriteDayConfirm = null;
     handlers.renderBuilder();
@@ -853,6 +874,16 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   }
   if (type === "builder-block-picker-back-to-plans") {
     state.builder.blockPicker = { ...state.builder.blockPicker, planId: "", planName: "", blocks: [], error: "" };
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-back-to-blocks") {
+    state.builder.blockPicker = { ...state.builder.blockPicker, blockId: "", blockName: "", sessions: [], error: "" };
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-back-to-sessions") {
+    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId: "", sessionName: "", nodes: [], error: "" };
     handlers.renderBuilder();
     return true;
   }
@@ -906,11 +937,75 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     handlers.renderBuilder();
     return true;
   }
-  if (type === "builder-block-picker-choose-block") {
+  // Drilling into a block/day no longer sets the clipboard directly -
+  // "Copy this whole day" (below) still does exactly what this used to do;
+  // this instead loads the day's sessions so a coach can also drill
+  // further into one session, or one domain/category/section within it.
+  if (type === "builder-block-picker-drill-block") {
     const blockId = action.dataset.blockId || "";
     const blockName = action.dataset.blockName || "Block";
     if (!blockId) return true;
-    state.builder.clipboard = { type: "cross-plan-block", sourcePlanId: state.builder.blockPicker.planId, blockId, name: blockName };
+    state.builder.blockPicker = { ...state.builder.blockPicker, blockId, blockName, sessionsLoading: true, error: "" };
+    handlers.renderBuilder();
+    try {
+      const result = await api(`/api/builder/blocks/${encodeURIComponent(blockId)}/sessions`);
+      state.builder.blockPicker.sessions = result.sessions || [];
+    } catch (error) {
+      state.builder.blockPicker.error = error.message || "Could not load this day's sessions.";
+    }
+    state.builder.blockPicker.sessionsLoading = false;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-copy-whole-block") {
+    const { blockId, blockName, planId } = state.builder.blockPicker;
+    if (!blockId) return true;
+    state.builder.clipboard = { type: "cross-plan-block", sourcePlanId: planId, blockId, name: blockName || "Block" };
+    state.builder.blockPicker = emptyBlockPicker();
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-drill-session") {
+    const sessionId = action.dataset.sessionId || "";
+    const sessionName = action.dataset.sessionName || "Session";
+    if (!sessionId) return true;
+    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId, sessionName, nodesLoading: true, error: "" };
+    handlers.renderBuilder();
+    try {
+      const result = await api(`/api/builder/sessions/${encodeURIComponent(sessionId)}/nodes`);
+      state.builder.blockPicker.nodes = result.nodes || [];
+    } catch (error) {
+      state.builder.blockPicker.error = error.message || "Could not load this session's structure.";
+    }
+    state.builder.blockPicker.nodesLoading = false;
+    handlers.renderBuilder();
+    return true;
+  }
+  // Whole-session copy has no existing same-plan equivalent to piggyback
+  // on (a session has only ever been created one at a time via "Add
+  // session", never "copied whole") - a new clipboard type + a new Paste
+  // session affordance (renderPasteSessionIconButton, builder-structure.js)
+  // next to the existing Copy/Paste day icons.
+  if (type === "builder-block-picker-copy-whole-session") {
+    const { sessionId, sessionName } = state.builder.blockPicker;
+    if (!sessionId) return true;
+    state.builder.clipboard = { type: "cross-plan-session", sessionId, name: sessionName || "Session" };
+    state.builder.blockPicker = emptyBlockPicker();
+    handlers.renderBuilder();
+    return true;
+  }
+  // A node picked here sets the exact same clipboard shape same-plan node
+  // copy already uses (builder-copy-node above) - the existing paste
+  // mechanism (renderNodePasteButton, POST /nodes/:nodeId/copy, now
+  // widened to accept a read/copy-access source) already works for it,
+  // with zero new clipboard type and zero new paste UI.
+  if (type === "builder-block-picker-choose-node") {
+    const nodeId = action.dataset.nodeId || "";
+    const nodeType = action.dataset.nodeType || "";
+    const nodeName = action.dataset.nodeName || "";
+    const itemCount = Number(action.dataset.itemCount) || 0;
+    if (!nodeId || !nodeType) return true;
+    state.builder.clipboard = { type: nodeType, nodeId, name: nodeName, itemCount };
     state.builder.blockPicker = emptyBlockPicker();
     handlers.renderBuilder();
     return true;

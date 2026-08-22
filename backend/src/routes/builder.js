@@ -458,6 +458,107 @@ router.get("/plans/:planId/blocks", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Lightweight session list for a block/day the coach has read/copy access
+// to - same shape/style as GET /plans/:planId/blocks one level down, powers
+// the "drill into a day, then pick a whole session or go deeper" picker
+// step. Field names (amPm/bta/time/name) match buildDraft()'s own session
+// shape so the frontend can reuse sessionLabel() (builder-helpers.js)
+// unchanged.
+router.get("/blocks/:blockId/sessions", async (req, res, next) => {
+  try {
+    const block = await getCopySourceBlock(req, req.params.blockId);
+    if (!block) return res.status(404).json({ error: "Day not found." });
+    const result = await query(
+      `select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name,
+              (select count(*)::int from plans.plan_items pi join plans.plan_nodes pn on pn.id = pi.plan_node_id where pn.plan_session_id = ps.id) as item_count
+       from plans.plan_sessions ps
+       where ps.plan_day_id = $1
+       order by ps.session_order nulls last`,
+      [block.id],
+    );
+    res.json({
+      sessions: result.rows.map((row) => ({
+        id: row.id,
+        amPm: row.am_pm || "",
+        bta: row.bta || "",
+        time: row.session_time ? String(row.session_time).slice(0, 5) : "",
+        name: row.name || "",
+        itemCount: row.item_count,
+      })),
+    });
+  } catch (error) { next(error); }
+});
+
+// Flat node list (no recursive CTE needed - the frontend nests it
+// client-side exactly the way renderBuilderNodeTree already does,
+// session.nodes.filter(node => node.parentId === parentId)) for a session
+// the coach has read/copy access to - powers the "drill into a session,
+// pick any domain/category/section" picker step.
+router.get("/sessions/:sessionId/nodes", async (req, res, next) => {
+  try {
+    const session = await getCopySourceSession(req, req.params.sessionId);
+    if (!session) return res.status(404).json({ error: "Session not found." });
+    const result = await query(
+      `select pn.id, pn.parent_id, pn.node_type, pn.name, pn.color, pn.icon_url,
+              (select count(*)::int from plans.plan_items pi where pi.plan_node_id = pn.id) as item_count
+       from plans.plan_nodes pn
+       where pn.plan_session_id = $1
+       order by pn.node_order nulls last`,
+      [session.id],
+    );
+    res.json({
+      nodes: result.rows.map((row) => ({
+        id: row.id,
+        parentId: row.parent_id || "",
+        type: row.node_type,
+        name: row.name,
+        iconUrl: row.icon_url || "",
+        itemCount: row.item_count,
+      })),
+    });
+  } catch (error) { next(error); }
+});
+
+// New session, appended to the target day (a day can already hold several
+// sessions - AM/PM, for instance - so unlike whole-day paste this never
+// overwrites anything and needs no confirm step). Source resolved with
+// READ/copy access (getCopySourceSession) - the coach doesn't need edit
+// rights on the plan they're copying FROM, only on the plan they're
+// pasting INTO (getEditableBlock, unchanged).
+router.post("/sessions/:sessionId/copy-into/:targetDayId", async (req, res, next) => {
+  let client;
+  try {
+    const source = await getCopySourceSession(req, req.params.sessionId);
+    if (!source) return res.status(404).json({ error: "Source session not found." });
+    const target = await getEditableBlock(req, req.params.targetDayId);
+    if (!target) return res.status(404).json({ error: "Target day not found." });
+    if (target.plan.plan_type !== "weekly") return res.status(400).json({ error: "Session paste is only available for weekly plans." });
+
+    client = await pool.connect();
+    const nextOrderResult = await client.query(
+      "select coalesce(max(session_order), -1) + 1 as next_order from plans.plan_sessions where plan_day_id = $1",
+      [target.id],
+    );
+    await client.query("begin");
+    const created = await client.query(
+      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name)
+       values ($1, $2, $3, $4, $5) returning id`,
+      [target.id, source.am_pm, source.bta, nextOrderResult.rows[0].next_order, source.name],
+    );
+    await copySessionContent(client, source.id, created.rows[0].id);
+    await client.query("commit");
+    client.release();
+    client = null;
+    return respondWithDraft(req, res, req.user, target.plan);
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+      client.release();
+    }
+    next(error);
+  }
+});
+
 router.patch("/blocks/:blockId", async (req, res, next) => {
   try {
     const block = await getEditableBlock(req, req.params.blockId);
@@ -702,9 +803,18 @@ router.post("/nodes/:nodeId/custom-exercise", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Source resolved with READ/copy access (getCopySourceNode), not edit
+// access - a coach doesn't need to be able to EDIT the plan they're
+// copying a node FROM, only the one they're pasting INTO (targetSession,
+// still getEditableSession/write-access, unchanged). Widening this from
+// getEditableNode (its original, same-plan-only shape) is what makes the
+// existing same-plan node clipboard/paste mechanism (builder-copy-node /
+// renderNodePasteButton) work for a node picked from another plan too,
+// with no new clipboard type or paste UI needed - the picker just sets the
+// exact same clipboard shape same-plan copy already uses.
 router.post("/nodes/:nodeId/copy", async (req, res, next) => {
   try {
-    const source = await getEditableNode(req, req.params.nodeId);
+    const source = await getCopySourceNode(req, req.params.nodeId);
     const targetSession = await getEditableSession(req, req.body?.targetSessionId);
     if (!source || !targetSession) return res.status(404).json({ error: "Source node or target session not found" });
     const targetParentId = nullableText(req.body?.targetParentId);
@@ -1520,6 +1630,37 @@ async function getCopySourceBlock(req, blockId) {
   const plan = await getCopySource(req, row.plan_id);
   if (!plan || !canCopyFromPlan(req, plan)) return null;
   return { id: row.id, plan };
+}
+
+// Read/copy-access counterparts of getEditableSession/getEditableNode below
+// - byte-for-byte the same join path, but resolving the plan via
+// getCopySource + canCopyFromPlan instead of getEditablePlan, exactly how
+// getCopySourceBlock above already mirrors getEditableBlock. Power the
+// session/node drill-down steps of the "Copy from another plan" picker
+// (session and node-level copy only ever need to READ the source plan, not
+// edit it) and, for getCopySourceNode, widen POST /nodes/:nodeId/copy so
+// the existing same-plan node clipboard/paste mechanism works cross-plan
+// too, with zero new clipboard type.
+async function getCopySourceSession(req, sessionId) {
+  const result = await query(
+    "select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1",
+    [sessionId],
+  );
+  const row = result.rows[0]; if (!row) return null;
+  const plan = await getCopySource(req, row.plan_id);
+  if (!plan || !canCopyFromPlan(req, plan)) return null;
+  return { ...row, plan };
+}
+
+async function getCopySourceNode(req, nodeId) {
+  const result = await query(
+    "select pn.id, pn.plan_session_id, pn.parent_id, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1",
+    [nodeId],
+  );
+  const row = result.rows[0]; if (!row) return null;
+  const plan = await getCopySource(req, row.plan_id);
+  if (!plan || !canCopyFromPlan(req, plan)) return null;
+  return { ...row, plan };
 }
 
 async function requirePlan(req, planId, res) {
