@@ -496,6 +496,8 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   if (type === "builder-entry-back") {
     state.builder.entryType = "";
     state.builder.athletePickerOpen = false;
+    state.builder.createName = "";
+    state.builder.createColor = "#C2F0E6";
     handlers.renderBuilder();
     return true;
   }
@@ -1196,6 +1198,8 @@ export async function submitBuilderForm(form, handlers) {
     state.builder.createAthleteIds = [];
     state.builder.planType = "weekly";
     state.builder.weekStart = "";
+    state.builder.createName = "";
+    state.builder.createColor = "#C2F0E6";
     state.builder.addNodeOpen = false;
     await handlers.loadBuilderExercises();
     return;

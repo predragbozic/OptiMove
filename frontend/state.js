@@ -103,6 +103,12 @@ export const emptyBuilderState = (overrides = {}) => ({
   entryType: "",
   planType: "weekly",
   weekStart: "",
+  // Mirror of the create form's uncontrolled name/color inputs - without this,
+  // opening the athlete picker (which re-renders the whole create-form branch)
+  // wipes whatever the coach already typed/picked, since those inputs would
+  // otherwise have no value= binding at all.
+  createName: "",
+  createColor: "#C2F0E6",
   selectedSessionId: "",
   selectedNodeId: "",
   exerciseQuery: "",
