@@ -66,16 +66,77 @@ test("7. Specific program step, once an athlete is chosen, lists that athlete's 
   assert.match(html, /158 exercises/);
 });
 
-test("8. once a plan is chosen (planId set), the block list (state.builder.blockPicker.blocks) is shown, wired to choose-block", () => {
+test("8. once a plan is chosen (planId set), the block list (state.builder.blockPicker.blocks) is shown, wired to drill-block", () => {
   const html = renderBlockPickerModal(baseState({
     sourceType: "template",
     planId: "t1",
     planName: "Rechab template",
     blocks: [{ id: "b1", name: "Phase 1", sessionCount: 2, itemCount: 30 }],
   }));
-  assert.match(html, /data-action="builder-block-picker-choose-block" data-block-id="b1" data-block-name="Phase 1"/);
+  assert.match(html, /data-action="builder-block-picker-drill-block" data-block-id="b1" data-block-name="Phase 1"/);
   assert.match(html, /2 sessions - 30 exercises/);
   assert.match(html, /<h3>Rechab template<\/h3>/, "the modal header must name the chosen plan once one is picked");
+});
+
+// Session-list step (Phase 2 of "prvo b pa onda a"): picking a day no
+// longer sets the clipboard directly - it drills into that day's sessions,
+// with "Copy this whole day" staying available for a coach who just wants
+// the old whole-day behavior.
+
+test("11. once a day is chosen (blockId set), the session list (state.builder.blockPicker.sessions) is shown, wired to drill-session, alongside a 'Copy this whole day' shortcut", () => {
+  const html = renderBlockPickerModal(baseState({
+    sourceType: "template",
+    planId: "t1",
+    planName: "Rechab template",
+    blockId: "b1",
+    blockName: "Phase 1",
+    sessions: [{ id: "s1", amPm: "AM", bta: "T", name: "", itemCount: 5 }],
+  }));
+  assert.match(html, /data-action="builder-block-picker-drill-session" data-session-id="s1"/);
+  assert.match(html, /data-action="builder-block-picker-copy-whole-block"/);
+  assert.match(html, /Copy this whole day/);
+});
+
+test("11b. the session list shows a loading state while fetching", () => {
+  const html = renderBlockPickerModal(baseState({ sourceType: "template", planId: "t1", blockId: "b1", sessionsLoading: true, sessions: [] }));
+  assert.match(html, /Loading sessions/);
+});
+
+test("11c. an empty session list shows an explicit empty state", () => {
+  const html = renderBlockPickerModal(baseState({ sourceType: "template", planId: "t1", blockId: "b1", sessions: [] }));
+  assert.match(html, /This day has no sessions yet\./);
+});
+
+// Node-tree step: picking a session shows its domain/category/section tree,
+// with "Copy this whole session" as the equivalent whole-thing shortcut.
+
+test("16. once a session is chosen (sessionId set), the node tree (state.builder.blockPicker.nodes) is shown, wired to choose-node, alongside a 'Copy this whole session' shortcut", () => {
+  const html = renderBlockPickerModal(baseState({
+    sourceType: "template",
+    planId: "t1",
+    blockId: "b1",
+    sessionId: "s1",
+    sessionName: "AM / Training",
+    nodes: [
+      { id: "d1", parentId: "", type: "domain", name: "Strength", iconUrl: "", itemCount: 0 },
+      { id: "sec1", parentId: "d1", type: "section", name: "Squat", iconUrl: "", itemCount: 3 },
+    ],
+  }));
+  assert.match(html, /data-action="builder-block-picker-choose-node" data-node-id="d1" data-node-type="domain" data-node-name="Strength"/);
+  assert.match(html, /data-action="builder-block-picker-choose-node" data-node-id="sec1" data-node-type="section" data-node-name="Squat" data-item-count="3"/);
+  assert.match(html, /3 exercises/);
+  assert.match(html, /data-action="builder-block-picker-copy-whole-session"/);
+  assert.match(html, /Copy this whole session/);
+});
+
+test("16b. the node tree shows a loading state while fetching", () => {
+  const html = renderBlockPickerModal(baseState({ sourceType: "template", planId: "t1", blockId: "b1", sessionId: "s1", nodesLoading: true, nodes: [] }));
+  assert.match(html, /Loading structure/);
+});
+
+test("16c. an empty node tree shows an explicit empty state, not a blank body", () => {
+  const html = renderBlockPickerModal(baseState({ sourceType: "template", planId: "t1", blockId: "b1", sessionId: "s1", nodes: [] }));
+  assert.match(html, /This session has no domains, categories, or sections yet\./);
 });
 
 test("9. the block list shows a loading state while fetching", () => {

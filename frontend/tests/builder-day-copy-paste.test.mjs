@@ -67,3 +67,26 @@ test("7. a cross-plan-block clipboard never leaks a Paste button into a non-week
   const html = renderBuilderBlock(emptyBlock({ id: "block-1" }), "", "", false, baseContext({ clipboard }));
   assert.doesNotMatch(html, /data-action="builder-paste-day"/);
 });
+
+// Phase F2: a "Copy this whole session" clipboard entry (cross-plan-session)
+// gets its own Paste session button, independent of Paste day - a session
+// paste always appends a new session to the target day rather than
+// overwriting the day's own content.
+test("8. a cross-plan-session clipboard shows a Paste session button on every weekly day", () => {
+  const clipboard = { type: "cross-plan-session", sessionId: "session-1", name: "AM / Training" };
+  const html = renderBuilderBlock(emptyBlock({ id: "day-2" }), "", "", true, baseContext({ clipboard }));
+  assert.match(html, /data-action="builder-paste-session" data-day-id="day-2"/);
+  assert.match(html, /Paste session &quot;AM \/ Training&quot;|Paste session "AM \/ Training"/);
+});
+
+test("9. a cross-plan-session clipboard never leaks a Paste session button into a non-weekly block", () => {
+  const clipboard = { type: "cross-plan-session", sessionId: "session-1", name: "AM / Training" };
+  const html = renderBuilderBlock(emptyBlock({ id: "block-1" }), "", "", false, baseContext({ clipboard }));
+  assert.doesNotMatch(html, /data-action="builder-paste-session"/);
+});
+
+test("10. a day clipboard (not a session) never shows a Paste session button", () => {
+  const clipboard = { type: "day", dayId: "day-1", name: "Monday" };
+  const html = renderBuilderBlock(emptyBlock({ id: "day-2" }), "", "", true, baseContext({ clipboard }));
+  assert.doesNotMatch(html, /data-action="builder-paste-session"/);
+});

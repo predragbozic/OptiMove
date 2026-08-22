@@ -92,6 +92,19 @@ export const emptyBlockPicker = (overrides = {}) => ({
   planName: "",
   blocks: [],
   blocksLoading: false,
+  // Drill-down steps (Phase F2): picking a block no longer immediately sets
+  // the clipboard - it loads that block's sessions instead, so a coach can
+  // choose "copy this whole day" OR drill into a session, and from there
+  // either "copy this whole session" OR drill into that session's node
+  // tree to copy just one domain/category/section.
+  blockId: "",
+  blockName: "",
+  sessions: [],
+  sessionsLoading: false,
+  sessionId: "",
+  sessionName: "",
+  nodes: [],
+  nodesLoading: false,
   error: "",
   ...overrides,
 });
