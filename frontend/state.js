@@ -98,6 +98,9 @@ export const emptyBlockPicker = (overrides = {}) => ({
 
 export const emptyBuilderState = (overrides = {}) => ({
   draft: null,
+  // "" until a coach picks one of the three entry tiles (weekly/program/template) -
+  // gates whether renderBuilderInner shows the tile grid or the create form.
+  entryType: "",
   planType: "weekly",
   weekStart: "",
   selectedSessionId: "",

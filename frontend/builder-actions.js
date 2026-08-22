@@ -481,9 +481,20 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     handlers.renderBuilder();
     return true;
   }
-  if (type === "builder-set-plan-type") {
-    state.builder.planType = action.dataset.planType === "weekly" ? "weekly" : "program";
+  if (type === "builder-choose-entry-type") {
+    const entryType = action.dataset.entryType;
+    state.builder.entryType = entryType;
+    state.builder.planType = entryType === "weekly" ? "weekly" : "program";
     state.builder.weekStart ||= weekMondayIso(localDateIso());
+    // Program tile nudges straight into picking an athlete (a Specific Program
+    // is meant to be assigned); Template tile leaves the picker closed so it
+    // defaults to a reusable, unassigned template - same default as today.
+    state.builder.athletePickerOpen = entryType === "program";
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-entry-back") {
+    state.builder.entryType = "";
     state.builder.athletePickerOpen = false;
     handlers.renderBuilder();
     return true;
