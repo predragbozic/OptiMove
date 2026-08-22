@@ -9184,6 +9184,14 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 }
 .builder-inline-add-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 
+.builder-preset-picker { margin: -2px 0 10px; }
+.builder-preset-picker-trigger { font-size: 12px; }
+.builder-preset-picker-list { display: none; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; margin-top: 8px; }
+.builder-preset-picker.is-open .builder-preset-picker-list { display: flex; }
+.builder-preset-picker-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 1px solid var(--line, #dfe4e8); border-radius: 7px; background: #fff; color: inherit; text-align: left; cursor: pointer; font: inherit; font-size: 13px; }
+.builder-preset-picker-option:hover { border-color: var(--accent, #1f6f68); background: #eef8f6; }
+.builder-preset-picker-option .builder-node-icon { flex-shrink: 0; }
+
 .builder-add-node-triggers {
   display: flex;
   align-items: center;

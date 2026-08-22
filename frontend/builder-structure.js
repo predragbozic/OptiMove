@@ -1,3 +1,4 @@
+import { builderIconGlyph } from "./builder-helpers.js";
 import { renderImage } from "./media.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import { formatDate, weekDayName, escapeAttr, escapeHtml } from "./utils.js";
@@ -159,17 +160,14 @@ function renderBuilderAddTriggers(session, parentId, validTypes, context) {
 function renderBuilderInlineAddForm(session, parentId, context) {
   const type = ALL_NODE_TYPES.includes(context.inlineAddType) ? context.inlineAddType : "domain";
   const label = context.exerciseNodeLabel(type);
-  const presets = (context.builderNodePresets || []).filter((preset) => preset.node_type === type);
-  const listId = `builder-preset-names-${type}`;
+  const presets = context.builderNodePresets || [];
   return `
     <form class="builder-node-form builder-inline-add-form" data-builder-form="add-node" data-session-id="${escapeAttr(session.id)}">
       <div class="builder-node-form-head"><strong>Add ${escapeHtml(label)}</strong></div>
       <input type="hidden" name="parentId" value="${escapeAttr(parentId)}">
       <input type="hidden" name="nodeType" value="${escapeAttr(type)}">
-      <input class="builder-text-input" name="name" list="${escapeAttr(listId)}" placeholder="${escapeAttr(label)} name" required autocomplete="off" data-builder-preset-name-input>
-      <datalist id="${escapeAttr(listId)}">
-        ${presets.map((preset) => `<option value="${escapeAttr(preset.name)}"></option>`).join("")}
-      </datalist>
+      <input class="builder-text-input" name="name" placeholder="${escapeAttr(label)} name" required autocomplete="off" data-builder-preset-name-input>
+      ${renderPresetPicker(type, presets)}
       ${renderPastelSwatches("color", "", { allowCustom: true, collapsed: true })}
       <input class="builder-text-input" name="iconUrl" type="url" placeholder="Icon URL (optional)" aria-label="Node icon URL">
       <input class="builder-text-input" name="shortNote" maxlength="60" placeholder="Short note (optional, shown on the calendar)" aria-label="Short note">
@@ -188,6 +186,42 @@ function renderBuilderNodeIcon(iconUrl, context) {
     return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="">`;
   }
   return context.builderIconGlyph(iconUrl);
+}
+
+// Replaces the plain-text <datalist> presets used to have (no way to show an
+// icon in a native datalist option) with a small collapsible list, each row
+// showing the same icon (renderBuilderNodeIcon) the preset will render as
+// once it's actually placed in the tree/seen in the Calendar - same
+// collapsed-until-clicked interaction as the pastel color picker
+// (.pastel-palette-collapsed, taxonomy-view.js) right next to it in these
+// same forms. Picking a row sets the name/color/icon fields directly from
+// the preset's own data (not by re-matching typed text), so it works
+// identically whether this is the add-node form or the edit-node form (the
+// edit form has never had a nodeType hidden field for the older
+// text-match-based applyBuilderNodePresetMatch to key off of).
+function renderPresetPickerIcon(iconUrl) {
+  if (iconUrl && /^https?:\/\//i.test(iconUrl)) {
+    return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="">`;
+  }
+  return builderIconGlyph(iconUrl);
+}
+
+function renderPresetPicker(nodeType, presets) {
+  const typePresets = (presets || []).filter((preset) => preset.node_type === nodeType);
+  if (!typePresets.length) return "";
+  return `
+    <div class="builder-preset-picker">
+      <button type="button" class="text-action builder-preset-picker-trigger" data-action="builder-toggle-preset-picker">Pick from presets</button>
+      <div class="builder-preset-picker-list">
+        ${typePresets.map((preset) => `
+          <button type="button" class="builder-preset-picker-option" data-action="builder-pick-preset" data-name="${escapeAttr(preset.name)}" data-color="${escapeAttr(preset.color || "")}" data-icon-url="${escapeAttr(preset.icon_url || "")}">
+            <span class="builder-node-icon">${renderPresetPickerIcon(preset.icon_url)}</span>
+            <span>${escapeHtml(preset.name)}</span>
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function isInlineAddHere(session, parentId, context) {
@@ -312,15 +346,11 @@ export function renderNodeEditForm(node, label, isOpen = false, presets = []) {
   if (!isOpen) {
     return `<div class="builder-node-edit-heading"><span class="builder-node-edit-name">${escapeHtml(node.name)}</span>${toggleButton}</div>`;
   }
-  const typePresets = presets.filter((preset) => preset.node_type === node.type);
-  const listId = `builder-edit-preset-names-${escapeAttr(node.id)}`;
   return `
     <form class="builder-node-form builder-node-edit-form" data-builder-form="update-node" data-builder-autosave data-node-id="${escapeAttr(node.id)}">
       <div class="builder-node-form-head"><strong>Editing ${escapeHtml(label)}</strong>${toggleButton}</div>
-      <input class="builder-text-input" name="name" list="${listId}" value="${escapeAttr(node.name || "")}" placeholder="Name" aria-label="${escapeAttr(label)} name" autocomplete="off">
-      <datalist id="${listId}">
-        ${typePresets.map((preset) => `<option value="${escapeAttr(preset.name)}"></option>`).join("")}
-      </datalist>
+      <input class="builder-text-input" name="name" value="${escapeAttr(node.name || "")}" placeholder="Name" aria-label="${escapeAttr(label)} name" autocomplete="off">
+      ${renderPresetPicker(node.type, presets)}
       ${renderPastelSwatches("color", node.color || "", { allowCustom: true, collapsed: true })}
       <input class="builder-text-input" name="iconUrl" type="url" value="${escapeAttr(node.iconUrl || "")}" placeholder="Icon URL (optional)" aria-label="${escapeAttr(label)} icon URL">
       <input class="builder-text-input" name="shortNote" maxlength="60" value="${escapeAttr(node.shortNote || "")}" placeholder="Short note (optional, shown on the calendar)" aria-label="${escapeAttr(label)} short note">

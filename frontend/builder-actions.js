@@ -496,6 +496,40 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     handlers.renderBuilder();
     return true;
   }
+  // Pure DOM toggles, same "no state, no re-render" shape as the pastel
+  // color picker right next to these forms (taxonomy-actions.js's
+  // taxonomy-toggle-palette/taxonomy-pick-color).
+  if (type === "builder-toggle-preset-picker") {
+    action.closest(".builder-preset-picker")?.classList.toggle("is-open");
+    return true;
+  }
+  if (type === "builder-pick-preset") {
+    const form = action.closest("form");
+    const nameInput = form?.querySelector('[name="name"]');
+    const colorInput = form?.querySelector('[name="color"]');
+    const iconInput = form?.querySelector('[name="iconUrl"]');
+    if (nameInput) {
+      nameInput.value = action.dataset.name || "";
+      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    if (iconInput) iconInput.value = action.dataset.iconUrl || "";
+    if (colorInput) {
+      colorInput.value = action.dataset.color || "";
+      const currentSwatch = colorInput.closest(".pastel-palette")?.querySelector(".pastel-current-swatch");
+      if (currentSwatch) {
+        currentSwatch.style.background = action.dataset.color || "";
+        currentSwatch.classList.toggle("is-empty", !action.dataset.color);
+      }
+      // The edit-node form is autosave (data-builder-autosave) - this
+      // "change" is what actually saves the picked preset's name/color/icon
+      // together in one PATCH, the same as any other field's own blur would.
+      // The add-node form isn't autosave, so this is a harmless no-op there;
+      // it still requires the explicit "Add" submit, same as typing a name.
+      colorInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    action.closest(".builder-preset-picker")?.classList.remove("is-open");
+    return true;
+  }
   if (type === "builder-choose-entry-type") {
     const entryType = action.dataset.entryType;
     state.builder.entryType = entryType;
