@@ -10,7 +10,7 @@ import {
   sessionLabel,
 } from "./builder-helpers.js";
 import { renderBuilderAddConfirmation, renderBuilderExerciseResults, renderBuilderStickyBar } from "./builder-exercises.js";
-import { renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
+import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import {
   ICON_CHECK,
@@ -19,6 +19,7 @@ import {
   renderBuilderAddBlockCard,
   renderBuilderBlock,
   renderBuilderStructureModal,
+  renderImportBlockIconButton,
 } from "./builder-structure.js";
 import { els } from "./dom.js";
 import { renderImage } from "./media.js";
@@ -406,13 +407,13 @@ function renderBuilderInner() {
       </header>
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : ""}
-      ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
+      ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type === "cross-plan-block" ? "block" : state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       <div class="builder-layout">
         <section class="panel builder-outline">
           <div class="section-heading">
             <div><p class="eyebrow">Day and session structure</p><h3>${isWeekly ? "Seven-day plan" : "Blocks and sessions"}</h3></div>
             <div class="builder-outline-info-buttons">
-              ${isWeekly ? "" : `<button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program structure example"><span class="button-icon">i</span></button>`}
+              ${isWeekly ? renderImportBlockIconButton() : `<button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program structure example"><span class="button-icon">i</span></button>`}
               <button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session structure example"><span class="button-icon">i</span></button>
             </div>
           </div>
@@ -434,6 +435,7 @@ function renderBuilderInner() {
       ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}
       ${renderCopyPlanModal(state)}
       ${renderOverwriteDayConfirmHtml(state)}
+      ${renderBlockPickerModal(state)}
     </section>
   `;
 }

@@ -3,7 +3,7 @@ import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-
 import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { invalidateCoachHomeCache } from "./coach-home-data.js";
 import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
-import { emptyBuilderState, state } from "./state.js";
+import { emptyBlockPicker, emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
 
 // feature/mobile-builder-section-workflow: replaces the old post-add
@@ -107,9 +107,15 @@ function queuedBuilderApi(url, options) {
 // Shared by the initial "Paste day" click and the overwrite-confirm dialog's
 // own confirm button - the only difference between them is whether
 // confirmOverwrite is set, so this is the one place that builds the request
-// for either caller.
-function requestDayPaste(sourceDayId, targetDayId, confirmOverwrite) {
-  return queuedBuilderApi(`/api/builder/days/${encodeURIComponent(sourceDayId)}/copy-into/${encodeURIComponent(targetDayId)}`, {
+// for either caller. source is {type, id}: type "day" (Phase 1 - another
+// day of the SAME weekly plan) hits /days/:id/copy-into, type
+// "cross-plan-block" (Phase 2 - a block from a Template/Specific Program)
+// hits /blocks/:id/copy-into - both resolve to the exact same backend
+// behavior past ownership resolution (see respondCopyIntoDay in
+// backend/src/routes/builder.js), only the URL differs.
+function requestDayPaste(source, targetDayId, confirmOverwrite) {
+  const segment = source.type === "cross-plan-block" ? "blocks" : "days";
+  return queuedBuilderApi(`/api/builder/${segment}/${encodeURIComponent(source.id)}/copy-into/${encodeURIComponent(targetDayId)}`, {
     method: "POST",
     body: JSON.stringify(withBatchSyncPayload(confirmOverwrite ? { confirmOverwrite: true } : {})),
   });
@@ -719,12 +725,13 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   }
   if (type === "builder-paste-day") {
     const clipboard = state.builder.clipboard;
-    if (!clipboard || clipboard.type !== "day") return true;
+    if (!clipboard || (clipboard.type !== "day" && clipboard.type !== "cross-plan-block")) return true;
+    const source = clipboard.type === "day" ? { type: "day", id: clipboard.dayId } : { type: "cross-plan-block", id: clipboard.blockId };
     const targetDayId = action.dataset.dayId || "";
-    if (!targetDayId || targetDayId === clipboard.dayId) return true;
+    if (!targetDayId || (source.type === "day" && targetDayId === source.id)) return true;
     action.disabled = true;
     try {
-      setBuilderDraft(await requestDayPaste(clipboard.dayId, targetDayId, false));
+      setBuilderDraft(await requestDayPaste(source, targetDayId, false));
       handlers.renderBuilder();
     } catch (error) {
       action.disabled = false;
@@ -732,7 +739,7 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
       // styled overwrite-confirm dialog (same pattern as messages.js's
       // hideConfirmOpen) instead of surfacing this as a plain error.
       if (error?.status === 409) {
-        state.builder.overwriteDayConfirm = { sourceDayId: clipboard.dayId, targetDayId };
+        state.builder.overwriteDayConfirm = { sourceType: source.type, sourceId: source.id, targetDayId };
         handlers.renderBuilder();
         return true;
       }
@@ -754,12 +761,94 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     }
     action.disabled = true;
     try {
-      setBuilderDraft(await requestDayPaste(pending.sourceDayId, pending.targetDayId, true));
+      setBuilderDraft(await requestDayPaste({ type: pending.sourceType, id: pending.sourceId }, pending.targetDayId, true));
       handlers.renderBuilder();
     } catch (error) {
       action.disabled = false;
       handlers.renderBuilderError(error);
     }
+    return true;
+  }
+  if (type === "builder-open-block-picker") {
+    state.builder.blockPicker = emptyBlockPicker({ open: true });
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-close-block-picker") {
+    state.builder.blockPicker = emptyBlockPicker();
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-back-to-source") {
+    state.builder.blockPicker = emptyBlockPicker({ open: true });
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-back-to-athletes") {
+    state.builder.blockPicker = { ...state.builder.blockPicker, athleteId: "", athletePlans: [], planId: "", planName: "", blocks: [], error: "" };
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-back-to-plans") {
+    state.builder.blockPicker = { ...state.builder.blockPicker, planId: "", planName: "", blocks: [], error: "" };
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-choose-source-type") {
+    const sourceType = action.dataset.sourceType || "";
+    state.builder.blockPicker = { ...state.builder.blockPicker, sourceType, error: "" };
+    if (sourceType === "template") {
+      state.builder.blockPicker.templatesLoading = true;
+      handlers.renderBuilder();
+      try {
+        const result = await api("/api/templates?scope=my_programs");
+        state.builder.blockPicker.templates = result.templates || [];
+      } catch (error) {
+        state.builder.blockPicker.error = error.message || "Could not load templates.";
+      }
+      state.builder.blockPicker.templatesLoading = false;
+    }
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-choose-athlete") {
+    const athleteId = action.dataset.athleteId || "";
+    if (!athleteId) return true;
+    state.builder.blockPicker = { ...state.builder.blockPicker, athleteId, athletePlansLoading: true, error: "" };
+    handlers.renderBuilder();
+    try {
+      const result = await api(`/api/athletes/${encodeURIComponent(athleteId)}/plans`);
+      state.builder.blockPicker.athletePlans = (result.plans || []).filter((plan) => plan.plan_type === "program" && !plan.is_template);
+    } catch (error) {
+      state.builder.blockPicker.error = error.message || "Could not load this athlete's programs.";
+    }
+    state.builder.blockPicker.athletePlansLoading = false;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-choose-plan") {
+    const planId = action.dataset.planId || "";
+    const planName = action.dataset.planName || "";
+    if (!planId) return true;
+    state.builder.blockPicker = { ...state.builder.blockPicker, planId, planName, blocksLoading: true, error: "" };
+    handlers.renderBuilder();
+    try {
+      const result = await api(`/api/builder/plans/${encodeURIComponent(planId)}/blocks`);
+      state.builder.blockPicker.blocks = result.blocks || [];
+    } catch (error) {
+      state.builder.blockPicker.error = error.message || "Could not load this plan's blocks.";
+    }
+    state.builder.blockPicker.blocksLoading = false;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-choose-block") {
+    const blockId = action.dataset.blockId || "";
+    const blockName = action.dataset.blockName || "Block";
+    if (!blockId) return true;
+    state.builder.clipboard = { type: "cross-plan-block", sourcePlanId: state.builder.blockPicker.planId, blockId, name: blockName };
+    state.builder.blockPicker = emptyBlockPicker();
+    handlers.renderBuilder();
     return true;
   }
   if (type === "builder-toggle-section-preview") {

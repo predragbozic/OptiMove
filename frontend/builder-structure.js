@@ -8,6 +8,7 @@ const ICON_COPY = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden
 export const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>`;
 const ICON_PASTE = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"></rect><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"></path><path d="M9 12h6M9 16h6"></path></svg>`;
 const ICON_PENCIL = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z"></path><path d="M13 7l4 4"></path></svg>`;
+const ICON_IMPORT = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M12 3v11"></path><path d="M8 10l4 4 4-4"></path><path d="M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"></path></svg>`;
 
 function renderConfirmIconButton({ type = "submit", action = "", dataAttrs = "", label = "Add" } = {}) {
   return `<button class="plain-button builder-icon-action builder-confirm-icon" type="${type}" ${action ? `data-action="${escapeAttr(action)}"` : ""} ${dataAttrs} aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_CHECK}</button>`;
@@ -29,13 +30,30 @@ function renderCopyDayIconButton(dayId) {
   return `<button class="plain-button builder-icon-action builder-copy-icon" type="button" data-action="builder-copy-day" data-day-id="${escapeAttr(dayId)}" aria-label="Copy day" title="Copy day">${ICON_COPY}</button>`;
 }
 
-// Only rendered on days OTHER than the one currently in the clipboard - a
-// day pasting onto itself is meaningless, and the backend already rejects
-// it (source id === target id), so this just keeps the button from
-// appearing somewhere it can never succeed.
+// Phase 2: opens the "pick a block from another plan" picker
+// (builder-modals.js's renderBlockPickerModal) - once a block is chosen
+// there it sets the clipboard the exact same way Copy day does, so the
+// SAME renderPasteDayIconButton/builder-paste-day flow below handles it.
+// Rendered ONCE at the outline panel's own header (frontend/builder-view.js),
+// not per-day - unlike Copy/Paste day, this isn't tied to any one day, so
+// showing it 7 times (once per weekly day) would just be 7 identical
+// buttons doing the exact same thing.
+export function renderImportBlockIconButton() {
+  return `<button class="plain-button builder-icon-action builder-copy-icon" type="button" data-action="builder-open-block-picker" aria-label="Copy from another plan" title="Copy from another plan">${ICON_IMPORT}</button>`;
+}
+
+// Only rendered on days OTHER than the one currently in the clipboard when
+// the clipboard holds a same-plan day (pasting a day onto itself is
+// meaningless, and the backend already rejects it) - a cross-plan-block
+// clipboard has no such self-collision (its id belongs to a different
+// plan entirely), so it shows on every weekly day.
 function renderPasteDayIconButton(dayId, context) {
   const clipboard = context.clipboard;
-  if (clipboard?.type !== "day" || clipboard.dayId === dayId) return "";
+  if (clipboard?.type === "day") {
+    if (clipboard.dayId === dayId) return "";
+  } else if (clipboard?.type !== "cross-plan-block") {
+    return "";
+  }
   const title = `Paste "${clipboard.name || "day"}"`;
   return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-day" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
 }

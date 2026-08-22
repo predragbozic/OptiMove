@@ -117,12 +117,12 @@ test("5. a 409 from paste opens the overwrite-confirm dialog (state.builder.over
 
   await handleBuilderWorkspaceAction(action, noopHandlers({ renderBuilderError: () => { errorSeen = true; } }));
 
-  assert.deepEqual(state.builder.overwriteDayConfirm, { sourceDayId: "day-1", targetDayId: "day-2" });
+  assert.deepEqual(state.builder.overwriteDayConfirm, { sourceType: "day", sourceId: "day-1", targetDayId: "day-2" });
   assert.equal(errorSeen, false, "a 409 here is an expected, handled case (needs confirmation) - not a surfaced error");
 });
 
 test("6. builder-overwrite-day-cancel clears the pending confirm without any network call", async () => {
-  state.builder.overwriteDayConfirm = { sourceDayId: "day-1", targetDayId: "day-2" };
+  state.builder.overwriteDayConfirm = { sourceType: "day", sourceId: "day-1", targetDayId: "day-2" };
   const calls = installFetchMock([]);
   const action = fakeAction({ action: "builder-overwrite-day-cancel" });
 
@@ -133,7 +133,7 @@ test("6. builder-overwrite-day-cancel clears the pending confirm without any net
 });
 
 test("7. builder-overwrite-day-confirm re-sends the SAME paste with confirmOverwrite: true and clears the pending state", async () => {
-  state.builder.overwriteDayConfirm = { sourceDayId: "day-1", targetDayId: "day-2" };
+  state.builder.overwriteDayConfirm = { sourceType: "day", sourceId: "day-1", targetDayId: "day-2" };
   const calls = installFetchMock([{ status: 200, body: makeDraft("plan-1", { name: "Replaced" }) }]);
   const action = fakeAction({ action: "builder-overwrite-day-confirm" });
 
@@ -146,11 +146,22 @@ test("7. builder-overwrite-day-confirm re-sends the SAME paste with confirmOverw
   assert.equal(state.builder.draft.plan.name, "Replaced");
 });
 
+test("7b. builder-overwrite-day-confirm re-sends against /blocks/... when the pending source was a cross-plan block, not /days/...", async () => {
+  state.builder.overwriteDayConfirm = { sourceType: "cross-plan-block", sourceId: "block-9", targetDayId: "day-2" };
+  const calls = installFetchMock([{ status: 200, body: makeDraft("plan-1", { name: "Replaced" }) }]);
+  const action = fakeAction({ action: "builder-overwrite-day-confirm" });
+
+  await handleBuilderWorkspaceAction(action, noopHandlers());
+
+  assert.equal(calls[0].url, "/api/builder/blocks/block-9/copy-into/day-2");
+  assert.equal(calls[0].body.confirmOverwrite, true);
+});
+
 test("8. renderOverwriteDayConfirmHtml renders nothing when there is no pending confirm, and the dialog when there is", () => {
   state.builder = emptyBuilderState();
   assert.equal(renderOverwriteDayConfirmHtml(state), "");
 
-  state.builder.overwriteDayConfirm = { sourceDayId: "day-1", targetDayId: "day-2" };
+  state.builder.overwriteDayConfirm = { sourceType: "day", sourceId: "day-1", targetDayId: "day-2" };
   const html = renderOverwriteDayConfirmHtml(state);
   assert.match(html, /exit-confirm-modal/, "must reuse the app's existing styled confirm modal classes, not a one-off style or window.confirm");
   assert.match(html, /data-action="builder-overwrite-day-cancel"/);

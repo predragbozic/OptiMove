@@ -7874,6 +7874,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-athlete-picker-continue:hover { background: #eaf7ee; }
 .builder-athlete-picker-continue:disabled { color: var(--muted, #667085); border-color: var(--line, #dfe4e8); opacity: .6; cursor: not-allowed; }
 .builder-copy-plan-modal .builder-athlete-options { max-height: 300px; }
+.builder-block-picker-modal { width: min(520px, 96vw); max-height: min(640px, 88dvh); overflow: auto; }
+.builder-block-picker-list, .builder-block-picker-source-choice { display: grid; gap: 8px; max-height: 380px; overflow: auto; margin-bottom: 10px; }
+.builder-block-picker-option { display: block; width: 100%; padding: 11px; border: 1px solid var(--line, #dfe4e8); border-radius: 7px; background: #fff; color: inherit; text-align: left; cursor: pointer; }
+.builder-block-picker-option:hover { border-color: #287e77; background: #eef8f6; }
+.builder-block-picker-option strong, .builder-block-picker-option small { display: block; }
+.builder-block-picker-option small { margin-top: 3px; color: var(--muted, #667085); font-size: 12px; }
 .builder-copy-plan-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
 .builder-copy-plan-footer .muted { margin: 0; font-size: 12px; }
 .builder-batch-switcher { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid #dce6ea; border-radius: 8px; background: #fff; box-shadow: 0 10px 28px rgba(15, 23, 42, .06); }

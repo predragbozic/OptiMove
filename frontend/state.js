@@ -80,6 +80,22 @@ export const emptyTemplatePreview = (overrides = {}) => ({
   ...overrides,
 });
 
+export const emptyBlockPicker = (overrides = {}) => ({
+  open: false,
+  sourceType: "",
+  templates: [],
+  templatesLoading: false,
+  athleteId: "",
+  athletePlans: [],
+  athletePlansLoading: false,
+  planId: "",
+  planName: "",
+  blocks: [],
+  blocksLoading: false,
+  error: "",
+  ...overrides,
+});
+
 export const emptyBuilderState = (overrides = {}) => ({
   draft: null,
   planType: "weekly",
@@ -128,6 +144,14 @@ export const emptyBuilderState = (overrides = {}) => ({
   // pending-action payload, since day-paste can target any of several days
   // (unlike a single "currently selected conversation").
   overwriteDayConfirm: null,
+  // Phase 2: "Copy a block from another plan" picker, opened from a weekly
+  // day's header. A small wizard - sourceType ("template"|"program") ->
+  // (if "program") pick an athlete -> pick that athlete's/the template
+  // library's specific plan -> pick one of that plan's blocks (fetched
+  // lightweight via GET /api/builder/plans/:planId/blocks, not the full
+  // node/item tree). Picking a block sets state.builder.clipboard to
+  // {type: "cross-plan-block", ...} and closes this.
+  blockPicker: emptyBlockPicker(),
   showNote: false,
   addNodeOpen: false,
   sessionQuickAdd: { blockId: "", amPm: "", bta: "", time: "" },
