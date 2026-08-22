@@ -364,6 +364,7 @@ function renderBuilderInner() {
                 <label class="search-field"><span>Icon</span><select name="iconUrl">${builderIconOptions()}</select></label>
               </div>
             </div>
+            ${isWeekly ? "" : `<label class="search-field"><span>Cover image URL (optional)</span><input name="coverImageUrl" type="url" placeholder="https://..."></label>`}
             <input type="hidden" name="planType" value="${isWeekly ? "weekly" : "program"}">
             <input type="hidden" name="athleteId" value="${escapeAttr(state.builder.createAthleteId)}">
             ${isWeekly ? `<label class="search-field builder-week-start"><span>Any date in the planned week</span><input name="weekStart" data-builder-week-start type="date" value="${escapeAttr(weekStart)}" required><small>The weekly plan will begin on Monday ${escapeHtml(formatDate(weekStart))}.</small></label>` : ""}
