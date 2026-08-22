@@ -1095,22 +1095,55 @@ async function applyEditDraft(req, draftPlan) {
   }
 }
 
-async function copyProgramTree(client, sourcePlanId, targetPlanId) {
+// Copies every day AND every session across those days in two batched
+// round trips total, instead of one INSERT per day PLUS one query-then-
+// INSERT-per-session for every one of those days (a multi-week program's
+// "open for editing"/"save" path used to mean dozens of sequential awaited
+// queries just for the day/session skeleton, before a single node or item
+// was ever touched - the dominant cost behind Edit/Copy taking 5-10s to
+// open the Builder on a large program). Node/item content per session
+// still goes through copySessionContent() (itself already a small,
+// constant number of round trips per session, per the comment above it).
+export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
   const days = await client.query("select * from plans.plan_days where plan_id = $1 order by block_order nulls last, block_index", [sourcePlanId]);
-  for (const day of days.rows) {
-    const createdDay = await client.query(
-      `insert into plans.plan_days (plan_id, date, day_note, day_order, block_index, block_name, block_type, block_order)
-       values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
-      [targetPlanId, day.date, day.day_note, day.day_order, day.block_index, day.block_name, day.block_type, day.block_order],
-    );
-    const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [day.id]);
-    for (const session of sessions.rows) {
-      const createdSession = await client.query(
-        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name) values ($1, $2, $3, $4, $5) returning id",
-        [createdDay.rows[0].id, session.am_pm, session.bta, session.session_order, session.name],
-      );
-      await copySessionContent(client, session.id, createdSession.rows[0].id);
-    }
+  if (!days.rowCount) return;
+
+  const dayValues = [];
+  const dayParams = [];
+  let dayColumn = 0;
+  days.rows.forEach((day) => {
+    const row = [targetPlanId, day.date, day.day_note, day.day_order, day.block_index, day.block_name, day.block_type, day.block_order];
+    dayValues.push(`(${row.map(() => `$${++dayColumn}`).join(", ")})`);
+    dayParams.push(...row);
+  });
+  const createdDays = await client.query(
+    `insert into plans.plan_days (plan_id, date, day_note, day_order, block_index, block_name, block_type, block_order)
+     values ${dayValues.join(", ")} returning id`,
+    dayParams,
+  );
+  const sourceDayIdToTargetDayId = new Map();
+  days.rows.forEach((day, index) => sourceDayIdToTargetDayId.set(day.id, createdDays.rows[index].id));
+
+  const sessions = await client.query(
+    "select * from plans.plan_sessions where plan_day_id = any($1::uuid[]) order by plan_day_id, session_order",
+    [days.rows.map((day) => day.id)],
+  );
+  if (!sessions.rowCount) return;
+  const sessionValues = [];
+  const sessionParams = [];
+  let sessionColumn = 0;
+  sessions.rows.forEach((session) => {
+    const row = [sourceDayIdToTargetDayId.get(session.plan_day_id), session.am_pm, session.bta, session.session_order, session.name];
+    sessionValues.push(`(${row.map(() => `$${++sessionColumn}`).join(", ")})`);
+    sessionParams.push(...row);
+  });
+  const createdSessions = await client.query(
+    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name)
+     values ${sessionValues.join(", ")} returning id`,
+    sessionParams,
+  );
+  for (let index = 0; index < sessions.rows.length; index++) {
+    await copySessionContent(client, sessions.rows[index].id, createdSessions.rows[index].id);
   }
 }
 
@@ -1193,14 +1226,29 @@ function normalizedWeekday(dayOrder) {
   return (((raw - 1) % 7 + 7) % 7) + 1;
 }
 
-async function copyDaySessions(client, sourceDayId, targetDayId) {
+// Batch-inserts every session of one day in a single round trip instead of
+// one INSERT per session (used both by copyWeeklyPlanTree's per-day loop
+// below and directly by the day-to-day/cross-plan-block "paste" endpoints,
+// where a day with several AM/PM/etc. sessions used to mean one sequential
+// awaited query per session before any content was copied).
+export async function copyDaySessions(client, sourceDayId, targetDayId) {
   const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [sourceDayId]);
-  for (const session of sessions.rows) {
-    const createdSession = await client.query(
-      "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name) values ($1, $2, $3, $4, $5) returning id",
-      [targetDayId, session.am_pm, session.bta, session.session_order, session.name],
-    );
-    await copySessionContent(client, session.id, createdSession.rows[0].id);
+  if (!sessions.rowCount) return;
+  const values = [];
+  const params = [];
+  let column = 0;
+  sessions.rows.forEach((session) => {
+    const row = [targetDayId, session.am_pm, session.bta, session.session_order, session.name];
+    values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
+    params.push(...row);
+  });
+  const created = await client.query(
+    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name)
+     values ${values.join(", ")} returning id`,
+    params,
+  );
+  for (let index = 0; index < sessions.rows.length; index++) {
+    await copySessionContent(client, sessions.rows[index].id, created.rows[index].id);
   }
 }
 
