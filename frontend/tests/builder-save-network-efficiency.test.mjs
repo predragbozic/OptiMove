@@ -70,7 +70,7 @@ function installHeldFetchMock() {
   return { calls, release: (body = {}) => release(body) };
 }
 
-function fakeAction(dataset, { disabled = false, textContent = "" } = {}) {
+function fakeAction(dataset, { disabled = false, textContent = "", innerHTML = "" } = {}) {
   // querySelector("span") stands in for the button's label element - the
   // Edit button swaps this to "Opening..." while its request is in flight
   // (see builder-actions.js) so a coach gets visible feedback that the
@@ -79,7 +79,7 @@ function fakeAction(dataset, { disabled = false, textContent = "" } = {}) {
   // (not a fresh object per call) so the handler's own reference and a
   // test's later assertion on it see the same mutations.
   const label = { textContent: "" };
-  return { dataset, disabled, textContent, querySelector: () => label };
+  return { dataset, disabled, textContent, innerHTML, querySelector: () => label };
 }
 
 function makeDraft(planId = "plan-1", overrides = {}) {
@@ -167,7 +167,10 @@ test("4. a failed save leaves the in-memory draft completely untouched, shows an
   installFetchMock([{ status: 500, body: { error: "Server error" } }]);
   let errorSeen = null;
   let renderedAfterFailure = false;
-  const action = fakeAction({ action: "builder-submit-plan" }, { textContent: "Save and finish" });
+  // The real button is icon-only (no text label) - innerHTML stands in for
+  // its SVG icon markup, restored on failure instead of textContent (see
+  // builder-actions.js's own comment on this exact point).
+  const action = fakeAction({ action: "builder-submit-plan" }, { innerHTML: "<svg>icon</svg>" });
 
   await handleBuilderDraftAction(action, noopHandlers({
     renderBuilderError: (error) => { errorSeen = error; },
@@ -178,7 +181,7 @@ test("4. a failed save leaves the in-memory draft completely untouched, shows an
   assert.equal(state.builder.draft, originalDraft, "the exact same in-memory draft object must survive a failed save - no local edits lost, nothing replaced with a partial/empty response");
   assert.equal(state.builder.draft.blocks[0].sessions[0].id, "session-unsaved-local-edit", "the local edit that hadn't been confirmed saved yet must still be there");
   assert.equal(action.disabled, false, "the button must be usable again for a retry");
-  assert.equal(action.textContent, "Save and finish", "the button label must be restored, not left stuck on 'Saving…'");
+  assert.equal(action.innerHTML, "<svg>icon</svg>", "the button's icon markup must be restored (not left as bare 'Saving…' text, and not wiped to empty by a textContent-only restore)");
   // A failed save must not act like a success: no full-page render/navigation was forced by the failure path itself.
   assert.equal(renderedAfterFailure, false, "a failed save must not trigger the same re-render a successful one does - that would read as the save having gone through");
 });

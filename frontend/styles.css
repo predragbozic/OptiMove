@@ -7977,13 +7977,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
    .builder-copy-hint's space-between layout for room. */
 .builder-assign-result { flex-wrap: wrap; }
 .builder-assign-result-links { display: flex; flex-wrap: wrap; gap: 6px; }
-.builder-finish-button { min-height: 36px; padding: 7px 12px; }
-.builder-cancel-button, .builder-finish-button { display: flex; align-items: center; gap: 6px; }
+.builder-finish-button, .builder-exit-button { width: 32px; min-width: 32px; height: 32px; min-height: 32px; padding: 0; }
 .builder-finish-button .builder-icon-svg { color: #2e9e4f; }
 .builder-finished-label { color: #287e77; font-size: 13px; font-weight: 800; }
-.builder-saved-indicator { display: flex; align-items: center; gap: 5px; color: #287e77; font-size: 13px; font-weight: 700; }
-.builder-saved-indicator .builder-icon-svg { color: #287e77; }
-.builder-exit-button { width: 32px; min-width: 32px; height: 32px; min-height: 32px; padding: 0; }
 .builder-info-button { width: 32px; min-width: 32px; height: 32px; min-height: 32px; margin-left: auto; }
 .builder-outline-info-buttons { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .builder-outline-info-buttons .builder-info-button { margin-left: 0; }

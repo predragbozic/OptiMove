@@ -977,7 +977,11 @@ export async function handleBuilderDraftAction(action, handlers) {
     // tell a slow save from a swallowed click.
     if (action.disabled) return true;
     action.disabled = true;
-    const originalLabel = action.textContent;
+    // Captured as innerHTML, not textContent: this button is icon-only (no
+    // text label), so a plain textContent restore would replace the icon
+    // SVG with an empty text node and leave the button permanently blank
+    // after a failed save - innerHTML round-trips the actual icon markup.
+    const originalHTML = action.innerHTML;
     action.textContent = "Saving…";
     try {
       const currentDraft = state.builder.draft || draft;
@@ -1004,7 +1008,7 @@ export async function handleBuilderDraftAction(action, handlers) {
       // (same pattern as the Add-exercise error path above) makes a retry
       // available immediately instead of leaving it stuck on "Saving…".
       action.disabled = false;
-      action.textContent = originalLabel;
+      action.innerHTML = originalHTML;
       handlers.renderBuilderError(error);
     }
     return true;

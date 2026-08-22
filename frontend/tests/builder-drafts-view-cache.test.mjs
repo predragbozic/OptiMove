@@ -153,7 +153,7 @@ test("8. draft-list-membership mutations (create/delete/submit) still invalidate
   // defined earlier in this file.
   const submitHandlerIndex = builderActionsSource.indexOf('if (type === "builder-submit-plan")');
   assert.ok(submitHandlerIndex >= 0);
-  const submitHandlerBody = builderActionsSource.slice(submitHandlerIndex, submitHandlerIndex + 1600);
+  const submitHandlerBody = builderActionsSource.slice(submitHandlerIndex, submitHandlerIndex + 1900);
   assert.match(submitHandlerBody, /\/submit`/);
   assert.ok(submitHandlerBody.includes("invalidateBuilderDraftsCache()"), "submitting a draft (it leaves 'draft' status) must invalidate the cached drafts list");
 });
