@@ -43,7 +43,7 @@ function sliceFunction(source, name, windowSize = 1200) {
 }
 
 test("handleContentChange debounces update-item autosave, keyed per item, instead of saving on every single field's blur", () => {
-  const body = sliceFunction(appJsSource, "handleContentChange", 5000);
+  const body = sliceFunction(appJsSource, "handleContentChange", 5300);
   assert.match(body, /if \(form\.dataset\.builderForm === "update-item"\) \{/);
   assert.match(body, /const key = form\.dataset\.itemId \|\| form;/);
   assert.match(body, /clearTimeout\(builderAutosaveTimers\.get\(key\)\);/);
@@ -55,14 +55,14 @@ test("the update-item debounce delay is a small, named constant, not a magic num
 });
 
 test("other autosave forms (update-block, update-node, update-session, update-plan) are NOT debounced - only update-item has the sibling-field tabbing problem", () => {
-  const body = sliceFunction(appJsSource, "handleContentChange", 5000);
+  const body = sliceFunction(appJsSource, "handleContentChange", 5300);
   // The non-debounced fallback path must still exist right after the
   // update-item branch's early return, for every other data-builder-form.
   assert.match(body, /return;\s*\}\s*try \{\s*await submitBuilderFormAction\(form,/);
 });
 
 test("a debounced update-item save still surfaces errors the same way an immediate one would", () => {
-  const body = sliceFunction(appJsSource, "handleContentChange", 5000);
+  const body = sliceFunction(appJsSource, "handleContentChange", 5300);
   assert.match(body, /submitBuilderFormAction\(form, \{ loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback \}\)\.catch\(renderBuilderError\);/);
 });
 
