@@ -316,3 +316,48 @@ test("7. GET /plans/:planId/blocks 404s for a plan the coach has no access to", 
 
   assert.equal(res.status, 404);
 });
+
+// "Weekly plan" as a cross-plan source (round 2 of Builder feedback): a
+// weekly plan's own day is just a plan_days row like any block/day, so it
+// goes through the exact same /blocks/:blockId/copy-into/:targetDayId route
+// - the only change needed was relaxing respondCopyIntoDay's guard for THIS
+// route specifically (allowCrossPlan: true), while /days/:dayId/copy-into
+// (Phase 1's same-plan route, getEditableBlock on both sides) keeps
+// rejecting cross-plan entirely - see backend/tests/builder-day-copy-paste
+// .test.mjs test 5, unchanged and still passing.
+
+test("8. copying a day from a DIFFERENT weekly plan (same coach, different athlete) into a weekly day succeeds and brings the whole tree", async () => {
+  const coach = await makeCoach("weekly-source");
+  const sourceAthlete = await makeAthlete(coach.id);
+  const targetAthlete = await makeAthlete(coach.id);
+  const { planId: sourcePlanId } = await makeWeeklyPlan(coach.id, sourceAthlete.id, "2026-12-07", []);
+  const sourceDayId = await addBlockWithTree(sourcePlanId, { blockIndex: 1, itemTitle: "Weekly source exercise" });
+  const { dayIdByOrder } = await makeWeeklyPlan(coach.id, targetAthlete.id, "2026-12-07", [1]);
+
+  const res = await api(`/api/builder/blocks/${sourceDayId}/copy-into/${dayIdByOrder.get(1)}`, {
+    method: "POST", cookie: coach.cookie, body: {},
+  });
+
+  assert.equal(res.status, 200, `expected the copy to succeed, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const tree = await dayTree(dayIdByOrder.get(1));
+  assert.ok(tree.some((row) => row.title === "Weekly source exercise"), "content from the source weekly plan's day must land on the target day");
+});
+
+test("9. a coach with no access to the source weekly plan's athlete is rejected", async () => {
+  const owner = await makeCoach("weekly-source-owner");
+  const ownerAthlete = await makeAthlete(owner.id);
+  const { planId: sourcePlanId } = await makeWeeklyPlan(owner.id, ownerAthlete.id, "2026-12-14", []);
+  const sourceDayId = await addBlockWithTree(sourcePlanId, { blockIndex: 1, itemTitle: "Private weekly exercise" });
+
+  const stranger = await makeCoach("weekly-source-stranger");
+  const strangerAthlete = await makeAthlete(stranger.id);
+  const { dayIdByOrder } = await makeWeeklyPlan(stranger.id, strangerAthlete.id, "2026-12-14", [1]);
+
+  const res = await api(`/api/builder/blocks/${sourceDayId}/copy-into/${dayIdByOrder.get(1)}`, {
+    method: "POST", cookie: stranger.cookie, body: {},
+  });
+
+  assert.equal(res.status, 404, "a coach with no relationship to the source athlete/plan must not even learn it exists");
+  const tree = await dayTree(dayIdByOrder.get(1));
+  assert.equal(tree.length, 0);
+});
