@@ -1,3 +1,4 @@
+import { builderIconGlyph } from "./builder-helpers.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -190,9 +191,19 @@ function renderNodePresetAddForm(type, data) {
   `;
 }
 
+// Presets set via the Builder's old icon:<name> glyph codes (icon:target,
+// icon:bolt, etc. - builderIconOptions() in builder-helpers.js) are not real
+// image URLs, so the http(s):// check below never matches them. The
+// Builder's own rendering (renderPresetPickerIcon/renderBuilderNodeIcon,
+// builder-structure.js) already falls back to builderIconGlyph() for these -
+// this screen returned nothing at all for the exact same values, which is
+// why a preset's icon showed correctly everywhere it's actually used (the
+// Builder's preset picker, the plan tree) but not here, in the list where
+// it's managed.
 function renderTaxonomyIcon(iconUrl) {
-  if (iconUrl && /^https?:\/\//i.test(iconUrl)) return `<img class="taxonomy-icon" src="${escapeAttr(iconUrl)}" alt="">`;
-  return "";
+  if (!iconUrl) return "";
+  if (/^https?:\/\//i.test(iconUrl)) return `<img class="taxonomy-icon" src="${escapeAttr(iconUrl)}" alt="">`;
+  return `<span class="taxonomy-icon taxonomy-icon-glyph">${escapeHtml(builderIconGlyph(iconUrl))}</span>`;
 }
 
 function renderScopeOptions(data) {
