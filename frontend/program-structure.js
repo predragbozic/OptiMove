@@ -43,9 +43,21 @@ function sessionTimeLabel(items) {
   return withTime ? withTime.sessionTime : "";
 }
 
-function withTimePrefix(label, items) {
+function sessionNameLabel(items) {
+  const withName = items.find((item) => item.sessionName);
+  return withName ? withName.sessionName : "";
+}
+
+// Combines a session's own custom name and its specific time (either may be
+// absent) with the base AM/PM+training-phase label, in the same "name
+// (badge)" convention already used for the cross-plan-copy picker's session
+// list (builder-modals.js's pickerSessionLabel) - so the same session reads
+// identically in Builder, the copy picker, and here.
+function withSessionDetails(label, items) {
+  const name = sessionNameLabel(items);
   const time = sessionTimeLabel(items);
-  return time ? `${time} · ${label}` : label;
+  const withName = name ? `${name} (${label})` : label;
+  return time ? `${time} · ${withName}` : withName;
 }
 
 export function btaNodes(items, makeNode) {
@@ -55,7 +67,7 @@ export function btaNodes(items, makeNode) {
     .map((keyValue) => {
       const filtered = items.filter((item) => (item.bta || "") === keyValue);
       if (!filtered.length) return null;
-      return makeNode("bta", withTimePrefix(labels[keyValue], filtered), filtered, {
+      return makeNode("bta", withSessionDetails(labels[keyValue], filtered), filtered, {
         subtitle: countLabel(filtered),
         color: keyValue === "B" ? "#487b65" : keyValue === "T" ? "#1f6f68" : keyValue === "A" ? "#9a6a3a" : "#667085",
       });
@@ -75,7 +87,7 @@ export function sessionNodes(items, makeNode) {
   return [
     makeNode("amPm", "AM", explicitItems.filter((item) => item.amPm === "AM"), { color: "#2f6f8f" }),
     makeNode("amPm", "PM", explicitItems.filter((item) => item.amPm === "PM"), { color: "#6d5d9f" }),
-    makeNode("session", "Session", blankItems, { subtitle: countLabel(blankItems), color: "#667085" }),
+    makeNode("session", withSessionDetails("Session", blankItems), blankItems, { subtitle: countLabel(blankItems), color: "#667085" }),
   ].filter((node) => node.items.length);
 }
 

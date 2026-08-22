@@ -129,8 +129,8 @@ async function todayIso() {
 // alone never appears in it.
 async function makeWeeklyTrainingDay({ athleteId, coachId, date }) {
   const plan = await query(
-    `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, week_start, is_active)
-     values ('weekly', $1, $2, $3, $4, true)
+    `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, week_start, is_active, status)
+     values ('weekly', $1, $2, $3, $4, true, 'active')
      returning id`,
     [coachId, athleteId, `Home Test Weekly ${Date.now()}`, mondayOfIso(date)],
   );

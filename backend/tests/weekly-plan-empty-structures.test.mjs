@@ -138,7 +138,8 @@ const MINIMAL_SCHEMA_SQL = `
     am_pm character varying,
     bta character varying,
     session_order numeric,
-    session_time time
+    session_time time,
+    name character varying(120)
   );
 
   create table plans.plan_nodes (

@@ -37,6 +37,13 @@ import * as runner from "../src/migrate.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS_SQL_PATH = path.resolve(__dirname, "../../create_plan_read_views.sql");
 const MIGRATION_SQL_PATH = path.resolve(__dirname, "../../migrations_v2/202608231000_weekly_plan_items_hierarchy_order.sql");
+// v_weekly_plan_items itself was touched again after 202608231000 (session
+// name + draft-hidden-from-calendar) - the bootstrap file's CURRENT
+// v_weekly_plan_items definition reflects that later migration, not this
+// one, so test "0" below compares that specific view against ITS latest
+// source instead. v_plan_node_sort_path (also defined by 202608231000) was
+// never touched again, so it still compares against MIGRATION_SQL_PATH.
+const LATEST_WEEKLY_VIEW_MIGRATION_SQL_PATH = path.resolve(__dirname, "../../migrations_v2/202608231700_weekly_calendar_draft_hidden_and_session_name.sql");
 
 const RUN_ID = crypto.randomBytes(6).toString("hex");
 const DB_NAME = `optimove_weekly_hierarchy_order_test_${RUN_ID}`;
@@ -144,7 +151,8 @@ const MINIMAL_SCHEMA_SQL = `
     am_pm character varying,
     bta character varying,
     session_order numeric,
-    session_time time
+    session_time time,
+    name character varying(120)
   );
 
   create table plans.plan_nodes (
@@ -202,7 +210,7 @@ let athleteId;
 
 async function seedWeeklyPlan({ weekStart = "2026-08-17", date = "2026-08-22", dayOrder = 6 } = {}) {
   const plan = await client.query(
-    `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, week_start) values ('weekly', $1, $2, $3, $4) returning id`,
+    `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, week_start, status) values ('weekly', $1, $2, $3, $4, 'active') returning id`,
     [coachId, athleteId, `plan for ${date}`, weekStart],
   );
   const planId = plan.rows[0].id;
@@ -288,6 +296,7 @@ test("0. sanity: create_plan_read_views.sql and the new migration define the SAM
   const normalize = (text) => text.replace(/\r\n/g, "\n");
   const bootstrap = normalize(await readFile(VIEWS_SQL_PATH, "utf8"));
   const migration = normalize(await readFile(MIGRATION_SQL_PATH, "utf8"));
+  const latestWeeklyViewMigration = normalize(await readFile(LATEST_WEEKLY_VIEW_MIGRATION_SQL_PATH, "utf8"));
   const extract = (source, startMarker, endMarker) => {
     const start = source.indexOf(startMarker);
     assert.ok(start >= 0, `${startMarker} must exist`);
@@ -300,8 +309,8 @@ test("0. sanity: create_plan_read_views.sql and the new migration define the SAM
   assert.equal(migrationSortPath, bootstrapSortPath);
 
   const bootstrapWeekly = extract(bootstrap, "create or replace view plans.v_weekly_plan_items", "create or replace view plans.v_program_plan_items");
-  const migrationWeekly = migration.slice(migration.indexOf("create or replace view plans.v_weekly_plan_items"));
-  assert.equal(migrationWeekly.trim(), bootstrapWeekly.trim());
+  const latestMigrationWeekly = latestWeeklyViewMigration.slice(latestWeeklyViewMigration.indexOf("create or replace view plans.v_weekly_plan_items"));
+  assert.equal(latestMigrationWeekly.trim(), bootstrapWeekly.trim());
 });
 
 test("1+2. five sections directly under the session (no domain/category), each with one exercise added in a DIFFERENT order than the sections - Weekly must still show them in section order", async () => {

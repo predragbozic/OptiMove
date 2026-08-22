@@ -214,7 +214,8 @@ select
   na.domain_node_id,
   na.category_node_id,
   na.section_node_id,
-  nsp.sort_path as hierarchy_sort_path
+  nsp.sort_path as hierarchy_sort_path,
+  ps.name as session_name
 from plans.plans p
 join public.athletes a on a.id = p.athlete_id
 join plans.plan_days pd on pd.plan_id = p.id
@@ -224,6 +225,7 @@ left join library.exercises e on e.id = pi.exercise_id
 left join plans.v_plan_item_node_ancestry na on na.plan_node_id = pi.plan_node_id
 left join plans.v_plan_node_sort_path nsp on nsp.plan_node_id = pi.plan_node_id
 where p.plan_type = 'weekly'
+  and p.status = 'active'
   and coalesce(p.is_active, true)
   and not coalesce(p.is_edit_draft, false)
 
@@ -297,7 +299,8 @@ select
   nad.domain_node_id,
   nad.category_node_id,
   nad.section_node_id,
-  nsp.sort_path as hierarchy_sort_path
+  nsp.sort_path as hierarchy_sort_path,
+  ps.name as session_name
 from plans.plan_nodes pn
 join plans.v_plan_node_ancestry_detail nad on nad.plan_node_id = pn.id
 join plans.plan_sessions ps on ps.id = pn.plan_session_id
@@ -306,6 +309,7 @@ join plans.plans p on p.id = pd.plan_id
 join public.athletes a on a.id = p.athlete_id
 left join plans.v_plan_node_sort_path nsp on nsp.plan_node_id = pn.id
 where p.plan_type = 'weekly'
+  and p.status = 'active'
   and coalesce(p.is_active, true)
   and not coalesce(p.is_edit_draft, false)
   and not exists (select 1 from plans.plan_items pi2 where pi2.plan_node_id = pn.id)
