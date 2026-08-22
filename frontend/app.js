@@ -751,6 +751,15 @@ function handleContentFocusIn(event) {
 }
 
 function handleContentInput(event) {
+  // The create-form's name input has no value= binding to state, so a full
+  // re-render (e.g. opening the athlete picker) would otherwise wipe it -
+  // mirror every keystroke into state, same idea as createAthleteId.
+  const createNameInput = event.target.closest(".builder-create-form input[name='name']");
+  if (createNameInput) {
+    state.builder.createName = createNameInput.value;
+    return;
+  }
+
   const orgFilter = event.target.closest("[data-org-select-filter]");
   if (orgFilter) {
     handleOrganizationFilterInput(orgFilter);
@@ -812,6 +821,16 @@ function handleContentInput(event) {
 }
 
 async function handleContentChange(event) {
+  // Mirror the create-form's color-palette hidden input into state, same
+  // reasoning as createNameInput above - fires for both a swatch pick and a
+  // custom-color pick, since both end up setting this hidden input's value
+  // and dispatching change on it (see taxonomy-actions.js / pastelCustom below).
+  const createColorInput = event.target.closest(".builder-create-form input[name='color']");
+  if (createColorInput) {
+    state.builder.createColor = createColorInput.value;
+    return;
+  }
+
   const orgFilter = event.target.closest("[data-org-select-filter]");
   if (orgFilter) {
     handleOrganizationFilterInput(orgFilter);

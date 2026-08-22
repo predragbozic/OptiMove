@@ -12,6 +12,7 @@ import {
 import { renderBuilderAddConfirmation, renderBuilderExerciseResults, renderBuilderStickyBar } from "./builder-exercises.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
+import { renderPastelSwatches } from "./taxonomy-view.js";
 import {
   ICON_CHECK,
   ICON_TRASH,
@@ -402,11 +403,8 @@ function renderBuilderInner() {
           </div>
           <form class="builder-form builder-create-form" data-builder-form="create">
             <div class="builder-details-row">
-              <label class="search-field"><span>${isWeekly ? "Weekly plan name (optional)" : "Program name"}</span><input name="name" ${isWeekly ? "" : "required"} placeholder="${isWeekly ? "e.g. Match week" : "e.g. Preseason strength block"}"></label>
-              <div class="builder-metadata-grid builder-setup-controls">
-                <label class="search-field"><span>Color</span><input name="color" type="color" value="#287e77"></label>
-                <label class="search-field"><span>Icon</span><select name="iconUrl">${builderIconOptions()}</select></label>
-              </div>
+              <label class="search-field"><span>${isWeekly ? "Weekly plan name (optional)" : "Program name"}</span><input name="name" ${isWeekly ? "" : "required"} value="${escapeAttr(state.builder.createName)}" placeholder="${isWeekly ? "e.g. Match week" : "e.g. Preseason strength block"}"></label>
+              <div class="search-field builder-create-color-field"><span>Color</span>${renderPastelSwatches("color", state.builder.createColor, { allowCustom: true })}</div>
             </div>
             ${isWeekly ? "" : `<label class="search-field"><span>Cover image URL (optional)</span><input name="coverImageUrl" type="url" placeholder="https://..."></label>`}
             <input type="hidden" name="planType" value="${isWeekly ? "weekly" : "program"}">
@@ -439,7 +437,7 @@ function renderBuilderInner() {
   els.content.innerHTML = `
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
-        <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}"></form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
+        <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}">${isWeekly ? "" : `<input name="coverImageUrl" type="url" class="builder-plan-cover-input" value="${escapeAttr(draft.plan.coverImageUrl || "")}" placeholder="Cover image URL (optional)" aria-label="Cover image URL">`}</form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
         <div class="builder-program-actions">
           <span class="item-badge">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span>
           ${isEditDraft

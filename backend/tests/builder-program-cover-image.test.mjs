@@ -103,3 +103,54 @@ test("3. GET /api/builder/plans/:id (an existing plan's draft) also returns cove
   assert.equal(res.status, 200);
   assert.equal(res.body.plan.coverImageUrl, "https://example.com/reload.png");
 });
+
+// Round 2 of Builder feedback: the cover image URL must be editable from
+// inside an already-open draft (PATCH /plans/:planId), not just at creation -
+// previously that route only ever touched `name`.
+
+test("4. PATCH /api/builder/plans/:id with coverImageUrl sets it on a plan that was created without one", async () => {
+  const coach = await makeCoach("patch-set-image");
+  const created = await api("/api/builder/plans", { method: "POST", cookie: coach.cookie, body: { planType: "program", name: "No image yet" } });
+  cleanupPlanIds.add(created.body.plan.id);
+  assert.equal(created.body.plan.coverImageUrl, "");
+
+  const res = await api(`/api/builder/plans/${created.body.plan.id}`, {
+    method: "PATCH", cookie: coach.cookie, body: { name: "No image yet", coverImageUrl: "https://example.com/added-later.jpg" },
+  });
+
+  assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
+  assert.equal(res.body.plan.coverImageUrl, "https://example.com/added-later.jpg");
+  const row = await query("select cover_image_url from plans.plans where id = $1", [created.body.plan.id]);
+  assert.equal(row.rows[0].cover_image_url, "https://example.com/added-later.jpg");
+});
+
+test("5. PATCH /api/builder/plans/:id with only name (no coverImageUrl key at all) leaves the existing cover image untouched", async () => {
+  const coach = await makeCoach("patch-name-only");
+  const created = await api("/api/builder/plans", {
+    method: "POST", cookie: coach.cookie,
+    body: { planType: "program", name: "Original name", coverImageUrl: "https://example.com/keep-me.jpg" },
+  });
+  cleanupPlanIds.add(created.body.plan.id);
+
+  const res = await api(`/api/builder/plans/${created.body.plan.id}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Renamed" } });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.plan.name, "Renamed");
+  assert.equal(res.body.plan.coverImageUrl, "https://example.com/keep-me.jpg", "a PATCH that never mentions coverImageUrl must not wipe it - only an explicit key (even empty) should change it");
+});
+
+test("6. PATCH /api/builder/plans/:id with coverImageUrl: \"\" explicitly clears a previously-set cover image", async () => {
+  const coach = await makeCoach("patch-clear-image");
+  const created = await api("/api/builder/plans", {
+    method: "POST", cookie: coach.cookie,
+    body: { planType: "program", name: "Will clear image", coverImageUrl: "https://example.com/to-be-cleared.jpg" },
+  });
+  cleanupPlanIds.add(created.body.plan.id);
+
+  const res = await api(`/api/builder/plans/${created.body.plan.id}`, {
+    method: "PATCH", cookie: coach.cookie, body: { name: "Will clear image", coverImageUrl: "" },
+  });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.plan.coverImageUrl, "");
+});

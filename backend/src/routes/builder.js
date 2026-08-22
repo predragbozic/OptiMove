@@ -57,7 +57,8 @@ router.patch("/plans/:planId", async (req, res, next) => {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
     const name = text(req.body?.name) || (plan.plan_type === "weekly" ? `Weekly plan ${plan.week_start}` : plan.name);
-    await query("update plans.plans set name = $2, updated_at = now() where id = $1", [plan.id, name]);
+    const coverImageUrl = req.body?.coverImageUrl === undefined ? plan.cover_image_url : nullableText(req.body.coverImageUrl);
+    await query("update plans.plans set name = $2, cover_image_url = $3, updated_at = now() where id = $1", [plan.id, name, coverImageUrl]);
     return respondWithDraft(req, res, req.user, plan);
   } catch (error) { next(error); }
 });
