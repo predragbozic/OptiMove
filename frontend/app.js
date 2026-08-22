@@ -1744,10 +1744,10 @@ async function handleContentClick(event) {
           weekStart,
         }),
       });
-      state.builder = emptyBuilderState({ planType: "weekly", weekStart, draft: created });
+      state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart, draft: created });
       await loadBuilder();
     } catch (error) {
-      state.builder = emptyBuilderState({ planType: "weekly", weekStart });
+      state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart });
       renderBuilder();
       renderBuilderError(error);
     }

@@ -33,6 +33,37 @@ import {
   weekMondayIso,
 } from "./utils.js";
 
+// Same figure + white-on-fill plus badge convention as ICON_ADD_ATHLETE/
+// ICON_ADD_CLUB in organization-view.js - reused here rather than invented,
+// so the three entry tiles read as the same "add" family as the rest of the app.
+const ICON_ENTRY_WEEKLY = `<svg class="athlete-home-quick-action-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="14" height="13.5" rx="2"></rect><path d="M7 2.5v4"></path><path d="M13 2.5v4"></path><path d="M3 9.5h14"></path><circle cx="18" cy="18" r="4.5" fill="currentColor" stroke="none"></circle><path d="M18 15.8v4.4M15.8 18h4.4" stroke="var(--surface, #fff)" stroke-width="1.4" stroke-linecap="round"></path></svg>`;
+const ICON_ENTRY_PROGRAM = `<svg class="athlete-home-quick-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.5h6.5L16 6v11.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-14a1 1 0 0 1 1-1Z"></path><path d="M12.5 2.5V6H16"></path><path d="M7.5 10.5h5"></path><path d="M7.5 13.5h5"></path><circle cx="18" cy="18" r="4.5" fill="currentColor" stroke="none"></circle><path d="M18 15.8v4.4M15.8 18h4.4" stroke="var(--surface, #fff)" stroke-width="1.4" stroke-linecap="round"></path></svg>`;
+const ICON_ENTRY_TEMPLATE = `<svg class="athlete-home-quick-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 2.5l6 3-6 3-6-3 6-3Z"></path><path d="M2.5 8.5l6 3 6-3"></path><path d="M2.5 12.5l6 3 6-3"></path><circle cx="18" cy="18" r="4.5" fill="currentColor" stroke="none"></circle><path d="M18 15.8v4.4M15.8 18h4.4" stroke="var(--surface, #fff)" stroke-width="1.4" stroke-linecap="round"></path></svg>`;
+
+const BUILDER_ENTRY_TILES = [
+  ["weekly", "Weekly plan", ICON_ENTRY_WEEKLY],
+  ["program", "Program", ICON_ENTRY_PROGRAM],
+  ["template", "Template", ICON_ENTRY_TEMPLATE],
+];
+
+function renderBuilderEntryTiles() {
+  return `
+    <section class="panel builder-setup-card builder-entry-tiles">
+      <div class="section-heading">
+        <div><p class="eyebrow">Program builder</p><h3>What are you creating?</h3><p class="muted">Pick one to jump straight into its setup.</p></div>
+      </div>
+      <div class="athlete-home-quick-actions-grid builder-entry-tiles-grid">
+        ${BUILDER_ENTRY_TILES.map(([entryType, label, icon]) => `
+          <button class="athlete-home-quick-action" type="button" data-action="builder-choose-entry-type" data-entry-type="${entryType}">
+            ${icon}
+            <span class="athlete-home-quick-action-label">${escapeHtml(label)}</span>
+          </button>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function builderStructureContext() {
   return {
     builderExerciseCountDots,
@@ -335,13 +366,27 @@ function renderBuilderInner() {
       : (draft.plan.athleteName || (draft.plan.isTemplate ? "Reusable template" : "Draft")))
     : "New program";
   els.toolbar.innerHTML = "";
+  if (!draft && !state.builder.entryType) {
+    els.content.innerHTML = `
+      <section class="content-section builder-start">
+        ${renderBuilderDraftsPanel()}
+        ${renderBuilderEntryTiles()}
+      </section>
+    `;
+    return;
+  }
   if (!draft) {
     const selectedAthleteIds = new Set((state.builder.createAthleteIds || []).map(String));
     const assignedAthletes = state.athletes.filter((athlete) => selectedAthleteIds.has(String(athlete.athlete_id)));
     const assignedAthlete = assignedAthletes[0];
     const selectedCount = assignedAthletes.length;
     const isWeekly = state.builder.planType === "weekly";
+    const isTemplate = state.builder.entryType === "template";
     const weekStart = state.builder.weekStart || weekMondayIso(localDateIso());
+    const heading = isWeekly ? "Create weekly plan" : (isTemplate ? "Create template" : "Create program");
+    const subtitle = isWeekly
+      ? "Choose an athlete and the week to plan."
+      : (isTemplate ? "Reusable across athletes - leave it unassigned." : "Assign an athlete to build a program just for them.");
     const athleteTitle = selectedCount > 1
       ? `${selectedCount} athletes selected`
       : assignedAthlete?.athlete || (isWeekly ? "Choose athlete" : "Choose athlete or template");
@@ -353,10 +398,9 @@ function renderBuilderInner() {
         ${renderBuilderDraftsPanel()}
         <section class="panel builder-setup-card">
           <div class="section-heading">
-            <div><p class="eyebrow">Program builder</p><h3>${isWeekly ? "Create weekly plan" : "Create program"}</h3><p class="muted">${isWeekly ? "Choose an athlete and the week to plan." : "Assign an athlete, or leave it reusable as a template."}</p></div>
+            <div><button class="text-action builder-entry-back" type="button" data-action="builder-entry-back">&larr; Back</button><p class="eyebrow">Program builder</p><h3>${heading}</h3><p class="muted">${subtitle}</p></div>
           </div>
           <form class="builder-form builder-create-form" data-builder-form="create">
-            <div class="builder-plan-type-control" role="group" aria-label="Plan type"><button class="${isWeekly ? "" : "is-active"}" type="button" data-action="builder-set-plan-type" data-plan-type="program">Program or template</button><button class="${isWeekly ? "is-active" : ""}" type="button" data-action="builder-set-plan-type" data-plan-type="weekly">Weekly plan</button></div>
             <div class="builder-details-row">
               <label class="search-field"><span>${isWeekly ? "Weekly plan name (optional)" : "Program name"}</span><input name="name" ${isWeekly ? "" : "required"} placeholder="${isWeekly ? "e.g. Match week" : "e.g. Preseason strength block"}"></label>
               <div class="builder-metadata-grid builder-setup-controls">
