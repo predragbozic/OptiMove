@@ -130,30 +130,42 @@ export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatu
           </article>
         </div>
       </section>
-      <section class="panel athlete-settings-card">
-        <div>
-          <p class="eyebrow">Account</p>
-          <h3>Login email</h3>
-          <p class="muted">The email you use to sign in. Changing it requires confirming the new address before it takes effect.</p>
-        </div>
-        <p class="account-current-email"><span>Current login email</span> <strong>${escapeHtml(currentUser?.email || "")}</strong></p>
-        ${renderEmailChangeStatusHtml(emailChangeStatus)}
-      </section>
-      <section class="panel athlete-settings-card">
-        <div>
-          <p class="eyebrow">Account</p>
-          <h3>Change password</h3>
-          <p class="muted">Change the password you use to sign in. This never changes your login email.</p>
-        </div>
-        <form class="organization-form" data-account-form="password-change">
-          <label class="search-field"><span>Current password</span><input name="currentPassword" type="password" required placeholder="Confirm with your current password" autocomplete="current-password"></label>
-          <label class="search-field"><span>New password</span><input name="newPassword" type="password" required minlength="8" placeholder="At least 8 characters" autocomplete="new-password"></label>
-          <label class="search-field"><span>Confirm new password</span><input name="confirmNewPassword" type="password" required minlength="8" autocomplete="new-password"></label>
-          <p class="builder-error" aria-live="polite"></p>
-          <p class="builder-success" aria-live="polite"></p>
-          <button class="plain-button" type="submit">Change password</button>
-        </form>
-      </section>
+      ${renderAccountEmailPasswordSectionsHtml(currentUser, emailChangeStatus)}
+    </section>
+  `;
+}
+
+// Login-email-change and change-password panels: only ever depend on
+// generic currentUser/emailChangeStatus and the role-agnostic backend
+// endpoints (PUT /api/auth/me/credentials, POST/GET
+// /api/auth/account/email-change/*) - never anything athlete-specific -
+// so this is shared as-is between the athlete Account page above and the
+// coach Account page (coach-account.js), instead of being duplicated.
+export function renderAccountEmailPasswordSectionsHtml(currentUser, emailChangeStatus) {
+  return `
+    <section class="panel athlete-settings-card">
+      <div>
+        <p class="eyebrow">Account</p>
+        <h3>Login email</h3>
+        <p class="muted">The email you use to sign in. Changing it requires confirming the new address before it takes effect.</p>
+      </div>
+      <p class="account-current-email"><span>Current login email</span> <strong>${escapeHtml(currentUser?.email || "")}</strong></p>
+      ${renderEmailChangeStatusHtml(emailChangeStatus)}
+    </section>
+    <section class="panel athlete-settings-card">
+      <div>
+        <p class="eyebrow">Account</p>
+        <h3>Change password</h3>
+        <p class="muted">Change the password you use to sign in. This never changes your login email.</p>
+      </div>
+      <form class="organization-form" data-account-form="password-change">
+        <label class="search-field"><span>Current password</span><input name="currentPassword" type="password" required placeholder="Confirm with your current password" autocomplete="current-password"></label>
+        <label class="search-field"><span>New password</span><input name="newPassword" type="password" required minlength="8" placeholder="At least 8 characters" autocomplete="new-password"></label>
+        <label class="search-field"><span>Confirm new password</span><input name="confirmNewPassword" type="password" required minlength="8" autocomplete="new-password"></label>
+        <p class="builder-error" aria-live="polite"></p>
+        <p class="builder-success" aria-live="polite"></p>
+        <button class="plain-button" type="submit">Change password</button>
+      </form>
     </section>
   `;
 }

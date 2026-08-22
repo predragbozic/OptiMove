@@ -129,4 +129,11 @@ export const MENU_CACHE_POLICIES = {
     rationale:
       "renderAthleteSettings() makes no API call of its own - it renders purely from state.athletes/state.currentUser, already loaded elsewhere.",
   },
+  "coach-account": {
+    label: "Account (coach shell)",
+    policy: "static",
+    namespace: null,
+    rationale:
+      "renderCoachAccount() mirrors renderAthleteSettings() exactly (same two-pass render pattern, same GET /api/auth/account/email-change/status patch-in) - same 'static' classification for the same reason: it renders purely from state.currentUser, already loaded elsewhere, with no caching layer of its own to wire in.",
+  },
 };
