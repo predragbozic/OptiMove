@@ -28,7 +28,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import pg from "pg";
-import { copySessionContent } from "../src/routes/builder.js";
+import { copySessionContent, copyProgramTree, copyDaySessions } from "../src/routes/builder.js";
 
 const RUN_ID = crypto.randomBytes(6).toString("hex");
 const DB_NAME = `optimove_builder_copy_perf_test_${RUN_ID}`;
@@ -48,9 +48,26 @@ let adminClient;
 let client;
 
 const MINIMAL_SCHEMA_SQL = `
+  create table plans.plan_days (
+    id uuid primary key default gen_random_uuid(),
+    plan_id uuid not null,
+    date date,
+    day_note text,
+    day_order numeric,
+    block_index numeric,
+    block_name character varying(255),
+    block_type character varying(20),
+    block_order numeric
+  );
+
   create table plans.plan_sessions (
     id uuid primary key default gen_random_uuid(),
-    label text
+    label text,
+    plan_day_id uuid references plans.plan_days(id) on delete cascade,
+    am_pm character varying(4),
+    bta character varying(4),
+    session_order numeric,
+    name character varying(255)
   );
 
   create table plans.plan_nodes (
@@ -213,4 +230,92 @@ test("copySessionContent(): correctly falls back to copyLegacySession() behavior
   await assert.doesNotReject(() => copySessionContent(client, emptySession, target));
   const nodeCount = await client.query(`select count(*) c from plans.plan_nodes where plan_session_id=$1`, [target]);
   assert.equal(nodeCount.rows[0].c, "0");
+});
+
+// Regression guard for the "Step 1" performance fix: copyProgramTree() used
+// to INSERT one day at a time, and for EACH day query then INSERT one
+// session at a time - a multi-week program's "open for editing"/"save"
+// path meant one sequential awaited query per day PLUS one per session,
+// before a single node/item was ever copied (the dominant cost behind
+// Edit/Copy taking 5-10s to open the Builder on a large program). It now
+// batch-inserts every day, then every session across every one of those
+// days, in two round trips total, regardless of day/session count.
+async function buildDays(planId, dayCount, sessionsPerDay) {
+  for (let d = 1; d <= dayCount; d++) {
+    const day = await client.query(
+      `insert into plans.plan_days (plan_id, day_order, block_index, block_order) values ($1,$2,$3,$4) returning id`,
+      [planId, d, d, d],
+    );
+    for (let s = 1; s <= sessionsPerDay; s++) {
+      await client.query(
+        `insert into plans.plan_sessions (plan_day_id, am_pm, session_order, name) values ($1,$2,$3,$4)`,
+        [day.rows[0].id, s % 2 === 0 ? "PM" : "AM", s, `Session ${d}.${s}`],
+      );
+    }
+  }
+}
+
+// Each session copyProgramTree/copyDaySessions creates still gets its own
+// copySessionContent() call (that function's own already-constant
+// per-session cost, proven separately above, is untouched by this fix) -
+// so the query count for the SKELETON build (day/session rows themselves)
+// is isolated below by subtracting exactly that many session-content
+// copies' worth of queries, measured empirically against a real
+// content-less session rather than hard-coded, so this stays correct even
+// if copySessionContent's own internals change later.
+async function measurePerSessionContentCost() {
+  const source = (await client.query(`insert into plans.plan_sessions (label) values ('baseline') returning id`)).rows[0].id;
+  const target = (await client.query(`insert into plans.plan_sessions (label) values ('baseline-target') returning id`)).rows[0].id;
+  return countQueriesDuring(client, () => copySessionContent(client, source, target));
+}
+
+test("copyProgramTree(): the day/session skeleton's own query count does not scale with day/session count", async () => {
+  const perSessionCost = await measurePerSessionContentCost();
+
+  const smallPlan = crypto.randomUUID();
+  const smallTargetPlan = crypto.randomUUID();
+  await buildDays(smallPlan, 1, 1); // 1 day, 1 session
+  const smallCount = await countQueriesDuring(client, () => copyProgramTree(client, smallPlan, smallTargetPlan));
+
+  const largePlan = crypto.randomUUID();
+  const largeTargetPlan = crypto.randomUUID();
+  await buildDays(largePlan, 12, 4); // 12 days, 4 sessions/day = 48 sessions
+  const largeCount = await countQueriesDuring(client, () => copyProgramTree(client, largePlan, largeTargetPlan));
+
+  const smallSkeletonCost = smallCount - perSessionCost * 1;
+  const largeSkeletonCost = largeCount - perSessionCost * 48;
+  assert.ok(smallSkeletonCost <= 4, `expected a small constant skeleton cost, got ${smallSkeletonCost}`);
+  assert.equal(largeSkeletonCost, smallSkeletonCost, "the day/session skeleton's own query count (days query+insert, sessions query+insert) must be identical for a 1-day/1-session program and a 12-day/48-session program - proof it no longer scales per day or per session");
+
+  const verify = await client.query(
+    `select (select count(*) from plans.plan_days where plan_id=$1) as days,
+            (select count(*) from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id where pd.plan_id=$1) as sessions`,
+    [largeTargetPlan],
+  );
+  assert.equal(verify.rows[0].days, "12");
+  assert.equal(verify.rows[0].sessions, "48");
+});
+
+test("copyDaySessions(): the session-batch's own query count does not scale with session count", async () => {
+  const perSessionCost = await measurePerSessionContentCost();
+
+  const smallDay = (await client.query(`insert into plans.plan_days (plan_id) values ($1) returning id`, [crypto.randomUUID()])).rows[0].id;
+  await client.query(`insert into plans.plan_sessions (plan_day_id, am_pm, session_order) values ($1,'AM',1)`, [smallDay]);
+  const smallTarget = (await client.query(`insert into plans.plan_days (plan_id) values ($1) returning id`, [crypto.randomUUID()])).rows[0].id;
+  const smallCount = await countQueriesDuring(client, () => copyDaySessions(client, smallDay, smallTarget));
+
+  const largeDay = (await client.query(`insert into plans.plan_days (plan_id) values ($1) returning id`, [crypto.randomUUID()])).rows[0].id;
+  for (let s = 1; s <= 20; s++) {
+    await client.query(`insert into plans.plan_sessions (plan_day_id, am_pm, session_order) values ($1,$2,$3)`, [largeDay, s % 2 === 0 ? "PM" : "AM", s]);
+  }
+  const largeTarget = (await client.query(`insert into plans.plan_days (plan_id) values ($1) returning id`, [crypto.randomUUID()])).rows[0].id;
+  const largeCount = await countQueriesDuring(client, () => copyDaySessions(client, largeDay, largeTarget));
+
+  const smallSkeletonCost = smallCount - perSessionCost * 1;
+  const largeSkeletonCost = largeCount - perSessionCost * 20;
+  assert.ok(smallSkeletonCost <= 2, `expected a small constant skeleton cost, got ${smallSkeletonCost}`);
+  assert.equal(largeSkeletonCost, smallSkeletonCost, "the session batch's own query count (sessions query+insert) must be identical for a 1-session day and a 20-session day - proof it no longer scales per session");
+
+  const verify = await client.query(`select count(*) c from plans.plan_sessions where plan_day_id=$1`, [largeTarget]);
+  assert.equal(verify.rows[0].c, "20");
 });
