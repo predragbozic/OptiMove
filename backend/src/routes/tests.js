@@ -889,14 +889,19 @@ router.delete("/schedules/:scheduleId", async (req, res, next) => {
     // assignment can only ever exist via an occurrence's FK) - those are
     // never deleted, only hidden behind a cancelled status.
     //
-    // KNOWN RESIDUAL RACE: tests.generate_test_schedule_occurrence() (Phase
-    // 1, unmodified) reads the schedule row with a plain SELECT, not FOR
-    // SHARE/FOR UPDATE, so this FOR UPDATE lock on the schedule row does not
-    // block a concurrent occurrence generation from committing in the
-    // narrow window between this check and the DELETE below. Closing that
-    // fully would require changing the already-deployed Phase 1 function,
-    // which this task explicitly does not touch. Documented as a known risk
-    // in the delivery report, not silently ignored.
+    // This FOR UPDATE lock on the schedule row (taken above) now genuinely
+    // serializes against a concurrent occurrence generation:
+    // tests.generate_test_schedule_occurrence() takes FOR SHARE on this same
+    // row - see the CREATE OR REPLACE in migrations_v2/202608260900_tests_v42_
+    // occurrence_generation_lock_fix.sql (an additive migration; the
+    // already-deployed Phase 1 file itself is untouched). If a generation
+    // committed first, the check below sees its occurrence and this DELETE
+    // cancels instead of deleting; if this DELETE wins first and removes the
+    // row (no occurrence existed), a generation call blocked behind it wakes
+    // up to find the row gone and returns null - see
+    // testsOccurrenceService.js's ensureCurrentOccurrence(). Both orderings
+    // are covered by the J1/J2 concurrency tests in
+    // backend/tests/tests-module-schedule-management.test.mjs.
     const hasOccurrence = await client.query(`select 1 from tests.test_schedule_occurrences where schedule_id = $1 limit 1`, [schedule.id]);
     if (!hasOccurrence.rowCount) {
       await client.query(`delete from tests.test_schedules where id = $1`, [schedule.id]);
