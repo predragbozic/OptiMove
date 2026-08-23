@@ -117,21 +117,43 @@ router.get("/athlete/today", async (req, res, next) => {
   try {
     const athleteId = requireAthlete(req, res);
     if (!athleteId) return;
+
+    // Step 1: for every ACTIVE schedule CURRENTLY targeting this athlete
+    // (direct, or via a current team/club membership), ensure today's/the
+    // one-time occurrence exists - idempotent, matches Phase 1's own
+    // on-demand materialization contract exactly. This step's only job is
+    // to make sure new rows exist where they should; it never decides what
+    // gets shown below.
     const schedules = await loadSchedulesTargetingAthlete(athleteId, "active");
-    const rows = [];
     for (const schedule of schedules) {
-      const occurrenceId = await ensureCurrentOccurrence(pool, schedule);
-      if (!occurrenceId) continue;
-      const assignmentResult = await query(
-        `select asg.*, o.opens_at, o.closes_at, o.status as occurrence_status, tv.name as test_name
-         from tests.test_assignments asg
-         join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
-         join tests.test_versions tv on tv.id = asg.snapshot_test_version_id
-         where asg.occurrence_id = $1 and asg.athlete_id = $2`,
-        [occurrenceId, athleteId],
-      );
-      const assignment = assignmentResult.rows[0];
-      if (!assignment) continue;
+      await ensureCurrentOccurrence(pool, schedule);
+    }
+
+    // Step 2: the athlete's OWN already-materialized assignments, for
+    // TODAY's occurrence in each occurrence's own schedule timezone, are
+    // the real source of truth for what Today shows - queried directly
+    // from test_assignments, never re-derived from CURRENT membership.
+    // This is what keeps an assignment visible even after the athlete's
+    // team/club membership is later paused/removed/changed:
+    // materialize_test_assignments_for_occurrence() (Phase 1) already
+    // guarantees a later membership change never retroactively adds/
+    // removes rows for an occurrence that was already materialized: this
+    // endpoint must not undo that guarantee by re-deriving "today" from
+    // step 1's membership-based schedule list instead of from the
+    // assignment rows that already exist.
+    const assignmentsResult = await query(
+      `select asg.*, o.opens_at, o.closes_at, o.status as occurrence_status, tv.name as test_name
+       from tests.test_assignments asg
+       join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
+       join tests.test_schedules sch on sch.id = o.schedule_id
+       join tests.test_versions tv on tv.id = asg.snapshot_test_version_id
+       where asg.athlete_id = $1
+         and o.scheduled_date = (now() at time zone sch.timezone)::date
+       order by o.scheduled_date desc`,
+      [athleteId],
+    );
+    const rows = [];
+    for (const assignment of assignmentsResult.rows) {
       rows.push(await formatAthleteAssignmentRow(assignment));
     }
     res.json({ assignments: rows });
@@ -332,9 +354,22 @@ router.post("/assignments/:assignmentId/submit", async (req, res, next) => {
 
     // Idempotent replay: the exact same submission (same idempotency key)
     // resolving to an assessment that already completed is returned as-is,
-    // never treated as a second submit/correction.
+    // never treated as a second submit/correction. Scoped to THIS exact
+    // assignment/athlete/test_version, not just the bare key - the key
+    // column already carries a global unique index (Phase 1), so a
+    // mismatched key can never collide with a genuine different row here,
+    // but this extra scoping is what stops a key value that leaked or was
+    // reused from ever handing back another athlete's own assessment id/
+    // values/score - a lookup that only matched on idempotency_key alone
+    // would return whatever row that key belongs to, regardless of who is
+    // asking.
     if (idempotencyKey) {
-      const existing = await client.query(`select id from tests.test_assessments where idempotency_key = $1 and status = 'completed'`, [idempotencyKey]);
+      const existing = await client.query(
+        `select id from tests.test_assessments
+         where idempotency_key = $1 and status = 'completed'
+           and assignment_id = $2 and athlete_id = $3 and test_version_id = $4`,
+        [idempotencyKey, assignment.id, athleteId, assignment.snapshot_test_version_id],
+      );
       if (existing.rows[0]) {
         await client.query("commit");
         const { values: existingValues, wellnessScore } = await loadAssessmentValuesAndResult(query, existing.rows[0].id);
@@ -753,16 +788,22 @@ router.get("/results", async (req, res, next) => {
        where ta.superseded_by_assessment_id is null
          and ta.status = 'completed'
          and ta.test_version_id = $3
-         and ($7::uuid is null or sch.id = $7)
+         and ($8::uuid is null or sch.id = $8)
          and (
-           $6::boolean
+           $7::boolean
            or (sch.owner_scope = 'user' and sch.owner_user_id = $4)
-           or (sch.owner_scope = 'club' and sch.owner_club_id = any($5))
-           or (sch.owner_scope = 'team' and sch.owner_team_id = any($5::uuid[]))
+           or (sch.owner_scope = 'club' and sch.owner_club_id = any($5::uuid[]))
+           or (sch.owner_scope = 'team' and sch.owner_team_id = any($6::uuid[]))
          )
        order by o.scheduled_date desc, athlete_name asc
        limit 300`,
-      [WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID, WELLNESS_TEST_VERSION_ID, req.user.id, clubIds && teamIds ? [...clubIds, ...teamIds] : (clubIds || teamIds || []), isPlatformAdministrator(req.authz), scheduleId],
+      // clubIds/teamIds are separate parameters ($5/$6) - a schedule owned
+      // by a club never matches against teamIds and vice versa, even if a
+      // club id and a team id happen to be equal (see the K2 test below).
+      // A previous version of this query merged both into one array and
+      // reused it for both branches - a real authorization bug, not just a
+      // style issue.
+      [WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID, WELLNESS_TEST_VERSION_ID, req.user.id, clubIds || [], teamIds || [], isPlatformAdministrator(req.authz), scheduleId],
     );
     res.json({
       results: result.rows.map((row) => ({

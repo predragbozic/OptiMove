@@ -761,6 +761,411 @@ test("N1. Today reports correct completed/pending counts and injury count", asyn
 });
 
 // ------------------------------------------------------------
+// P. Presentation metadata lifecycle immutability (round 2 review fix)
+// ------------------------------------------------------------
+// tests.protect_presentation_lifecycle() (migrations_v2/202608250900) is
+// created AFTER this file's own WELLNESS backfill runs (as a plain,
+// trigger-free INSERT) - from that point on it applies to EVERY write,
+// including WELLNESS's own already-active version. Exercised here directly
+// via adminClient (raw SQL), the same way this file already proves other
+// trigger-level guarantees, since these are DB-level invariants, not HTTP
+// behavior.
+
+async function makeDraftTestVersionWithParameter(label) {
+  const testRow = await adminClient.query(`insert into tests.test (id, owner_scope, visibility) values (gen_random_uuid(), 'system', 'system') returning id`);
+  const versionRow = await adminClient.query(
+    `insert into tests.test_versions (id, test_id, version_number, status, name) values (gen_random_uuid(), $1, 1, 'draft', $2) returning id`,
+    [testRow.rows[0].id, `QA Draft ${label}`],
+  );
+  const paramRow = await adminClient.query(
+    `insert into tests.test_parameters (id, test_version_id, parameter_key, parameter, value_type) values (gen_random_uuid(), $1, $2, $2, 'integer') returning id`,
+    [versionRow.rows[0].id, `qa_param_${label}`],
+  );
+  return { testVersionId: versionRow.rows[0].id, testParameterId: paramRow.rows[0].id };
+}
+
+async function expectRejected(promise, label) {
+  try {
+    await promise;
+    assert.fail(`expected rejection: ${label}`);
+  } catch (error) {
+    assert.match(error.message, /P0001|test_parameter_presentation/, `${label} - got unexpected error: ${error.message}`);
+  }
+}
+
+test("P1. insert into an already-active version with zero existing presentation rows is rejected", async () => {
+  await adminClient.query("begin");
+  try {
+    await expectRejected(
+      adminClient.query(
+        `insert into tests.test_parameter_presentation (test_version_id, test_parameter_id, display_order, control_type, direction) values ($1, $2, 0, 'number', 'neutral')`,
+        [DEEP_SQUAT_TEST_VERSION_ID, "3f2873b1-0453-4f4a-93d9-02c388e9efcb"],
+      ),
+      "insert into active Deep Squat version",
+    );
+  } finally {
+    await adminClient.query("rollback");
+  }
+});
+
+test("P2. a second insert into WELLNESS's own active version (which already has rows) is rejected", async () => {
+  await adminClient.query("begin");
+  try {
+    await expectRejected(
+      adminClient.query(
+        `insert into tests.test_parameter_presentation (test_version_id, test_parameter_id, display_order, control_type, direction) values ($1, $2, 99, 'slider', 'lower_better')`,
+        [WELLNESS_TEST_VERSION_ID, "f33abe4e-f2c2-48f7-89b0-e4c96ca0f6ea"],
+      ),
+      "second insert into WELLNESS",
+    );
+  } finally {
+    await adminClient.query("rollback");
+  }
+});
+
+test("P3. UPDATE and DELETE of WELLNESS presentation metadata are both rejected", async () => {
+  await adminClient.query("begin");
+  try {
+    await expectRejected(
+      adminClient.query(`update tests.test_parameter_presentation set help_text = 'x' where test_version_id = $1 and display_order = 0`, [WELLNESS_TEST_VERSION_ID]),
+      "update WELLNESS presentation row",
+    );
+  } finally {
+    await adminClient.query("rollback");
+  }
+  await adminClient.query("begin");
+  try {
+    await expectRejected(
+      adminClient.query(`delete from tests.test_parameter_presentation where test_version_id = $1 and display_order = 0`, [WELLNESS_TEST_VERSION_ID]),
+      "delete WELLNESS presentation row",
+    );
+  } finally {
+    await adminClient.query("rollback");
+  }
+});
+
+test("P4. insert/update/delete against a genuinely draft test_version all succeed", async () => {
+  const { testVersionId, testParameterId } = await makeDraftTestVersionWithParameter("p4");
+  const inserted = await adminClient.query(
+    `insert into tests.test_parameter_presentation (test_version_id, test_parameter_id, display_order, control_type, direction) values ($1, $2, 0, 'slider', 'neutral') returning id`,
+    [testVersionId, testParameterId],
+  );
+  await adminClient.query(`update tests.test_parameter_presentation set help_text = 'updated' where id = $1`, [inserted.rows[0].id]);
+  const after = await adminClient.query(`select help_text from tests.test_parameter_presentation where id = $1`, [inserted.rows[0].id]);
+  assert.equal(after.rows[0].help_text, "updated");
+  await adminClient.query(`delete from tests.test_parameter_presentation where id = $1`, [inserted.rows[0].id]);
+  const gone = await adminClient.query(`select id from tests.test_parameter_presentation where id = $1`, [inserted.rows[0].id]);
+  assert.equal(gone.rowCount, 0);
+});
+
+test("P5. reparenting a draft row onto a different test_version/test_parameter via UPDATE is rejected, even though the row is still draft", async () => {
+  const source = await makeDraftTestVersionWithParameter("p5-source");
+  const other = await makeDraftTestVersionWithParameter("p5-other");
+  const inserted = await adminClient.query(
+    `insert into tests.test_parameter_presentation (test_version_id, test_parameter_id, display_order, control_type, direction) values ($1, $2, 0, 'slider', 'neutral') returning id`,
+    [source.testVersionId, source.testParameterId],
+  );
+  await expectRejected(
+    adminClient.query(
+      `update tests.test_parameter_presentation set test_version_id = $1, test_parameter_id = $2 where id = $3`,
+      [other.testVersionId, other.testParameterId, inserted.rows[0].id],
+    ),
+    "reparent draft row to a different version",
+  );
+  await adminClient.query(`delete from tests.test_parameter_presentation where id = $1`, [inserted.rows[0].id]);
+});
+
+test("P6. once a draft version is published, its presentation rows immediately become immutable - no further insert/update", async () => {
+  const { testVersionId, testParameterId } = await makeDraftTestVersionWithParameter("p6");
+  const inserted = await adminClient.query(
+    `insert into tests.test_parameter_presentation (test_version_id, test_parameter_id, display_order, control_type, direction) values ($1, $2, 0, 'slider', 'neutral') returning id`,
+    [testVersionId, testParameterId],
+  );
+  await adminClient.query(`update tests.test_versions set status = 'active', published_at = now() where id = $1`, [testVersionId]);
+  await expectRejected(
+    adminClient.query(
+      `insert into tests.test_parameter_presentation (test_version_id, test_parameter_id, display_order, control_type, direction) values ($1, gen_random_uuid(), 1, 'slider', 'neutral')`,
+      [testVersionId],
+    ),
+    "insert into the now-published version",
+  );
+  await expectRejected(
+    adminClient.query(`update tests.test_parameter_presentation set help_text = 'y' where id = $1`, [inserted.rows[0].id]),
+    "update the now-published version's row",
+  );
+});
+
+test("P7. a concurrent publish and a concurrent child-write on the same draft version never both succeed against inconsistent state", async () => {
+  const { testVersionId, testParameterId } = await makeDraftTestVersionWithParameter("p7");
+  const publisher = new pg.Client({ connectionString: db.url });
+  const writer = new pg.Client({ connectionString: db.url });
+  await publisher.connect();
+  await writer.connect();
+  try {
+    await publisher.query("begin");
+    // Takes a row lock on this exact test_versions row and holds the
+    // transaction open (not yet committed) - protect_presentation_lifecycle's
+    // own FOR SHARE select on the same row must block behind this.
+    await publisher.query(`update tests.test_versions set status = 'active', published_at = now() where id = $1 and status = 'draft'`, [testVersionId]);
+
+    await writer.query("begin");
+    const writerPromise = writer.query(
+      `insert into tests.test_parameter_presentation (test_version_id, test_parameter_id, display_order, control_type, direction) values ($1, $2, 0, 'slider', 'neutral')`,
+      [testVersionId, testParameterId],
+    );
+
+    // Give the writer's query a moment to actually reach and block on the
+    // FOR SHARE select - it must NOT resolve while the publisher still
+    // holds its uncommitted UPDATE.
+    let writerSettled = false;
+    writerPromise.then(() => { writerSettled = true; }, () => { writerSettled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(writerSettled, false, "the child-write must block behind the publisher's uncommitted transaction, not race ahead of it");
+
+    await publisher.query("commit");
+
+    // Now that the publish has committed, the writer's blocked SELECT ...
+    // FOR SHARE unblocks and sees status='active' - its insert must be
+    // rejected, never silently land against what is now a published
+    // version.
+    await expectRejected(writerPromise, "child-write against a version that published while it was waiting");
+    await writer.query("rollback").catch(() => {});
+
+    const finalStatus = await adminClient.query(`select status from tests.test_versions where id = $1`, [testVersionId]);
+    assert.equal(finalStatus.rows[0].status, "active");
+    const presentationCount = await adminClient.query(`select count(*)::int as n from tests.test_parameter_presentation where test_version_id = $1`, [testVersionId]);
+    assert.equal(presentationCount.rows[0].n, 0, "no partial/inconsistent presentation row was left behind");
+  } finally {
+    await publisher.end();
+    await writer.end();
+  }
+});
+
+// ------------------------------------------------------------
+// Q. One-time occurrence date correctness (round 2 review fix)
+// ------------------------------------------------------------
+
+test("Q1. a one_time schedule dated in the future does not appear in Athlete Today before its start_date", async () => {
+  const { coachCookie, athleteId, athleteCookie } = await makeIndependentCoachWithAthlete("q1");
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const created = await api("/api/tests/schedules", {
+    method: "POST",
+    cookie: coachCookie,
+    body: { testVersionId: WELLNESS_TEST_VERSION_ID, scheduleKind: "one_time", timezone: "UTC", startDate: tomorrow, opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athleteId }] },
+  });
+  assert.equal(created.status, 201);
+  const today = await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  assert.equal(today.body.assignments.length, 0, "a future one_time schedule must not materialize/show as today's");
+  const occurrenceCount = await query(`select count(*)::int as n from tests.test_schedule_occurrences where schedule_id = $1`, [created.body.schedule.id]);
+  assert.equal(occurrenceCount.rows[0].n, 0, "no occurrence row should have been generated yet");
+});
+
+test("Q2. a one_time schedule appears in Athlete Today exactly on its start_date", async () => {
+  const { coachCookie, athleteId, athleteCookie } = await makeIndependentCoachWithAthlete("q2");
+  const created = await scheduleWellnessForAthlete(coachCookie, athleteId);
+  assert.equal(created.status, 201);
+  const today = await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  assert.equal(today.body.assignments.length, 1);
+});
+
+test("Q3. a one_time schedule no longer appears as today's once its date has passed, even though the occurrence already exists", async () => {
+  const { coachId, athleteId, athleteCookie } = await makeIndependentCoachWithAthlete("q3");
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // Created directly via SQL (bypassing the API's own start_date validation
+  // convenience) as a one_time schedule whose window was "yesterday" -
+  // simulates a schedule that genuinely was visited/materialized on its own
+  // day and now has a real occurrence + assignment on record.
+  const scheduleRow = await query(
+    `insert into tests.test_schedules (test_version_id, schedule_kind, timezone, start_date, end_date, opens_time, closes_time, status, created_by_user_id, owner_scope, owner_user_id)
+     values ($1, 'one_time', 'UTC', $2, $2, '00:00', '23:59', 'active', $3, 'user', $3)
+     returning id`,
+    [WELLNESS_TEST_VERSION_ID, yesterday, coachId],
+  );
+  const scheduleId = scheduleRow.rows[0].id;
+  await query(`insert into tests.test_schedule_targets (schedule_id, target_kind, target_athlete_id) values ($1, 'athlete', $2)`, [scheduleId, athleteId]);
+  const occ = await query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [scheduleId, yesterday]);
+  await query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occ.rows[0].id]);
+  const assignmentCheck = await query(`select id from tests.test_assignments where occurrence_id = $1 and athlete_id = $2`, [occ.rows[0].id, athleteId]);
+  assert.equal(assignmentCheck.rowCount, 1, "sanity check: the assignment really was materialized for yesterday");
+
+  const today = await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  assert.equal(today.body.assignments.length, 0, "an occurrence from a past one_time date must not show as today's");
+
+  // Nothing was deleted, only excluded from Today - the row itself is still
+  // reachable by direct query (it just never completed, so it won't appear
+  // in the completed-only History list).
+  const stillThere = await query(`select id from tests.test_assignments where id = $1`, [assignmentCheck.rows[0].id]);
+  assert.equal(stillThere.rowCount, 1);
+});
+
+test("Q4. a daily schedule's local 'today' follows the schedule's own IANA timezone across a midnight boundary, for a one_time schedule too", async () => {
+  const { coachCookie, athleteId, athleteCookie } = await makeIndependentCoachWithAthlete("q4");
+  const timezone = "Pacific/Kiritimati"; // UTC+14
+  const localToday = (await query(`select (now() at time zone $1)::date as d`, [timezone])).rows[0].d;
+  const created = await api("/api/tests/schedules", {
+    method: "POST",
+    cookie: coachCookie,
+    body: { testVersionId: WELLNESS_TEST_VERSION_ID, scheduleKind: "one_time", timezone, startDate: String(localToday), opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athleteId }] },
+  });
+  assert.equal(created.status, 201);
+  const today = await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  assert.equal(today.body.assignments.length, 1, "a one_time schedule dated at the schedule timezone's own local today must appear, even if that differs from the server's own date");
+});
+
+// ------------------------------------------------------------
+// R. Results query: club and team scope must never merge (round 2 review fix)
+// ------------------------------------------------------------
+
+test("R1. a club id and a team id that happen to be numerically equal never cross-authorize Results access", async () => {
+  // Two real, distinct rows (clubs.id and teams.id are separate sequences/
+  // tables) that we force to share the exact same UUID value - the only way
+  // to prove the query parameters are genuinely independent rather than
+  // coincidentally never colliding in practice.
+  const sharedId = crypto.randomUUID();
+  await query(`insert into public.clubs (id, name) values ($1, 'R1 Shared-Id Club')`, [sharedId]);
+  const otherClubForTeam = await makeClub("R1 Team's Real Club");
+  await query(`insert into public.teams (id, club_id, name) values ($1, $2, 'R1 Shared-Id Team')`, [sharedId, otherClubForTeam]);
+
+  const clubAdminId = await makeUser({ email: `r1-clubadmin-${Date.now()}@test.local` });
+  await grantClubAdmin(clubAdminId, sharedId);
+  const clubAdminCookie = await loginCookie(clubAdminId);
+
+  const teamCoachId = await makeUser({ email: `r1-teamcoach-${Date.now()}@test.local` });
+  await grantTeamCoach(teamCoachId, sharedId);
+  const teamCoachCookie = await loginCookie(teamCoachId);
+
+  // A schedule genuinely owned by the TEAM (owner_scope='team', owner_team_id=sharedId).
+  const athleteUserId = await makeUser({ email: `r1-athlete-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "R1 Athlete", userId: athleteUserId });
+  await addMembership(athleteId, { teamId: sharedId });
+  const athleteCookie = await loginCookie(athleteUserId);
+  const teamSchedule = await api("/api/tests/schedules", {
+    method: "POST",
+    cookie: teamCoachCookie,
+    body: { testVersionId: WELLNESS_TEST_VERSION_ID, scheduleKind: "one_time", timezone: "UTC", startDate: new Date().toISOString().slice(0, 10), opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "team", id: sharedId }] },
+  });
+  assert.equal(teamSchedule.status, 201);
+  assert.equal(teamSchedule.body.schedule.ownerScope, "team");
+  await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  const assignmentId = await getTodayAssignmentId(athleteCookie);
+  await api(`/api/tests/assignments/${assignmentId}/submit`, { method: "POST", cookie: athleteCookie, body: { values: FULL_VALUES } });
+
+  // The CLUB admin (whose id happens to equal the team's id) must NOT see
+  // this team-owned result via Results - only a genuine club-owned schedule
+  // should ever match the owner_club_id branch.
+  const asClubAdmin = await api("/api/tests/results", { cookie: clubAdminCookie });
+  assert.ok(!asClubAdmin.body.results.some((r) => r.scheduleId === teamSchedule.body.schedule.id), "club admin must not see a team-owned schedule's results merely because their club id equals the team id");
+
+  // The team coach (the real owner) must see it.
+  const asTeamCoach = await api("/api/tests/results", { cookie: teamCoachCookie });
+  assert.ok(asTeamCoach.body.results.some((r) => r.scheduleId === teamSchedule.body.schedule.id), "the real team coach must still see their own team-owned schedule's results");
+});
+
+// ------------------------------------------------------------
+// S. Athlete Today snapshot semantics (round 2 review fix)
+// ------------------------------------------------------------
+
+test("S1. an already-materialized assignment stays in Athlete Today even after the athlete's team membership is paused", async () => {
+  const clubId = await makeClub("S1 Club");
+  const teamId = await makeTeam(clubId, "S1 Team");
+  const coachId = await makeUser({ email: `s1-coach-${Date.now()}@test.local` });
+  await grantTeamCoach(coachId, teamId);
+  const coachCookie = await loginCookie(coachId);
+  const athleteUserId = await makeUser({ email: `s1-athlete-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "S1 Athlete", userId: athleteUserId });
+  await addMembership(athleteId, { teamId });
+  const athleteCookie = await loginCookie(athleteUserId);
+
+  await api("/api/tests/schedules", {
+    method: "POST",
+    cookie: coachCookie,
+    body: { testVersionId: WELLNESS_TEST_VERSION_ID, scheduleKind: "one_time", timezone: "UTC", startDate: new Date().toISOString().slice(0, 10), opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "team", id: teamId }] },
+  });
+  const firstToday = await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  assert.equal(firstToday.body.assignments.length, 1, "sanity check: materialized once via team membership");
+
+  await query(`update public.athlete_memberships set status = 'paused' where athlete_id = $1 and team_id = $2`, [athleteId, teamId]);
+
+  const secondToday = await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  assert.equal(secondToday.body.assignments.length, 1, "an already-materialized assignment must remain visible after membership is paused");
+});
+
+test("S2. an athlete added to a team AFTER materialization does not retroactively get an assignment for that occurrence", async () => {
+  const clubId = await makeClub("S2 Club");
+  const teamId = await makeTeam(clubId, "S2 Team");
+  const coachId = await makeUser({ email: `s2-coach-${Date.now()}@test.local` });
+  await grantTeamCoach(coachId, teamId);
+  const coachCookie = await loginCookie(coachId);
+  const existingAthleteUserId = await makeUser({ email: `s2-existing-${Date.now()}@test.local`, roleHint: "athlete" });
+  const existingAthleteId = await makeAthlete({ name: "S2 Existing", userId: existingAthleteUserId });
+  await addMembership(existingAthleteId, { teamId });
+  const existingCookie = await loginCookie(existingAthleteUserId);
+
+  const created = await api("/api/tests/schedules", {
+    method: "POST",
+    cookie: coachCookie,
+    body: { testVersionId: WELLNESS_TEST_VERSION_ID, scheduleKind: "one_time", timezone: "UTC", startDate: new Date().toISOString().slice(0, 10), opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "team", id: teamId }] },
+  });
+  assert.equal(created.status, 201);
+  await api("/api/tests/athlete/today", { cookie: existingCookie }); // triggers materialization
+
+  const lateAthleteUserId = await makeUser({ email: `s2-late-${Date.now()}@test.local`, roleHint: "athlete" });
+  const lateAthleteId = await makeAthlete({ name: "S2 Late", userId: lateAthleteUserId });
+  await addMembership(lateAthleteId, { teamId });
+  const lateCookie = await loginCookie(lateAthleteUserId);
+
+  const lateToday = await api("/api/tests/athlete/today", { cookie: lateCookie });
+  assert.equal(lateToday.body.assignments.length, 0, "a team member added after materialization must not join that occurrence");
+});
+
+test("S3. repeated Athlete Today calls never duplicate assignments, with the snapshot-vs-membership rewrite in place", async () => {
+  const { coachCookie, athleteId, athleteCookie } = await makeIndependentCoachWithAthlete("s3");
+  await scheduleWellnessForAthlete(coachCookie, athleteId);
+  await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  const third = await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  assert.equal(third.body.assignments.length, 1);
+  const count = await query(`select count(*)::int as n from tests.test_assignments where athlete_id = $1`, [athleteId]);
+  assert.equal(count.rows[0].n, 1);
+});
+
+// ------------------------------------------------------------
+// T. Idempotency key scoping (round 2 review fix)
+// ------------------------------------------------------------
+
+test("T1. an idempotency key that belongs to a different assignment/athlete never returns that other athlete's result", async () => {
+  const a = await makeIndependentCoachWithAthlete("t1a");
+  const b = await makeIndependentCoachWithAthlete("t1b");
+  await scheduleWellnessForAthlete(a.coachCookie, a.athleteId);
+  await scheduleWellnessForAthlete(b.coachCookie, b.athleteId);
+  const assignmentAId = await getTodayAssignmentId(a.athleteCookie);
+  const assignmentBId = await getTodayAssignmentId(b.athleteCookie);
+
+  const sharedKey = crypto.randomUUID();
+  const submitA = await api(`/api/tests/assignments/${assignmentAId}/submit`, { method: "POST", cookie: a.athleteCookie, body: { values: FULL_VALUES, idempotencyKey: sharedKey } });
+  assert.equal(submitA.status, 200);
+
+  // Athlete B submits their OWN assignment reusing athlete A's already-
+  // completed idempotency key. Before the fix, a bare
+  // "idempotency_key = $1 and status = 'completed'" lookup would have
+  // matched A's row and hapily returned A's assessmentId/values/score to B.
+  const submitB = await api(`/api/tests/assignments/${assignmentBId}/submit`, { method: "POST", cookie: b.athleteCookie, body: { values: { ...FULL_VALUES, fatigue: 9 }, idempotencyKey: sharedKey } });
+  if (submitB.status === 200) {
+    assert.notEqual(submitB.body.assessmentId, submitA.body.assessmentId, "B must never be handed A's own assessment id");
+    assert.notEqual(submitB.body.wellnessScore, submitA.body.wellnessScore, "B must never be handed A's own score by reusing A's key");
+  } else {
+    // The globally-unique idempotency_key index (Phase 1) makes a genuine
+    // second INSERT with the same key impossible once the scoped lookup no
+    // longer short-circuits into A's row - a clean rejection is an equally
+    // acceptable, equally safe outcome, as long as A's data was never leaked.
+    assert.equal(submitB.status, 409);
+  }
+  // Athlete A's own row must be completely unaffected either way.
+  const historyA = await api("/api/tests/athlete/history", { cookie: a.athleteCookie });
+  assert.equal(historyA.body.history[0].assessmentId, submitA.body.assessmentId);
+});
+
+// ------------------------------------------------------------
 // O. Full backend/v4.2/Phase1 suites unaffected - covered by re-running
 // those suites directly (see completion report), not duplicated here.
 // ------------------------------------------------------------

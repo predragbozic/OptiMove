@@ -16,16 +16,27 @@
 // schedule: a full row from tests.test_schedules (needs id, status,
 // schedule_kind, timezone, start_date, end_date).
 // Returns the occurrence id, or null if there is nothing to show right now
-// (schedule not active, not yet started, or already past its end_date).
+// (schedule not active, not yet started, or already past its end_date/its
+// own one_time date).
 export async function ensureCurrentOccurrence(client, schedule) {
   if (schedule.status !== "active") return null;
 
+  // Always computed, for BOTH schedule kinds - a one_time schedule's single
+  // occurrence is only ever "today's" on its own start_date, exactly like a
+  // daily schedule's occurrence is only ever "today's" on today. Before
+  // that date there is nothing to show yet; once it has passed, this
+  // function stops surfacing it as current (its own row, once generated,
+  // remains reachable through History/Results - this function only governs
+  // what counts as "today" for the Today view).
+  const localDateResult = await client.query(`select (now() at time zone $1)::date as local_date`, [schedule.timezone]);
+  const localToday = localDateResult.rows[0].local_date;
+
   let targetDate;
   if (schedule.schedule_kind === "one_time") {
+    if (localToday !== schedule.start_date) return null;
     targetDate = schedule.start_date;
   } else {
-    const localDateResult = await client.query(`select (now() at time zone $1)::date as local_date`, [schedule.timezone]);
-    targetDate = localDateResult.rows[0].local_date;
+    targetDate = localToday;
   }
 
   if (targetDate < schedule.start_date) return null;
