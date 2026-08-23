@@ -208,6 +208,79 @@ export const emptyBuilderState = (overrides = {}) => ({
 export const TEMPLATE_SCOPES = ["my_programs", "optimove", "marketplace"];
 export const ATHLETE_TEMPLATE_SCOPES = ["my_programs", "optimove", "marketplace"];
 
+// WELLNESS check-in form state - shared shape used both by the normal
+// in-app Tests tab (state.tests.form) and the public check-in page
+// (state.checkIn.form), since the form itself behaves identically once an
+// assignment has been resolved. `answered` is tracked separately from
+// `values` so a slider that has genuinely been moved to 0 (or an Injury
+// answer of No) is indistinguishable from "still untouched" nowhere in the
+// UI - `values[key] === 0` alone can never mean "unanswered".
+export const emptyWellnessForm = (overrides = {}) => ({
+  assignmentId: "",
+  testName: "",
+  athleteName: "",
+  opensAt: "",
+  closesAt: "",
+  canSubmit: false,
+  parameters: [],
+  values: {},
+  answered: {},
+  submitting: false,
+  error: "",
+  result: null, // { wellnessScore } once a submit has succeeded this page load
+  latestAssessment: null, // a previously-saved answer, if any (pre-fills values/answered)
+  idempotencyKey: "",
+  ...overrides,
+});
+
+export const emptyScheduleForm = (overrides = {}) => ({
+  open: false,
+  scheduleKind: "one_time",
+  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  startDate: "",
+  opensTime: "06:00",
+  dueTime: "",
+  closesTime: "22:00",
+  targetKind: "athlete",
+  targetId: "",
+  submitting: false,
+  error: "",
+  ...overrides,
+});
+
+export const emptyTestsState = (overrides = {}) => ({
+  section: "today",
+  loading: false,
+  error: "",
+  pendingCount: 0,
+  athleteToday: [],
+  athleteUpcoming: [],
+  athleteHistory: [],
+  coachToday: [],
+  schedules: [],
+  scheduleDetail: null,
+  results: [],
+  resultsScheduleId: "",
+  library: { tests: [], batteries: [] },
+  orgPickerData: null,
+  scheduleForm: emptyScheduleForm(),
+  form: null,
+  ...overrides,
+});
+
+export const emptyCheckInState = (overrides = {}) => ({
+  token: "",
+  loading: true,
+  error: "",
+  testName: "",
+  needsLogin: false,
+  loginError: "",
+  loginPending: false,
+  message: "",
+  form: null,
+  ...overrides,
+});
+
 export const createInitialState = () => ({
   currentUser: null,
   athletes: [],
@@ -281,6 +354,8 @@ export const createInitialState = () => ({
   },
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
+  tests: emptyTestsState(),
+  checkIn: emptyCheckInState(),
   // feature/mobile-messages-fullscreen: menuOpen is the mobile thread
   // header's 3-dot overflow menu (Hide/Block live there on mobile instead
   // of always-visible buttons); hideConfirmOpen drives the styled confirm

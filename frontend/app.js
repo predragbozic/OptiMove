@@ -25,6 +25,10 @@ import {
   renderConfirmEmailChange as renderConfirmEmailChangeAction,
   submitConfirmEmailChange as submitConfirmEmailChangeAction,
 } from "./email-change-actions.js";
+import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
+import { handleTestsAction, handleTestsScheduleFormField, handleTestsSliderInput, submitTestsForm } from "./tests-actions.js";
+import { loadPendingCount as loadTestsPendingCount, loadTests } from "./tests-data.js";
+import { renderTests, renderTestsBadge } from "./tests-view.js";
 import {
   renderAthleteHeaderToolbarHtml,
   renderAthleteListHtml,
@@ -246,6 +250,10 @@ async function init() {
     await renderConfirmEmailChangeAction({ renderUserControls, setStatus });
     return;
   }
+  if (window.location.pathname.startsWith("/tests/check-in/")) {
+    await renderCheckInPageAction({ renderUserControls, setStatus });
+    return;
+  }
   await loadSession();
   if (!state.currentUser) {
     renderLoginAction({ renderUserControls, setStatus });
@@ -262,6 +270,7 @@ async function init() {
   ensureBackGuard();
   void loadNotifications({ silent: true });
   void loadMessages({ silent: true });
+  void loadTestsPendingCount().then(renderTestsBadge);
   startRealtimeInbox((connected) => {
     state.realtimeOffline = !connected;
     renderConnectionIndicator();
@@ -531,6 +540,20 @@ async function handleContentSubmit(event) {
   if (coachContactForm) {
     event.preventDefault();
     await submitCoachContactFormAction(coachContactForm, { renderCoachContext });
+    return;
+  }
+
+  const testsForm = event.target.closest("[data-tests-form]");
+  if (testsForm) {
+    event.preventDefault();
+    await submitTestsForm(testsForm, { renderTests: renderActiveTestsSurface });
+    return;
+  }
+
+  const checkInLoginForm = event.target.closest("#checkInLoginForm");
+  if (checkInLoginForm) {
+    event.preventDefault();
+    await submitCheckInLoginAction(checkInLoginForm);
     return;
   }
 
@@ -815,6 +838,12 @@ function handleContentInput(event) {
   }
   if (handleExerciseEditorInput(state, event)) return;
 
+  const wellnessSlider = event.target.closest("[data-action='tests-slider-input']");
+  if (wellnessSlider) {
+    handleTestsSliderInput(wellnessSlider);
+    return;
+  }
+
   const input = event.target.closest("[data-builder-exercise-search]");
   if (!input) return;
   state.builder.exerciseQuery = input.value;
@@ -822,6 +851,7 @@ function handleContentInput(event) {
 }
 
 async function handleContentChange(event) {
+  if (await handleTestsContentChange(event)) return;
   // Mirror the create-form's color-palette hidden input into state, same
   // reasoning as createNameInput above - fires for both a swatch pick and a
   // custom-color pick, since both end up setting this hidden input's value
@@ -939,6 +969,14 @@ async function handleContentChange(event) {
   } catch (error) {
     renderBuilderError(error);
   }
+}
+
+async function handleTestsContentChange(event) {
+  const testsScheduleField = event.target.closest("[data-action='tests-schedule-form-field']");
+  if (!testsScheduleField) return false;
+  handleTestsScheduleFormField(testsScheduleField);
+  renderTests();
+  return true;
 }
 const builderAutosaveTimers = new Map();
 const BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS = 500;
@@ -1561,6 +1599,7 @@ async function loadActiveTab() {
   if (state.activeTab === "templates") return loadTemplates();
   if (state.activeTab === "coaches") return loadCoaches();
   if (state.activeTab === "builder") return loadBuilder();
+  if (state.activeTab === "tests") return loadTests({ setLoading, renderTests });
   return loadExercises({ renderExercises, setLoading });
 }
 
@@ -1863,7 +1902,19 @@ async function handleContentClick(event) {
   })) return;
   if (await handleTaxonomyAction(action, { renderOrganizationPanel })) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
+  if (await handleTestsAction(action, { renderTests: renderActiveTestsSurface })) return;
   handleMediaAction(action);
+}
+
+// Both the normal in-app Tests tab and the public /tests/check-in/:token
+// page (see check-in-actions.js) render WELLNESS form markup into the same
+// #content element through the same delegated click/input/submit listeners
+// - this picks the right re-render for whichever one is actually on screen,
+// so tests-actions.js's shared WELLNESS handlers never need to know which
+// context they were called from.
+function renderActiveTestsSurface() {
+  if (state.checkIn.token) return renderCheckInContent();
+  return renderTests();
 }
 
 function renderCurrentNode() {
@@ -1880,6 +1931,7 @@ function renderCurrentNode() {
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
   if (state.activeTab === "coach-account") return renderCoachAccount();
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();
+  if (state.activeTab === "tests") return renderTests();
 }
 
 function moveWeek(delta) {
@@ -1992,6 +2044,7 @@ async function onWorkspaceChanged() {
   if (state.activeTab === "coaches") return loadCoaches({ forceRefresh: true });
   if (state.activeTab === "templates") return loadTemplates({ forceRefresh: true });
   if (state.activeTab === "exercises") return loadExercises({ renderExercises, setLoading }, { forceRefresh: true });
+  if (state.activeTab === "tests") return loadTests({ setLoading, renderTests });
 }
 
 // The shared post-mutation refresh every organization-actions.js handler

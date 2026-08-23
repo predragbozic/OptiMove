@@ -18,6 +18,8 @@ import coachesRouter from "./routes/coaches.js";
 import notificationsRouter from "./routes/notifications.js";
 import messagesRouter from "./routes/messages.js";
 import taxonomyRouter from "./routes/taxonomy.js";
+import testsRouter from "./routes/tests.js";
+import testsCheckInRouter from "./routes/testsCheckIn.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
@@ -74,6 +76,13 @@ app.use("/api/taxonomy", requireAuth, requireCoach, taxonomyRouter);
 app.use("/api/coaches", requireAuth, coachesRouter);
 app.use("/api/notifications", requireAuth, notificationsRouter);
 app.use("/api/messages", requireAuth, messagesRouter);
+// Public check-in link (feature/tests-wellness-phase2) - mounted BEFORE the
+// requireAuth-gated /api/tests below so /api/tests/check-in/:token is
+// reachable with no session at all (it requires login inline, only once it
+// actually needs to resolve an athlete's own assignment - see
+// backend/src/routes/testsCheckIn.js).
+app.use("/api/tests/check-in", testsCheckInRouter);
+app.use("/api/tests", requireAuth, testsRouter);
 app.get("/api/realtime", requireAuth, realtimeRouter);
 
 // Dev/test: this is a plain ES-modules frontend with no build step - script
@@ -116,6 +125,15 @@ app.get(["/", "/app", "/invite", "/join", "/verify-email", "/forgot-password", "
   sendHtmlEntry(res, "index.html");
 });
 app.get("/athlete", (_req, res) => {
+  sendHtmlEntry(res, "athlete.html");
+});
+// Public schedule check-in link (feature/tests-wellness-phase2) - a coach
+// pastes this into a WhatsApp/Viber group chat, so it must resolve to a real
+// page for someone who isn't logged in (or isn't even on this device) yet.
+// Served from the athlete shell (see frontend/app.js's pathname bypass in
+// init()) since resolving a check-in always ends at one athlete's own
+// assignment, never a coach view.
+app.get("/tests/check-in/:token", (_req, res) => {
   sendHtmlEntry(res, "athlete.html");
 });
 

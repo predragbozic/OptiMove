@@ -136,4 +136,11 @@ export const MENU_CACHE_POLICIES = {
     rationale:
       "renderCoachAccount() mirrors renderAthleteSettings() exactly (same two-pass render pattern, same GET /api/auth/account/email-change/status patch-in) - same 'static' classification for the same reason: it renders purely from state.currentUser, already loaded elsewhere, with no caching layer of its own to wire in.",
   },
+  tests: {
+    label: "Tests",
+    policy: "always-refresh",
+    namespace: null,
+    rationale:
+      "feature/tests-wellness-phase2: deliberately NOT wired into view-cache.js. Every one of Tests' sections (coach Today/Schedule/Results, athlete Today/Upcoming/History) reflects state that changes on nearly every visit - a coach checking in mid-day, an athlete who just answered, an assignment/occurrence window opening or closing - so a 30s-fresh cache would routinely show a stale completion count or a check-in the athlete can no longer act on. loadTests() (tests-data.js) always issues a real fetch on entry; onWorkspaceChanged() (app.js) also calls it plainly, matching the other workspace-scoped tabs' re-fetch-on-switch behavior without going through the cache layer. The nav badge (pending assignment count) follows notifications.js's own on-demand convention instead: fetched once at session bootstrap and after a successful submit, never polled.",
+  },
 };

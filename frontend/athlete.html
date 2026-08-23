@@ -4,13 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>OptiMove Athlete</title>
-    <link rel="stylesheet" href="./styles.css?v=20260722-2">
+    <link rel="stylesheet" href="/styles.css?v=20260722-2">
   </head>
   <body class="athlete-mode">
     <div class="app-shell">
       <aside class="sidebar athlete-sidebar">
         <div class="brand">
-          <button class="brand-mark" type="button" data-action="home" aria-label="Home"><img class="brand-mark-icon" src="./brand-logo.png" alt="OptiMove"></button>
+          <button class="brand-mark" type="button" data-action="home" aria-label="Home"><img class="brand-mark-icon" src="/brand-logo.png" alt="OptiMove"></button>
           <p class="brand-name">OptiMove</p>
           <button class="rail-toggle" id="railToggle" type="button" aria-expanded="false" aria-label="Expand navigation">
             <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -65,6 +65,15 @@
             </svg>
             <span>Exercises</span>
           </button>
+          <button class="sidebar-nav-button rail-button" data-athlete-tab="tests" type="button" title="Tests">
+            <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 3h6v4H9z"></path>
+              <path d="M9 5H6a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-3"></path>
+              <path d="M8 12l2.5 2.5L16 9"></path>
+            </svg>
+            <span>Tests</span>
+            <span class="notification-count" data-tests-count hidden>0</span>
+          </button>
           <button class="sidebar-nav-button rail-button" data-athlete-tab="coaches" type="button" title="Coaches">
             <svg class="rail-icon" viewBox="0 0 300 349" aria-hidden="true">
               <path d="M43 165 C37 123 40 83 59 54 C78 26 108 14 149 14 C190 14 222 27 241 56 C259 84 262 124 256 166" stroke-width="22"></path>
@@ -102,7 +111,7 @@
             <h2 id="screenTitle">My program</h2>
           </div>
           <button class="plain-button athlete-topbar-brand" type="button" data-action="home" aria-label="Home">
-            <img class="athlete-topbar-brand-icon" src="./brand-logo.png" alt="OptiMove">
+            <img class="athlete-topbar-brand-icon" src="/brand-logo.png" alt="OptiMove">
           </button>
           <div class="topbar-actions">
             <button class="plain-button mobile-nav-toggle" id="mobileNavToggle" data-action="mobile-nav-toggle" type="button" aria-expanded="false" aria-label="Open menu" title="Menu">
@@ -186,6 +195,6 @@
       </div>
     </div>
 
-    <script type="module" src="./app.js?v=20260729-1"></script>
+    <script type="module" src="/app.js?v=20260729-1"></script>
   </body>
 </html>
