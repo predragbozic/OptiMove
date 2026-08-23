@@ -48,7 +48,15 @@ create table tests.test_schedules (
   status varchar(10) not null check (status in ('active','paused','cancelled')),
 
   created_by_user_id uuid not null references public.users(id) on delete restrict,
-  owner_club_id uuid not null references public.clubs(id) on delete restrict,
+
+  -- Same owner_scope/owner_*_id pattern as tests.test/tests.test_battery -
+  -- an independent coach (owner_scope='user') is a first-class case, not
+  -- just club/team coaches. owner_club_id NOT NULL (an earlier version of
+  -- this table) would have made an independent coach's own schedule
+  -- impossible to represent.
+  owner_scope varchar(20) not null check (owner_scope in ('system','club','team','user')),
+  owner_user_id uuid references public.users(id) on delete restrict,
+  owner_club_id uuid references public.clubs(id) on delete restrict,
   owner_team_id uuid references public.teams(id) on delete restrict,
 
   created_at timestamptz not null default now(),
@@ -57,15 +65,26 @@ create table tests.test_schedules (
   check (num_nonnulls(test_version_id, test_battery_version_id) = 1),
 
   check (
+    (owner_scope = 'system' and owner_user_id is null and owner_club_id is null and owner_team_id is null) or
+    (owner_scope = 'user'   and owner_user_id is not null and owner_club_id is null and owner_team_id is null) or
+    (owner_scope = 'club'   and owner_club_id is not null and owner_user_id is null and owner_team_id is null) or
+    (owner_scope = 'team'   and owner_team_id is not null and owner_user_id is null and owner_club_id is null)
+  ),
+
+  check (
     (schedule_kind = 'one_time' and recurrence_rule is null and (end_date is null or end_date = start_date))
     or
     (schedule_kind = 'recurring' and recurrence_rule is not null)
   ),
+  -- Structural shape only (object, has 'freq') - the unsafe ->>'version'::int
+  -- cast (a JSON boolean/object there would throw an uncontrolled generic
+  -- Postgres error) and the actual version-number comparison are moved into
+  -- validate_schedule_timezone_and_recurrence() below, which checks
+  -- jsonb_typeof() BEFORE casting, same pattern the v4.2 schema's own
+  -- validate_conditional_definition_* already uses for calculation_definition.
   check (
     recurrence_rule is null or (
       jsonb_typeof(recurrence_rule) = 'object'
-      and recurrence_rule ? 'version'
-      and (recurrence_rule ->> 'version')::int = recurrence_rule_version
       and recurrence_rule ? 'freq'
       and recurrence_rule ->> 'freq' in ('daily','weekly','monthly')
     )
@@ -80,6 +99,38 @@ create table tests.test_schedules (
 
 create unique index test_schedules_one_target_version_idx on tests.test_schedules (id, test_version_id);
 create unique index test_schedules_one_target_battery_idx on tests.test_schedules (id, test_battery_version_id);
+
+-- Controlled validation for the two fields a bare CHECK can't safely cover:
+-- timezone (must be a real IANA name - checked against pg_timezone_names,
+-- a system view, which CHECK constraints cannot query) and
+-- recurrence_rule.version (must type-check as a JSON number BEFORE the
+-- ::int cast, or an invalid shape throws Postgres's generic, uncontrolled
+-- cast error instead of a clear validation message).
+create function tests.validate_schedule_timezone_and_recurrence()
+returns trigger language plpgsql as $$
+declare
+  v_version jsonb;
+begin
+  if not exists (select 1 from pg_timezone_names where name = NEW.timezone) then
+    raise exception 'timezone % is not a recognized IANA timezone name', NEW.timezone;
+  end if;
+
+  if NEW.recurrence_rule is not null then
+    v_version := NEW.recurrence_rule -> 'version';
+    if v_version is null or jsonb_typeof(v_version) is distinct from 'number' then
+      raise exception 'recurrence_rule.version must be a JSON number';
+    end if;
+    if (v_version #>> '{}')::numeric <> NEW.recurrence_rule_version then
+      raise exception 'recurrence_rule.version (%) must match recurrence_rule_version column (%)', v_version, NEW.recurrence_rule_version;
+    end if;
+  end if;
+
+  return NEW;
+end $$;
+
+create trigger validate_schedule_timezone_and_recurrence
+  before insert or update on tests.test_schedules
+  for each row execute function tests.validate_schedule_timezone_and_recurrence();
 
 -- Ko treba da popuni raspored - sportista direktno, ili tim/klub (koji se
 -- materijalizuje u pojedinačne assignments pri generisanju occurrence-a,
@@ -101,7 +152,12 @@ create table tests.test_schedule_targets (
     (target_kind = 'club'    and target_club_id is not null and target_athlete_id is null and target_team_id is null)
   ),
 
-  unique (schedule_id, target_kind, target_athlete_id, target_team_id, target_club_id)
+  -- NULLS NOT DISTINCT is required here - two rows both targeting the same
+  -- athlete both carry target_team_id=NULL/target_club_id=NULL, and under
+  -- default NULL semantics two NULLs are never "equal" for uniqueness
+  -- purposes, so a plain UNIQUE would silently allow the exact same athlete/
+  -- team/club to be targeted twice.
+  unique nulls not distinct (schedule_id, target_kind, target_athlete_id, target_team_id, target_club_id)
 );
 
 -- Konkretna realizacija rasporeda za jedan datum. snapshot_* kolone se
@@ -123,13 +179,23 @@ create table tests.test_schedule_occurrences (
   snapshot_test_version_id uuid references tests.test_versions(id) on delete restrict,
   snapshot_test_battery_version_id uuid references tests.test_battery_versions(id) on delete restrict,
 
+  -- Set exactly once by tests.materialize_test_assignments_for_occurrence()
+  -- below - the canonical "have we already materialized" flag. Deliberately
+  -- NOT inferred from "does this occurrence have any assignment rows",
+  -- which would be wrong the moment a target genuinely resolves to zero
+  -- athletes (an empty team) - that materialization still happened, and
+  -- must never be allowed to run again once membership changes.
+  assignments_materialized_at timestamptz,
+
   created_at timestamptz not null default now(),
 
   check (num_nonnulls(snapshot_test_version_id, snapshot_test_battery_version_id) = 1),
   check (opens_at <= closes_at),
   check (due_at is null or (due_at >= opens_at and due_at <= closes_at)),
 
-  unique (schedule_id, scheduled_date)
+  unique (schedule_id, scheduled_date),
+  unique (id, snapshot_test_version_id),        -- kompozitni FK cilj (test_assignments ispod)
+  unique (id, snapshot_test_battery_version_id)  -- kompozitni FK cilj (test_assignments ispod)
 );
 
 create index test_schedule_occurrences_snapshot_test_idx on tests.test_schedule_occurrences (snapshot_test_version_id);
@@ -147,8 +213,12 @@ begin
   if v_schedule.id is null then
     raise exception 'test_schedule_occurrences.schedule_id % does not reference an existing schedule', NEW.schedule_id;
   end if;
-  if v_schedule.status = 'cancelled' then
-    raise exception 'cannot generate an occurrence for cancelled schedule %', NEW.schedule_id;
+  -- Only an 'active' schedule may generate new occurrences - 'paused' must
+  -- block generation exactly like 'cancelled' (a paused schedule is not
+  -- currently running, not merely "cancelled but softer"); an occurrence
+  -- already generated before pausing is untouched.
+  if v_schedule.status <> 'active' then
+    raise exception 'cannot generate an occurrence for schedule % - status is %, not active', NEW.schedule_id, v_schedule.status;
   end if;
 
   NEW.snapshot_test_version_id := v_schedule.test_version_id;
@@ -159,6 +229,29 @@ end $$;
 create trigger snapshot_occurrence_test_reference
   before insert on tests.test_schedule_occurrences
   for each row execute function tests.snapshot_occurrence_test_reference();
+
+-- Identity columns (which schedule, which date, which test/battery version)
+-- are immutable after creation - only status may ever change on an
+-- existing occurrence.
+create function tests.protect_occurrence_identity()
+returns trigger language plpgsql as $$
+begin
+  if NEW.schedule_id is distinct from OLD.schedule_id
+     or NEW.scheduled_date is distinct from OLD.scheduled_date
+     or NEW.snapshot_test_version_id is distinct from OLD.snapshot_test_version_id
+     or NEW.snapshot_test_battery_version_id is distinct from OLD.snapshot_test_battery_version_id
+     or NEW.opens_at is distinct from OLD.opens_at
+     or NEW.due_at is distinct from OLD.due_at
+     or NEW.closes_at is distinct from OLD.closes_at
+  then
+    raise exception 'test_schedule_occurrences.% identity/snapshot columns are immutable after creation - only status/assignments_materialized_at may change', OLD.id;
+  end if;
+  return NEW;
+end $$;
+
+create trigger protect_occurrence_identity
+  before update on tests.test_schedule_occurrences
+  for each row execute function tests.protect_occurrence_identity();
 
 -- Idempotentan generator: (scheduled_date + schedule-ovo lokalno vreme) AT
 -- TIME ZONE schedule.timezone daje tačan apsolutni trenutak bez obzira na
@@ -206,6 +299,16 @@ create table tests.test_assignments (
   occurrence_id uuid not null references tests.test_schedule_occurrences(id) on delete cascade,
   athlete_id uuid not null references public.athletes(id) on delete restrict,
 
+  -- Copied from the occurrence at INSERT time (trigger below), and
+  -- FK-checked against the occurrence's OWN snapshot columns - this is what
+  -- lets test_assessments/test_battery_assessments below enforce "an
+  -- assignment used by a test assessment must itself be a test-kind
+  -- assignment, matching the exact test_version" (and the battery
+  -- equivalent) via a single composite FK, without a second join hop
+  -- through test_schedule_occurrences.
+  snapshot_test_version_id uuid references tests.test_versions(id) on delete restrict,
+  snapshot_test_battery_version_id uuid references tests.test_battery_versions(id) on delete restrict,
+
   status varchar(15) not null default 'pending'
     check (status in ('pending','open','in_progress','completed','missed','excused','cancelled')),
   started_at timestamptz,
@@ -217,12 +320,44 @@ create table tests.test_assignments (
   check (status in ('in_progress','completed') or started_at is null),
   check (status = 'completed' or completed_at is null),
   check (status <> 'completed' or completed_at is not null),
+  check (num_nonnulls(snapshot_test_version_id, snapshot_test_battery_version_id) = 1),
 
   unique (occurrence_id, athlete_id),
-  unique (id, athlete_id) -- kompozitni FK cilj za test_assessments/test_battery_assessments ispod (garantuje da assignment.athlete_id odgovara assessment.athlete_id)
+  unique (id, athlete_id),   -- kompozitni FK cilj (assessment.athlete_id mora odgovarati)
+  unique (id, occurrence_id), -- kompozitni FK cilj (notification dispatch mora biti isti occurrence)
+  unique (id, snapshot_test_version_id),         -- kompozitni FK cilj (test_assessments ispod)
+  unique (id, snapshot_test_battery_version_id), -- kompozitni FK cilj (test_battery_assessments ispod)
+
+  foreign key (occurrence_id, snapshot_test_version_id)
+    references tests.test_schedule_occurrences (id, snapshot_test_version_id) on delete restrict,
+  foreign key (occurrence_id, snapshot_test_battery_version_id)
+    references tests.test_schedule_occurrences (id, snapshot_test_battery_version_id) on delete restrict
 );
 
 create index test_assignments_athlete_id_idx on tests.test_assignments (athlete_id);
+create index test_assignments_snapshot_test_version_id_idx on tests.test_assignments (snapshot_test_version_id);
+create index test_assignments_snapshot_battery_version_id_idx on tests.test_assignments (snapshot_test_battery_version_id);
+
+-- BEFORE INSERT: popuni snapshot_* sa roditeljskog occurrence-a - isti
+-- obrazac kao snapshot_occurrence_test_reference() iznad. Jedini pisac ovih
+-- kolona.
+create function tests.snapshot_assignment_test_reference()
+returns trigger language plpgsql as $$
+declare
+  v_occurrence tests.test_schedule_occurrences%rowtype;
+begin
+  select * into v_occurrence from tests.test_schedule_occurrences where id = NEW.occurrence_id;
+  if v_occurrence.id is null then
+    raise exception 'test_assignments.occurrence_id % does not reference an existing occurrence', NEW.occurrence_id;
+  end if;
+  NEW.snapshot_test_version_id := v_occurrence.snapshot_test_version_id;
+  NEW.snapshot_test_battery_version_id := v_occurrence.snapshot_test_battery_version_id;
+  return NEW;
+end $$;
+
+create trigger snapshot_assignment_test_reference
+  before insert on tests.test_assignments
+  for each row execute function tests.snapshot_assignment_test_reference();
 
 -- Materijalizacija: čita postojeće tests.test_schedule_targets za occurrence-ov
 -- schedule i pravi po jedan pending assignment po sportisti. Tim/klub
@@ -234,21 +369,26 @@ create function tests.materialize_test_assignments_for_occurrence(p_occurrence_i
 returns integer language plpgsql as $$
 declare
   v_schedule_id uuid;
+  v_already_materialized timestamptz;
   v_inserted_count integer;
 begin
-  select schedule_id into v_schedule_id from tests.test_schedule_occurrences where id = p_occurrence_id;
+  -- FOR UPDATE locks this occurrence row for the rest of the transaction -
+  -- a second concurrent call blocks here until the first commits, then sees
+  -- assignments_materialized_at already set and returns 0. This is what
+  -- guarantees two parallel calls converge on the SAME final snapshot,
+  -- rather than both racing to insert.
+  select schedule_id, assignments_materialized_at into v_schedule_id, v_already_materialized
+  from tests.test_schedule_occurrences where id = p_occurrence_id for update;
   if v_schedule_id is null then
     raise exception 'occurrence % does not exist', p_occurrence_id;
   end if;
 
-  -- One-time snapshot, not an ongoing sync: if this occurrence already has
-  -- ANY assignment (from a prior call), membership was already frozen then -
-  -- a later call must be a pure no-op, even for a target/membership added
-  -- since. This is what actually satisfies "kasnije promene članstva ne
-  -- menjaju istoriju" - idempotency alone (ON CONFLICT DO NOTHING below)
-  -- only stops DUPLICATES, it would still happily ADD a newly-qualifying
-  -- athlete on a second call without this guard.
-  if exists (select 1 from tests.test_assignments where occurrence_id = p_occurrence_id) then
+  -- One-time snapshot, not an ongoing sync. assignments_materialized_at -
+  -- not "does this occurrence already have any assignment row" - is the
+  -- canonical guard: a target that genuinely resolves to zero athletes
+  -- (an empty team) must still count as "materialization happened", or a
+  -- team member added afterward would wrongly slip into a re-run.
+  if v_already_materialized is not null then
     return 0;
   end if;
 
@@ -278,6 +418,9 @@ begin
   on conflict (occurrence_id, athlete_id) do nothing;
 
   get diagnostics v_inserted_count = row_count;
+
+  update tests.test_schedule_occurrences set assignments_materialized_at = now() where id = p_occurrence_id;
+
   return v_inserted_count;
 end $$;
 
@@ -318,7 +461,14 @@ create table tests.test_battery_assessments (
 
   unique (id, athlete_id),      -- kompozitni FK cilj (test_assessment_evaluations, itd.)
   unique (id, battery_version_id), -- kompozitni FK cilj (test_battery_assessment_derived_results)
-  unique (superseded_by_assessment_id)
+  unique (id, assignment_id),  -- kompozitni FK cilj (test_assessments ispod - item mora naslediti IST assignment)
+  unique (supersedes_assessment_id),   -- najviše jedan naslednik po originalu
+  unique (superseded_by_assessment_id), -- najviše jedan original po nasledniku
+
+  -- Assignment (ako postoji) mora biti TEST-TIPA assignment ČIJI je
+  -- snapshot_test_battery_version_id TAČNO ova battery_version_id - sprečava
+  -- battery assessment da koristi assignment namenjen standalone testu.
+  foreign key (assignment_id, battery_version_id) references tests.test_assignments (id, snapshot_test_battery_version_id) on delete restrict
 );
 
 create index test_battery_assessments_athlete_id_idx on tests.test_battery_assessments (athlete_id);
@@ -339,6 +489,15 @@ create table tests.test_assessments (
   battery_assessment_id uuid references tests.test_battery_assessments(id) on delete restrict,
   battery_version_id uuid references tests.test_battery_versions(id) on delete restrict,
   battery_item_id uuid references tests.test_battery_items(id) on delete restrict,
+
+  -- NULL whenever this is a battery item (battery_assessment_id is set) -
+  -- equals assignment_id only for a genuinely standalone assessment. Exists
+  -- purely so the FK below can apply "assignment must be a TEST-kind
+  -- assignment matching this test_version" ONLY to standalone assessments -
+  -- a battery item's assignment is legitimately BATTERY-kind (its own
+  -- snapshot_test_version_id is NULL by design), and that case is already
+  -- fully covered by the battery_assessment_id-chained FKs below.
+  standalone_assignment_id uuid generated always as (case when battery_assessment_id is null then assignment_id else null end) stored,
 
   attempt_number integer not null default 1 check (attempt_number > 0),
   source varchar(20) not null check (source in ('athlete_self','coach_manual','device_import','api')),
@@ -366,17 +525,33 @@ create table tests.test_assessments (
 
   unique (id, test_version_id), -- kompozitni FK cilj (test_assessment_values/derived_results)
   unique (id, athlete_id),
-  unique (superseded_by_assessment_id),
+  unique (supersedes_assessment_id),    -- najviše jedan naslednik po originalu
+  unique (superseded_by_assessment_id), -- najviše jedan original po nasledniku
 
-  -- Ako je deo baterije: assignment (ako postoji) mora biti isti sportista;
-  -- battery_item mora pripadati TAČNO toj battery_version_id I imati TAČNO
-  -- ovaj test_version_id (garantuje "tačan battery_item").
+  -- Ako je deo baterije: battery_item mora pripadati TAČNO toj
+  -- battery_version_id I imati TAČNO ovaj test_version_id (garantuje "tačan
+  -- battery_item"); item MORA imati istog sportistu kao roditeljski battery
+  -- assessment; item assignment_id mora ili biti NULL ili TAČNO naslediti
+  -- battery assessment-ov assignment_id (nikad neki drugi occurrence).
   foreign key (battery_assessment_id, battery_version_id)
     references tests.test_battery_assessments (id, battery_version_id) on delete restrict,
   foreign key (battery_version_id, battery_item_id)
     references tests.test_battery_items (battery_version_id, id) on delete restrict,
   foreign key (test_version_id, battery_item_id)
-    references tests.test_battery_items (test_version_id, id) on delete restrict
+    references tests.test_battery_items (test_version_id, id) on delete restrict,
+  foreign key (battery_assessment_id, athlete_id)
+    references tests.test_battery_assessments (id, athlete_id) on delete restrict,
+  foreign key (battery_assessment_id, assignment_id)
+    references tests.test_battery_assessments (id, assignment_id) on delete restrict,
+
+  -- Standalone (bez baterije): ako assignment postoji, mora biti TEST-TIPA
+  -- assignment čiji je snapshot_test_version_id TAČNO ovaj test_version_id -
+  -- sprečava test assessment da koristi assignment namenjen bateriji. Preko
+  -- standalone_assignment_id (vidi gore) - trivijalno zadovoljeno (NULL) za
+  -- battery item redove, koji taj slučaj već pokrivaju kroz
+  -- battery_assessment_id-lančane FK-ove iznad.
+  foreign key (standalone_assignment_id, test_version_id)
+    references tests.test_assignments (id, snapshot_test_version_id) on delete restrict
 );
 
 create index test_assessments_athlete_id_idx on tests.test_assessments (athlete_id);
@@ -411,6 +586,7 @@ create table tests.test_assessment_values (
   updated_at timestamptz not null default now(),
 
   check (num_nonnulls(value_numeric, value_boolean, value_text) = 1),
+  check (value_numeric is null or value_numeric not in ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)),
 
   unique (assessment_id, test_parameter_id),
 
@@ -442,6 +618,7 @@ create table tests.test_assessment_derived_results (
   created_at timestamptz not null default now(),
 
   check (num_nonnulls(result_numeric, result_boolean, result_text) = 1),
+  check (result_numeric is null or result_numeric not in ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)),
 
   unique (assessment_id, test_version_derived_parameter_id),
 
@@ -467,6 +644,7 @@ create table tests.test_battery_assessment_derived_results (
   created_at timestamptz not null default now(),
 
   check (num_nonnulls(result_numeric, result_boolean, result_text) = 1),
+  check (result_numeric is null or result_numeric not in ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)),
 
   unique (battery_assessment_id, test_battery_derived_parameter_id),
 
@@ -475,6 +653,52 @@ create table tests.test_battery_assessment_derived_results (
   foreign key (battery_version_id, test_battery_derived_parameter_id)
     references tests.test_battery_derived_parameters (battery_version_id, id) on delete restrict
 );
+
+-- Validira, za oba nivoa (test i battery), da: (a) typed result kolona
+-- odgovara result_type stvarne derived definicije, (b) definition_version
+-- na ovom redu odgovara TRENUTNOJ definition_version kolone definicije -
+-- podmetnut/zastareo definition_version se odbija, ne tiho prihvata.
+create function tests.validate_assessment_derived_result()
+returns trigger language plpgsql as $$
+declare
+  v_result_type varchar(20);
+  v_definition_version integer;
+begin
+  if TG_TABLE_NAME = 'test_assessment_derived_results' then
+    select result_type, definition_version into v_result_type, v_definition_version
+    from tests.test_version_derived_parameters
+    where id = NEW.test_version_derived_parameter_id and test_version_id = NEW.test_version_id;
+  else
+    select result_type, definition_version into v_result_type, v_definition_version
+    from tests.test_battery_derived_parameters
+    where id = NEW.test_battery_derived_parameter_id and battery_version_id = NEW.battery_version_id;
+  end if;
+
+  if v_result_type is null then
+    raise exception '% references a derived parameter definition that does not exist for this version', TG_TABLE_NAME;
+  end if;
+
+  if NEW.definition_version <> v_definition_version then
+    raise exception '% definition_version (%) does not match the derived parameter''s current definition_version (%) - stale or forged definition_version', TG_TABLE_NAME, NEW.definition_version, v_definition_version;
+  end if;
+
+  if v_result_type in ('numeric','integer','ordinal') and NEW.result_numeric is null then
+    raise exception '% derived parameter result_type % requires result_numeric', TG_TABLE_NAME, v_result_type;
+  elsif v_result_type = 'boolean' and NEW.result_boolean is null then
+    raise exception '% derived parameter result_type boolean requires result_boolean, not a numeric/text column', TG_TABLE_NAME;
+  elsif v_result_type = 'text' and NEW.result_text is null then
+    raise exception '% derived parameter result_type text requires result_text', TG_TABLE_NAME;
+  end if;
+
+  return NEW;
+end $$;
+
+create trigger validate_assessment_derived_result
+  before insert or update on tests.test_assessment_derived_results
+  for each row execute function tests.validate_assessment_derived_result();
+create trigger validate_assessment_derived_result
+  before insert or update on tests.test_battery_assessment_derived_results
+  for each row execute function tests.validate_assessment_derived_result();
 
 -- Pomoćni kompozitni unique da tumačenje ispod može da proveri da output
 -- zaista pripada rule-u (originalna v4.2 šema ovo nije trebala, ne menja se
@@ -520,11 +744,25 @@ create index test_assessment_evaluations_battery_assessment_id_idx on tests.test
 create index test_assessment_evaluations_criteria_set_version_id_idx on tests.test_assessment_evaluations (criteria_set_version_id);
 
 -- Sprečava tiho prepisivanje/brisanje jednom završenog rezultata - korekcija
--- ide isključivo kroz supersede lanac (nov red, status='invalidated' na
--- starom + superseded_by_assessment_id -> novi). Draft ostaje slobodno
--- izmenljiv.
+-- ide isključivo kroz supersede lanac. Ispravan redosled (svaki korak sam po
+-- sebi validan pod ovim trigerom):
+--   1. INSERT naslednika sa supersedes_assessment_id = original.id (dok je
+--      naslednik još 'draft' - slobodno izmenljivo).
+--   2. UPDATE naslednika: status='completed' (draft->completed je uvek
+--      dozvoljeno, ne dira ovaj trigerski put).
+--   3. UPDATE originala: status='invalidated', superseded_by_assessment_id =
+--      naslednik.id - OVAJ korak je ono što trigerski put ispod proverava:
+--      lockuje i validira naslednika (mora već pokazivati nazad na
+--      original, mora biti 'completed', mora imati identičan
+--      athlete/test-ili-battery-verziju/assignment/battery kontekst/attempt).
+-- invalidated je posle toga POTPUNO nepromenljiv (nema dalje tranzicije).
+-- completed dozvoljava TAČNO tu jednu tranziciju i ništa drugo - upoređeno
+-- kao ceo red (to_jsonb minus dozvoljene kolone), NULL-safe i bez ručne
+-- liste kolona koja bi mogla zaostati iza šeme.
 create function tests.protect_completed_assessment()
 returns trigger language plpgsql as $$
+declare
+  v_successor record;
 begin
   if TG_OP = 'DELETE' then
     if OLD.status <> 'draft' then
@@ -538,24 +776,68 @@ begin
     return NEW; -- draft je slobodno izmenljiv
   end if;
 
-  -- Dozvoljena tranzicija: completed -> invalidated, isključivo uz
-  -- postavljanje superseded_by_assessment_id u istoj izmeni.
-  if OLD.status = 'completed' and NEW.status = 'invalidated' and NEW.superseded_by_assessment_id is not null then
-    return NEW;
+  if OLD.status = 'invalidated' then
+    raise exception '% % is invalidated - fully immutable, no further changes of any kind are allowed', TG_TABLE_NAME, OLD.id;
   end if;
 
-  -- Sve ostalo na već-nedraft redu je zabranjeno (uključujući "tihu"
-  -- izmenu vrednosti bez promene statusa).
-  if OLD.status <> NEW.status
-     or OLD.athlete_id is distinct from NEW.athlete_id
-     or (TG_TABLE_NAME = 'test_assessments' and OLD.test_version_id is distinct from NEW.test_version_id)
-     or (TG_TABLE_NAME = 'test_battery_assessments' and OLD.battery_version_id is distinct from NEW.battery_version_id)
-     or OLD.completed_at is distinct from NEW.completed_at
+  -- OLD.status = 'completed' od ovde nadalje. Jedina dozvoljena tranzicija:
+  -- invalidated + superseded_by_assessment_id postavljen u ISTOJ izmeni.
+  if not (NEW.status = 'invalidated' and NEW.superseded_by_assessment_id is not null) then
+    raise exception '% % is completed - cannot be mutated except the completed->invalidated supersede transition', TG_TABLE_NAME, OLD.id;
+  end if;
+
+  -- Ništa osim status/superseded_by_assessment_id/updated_at sme da se
+  -- razlikuje - poređenje celog reda kao jsonb pokriva SVAKU kolonu bez
+  -- ručnog nabrajanja, i NULL-safe je (IS DISTINCT FROM).
+  if (to_jsonb(OLD) - 'status' - 'superseded_by_assessment_id' - 'updated_at')
+     is distinct from
+     (to_jsonb(NEW) - 'status' - 'superseded_by_assessment_id' - 'updated_at')
   then
-    if not (OLD.status = 'completed' and NEW.status = 'invalidated' and NEW.superseded_by_assessment_id is not null) then
-      raise exception '% % is % - cannot be mutated except the completed->invalidated supersede transition', TG_TABLE_NAME, OLD.id, OLD.status;
+    raise exception '% % supersede transition may only change status/superseded_by_assessment_id/updated_at - every other column must stay identical', TG_TABLE_NAME, OLD.id;
+  end if;
+
+  -- Lockuje i validira naslednika ATOMSKI, u istoj transakciji - sprečava
+  -- trku između dva paralelna pokušaja korekcije istog originala.
+  if TG_TABLE_NAME = 'test_assessments' then
+    select * into v_successor from tests.test_assessments where id = NEW.superseded_by_assessment_id for update;
+    if v_successor.id is null then
+      raise exception 'superseded_by_assessment_id % does not reference an existing test_assessments row', NEW.superseded_by_assessment_id;
+    end if;
+    if v_successor.status <> 'completed' then
+      raise exception 'successor % must itself be completed before it can supersede %', v_successor.id, OLD.id;
+    end if;
+    if v_successor.supersedes_assessment_id is distinct from OLD.id then
+      raise exception 'successor % must already have supersedes_assessment_id = % (set at step 1, before this transition) - bidirectional link is not established', v_successor.id, OLD.id;
+    end if;
+    if v_successor.athlete_id is distinct from OLD.athlete_id
+       or v_successor.test_version_id is distinct from OLD.test_version_id
+       or v_successor.assignment_id is distinct from OLD.assignment_id
+       or v_successor.battery_assessment_id is distinct from OLD.battery_assessment_id
+       or v_successor.battery_version_id is distinct from OLD.battery_version_id
+       or v_successor.battery_item_id is distinct from OLD.battery_item_id
+       or v_successor.attempt_number is distinct from OLD.attempt_number
+    then
+      raise exception 'successor % must match predecessor %''s athlete/test_version/assignment/battery context/attempt exactly - a correction changes VALUES, never identity', v_successor.id, OLD.id;
+    end if;
+  elsif TG_TABLE_NAME = 'test_battery_assessments' then
+    select * into v_successor from tests.test_battery_assessments where id = NEW.superseded_by_assessment_id for update;
+    if v_successor.id is null then
+      raise exception 'superseded_by_assessment_id % does not reference an existing test_battery_assessments row', NEW.superseded_by_assessment_id;
+    end if;
+    if v_successor.status <> 'completed' then
+      raise exception 'successor % must itself be completed before it can supersede %', v_successor.id, OLD.id;
+    end if;
+    if v_successor.supersedes_assessment_id is distinct from OLD.id then
+      raise exception 'successor % must already have supersedes_assessment_id = % (set at step 1, before this transition) - bidirectional link is not established', v_successor.id, OLD.id;
+    end if;
+    if v_successor.athlete_id is distinct from OLD.athlete_id
+       or v_successor.battery_version_id is distinct from OLD.battery_version_id
+       or v_successor.assignment_id is distinct from OLD.assignment_id
+    then
+      raise exception 'successor % must match predecessor %''s athlete/battery_version/assignment exactly - a correction changes VALUES, never identity', v_successor.id, OLD.id;
     end if;
   end if;
+
   return NEW;
 end $$;
 
@@ -675,7 +957,15 @@ create table tests.test_access_links (
     (link_kind = 'occurrence' and occurrence_id is not null and schedule_id is null and assignment_id is null) or
     (link_kind = 'assignment' and assignment_id is not null and schedule_id is null and occurrence_id is null)
   ),
-  check (auth_mode = 'personal_magic' or magic_token_hash is null),
+  -- iff: personal_magic ZAHTEVA hash, authenticated_group ga MORA imati NULL
+  -- (ranija verzija je samo zabranjivala hash za authenticated_group, ali
+  -- nije zahtevala da personal_magic zaista ima jedan).
+  check ((auth_mode = 'personal_magic') = (magic_token_hash is not null)),
+  -- personal_magic je rezervisan isključivo za assignment link (budući lični
+  -- link jednog sportiste) - schedule/occurrence linkovi ostaju
+  -- authenticated_group samo.
+  check (auth_mode <> 'personal_magic' or link_kind = 'assignment'),
+  check (rotated_from_link_id is null or rotated_from_link_id <> id),
   check (
     (status = 'revoked' and revoked_at is not null and revoked_by_user_id is not null) or
     (status <> 'revoked' and revoked_at is null and revoked_by_user_id is null)
@@ -723,7 +1013,13 @@ create table tests.test_schedule_notification_rules (
 
   check (notification_kind <> 'athlete_reminder' or reminder_offset_minutes is not null),
   check (notification_kind not in ('coach_digest','final_digest') or digest_trigger is not null),
-  check (notification_kind not in ('athlete_invitation') or (reminder_offset_minutes is null and digest_trigger is null)),
+  -- Athlete-kind pravila (invitation/reminder) nikad ne smeju imati digest
+  -- polja; digest-kind pravila (coach_digest/final_digest) nikad ne smeju
+  -- imati reminder_offset_minutes. Ranija verzija je ovo proveravala samo
+  -- za athlete_invitation, ostavljajući athlete_reminder+digest_trigger i
+  -- coach_digest/final_digest+reminder_offset_minutes nekontrolisane.
+  check (notification_kind not in ('athlete_invitation','athlete_reminder') or digest_trigger is null),
+  check (notification_kind not in ('coach_digest','final_digest') or reminder_offset_minutes is null),
 
   unique (schedule_id, notification_kind)
 );
@@ -741,13 +1037,13 @@ create table tests.test_schedule_notification_dispatches (
   assignment_id uuid references tests.test_assignments(id) on delete cascade,
   notification_kind varchar(20) not null
     check (notification_kind in ('athlete_invitation','athlete_reminder','coach_digest','final_digest')),
-  recipient_user_id uuid references public.users(id) on delete cascade,
+  recipient_user_id uuid not null references public.users(id) on delete cascade,
 
   dedupe_key varchar(300) not null,
   status varchar(10) not null default 'pending' check (status in ('pending','sent','skipped')),
 
-  completed_count integer,
-  total_count integer,
+  completed_count integer check (completed_count is null or completed_count >= 0),
+  total_count integer check (total_count is null or total_count >= 0),
 
   last_computed_at timestamptz,
   sent_at timestamptz,
@@ -757,8 +1053,18 @@ create table tests.test_schedule_notification_dispatches (
   check (notification_kind not in ('athlete_invitation','athlete_reminder') or assignment_id is not null),
   check (notification_kind not in ('coach_digest','final_digest') or assignment_id is null),
   check (status <> 'sent' or sent_at is not null),
+  check (completed_count is null or total_count is null or completed_count <= total_count),
 
-  unique (dedupe_key)
+  unique (dedupe_key),
+  -- Belt-and-suspenders na dedupe_key konvenciju: bez obzira kako worker
+  -- sastavi dedupe_key, DB nivo garantuje najviše jedan digest red po
+  -- (occurrence, kind, primalac) - "17/25 completed" red za jednog trenera
+  -- na jednom occurrence-u fizički ne može da se udvostruči.
+  unique (occurrence_id, notification_kind, recipient_user_id),
+
+  -- Assignment (ako postoji) mora pripadati ISTOM occurrence-u kao dispatch -
+  -- sprečava dispatch red da referencira assignment sa drugog occurrence-a.
+  foreign key (assignment_id, occurrence_id) references tests.test_assignments (id, occurrence_id) on delete cascade
 );
 
 create index test_schedule_notification_dispatches_occurrence_id_idx on tests.test_schedule_notification_dispatches (occurrence_id);
@@ -808,3 +1114,7 @@ create index test_assessment_values_test_version_id_idx on tests.test_assessment
 create index test_assessment_derived_results_test_version_id_idx on tests.test_assessment_derived_results (test_version_id);
 create index test_battery_assessment_derived_results_battery_version_id_idx on tests.test_battery_assessment_derived_results (battery_version_id);
 create index test_access_links_revoked_by_idx on tests.test_access_links (revoked_by_user_id);
+
+create index test_schedules_owner_user_id_idx on tests.test_schedules (owner_user_id);
+create index test_battery_assessments_assignment_id_battery_idx on tests.test_battery_assessments (assignment_id, battery_version_id);
+create index test_assessments_standalone_assignment_id_idx on tests.test_assessments (standalone_assignment_id);
