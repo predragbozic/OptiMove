@@ -26,7 +26,7 @@ import {
   submitConfirmEmailChange as submitConfirmEmailChangeAction,
 } from "./email-change-actions.js";
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
-import { handleTestsAction, handleTestsScheduleFormField, handleTestsSliderInput, submitTestsForm } from "./tests-actions.js";
+import { handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests } from "./tests-data.js";
 import { renderTests, renderTestsBadge } from "./tests-view.js";
 import {
@@ -841,6 +841,11 @@ function handleContentInput(event) {
   const wellnessSlider = event.target.closest("[data-action='tests-slider-input']");
   if (wellnessSlider) {
     handleTestsSliderInput(wellnessSlider);
+    return;
+  }
+  const testsAthleteSearch = event.target.closest("[data-action='tests-schedule-athlete-search']");
+  if (testsAthleteSearch) {
+    handleTestsScheduleAthleteSearchInput(testsAthleteSearch);
     return;
   }
 

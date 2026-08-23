@@ -13,39 +13,69 @@
 // this is what makes "today" mean the same calendar date for the schedule's
 // timezone regardless of which timezone the backend process itself runs in.
 
+// pool: the real pg Pool (every call site passes the module-level `pool`
+// from db.js, never an already-open transaction client - generate +
+// materialize get their OWN single connection/transaction here, borrowed
+// and released within this one call).
 // schedule: a full row from tests.test_schedules (needs id, status,
 // schedule_kind, timezone, start_date, end_date).
 // Returns the occurrence id, or null if there is nothing to show right now
-// (schedule not active, not yet started, or already past its end_date/its
-// own one_time date).
-export async function ensureCurrentOccurrence(client, schedule) {
+// (schedule not active, not yet started, already past its end_date/its own
+// one_time date, or - see below - concurrently deleted).
+export async function ensureCurrentOccurrence(pool, schedule) {
   if (schedule.status !== "active") return null;
 
-  // Always computed, for BOTH schedule kinds - a one_time schedule's single
-  // occurrence is only ever "today's" on its own start_date, exactly like a
-  // daily schedule's occurrence is only ever "today's" on today. Before
-  // that date there is nothing to show yet; once it has passed, this
-  // function stops surfacing it as current (its own row, once generated,
-  // remains reachable through History/Results - this function only governs
-  // what counts as "today" for the Today view).
-  const localDateResult = await client.query(`select (now() at time zone $1)::date as local_date`, [schedule.timezone]);
-  const localToday = localDateResult.rows[0].local_date;
+  const client = await pool.connect();
+  try {
+    // Always computed, for BOTH schedule kinds - a one_time schedule's
+    // single occurrence is only ever "today's" on its own start_date,
+    // exactly like a daily schedule's occurrence is only ever "today's" on
+    // today. Before that date there is nothing to show yet; once it has
+    // passed, this function stops surfacing it as current (its own row,
+    // once generated, remains reachable through History/Results - this
+    // function only governs what counts as "today" for the Today view).
+    const localDateResult = await client.query(`select (now() at time zone $1)::date as local_date`, [schedule.timezone]);
+    const localToday = localDateResult.rows[0].local_date;
 
-  let targetDate;
-  if (schedule.schedule_kind === "one_time") {
-    if (localToday !== schedule.start_date) return null;
-    targetDate = schedule.start_date;
-  } else {
-    targetDate = localToday;
+    let targetDate;
+    if (schedule.schedule_kind === "one_time") {
+      if (localToday !== schedule.start_date) return null;
+      targetDate = schedule.start_date;
+    } else {
+      targetDate = localToday;
+    }
+
+    if (targetDate < schedule.start_date) return null;
+    if (schedule.end_date && targetDate > schedule.end_date) return null;
+
+    // Generate + materialize share ONE transaction on ONE connection, and
+    // tests.generate_test_schedule_occurrence() (see
+    // migrations_v2/202608260900_tests_v42_occurrence_generation_lock_fix.sql)
+    // now takes `for share` on the schedule row while reading it - this
+    // serializes against a concurrent PATCH/DELETE's `for update` on that
+    // same row (backend/src/routes/tests.js), instead of racing it.
+    await client.query("begin");
+    try {
+      const occurrenceResult = await client.query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [schedule.id, targetDate]);
+      const occurrenceId = occurrenceResult.rows[0].id;
+      await client.query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occurrenceId]);
+      await client.query("commit");
+      return occurrenceId;
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      // The schedule row may have just been physically deleted by a
+      // concurrent DELETE that won the race for the row lock (see the
+      // DELETE handler in backend/src/routes/tests.js) - once that DELETE
+      // commits, this call's blocked `for share` read simply finds no row
+      // left and the function raises exactly this controlled error. That is
+      // "nothing to show right now" here, never a 500 - the schedule is
+      // gone, so no occurrence/assignment must ever be created under it.
+      if (error?.code === "P0001" && /does not exist/.test(error.message || "")) return null;
+      throw error;
+    }
+  } finally {
+    client.release();
   }
-
-  if (targetDate < schedule.start_date) return null;
-  if (schedule.end_date && targetDate > schedule.end_date) return null;
-
-  const occurrenceResult = await client.query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [schedule.id, targetDate]);
-  const occurrenceId = occurrenceResult.rows[0].id;
-  await client.query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occurrenceId]);
-  return occurrenceId;
 }
 
 // Whether an occurrence is currently accepting submissions. Deliberately

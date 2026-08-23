@@ -10038,7 +10038,78 @@ button.tests-assignment-card {
 
 .tests-schedule-toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tests-show-cancelled-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tests-schedule-card {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.tests-schedule-card-open {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  padding: 14px 16px;
+}
+
+.tests-schedule-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 16px 14px;
+}
+
+.tests-delete-button {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.tests-future-only-notice {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: #fdf1de;
+  color: #9a6a1c;
+  font-size: 13px;
+}
+
+.tests-cancelled-note {
+  margin: 0;
+  padding: 8px 10px 14px;
+  font-size: 12px;
+}
+
+.tests-athlete-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.tests-athlete-options {
+  max-height: 260px;
+}
+
+.tests-athlete-count {
+  margin: 0;
+  font-size: 12px;
 }
 
 .tests-schedule-form,

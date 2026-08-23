@@ -235,14 +235,21 @@ export const emptyWellnessForm = (overrides = {}) => ({
 
 export const emptyScheduleForm = (overrides = {}) => ({
   open: false,
+  editingScheduleId: "", // "" = create mode; set = editing this schedule (PATCH, not a parallel route)
+  hasOccurrences: false, // mirrors the schedule's hasOccurrences - blocks full-edit for a one_time schedule that already ran
   scheduleKind: "one_time",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   startDate: "",
   opensTime: "06:00",
   dueTime: "",
   closesTime: "22:00",
-  targetKind: "athlete",
-  targetId: "",
+  // Individually-selected athletes (real athlete uuids, combinable with the
+  // team/club quick-targets below) plus the team/club single-target quick
+  // option, kept alongside multi-athlete selection rather than replacing it.
+  athleteIds: [],
+  athleteSearch: "",
+  teamId: "",
+  clubId: "",
   submitting: false,
   error: "",
   ...overrides,
@@ -264,6 +271,10 @@ export const emptyTestsState = (overrides = {}) => ({
   library: { tests: [], batteries: [] },
   orgPickerData: null,
   scheduleForm: emptyScheduleForm(),
+  showCancelledSchedules: false,
+  // Id of the schedule currently mid-delete (double-click guard + "Deleting..."
+  // label on that one row's button) - "" when no delete is in flight.
+  deletingScheduleId: "",
   form: null,
   ...overrides,
 });
