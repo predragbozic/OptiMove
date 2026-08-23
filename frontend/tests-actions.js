@@ -1,7 +1,7 @@
 import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
-import { checkInUrl, renderTestsBadge } from "./tests-view.js";
+import { checkInUrl, patchTestsAthletePickerDom, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes } from "./tests-view.js";
 import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadWellnessForm } from "./tests-data.js";
 
 // Every data-action="tests-*" click/change and data-tests-form submit in the
@@ -88,13 +88,57 @@ export async function handleTestsAction(action, { renderTests }) {
     renderTests();
     return true;
   }
+  if (type === "tests-open-edit-schedule") {
+    await openEditSchedule(action.dataset.scheduleId, renderTests);
+    return true;
+  }
+  if (type === "tests-toggle-show-cancelled") {
+    state.tests.showCancelledSchedules = action.checked;
+    if (action.checked && state.tests.section === "schedule") await reloadSection(renderTests);
+    else renderTests();
+    return true;
+  }
+  if (type === "tests-schedule-toggle-athlete") {
+    const id = action.dataset.athleteUuid;
+    const form = state.tests.scheduleForm;
+    const index = form.athleteIds.indexOf(id);
+    if (index >= 0) form.athleteIds.splice(index, 1);
+    else form.athleteIds.push(id);
+    patchTestsAthletePickerDom();
+    return true;
+  }
+  if (type === "tests-schedule-select-all-athletes") {
+    const form = state.tests.scheduleForm;
+    const visible = testsAthleteMultiSelectVisibleAthletes(form);
+    const selected = new Set(form.athleteIds);
+    for (const athlete of visible) selected.add(athlete.athlete_uuid);
+    form.athleteIds = Array.from(selected);
+    patchTestsAthletePickerDom();
+    return true;
+  }
+  if (type === "tests-schedule-clear-all-athletes") {
+    state.tests.scheduleForm.athleteIds = [];
+    patchTestsAthletePickerDom();
+    return true;
+  }
+  if (type === "tests-delete-schedule") {
+    await deleteSchedule(action, renderTests);
+    return true;
+  }
   if (type === "tests-set-schedule-status") {
     try {
       await api(`/api/tests/schedules/${encodeURIComponent(action.dataset.scheduleId)}`, {
         method: "PATCH",
         body: JSON.stringify({ status: action.dataset.status }),
       });
-      await loadScheduleDetail(action.dataset.scheduleId);
+      // No extra GET - the schedule the coach is looking at is either the
+      // open detail view (re-fetched, small/cheap and already the pattern
+      // used everywhere else here) or a list row (patched in place below).
+      if (state.tests.scheduleDetail?.schedule.id === action.dataset.scheduleId) {
+        await loadScheduleDetail(action.dataset.scheduleId);
+      }
+      const row = state.tests.schedules.find((s) => s.id === action.dataset.scheduleId);
+      if (row) row.status = action.dataset.status;
     } catch (error) {
       state.tests.error = error.message || "Could not update the schedule.";
     }
@@ -228,7 +272,109 @@ export function handleTestsScheduleFormField(fieldEl) {
   const name = fieldEl.name;
   if (!name) return;
   state.tests.scheduleForm[name] = fieldEl.value;
-  if (name === "targetKind") state.tests.scheduleForm.targetId = "";
+}
+
+// Wired into app.js's handleContentInput (fires on every keystroke), not the
+// data-action click dispatch above - a full renderTests() on every keystroke
+// would replace #content's innerHTML and knock focus out of this exact input
+// mid-type, so only the picker's own sub-DOM is patched.
+export function handleTestsScheduleAthleteSearchInput(inputEl) {
+  state.tests.scheduleForm.athleteSearch = inputEl.value;
+  patchTestsAthletePickerDom();
+}
+
+// ------------------------------------------------------------
+// Edit / Delete schedule
+// ------------------------------------------------------------
+
+async function openEditSchedule(scheduleId, renderTests) {
+  state.tests.error = "";
+  // A one_time schedule that already has its occurrence must never offer a
+  // misleading "edit" UI (its snapshot is immutable at the DB level too, see
+  // backend/src/routes/tests.js's PATCH handler) - checked from data already
+  // on hand (the list row / open detail), no network round trip needed just
+  // to find out it will be refused.
+  const known = state.tests.schedules.find((s) => s.id === scheduleId)
+    || (state.tests.scheduleDetail?.schedule.id === scheduleId ? state.tests.scheduleDetail.schedule : null);
+  if (known?.scheduleKind === "one_time" && known?.hasOccurrences) {
+    state.tests.error = "This one-time schedule already has its occurrence and can no longer be edited - cancel or delete it instead.";
+    renderTests();
+    return;
+  }
+  try {
+    const detail = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}`);
+    const targets = detail.targets || [];
+    state.tests.scheduleForm = emptyScheduleForm({
+      open: true,
+      editingScheduleId: scheduleId,
+      hasOccurrences: Boolean(detail.schedule.hasOccurrences),
+      scheduleKind: detail.schedule.scheduleKind === "recurring" ? "daily" : "one_time",
+      timezone: detail.schedule.timezone,
+      startDate: detail.schedule.startDate,
+      opensTime: detail.schedule.opensTime,
+      dueTime: detail.schedule.dueTime || "",
+      closesTime: detail.schedule.closesTime,
+      athleteIds: targets.filter((t) => t.kind === "athlete").map((t) => t.id),
+      teamId: targets.find((t) => t.kind === "team")?.id || "",
+      clubId: targets.find((t) => t.kind === "club")?.id || "",
+    });
+  } catch (error) {
+    state.tests.error = error.message || "Could not open this schedule for editing.";
+  }
+  renderTests();
+  void loadOrgPickerData().then(renderTests).catch(() => {});
+}
+
+async function deleteSchedule(action, renderTests) {
+  const scheduleId = action.dataset.scheduleId;
+  if (state.tests.deletingScheduleId) return; // one delete in flight at a time - guards a double-click/double-submit
+  const hasOccurrences = action.dataset.hasOccurrences === "true";
+  const message = hasOccurrences
+    ? "This schedule has existing assignments or results. It will be cancelled and hidden, while historical results will be preserved"
+    : "This schedule will be permanently deleted";
+  if (!window.confirm(message)) return;
+  state.tests.deletingScheduleId = scheduleId;
+  state.tests.error = "";
+  renderTests();
+  try {
+    const result = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}`, { method: "DELETE" });
+    if (result.action === "deleted") {
+      state.tests.schedules = state.tests.schedules.filter((s) => s.id !== scheduleId);
+    } else {
+      const row = state.tests.schedules.find((s) => s.id === scheduleId);
+      if (row) row.status = "cancelled";
+    }
+    if (state.tests.scheduleDetail?.schedule.id === scheduleId) state.tests.scheduleDetail = null;
+  } catch (error) {
+    state.tests.error = error.message || "Could not delete this schedule.";
+  } finally {
+    state.tests.deletingScheduleId = "";
+    renderTests();
+  }
+}
+
+function buildTargetsFromForm(form) {
+  const targets = form.athleteIds.map((id) => ({ kind: "athlete", id }));
+  if (form.teamId) targets.push({ kind: "team", id: form.teamId });
+  if (form.clubId) targets.push({ kind: "club", id: form.clubId });
+  return targets;
+}
+
+// Computed locally from what was just submitted (+ the already-loaded org
+// picker data for team/club display names) so create/edit never needs an
+// extra GET just to refresh the list row's target-summary text - neither
+// POST /schedules nor PATCH /schedules/:id's response carries these
+// (they're list-only aggregate subqueries, see formatScheduleRow call sites
+// in backend/src/routes/tests.js).
+function targetSummaryFieldsFor(targets, orgData) {
+  const athleteTargetCount = targets.filter((t) => t.kind === "athlete").length;
+  const teamNames = targets.filter((t) => t.kind === "team").map((t) => orgData?.teams?.find((team) => team.id === t.id)?.name).filter(Boolean);
+  const clubNames = targets.filter((t) => t.kind === "club").map((t) => orgData?.clubs?.find((club) => club.id === t.id)?.name).filter(Boolean);
+  return {
+    athleteTargetCount,
+    teamTargetNames: teamNames.join(", ") || undefined,
+    clubTargetNames: clubNames.join(", ") || undefined,
+  };
 }
 
 // ------------------------------------------------------------
@@ -238,7 +384,7 @@ export function handleTestsScheduleFormField(fieldEl) {
 export async function submitTestsForm(form, { renderTests }) {
   const kind = form.dataset.testsForm;
   if (kind === "wellness-submit") return submitWellnessForm(renderTests);
-  if (kind === "create-schedule") return submitCreateSchedule(renderTests);
+  if (kind === "create-schedule" || kind === "edit-schedule") return submitScheduleForm(renderTests);
 }
 
 async function submitWellnessForm(renderTests) {
@@ -267,32 +413,44 @@ async function submitWellnessForm(renderTests) {
   }
 }
 
-async function submitCreateSchedule(renderTests) {
+async function submitScheduleForm(renderTests) {
   const scheduleForm = state.tests.scheduleForm;
   if (scheduleForm.submitting) return;
+  const isEdit = Boolean(scheduleForm.editingScheduleId);
+  const targets = buildTargetsFromForm(scheduleForm);
   scheduleForm.submitting = true;
   scheduleForm.error = "";
   renderTests();
   try {
-    const library = await api("/api/tests/library");
-    const wellness = library.tests.find((t) => t.schedulable);
-    await api("/api/tests/schedules", {
-      method: "POST",
-      body: JSON.stringify({
-        testVersionId: wellness?.testVersionId,
-        scheduleKind: scheduleForm.scheduleKind,
-        timezone: scheduleForm.timezone,
-        startDate: scheduleForm.startDate,
-        opensTime: scheduleForm.opensTime,
-        dueTime: scheduleForm.dueTime || null,
-        closesTime: scheduleForm.closesTime,
-        targets: scheduleForm.targetId ? [{ kind: scheduleForm.targetKind, id: scheduleForm.targetId }] : [],
-      }),
-    });
+    const body = {
+      scheduleKind: scheduleForm.scheduleKind,
+      timezone: scheduleForm.timezone,
+      startDate: scheduleForm.startDate,
+      opensTime: scheduleForm.opensTime,
+      dueTime: scheduleForm.dueTime || null,
+      closesTime: scheduleForm.closesTime,
+      targets,
+    };
+    let result;
+    if (isEdit) {
+      result = await api(`/api/tests/schedules/${encodeURIComponent(scheduleForm.editingScheduleId)}`, { method: "PATCH", body: JSON.stringify(body) });
+    } else {
+      const library = await api("/api/tests/library");
+      const wellness = library.tests.find((t) => t.schedulable);
+      result = await api("/api/tests/schedules", { method: "POST", body: JSON.stringify({ ...body, testVersionId: wellness?.testVersionId }) });
+    }
+    const merged = { ...result.schedule, ...targetSummaryFieldsFor(targets, state.tests.orgPickerData) };
+    const existingIndex = state.tests.schedules.findIndex((s) => s.id === merged.id);
+    if (existingIndex >= 0) state.tests.schedules[existingIndex] = merged;
+    else state.tests.schedules.unshift(merged);
+    // The detail view (if this exact schedule is open there) needs the real
+    // per-target rows (id/name) for its own display, which the mutation
+    // response never carries - kept as one cheap, deliberate GET, not a
+    // redundant re-fetch of the whole list.
+    if (state.tests.scheduleDetail?.schedule.id === merged.id) await loadScheduleDetail(merged.id);
     state.tests.scheduleForm = emptyScheduleForm();
-    await loadTestsSection();
   } catch (error) {
-    scheduleForm.error = error.message || "Could not create this schedule.";
+    scheduleForm.error = error.message || (isEdit ? "Could not save this schedule." : "Could not create this schedule.");
     scheduleForm.submitting = false;
     renderTests();
     return;

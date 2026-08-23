@@ -46,7 +46,8 @@ export async function loadTestsSection() {
     const data = await api("/api/tests/today");
     state.tests.coachToday = data.groups || [];
   } else if (section === "schedule") {
-    const data = await api("/api/tests/schedules");
+    const query = state.tests.showCancelledSchedules ? "?includeCancelled=true" : "";
+    const data = await api(`/api/tests/schedules${query}`);
     state.tests.schedules = data.schedules || [];
   } else if (section === "results") {
     const query = state.tests.resultsScheduleId ? `?scheduleId=${encodeURIComponent(state.tests.resultsScheduleId)}` : "";
