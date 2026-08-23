@@ -22,6 +22,12 @@ const WELLNESS_TEST_VERSION_ID = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 const WELLNESS_TOTAL_DERIVED_PARAMETER_ID = "a342af02-52cb-4b39-83d5-3b7861fe2069";
 const WELLNESS_INJURY_PARAMETER_ID = "a98f2afb-b458-40ff-98a7-c6b5108bba9e";
 
+// The only two scheduleKind values POST/PATCH ever accept from a client -
+// anything else (a typo like "weekly", an unrelated value) is a controlled
+// 400, never silently coerced to "one_time" the way an unconditional
+// `=== "daily" ? recurring : one_time` ternary used to.
+const VALID_SCHEDULE_KIND_INPUTS = ["one_time", "daily"];
+
 const athleteDisplayNameSql = `coalesce(a.display_name, a.full_name, nullif(concat_ws(' ', a.first_name, a.last_name), ''), a.source_external_id, a.athlete_id::text)`;
 
 function text(value) {
@@ -539,7 +545,11 @@ router.post("/schedules", async (req, res, next) => {
     if (text(body.testVersionId) !== WELLNESS_TEST_VERSION_ID) {
       return res.status(400).json({ error: "Only WELLNESS can be scheduled in this phase." });
     }
-    const scheduleKind = text(body.scheduleKind) === "daily" ? "recurring" : "one_time";
+    const scheduleKindInput = text(body.scheduleKind);
+    if (!VALID_SCHEDULE_KIND_INPUTS.includes(scheduleKindInput)) {
+      return res.status(400).json({ error: "scheduleKind must be 'one_time' or 'daily'." });
+    }
+    const scheduleKind = scheduleKindInput === "daily" ? "recurring" : "one_time";
     const timezone = text(body.timezone);
     const startDate = text(body.startDate);
     const endDate = text(body.endDate) || null;
@@ -718,7 +728,7 @@ const FULL_EDIT_BODY_KEYS = ["targets", "scheduleKind", "timezone", "startDate",
 router.patch("/schedules/:scheduleId", async (req, res, next) => {
   const client = await pool.connect();
   try {
-    if (!requireCoachWorkspace(req, res)) return void client.release();
+    if (!requireCoachWorkspace(req, res)) return;
     const body = req.body || {};
 
     await client.query("begin");
@@ -732,12 +742,28 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       return res.status(404).json({ error: "Schedule not found." });
     }
 
+    // cancelled is terminal: no status transition and no full edit is ever
+    // allowed out of it - the schedule's access links were already revoked
+    // and its occurrences/results already preserved-and-hidden by DELETE
+    // (the only route that reaches 'cancelled'), so reactivating it here
+    // would silently undo that. A coach who wants this schedule's targets
+    // again creates a new one.
+    if (schedule.status === "cancelled") {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This schedule is cancelled and can no longer be edited or reactivated. Create a new schedule instead." });
+    }
+
     const isFullEdit = FULL_EDIT_BODY_KEYS.some((key) => body[key] !== undefined);
     if (!isFullEdit) {
       const status = text(body.status);
-      if (!["active", "paused", "cancelled"].includes(status)) {
+      // 'cancelled' is deliberately not accepted here - DELETE is the only
+      // route that cancels a schedule, since cancelling also has to revoke
+      // active access links (see the DELETE handler below); a status-only
+      // PATCH to 'cancelled' would reach the same terminal state without
+      // that side effect.
+      if (!["active", "paused"].includes(status)) {
         await client.query("rollback");
-        return res.status(400).json({ error: "Invalid status." });
+        return res.status(400).json({ error: "Invalid status - use DELETE to cancel a schedule." });
       }
       await client.query(`update tests.test_schedules set status = $2, updated_at = now() where id = $1`, [schedule.id, status]);
       await client.query("commit");
@@ -755,6 +781,10 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       }
     }
 
+    if (body.scheduleKind !== undefined && !VALID_SCHEDULE_KIND_INPUTS.includes(text(body.scheduleKind))) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "scheduleKind must be 'one_time' or 'daily'." });
+    }
     const scheduleKind = (body.scheduleKind !== undefined ? text(body.scheduleKind) === "daily" : schedule.schedule_kind === "recurring") ? "recurring" : "one_time";
     const timezone = body.timezone !== undefined ? text(body.timezone) : schedule.timezone;
     const startDate = body.startDate !== undefined ? text(body.startDate) : schedule.start_date;
@@ -770,9 +800,12 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
     let status = schedule.status;
     if (body.status !== undefined) {
       status = text(body.status);
-      if (!["active", "paused", "cancelled"].includes(status)) {
+      // Same reasoning as the status-only path above - 'cancelled' is
+      // reached only through DELETE, never through PATCH (full edit
+      // included), so it always carries the link-revocation side effect.
+      if (!["active", "paused"].includes(status)) {
         await client.query("rollback");
-        return res.status(400).json({ error: "Invalid status." });
+        return res.status(400).json({ error: "Invalid status - use DELETE to cancel a schedule." });
       }
     }
 
@@ -839,7 +872,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
 router.delete("/schedules/:scheduleId", async (req, res, next) => {
   const client = await pool.connect();
   try {
-    if (!requireCoachWorkspace(req, res)) return void client.release();
+    if (!requireCoachWorkspace(req, res)) return;
     await client.query("begin");
     const scheduleResult = await client.query(`select * from tests.test_schedules where id = $1 for update`, [req.params.scheduleId]);
     const schedule = scheduleResult.rows[0];

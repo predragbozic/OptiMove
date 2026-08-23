@@ -339,7 +339,9 @@ function renderScheduleCardHtml(row) {
         <p class="muted">${targetSummaryFor(row)}</p>
         <p class="muted">${escapeHtml(row.startDate || "")} &middot; ${escapeHtml(row.opensTime)}&ndash;${escapeHtml(row.closesTime)} ${escapeHtml(row.timezone)}</p>
       </button>
-      ${row.status === "cancelled" ? "" : `
+      ${row.status === "cancelled"
+        ? `<p class="muted tests-cancelled-note">Cancelled - read-only. Historical results, if any, remain available in History/Results. Create a new schedule to reuse these targets.</p>`
+        : `
         <div class="tests-schedule-card-actions">
           <button type="button" class="plain-button compact-button" data-action="tests-open-edit-schedule" data-schedule-id="${escapeAttr(row.id)}">Edit</button>
           ${row.status === "active"
@@ -360,15 +362,15 @@ function renderScheduleDetailHtml() {
       <h3>${escapeHtml(schedule.testName)} &middot; ${schedule.scheduleKind === "recurring" ? "Daily" : "One-time"}</h3>
       <p class="muted">${escapeHtml(schedule.opensTime)}&ndash;${escapeHtml(schedule.closesTime)} ${escapeHtml(schedule.timezone)}</p>
       <p>Targets: ${targets.map((t) => escapeHtml(t.name || t.id)).join(", ") || "none"}</p>
-      <div class="tests-schedule-actions">
-        ${schedule.status !== "cancelled" ? `<button type="button" class="plain-button compact-button" data-action="tests-open-edit-schedule" data-schedule-id="${escapeAttr(schedule.id)}">Edit</button>` : ""}
+      ${schedule.status === "cancelled"
+        ? `<p class="muted tests-cancelled-note">Cancelled - read-only. It can no longer be edited or reactivated. Historical results, if any, remain available in History/Results. Create a new schedule to reuse these targets.</p>`
+        : `<div class="tests-schedule-actions">
+        <button type="button" class="plain-button compact-button" data-action="tests-open-edit-schedule" data-schedule-id="${escapeAttr(schedule.id)}">Edit</button>
         ${schedule.status === "active"
           ? `<button type="button" class="plain-button compact-button" data-action="tests-set-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="paused">Pause</button>`
-          : schedule.status === "paused"
-            ? `<button type="button" class="plain-button compact-button" data-action="tests-set-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="active">Activate</button>`
-            : ""}
-        ${schedule.status !== "cancelled" ? `<button type="button" class="plain-button compact-button tests-delete-button" data-action="tests-delete-schedule" data-schedule-id="${escapeAttr(schedule.id)}" data-test-name="${escapeAttr(schedule.testName)}" data-has-occurrences="${schedule.hasOccurrences ? "true" : "false"}" ${state.tests.deletingScheduleId === schedule.id ? "disabled" : ""}>${state.tests.deletingScheduleId === schedule.id ? "Deleting..." : "Delete"}</button>` : ""}
-      </div>
+          : `<button type="button" class="plain-button compact-button" data-action="tests-set-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="active">Activate</button>`}
+        <button type="button" class="plain-button compact-button tests-delete-button" data-action="tests-delete-schedule" data-schedule-id="${escapeAttr(schedule.id)}" data-test-name="${escapeAttr(schedule.testName)}" data-has-occurrences="${schedule.hasOccurrences ? "true" : "false"}" ${state.tests.deletingScheduleId === schedule.id ? "disabled" : ""}>${state.tests.deletingScheduleId === schedule.id ? "Deleting..." : "Delete"}</button>
+      </div>`}
       <div class="tests-link-box">
         ${link
           ? `<p class="muted">Group link ready - share it in WhatsApp/Viber.</p><code class="tests-link-code">${escapeHtml(checkInUrl(link.publicToken))}</code>

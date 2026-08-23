@@ -296,6 +296,15 @@ async function openEditSchedule(scheduleId, renderTests) {
   // to find out it will be refused.
   const known = state.tests.schedules.find((s) => s.id === scheduleId)
     || (state.tests.scheduleDetail?.schedule.id === scheduleId ? state.tests.scheduleDetail.schedule : null);
+  // cancelled is terminal (backend/src/routes/tests.js's PATCH rejects it
+  // outright regardless of body) - the Edit button is already hidden for a
+  // cancelled row, this only guards a stale/known row object reached some
+  // other way (e.g. this exact schedule got cancelled in another tab).
+  if (known?.status === "cancelled") {
+    state.tests.error = "This schedule is cancelled and can no longer be edited or reactivated. Create a new schedule instead.";
+    renderTests();
+    return;
+  }
   if (known?.scheduleKind === "one_time" && known?.hasOccurrences) {
     state.tests.error = "This one-time schedule already has its occurrence and can no longer be edited - cancel or delete it instead.";
     renderTests();

@@ -10092,6 +10092,12 @@ button.tests-assignment-card {
   font-size: 13px;
 }
 
+.tests-cancelled-note {
+  margin: 0;
+  padding: 8px 10px 14px;
+  font-size: 12px;
+}
+
 .tests-athlete-picker {
   display: grid;
   gap: 8px;

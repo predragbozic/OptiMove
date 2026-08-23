@@ -25,11 +25,13 @@ const SEED_PATH = path.resolve(__dirname, "../../migrations_v2/202608221000_test
 const PHASE1_PATH = path.resolve(__dirname, "../../migrations_v2/202608240900_tests_v42_phase1_scheduling_execution.sql");
 const PRESENTATION_PATH = path.resolve(__dirname, "../../migrations_v2/202608250900_tests_v42_presentation_metadata.sql");
 const SUPERSEDE_FIX_PATH = path.resolve(__dirname, "../../migrations_v2/202608250901_tests_v42_supersede_generated_column_fix.sql");
+const OCCURRENCE_LOCK_FIX_PATH = path.resolve(__dirname, "../../migrations_v2/202608260900_tests_v42_occurrence_generation_lock_fix.sql");
 const SCHEMA_NAME = "202608220900_tests_v42_schema.sql";
 const SEED_NAME = "202608221000_tests_v42_seed_wellness_fms.sql";
 const PHASE1_NAME = "202608240900_tests_v42_phase1_scheduling_execution.sql";
 const PRESENTATION_NAME = "202608250900_tests_v42_presentation_metadata.sql";
 const SUPERSEDE_FIX_NAME = "202608250901_tests_v42_supersede_generated_column_fix.sql";
+const OCCURRENCE_LOCK_FIX_NAME = "202608260900_tests_v42_occurrence_generation_lock_fix.sql";
 
 const WELLNESS_TEST_VERSION_ID = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 
@@ -180,15 +182,16 @@ async function writeMigrationsDir(runId, files) {
 
 let db, adminClient, migrationsDir;
 let server, apiBaseUrl;
-let query, pool, createSession, hashPassword;
+let query, pool, createSession, hashPassword, ensureCurrentOccurrence;
 
 before(async () => {
-  const [schemaSql, seedSql, phase1Sql, presentationSql, supersedeFixSql] = await Promise.all([
+  const [schemaSql, seedSql, phase1Sql, presentationSql, supersedeFixSql, occurrenceLockFixSql] = await Promise.all([
     fsp.readFile(SCHEMA_PATH, "utf8"),
     fsp.readFile(SEED_PATH, "utf8"),
     fsp.readFile(PHASE1_PATH, "utf8"),
     fsp.readFile(PRESENTATION_PATH, "utf8"),
     fsp.readFile(SUPERSEDE_FIX_PATH, "utf8"),
+    fsp.readFile(OCCURRENCE_LOCK_FIX_PATH, "utf8"),
   ]);
 
   db = await makeTempDb("primary");
@@ -204,6 +207,7 @@ before(async () => {
     [PHASE1_NAME]: phase1Sql,
     [PRESENTATION_NAME]: presentationSql,
     [SUPERSEDE_FIX_NAME]: supersedeFixSql,
+    [OCCURRENCE_LOCK_FIX_NAME]: occurrenceLockFixSql,
   });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
 
@@ -214,6 +218,8 @@ before(async () => {
   const authModule = await import("../src/auth.js");
   createSession = authModule.createSession;
   hashPassword = authModule.hashPassword;
+  const occurrenceServiceModule = await import("../src/testsOccurrenceService.js");
+  ensureCurrentOccurrence = occurrenceServiceModule.ensureCurrentOccurrence;
   const serverModule = await import("../src/server.js");
 
   server = http.createServer(serverModule.app);
@@ -280,6 +286,25 @@ async function addMembership(athleteId, { teamId = null, clubId = null }) {
 async function loginCookie(userId) {
   const token = await createSession(userId);
   return cookieFor(token);
+}
+
+// Polls pg_stat_activity until some OTHER backend is genuinely blocked on a
+// lock held by `blockerPid` (via pg_blocking_pids(), not a fixed sleep) -
+// this is what makes the concurrency tests below deterministic instead of
+// timing-dependent: the test only proceeds to release the blocking
+// transaction once it has proven the other request/transaction is really
+// queued behind it, not just "probably" queued by the time a sleep elapses.
+async function waitUntilBlockedBy(blockerPid, { timeoutMs = 5000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await adminClient.query(
+      `select pid from pg_stat_activity where pg_blocking_pids(pid) @> array[$1]::int[]`,
+      [blockerPid],
+    );
+    if (result.rowCount > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`Timed out waiting for a backend to be blocked by pid ${blockerPid}`);
 }
 
 const FULL_VALUES = { fatigue: 2, sleep: 4, soreness: 0, stress: 6, mood: 8, injury: true };
@@ -605,4 +630,221 @@ test("E1. create -> submit -> correct -> group link still work end to end after 
   assert.equal(link.status, 201);
   const resolved = await api(`/api/tests/check-in/${link.body.link.publicToken}/my-assignment`, { cookie: athletes[0].cookie });
   assert.equal(resolved.body.assignment.id, assignmentId);
+});
+
+// ------------------------------------------------------------
+// F. requireCoachWorkspace rejection inside PATCH/DELETE must not
+// double-release the pg client (the same `client.release()` inside the
+// early-return AND inside `finally` regression previously fixed elsewhere
+// in this file's own history).
+// ------------------------------------------------------------
+
+// pg's Client#release() throws "Release called on client which has already
+// been released to the pool" on a second call - if either route still had
+// its own manual release ahead of the shared `finally`, that throw would
+// surface as an unhandled rejection (no async-error middleware is wired up
+// in this app - see server.js/express@4), never as a clean 403 body. A
+// plain, complete 403 response is already the first proof; draining the
+// whole pool afterward and running a real query on every connection is the
+// second, independent proof that no connection was left corrupted.
+async function assertPoolStillFullyUsable() {
+  const poolSize = pool.options.max || 10;
+  const clients = [];
+  try {
+    for (let i = 0; i < poolSize; i += 1) clients.push(await pool.connect());
+    for (const client of clients) {
+      const result = await client.query("select 1 as ok");
+      assert.equal(result.rows[0].ok, 1);
+    }
+  } finally {
+    for (const client of clients) client.release();
+  }
+}
+
+test("F1. a non-coach account calling PATCH gets a clean 403 (no double-release), and the pool stays fully usable afterward", async () => {
+  const { athletes } = await makeClubWithAthletes("f1", 1);
+  const nonCoachCookie = athletes[0].cookie; // athlete account: no club/team role, so no coachWorkspace capability
+  const res = await api(`/api/tests/schedules/00000000-0000-0000-0000-000000000000`, { method: "PATCH", cookie: nonCoachCookie, body: { status: "paused" } });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.error, "Forbidden");
+  await assertPoolStillFullyUsable();
+});
+
+test("F2. a non-coach account calling DELETE gets a clean 403 (no double-release), and the pool stays fully usable afterward", async () => {
+  const { athletes } = await makeClubWithAthletes("f2", 1);
+  const nonCoachCookie = athletes[0].cookie;
+  const res = await api(`/api/tests/schedules/00000000-0000-0000-0000-000000000000`, { method: "DELETE", cookie: nonCoachCookie });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.error, "Forbidden");
+  await assertPoolStillFullyUsable();
+});
+
+// ------------------------------------------------------------
+// G. cancelled is a terminal status - no reactivation, no edit
+// ------------------------------------------------------------
+
+test("G1. status-only PATCH cannot move a cancelled schedule to active or paused", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("g1", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const deleted = await api(`/api/tests/schedules/${created.body.schedule.id}`, { method: "DELETE", cookie: coachCookie });
+  assert.equal(deleted.body.action, "deleted", "no occurrence yet - this DELETE physically removes the schedule, not what this test is about");
+
+  // Re-create so there IS a cancelled row to test against (a schedule with
+  // an occurrence cancels instead of being deleted - see C2).
+  const created2 = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  await api("/api/tests/athlete/today", { cookie: athletes[0].cookie }); // forces an occurrence to exist
+  const cancelled = await api(`/api/tests/schedules/${created2.body.schedule.id}`, { method: "DELETE", cookie: coachCookie });
+  assert.equal(cancelled.body.action, "cancelled");
+
+  for (const status of ["active", "paused"]) {
+    const attempt = await api(`/api/tests/schedules/${created2.body.schedule.id}`, { method: "PATCH", cookie: coachCookie, body: { status } });
+    assert.equal(attempt.status, 409, `reactivating to '${status}' must be rejected`);
+  }
+  const row = await query(`select status from tests.test_schedules where id = $1`, [created2.body.schedule.id]);
+  assert.equal(row.rows[0].status, "cancelled");
+});
+
+test("G2. a full edit (targets/kind/dates/times) on a cancelled schedule is rejected outright, nothing is written", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("g2", 2);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  await api("/api/tests/athlete/today", { cookie: athletes[0].cookie });
+  await api(`/api/tests/schedules/${created.body.schedule.id}`, { method: "DELETE", cookie: coachCookie });
+
+  const edited = await api(`/api/tests/schedules/${created.body.schedule.id}`, {
+    method: "PATCH",
+    cookie: coachCookie,
+    body: { scheduleKind: "daily", timezone: "UTC", startDate: TODAY, opensTime: "09:00", closesTime: "20:00", targets: [{ kind: "athlete", id: athletes[1].athleteId }] },
+  });
+  assert.equal(edited.status, 409);
+
+  const detail = await api(`/api/tests/schedules/${created.body.schedule.id}`, { cookie: coachCookie });
+  assert.equal(detail.body.schedule.status, "cancelled");
+  assert.equal(detail.body.targets.length, 1);
+  assert.equal(detail.body.targets[0].id, athletes[0].athleteId, "the original target must be untouched");
+});
+
+test("G3. status-only PATCH can no longer set status directly to 'cancelled' either - only DELETE cancels (it also revokes links, which a bare status write would skip)", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("g3", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const attempt = await api(`/api/tests/schedules/${created.body.schedule.id}`, { method: "PATCH", cookie: coachCookie, body: { status: "cancelled" } });
+  assert.equal(attempt.status, 400);
+  const row = await query(`select status from tests.test_schedules where id = $1`, [created.body.schedule.id]);
+  assert.equal(row.rows[0].status, "active");
+});
+
+// ------------------------------------------------------------
+// H. scheduleKind is validated explicitly, not silently coerced
+// ------------------------------------------------------------
+
+test("H1. POST /schedules rejects an unrecognized scheduleKind with a controlled 400, nothing is written", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("h1", 1);
+  const before = await query(`select count(*)::int as n from tests.test_schedules`);
+  const attempt = await api("/api/tests/schedules", {
+    method: "POST",
+    cookie: coachCookie,
+    body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }], { scheduleKind: "weekly" }),
+  });
+  assert.equal(attempt.status, 400);
+  const after = await query(`select count(*)::int as n from tests.test_schedules`);
+  assert.equal(after.rows[0].n, before.rows[0].n);
+});
+
+test("H2. full-edit PATCH rejects an unrecognized scheduleKind with a controlled 400, the schedule is left unchanged", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("h2", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const attempt = await api(`/api/tests/schedules/${created.body.schedule.id}`, {
+    method: "PATCH",
+    cookie: coachCookie,
+    body: { scheduleKind: "typo", timezone: "UTC", startDate: TODAY, opensTime: "08:00", closesTime: "20:00", targets: [{ kind: "athlete", id: athletes[0].athleteId }] },
+  });
+  assert.equal(attempt.status, 400);
+  const row = await query(`select schedule_kind from tests.test_schedules where id = $1`, [created.body.schedule.id]);
+  assert.equal(row.rows[0].schedule_kind, "one_time");
+});
+
+// ------------------------------------------------------------
+// J. Occurrence-generation vs PATCH/DELETE race, closed via
+// migrations_v2/202608260900_tests_v42_occurrence_generation_lock_fix.sql
+// (FOR SHARE in tests.generate_test_schedule_occurrence(), serializing
+// against PATCH/DELETE's FOR UPDATE on the same schedule row). Driven with
+// two REAL, independent connections and deterministic lock-wait polling
+// (waitUntilBlockedBy), not sleeps.
+// ------------------------------------------------------------
+
+test("J1. generation wins the race first: DELETE waits, then sees the occurrence and correctly cancels instead of physically deleting", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("j1", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const scheduleId = created.body.schedule.id;
+
+  const clientA = await pool.connect();
+  try {
+    const pidResult = await clientA.query("select pg_backend_pid() as pid");
+    const blockerPid = pidResult.rows[0].pid;
+
+    await clientA.query("begin");
+    // Acquires the FOR SHARE lock (migrations_v2/202608260900_...) and
+    // inserts the occurrence row, but does not commit yet - the row lock is
+    // held for the rest of clientA's open transaction.
+    const genResult = await clientA.query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [scheduleId, TODAY]);
+    assert.ok(genResult.rows[0].id, "generation must succeed and return a real occurrence id");
+
+    // Fire the REAL DELETE route concurrently - its own FOR UPDATE must
+    // queue behind clientA's held FOR SHARE lock on the same schedule row.
+    const deletePromise = api(`/api/tests/schedules/${scheduleId}`, { method: "DELETE", cookie: coachCookie });
+    await waitUntilBlockedBy(blockerPid);
+
+    await clientA.query("commit");
+    const deleted = await deletePromise;
+
+    assert.equal(deleted.status, 200);
+    assert.equal(deleted.body.action, "cancelled");
+    assert.equal(deleted.body.historyPreserved, true);
+
+    const scheduleRow = await query(`select status from tests.test_schedules where id = $1`, [scheduleId]);
+    assert.equal(scheduleRow.rows[0].status, "cancelled", "the schedule row must still exist, now cancelled - never physically deleted once an occurrence exists");
+    const occurrenceRow = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [scheduleId]);
+    assert.equal(occurrenceRow.rowCount, 1, "the occurrence generated during the race must be preserved");
+  } finally {
+    clientA.release();
+  }
+});
+
+test("J2. DELETE wins the race first: it physically removes the empty schedule, and the blocked generation call resolves to null afterward - no row created under a deleted schedule, no uncontrolled crash", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("j2", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const scheduleId = created.body.schedule.id;
+  const scheduleRow = (await query(`select * from tests.test_schedules where id = $1`, [scheduleId])).rows[0];
+
+  const clientA = await pool.connect();
+  try {
+    const pidResult = await clientA.query("select pg_backend_pid() as pid");
+    const blockerPid = pidResult.rows[0].pid;
+
+    await clientA.query("begin");
+    // Mirrors the DELETE route's own first step: lock the schedule row
+    // FOR UPDATE, but do not commit yet.
+    await clientA.query(`select * from tests.test_schedules where id = $1 for update`, [scheduleId]);
+
+    // Fire a REAL generation attempt concurrently, through the exact same
+    // service function the app's own routes call - it must queue behind
+    // clientA's FOR UPDATE (it takes FOR SHARE on the same row).
+    const generatePromise = ensureCurrentOccurrence(pool, scheduleRow);
+    await waitUntilBlockedBy(blockerPid);
+
+    // Mirrors the DELETE route's own "no occurrence yet" branch: physically
+    // remove the schedule (and, via cascade, its targets/links), then
+    // commit.
+    await clientA.query(`delete from tests.test_schedules where id = $1`, [scheduleId]);
+    await clientA.query("commit");
+
+    const occurrenceId = await generatePromise; // must resolve cleanly, never reject/throw
+    assert.equal(occurrenceId, null, "no occurrence must ever be created under a schedule that was concurrently, physically deleted");
+
+    const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [scheduleId]);
+    assert.equal(occurrenceRows.rowCount, 0);
+    const assignmentRows = await query(`select id from tests.test_assignments where athlete_id = $1`, [athletes[0].athleteId]);
+    assert.equal(assignmentRows.rowCount, 0);
+  } finally {
+    clientA.release();
+  }
 });

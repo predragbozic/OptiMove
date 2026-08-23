@@ -229,6 +229,17 @@ test("a one_time schedule that already has its occurrence never opens the edit f
   assert.equal(fetchCalls.length, 0, "no request should be made once the block is already known from the list row");
 });
 
+test("a cancelled schedule never opens the edit form either - cancelled is terminal, no network round trip needed to find out", async () => {
+  resetTestsState();
+  state.tests.scheduleForm = emptyScheduleForm();
+  state.tests.schedules = [{ id: "sched-3", scheduleKind: "daily", status: "cancelled", hasOccurrences: true }];
+  installFetchMock(() => ({ status: 200, body: {} }));
+  await handleTestsAction(fakeAction({ action: "tests-open-edit-schedule", scheduleId: "sched-3" }), { renderTests: () => {} });
+  assert.equal(state.tests.scheduleForm.open, false);
+  assert.ok(state.tests.error.toLowerCase().includes("cancelled"), state.tests.error);
+  assert.equal(fetchCalls.length, 0);
+});
+
 test("editing a recurring schedule with an existing occurrence still opens the form (only future occurrences are affected)", async () => {
   resetTestsState();
   state.tests.schedules = [{ id: "sched-2", scheduleKind: "recurring", hasOccurrences: true }];
