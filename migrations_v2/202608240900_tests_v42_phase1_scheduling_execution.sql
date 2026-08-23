@@ -232,7 +232,10 @@ create trigger snapshot_occurrence_test_reference
 
 -- Identity columns (which schedule, which date, which test/battery version)
 -- are immutable after creation - only status may ever change on an
--- existing occurrence.
+-- existing occurrence. assignments_materialized_at is separately monotonic:
+-- NULL -> a timestamp exactly once (set only by
+-- tests.materialize_test_assignments_for_occurrence's own UPDATE), never
+-- reverted to NULL nor changed again afterward.
 create function tests.protect_occurrence_identity()
 returns trigger language plpgsql as $$
 begin
@@ -246,6 +249,13 @@ begin
   then
     raise exception 'test_schedule_occurrences.% identity/snapshot columns are immutable after creation - only status/assignments_materialized_at may change', OLD.id;
   end if;
+
+  if OLD.assignments_materialized_at is not null
+     and NEW.assignments_materialized_at is distinct from OLD.assignments_materialized_at
+  then
+    raise exception 'test_schedule_occurrences.% assignments_materialized_at is immutable once set (was %, attempted %)', OLD.id, OLD.assignments_materialized_at, NEW.assignments_materialized_at;
+  end if;
+
   return NEW;
 end $$;
 
@@ -358,6 +368,45 @@ end $$;
 create trigger snapshot_assignment_test_reference
   before insert on tests.test_assignments
   for each row execute function tests.snapshot_assignment_test_reference();
+
+-- Nakon INSERT-a: identitet (occurrence/athlete/snapshot verzije) je
+-- nepromenljiv - isti obrazac kao protect_occurrence_identity(). Status
+-- sme samo napred: pending(1) -> open(2) -> in_progress(3) -> jedno od
+-- completed/missed/excused/cancelled(4, terminalno) - nikad unazad, i
+-- jednom u terminalnom stanju nikad više promenjen (uključujući "completed
+-- ponovo postaje pending/open/in_progress"). assignments_materialized_at
+-- sme preći iz NULL u vrednost TAČNO jednom (postavlja ga isključivo
+-- tests.materialize_test_assignments_for_occurrence) i nikad se posle
+-- toga ne menja niti vraća na NULL.
+create function tests.protect_assignment_identity_and_lifecycle()
+returns trigger language plpgsql as $$
+declare
+  v_old_rank integer;
+  v_new_rank integer;
+begin
+  if NEW.occurrence_id is distinct from OLD.occurrence_id
+     or NEW.athlete_id is distinct from OLD.athlete_id
+     or NEW.snapshot_test_version_id is distinct from OLD.snapshot_test_version_id
+     or NEW.snapshot_test_battery_version_id is distinct from OLD.snapshot_test_battery_version_id
+  then
+    raise exception 'test_assignments.% identity/snapshot columns (occurrence_id/athlete_id/snapshot_test_version_id/snapshot_test_battery_version_id) are immutable after creation', OLD.id;
+  end if;
+
+  v_old_rank := case OLD.status when 'pending' then 1 when 'open' then 2 when 'in_progress' then 3 else 4 end;
+  v_new_rank := case NEW.status when 'pending' then 1 when 'open' then 2 when 'in_progress' then 3 else 4 end;
+  if v_old_rank = 4 and NEW.status <> OLD.status then
+    raise exception 'test_assignments.% status % is terminal - cannot transition to %', OLD.id, OLD.status, NEW.status;
+  end if;
+  if v_new_rank < v_old_rank then
+    raise exception 'test_assignments.% status cannot move backward from % to %', OLD.id, OLD.status, NEW.status;
+  end if;
+
+  return NEW;
+end $$;
+
+create trigger protect_assignment_identity_and_lifecycle
+  before update on tests.test_assignments
+  for each row execute function tests.protect_assignment_identity_and_lifecycle();
 
 -- Materijalizacija: čita postojeće tests.test_schedule_targets za occurrence-ov
 -- schedule i pravi po jedan pending assignment po sportisti. Tim/klub
@@ -684,6 +733,8 @@ begin
 
   if v_result_type in ('numeric','integer','ordinal') and NEW.result_numeric is null then
     raise exception '% derived parameter result_type % requires result_numeric', TG_TABLE_NAME, v_result_type;
+  elsif v_result_type in ('integer','ordinal') and NEW.result_numeric <> trunc(NEW.result_numeric) then
+    raise exception '% derived parameter result_type % requires a whole-number result_numeric (got %)', TG_TABLE_NAME, v_result_type, NEW.result_numeric;
   elsif v_result_type = 'boolean' and NEW.result_boolean is null then
     raise exception '% derived parameter result_type boolean requires result_boolean, not a numeric/text column', TG_TABLE_NAME;
   elsif v_result_type = 'text' and NEW.result_text is null then
@@ -773,7 +824,14 @@ begin
 
   -- TG_OP = 'UPDATE'
   if OLD.status = 'draft' then
-    return NEW; -- draft je slobodno izmenljiv
+    -- Draft sme postati 'draft' (slobodno izmenljiv) ili 'completed' (kroz
+    -- tests.completeTestAssessmentWithDerivedResults) - NIKAD direktno
+    -- 'invalidated'. invalidated se dostiže isključivo iz completed, kroz
+    -- validan supersede (provere ispod).
+    if NEW.status = 'invalidated' then
+      raise exception '% % is draft - cannot transition directly to invalidated, only a completed row can via a valid supersede', TG_TABLE_NAME, OLD.id;
+    end if;
+    return NEW;
   end if;
 
   if OLD.status = 'invalidated' then
@@ -848,26 +906,192 @@ create trigger protect_completed_assessment
   before update or delete on tests.test_battery_assessments
   for each row execute function tests.protect_completed_assessment();
 
--- Vrednosti (test_assessment_values) prate status svog roditeljskog
--- assessment-a: nepromenljive čim assessment nije više 'draft'.
-create function tests.protect_completed_assessment_values()
+-- protect_completed_assessment() iznad proverava svaki POJEDINAČNI UPDATE u
+-- trenutku kad se desi (BEFORE, ne-deferred) - ali ispravan supersede je
+-- DVA odvojena UPDATE-a (naslednik dobija supersedes_assessment_id +
+-- completed; original dobija invalidated + superseded_by_assessment_id) i
+-- ništa dosad nije sprečavalo da se transakcija commit-uje posle SAMO prvog
+-- koraka - naslednik bi ostao completed sa supersedes_assessment_id, a
+-- original bi i dalje bio obično completed, bez odgovarajućeg
+-- superseded_by_assessment_id. Ovaj AFTER CONSTRAINT TRIGGER, DEFERRABLE
+-- INITIALLY DEFERRED, se izvršava TAČNO PRE COMMIT-a i ponovo čita FINALNO
+-- stanje reda (i njegovog partnera) - ako veza nije obostrano zatvorena do
+-- tog trenutka, ceo COMMIT pada, bez obzira kojim redosledom su UPDATE-i
+-- rađeni unutar transakcije. Uključuje i ograničenu proveru ciklusa u
+-- supersedes_assessment_id lancu.
+create function tests.enforce_supersede_consistency()
 returns trigger language plpgsql as $$
 declare
-  v_status varchar(15);
-  v_assessment_id uuid;
+  v_row record;
+  v_partner record;
+  v_current uuid;
+  v_visited uuid[];
+  v_hops integer := 0;
 begin
-  v_assessment_id := coalesce(NEW.assessment_id, OLD.assessment_id);
-  select status into v_status from tests.test_assessments where id = v_assessment_id;
-  if v_status is distinct from 'draft' then
-    raise exception 'test_assessment_values for assessment % cannot change - parent assessment status is %, not draft', v_assessment_id, v_status;
+  if TG_TABLE_NAME = 'test_assessments' then
+    select * into v_row from tests.test_assessments where id = NEW.id;
+  else
+    select * into v_row from tests.test_battery_assessments where id = NEW.id;
   end if;
+  if v_row.id is null then
+    return NEW; -- red je posle toga obrisan u istoj transakciji (draft delete) - nema šta da se proveri
+  end if;
+
+  if v_row.supersedes_assessment_id is not null then
+    if TG_TABLE_NAME = 'test_assessments' then
+      select * into v_partner from tests.test_assessments where id = v_row.supersedes_assessment_id;
+    else
+      select * into v_partner from tests.test_battery_assessments where id = v_row.supersedes_assessment_id;
+    end if;
+    if v_partner.id is null then
+      raise exception '%.% supersedes a non-existent row %', TG_TABLE_NAME, v_row.id, v_row.supersedes_assessment_id;
+    end if;
+    if v_row.status <> 'completed' then
+      raise exception '%.% supersedes % but is not itself completed (status=%)', TG_TABLE_NAME, v_row.id, v_partner.id, v_row.status;
+    end if;
+    if v_partner.status <> 'invalidated' or v_partner.superseded_by_assessment_id is distinct from v_row.id then
+      raise exception '%.% claims to supersede % but that link is not reciprocated by commit time (predecessor status=%, superseded_by=%) - the supersede must fully commit or fully roll back', TG_TABLE_NAME, v_row.id, v_partner.id, v_partner.status, v_partner.superseded_by_assessment_id;
+    end if;
+    if v_partner.athlete_id is distinct from v_row.athlete_id
+       or v_partner.assignment_id is distinct from v_row.assignment_id
+       or (TG_TABLE_NAME = 'test_assessments' and (
+             v_partner.test_version_id is distinct from v_row.test_version_id
+             or v_partner.battery_assessment_id is distinct from v_row.battery_assessment_id
+             or v_partner.battery_version_id is distinct from v_row.battery_version_id
+             or v_partner.battery_item_id is distinct from v_row.battery_item_id
+             or v_partner.attempt_number is distinct from v_row.attempt_number
+           ))
+       or (TG_TABLE_NAME = 'test_battery_assessments' and v_partner.battery_version_id is distinct from v_row.battery_version_id)
+    then
+      raise exception '%.% and predecessor % must share identical athlete/test-or-battery-version/assignment/battery-context/attempt', TG_TABLE_NAME, v_row.id, v_partner.id;
+    end if;
+  end if;
+
+  if v_row.superseded_by_assessment_id is not null then
+    if TG_TABLE_NAME = 'test_assessments' then
+      select * into v_partner from tests.test_assessments where id = v_row.superseded_by_assessment_id;
+    else
+      select * into v_partner from tests.test_battery_assessments where id = v_row.superseded_by_assessment_id;
+    end if;
+    if v_partner.id is null then
+      raise exception '%.% is superseded by a non-existent row %', TG_TABLE_NAME, v_row.id, v_row.superseded_by_assessment_id;
+    end if;
+    if v_row.status <> 'invalidated' then
+      raise exception '%.% has superseded_by_assessment_id set but is not itself invalidated (status=%)', TG_TABLE_NAME, v_row.id, v_row.status;
+    end if;
+    if v_partner.status <> 'completed' or v_partner.supersedes_assessment_id is distinct from v_row.id then
+      raise exception '%.% claims to be superseded by % but that link is not reciprocated by commit time (successor status=%, supersedes=%)', TG_TABLE_NAME, v_row.id, v_partner.id, v_partner.status, v_partner.supersedes_assessment_id;
+    end if;
+  end if;
+
+  -- Ograničena provera ciklusa: prati supersedes_assessment_id lanac
+  -- unazad, odbij ako se bilo koji id ponovi.
+  v_current := v_row.id;
+  v_visited := array[v_current];
+  loop
+    if TG_TABLE_NAME = 'test_assessments' then
+      select supersedes_assessment_id into v_current from tests.test_assessments where id = v_current;
+    else
+      select supersedes_assessment_id into v_current from tests.test_battery_assessments where id = v_current;
+    end if;
+    exit when v_current is null;
+    v_hops := v_hops + 1;
+    if v_hops > 1000 then
+      raise exception '%.% supersede chain exceeds 1000 hops - probable cycle', TG_TABLE_NAME, v_row.id;
+    end if;
+    if v_current = any(v_visited) then
+      raise exception '%.% supersede chain contains a cycle at %', TG_TABLE_NAME, v_row.id, v_current;
+    end if;
+    v_visited := v_visited || v_current;
+  end loop;
+
+  return NEW;
+end $$;
+
+create constraint trigger enforce_supersede_consistency
+  after insert or update on tests.test_assessments
+  deferrable initially deferred
+  for each row execute function tests.enforce_supersede_consistency();
+create constraint trigger enforce_supersede_consistency
+  after insert or update on tests.test_battery_assessments
+  deferrable initially deferred
+  for each row execute function tests.enforce_supersede_consistency();
+
+-- Deca čiji roditelj mora biti 'draft' u trenutku pisanja: test_assessment_
+-- values (roditelj = assessment_id) i oba nivoa derived rezultata
+-- (test_assessment_derived_results roditelj = assessment_id,
+-- test_battery_assessment_derived_results roditelj = battery_assessment_id) -
+-- sve tri se pišu u istoj tranzakciji koja završava assessment DOK je on
+-- još 'draft' (vidi tests.completeTestAssessmentWithDerivedResults u
+-- backend/src/testAssessmentCalculations.js), a zamrzavaju se čim roditelj
+-- napusti 'draft'. Na UPDATE-u proverava i STAROG i NOVOG roditelja - red
+-- ne sme "pobeći" reparentovanjem (promenom assessment_id/battery_
+-- assessment_id) ni SA completed/invalidated roditelja, ni NA njega.
+create function tests.protect_draft_only_children()
+returns trigger language plpgsql as $$
+declare
+  v_old_parent_id uuid;
+  v_new_parent_id uuid;
+  v_old_status varchar(15);
+  v_new_status varchar(15);
+  v_parent_table text;
+begin
+  v_parent_table := case TG_TABLE_NAME
+    when 'test_battery_assessment_derived_results' then 'test_battery_assessments'
+    else 'test_assessments'
+  end;
+
+  if TG_TABLE_NAME = 'test_assessment_values' then
+    v_old_parent_id := OLD.assessment_id; v_new_parent_id := NEW.assessment_id;
+  elsif TG_TABLE_NAME = 'test_assessment_derived_results' then
+    v_old_parent_id := OLD.assessment_id; v_new_parent_id := NEW.assessment_id;
+  elsif TG_TABLE_NAME = 'test_battery_assessment_derived_results' then
+    v_old_parent_id := OLD.battery_assessment_id; v_new_parent_id := NEW.battery_assessment_id;
+  end if;
+
+  if TG_OP in ('UPDATE','DELETE') then
+    execute format('select status from tests.%I where id = $1', v_parent_table) into v_old_status using v_old_parent_id;
+    if v_old_status is distinct from 'draft' then
+      raise exception '% row for parent % cannot change - parent (%) status is %, not draft', TG_TABLE_NAME, v_old_parent_id, v_parent_table, v_old_status;
+    end if;
+  end if;
+  if TG_OP in ('INSERT','UPDATE') then
+    execute format('select status from tests.%I where id = $1', v_parent_table) into v_new_status using v_new_parent_id;
+    if v_new_status is distinct from 'draft' then
+      raise exception '% row for parent % cannot change - parent (%) status is %, not draft', TG_TABLE_NAME, v_new_parent_id, v_parent_table, v_new_status;
+    end if;
+  end if;
+
   if TG_OP = 'DELETE' then return OLD; end if;
   return NEW;
 end $$;
 
-create trigger protect_completed_assessment_values
+create trigger protect_draft_only_children
   before insert or update or delete on tests.test_assessment_values
-  for each row execute function tests.protect_completed_assessment_values();
+  for each row execute function tests.protect_draft_only_children();
+create trigger protect_draft_only_children
+  before insert or update or delete on tests.test_assessment_derived_results
+  for each row execute function tests.protect_draft_only_children();
+create trigger protect_draft_only_children
+  before insert or update or delete on tests.test_battery_assessment_derived_results
+  for each row execute function tests.protect_draft_only_children();
+
+-- test_assessment_evaluations su istorijski zapisi, ne "u toku" podaci kao
+-- gore - po prirodi se pišu NAKON što je assessment već completed (tumače
+-- konačan rezultat), pa se ne mogu ograničiti na "roditelj mora biti
+-- draft". Umesto toga: write-once. INSERT je uvek dozvoljen; UPDATE i
+-- DELETE su UVEK zabranjeni, bez izuzetka - što automatski pokriva i
+-- reparenting (promena assessment_id/battery_assessment_id je samo
+-- specijalan slučaj UPDATE-a, već obuhvaćen).
+create function tests.protect_evaluation_immutability()
+returns trigger language plpgsql as $$
+begin
+  raise exception 'test_assessment_evaluations rows are write-once history - % is not allowed on row %', TG_OP, OLD.id;
+end $$;
+
+create trigger protect_evaluation_immutability
+  before update or delete on tests.test_assessment_evaluations
+  for each row execute function tests.protect_evaluation_immutability();
 
 -- Validacija tipa/opsega vrednosti u odnosu na tests.test_parameters -
 -- zahteva pogled u drugu tabelu, pa je triger, ne CHECK.

@@ -17,7 +17,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
-import { computeAndStoreTestAssessmentDerivedResults } from "../src/testAssessmentCalculations.js";
+import { computeAndStoreTestAssessmentDerivedResults, completeTestAssessmentWithDerivedResults } from "../src/testAssessmentCalculations.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.resolve(__dirname, "../../migrations_v2/202608220900_tests_v42_schema.sql");
@@ -772,6 +772,29 @@ async function submitFullWellness(athleteId, values) {
   return assessmentId;
 }
 
+// Point 6: the real, complete service flow - locks the draft row, computes
+// and stores derived results, THEN flips status/completed_at, all wrapped
+// in a real transaction here (the function itself assumes the caller
+// manages BEGIN/COMMIT/ROLLBACK). Used everywhere a WELLNESS assessment
+// needs to be completed in this file, instead of a manual status UPDATE.
+async function completeWellnessAssessment(assessmentId) {
+  await client.query("begin");
+  try {
+    const results = await completeTestAssessmentWithDerivedResults(client, assessmentId);
+    await client.query("commit");
+    return results;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+}
+
+async function submitAndCompleteWellness(athleteId, values) {
+  const assessmentId = await submitFullWellness(athleteId, values);
+  await completeWellnessAssessment(assessmentId);
+  return assessmentId;
+}
+
 test("J1. WELLNESS Total is the average of exactly fatigue/sleep/soreness/stress/mood - injury and RPE never affect it - computed by the REAL backend service, not hand-computed in the test", async () => {
   // Confirm structurally first: derived parameter's own declared inputs are
   // exactly those 5 native parameters, RPE isn't even a WELLNESS parameter.
@@ -783,30 +806,45 @@ test("J1. WELLNESS Total is the average of exactly fatigue/sleep/soreness/stress
   const rpe = await client.query(`select 1 from tests.test_parameters where test_version_id=$1 and parameter_key='rpe'`, [WELLNESS_TEST_VERSION_ID]);
   assert.equal(rpe.rowCount, 0, "RPE must not exist as a WELLNESS parameter in this phase");
 
-  // Point 8: computeAndStoreTestAssessmentDerivedResults() (backend/src/
+  // Point 6: completeTestAssessmentWithDerivedResults() (backend/src/
   // testAssessmentCalculations.js) is the ONLY thing that writes this
-  // result - it reads the real stored values and the real derived-parameter
-  // definition, never a caller-supplied total. Run it in the SAME
-  // transaction that completes the assessment, matching the required
-  // integration pattern.
+  // result - it locks the draft assessment, computes and stores derived
+  // results WHILE it is still draft (the only window
+  // tests.protect_draft_only_children allows), and only THEN flips status
+  // to completed. Never a caller-supplied total.
   const values = { fatigue: 2, sleep: 4, soreness: 6, stress: 8, mood: 10, injury: false };
   const assessmentId = await submitFullWellness(athleteAId, values);
-
-  await client.query("begin");
-  try {
-    await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [assessmentId]);
-    const results = await computeAndStoreTestAssessmentDerivedResults(client, assessmentId);
-    await client.query("commit");
-    assert.equal(results.length, 1);
-    assert.equal(results[0].parameterKey, "wellness_total");
-    assert.equal(results[0].value, 6);
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  }
+  const results = await completeWellnessAssessment(assessmentId);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].parameterKey, "wellness_total");
+  assert.equal(results[0].value, 6);
 
   const stored = await client.query(`select result_numeric from tests.test_assessment_derived_results where assessment_id=$1 and test_version_derived_parameter_id=$2`, [assessmentId, WELLNESS_TOTAL_DERIVED_ID]);
   assert.equal(Number(stored.rows[0].result_numeric), 6);
+  const status = await client.query(`select status, completed_at from tests.test_assessments where id=$1`, [assessmentId]);
+  assert.equal(status.rows[0].status, "completed");
+  assert.ok(status.rows[0].completed_at);
+});
+
+test("J1b. completeTestAssessmentWithDerivedResults rolls back entirely (no partial derived-result row, status stays draft) when calculation fails", async () => {
+  // Missing 'mood' - WELLNESS Total's missing_input_behavior is 'error'.
+  const assessmentId = await makeStandaloneWellnessAssessment(athleteAId);
+  for (const key of ["fatigue", "sleep", "soreness", "stress"]) {
+    await client.query(
+      `insert into tests.test_assessment_values (assessment_id, test_version_id, test_parameter_id, value_numeric) values ($1,$2,$3,5)`,
+      [assessmentId, WELLNESS_TEST_VERSION_ID, WELLNESS_PARAM[key]],
+    );
+  }
+  await assert.rejects(() => completeWellnessAssessment(assessmentId));
+  const status = await client.query(`select status from tests.test_assessments where id=$1`, [assessmentId]);
+  assert.equal(status.rows[0].status, "draft", "a failed completion must leave the assessment exactly as it was");
+  const noResult = await client.query(`select 1 from tests.test_assessment_derived_results where assessment_id=$1`, [assessmentId]);
+  assert.equal(noResult.rowCount, 0, "no partial derived-result row from the failed attempt");
+});
+
+test("J1c. completeTestAssessmentWithDerivedResults refuses to complete an assessment that isn't draft", async () => {
+  const assessmentId = await submitAndCompleteWellness(athleteAId, { fatigue: 1, sleep: 1, soreness: 1, stress: 1, mood: 1, injury: false });
+  await assert.rejects(() => completeWellnessAssessment(assessmentId), /not draft/i);
 });
 
 test("J2. the calculation service rejects an unsupported calculation_method explicitly, rather than silently accepting a manual value", async () => {
@@ -903,22 +941,19 @@ test("L1. a concurrent double-submit with the same idempotency_key never creates
 });
 
 test("M1. a completed assessment's values become immutable", async () => {
-  const assessmentId = await submitFullWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [assessmentId]);
+  const assessmentId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
   await assert.rejects(() =>
     client.query(`update tests.test_assessment_values set value_numeric=9 where assessment_id=$1 and test_parameter_id=$2`, [assessmentId, WELLNESS_PARAM.fatigue]),
   );
 });
 
 test("M2. a completed assessment cannot be silently mutated (e.g. re-pointed to a different athlete)", async () => {
-  const assessmentId = await submitFullWellness(athleteBId, { fatigue: 3, sleep: 3, soreness: 3, stress: 3, mood: 3, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [assessmentId]);
+  const assessmentId = await submitAndCompleteWellness(athleteBId, { fatigue: 3, sleep: 3, soreness: 3, stress: 3, mood: 3, injury: false });
   await assert.rejects(() => client.query(`update tests.test_assessments set athlete_id=$1 where id=$2`, [athleteCId, assessmentId]));
 });
 
 test("M3. a completed assessment cannot be physically deleted", async () => {
-  const assessmentId = await submitFullWellness(athleteBId, { fatigue: 1, sleep: 1, soreness: 1, stress: 1, mood: 1, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [assessmentId]);
+  const assessmentId = await submitAndCompleteWellness(athleteBId, { fatigue: 1, sleep: 1, soreness: 1, stress: 1, mood: 1, injury: false });
   await assert.rejects(() => client.query(`delete from tests.test_assessments where id=$1`, [assessmentId]));
 });
 
@@ -927,14 +962,37 @@ test("M4. a draft assessment CAN be deleted", async () => {
   await assert.doesNotReject(() => client.query(`delete from tests.test_assessments where id=$1`, [assessmentId]));
 });
 
+// M5-M9's supersede chain itself (steps 2-3 of the protocol) has no
+// dedicated service function in this phase - only the "complete" half
+// (submitAndCompleteWellness) does. The two linking UPDATEs stay raw SQL,
+// matching exactly what tests.enforce_supersede_consistency (the deferred
+// constraint trigger) is built to guard.
+// Point 4 changed what a "valid" 2-statement supersede protocol requires:
+// tests.enforce_supersede_consistency (deferred constraint trigger) now
+// fires at the commit boundary of EVERY statement that touches
+// supersedes_assessment_id/superseded_by_assessment_id, including step 1
+// alone (the successor completing+linking) - so step 1 and step 2 must be
+// wrapped in the SAME explicit transaction, or step 1's own (single-
+// statement, auto-committing) transaction fails immediately because the
+// reciprocal link doesn't exist yet. This is the intended tightening, not
+// a regression - see R12/R13 below for direct proof of the atomicity
+// guarantee itself.
+async function completeSupersede(originalId, successorId) {
+  await client.query("begin");
+  try {
+    await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, successorId]);
+    await client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1 where id=$2`, [successorId, originalId]);
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+}
+
 test("M5. the correct correction path (completed -> invalidated + superseded_by a new assessment) is allowed and auditable", async () => {
-  const originalId = await submitFullWellness(athleteCId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [originalId]);
-
+  const originalId = await submitAndCompleteWellness(athleteCId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
   const correctedId = await submitFullWellness(athleteCId, { fatigue: 4, sleep: 4, soreness: 4, stress: 4, mood: 4, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, correctedId]);
-
-  await client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1 where id=$2`, [correctedId, originalId]);
+  await completeSupersede(originalId, correctedId);
 
   const row = await client.query(`select status, superseded_by_assessment_id from tests.test_assessments where id=$1`, [originalId]);
   assert.equal(row.rows[0].status, "invalidated");
@@ -944,55 +1002,68 @@ test("M5. the correct correction path (completed -> invalidated + superseded_by 
 });
 
 test("M5b. invalidated is fully immutable - even a no-op re-write of the same values is rejected", async () => {
-  const originalId = await submitFullWellness(athleteCId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [originalId]);
+  const originalId = await submitAndCompleteWellness(athleteCId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
   const correctedId = await submitFullWellness(athleteCId, { fatigue: 4, sleep: 4, soreness: 4, stress: 4, mood: 4, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, correctedId]);
-  await client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1 where id=$2`, [correctedId, originalId]);
+  await completeSupersede(originalId, correctedId);
 
   await assert.rejects(() => client.query(`update tests.test_assessments set status='invalidated' where id=$1`, [originalId]), "re-applying the exact same status is still a mutation of an invalidated row");
   await assert.rejects(() => client.query(`update tests.test_assessments set idempotency_key = 'anything' where id=$1`, [originalId]));
 });
 
 test("M6. completed -> invalidated is rejected if ANY other column (source, assignment, attempt_number, ...) also changes in the same statement", async () => {
-  const originalId = await submitFullWellness(athleteCId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [originalId]);
-
+  const originalId = await submitAndCompleteWellness(athleteCId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
   const correctedId = await submitFullWellness(athleteCId, { fatigue: 4, sleep: 4, soreness: 4, stress: 4, mood: 4, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, correctedId]);
 
-  // source changes alongside the transition - must be rejected as a whole.
-  await assert.rejects(() =>
-    client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1, source='device_import' where id=$2`, [correctedId, originalId]),
-  );
-  // attempt_number changing alongside the transition - also rejected.
-  await assert.rejects(() =>
-    client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1, attempt_number=99 where id=$2`, [correctedId, originalId]),
-  );
-  // The original must still be untouched (completed, not invalidated) after both rejected attempts.
+  // Both bad attempts happen inside one transaction, right after step 1
+  // (successor completes+links) - the immediate protect_completed_assessment
+  // trigger catches the extra-column change on step 2's own statement, so
+  // the deferred check at commit never even needs to run; roll back either
+  // way so this test never depends on (or pollutes) a real commit.
+  await client.query("begin");
+  try {
+    await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, correctedId]);
+    await assert.rejects(() =>
+      client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1, source='device_import' where id=$2`, [correctedId, originalId]),
+    );
+  } finally {
+    await client.query("rollback");
+  }
+
+  await client.query("begin");
+  try {
+    await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, correctedId]);
+    await assert.rejects(() =>
+      client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1, attempt_number=99 where id=$2`, [correctedId, originalId]),
+    );
+  } finally {
+    await client.query("rollback");
+  }
+
+  // The original must still be untouched (completed, not invalidated) - both attempts were rolled back.
   const row = await client.query(`select status from tests.test_assessments where id=$1`, [originalId]);
   assert.equal(row.rows[0].status, "completed");
 });
 
 test("M7. a successor cannot supersede an original whose identity (athlete/test_version/attempt) doesn't match its own", async () => {
-  const originalId = await submitFullWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [originalId]);
-
+  const originalId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
   // A "corrected" row for a DIFFERENT athlete (athleteC, not athleteB) trying to supersede athleteB's original.
   const mismatchedId = await submitFullWellness(athleteCId, { fatigue: 4, sleep: 4, soreness: 4, stress: 4, mood: 4, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, mismatchedId]);
 
-  await assert.rejects(() =>
-    client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1 where id=$2`, [mismatchedId, originalId]),
-  );
+  await client.query("begin");
+  try {
+    await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, mismatchedId]);
+    await assert.rejects(() =>
+      client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1 where id=$2`, [mismatchedId, originalId]),
+    );
+  } finally {
+    await client.query("rollback");
+  }
 });
 
 test("M8. two DIFFERENT successor assessments cannot both claim to supersede the SAME original (at most one successor per original)", async () => {
-  const originalId = await submitFullWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [originalId]);
-
+  const originalId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
   const successor1 = await submitFullWellness(athleteBId, { fatigue: 4, sleep: 4, soreness: 4, stress: 4, mood: 4, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, successor1]);
+  await completeSupersede(originalId, successor1);
 
   const successor2 = await submitFullWellness(athleteBId, { fatigue: 3, sleep: 3, soreness: 3, stress: 3, mood: 3, injury: false });
   // The unique(supersedes_assessment_id) constraint must reject this at
@@ -1003,17 +1074,216 @@ test("M8. two DIFFERENT successor assessments cannot both claim to supersede the
 });
 
 test("M9. once superseded_by_assessment_id is set on the original, it cannot ALSO be superseded again by a second successor (unique(superseded_by_assessment_id) is per-successor, but the original itself is now invalidated+immutable, blocking any further link change)", async () => {
-  const originalId = await submitFullWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now() where id=$1`, [originalId]);
+  const originalId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
   const successor1 = await submitFullWellness(athleteBId, { fatigue: 4, sleep: 4, soreness: 4, stress: 4, mood: 4, injury: false });
-  await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, successor1]);
-  await client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1 where id=$2`, [successor1, originalId]);
+  await completeSupersede(originalId, successor1);
 
   const successor2 = await submitFullWellness(athleteBId, { fatigue: 3, sleep: 3, soreness: 3, stress: 3, mood: 3, injury: false });
   await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, successor2]).catch(() => {});
   await assert.rejects(() =>
     client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1 where id=$2`, [successor2, originalId]),
     "the original is already invalidated - fully immutable, cannot be re-linked to a second successor",
+  );
+});
+
+// ==================================================================
+// R. New in this pass: reparenting, derived/evaluation immutability,
+// lifecycle completeness, assignment identity/status, atomic supersede,
+// integer/ordinal whole-number derived results.
+// ==================================================================
+
+test("R1. a draft test_assessment_values row cannot be reparented (assessment_id changed) onto a COMPLETED assessment", async () => {
+  const completedId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
+  const draftId = await makeStandaloneWellnessAssessment(athleteAId);
+  await client.query(`insert into tests.test_assessment_values (assessment_id, test_version_id, test_parameter_id, value_numeric) values ($1,$2,$3,7)`, [draftId, WELLNESS_TEST_VERSION_ID, WELLNESS_PARAM.fatigue]);
+  await assert.rejects(() =>
+    client.query(`update tests.test_assessment_values set assessment_id=$1 where assessment_id=$2 and test_parameter_id=$3`, [completedId, draftId, WELLNESS_PARAM.fatigue]),
+  );
+});
+
+test("R2. a value row belonging to a COMPLETED assessment cannot be reparented onto a draft assessment either", async () => {
+  const completedId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
+  const draftId = await makeStandaloneWellnessAssessment(athleteAId);
+  await assert.rejects(() =>
+    client.query(`update tests.test_assessment_values set assessment_id=$1 where assessment_id=$2 and test_parameter_id=$3`, [draftId, completedId, WELLNESS_PARAM.fatigue]),
+  );
+});
+
+test("R3. a test_assessment_derived_results row cannot be reparented onto a different (even draft) assessment", async () => {
+  const completedId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
+  const draftId = await makeStandaloneWellnessAssessment(athleteAId);
+  await assert.rejects(() =>
+    client.query(`update tests.test_assessment_derived_results set assessment_id=$1 where assessment_id=$2`, [draftId, completedId]),
+  );
+});
+
+test("R4. a test_assessment_derived_results row is fully frozen once its assessment is completed - INSERT, UPDATE, and DELETE all rejected", async () => {
+  const completedId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
+  await assert.rejects(() =>
+    client.query(
+      `insert into tests.test_assessment_derived_results (assessment_id, test_version_id, test_version_derived_parameter_id, result_numeric, definition_version) values ($1,$2,$3,99,1)`,
+      [completedId, WELLNESS_TEST_VERSION_ID, WELLNESS_TOTAL_DERIVED_ID],
+    ),
+  );
+  await assert.rejects(() =>
+    client.query(`update tests.test_assessment_derived_results set result_numeric=99 where assessment_id=$1`, [completedId]),
+  );
+  await assert.rejects(() => client.query(`delete from tests.test_assessment_derived_results where assessment_id=$1`, [completedId]));
+});
+
+test("R5. a test_battery_assessment_derived_results row is fully frozen once its battery assessment is completed", async () => {
+  const battery = await client.query(`select id, battery_version_id from tests.test_battery_items limit 1`);
+  const derived = await client.query(`select id, definition_version from tests.test_battery_derived_parameters where battery_version_id=$1 limit 1`, [battery.rows[0].battery_version_id]);
+  if (!derived.rowCount) return; // seed has no battery-level derived parameter to test against
+  const ba = await client.query(`insert into tests.test_battery_assessments (athlete_id, battery_version_id, status) values ($1,$2,'draft') returning id`, [athleteAId, battery.rows[0].battery_version_id]);
+  await client.query(
+    `insert into tests.test_battery_assessment_derived_results (battery_assessment_id, battery_version_id, test_battery_derived_parameter_id, result_numeric, definition_version) values ($1,$2,$3,1,$4)`,
+    [ba.rows[0].id, battery.rows[0].battery_version_id, derived.rows[0].id, derived.rows[0].definition_version],
+  );
+  await client.query(`update tests.test_battery_assessments set status='completed', completed_at=now() where id=$1`, [ba.rows[0].id]);
+
+  await assert.rejects(() =>
+    client.query(`update tests.test_battery_assessment_derived_results set result_numeric=99 where battery_assessment_id=$1`, [ba.rows[0].id]),
+  );
+  await assert.rejects(() => client.query(`delete from tests.test_battery_assessment_derived_results where battery_assessment_id=$1`, [ba.rows[0].id]));
+});
+
+test("R6. test_assessment_evaluations is write-once: INSERT is allowed at any time, but UPDATE and DELETE are always rejected, including reparenting", async () => {
+  const completedId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
+  const criteriaSetVersion = await client.query(`select id from tests.test_criteria_set_versions limit 1`);
+  if (!criteriaSetVersion.rowCount) return; // seed carries no criteria set to attach an evaluation to
+  const rule = await client.query(`select id from tests.test_criteria_rules where set_version_id=$1 limit 1`, [criteriaSetVersion.rows[0].id]);
+  const output = await client.query(`select id from tests.test_criteria_outputs where rule_id=$1 limit 1`, [rule.rows[0]?.id]);
+  if (!rule.rowCount || !output.rowCount) return;
+
+  const evaluation = await client.query(
+    `insert into tests.test_assessment_evaluations (assessment_id, criteria_set_version_id, rule_id, output_id, result_label) values ($1,$2,$3,$4,'ok') returning id`,
+    [completedId, criteriaSetVersion.rows[0].id, rule.rows[0].id, output.rows[0].id],
+  );
+  await assert.rejects(() => client.query(`update tests.test_assessment_evaluations set result_label='changed' where id=$1`, [evaluation.rows[0].id]));
+  await assert.rejects(() => client.query(`delete from tests.test_assessment_evaluations where id=$1`, [evaluation.rows[0].id]));
+
+  const draftId = await makeStandaloneWellnessAssessment(athleteAId);
+  await assert.rejects(() => client.query(`update tests.test_assessment_evaluations set assessment_id=$1 where id=$2`, [draftId, evaluation.rows[0].id]));
+});
+
+test("R7. lifecycle completeness: draft->completed allowed; draft->invalidated rejected; completed->draft rejected; invalidated->draft rejected", async () => {
+  await assert.doesNotReject(() => submitAndCompleteWellness(athleteAId, { fatigue: 1, sleep: 1, soreness: 1, stress: 1, mood: 1, injury: false }));
+
+  const draftId = await makeStandaloneWellnessAssessment(athleteAId);
+  await assert.rejects(() => client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=null where id=$1`, [draftId]), "draft cannot jump straight to invalidated - only completed can, and only via a valid supersede");
+
+  const completedId = await submitAndCompleteWellness(athleteBId, { fatigue: 2, sleep: 2, soreness: 2, stress: 2, mood: 2, injury: false });
+  await assert.rejects(() => client.query(`update tests.test_assessments set status='draft' where id=$1`, [completedId]));
+
+  const originalId = await submitAndCompleteWellness(athleteCId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
+  const successorId = await submitFullWellness(athleteCId, { fatigue: 4, sleep: 4, soreness: 4, stress: 4, mood: 4, injury: false });
+  await completeSupersede(originalId, successorId);
+  await assert.rejects(() => client.query(`update tests.test_assessments set status='draft' where id=$1`, [originalId]));
+});
+
+test("R8. test_assignments identity columns (occurrence/athlete/snapshot versions) are immutable after INSERT", async () => {
+  const scheduleId = await makeDailyWellnessSchedule({ startDate: futureDate(40) });
+  await client.query(`insert into tests.test_schedule_targets (schedule_id, target_kind, target_athlete_id) values ($1,'athlete',$2)`, [scheduleId, athleteAId]);
+  const occId = (await client.query(`select tests.generate_test_schedule_occurrence($1,$2) as id`, [scheduleId, futureDate(40)])).rows[0].id;
+  await client.query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occId]);
+  const assignment = await client.query(`select id from tests.test_assignments where occurrence_id=$1 and athlete_id=$2`, [occId, athleteAId]);
+
+  await assert.rejects(() => client.query(`update tests.test_assignments set athlete_id=$1 where id=$2`, [athleteBId, assignment.rows[0].id]));
+
+  const otherOcc = await client.query(`select tests.generate_test_schedule_occurrence($1,$2) as id`, [scheduleId, futureDate(41)]);
+  await assert.rejects(() => client.query(`update tests.test_assignments set occurrence_id=$1 where id=$2`, [otherOcc.rows[0].id, assignment.rows[0].id]));
+});
+
+test("R9. test_assignments status transitions are one-directional - a completed assignment can never move back to pending/open/in_progress", async () => {
+  const scheduleId = await makeDailyWellnessSchedule({ startDate: futureDate(42) });
+  await client.query(`insert into tests.test_schedule_targets (schedule_id, target_kind, target_athlete_id) values ($1,'athlete',$2)`, [scheduleId, athleteAId]);
+  const occId = (await client.query(`select tests.generate_test_schedule_occurrence($1,$2) as id`, [scheduleId, futureDate(42)])).rows[0].id;
+  await client.query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occId]);
+  const assignmentId = (await client.query(`select id from tests.test_assignments where occurrence_id=$1 and athlete_id=$2`, [occId, athleteAId])).rows[0].id;
+
+  await assert.doesNotReject(() => client.query(`update tests.test_assignments set status='open' where id=$1`, [assignmentId]));
+  await assert.doesNotReject(() => client.query(`update tests.test_assignments set status='in_progress', started_at=now() where id=$1`, [assignmentId]));
+  await assert.doesNotReject(() => client.query(`update tests.test_assignments set status='completed', completed_at=now() where id=$1`, [assignmentId]));
+
+  await assert.rejects(() => client.query(`update tests.test_assignments set status='pending' where id=$1`, [assignmentId]));
+  await assert.rejects(() => client.query(`update tests.test_assignments set status='open' where id=$1`, [assignmentId]));
+  await assert.rejects(() => client.query(`update tests.test_assignments set status='in_progress' where id=$1`, [assignmentId]));
+});
+
+test("R10. test_assignments cannot skip backward within the forward states either (in_progress cannot revert to pending)", async () => {
+  const scheduleId = await makeDailyWellnessSchedule({ startDate: futureDate(43) });
+  await client.query(`insert into tests.test_schedule_targets (schedule_id, target_kind, target_athlete_id) values ($1,'athlete',$2)`, [scheduleId, athleteAId]);
+  const occId = (await client.query(`select tests.generate_test_schedule_occurrence($1,$2) as id`, [scheduleId, futureDate(43)])).rows[0].id;
+  await client.query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occId]);
+  const assignmentId = (await client.query(`select id from tests.test_assignments where occurrence_id=$1 and athlete_id=$2`, [occId, athleteAId])).rows[0].id;
+
+  await client.query(`update tests.test_assignments set status='in_progress', started_at=now() where id=$1`, [assignmentId]);
+  await assert.rejects(() => client.query(`update tests.test_assignments set status='pending' where id=$1`, [assignmentId]));
+});
+
+test("R11. test_schedule_occurrences.assignments_materialized_at can only move NULL -> a value once, never back to NULL nor changed again", async () => {
+  const scheduleId = await makeDailyWellnessSchedule({ startDate: futureDate(44) });
+  await client.query(`insert into tests.test_schedule_targets (schedule_id, target_kind, target_athlete_id) values ($1,'athlete',$2)`, [scheduleId, athleteAId]);
+  const occId = (await client.query(`select tests.generate_test_schedule_occurrence($1,$2) as id`, [scheduleId, futureDate(44)])).rows[0].id;
+  await client.query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occId]);
+
+  await assert.rejects(() => client.query(`update tests.test_schedule_occurrences set assignments_materialized_at = null where id=$1`, [occId]));
+  await assert.rejects(() => client.query(`update tests.test_schedule_occurrences set assignments_materialized_at = now() where id=$1`, [occId]));
+});
+
+test("R12. atomic supersede: committing only the FIRST half of the link (successor completed+supersedes set, original never updated) fails at COMMIT, and rollback leaves no partial state", async () => {
+  const originalId = await submitAndCompleteWellness(athleteBId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
+  const successorId = await submitFullWellness(athleteBId, { fatigue: 4, sleep: 4, soreness: 4, stress: 4, mood: 4, injury: false });
+
+  await client.query("begin");
+  await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, successorId]);
+  // Deliberately never touch the original - the deferred constraint trigger
+  // must catch this at COMMIT, not let it silently through.
+  await assert.rejects(() => client.query("commit"));
+  await client.query("rollback").catch(() => {});
+
+  const successorRow = await client.query(`select status, supersedes_assessment_id from tests.test_assessments where id=$1`, [successorId]);
+  assert.equal(successorRow.rows[0].status, "draft", "rollback must undo even the successor's own half of the change");
+  assert.equal(successorRow.rows[0].supersedes_assessment_id, null);
+  const originalRow = await client.query(`select status, superseded_by_assessment_id from tests.test_assessments where id=$1`, [originalId]);
+  assert.equal(originalRow.rows[0].status, "completed");
+  assert.equal(originalRow.rows[0].superseded_by_assessment_id, null);
+});
+
+test("R13. atomic supersede: the full, correctly-ordered two-statement protocol commits successfully", async () => {
+  const originalId = await submitAndCompleteWellness(athleteCId, { fatigue: 5, sleep: 5, soreness: 5, stress: 5, mood: 5, injury: false });
+  const successorId = await submitFullWellness(athleteCId, { fatigue: 4, sleep: 4, soreness: 4, stress: 4, mood: 4, injury: false });
+
+  await client.query("begin");
+  await client.query(`update tests.test_assessments set status='completed', completed_at=now(), supersedes_assessment_id=$1 where id=$2`, [originalId, successorId]);
+  await client.query(`update tests.test_assessments set status='invalidated', superseded_by_assessment_id=$1 where id=$2`, [successorId, originalId]);
+  await assert.doesNotReject(() => client.query("commit"));
+
+  const row = await client.query(`select status from tests.test_assessments where id=$1`, [originalId]);
+  assert.equal(row.rows[0].status, "invalidated");
+});
+
+test("R14. an integer/ordinal derived result with a fractional value is rejected", async () => {
+  const test1 = await client.query(`insert into tests.test (owner_scope) values ('system') returning id`);
+  const version1 = await client.query(`insert into tests.test_versions (test_id, version_number, status, name) values ($1,1,'draft','QA ordinal total') returning id`, [test1.rows[0].id]);
+  const param = await client.query(`insert into tests.test_parameters (test_version_id, parameter_key, parameter, value_type) values ($1,'a','A','ordinal') returning id`, [version1.rows[0].id]);
+  const derived = await client.query(
+    `insert into tests.test_version_derived_parameters (test_version_id, parameter_key, name, calculation_method, result_type, missing_input_behavior) values ($1,'total','Total','average','ordinal','error') returning id, definition_version`,
+    [version1.rows[0].id],
+  );
+  await client.query(
+    `insert into tests.test_version_derived_parameter_inputs (test_version_id, derived_parameter_id, input_source_kind, source_test_parameter_id, role) values ($1,$2,'native',$3,'a')`,
+    [version1.rows[0].id, derived.rows[0].id, param.rows[0].id],
+  );
+  await client.query(`update tests.test_versions set status='active', published_at=now() where id=$1`, [version1.rows[0].id]);
+  const assessment = await client.query(`insert into tests.test_assessments (athlete_id, test_version_id, attempt_number, source, status) values ($1,$2,1,'coach_manual','draft') returning id`, [athleteAId, version1.rows[0].id]);
+
+  await assert.rejects(() =>
+    client.query(
+      `insert into tests.test_assessment_derived_results (assessment_id, test_version_id, test_version_derived_parameter_id, result_numeric, definition_version) values ($1,$2,$3,1.5,$4)`,
+      [assessment.rows[0].id, version1.rows[0].id, derived.rows[0].id, derived.rows[0].definition_version],
+    ),
   );
 });
 

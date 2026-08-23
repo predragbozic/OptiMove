@@ -85,3 +85,32 @@ export async function computeAndStoreTestAssessmentDerivedResults(client, assess
   }
   return results;
 }
+
+// The full, correct completion flow for a test assessment - locks the draft
+// row, computes and stores its derived results WHILE it is still draft (the
+// only window tests.protect_draft_only_children allows those rows to be
+// written), and only THEN flips status to 'completed'. If the calculation
+// throws (missing values, unsupported method, etc.), the status update
+// never runs - callers must wrap this call in a transaction (BEGIN/COMMIT/
+// ROLLBACK) so a thrown error here also undoes the derived-result inserts,
+// leaving the assessment exactly as it was (still draft, no partial
+// derived-result rows) rather than half-completed.
+export async function completeTestAssessmentWithDerivedResults(client, assessmentId) {
+  const locked = await client.query(
+    `select id, status from tests.test_assessments where id = $1 for update`,
+    [assessmentId],
+  );
+  if (!locked.rows[0]) throw new Error(`test_assessment ${assessmentId} not found`);
+  if (locked.rows[0].status !== "draft") {
+    throw new Error(`test_assessment ${assessmentId} is ${locked.rows[0].status}, not draft - cannot complete it again`);
+  }
+
+  const results = await computeAndStoreTestAssessmentDerivedResults(client, assessmentId);
+
+  await client.query(
+    `update tests.test_assessments set status = 'completed', completed_at = now() where id = $1`,
+    [assessmentId],
+  );
+
+  return results;
+}
