@@ -3,6 +3,25 @@ import { els } from "./dom.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
 
+// Icon-above-label tabs for the coach's 4 sections (Today/Schedule/Results/
+// Test Library) - same stroke-based line-icon convention as the sidebar's
+// own .rail-icon (24x24 viewBox, fill:none, stroke:currentColor - see
+// styles.css) so these read as part of the same visual system, not a
+// separate icon set. Athlete-mode tabs (Today/Upcoming/History) are
+// unrelated to this request and stay text-only, unchanged.
+const TESTS_TAB_ICONS = {
+  today: `<rect x="3" y="5" width="18" height="16" rx="3"></rect><path d="M8 3v3"></path><path d="M16 3v3"></path><path d="M3 10h18"></path><rect x="7" y="13" width="4" height="4" rx="1"></rect>`,
+  schedule: `<path d="M12 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4"></path><path d="M16 3v4"></path><path d="M8 3v4"></path><path d="M3 11h11"></path><circle cx="18" cy="18" r="4"></circle><path d="M18 16.5V18l1 1"></path>`,
+  results: `<circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="9" cy="7" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="14" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="19" cy="6" r="1.3" fill="currentColor" stroke="none"></circle><path d="M4 12l5-5 5 3 5-4"></path><path d="M4 21v-6"></path><path d="M9 21v-9"></path><path d="M14 21v-7"></path><path d="M19 21v-11"></path>`,
+  library: `<path d="M3 3v18"></path><path d="M3 4.5h3"></path><path d="M3 7.5h2"></path><path d="M3 10.5h3"></path><path d="M3 13.5h2"></path><path d="M3 16.5h3"></path><path d="M3 19.5h2"></path><circle cx="14" cy="7" r="3"></circle><path d="M9 21v-3a5 5 0 0 1 10 0v3"></path><path d="M19 4h2"></path>`,
+};
+
+function renderTestsTabIcon(section) {
+  const paths = TESTS_TAB_ICONS[section];
+  if (!paths) return "";
+  return `<svg class="tests-tab-icon" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+}
+
 function formatDateTime(value) {
   if (!value) return "";
   try {
@@ -45,13 +64,14 @@ export function renderTests() {
 }
 
 function renderTestsTabsHtml() {
-  const sections = isAthleteMode()
+  const athleteMode = isAthleteMode();
+  const sections = athleteMode
     ? [["today", "Today"], ["upcoming", "Upcoming"], ["history", "History"]]
     : [["today", "Today"], ["schedule", "Schedule"], ["results", "Results"], ["library", "Test Library"]];
   return `
-    <nav class="tabs tests-section-tabs" aria-label="Tests sections">
+    <nav class="tabs tests-section-tabs ${athleteMode ? "" : "tests-section-tabs-icon"}" aria-label="Tests sections">
       ${sections.map(([value, label]) => `
-        <button class="tab ${state.tests.section === value ? "is-active" : ""}" type="button" data-action="tests-section" data-section="${escapeAttr(value)}">${escapeHtml(label)}</button>
+        <button class="tab ${state.tests.section === value ? "is-active" : ""}" type="button" data-action="tests-section" data-section="${escapeAttr(value)}">${athleteMode ? "" : renderTestsTabIcon(value)}<span>${escapeHtml(label)}</span></button>
       `).join("")}
     </nav>
   `;

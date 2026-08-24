@@ -9882,6 +9882,27 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
 }
 
+.tests-section-tabs-icon .tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 64px;
+  padding: 8px 6px;
+  font-size: 12px;
+}
+
+.tests-tab-icon {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .tests-shell {
   display: grid;
   gap: 12px;
