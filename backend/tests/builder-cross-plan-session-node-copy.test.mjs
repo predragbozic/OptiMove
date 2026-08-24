@@ -310,3 +310,67 @@ test("8. POST /nodes/:nodeId/copy is still rejected for a coach with no access a
 
   assert.equal(res.status, 404);
 });
+
+// Regression coverage for the actual reported bug: "Source node or target
+// session not found" on both same-plan and cross-plan node copy, whenever
+// the plan involved had already been published once and re-opened for
+// editing. POST /plans/:planId/edit (backend/src/routes/builder.js) creates
+// that hidden "edit draft" row with is_active = FALSE on purpose (so it
+// never shows up in normal plan listings) - every test above only ever
+// inserts plans directly, which default to is_active = true, so none of
+// them exercised this path at all. getCopySource's `is_active = true`
+// filter (before the fix) silently treated the coach's own currently-open
+// edit draft as "not found".
+async function markAsEditDraft(planId, sourcePlanId) {
+  await query(`update plans.plans set is_active = false, is_edit_draft = true, edit_source_plan_id = $2 where id = $1`, [planId, sourcePlanId]);
+}
+
+test("9. POST /nodes/:nodeId/copy works for a same-plan copy where BOTH source and target live in the coach's own currently-open edit draft (is_active = false)", async () => {
+  const coach = await makeCoach("node-copy-same-plan-editdraft");
+  const athlete = await makeAthlete(coach.id);
+  const { planId, dayIdByOrder } = await makeWeeklyPlan(coach.id, athlete.id, "2027-02-01", [1]);
+  const { sectionId } = await addBlockWithTwoSessions(planId, { blockIndex: 2 });
+  await markAsEditDraft(planId, planId); // edit_source_plan_id value is irrelevant to this endpoint - only is_active/is_edit_draft matter here
+  const targetSession = await query(`insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, 'AM', 'T', 0) returning id`, [dayIdByOrder.get(1)]);
+
+  const res = await api("/api/builder/nodes/" + sectionId + "/copy", {
+    method: "POST", cookie: coach.cookie, body: { targetSessionId: targetSession.rows[0].id },
+  });
+
+  assert.equal(res.status, 201, `expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const tree = await dayTree(dayIdByOrder.get(1));
+  assert.ok(tree.some((row) => row.node_type === "section" && row.node_name === "Ankle"));
+});
+
+test("10. POST /nodes/:nodeId/copy works when the SOURCE plan (a template) has been edited-and-republished before, not just freshly created", async () => {
+  const coach = await makeCoach("node-copy-cross-plan-editdraft");
+  const athlete = await makeAthlete(coach.id);
+  const templateId = await makeTemplate(coach.id);
+  const { sectionId } = await addBlockWithTwoSessions(templateId);
+  await markAsEditDraft(templateId, templateId);
+  const { dayIdByOrder } = await makeWeeklyPlan(coach.id, athlete.id, "2027-02-08", [1]);
+  const targetSession = await query(`insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order) values ($1, 'AM', 'T', 0) returning id`, [dayIdByOrder.get(1)]);
+
+  const res = await api("/api/builder/nodes/" + sectionId + "/copy", {
+    method: "POST", cookie: coach.cookie, body: { targetSessionId: targetSession.rows[0].id },
+  });
+
+  assert.equal(res.status, 201, `expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const tree = await dayTree(dayIdByOrder.get(1));
+  assert.ok(tree.some((row) => row.node_type === "section" && row.node_name === "Ankle"));
+});
+
+test("11. GET /blocks/:blockId/sessions and GET /sessions/:sessionId/nodes also work against an edit-draft source plan", async () => {
+  const coach = await makeCoach("edit-draft-picker-list");
+  const templateId = await makeTemplate(coach.id);
+  const { blockId, amSessionId } = await addBlockWithTwoSessions(templateId);
+  await markAsEditDraft(templateId, templateId);
+
+  const sessionsRes = await api(`/api/builder/blocks/${blockId}/sessions`, { cookie: coach.cookie });
+  assert.equal(sessionsRes.status, 200, `expected 200, got ${sessionsRes.status}: ${JSON.stringify(sessionsRes.body)}`);
+  assert.equal(sessionsRes.body.sessions.length, 2);
+
+  const nodesRes = await api(`/api/builder/sessions/${amSessionId}/nodes`, { cookie: coach.cookie });
+  assert.equal(nodesRes.status, 200, `expected 200, got ${nodesRes.status}: ${JSON.stringify(nodesRes.body)}`);
+  assert.equal(nodesRes.body.nodes.length, 3);
+});

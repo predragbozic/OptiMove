@@ -1143,6 +1143,16 @@ export async function handleBuilderDraftAction(action, handlers) {
         await exitBuilderToPlanContext(draft.plan, handlers);
         return true;
       }
+      // Finishing an edit draft (re-opening an already-published plan)
+      // deletes that draft's entire day/session/node tree server-side and
+      // recreates it under the original plan with brand-new ids
+      // (applyEditDraft, backend/src/routes/builder.js) - any node/section
+      // still sitting in the clipboard from before this Finish now points
+      // at rows that no longer exist, so pasting it would 404 ("Source node
+      // or target session not found"). A brand-new plan's first-ever
+      // submit never touches its ids (just flips status), so the clipboard
+      // stays valid and is deliberately left alone in that case.
+      if (currentDraft.plan.isEditDraft) state.builder.clipboard = null;
       setBuilderDraft(result);
       handlers.renderBuilder();
     } catch (error) {

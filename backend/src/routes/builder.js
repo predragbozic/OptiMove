@@ -1654,9 +1654,24 @@ async function getEditablePlan(req, planId) {
 async function getCopySource(req, planId) {
   if (!(await canAccessPlan(query, req, planId))) return null;
   const result = await query(
+    // `is_active = true` alone excludes a plan's own currently-open edit
+    // draft (POST /plans/:planId/edit inserts that hidden row with
+    // is_active = FALSE on purpose, so it never shows up in normal plan
+    // listings - see that route's insert a few hundred lines down). That
+    // row is exactly what a coach is looking at while copying/pasting
+    // within (or out of) the plan they're actively editing, so it must
+    // still be a valid copy source. Every other plan-access query in this
+    // file already treats is_active permissively (coalesce(is_active,
+    // true)) - this one extra `or is_edit_draft = true` is what was
+    // missing when getCopySource/getCopySourceNode/getCopySourceSession/
+    // getCopySourceBlock were introduced, and is the root cause of
+    // "Source node or target session not found" on same-plan AND
+    // cross-plan copy alike, whenever the source plan had been edited
+    // and re-opened at least once (i.e. almost always, for anything but a
+    // brand-new never-yet-saved draft).
     `select id, created_by_user_id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days, can_copy, can_edit_copy
      from plans.plans
-     where id = $1 and plan_type in ('program', 'weekly') and is_active = true`,
+     where id = $1 and plan_type in ('program', 'weekly') and (coalesce(is_active, true) or is_edit_draft = true)`,
     [planId],
   );
   return result.rows[0] || null;
