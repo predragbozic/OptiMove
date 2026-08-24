@@ -765,6 +765,29 @@ function applyBuilderNodePresetMatch(nameInput) {
   if (iconInput) iconInput.value = preset.icon_url || "";
 }
 
+// Live "type to narrow it down" filtering for the domain/category/section
+// preset picker (renderPresetPicker, builder-structure.js) - restores what
+// a native <datalist> gave for free before Phase D replaced it with this
+// icon-capable custom list (icons aren't possible in a native datalist
+// option). Every keystroke here is a targeted DOM patch (row .hidden
+// toggles + one classList.toggle on the container), never a renderBuilder()
+// - the whole point is to keep typing in this exact input, so a full
+// re-render that replaces the input node would drop focus mid-keystroke.
+function filterBuilderPresetPicker(nameInput) {
+  const form = nameInput.closest("form");
+  const picker = form?.querySelector(".builder-preset-picker");
+  if (!picker) return;
+  const typed = nameInput.value.trim().toLowerCase();
+  const options = picker.querySelectorAll(".builder-preset-picker-option");
+  let anyVisible = false;
+  options.forEach((option) => {
+    const matches = !typed || (option.dataset.presetNameLower || "").includes(typed);
+    option.hidden = !matches;
+    if (matches) anyVisible = true;
+  });
+  picker.classList.toggle("is-open", Boolean(typed) && anyVisible);
+}
+
 const FOCUS_SCROLL_TOP_SELECTOR = "[data-builder-exercise-search], .builder-quick-dose input, .builder-section-library .exercise-filter-field select, .builder-section-library .exercise-filter-field input";
 
 function handleContentFocusIn(event) {
@@ -784,6 +807,16 @@ function handleContentInput(event) {
     return;
   }
 
+  // Re-arm the SAME per-item debounced autosave (see scheduleBuilderItemAutosave)
+  // on every keystroke, not only on blur ("change", handled below in
+  // handleContentChange) - see that function's comment for why blur-only
+  // debouncing still let a mid-typing rebuild wipe out characters.
+  const updateItemForm = event.target.closest('[data-builder-form="update-item"][data-builder-autosave]');
+  if (updateItemForm && event.target.matches("input, textarea")) {
+    scheduleBuilderItemAutosave(updateItemForm);
+    return;
+  }
+
   const orgFilter = event.target.closest("[data-org-select-filter]");
   if (orgFilter) {
     handleOrganizationFilterInput(orgFilter);
@@ -793,6 +826,7 @@ function handleContentInput(event) {
   const presetNameInput = event.target.closest("[data-builder-preset-name-input]");
   if (presetNameInput) {
     applyBuilderNodePresetMatch(presetNameInput);
+    filterBuilderPresetPicker(presetNameInput);
     return;
   }
 
@@ -961,12 +995,7 @@ async function handleContentChange(event) {
   // FormData is only read once the debounced call finally fires, it always
   // captures whatever is currently in the DOM - never stale.
   if (form.dataset.builderForm === "update-item") {
-    const key = form.dataset.itemId || form;
-    clearTimeout(builderAutosaveTimers.get(key));
-    builderAutosaveTimers.set(key, setTimeout(() => {
-      builderAutosaveTimers.delete(key);
-      submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback }).catch(renderBuilderError);
-    }, BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS));
+    scheduleBuilderItemAutosave(form);
     return;
   }
   try {
@@ -985,6 +1014,28 @@ async function handleTestsContentChange(event) {
 }
 const builderAutosaveTimers = new Map();
 const BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS = 500;
+
+// Shared by both the "change" (blur) and "input" (every keystroke) paths
+// below for an update-item form - keyed per item, so typing anywhere across
+// Sets/Reps/Load/Instruction keeps pushing the save+rebuild further out.
+// Blur-only debouncing (the original fix) still lost text in a very
+// realistic pattern: blur Sets, pause a beat deciding what to type, THEN
+// start typing Reps - if that pause exceeded 500ms, Sets' own debounced
+// save could fire and rebuild the DOM (renderBuilderSectionItems) WHILE the
+// coach was mid-keystroke on Reps, wiping the in-progress (not yet blurred,
+// so not yet reflected in any saved FormData) characters - reported live as
+// letters constantly vanishing while typing. Re-arming this same timer on
+// every "input" event too, not only "change", means the save (and the
+// rebuild it triggers) only ever fires 500ms after the coach's TRUE last
+// keystroke anywhere in the item's own form, never mid-typing.
+function scheduleBuilderItemAutosave(form) {
+  const key = form.dataset.itemId || form;
+  clearTimeout(builderAutosaveTimers.get(key));
+  builderAutosaveTimers.set(key, setTimeout(() => {
+    builderAutosaveTimers.delete(key);
+    submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback }).catch(renderBuilderError);
+  }, BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS));
+}
 
 let builderSearchTimer = null;
 function debounceBuilderSearch() {

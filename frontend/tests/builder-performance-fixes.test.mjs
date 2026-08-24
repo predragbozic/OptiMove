@@ -16,6 +16,15 @@ import { fileURLToPath } from "node:url";
 //    coach actually pauses, and since FormData is only read once the
 //    debounced call fires, it always picks up whatever's currently in the
 //    DOM - never a stale snapshot.
+//    Round 3 (still reported live as letters vanishing while typing):
+//    blur-only debouncing left one gap - blur Sets, pause over 500ms
+//    deciding what to type, THEN start typing Reps - Sets' own debounced
+//    save could still fire and rebuild the DOM while the coach was
+//    mid-keystroke on Reps (which hadn't blurred yet, so hadn't reset
+//    anything). scheduleBuilderItemAutosave is now shared by BOTH the
+//    "change" (blur) path and a new "input" (every keystroke) path, so the
+//    save+rebuild only ever fires 500ms after the coach's true last
+//    keystroke anywhere in the item's form, never mid-typing.
 // 2. Clicking Edit/Copy on a plan took 5-10s to show anything: both handlers
 //    awaited loadBuilderExercises() (two of its own serial network calls)
 //    BEFORE the Builder shell was ever painted - nothing rendered until
@@ -42,12 +51,17 @@ function sliceFunction(source, name, windowSize = 1200) {
   return source.slice(start, start + windowSize);
 }
 
-test("handleContentChange debounces update-item autosave, keyed per item, instead of saving on every single field's blur", () => {
+test("handleContentChange routes update-item autosave through the shared scheduleBuilderItemAutosave helper, instead of saving on every single field's blur", () => {
   const body = sliceFunction(appJsSource, "handleContentChange", 6000);
-  assert.match(body, /if \(form\.dataset\.builderForm === "update-item"\) \{/);
+  assert.match(body, /if \(form\.dataset\.builderForm === "update-item"\) \{\s*scheduleBuilderItemAutosave\(form\);\s*return;\s*\}/);
+});
+
+test("scheduleBuilderItemAutosave itself debounces per item, and a debounced save still surfaces errors the same way an immediate one would", () => {
+  const body = sliceFunction(appJsSource, "scheduleBuilderItemAutosave", 1200);
   assert.match(body, /const key = form\.dataset\.itemId \|\| form;/);
   assert.match(body, /clearTimeout\(builderAutosaveTimers\.get\(key\)\);/);
   assert.match(body, /builderAutosaveTimers\.set\(key, setTimeout\(\(\) => \{/);
+  assert.match(body, /submitBuilderFormAction\(form, \{ loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback \}\)\.catch\(renderBuilderError\);/);
 });
 
 test("the update-item debounce delay is a small, named constant, not a magic number", () => {
@@ -61,9 +75,10 @@ test("other autosave forms (update-block, update-node, update-session, update-pl
   assert.match(body, /return;\s*\}\s*try \{\s*await submitBuilderFormAction\(form,/);
 });
 
-test("a debounced update-item save still surfaces errors the same way an immediate one would", () => {
-  const body = sliceFunction(appJsSource, "handleContentChange", 6000);
-  assert.match(body, /submitBuilderFormAction\(form, \{ loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback \}\)\.catch\(renderBuilderError\);/);
+test("handleContentInput ALSO re-arms the same per-item debounce on every keystroke (not just blur) for an update-item field - this is what closes the mid-typing rebuild gap", () => {
+  const body = sliceFunction(appJsSource, "handleContentInput", 1400);
+  assert.match(body, /const updateItemForm = event\.target\.closest\('\[data-builder-form="update-item"\]\[data-builder-autosave\]'\);/);
+  assert.match(body, /if \(updateItemForm && event\.target\.matches\("input, textarea"\)\) \{\s*scheduleBuilderItemAutosave\(updateItemForm\);\s*return;\s*\}/);
 });
 
 test("builder-edit-plan renders the Builder shell before awaiting loadBuilderExercises(), not after", () => {

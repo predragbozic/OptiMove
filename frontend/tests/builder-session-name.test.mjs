@@ -51,3 +51,30 @@ test("4. the update-session form carries a name input pre-filled with the sessio
 test("5. sessionLabel() itself (the shared badge-text helper, reused for aria-labels/modal titles elsewhere) is untouched by the name field - still badge-only", () => {
   assert.equal(sessionLabel({ amPm: "AM", bta: "T", time: "", name: "MD-1" }), "AM / Training", "sessionLabel must stay badge-only - the name is an additive DISPLAY line at the render call site, not merged into the shared label string every caller (aria-labels, modal eyebrow) would otherwise inherit");
 });
+
+// Follow-up: AM/PM and training phase used to be set-once-at-creation-only
+// (renderSessionQuickAdd's chips) with no way back in - the update-session
+// autosave form (name/time) had no fields for them. Extended with two
+// <select>s in the SAME form, so one blur/change saves all four together,
+// same pattern as every other multi-field update-* autosave form here.
+test("6. the update-session form ALSO carries amPm/bta selects, in the SAME form as name/time, pre-selected to the session's current values", () => {
+  const html = renderBuilderBlock(blockWithSession({ amPm: "PM", bta: "A" }), "", "", true, baseContext());
+  const formStart = html.indexOf('data-builder-form="update-session"');
+  const formEnd = html.indexOf("</form>", formStart);
+  const formHtml = html.slice(formStart, formEnd);
+  assert.match(formHtml, /<select name="amPm"/, "amPm select must be inside the SAME update-session form as name/time, not a separate one");
+  assert.match(formHtml, /<select name="bta"/);
+  assert.match(formHtml, /<option value="PM" selected>PM<\/option>/);
+  assert.match(formHtml, /<option value="A" selected>After training<\/option>/);
+  assert.doesNotMatch(formHtml, /<option value="AM" selected>/, "only the session's actual current amPm must be pre-selected, not every option");
+});
+
+test("7. a session with no amPm/bta set yet shows the selects on their own empty placeholder option, not defaulted to AM or Before training", () => {
+  const html = renderBuilderBlock(blockWithSession({ amPm: "", bta: "" }), "", "", true, baseContext());
+  const formStart = html.indexOf('data-builder-form="update-session"');
+  const formEnd = html.indexOf("</form>", formStart);
+  const formHtml = html.slice(formStart, formEnd);
+  assert.match(formHtml, /<option value="">Time of day<\/option>/);
+  assert.doesNotMatch(formHtml, /<option value="AM" selected>/);
+  assert.doesNotMatch(formHtml, /<option value="B" selected>/);
+});

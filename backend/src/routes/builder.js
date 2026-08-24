@@ -433,12 +433,34 @@ router.post("/blocks/:blockId/copy-into/:targetDayId", async (req, res, next) =>
 // plan the coach has read/copy access to - powers the "pick a block to
 // copy" picker without fetching that plan's entire node/item tree the way
 // buildDraft() would.
+const PICKER_WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+// Mirrors frontend/utils.js's weekDayName()/formatDate() - kept as a small,
+// self-contained duplicate here rather than a shared import, since this is
+// the one place a *display label* needs computing server-side (every other
+// date-formatting call in this app happens in the browser). A weekly day
+// with no block_name typed in has a real calendar date to fall back to; a
+// program/template block never does (no `date` column meaning at all for
+// those), so it keeps the plain "Block N" fallback.
+function pickerBlockLabel(row) {
+  if (row.block_name) return row.block_name;
+  if (row.date) {
+    const parsed = new Date(`${String(row.date).slice(0, 10)}T12:00:00Z`);
+    if (!Number.isNaN(parsed.getTime())) {
+      const weekday = PICKER_WEEKDAY_NAMES[parsed.getUTCDay()];
+      const formatted = parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+      return `${weekday}, ${formatted}`;
+    }
+  }
+  return row.block_index != null ? `Block ${row.block_index}` : "Day";
+}
+
 router.get("/plans/:planId/blocks", async (req, res, next) => {
   try {
     const plan = await getCopySource(req, req.params.planId);
     if (!plan || !canCopyFromPlan(req, plan)) return res.status(404).json({ error: "Program not found." });
     const result = await query(
-      `select pd.id, pd.block_index, pd.block_name, pd.day_note,
+      `select pd.id, pd.block_index, pd.block_name, pd.day_note, pd.date,
               (select count(*)::int from plans.plan_sessions ps where ps.plan_day_id = pd.id) as session_count,
               (select count(*)::int from plans.plan_items pi join plans.plan_sessions ps2 on ps2.id = pi.plan_session_id where ps2.plan_day_id = pd.id) as item_count
        from plans.plan_days pd
@@ -449,7 +471,7 @@ router.get("/plans/:planId/blocks", async (req, res, next) => {
     res.json({
       blocks: result.rows.map((row) => ({
         id: row.id,
-        name: row.block_name || (row.block_index != null ? `Block ${row.block_index}` : "Day"),
+        name: pickerBlockLabel(row),
         note: row.day_note || "",
         sessionCount: row.session_count,
         itemCount: row.item_count,
@@ -588,9 +610,18 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
   try {
     const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
+    // amPm/bta are only touched when the request body actually includes the
+    // key - a caller that PATCHes just {name, time} (e.g. an older client,
+    // or a deliberate partial update) must never silently wipe the existing
+    // AM/PM/training-phase classification. An included empty string ("",
+    // what the coach's own "Time of day"/"Training phase" placeholder
+    // option submits) is still a real, explicit clear - same as how an
+    // empty name already clears the name field below.
+    const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
+    const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
     await query(
-      "update plans.plan_sessions set session_time = $2, name = $3, updated_at = now() where id = $1",
-      [session.id, sessionTimeValue(req.body?.time), nullableText(req.body?.name)],
+      "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, updated_at = now() where id = $1",
+      [session.id, sessionTimeValue(req.body?.time), nullableText(req.body?.name), amPm, bta],
     );
     return respondWithDraft(req, res, req.user, session.plan);
   } catch (error) { next(error); }
@@ -1739,9 +1770,10 @@ async function getEditableBlock(req, blockId) {
 }
 
 async function getEditableSession(req, sessionId) {
-  const result = await query("select ps.id, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
+  const result = await query("select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(req, row.plan_id); return plan ? { id: row.id, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id);
+  return plan ? { id: row.id, am_pm: row.am_pm, bta: row.bta, session_time: row.session_time, name: row.name, plan } : null;
 }
 
 async function getEditableNode(req, nodeId) {

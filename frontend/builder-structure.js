@@ -93,6 +93,27 @@ const SESSION_PHASE_PICKS = [
   { label: "After training", value: "A" },
 ];
 
+// AM/PM + training phase, editable on an EXISTING session, not just at
+// creation time (renderSessionQuickAdd below already offered these as
+// chips when first adding a session, but the session's own update-session
+// autosave form - name/time only - had no way to change them afterward).
+// Plain <select>s reusing the exact same SESSION_TIME_PICKS/SESSION_PHASE_PICKS
+// values/labels the create-flow's chips use, inside the SAME autosave form
+// as name/time - one blur/change saves all four fields together, same
+// pattern as every other multi-field update-* autosave form in this file.
+function renderSessionEditPhaseSelects(session) {
+  return `
+    <select name="amPm" class="builder-text-input builder-session-select" aria-label="Time of day (AM/PM)" title="Time of day (AM/PM)">
+      <option value="">Time of day</option>
+      ${SESSION_TIME_PICKS.map((pick) => `<option value="${escapeAttr(pick.value)}" ${session.amPm === pick.value ? "selected" : ""}>${escapeHtml(pick.label)}</option>`).join("")}
+    </select>
+    <select name="bta" class="builder-text-input builder-session-select" aria-label="Training phase" title="Training phase">
+      <option value="">Training phase</option>
+      ${SESSION_PHASE_PICKS.map((pick) => `<option value="${escapeAttr(pick.value)}" ${session.bta === pick.value ? "selected" : ""}>${escapeHtml(pick.label)}</option>`).join("")}
+    </select>
+  `;
+}
+
 function renderSessionQuickAdd(block, context) {
   const quickAdd = context.sessionQuickAdd || {};
   const isOpen = quickAdd.blockId === block.id;
@@ -218,6 +239,12 @@ function renderPresetPickerIcon(iconUrl) {
   return builderIconGlyph(iconUrl);
 }
 
+// data-preset-name-lower powers filterBuilderPresetPicker (app.js) - typing
+// in the name field above filters these rows live and auto-opens the list,
+// the same "type to narrow it down" behavior the native <datalist> this
+// replaced used to give for free, restored here without losing the icons a
+// datalist option can't show. "Pick from presets" stays as the manual
+// open/close trigger for browsing without typing anything yet.
 function renderPresetPicker(nodeType, presets) {
   const typePresets = (presets || []).filter((preset) => preset.node_type === nodeType);
   if (!typePresets.length) return "";
@@ -226,7 +253,7 @@ function renderPresetPicker(nodeType, presets) {
       <button type="button" class="text-action builder-preset-picker-trigger" data-action="builder-toggle-preset-picker">Pick from presets</button>
       <div class="builder-preset-picker-list">
         ${typePresets.map((preset) => `
-          <button type="button" class="builder-preset-picker-option" data-action="builder-pick-preset" data-name="${escapeAttr(preset.name)}" data-color="${escapeAttr(preset.color || "")}" data-icon-url="${escapeAttr(preset.icon_url || "")}">
+          <button type="button" class="builder-preset-picker-option" data-action="builder-pick-preset" data-name="${escapeAttr(preset.name)}" data-preset-name-lower="${escapeAttr(preset.name.trim().toLowerCase())}" data-color="${escapeAttr(preset.color || "")}" data-icon-url="${escapeAttr(preset.icon_url || "")}">
             <span class="builder-node-icon">${renderPresetPickerIcon(preset.icon_url)}</span>
             <span>${escapeHtml(preset.name)}</span>
           </button>
@@ -263,7 +290,7 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             ${session.name ? `<strong class="builder-session-name">${escapeHtml(session.name)}</strong>` : ""}
             <span class="builder-session-badge-row"><span>${escapeHtml(context.sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span></span>
-          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them"><input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div></div>
+          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them">${renderSessionEditPhaseSelects(session)}<input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div></div>
           ${isInlineAddHere(session, "", context) ? renderBuilderInlineAddForm(session, "", context) : ""}
           ${renderBuilderNodeTree(session, "", selectedNodeId, context)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}

@@ -169,6 +169,64 @@ test("3. PATCH with an empty name clears it back to null (a coach can remove a n
   assert.equal(updated.name, "", "an empty name must clear the field, not leave the old name stuck");
 });
 
+test("2b. PATCH /sessions/:id ALSO accepts amPm/bta, saving them alongside name/time in the same request", async () => {
+  const coach = await makeCoach("update-phase");
+  const { sessionId } = await makeTemplateWithNamedSessionBlock(coach.id, { sessionName: "" });
+
+  const res = await api(`/api/builder/sessions/${sessionId}`, {
+    method: "PATCH", cookie: coach.cookie, body: { name: "Match day", time: "09:30", amPm: "PM", bta: "A" },
+  });
+
+  assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const updated = findSession(res.body, sessionId);
+  assert.equal(updated.name, "Match day");
+  assert.equal(updated.time, "09:30");
+  assert.equal(updated.amPm, "PM");
+  assert.equal(updated.bta, "A");
+});
+
+test("2c. a PATCH that omits amPm/bta entirely (e.g. just {name, time}) leaves the existing classification untouched, not wiped to null", async () => {
+  const coach = await makeCoach("update-phase-partial");
+  const { sessionId } = await makeTemplateWithNamedSessionBlock(coach.id, { sessionName: "" }); // seeded with amPm 'AM', bta 'T'
+
+  const res = await api(`/api/builder/sessions/${sessionId}`, {
+    method: "PATCH", cookie: coach.cookie, body: { name: "Match day", time: "09:30" },
+  });
+
+  assert.equal(res.status, 200);
+  const updated = findSession(res.body, sessionId);
+  assert.equal(updated.amPm, "AM", "amPm must be preserved when the PATCH body doesn't mention it at all");
+  assert.equal(updated.bta, "T", "bta must be preserved when the PATCH body doesn't mention it at all");
+});
+
+test("2d. a PATCH that explicitly sends amPm/bta as empty strings clears them to null - a real, deliberate clear, not treated as 'omitted'", async () => {
+  const coach = await makeCoach("update-phase-clear");
+  const { sessionId } = await makeTemplateWithNamedSessionBlock(coach.id, { sessionName: "" }); // seeded with amPm 'AM', bta 'T'
+
+  const res = await api(`/api/builder/sessions/${sessionId}`, {
+    method: "PATCH", cookie: coach.cookie, body: { name: "", time: "", amPm: "", bta: "" },
+  });
+
+  assert.equal(res.status, 200);
+  const updated = findSession(res.body, sessionId);
+  assert.equal(updated.amPm, "", "an explicitly-cleared amPm must come back empty, not still 'AM'");
+  assert.equal(updated.bta, "", "an explicitly-cleared bta must come back empty, not still 'T'");
+});
+
+test("2e. an invalid amPm/bta value (not one of the allowed codes) is rejected to null rather than stored as garbage", async () => {
+  const coach = await makeCoach("update-phase-invalid");
+  const { sessionId } = await makeTemplateWithNamedSessionBlock(coach.id, { sessionName: "" });
+
+  const res = await api(`/api/builder/sessions/${sessionId}`, {
+    method: "PATCH", cookie: coach.cookie, body: { amPm: "MIDDAY", bta: "X" },
+  });
+
+  assert.equal(res.status, 200);
+  const updated = findSession(res.body, sessionId);
+  assert.equal(updated.amPm, "", "an unrecognized amPm code must not be stored verbatim");
+  assert.equal(updated.bta, "");
+});
+
 test("4. copying a block (POST /blocks/:id/copy, same-plan duplicate) carries the session's name onto the copy", async () => {
   const coach = await makeCoach("block-copy");
   const { blockId } = await makeTemplateWithNamedSessionBlock(coach.id, { sessionName: "MD-1" });

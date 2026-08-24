@@ -317,6 +317,30 @@ test("7. GET /plans/:planId/blocks 404s for a plan the coach has no access to", 
   assert.equal(res.status, 404);
 });
 
+// Regression coverage for the reported picker UX gap: an unnamed WEEKLY
+// day showed "Block N" in the "Copy from another plan" picker, which is
+// meaningless when browsing a calendar - a coach can't tell Monday from
+// Thursday that way. A weekly day has a real `date`, unlike a
+// program/template block (test 6 above, which correctly keeps "Block N" -
+// there is no date to fall back to there at all).
+test("6b. GET /plans/:planId/blocks falls back to the weekday + date for an unnamed WEEKLY day, not 'Block N'", async () => {
+  const coach = await makeCoach("blocks-listing-weekly");
+  const athlete = await makeAthlete(coach.id);
+  // 2026-12-07 is a Monday.
+  const { planId } = await makeWeeklyPlan(coach.id, athlete.id, "2026-12-07", [1, 2]);
+  await query(`update plans.plan_days set block_name = 'MD-1' where plan_id = $1 and day_order = 1`, [planId]);
+  // day_order 2 is left unnamed on purpose - date = 2026-12-08, a Tuesday.
+
+  const res = await api(`/api/builder/plans/${planId}/blocks`, { cookie: coach.cookie });
+
+  assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const named = res.body.blocks.find((block) => block.name === "MD-1");
+  assert.ok(named, "a day's own name must still win when it has one, exactly as before");
+  const unnamed = res.body.blocks.find((block) => block.name !== "MD-1");
+  assert.ok(unnamed, "the unnamed day must still be present");
+  assert.equal(unnamed.name, "Tuesday, Dec 8", "an unnamed weekly day must show its real weekday + date, not 'Block 2'");
+});
+
 // "Weekly plan" as a cross-plan source (round 2 of Builder feedback): a
 // weekly plan's own day is just a plan_days row like any block/day, so it
 // goes through the exact same /blocks/:blockId/copy-into/:targetDayId route
