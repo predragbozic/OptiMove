@@ -1028,12 +1028,44 @@ const BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS = 500;
 // every "input" event too, not only "change", means the save (and the
 // rebuild it triggers) only ever fires 500ms after the coach's TRUE last
 // keystroke anywhere in the item's own form, never mid-typing.
+//
+// That alone still isn't enough on a real network: the debounce only
+// delays WHEN the save is DISPATCHED, not how long the round trip to the
+// server takes once it's underway. On localhost the PATCH + response is
+// near-instant, so there's essentially no gap - but against a real deploy
+// (Render's response time, not zero) a coach can easily type MORE
+// characters during the second or so between "the save fired" and "the
+// response came back and renderBuilderSectionItems() rebuilt the DOM from
+// it". That rebuild reads state.builder.draft, which only reflects the
+// FormData snapshot taken when THIS save was dispatched - so it silently
+// overwrote the coach's newer, not-yet-saved keystrokes with the older
+// value, restoring focus/cursor position (renderBuilderSectionItems
+// already does that carefully) but not the newer text itself. A per-item
+// generation counter closes this: every keystroke bumps it, and a save's
+// own response only gets applied to the screen if no NEWER keystroke
+// happened while it was in flight - a stale response still updates
+// state.builder.draft in the background (harmless; the next, newer save
+// - already scheduled by that later keystroke - reads the DOM fresh and
+// will supersede it shortly) but never touches what's on screen.
+const builderItemAutosaveGeneration = new Map();
 function scheduleBuilderItemAutosave(form) {
   const key = form.dataset.itemId || form;
+  const generation = (builderItemAutosaveGeneration.get(key) || 0) + 1;
+  builderItemAutosaveGeneration.set(key, generation);
   clearTimeout(builderAutosaveTimers.get(key));
   builderAutosaveTimers.set(key, setTimeout(() => {
     builderAutosaveTimers.delete(key);
-    submitBuilderFormAction(form, { loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback }).catch(renderBuilderError);
+    const isStale = () => builderItemAutosaveGeneration.get(key) !== generation;
+    submitBuilderFormAction(form, {
+      loadBuilderExercises,
+      renderBuilder: () => { if (!isStale()) renderBuilder(); },
+      // Returning true when stale mirrors renderBuilderSectionItems()'s own
+      // "handled" signal (submitBuilderForm only falls through to
+      // handlers.renderBuilder() when this returns falsy) - a stale
+      // response is fully handled by doing nothing to the screen.
+      renderBuilderSectionItems: () => (isStale() ? true : renderBuilderSectionItems()),
+      renderBuilderAddFeedback,
+    }).catch(renderBuilderError);
   }, BUILDER_ITEM_AUTOSAVE_DEBOUNCE_MS));
 }
 

@@ -25,6 +25,20 @@ import { fileURLToPath } from "node:url";
 //    "change" (blur) path and a new "input" (every keystroke) path, so the
 //    save+rebuild only ever fires 500ms after the coach's true last
 //    keystroke anywhere in the item's form, never mid-typing.
+//    Round 4 (still reported live against the real deploy, never
+//    reproduced on localhost): the debounce only delays WHEN a save is
+//    DISPATCHED, not how long its round trip takes. Against a real network
+//    (not near-zero, unlike localhost) a coach can type more characters
+//    DURING the gap between "the save fired" and "its response came back
+//    and rebuilt the DOM" - that rebuild reads state.builder.draft, which
+//    only reflects the FormData snapshot from when THAT save was
+//    dispatched, silently overwriting newer, not-yet-saved keystrokes.
+//    scheduleBuilderItemAutosave now tracks a per-item generation counter,
+//    bumped on every keystroke - a save's response is only ever applied to
+//    the screen if no newer keystroke happened while it was in flight; a
+//    stale response still updates state.builder.draft in the background
+//    (harmless - the next, newer save was already scheduled by that later
+//    keystroke and will supersede it shortly) but never touches the DOM.
 // 2. Clicking Edit/Copy on a plan took 5-10s to show anything: both handlers
 //    awaited loadBuilderExercises() (two of its own serial network calls)
 //    BEFORE the Builder shell was ever painted - nothing rendered until
@@ -57,11 +71,22 @@ test("handleContentChange routes update-item autosave through the shared schedul
 });
 
 test("scheduleBuilderItemAutosave itself debounces per item, and a debounced save still surfaces errors the same way an immediate one would", () => {
-  const body = sliceFunction(appJsSource, "scheduleBuilderItemAutosave", 1200);
+  const body = sliceFunction(appJsSource, "scheduleBuilderItemAutosave", 1600);
   assert.match(body, /const key = form\.dataset\.itemId \|\| form;/);
   assert.match(body, /clearTimeout\(builderAutosaveTimers\.get\(key\)\);/);
   assert.match(body, /builderAutosaveTimers\.set\(key, setTimeout\(\(\) => \{/);
-  assert.match(body, /submitBuilderFormAction\(form, \{ loadBuilderExercises, renderBuilder, renderBuilderSectionItems, renderBuilderAddFeedback \}\)\.catch\(renderBuilderError\);/);
+  assert.match(body, /submitBuilderFormAction\(form, \{/);
+  assert.match(body, /\}\)\.catch\(renderBuilderError\);/);
+});
+
+test("every keystroke bumps a per-item generation counter, and only a still-current generation's response is allowed to touch the screen (Round 4 - a stale round trip must never clobber newer, in-flight typing)", () => {
+  assert.match(appJsSource, /const builderItemAutosaveGeneration = new Map\(\);/);
+  const body = sliceFunction(appJsSource, "scheduleBuilderItemAutosave", 1600);
+  assert.match(body, /const generation = \(builderItemAutosaveGeneration\.get\(key\) \|\| 0\) \+ 1;/, "generation must increment on every call (every keystroke), not just when the timer fires");
+  assert.match(body, /builderItemAutosaveGeneration\.set\(key, generation\);/);
+  assert.match(body, /const isStale = \(\) => builderItemAutosaveGeneration\.get\(key\) !== generation;/);
+  assert.match(body, /renderBuilder: \(\) => \{ if \(!isStale\(\)\) renderBuilder\(\); \}/, "a stale response must never trigger the full renderBuilder() rebuild either");
+  assert.match(body, /renderBuilderSectionItems: \(\) => \(isStale\(\) \? true : renderBuilderSectionItems\(\)\)/, "returning true when stale mirrors renderBuilderSectionItems()'s own truthy 'handled' signal, so submitBuilderForm never falls through to its own renderBuilder() call for a stale response");
 });
 
 test("the update-item debounce delay is a small, named constant, not a magic number", () => {
