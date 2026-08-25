@@ -105,6 +105,31 @@ export async function handleNotificationAction(action, handlers = {}) {
     await handlers.openTestsResults?.(scheduleId);
     return true;
   }
+  // Weekly plan just published (draft -> active, Builder's own "Save and
+  // finish") - opens the athlete's own Weekly view, selecting the exact
+  // week from metadata.weekStart (see backend/src/routes/builder.js's
+  // notifyPlanAssignments).
+  if (type === "notification-open-weekly-plan") {
+    const id = action.dataset.notificationId;
+    const weekStart = action.dataset.weekStart;
+    if (id) await markNotificationRead(id);
+    state.notifications.open = false;
+    renderNotifications();
+    if (weekStart) await handlers.openWeeklyPlanFromNotification?.(weekStart);
+    return true;
+  }
+  // Specific Program just published/assigned - opens the athlete's own
+  // Specific Programs view, resolving the exact plan by id (never by name -
+  // two programs can share a name).
+  if (type === "notification-open-specific-program") {
+    const id = action.dataset.notificationId;
+    const planId = action.dataset.planId;
+    if (id) await markNotificationRead(id);
+    state.notifications.open = false;
+    renderNotifications();
+    if (planId) await handlers.openSpecificProgramFromNotification?.(planId);
+    return true;
+  }
   if (type === "notification-accept-contact") {
     const requestId = action.dataset.requestId;
     const notificationId = action.dataset.notificationId;
@@ -170,6 +195,10 @@ function renderNotificationRow(row) {
   const isTestAssignmentNotification = (row.type === "test_athlete_invitation" || row.type === "test_athlete_reminder") && row.entity_type === "test_assignment" && row.entity_id;
   const isCoachDigestNotification = row.type === "test_coach_digest" && row.entity_type === "test_occurrence";
   const isFinalDigestNotification = row.type === "test_final_digest" && row.entity_type === "test_occurrence";
+  // Builder plan-assignment notifications (backend/src/routes/builder.js's
+  // notifyPlanAssignments) - athlete side, one of the two plan_type kinds.
+  const isWeeklyPlanAssigned = row.type === "weekly_plan_assigned" && row.entity_type === "plan" && row.entity_id;
+  const isSpecificProgramAssigned = row.type === "specific_program_assigned" && row.entity_type === "plan" && row.entity_id;
   const rowAction = isProgramAccessRequest
     ? "notification-open-program-requests"
     : isConversationNotification
@@ -180,10 +209,14 @@ function renderNotificationRow(row) {
           ? "notification-open-tests-today"
           : isFinalDigestNotification
             ? "notification-open-tests-results"
-            : "notification-read";
+            : isWeeklyPlanAssigned
+              ? "notification-open-weekly-plan"
+              : isSpecificProgramAssigned
+                ? "notification-open-specific-program"
+                : "notification-read";
   return `
     <article class="notification-row${unreadClass}">
-      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" data-conversation-id="${escapeAttr(isConversationNotification ? row.entity_id : "")}" data-assignment-id="${escapeAttr(isTestAssignmentNotification ? row.entity_id : "")}" data-schedule-id="${escapeAttr(isFinalDigestNotification ? row.metadata?.scheduleId || "" : "")}" type="button">
+      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" data-conversation-id="${escapeAttr(isConversationNotification ? row.entity_id : "")}" data-assignment-id="${escapeAttr(isTestAssignmentNotification ? row.entity_id : "")}" data-schedule-id="${escapeAttr(isFinalDigestNotification ? row.metadata?.scheduleId || "" : "")}" data-week-start="${escapeAttr(isWeeklyPlanAssigned ? row.metadata?.weekStart || "" : "")}" data-plan-id="${escapeAttr(isSpecificProgramAssigned ? row.entity_id : "")}" type="button">
         <span>
           <strong>${escapeHtml(row.title || "Notification")}</strong>
           ${row.body ? `<small>${escapeHtml(row.body)}</small>` : ""}
@@ -192,6 +225,8 @@ function renderNotificationRow(row) {
           ${isTestAssignmentNotification ? `<small class="notification-hint">Open check-in</small>` : ""}
           ${isCoachDigestNotification ? `<small class="notification-hint">Open Today</small>` : ""}
           ${isFinalDigestNotification ? `<small class="notification-hint">Open Results</small>` : ""}
+          ${isWeeklyPlanAssigned ? `<small class="notification-hint">Open weekly plan</small>` : ""}
+          ${isSpecificProgramAssigned ? `<small class="notification-hint">Open program</small>` : ""}
         </span>
         <time>${escapeHtml(date)}</time>
       </button>

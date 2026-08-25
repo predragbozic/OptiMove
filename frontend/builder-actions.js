@@ -326,13 +326,16 @@ export async function handleBuilderPlanAction(action, handlers) {
         setBuilderDraft(applied, { preserveBatch: false });
         duplicateSourceId = applied.plan.id;
       }
+      // intent tells the backend which of the two business meanings this is
+      // (plain Copy always stays 'draft', unchanged; Assign activates the
+      // copy and notifies the athlete, in the same transaction - see
+      // backend/src/routes/builder.js).
       const created = await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(duplicateSourceId)}/duplicate`, {
         method: "POST",
-        body: JSON.stringify({ athleteId: athleteIds[0] || "", athleteIds, weekStart: state.builder.copyWeekStart }),
+        body: JSON.stringify({ athleteId: athleteIds[0] || "", athleteIds, weekStart: state.builder.copyWeekStart, intent: isAssign ? "assign" : "copy" }),
       });
-      // /duplicate always creates a brand new status='draft' row (see
-      // backend/src/routes/builder.js) - the cached drafts list must never
-      // be missing it just because it happened to be cached before this copy.
+      // A plain Copy always creates a new 'draft' row - the cached drafts
+      // list must never be missing it.
       invalidateBuilderDraftsCache();
       if (isAssign) {
         // Unlike a plain "Copy", assigning a template doesn't navigate the

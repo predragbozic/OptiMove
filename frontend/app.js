@@ -1377,7 +1377,7 @@ async function handleGlobalClick(event) {
   if (await handleWorkspaceAction(action, { onWorkspaceChanged })) {
     return;
   }
-  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults })) {
+  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification })) {
     renderMessages();
     return;
   }
@@ -1833,6 +1833,26 @@ async function openProgramRequests() {
   renderTabs();
   renderLibraryNav();
   await loadTemplates();
+}
+
+// Specific Program just published/assigned - opens the athlete's own
+// Specific Programs view with that exact plan selected, resolved by id
+// (mirrors the click handling wireProgramToolbar/wireAthleteProgramsPanel
+// already use when a program card/chip is clicked directly).
+async function openSpecificProgramFromNotification(planId) {
+  if (state.activeTab !== "programs") pushAppHistory();
+  state.activeTab = "programs";
+  state.selectedProgramId = planId;
+  state.selectedTemplateId = null;
+  state.navStack = [];
+  collapseRailAfterNav();
+  renderTabs();
+  renderLibraryNav();
+  await loadPrograms();
+  const programs = state.lastProgramBundle?.programs || [];
+  openSpecificProgramOverlay();
+  renderProgramToolbar(programs);
+  renderProgramRoot(programs.find((program) => program.id === state.selectedProgramId));
 }
 
 // WELLNESS invitation/reminder click (athlete side) - switches to Tests and

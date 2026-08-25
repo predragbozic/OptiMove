@@ -2,9 +2,70 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
+import { emitRealtimeEvent } from "../realtime.js";
 
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
+
+// Shared by POST /plans/:planId/submit (weekly plan / specific program
+// draft -> active) and POST /plans/:planId/duplicate (Assign to athlete) -
+// the two events that actually put a new/published plan in front of an
+// athlete. Writes directly on the CALLER's own open transaction client, so
+// the notification and the plan-status change that caused it commit or
+// roll back together - never a plan silently activated with no
+// notification, or vice versa (see the migration this depends on,
+// 202608280900_app_notifications_dedupe_key.sql, for why a bare
+// dedupe_key + ON CONFLICT DO NOTHING is enough here - every notification
+// this writes is one-shot, never updated in place).
+//
+// `plans` is an array of { id, athlete_id, name, plan_type, week_start }
+// rows - exactly what `returning id, athlete_id, name, plan_type,
+// week_start` on the status-flip UPDATE (submit) or the per-target INSERT
+// (duplicate/assign) already produces, so callers never need a second
+// query just to build this list.
+//
+// Returns the recipient user ids that got a REAL new notification this
+// call, for the caller to emit realtime events for AFTER commit - never
+// thrown for a plan with no athlete_id, an athlete with no linked user_id
+// (skipped, not fatal - the rest of a multi-athlete batch must never be
+// brought down by one athlete's missing account), or a genuine dedupe-key
+// conflict (an already-notified retry).
+async function notifyPlanAssignments(client, plans, actorUserId) {
+  const notifiedUserIds = [];
+  for (const plan of plans) {
+    if (!plan.athlete_id) continue;
+    const athleteResult = await client.query(`select user_id from public.athletes where id = $1`, [plan.athlete_id]);
+    const recipientUserId = athleteResult.rows[0]?.user_id;
+    if (!recipientUserId) continue;
+
+    const isWeekly = plan.plan_type === "weekly";
+    const type = isWeekly ? "weekly_plan_assigned" : "specific_program_assigned";
+    const title = isWeekly ? "New weekly plan" : "New program assigned";
+    const body = isWeekly ? `${plan.name || "Weekly plan"} · week of ${plan.week_start}` : (plan.name || "Program");
+    const metadata = isWeekly
+      ? { planId: plan.id, planType: "weekly", weekStart: plan.week_start }
+      : { planId: plan.id, planType: "program" };
+    // One notification per (event kind, plan) ever - a retried
+    // submit/assign for the exact same plan row always resolves to the
+    // same dedupe_key, so a second attempt is a guaranteed no-op here
+    // regardless of how it was triggered (double click, network retry,
+    // two parallel requests).
+    const dedupeKey = `${type}:${plan.id}`;
+    const inserted = await client.query(
+      `insert into public.app_notifications (recipient_user_id, actor_user_id, type, title, body, entity_type, entity_id, metadata, dedupe_key)
+       values ($1, $2, $3, $4, $5, 'plan', $6, $7::jsonb, $8)
+       on conflict (dedupe_key) where dedupe_key is not null do nothing
+       returning id`,
+      [recipientUserId, actorUserId, type, title, body, plan.id, JSON.stringify(metadata), dedupeKey],
+    );
+    if (inserted.rows[0]) notifiedUserIds.push(recipientUserId);
+  }
+  return notifiedUserIds;
+}
+
+function emitPlanAssignedRealtime(userIds) {
+  for (const userId of userIds) emitRealtimeEvent(userId, "notifications_changed", { type: "plan_assigned" });
+}
 
 router.get("/drafts", async (req, res, next) => {
   try {
@@ -129,9 +190,15 @@ router.post("/plans", async (req, res, next) => {
 });
 
 router.post("/plans/:planId/submit", async (req, res, next) => {
+  let client;
   try {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
+    // Re-editing an already-active plan: applyEditDraft() sets the
+    // ORIGINAL plan back to 'active' (it never left that status from the
+    // athlete's point of view), never a draft->active transition - this
+    // must never reach the notification logic below, and it doesn't:
+    // this branch returns before either does.
     if (plan.is_edit_draft && plan.edit_source_plan_id) {
       const updated = await applyEditDraft(req, plan);
       return res.json(await buildDraft(updated));
@@ -140,8 +207,24 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     if (shouldSyncBatch) await syncBatchFromPlan(plan, req.user);
     const emptyDraft = await removeEmptyDraftOnSubmit(req.user, plan, req);
     if (emptyDraft) return res.json(emptyDraft);
+
+    client = await pool.connect();
+    await client.query("begin");
+    // `and status = 'draft'` on both statements below is what makes a
+    // retried Submit (double click, network retry) a clean no-op instead
+    // of a second notification attempt: a plan already flipped to
+    // 'active' by an earlier, successful call to this same route simply
+    // isn't returned here the second time, so notifyPlanAssignments never
+    // even sees it again. The dedupe_key/ON CONFLICT inside
+    // notifyPlanAssignments is the second, DB-level guarantee for the
+    // genuine race case (two parallel requests both reading 'draft'
+    // before either commits) - `for update` isn't needed on top of that
+    // WHERE clause: whichever request's UPDATE commits first is the one
+    // that actually matches `status = 'draft'`, the other's UPDATE
+    // affects 0 rows once it proceeds.
+    let activatedPlans;
     if (shouldSyncBatch) {
-      await query(
+      const updated = await client.query(
         `update plans.plans
          set status = 'active', updated_at = now()
          where builder_batch_id = $1
@@ -149,14 +232,35 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
            and source_type = 'builder'
            and status = 'draft'
            and coalesce(is_active, true)
-           and not coalesce(is_edit_draft, false)`,
+           and not coalesce(is_edit_draft, false)
+         returning id, athlete_id, name, plan_type, week_start`,
         [plan.builder_batch_id, req.user.id],
       );
+      activatedPlans = updated.rows;
     } else {
-      await query("update plans.plans set status = 'active', updated_at = now() where id = $1", [plan.id]);
+      const updated = await client.query(
+        `update plans.plans set status = 'active', updated_at = now()
+         where id = $1 and status = 'draft'
+         returning id, athlete_id, name, plan_type, week_start`,
+        [plan.id],
+      );
+      activatedPlans = updated.rows;
     }
+    const notifiedUserIds = await notifyPlanAssignments(client, activatedPlans, req.user.id);
+    await client.query("commit");
+    client.release();
+    client = null;
+    // Only after commit - a realtime push implying a notification exists
+    // must never fire ahead of the transaction that actually created it.
+    emitPlanAssignedRealtime(notifiedUserIds);
     res.json(await buildDraft(await getEditablePlan(req, plan.id)));
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+      client.release();
+    }
+    next(error);
+  }
 });
 
 router.post("/plans/:planId/duplicate", async (req, res, next) => {
@@ -167,16 +271,35 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     if (source.is_template && source.can_copy === false && !canAccessAllAthletes(req) && String(source.created_by_user_id) !== String(req.user.id)) {
       return res.status(403).json({ error: "This template cannot be copied." });
     }
+    // "Assign to athlete" (business-final) vs plain "Copy" (a working copy,
+    // stays draft until the coach finishes it themselves) - both hit this
+    // exact route; `intent` is the only thing that tells them apart. Plain
+    // Copy is the default (an unrecognized/missing intent is never treated
+    // as assign) so nothing about the existing Copy flow changes for a
+    // client that doesn't send this field at all.
+    const intent = text(req.body?.intent) === "assign" ? "assign" : "copy";
     const targetAthleteExternalIds = requestedAthleteIds(req.body);
     const { athletes: targetAthletes, missing, archived } = await findRequestedAthletes(targetAthleteExternalIds);
     if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
     if (archived.length) return res.status(400).json({ error: `Athlete is archived, restore them first: ${archived.join(", ")}` });
+    if (intent === "assign" && !source.is_template) {
+      return res.status(400).json({ error: "Only a template can be assigned to an athlete." });
+    }
+    if (intent === "assign" && !targetAthletes.length) {
+      return res.status(400).json({ error: "Choose at least one athlete to assign this template to." });
+    }
     const targetWeekStart = source.plan_type === "weekly" ? normalizedWeekStart(req.body?.weekStart) : null;
     if (source.plan_type === "weekly" && !targetAthletes.length) return res.status(400).json({ error: "Choose at least one athlete for a weekly plan copy." });
     if (source.plan_type === "weekly" && !targetWeekStart) return res.status(400).json({ error: "Choose the target week for this copy." });
     const targets = targetAthletes.length ? targetAthletes : [null];
     const batchId = targets.length > 1 ? randomUUID() : null;
+    // "Assign" activates every created copy immediately, in the SAME
+    // transaction as the copy itself - there is no intermediate draft state
+    // an athlete could ever see for an assigned plan. A plain Copy is
+    // unaffected: still always 'draft', exactly as before.
+    const status = intent === "assign" ? "active" : "draft";
     const createdIds = [];
+    const assignedPlans = [];
     client = await pool.connect();
     await client.query("begin");
     if (source.plan_type === "weekly") {
@@ -194,15 +317,22 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     }
     for (const target of targets) {
       const isTemplate = source.plan_type === "program" && !target;
+      const planName = `${source.name || "Program"} copy`;
       const created = await client.query(
         `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days, week_start, builder_batch_id)
-         values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, 'draft', 'builder', $9, $10, $11, $12)
+         values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, $9, 'builder', $10, $11, $12, $13)
          returning id`,
-        [source.plan_type, req.user.id, target?.id || null, `${source.name || "Program"} copy`, source.note, source.icon_url, source.color, isTemplate, source.start_date, source.duration_days, targetWeekStart, batchId],
+        [source.plan_type, req.user.id, target?.id || null, planName, source.note, source.icon_url, source.color, isTemplate, status, source.start_date, source.duration_days, targetWeekStart, batchId],
       );
       createdIds.push(created.rows[0].id);
       if (source.plan_type === "weekly") await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
       else await copyProgramTree(client, source.id, created.rows[0].id);
+      // target is never null here - intent === "assign" already required at
+      // least one real athlete target above, so this loop only ever
+      // produces real, athlete-owned rows when it's populating this list.
+      if (intent === "assign" && target) {
+        assignedPlans.push({ id: created.rows[0].id, athlete_id: target.id, name: planName, plan_type: source.plan_type, week_start: targetWeekStart });
+      }
     }
     await client.query(
       `insert into library.program_access (plan_id, user_id, access_type, status, related_plan_id)
@@ -214,9 +344,11 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
                      updated_at = now()`,
       [source.id, req.user.id, createdIds[0]],
     );
+    const notifiedUserIds = intent === "assign" ? await notifyPlanAssignments(client, assignedPlans, req.user.id) : [];
     await client.query("commit");
     client.release();
     client = null;
+    emitPlanAssignedRealtime(notifiedUserIds);
     // "assignments" lists every plan this call created (not just the first) -
     // required for a multi-athlete duplicate (e.g. the open-Builder "Assign
     // to athlete" flow, frontend/builder-actions.js) to be able to confirm
