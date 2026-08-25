@@ -73,6 +73,38 @@ export async function handleNotificationAction(action, handlers = {}) {
     if (conversationId) await openMessageConversation(conversationId);
     return true;
   }
+  // WELLNESS invitation/reminder (athlete side) - deep-links straight to the
+  // athlete's OWN assignment, never anyone else's (assignmentId comes from
+  // this exact notification row, which the worker only ever wrote for its
+  // real recipient - see testsNotificationWorker.js).
+  if (type === "notification-open-test-assignment") {
+    const id = action.dataset.notificationId;
+    const assignmentId = action.dataset.assignmentId;
+    if (id) await markNotificationRead(id);
+    state.notifications.open = false;
+    renderNotifications();
+    if (assignmentId) await handlers.openTestAssignment?.(assignmentId);
+    return true;
+  }
+  // Coach live digest - opens Tests -> Today (coach side).
+  if (type === "notification-open-tests-today") {
+    const id = action.dataset.notificationId;
+    if (id) await markNotificationRead(id);
+    state.notifications.open = false;
+    renderNotifications();
+    await handlers.openTestsToday?.();
+    return true;
+  }
+  // Final coach digest - opens Tests -> Results (coach side).
+  if (type === "notification-open-tests-results") {
+    const id = action.dataset.notificationId;
+    const scheduleId = action.dataset.scheduleId;
+    if (id) await markNotificationRead(id);
+    state.notifications.open = false;
+    renderNotifications();
+    await handlers.openTestsResults?.(scheduleId);
+    return true;
+  }
   if (type === "notification-accept-contact") {
     const requestId = action.dataset.requestId;
     const notificationId = action.dataset.notificationId;
@@ -132,19 +164,34 @@ function renderNotificationRow(row) {
   const isCoachContact = row.type === "coach_contact_requested" && row.entity_type === "coach_contact_request" && row.entity_id;
   const isProgramAccessRequest = row.type === "program_access_requested" && row.entity_type === "program_access";
   const isConversationNotification = row.entity_type === "message_conversation" && row.entity_id;
+  // Phase 3A: WELLNESS notifications (testsNotificationWorker.js). Invitation
+  // and reminder both deep-link to the athlete's own assignment; the two
+  // coach digests both open Tests, but to different sections.
+  const isTestAssignmentNotification = (row.type === "test_athlete_invitation" || row.type === "test_athlete_reminder") && row.entity_type === "test_assignment" && row.entity_id;
+  const isCoachDigestNotification = row.type === "test_coach_digest" && row.entity_type === "test_occurrence";
+  const isFinalDigestNotification = row.type === "test_final_digest" && row.entity_type === "test_occurrence";
   const rowAction = isProgramAccessRequest
     ? "notification-open-program-requests"
     : isConversationNotification
       ? "notification-open-conversation"
-      : "notification-read";
+      : isTestAssignmentNotification
+        ? "notification-open-test-assignment"
+        : isCoachDigestNotification
+          ? "notification-open-tests-today"
+          : isFinalDigestNotification
+            ? "notification-open-tests-results"
+            : "notification-read";
   return `
     <article class="notification-row${unreadClass}">
-      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" data-conversation-id="${escapeAttr(isConversationNotification ? row.entity_id : "")}" type="button">
+      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" data-conversation-id="${escapeAttr(isConversationNotification ? row.entity_id : "")}" data-assignment-id="${escapeAttr(isTestAssignmentNotification ? row.entity_id : "")}" data-schedule-id="${escapeAttr(isFinalDigestNotification ? row.metadata?.scheduleId || "" : "")}" type="button">
         <span>
           <strong>${escapeHtml(row.title || "Notification")}</strong>
           ${row.body ? `<small>${escapeHtml(row.body)}</small>` : ""}
           ${isProgramAccessRequest ? `<small class="notification-hint">Open requests</small>` : ""}
           ${isConversationNotification ? `<small class="notification-hint">Open conversation</small>` : ""}
+          ${isTestAssignmentNotification ? `<small class="notification-hint">Open check-in</small>` : ""}
+          ${isCoachDigestNotification ? `<small class="notification-hint">Open Today</small>` : ""}
+          ${isFinalDigestNotification ? `<small class="notification-hint">Open Results</small>` : ""}
         </span>
         <time>${escapeHtml(date)}</time>
       </button>

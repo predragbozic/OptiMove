@@ -10383,6 +10383,33 @@ button.tests-assignment-card {
   flex-wrap: wrap;
 }
 
+.tests-notifications-section {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.tests-notifications-section h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.tests-notification-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tests-notification-reminder-offset {
+  margin-left: 22px;
+  max-width: 260px;
+}
+
 .tests-link-box {
   display: grid;
   gap: 8px;

@@ -26,7 +26,7 @@ import {
   submitConfirmEmailChange as submitConfirmEmailChangeAction,
 } from "./email-change-actions.js";
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
-import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
+import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests } from "./tests-data.js";
 import { renderTests, renderTestsBadge } from "./tests-view.js";
 import {
@@ -1377,7 +1377,7 @@ async function handleGlobalClick(event) {
   if (await handleWorkspaceAction(action, { onWorkspaceChanged })) {
     return;
   }
-  if (await handleNotificationAction(action, { openProgramRequests })) {
+  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults })) {
     renderMessages();
     return;
   }
@@ -1833,6 +1833,46 @@ async function openProgramRequests() {
   renderTabs();
   renderLibraryNav();
   await loadTemplates();
+}
+
+// WELLNESS invitation/reminder click (athlete side) - switches to Tests and
+// opens the athlete's own assignment form directly, same as tapping it from
+// Today would. openTestAssignmentForm (tests-actions.js's own openAssignment)
+// already 404s safely if this assignment somehow isn't this athlete's own -
+// see GET /api/tests/assignments/:id's own athlete_id check.
+async function openTestAssignment(assignmentId) {
+  state.activeTab = "tests";
+  state.navStack = [];
+  renderTabs();
+  renderLibraryNav();
+  await openTestAssignmentForm(assignmentId, renderTests);
+}
+
+// Coach live digest click - switches to Tests -> Today.
+async function openTestsToday() {
+  state.activeTab = "tests";
+  state.tests.section = "today";
+  state.tests.scheduleDetail = null;
+  state.tests.form = null;
+  state.navStack = [];
+  renderTabs();
+  renderLibraryNav();
+  await loadTests({ setLoading, renderTests });
+}
+
+// Final coach digest click - switches to Tests -> Results, filtered to the
+// schedule this occurrence belongs to (the same scheduleId filter the
+// Results tab's own UI already supports).
+async function openTestsResults(scheduleId) {
+  state.activeTab = "tests";
+  state.tests.section = "results";
+  state.tests.resultsScheduleId = scheduleId || "";
+  state.tests.scheduleDetail = null;
+  state.tests.form = null;
+  state.navStack = [];
+  renderTabs();
+  renderLibraryNav();
+  await loadTests({ setLoading, renderTests });
 }
 
 async function loadTemplateOptionsInBackground() {

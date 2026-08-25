@@ -269,6 +269,16 @@ export const emptyScheduleForm = (overrides = {}) => ({
   calendarMonth: "",
   calendarOpen: false,
   selectedDates: [],
+  // Phase 3A notification rules - each entry is { kind, enabled,
+  // reminderOffsetMinutes? }, at most one per kind ("athlete_invitation" |
+  // "athlete_reminder" | "coach_digest" | "final_digest"). A kind missing
+  // from this array means "unconfigured", not "disabled" - GET /schedules/
+  // :id returns [] for a schedule that's never had rules saved, and the
+  // form shows that as a visible unconfigured state rather than silently
+  // defaulting it to anything. tests-open-schedule-form (create) seeds this
+  // with the visible MVP defaults instead; the coach sees and can change
+  // them before the first save, they are never a hidden backend default.
+  notificationRules: [],
   // Individually-selected athletes (real athlete uuids, combinable with the
   // team/club quick-targets below) plus the team/club single-target quick
   // option, kept alongside multi-athlete selection rather than replacing it.

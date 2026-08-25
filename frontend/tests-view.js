@@ -490,10 +490,57 @@ function renderScheduleFormHtml() {
             </select>
           </label>
           ${renderAthleteMultiSelectHtml(form)}
+          ${renderNotificationsSectionHtml(form)}
           <button type="submit" class="plain-button" data-tests-schedule-submit ${testsScheduleSubmitDisabled(form) ? "disabled" : ""}>${testsScheduleSubmitLabel(form)}</button>
         </form>
       `}
     </section>
+  `;
+}
+
+// Phase 3A. form.notificationRules holds at most one entry per kind - a
+// kind missing from it means "unconfigured" (see state.js's own comment),
+// rendered here as an unchecked box, same as an explicitly-disabled one; the
+// one visible difference is the muted notice above them, shown only when
+// the WHOLE array is empty (a schedule that has genuinely never had rules
+// saved, vs. one where every kind was deliberately turned off).
+function notificationRuleFor(form, kind) {
+  return form.notificationRules.find((rule) => rule.kind === kind) || { kind, enabled: false };
+}
+
+function renderNotificationsSectionHtml(form) {
+  const configured = form.notificationRules.length > 0;
+  const reminderRule = notificationRuleFor(form, "athlete_reminder");
+  const invitationRule = notificationRuleFor(form, "athlete_invitation");
+  const coachDigestRule = notificationRuleFor(form, "coach_digest");
+  const finalDigestRule = notificationRuleFor(form, "final_digest");
+  return `
+    <div class="tests-notifications-section">
+      <h4>Notifications</h4>
+      ${!configured ? `<p class="muted">Notifications aren't configured for this schedule yet - enable and save to start sending.</p>` : ""}
+      <label class="tests-notification-rule">
+        <input type="checkbox" data-action="tests-notification-rule-toggle" data-kind="athlete_invitation" ${invitationRule.enabled ? "checked" : ""}>
+        <span>Notify athletes when the questionnaire opens</span>
+      </label>
+      <label class="tests-notification-rule">
+        <input type="checkbox" data-action="tests-notification-rule-toggle" data-kind="athlete_reminder" ${reminderRule.enabled ? "checked" : ""}>
+        <span>Remind athletes who have not completed it</span>
+      </label>
+      ${reminderRule.enabled ? `
+      <label class="search-field tests-notification-reminder-offset">
+        <span>Minutes before due time (or close time, if no due time is set)</span>
+        <input type="number" name="reminderOffsetMinutes" min="1" step="1" value="${escapeAttr(reminderRule.reminderOffsetMinutes || 60)}" data-action="tests-schedule-form-field">
+      </label>
+      ` : ""}
+      <label class="tests-notification-rule">
+        <input type="checkbox" data-action="tests-notification-rule-toggle" data-kind="coach_digest" ${coachDigestRule.enabled ? "checked" : ""}>
+        <span>Show me a live completion summary</span>
+      </label>
+      <label class="tests-notification-rule">
+        <input type="checkbox" data-action="tests-notification-rule-toggle" data-kind="final_digest" ${finalDigestRule.enabled ? "checked" : ""}>
+        <span>Send a final summary when the questionnaire closes</span>
+      </label>
+    </div>
   `;
 }
 

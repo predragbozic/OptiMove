@@ -29,6 +29,7 @@ function installFetchMock(responder) {
 const {
   handleTestsAction,
   handleTestsScheduleAthleteSearchInput,
+  handleTestsScheduleFormField,
   submitTestsForm,
   startTestsCalendarDrag,
   extendTestsCalendarDrag,
@@ -561,4 +562,135 @@ test("a double-click on 'Schedule N dates' never sends a second bulk request whi
   resolveLibrary();
   await Promise.all([first, second]);
   assert.equal(fetchCalls.filter((c) => c.url.includes("/api/tests/library")).length, 1, "the second, overlapping submit must be a no-op, not a second request");
+});
+
+// ------------------------------------------------------------
+// Phase 3A: Notifications section (recurrence-independent rule toggles,
+// reminder offset, create/edit round-trip through the submit body)
+// ------------------------------------------------------------
+
+test("opening the create form seeds the visible MVP defaults - invitation on, reminder on at 60 minutes, both digests on", async () => {
+  resetTestsState();
+  await handleTestsAction(fakeAction({ action: "tests-open-schedule-form" }), { renderTests: () => {} });
+  const rules = state.tests.scheduleForm.notificationRules;
+  assert.equal(rules.length, 4);
+  assert.equal(rules.find((r) => r.kind === "athlete_invitation").enabled, true);
+  const reminder = rules.find((r) => r.kind === "athlete_reminder");
+  assert.equal(reminder.enabled, true);
+  assert.equal(reminder.reminderOffsetMinutes, 60);
+  assert.equal(rules.find((r) => r.kind === "coach_digest").enabled, true);
+  assert.equal(rules.find((r) => r.kind === "final_digest").enabled, true);
+});
+
+test("toggling a rule that doesn't exist yet (an unconfigured legacy schedule) creates it, rather than requiring all 4 to pre-exist", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.notificationRules = [];
+  await handleTestsAction(fakeAction({ action: "tests-notification-rule-toggle", kind: "coach_digest" }, { checked: true }), { renderTests: () => {} });
+  assert.deepEqual(state.tests.scheduleForm.notificationRules, [{ kind: "coach_digest", enabled: true }]);
+});
+
+test("toggling an existing rule off updates it in place - no duplicate entry for the same kind", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.notificationRules = [{ kind: "athlete_invitation", enabled: true }, { kind: "coach_digest", enabled: true }];
+  await handleTestsAction(fakeAction({ action: "tests-notification-rule-toggle", kind: "athlete_invitation" }, { checked: false }), { renderTests: () => {} });
+  assert.equal(state.tests.scheduleForm.notificationRules.length, 2);
+  assert.equal(state.tests.scheduleForm.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, false);
+  assert.equal(state.tests.scheduleForm.notificationRules.find((r) => r.kind === "coach_digest").enabled, true, "an unrelated kind must be untouched");
+});
+
+test("the reminder-offset number field writes into the athlete_reminder rule, creating it (disabled) if the coach types a number before ever checking the box", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.notificationRules = [];
+  handleTestsScheduleFormField({ name: "reminderOffsetMinutes", value: "30" });
+  const rule = state.tests.scheduleForm.notificationRules.find((r) => r.kind === "athlete_reminder");
+  assert.equal(rule.reminderOffsetMinutes, 30);
+  assert.equal(rule.enabled, false, "typing an offset alone must never silently enable the reminder");
+});
+
+test("editing an already-configured schedule loads its real saved notificationRules, not the create-form defaults", async () => {
+  resetTestsState();
+  state.tests.scheduleForm = emptyScheduleForm();
+  state.tests.schedules = [{ id: "sched-notif-1", scheduleKind: "one_time", hasOccurrences: false }];
+  const savedRules = [
+    { kind: "athlete_invitation", enabled: false, reminderOffsetMinutes: null, digestTrigger: null },
+    { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 15, digestTrigger: null },
+    { kind: "coach_digest", enabled: false, reminderOffsetMinutes: null, digestTrigger: "periodic" },
+    { kind: "final_digest", enabled: true, reminderOffsetMinutes: null, digestTrigger: "on_close" },
+  ];
+  installFetchMock((call) => (call.url === "/api/tests/schedules/sched-notif-1"
+    ? { status: 200, body: { schedule: { id: "sched-notif-1", scheduleKind: "one_time", hasOccurrences: false, timezone: "UTC", startDate: "2026-08-25", opensTime: "07:00", dueTime: null, closesTime: "21:00" }, targets: [], link: null, notificationRules: savedRules } }
+    : { status: 404, body: {} }));
+  await handleTestsAction(fakeAction({ action: "tests-open-edit-schedule", scheduleId: "sched-notif-1" }), { renderTests: () => {} });
+  assert.deepEqual(state.tests.scheduleForm.notificationRules, savedRules);
+});
+
+test("editing a legacy schedule that never had rules saved loads an EMPTY array, not silently-enabled or silently-disabled defaults", async () => {
+  resetTestsState();
+  state.tests.scheduleForm = emptyScheduleForm();
+  state.tests.schedules = [{ id: "sched-legacy-1", scheduleKind: "one_time", hasOccurrences: false }];
+  installFetchMock((call) => (call.url === "/api/tests/schedules/sched-legacy-1"
+    ? { status: 200, body: { schedule: { id: "sched-legacy-1", scheduleKind: "one_time", hasOccurrences: false, timezone: "UTC", startDate: "2026-08-25", opensTime: "07:00", dueTime: null, closesTime: "21:00" }, targets: [], link: null, notificationRules: [] } }
+    : { status: 404, body: {} }));
+  await handleTestsAction(fakeAction({ action: "tests-open-edit-schedule", scheduleId: "sched-legacy-1" }), { renderTests: () => {} });
+  assert.deepEqual(state.tests.scheduleForm.notificationRules, []);
+});
+
+test("create submit sends notificationRules exactly as configured in the form", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.athleteIds = ["a1"];
+  state.tests.scheduleForm.timezone = "UTC";
+  state.tests.scheduleForm.opensTime = "06:00";
+  state.tests.scheduleForm.closesTime = "22:00";
+  state.tests.scheduleForm.notificationRules = [
+    { kind: "athlete_invitation", enabled: true },
+    { kind: "athlete_reminder", enabled: false, reminderOffsetMinutes: 60 },
+    { kind: "coach_digest", enabled: true },
+    { kind: "final_digest", enabled: false },
+  ];
+  installFetchMock((call) => {
+    if (call.url.includes("/api/tests/library")) return { status: 200, body: { tests: [{ testVersionId: "wellness-v1", schedulable: true }] } };
+    if (call.url === "/api/tests/schedules" && call.method === "POST") return { status: 201, body: { schedule: { id: "sched-1" } } };
+    return { status: 404, body: {} };
+  });
+  await submitTestsForm({ dataset: { testsForm: "create-schedule" } }, { renderTests: () => {} });
+  const createCall = fetchCalls.find((c) => c.url === "/api/tests/schedules" && c.method === "POST");
+  // JSON.stringify drops undefined properties - a kind with no
+  // reminderOffsetMinutes set round-trips through the real fetch body
+  // without that key at all, not as an explicit `undefined`.
+  assert.deepEqual(createCall.body.notificationRules, [
+    { kind: "athlete_invitation", enabled: true },
+    { kind: "athlete_reminder", enabled: false, reminderOffsetMinutes: 60 },
+    { kind: "coach_digest", enabled: true },
+    { kind: "final_digest", enabled: false },
+  ]);
+});
+
+test("edit (PATCH) submit also sends notificationRules alongside the other fields", async () => {
+  resetTestsState();
+  state.tests.scheduleForm = emptyScheduleForm({
+    editingScheduleId: "sched-9", scheduleKind: "one_time", timezone: "UTC", startDate: "2026-08-25", opensTime: "06:00", closesTime: "22:00",
+    notificationRules: [{ kind: "athlete_invitation", enabled: true }],
+  });
+  installFetchMock((call) => (call.url === "/api/tests/schedules/sched-9" && call.method === "PATCH"
+    ? { status: 200, body: { schedule: { id: "sched-9" } } }
+    : { status: 404, body: {} }));
+  await submitTestsForm({ dataset: { testsForm: "edit-schedule" } }, { renderTests: () => {} });
+  const patchCall = fetchCalls.find((c) => c.url === "/api/tests/schedules/sched-9" && c.method === "PATCH");
+  assert.deepEqual(patchCall.body.notificationRules, [{ kind: "athlete_invitation", enabled: true }]);
+});
+
+test("bulk (Specific dates) submit sends the same notificationRules alongside dates/targets", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "specific_dates";
+  state.tests.scheduleForm.selectedDates = ["2026-09-01"];
+  state.tests.scheduleForm.athleteIds = ["a1"];
+  state.tests.scheduleForm.notificationRules = [{ kind: "final_digest", enabled: true }];
+  installFetchMock((call) => {
+    if (call.url.includes("/api/tests/library")) return { status: 200, body: { tests: [{ testVersionId: "wellness-v1", schedulable: true }] } };
+    if (call.url === "/api/tests/schedules/bulk") return { status: 201, body: { schedules: [{ id: "bulk-1" }], count: 1, dates: ["2026-09-01"] } };
+    return { status: 404, body: {} };
+  });
+  await submitTestsForm({ dataset: { testsForm: "create-schedule-bulk" } }, { renderTests: () => {} });
+  const bulkCall = fetchCalls.find((c) => c.url === "/api/tests/schedules/bulk");
+  assert.deepEqual(bulkCall.body.notificationRules, [{ kind: "final_digest", enabled: true }]);
 });

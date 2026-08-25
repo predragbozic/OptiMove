@@ -34,6 +34,91 @@ const VALID_SCHEDULE_KIND_INPUTS = ["one_time", "daily"];
 // number - 366 is "every possible day of one calendar year, leap included".
 const MAX_BULK_DATES = 366;
 
+// Phase 3A: the four notification kinds tests.test_schedule_notification_
+// rules already supports (added in migrations_v2/202608240900_..., a
+// future-worker input at the time - see testsNotificationWorker.js for the
+// worker that now reads them). digest_trigger is never client-controlled -
+// the UI only ever offers "enabled" + (for reminder) an offset, so the
+// backend fixes the trigger per kind itself.
+const NOTIFICATION_KINDS = ["athlete_invitation", "athlete_reminder", "coach_digest", "final_digest"];
+const DEFAULT_REMINDER_OFFSET_MINUTES = 60;
+const DIGEST_TRIGGER_BY_KIND = { coach_digest: "periodic", final_digest: "on_close" };
+
+// Validates + normalizes a client-supplied notificationRules array into
+// EXACTLY one row per NOTIFICATION_KINDS entry - a kind the client omitted
+// resolves to enabled:false, never "leave whatever existed before" (every
+// save fully replaces the set - see replaceNotificationRules below - which
+// is what makes "atomsko upisivanje sva četiri pravila" true: the coach
+// always sees and confirms the complete set, never a partial merge).
+// Returns { ok:false, status, error } on the first problem found, or
+// { ok:true, rules: null } if the caller didn't send notificationRules at
+// all (meaning: don't touch whatever's already saved for this schedule).
+function resolveNotificationRules(rawRules) {
+  if (rawRules === undefined) return { ok: true, rules: null };
+  const byKind = new Map();
+  for (const raw of Array.isArray(rawRules) ? rawRules : []) {
+    if (!raw || !NOTIFICATION_KINDS.includes(raw.kind)) {
+      return { ok: false, status: 400, error: `Unknown notification rule kind: "${raw?.kind}".` };
+    }
+    if (byKind.has(raw.kind)) {
+      return { ok: false, status: 400, error: `Duplicate notification rule for "${raw.kind}".` };
+    }
+    if (typeof raw.enabled !== "boolean") {
+      return { ok: false, status: 400, error: `The "${raw.kind}" rule needs an "enabled" true/false.` };
+    }
+    byKind.set(raw.kind, raw);
+  }
+  const resolved = [];
+  for (const kind of NOTIFICATION_KINDS) {
+    const raw = byKind.get(kind);
+    const enabled = raw ? raw.enabled : false;
+    let reminderOffsetMinutes = null;
+    if (kind === "athlete_reminder") {
+      // The DB CHECK requires a non-null offset on every athlete_reminder
+      // row regardless of enabled/disabled - falling back to the same
+      // 60-minute MVP default the create form itself shows (rather than
+      // rejecting) means disabling the reminder without having typed an
+      // offset first can never fail validation over a field the coach
+      // can't even see while it's disabled.
+      const rawOffset = raw?.reminderOffsetMinutes;
+      reminderOffsetMinutes = Number.isInteger(rawOffset) && rawOffset > 0 ? rawOffset : DEFAULT_REMINDER_OFFSET_MINUTES;
+    }
+    const digestTrigger = DIGEST_TRIGGER_BY_KIND[kind] || null;
+    resolved.push({ kind, enabled, reminderOffsetMinutes, digestTrigger });
+  }
+  return { ok: true, rules: resolved };
+}
+
+// Runs inside the caller's own open transaction (POST /schedules, POST
+// /schedules/bulk's per-date loop, PATCH /schedules/:id) - a full
+// delete-then-reinsert of all 4 rows, so a constraint violation on any one
+// of them rolls back the whole write, never a partial rule set.
+async function replaceNotificationRules(client, scheduleId, rules) {
+  await client.query(`delete from tests.test_schedule_notification_rules where schedule_id = $1`, [scheduleId]);
+  for (const rule of rules) {
+    await client.query(
+      `insert into tests.test_schedule_notification_rules
+         (schedule_id, notification_kind, enabled, reminder_offset_minutes, digest_trigger)
+       values ($1, $2, $3, $4, $5)`,
+      [scheduleId, rule.kind, rule.enabled, rule.reminderOffsetMinutes, rule.digestTrigger],
+    );
+  }
+}
+
+async function loadNotificationRules(executor, scheduleId) {
+  const result = await executor(
+    `select notification_kind, enabled, reminder_offset_minutes, digest_trigger
+     from tests.test_schedule_notification_rules where schedule_id = $1`,
+    [scheduleId],
+  );
+  return result.rows.map((row) => ({
+    kind: row.notification_kind,
+    enabled: row.enabled,
+    reminderOffsetMinutes: row.reminder_offset_minutes,
+    digestTrigger: row.digest_trigger,
+  }));
+}
+
 const athleteDisplayNameSql = `coalesce(a.display_name, a.full_name, nullif(concat_ws(' ', a.first_name, a.last_name), ''), a.source_external_id, a.athlete_id::text)`;
 
 function text(value) {
@@ -662,13 +747,21 @@ router.post("/schedules", async (req, res, next) => {
     }
     const resolved = await resolveValidTargets(req, body.targets);
     if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+    const resolvedRules = resolveNotificationRules(body.notificationRules);
+    if (!resolvedRules.ok) return res.status(resolvedRules.status).json({ error: resolvedRules.error });
 
     const owner = await resolveScheduleOwnerContext(req);
     await client.query("begin");
     const schedule = await insertScheduleRow(client, { scheduleKind, timezone, startDate, endDate, opensTime, dueTime, closesTime, userId: req.user.id, owner });
     await insertTargets(client, schedule.id, resolved.targets);
+    // Not a hidden backend default: the coach saw and confirmed these
+    // values in the create form (see the Notifications section there) - if
+    // the request omits notificationRules entirely, nothing is written and
+    // this schedule stays unconfigured (the worker sends nothing for it)
+    // until a coach explicitly saves rules for it.
+    if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
     await client.query("commit");
-    res.status(201).json({ schedule: formatScheduleRow({ ...schedule, test_name: "WELLNESS" }) });
+    res.status(201).json({ schedule: formatScheduleRow({ ...schedule, test_name: "WELLNESS" }), notificationRules: resolvedRules.rules || [] });
   } catch (error) {
     await client.query("rollback").catch(() => {});
     respondToWriteError(res, next, error);
@@ -757,6 +850,8 @@ router.post("/schedules/bulk", async (req, res, next) => {
     // until every date and every target has passed.
     const resolved = await resolveValidTargets(req, body.targets);
     if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+    const resolvedRules = resolveNotificationRules(body.notificationRules);
+    if (!resolvedRules.ok) return res.status(resolvedRules.status).json({ error: resolvedRules.error });
 
     const owner = await resolveScheduleOwnerContext(req);
     await client.query("begin");
@@ -766,6 +861,9 @@ router.post("/schedules/bulk", async (req, res, next) => {
         scheduleKind: "one_time", timezone, startDate: date, endDate: date, opensTime, dueTime, closesTime, userId: req.user.id, owner,
       });
       await insertTargets(client, schedule.id, resolved.targets);
+      // Same rule set applied to every date - configured once in the create
+      // form, shared by every schedule this one bulk request creates.
+      if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
       created.push(schedule);
     }
     await client.query("commit");
@@ -910,7 +1008,7 @@ router.get("/schedules/:scheduleId", async (req, res, next) => {
     if (!requireCoachWorkspace(req, res)) return;
     const schedule = await loadManageableSchedule(req, req.params.scheduleId);
     if (!schedule) return res.status(404).json({ error: "Schedule not found." });
-    const [targetsResult, linkResult, activity] = await Promise.all([
+    const [targetsResult, linkResult, activity, notificationRules] = await Promise.all([
       query(
         `select t.target_kind, t.target_athlete_id, t.target_team_id, t.target_club_id,
                 ${athleteDisplayNameSql} as athlete_name, tm.name as team_name, cl.name as club_name
@@ -923,6 +1021,7 @@ router.get("/schedules/:scheduleId", async (req, res, next) => {
       ),
       query(`select id, public_token, status, created_at from tests.test_access_links where schedule_id = $1 and link_kind = 'schedule' and status = 'active'`, [schedule.id]),
       loadScheduleActivity(query, schedule.id),
+      loadNotificationRules(query, schedule.id),
     ]);
     res.json({
       schedule: formatScheduleRow({ ...schedule, has_occurrences: activity.hasOccurrence, has_activity: activity.hasActivity }),
@@ -932,6 +1031,11 @@ router.get("/schedules/:scheduleId", async (req, res, next) => {
         name: row.athlete_name || row.team_name || row.club_name,
       })),
       link: linkResult.rows[0] ? { id: linkResult.rows[0].id, publicToken: linkResult.rows[0].public_token, createdAt: linkResult.rows[0].created_at } : null,
+      // Empty array means "never configured" (not "all disabled") - the
+      // frontend uses this exact distinction to show the unconfigured state
+      // for a schedule created before this phase, per the spec's explicit
+      // "don't silently start sending" requirement.
+      notificationRules,
     });
   } catch (error) { next(error); }
 });
@@ -970,21 +1074,47 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       return res.status(409).json({ error: "This schedule is cancelled and can no longer be edited or reactivated. Create a new schedule instead." });
     }
 
+    // Validated up front, before either branch below, so a bad rule rolls
+    // back a status-only PATCH exactly the same way it rolls back a full
+    // edit - notificationRules is accepted on both, independent of
+    // FULL_EDIT_BODY_KEYS (a coach adjusting only notification settings
+    // shouldn't have to resend targets/dates just to trip "full edit" mode).
+    const resolvedRules = resolveNotificationRules(body.notificationRules);
+    if (!resolvedRules.ok) {
+      await client.query("rollback");
+      return res.status(resolvedRules.status).json({ error: resolvedRules.error });
+    }
+
     const isFullEdit = FULL_EDIT_BODY_KEYS.some((key) => body[key] !== undefined);
     if (!isFullEdit) {
-      const status = text(body.status);
-      // 'cancelled' is deliberately not accepted here - DELETE is the only
-      // route that cancels a schedule, since cancelling also has to revoke
-      // active access links (see the DELETE handler below); a status-only
-      // PATCH to 'cancelled' would reach the same terminal state without
-      // that side effect.
-      if (!["active", "paused"].includes(status)) {
+      // Neither a status change nor notificationRules - there's nothing in
+      // this request to apply. Kept as a 400, same message as before, so a
+      // truly empty/garbage PATCH still gets a clear rejection rather than
+      // a silent no-op commit.
+      if (body.status === undefined && resolvedRules.rules === null) {
         await client.query("rollback");
         return res.status(400).json({ error: "Invalid status - use DELETE to cancel a schedule." });
       }
-      await client.query(`update tests.test_schedules set status = $2, updated_at = now() where id = $1`, [schedule.id, status]);
+      let status = schedule.status;
+      if (body.status !== undefined) {
+        status = text(body.status);
+        // 'cancelled' is deliberately not accepted here - DELETE is the
+        // only route that cancels a schedule, since cancelling also has to
+        // revoke active access links (see the DELETE handler below); a
+        // status-only PATCH to 'cancelled' would reach the same terminal
+        // state without that side effect.
+        if (!["active", "paused"].includes(status)) {
+          await client.query("rollback");
+          return res.status(400).json({ error: "Invalid status - use DELETE to cancel a schedule." });
+        }
+        await client.query(`update tests.test_schedules set status = $2, updated_at = now() where id = $1`, [schedule.id, status]);
+      }
+      // A coach adjusting only notification settings (no status, no full
+      // edit fields) must not have to resend a status just to trip this
+      // branch - see the up-front validation/comment above.
+      if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
       await client.query("commit");
-      return res.json({ ok: true, status });
+      return res.json({ ok: true, status, notificationRules: resolvedRules.rules || undefined });
     }
 
     // Full edit: validate everything FIRST, write nothing until every field
@@ -1133,6 +1263,8 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       await insertTargets(client, schedule.id, resolvedTargets);
     }
 
+    if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
+
     if (regenerateOneTimeOccurrence) {
       // Cascades to test_assignments (on delete cascade, Phase 1 schema) -
       // safe because every one of those assignment rows was just locked and
@@ -1147,14 +1279,15 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
     }
 
     await client.query("commit");
-    const [updated, updatedActivity] = await Promise.all([
+    const [updated, updatedActivity, updatedRules] = await Promise.all([
       query(
         `select sch.*, tv.name as test_name from tests.test_schedules sch join tests.test_versions tv on tv.id = sch.test_version_id where sch.id = $1`,
         [schedule.id],
       ),
       loadScheduleActivity(query, schedule.id),
+      loadNotificationRules(query, schedule.id),
     ]);
-    res.json({ schedule: formatScheduleRow({ ...updated.rows[0], has_occurrences: updatedActivity.hasOccurrence, has_activity: updatedActivity.hasActivity }) });
+    res.json({ schedule: formatScheduleRow({ ...updated.rows[0], has_occurrences: updatedActivity.hasOccurrence, has_activity: updatedActivity.hasActivity }), notificationRules: updatedRules });
   } catch (error) {
     await client.query("rollback").catch(() => {});
     respondToWriteError(res, next, error);

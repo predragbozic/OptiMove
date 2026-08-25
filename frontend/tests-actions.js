@@ -84,6 +84,16 @@ export async function handleTestsAction(action, { renderTests }) {
       timezone: defaultTimezone,
       startDate: localDateIsoInTimeZone(defaultTimezone),
       calendarMonth: localMonthIsoInTimeZone(defaultTimezone),
+      // Visible MVP defaults for a NEW schedule (spec: invitation on,
+      // reminder on at 60 minutes, both coach digests on) - the coach sees
+      // these checked in the form and can change any of them before saving;
+      // nothing here is a hidden backend default the coach never sees.
+      notificationRules: [
+        { kind: "athlete_invitation", enabled: true },
+        { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 60 },
+        { kind: "coach_digest", enabled: true },
+        { kind: "final_digest", enabled: true },
+      ],
     });
     state.tests.bulkResult = null;
     renderTests();
@@ -106,6 +116,26 @@ export async function handleTestsAction(action, { renderTests }) {
     const isEdit = Boolean(form.editingScheduleId);
     const daily = action.dataset.daily === "true";
     form.scheduleKind = daily ? "daily" : isEdit ? "one_time" : "specific_dates";
+    renderTests();
+    return true;
+  }
+  // One of the 4 Notifications checkboxes (invitation/reminder/coach live
+  // digest/final digest). Click-dispatched, same pattern as "Show
+  // cancelled" above - `action` is the checkbox element itself by the time
+  // its own click handler runs, so `.checked` already reflects the
+  // post-click state. A kind not yet present in notificationRules (an
+  // unconfigured existing schedule, or a kind the coach hasn't touched yet)
+  // is created on first interaction rather than requiring every kind to
+  // already have a row.
+  if (type === "tests-notification-rule-toggle") {
+    const kind = action.dataset.kind;
+    const form = state.tests.scheduleForm;
+    let rule = form.notificationRules.find((r) => r.kind === kind);
+    if (!rule) {
+      rule = kind === "athlete_reminder" ? { kind, enabled: false, reminderOffsetMinutes: 60 } : { kind, enabled: false };
+      form.notificationRules.push(rule);
+    }
+    rule.enabled = action.checked;
     renderTests();
     return true;
   }
@@ -251,7 +281,7 @@ async function reloadSection(renderTests) {
   renderTests();
 }
 
-async function openAssignment(assignmentId, renderTests) {
+export async function openAssignment(assignmentId, renderTests) {
   try {
     state.tests.form = await loadWellnessForm(assignmentId);
   } catch (error) {
@@ -332,6 +362,22 @@ function updateWellnessProgress(form) {
 export function handleTestsScheduleFormField(fieldEl) {
   const name = fieldEl.name;
   if (!name) return;
+  // The reminder-offset number input writes into the nested
+  // notificationRules array (one entry per kind), not a flat
+  // scheduleForm[name] field like every other input here - special-cased
+  // rather than generalizing this whole function, since it's the only field
+  // that isn't a direct 1:1 scheduleForm property.
+  if (name === "reminderOffsetMinutes") {
+    const form = state.tests.scheduleForm;
+    const minutes = Math.max(1, Math.round(Number(fieldEl.value)) || 60);
+    let rule = form.notificationRules.find((r) => r.kind === "athlete_reminder");
+    if (!rule) {
+      rule = { kind: "athlete_reminder", enabled: false };
+      form.notificationRules.push(rule);
+    }
+    rule.reminderOffsetMinutes = minutes;
+    return;
+  }
   state.tests.scheduleForm[name] = fieldEl.value;
 }
 
@@ -476,6 +522,10 @@ async function openEditSchedule(scheduleId, renderTests) {
       athleteIds: targets.filter((t) => t.kind === "athlete").map((t) => t.id),
       teamId: targets.find((t) => t.kind === "team")?.id || "",
       clubId: targets.find((t) => t.kind === "club")?.id || "",
+      // [] here means "never configured" (see state.js's own comment) - the
+      // form renders that as a visible unconfigured state, never silently
+      // treating it as either all-enabled or all-disabled.
+      notificationRules: detail.notificationRules || [],
     });
   } catch (error) {
     state.tests.error = error.message || "Could not open this schedule for editing.";
@@ -573,6 +623,16 @@ async function submitWellnessForm(renderTests) {
   }
 }
 
+// Strips the array down to exactly what the API accepts (kind/enabled/
+// reminderOffsetMinutes - nothing else the form might carry internally).
+function notificationRulesForSubmit(scheduleForm) {
+  return scheduleForm.notificationRules.map((rule) => ({
+    kind: rule.kind,
+    enabled: rule.enabled,
+    reminderOffsetMinutes: rule.reminderOffsetMinutes,
+  }));
+}
+
 async function submitScheduleForm(renderTests) {
   const scheduleForm = state.tests.scheduleForm;
   if (scheduleForm.submitting) return;
@@ -590,6 +650,7 @@ async function submitScheduleForm(renderTests) {
       dueTime: scheduleForm.dueTime || null,
       closesTime: scheduleForm.closesTime,
       targets,
+      notificationRules: notificationRulesForSubmit(scheduleForm),
     };
     let result;
     if (isEdit) {
@@ -642,6 +703,7 @@ async function submitBulkScheduleForm(renderTests) {
         closesTime: scheduleForm.closesTime,
         dates: scheduleForm.selectedDates,
         targets,
+        notificationRules: notificationRulesForSubmit(scheduleForm),
       }),
     });
     const summaryFields = targetSummaryFieldsFor(targets, state.tests.orgPickerData);
