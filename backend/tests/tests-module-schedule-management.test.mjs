@@ -471,10 +471,44 @@ test("B2. editing a recurring (daily) schedule that already has an occurrence ch
   assert.equal(athlete0Today.body.assignments.length, 1);
 });
 
-test("B3. a one_time schedule that already has an occurrence cannot be fully edited - a clear, controlled rejection, not a silent no-op", async () => {
+test("B3. a one_time schedule whose occurrence exists but is still fully untouched (pending, no assessment) CAN be fully edited - Phase 2.5 loosened this from an unconditional block", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("b3", 2);
   const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
-  await api("/api/tests/athlete/today", { cookie: athletes[0].cookie }); // generates the one_time occurrence
+  await api("/api/tests/athlete/today", { cookie: athletes[0].cookie }); // generates the one_time occurrence, athlete never submits
+
+  const edited = await api(`/api/tests/schedules/${created.body.schedule.id}`, {
+    method: "PATCH",
+    cookie: coachCookie,
+    body: { scheduleKind: "one_time", timezone: "UTC", startDate: TODAY, opensTime: "01:00", closesTime: "22:00", targets: [{ kind: "athlete", id: athletes[1].athleteId }] },
+  });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.schedule.opensTime.slice(0, 5), "01:00");
+  assert.equal(edited.body.schedule.hasOccurrences, false, "the stale, untouched occurrence was deleted, not left behind under the new targets/time");
+
+  const detail = await api(`/api/tests/schedules/${created.body.schedule.id}`, { cookie: coachCookie });
+  assert.equal(detail.body.targets.length, 1);
+  assert.equal(detail.body.targets[0].id, athletes[1].athleteId, "the new target replaced the old one");
+  assert.equal(detail.body.schedule.hasActivity, false);
+
+  // A fresh occurrence/assignment for the NEW target regenerates normally
+  // on the next on-demand call, exactly like a schedule that never had one.
+  const today1 = await api("/api/tests/athlete/today", { cookie: athletes[1].cookie });
+  assert.equal(today1.body.assignments.length, 1);
+  assert.equal(today1.body.assignments[0].occurrence.opensAt.slice(11, 16), "01:00");
+
+  // Athlete 0 (the OLD target) no longer has any assignment at all - the
+  // untouched, never-submitted occurrence/assignment they had was safely
+  // deleted, not left orphaned under a schedule that no longer targets them.
+  const today0 = await api("/api/tests/athlete/today", { cookie: athletes[0].cookie });
+  assert.equal(today0.body.assignments.length, 0);
+});
+
+test("B3b. a one_time schedule whose occurrence has a real submitted response cannot be edited at all - 409, nothing changes, history untouched", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("b3b", 2);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const assignmentId = await getTodayAssignmentId(athletes[0].cookie);
+  const submitted = await api(`/api/tests/assignments/${assignmentId}/submit`, { method: "POST", cookie: athletes[0].cookie, body: { values: FULL_VALUES } });
+  assert.equal(submitted.status, 200);
 
   const edited = await api(`/api/tests/schedules/${created.body.schedule.id}`, {
     method: "PATCH",
@@ -482,11 +516,17 @@ test("B3. a one_time schedule that already has an occurrence cannot be fully edi
     body: { scheduleKind: "one_time", timezone: "UTC", startDate: TODAY, opensTime: "01:00", closesTime: "22:00", targets: [{ kind: "athlete", id: athletes[1].athleteId }] },
   });
   assert.equal(edited.status, 409);
+  assert.equal(edited.body.reason, "has_activity");
 
-  // Nothing changed.
   const detail = await api(`/api/tests/schedules/${created.body.schedule.id}`, { cookie: coachCookie });
   assert.equal(detail.body.targets.length, 1);
-  assert.equal(detail.body.targets[0].id, athletes[0].athleteId);
+  assert.equal(detail.body.targets[0].id, athletes[0].athleteId, "nothing changed - target untouched");
+  assert.equal(detail.body.schedule.hasActivity, true);
+
+  // The submitted result is completely unaffected and still visible.
+  const history = await api("/api/tests/athlete/history", { cookie: athletes[0].cookie });
+  assert.equal(history.body.history.length, 1);
+  assert.equal(history.body.history[0].wellnessScore, 4);
 });
 
 test("B4. status-only PATCH (pause/activate) still works exactly as before, without requiring targets/dates in the body", async () => {
@@ -868,4 +908,276 @@ test("J2. DELETE wins the race first: it physically removes the empty schedule, 
   } finally {
     clientA.release();
   }
+});
+
+// ------------------------------------------------------------
+// K. Phase 2.5 - cancelled/paused lockdown across every access path (not
+// just Today, which C2b already covered)
+// ------------------------------------------------------------
+
+test("K1. a cancelled schedule's still-pending assignment disappears from Upcoming too, not only Today", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k1", 1);
+  const futureDate = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const created = await api("/api/tests/schedules", {
+    method: "POST", cookie: coachCookie,
+    body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }], { startDate: futureDate }),
+  });
+  const before = await api("/api/tests/athlete/upcoming", { cookie: athletes[0].cookie });
+  assert.equal(before.body.upcoming.length, 1);
+
+  const deleted = await api(`/api/tests/schedules/${created.body.schedule.id}`, { method: "DELETE", cookie: coachCookie });
+  assert.equal(deleted.body.action, "deleted", "no occurrence exists yet for a future one_time schedule - this is a physical delete");
+
+  const after = await api("/api/tests/athlete/upcoming", { cookie: athletes[0].cookie });
+  assert.equal(after.body.upcoming.length, 0);
+});
+
+test("K2. direct GET of an assignment under a cancelled schedule reports canSubmit:false and the schedule's own status - it must never invite filling it in again", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k2", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const assignmentId = await getTodayAssignmentId(athletes[0].cookie);
+  await api(`/api/tests/schedules/${created.body.schedule.id}`, { method: "DELETE", cookie: coachCookie }); // has an occurrence -> cancels
+
+  const detail = await api(`/api/tests/assignments/${assignmentId}`, { cookie: athletes[0].cookie });
+  assert.equal(detail.status, 200, "the assignment itself is still readable (read-only), never a 404 - History must stay reachable through it");
+  assert.equal(detail.body.canSubmit, false);
+  assert.equal(detail.body.assignment.scheduleStatus, "cancelled");
+});
+
+test("K3. submit through a PREVIOUSLY-opened assignment form fails with a controlled 409 once the schedule is cancelled after the fact - the server, not the stale client state, decides", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k3", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const assignmentId = await getTodayAssignmentId(athletes[0].cookie);
+
+  const openedFormStillCanSubmit = await api(`/api/tests/assignments/${assignmentId}`, { cookie: athletes[0].cookie });
+  assert.equal(openedFormStillCanSubmit.body.canSubmit, true, "the form was genuinely fillable at the moment it was opened");
+
+  await api(`/api/tests/schedules/${created.body.schedule.id}`, { method: "DELETE", cookie: coachCookie }); // cancels after the form was already open
+
+  const submitFromStaleForm = await api(`/api/tests/assignments/${assignmentId}/submit`, { method: "POST", cookie: athletes[0].cookie, body: { values: FULL_VALUES } });
+  assert.equal(submitFromStaleForm.status, 409);
+  assert.match(submitFromStaleForm.body.error, /cancelled/i);
+
+  const assignmentRow = await query(`select status from tests.test_assignments where id = $1`, [assignmentId]);
+  assert.equal(assignmentRow.rows[0].status, "pending", "the rejected submit must not have changed anything");
+});
+
+test("K4. a paused (not cancelled) schedule also rejects a new submit with a controlled 409, without touching any existing history", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k4", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const assignmentId = await getTodayAssignmentId(athletes[0].cookie);
+
+  const paused = await api(`/api/tests/schedules/${created.body.schedule.id}`, { method: "PATCH", cookie: coachCookie, body: { status: "paused" } });
+  assert.equal(paused.status, 200);
+
+  const submitWhilePaused = await api(`/api/tests/assignments/${assignmentId}/submit`, { method: "POST", cookie: athletes[0].cookie, body: { values: FULL_VALUES } });
+  assert.equal(submitWhilePaused.status, 409);
+  assert.match(submitWhilePaused.body.error, /paused/i);
+
+  const assignmentRow = await query(`select status from tests.test_assignments where id = $1`, [assignmentId]);
+  assert.equal(assignmentRow.rows[0].status, "pending");
+});
+
+test("K5. a completed result stays fully visible to the coach (in Results and the single-result view) after its schedule is cancelled", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k5", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const assignmentId = await getTodayAssignmentId(athletes[0].cookie);
+  const submitted = await api(`/api/tests/assignments/${assignmentId}/submit`, { method: "POST", cookie: athletes[0].cookie, body: { values: FULL_VALUES } });
+  assert.equal(submitted.status, 200);
+
+  const cancelled = await api(`/api/tests/schedules/${created.body.schedule.id}`, { method: "DELETE", cookie: coachCookie });
+  assert.equal(cancelled.body.action, "cancelled");
+
+  const results = await api("/api/tests/results", { cookie: coachCookie });
+  assert.equal(results.body.results.length, 1);
+  assert.equal(results.body.results[0].assessmentId, submitted.body.assessmentId);
+
+  const singleResult = await api(`/api/tests/results/${submitted.body.assessmentId}`, { cookie: coachCookie });
+  assert.equal(singleResult.status, 200);
+  assert.equal(singleResult.body.wellnessScore, 4);
+
+  // The athlete's own History is unaffected either.
+  const history = await api("/api/tests/athlete/history", { cookie: athletes[0].cookie });
+  assert.equal(history.body.history.length, 1);
+});
+
+// ------------------------------------------------------------
+// N. Concurrency: PATCH edit vs a simultaneous athlete submit on the SAME
+// one_time schedule's assignment - both orderings, driven with two real,
+// independent connections and deterministic lock-wait polling
+// (waitUntilBlockedBy), matching J1/J2's own pattern above.
+// ------------------------------------------------------------
+
+test("N1. submit wins the race: it completes first, so the concurrent edit attempt correctly sees the now-real activity and is rejected with 409", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("n1", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const assignmentId = await getTodayAssignmentId(athletes[0].cookie);
+
+  const clientA = await pool.connect();
+  try {
+    const pidResult = await clientA.query("select pg_backend_pid() as pid");
+    const blockerPid = pidResult.rows[0].pid;
+
+    await clientA.query("begin");
+    // Mirrors POST /submit's own first lock step.
+    await clientA.query(`select * from tests.test_assignments where id = $1 for update`, [assignmentId]);
+
+    // Fire the REAL PATCH edit concurrently - its own activity check takes
+    // FOR UPDATE on this exact assignment row, so it must queue behind
+    // clientA's held lock.
+    const editPromise = api(`/api/tests/schedules/${created.body.schedule.id}`, {
+      method: "PATCH", cookie: coachCookie,
+      body: { scheduleKind: "one_time", timezone: "UTC", startDate: TODAY, opensTime: "01:00", closesTime: "22:00", targets: [{ kind: "athlete", id: athletes[0].athleteId }] },
+    });
+    await waitUntilBlockedBy(blockerPid);
+
+    // Mirrors what a real submit does to the assignment row (the minimal
+    // part the edit's own activity check actually looks at) before
+    // committing - this IS "submit winning the race".
+    await clientA.query(`update tests.test_assignments set status = 'completed', completed_at = now() where id = $1`, [assignmentId]);
+    await clientA.query("commit");
+
+    const edited = await editPromise;
+    assert.equal(edited.status, 409);
+    assert.equal(edited.body.reason, "has_activity");
+
+    const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [created.body.schedule.id]);
+    assert.equal(occurrenceRows.rowCount, 1, "the edit must not have deleted the occurrence once it saw real activity");
+  } finally {
+    clientA.release();
+  }
+});
+
+test("N2. edit wins the race: it safely regenerates first, so the concurrent submit attempt correctly finds the assignment gone (404), never a corrupted half-state", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("n2", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  const assignmentId = await getTodayAssignmentId(athletes[0].cookie);
+
+  const clientA = await pool.connect();
+  try {
+    const pidResult = await clientA.query("select pg_backend_pid() as pid");
+    const blockerPid = pidResult.rows[0].pid;
+
+    await clientA.query("begin");
+    // Mirrors PATCH's own lock sequence: schedule row, then the
+    // occurrence(s), then the assignment(s) - all FOR UPDATE.
+    await clientA.query(`select * from tests.test_schedules where id = $1 for update`, [created.body.schedule.id]);
+    await clientA.query(`select id from tests.test_schedule_occurrences where schedule_id = $1 for update`, [created.body.schedule.id]);
+    await clientA.query(`select id, status, started_at from tests.test_assignments where id = $1 for update`, [assignmentId]);
+
+    // Fire the REAL submit concurrently - its own first step locks this
+    // exact assignment row, so it must queue behind clientA.
+    const submitPromise = api(`/api/tests/assignments/${assignmentId}/submit`, { method: "POST", cookie: athletes[0].cookie, body: { values: FULL_VALUES } });
+    await waitUntilBlockedBy(blockerPid);
+
+    // Already proven safe (still pending, no assessment) - mirrors the
+    // edit's own regeneration step.
+    await clientA.query(`delete from tests.test_schedule_occurrences where schedule_id = $1`, [created.body.schedule.id]);
+    await clientA.query("commit");
+
+    const submitted = await submitPromise;
+    assert.equal(submitted.status, 404, "the assignment the stale request was aimed at no longer exists - a clean 404, never a corrupted write");
+
+    const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [created.body.schedule.id]);
+    assert.equal(occurrenceRows.rowCount, 0);
+    const assessmentRows = await query(`select id from tests.test_assessments where athlete_id = $1`, [athletes[0].athleteId]);
+    assert.equal(assessmentRows.rowCount, 0, "the losing submit must never have created an assessment for a now-deleted assignment");
+  } finally {
+    clientA.release();
+  }
+});
+
+// ------------------------------------------------------------
+// M. "Specific dates" bulk scheduling (POST /schedules/bulk)
+// ------------------------------------------------------------
+
+function bulkCreateBody(dates, targets, overrides = {}) {
+  return {
+    testVersionId: WELLNESS_TEST_VERSION_ID,
+    timezone: "UTC",
+    opensTime: "06:00",
+    closesTime: "22:00",
+    dates,
+    targets,
+    ...overrides,
+  };
+}
+
+test("M1. choosing three dates creates exactly three independent one_time schedules, sharing the same test/time/targets", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m1", 1);
+  const dates = ["2026-09-01", "2026-09-03", "2026-09-07"];
+  const result = await api("/api/tests/schedules/bulk", { method: "POST", cookie: coachCookie, body: bulkCreateBody(dates, [{ kind: "athlete", id: athletes[0].athleteId }]) });
+  assert.equal(result.status, 201);
+  assert.equal(result.body.count, 3);
+  assert.deepEqual(result.body.dates.sort(), dates.slice().sort());
+  assert.equal(result.body.schedules.length, 3);
+  assert.ok(result.body.schedules.every((s) => s.scheduleKind === "one_time"));
+
+  const createdIds = result.body.schedules.map((s) => s.id);
+  const rows = await query(`select id, start_date, schedule_kind from tests.test_schedules where id = any($1::uuid[]) order by start_date`, [createdIds]);
+  assert.equal(rows.rowCount, 3);
+  assert.deepEqual(rows.rows.map((r) => r.schedule_kind), ["one_time", "one_time", "one_time"]);
+
+  // Independent schedules, not one grouped row - each has its own target row.
+  const targetRows = await query(`select schedule_id from tests.test_schedule_targets where schedule_id = any($1::uuid[])`, [createdIds]);
+  assert.equal(targetRows.rowCount, 3);
+  assert.equal(new Set(targetRows.rows.map((r) => r.schedule_id)).size, 3);
+});
+
+test("M2. duplicate dates in the same bulk request collapse to one schedule per unique date, not an error", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m2", 1);
+  const result = await api("/api/tests/schedules/bulk", {
+    method: "POST", cookie: coachCookie,
+    body: bulkCreateBody(["2026-09-10", "2026-09-10", "2026-09-11", "2026-09-10"], [{ kind: "athlete", id: athletes[0].athleteId }]),
+  });
+  assert.equal(result.status, 201);
+  assert.equal(result.body.count, 2);
+  assert.deepEqual(result.body.dates.sort(), ["2026-09-10", "2026-09-11"]);
+});
+
+test("M3. one malformed date rolls back the ENTIRE bulk request - no schedule for any of the valid dates either", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m3", 1);
+  const before = await query(`select count(*)::int as n from tests.test_schedules`);
+  const result = await api("/api/tests/schedules/bulk", {
+    method: "POST", cookie: coachCookie,
+    body: bulkCreateBody(["2026-09-12", "not-a-date", "2026-09-14"], [{ kind: "athlete", id: athletes[0].athleteId }]),
+  });
+  assert.equal(result.status, 400);
+  const after = await query(`select count(*)::int as n from tests.test_schedules`);
+  assert.equal(after.rows[0].n, before.rows[0].n);
+});
+
+test("M4. an unauthorized target rolls back the entire bulk request, across every date", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m4", 1);
+  const outsider = await makeAthlete({ name: "M4 Outsider" });
+  const before = await query(`select count(*)::int as n from tests.test_schedules`);
+  const result = await api("/api/tests/schedules/bulk", {
+    method: "POST", cookie: coachCookie,
+    body: bulkCreateBody(["2026-09-15", "2026-09-16"], [{ kind: "athlete", id: athletes[0].athleteId }, { kind: "athlete", id: outsider }]),
+  });
+  assert.equal(result.status, 403);
+  const after = await query(`select count(*)::int as n from tests.test_schedules`);
+  assert.equal(after.rows[0].n, before.rows[0].n);
+});
+
+test("M5. each schedule created by a bulk request is independently editable and independently deletable/cancellable afterward, through the existing single-schedule routes", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m5", 2);
+  const result = await api("/api/tests/schedules/bulk", {
+    method: "POST", cookie: coachCookie,
+    body: bulkCreateBody(["2026-09-20", "2026-09-21"], [{ kind: "athlete", id: athletes[0].athleteId }]),
+  });
+  const [first, second] = result.body.schedules;
+
+  const edited = await api(`/api/tests/schedules/${first.id}`, {
+    method: "PATCH", cookie: coachCookie,
+    body: { scheduleKind: "one_time", timezone: "UTC", startDate: "2026-09-20", opensTime: "07:00", closesTime: "20:00", targets: [{ kind: "athlete", id: athletes[1].athleteId }] },
+  });
+  assert.equal(edited.status, 200, "editing one bulk-created day must not require or affect the others");
+
+  const deleted = await api(`/api/tests/schedules/${second.id}`, { method: "DELETE", cookie: coachCookie });
+  assert.equal(deleted.body.action, "deleted");
+
+  const firstStillThere = await api(`/api/tests/schedules/${first.id}`, { cookie: coachCookie });
+  assert.equal(firstStillThere.status, 200);
+  assert.equal(firstStillThere.body.schedule.opensTime.slice(0, 5), "07:00");
 });

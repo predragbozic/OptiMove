@@ -30,9 +30,16 @@ const {
   handleTestsAction,
   handleTestsScheduleAthleteSearchInput,
   submitTestsForm,
+  startTestsCalendarDrag,
+  extendTestsCalendarDrag,
+  endTestsCalendarDrag,
 } = await import("../tests-actions.js");
 const { testsAthleteMultiSelectVisibleAthletes, renderTestsAthleteOptionsHtml } = await import("../tests-view.js");
 const { emptyScheduleForm, state } = await import("../state.js");
+
+function fakeDayEl(date, disabled = false) {
+  return { dataset: { date }, disabled };
+}
 
 function fakeAction(dataset, extra = {}) {
   return { dataset, ...extra };
@@ -217,16 +224,46 @@ test("editing a schedule with no occurrence loads its real targets/kind/times in
   assert.equal(form.opensTime, "07:00");
 });
 
-test("a one_time schedule that already has its occurrence never opens the edit form - a clear error instead, no network round trip needed to find out", async () => {
+test("a one_time schedule with an occurrence but NO real activity yet still opens the edit form (Phase 2.5 loosened this) - the true answer only comes from the detail fetch, never a stale list-row guess", async () => {
   resetTestsState();
-  state.tests.scheduleForm = emptyScheduleForm(); // closed, as it would be before clicking Edit from the list
+  state.tests.scheduleForm = emptyScheduleForm();
   state.tests.schedules = [{ id: "sched-1", scheduleKind: "one_time", hasOccurrences: true }];
-  installFetchMock(() => ({ status: 200, body: {} }));
+  installFetchMock((call) => (call.url === "/api/tests/schedules/sched-1"
+    ? {
+      status: 200,
+      body: {
+        schedule: { id: "sched-1", scheduleKind: "one_time", hasOccurrences: true, hasActivity: false, timezone: "UTC", startDate: "2026-08-25", opensTime: "07:00", dueTime: null, closesTime: "21:00" },
+        targets: [{ kind: "athlete", id: "a1", name: "Ana Anić" }],
+        link: null,
+      },
+    }
+    : { status: 404, body: {} }));
   await handleTestsAction(fakeAction({ action: "tests-open-edit-schedule", scheduleId: "sched-1" }), { renderTests: () => {} });
-  assert.equal(state.tests.scheduleForm.open, false);
-  assert.ok(!state.tests.scheduleForm.editingScheduleId);
-  assert.ok(state.tests.error.toLowerCase().includes("can no longer be edited"), state.tests.error);
-  assert.equal(fetchCalls.length, 0, "no request should be made once the block is already known from the list row");
+  const form = state.tests.scheduleForm;
+  assert.equal(form.open, true);
+  assert.equal(form.editingScheduleId, "sched-1");
+  assert.equal(form.hasOccurrences, true);
+  assert.equal(form.hasActivity, false);
+});
+
+test("a one_time schedule with real activity (started/completed response) opens the form but its hasActivity flag is set, so the view can render the blocked explanation instead of editable fields", async () => {
+  resetTestsState();
+  state.tests.scheduleForm = emptyScheduleForm();
+  state.tests.schedules = [{ id: "sched-2", scheduleKind: "one_time", hasOccurrences: true }];
+  installFetchMock((call) => (call.url === "/api/tests/schedules/sched-2"
+    ? {
+      status: 200,
+      body: {
+        schedule: { id: "sched-2", scheduleKind: "one_time", hasOccurrences: true, hasActivity: true, timezone: "UTC", startDate: "2026-08-25", opensTime: "07:00", dueTime: null, closesTime: "21:00" },
+        targets: [{ kind: "athlete", id: "a1", name: "Ana Anić" }],
+        link: null,
+      },
+    }
+    : { status: 404, body: {} }));
+  await handleTestsAction(fakeAction({ action: "tests-open-edit-schedule", scheduleId: "sched-2" }), { renderTests: () => {} });
+  const form = state.tests.scheduleForm;
+  assert.equal(form.open, true);
+  assert.equal(form.hasActivity, true, "the view (renderScheduleFormHtml) uses this to show the blocked explanation instead of the editable form");
 });
 
 test("a cancelled schedule never opens the edit form either - cancelled is terminal, no network round trip needed to find out", async () => {
@@ -341,4 +378,135 @@ test("toggling Show cancelled off filters cancelled rows out of the schedule lis
   // by construction whenever the toggle is off.
   const visible = state.tests.schedules.filter((row) => state.tests.showCancelledSchedules || row.status !== "cancelled");
   assert.deepEqual(visible.map((r) => r.id), ["s1"]);
+});
+
+// ------------------------------------------------------------
+// Specific dates: calendar click-and-drag range, toggle, double-submit guard
+// ------------------------------------------------------------
+
+test("a plain click (mousedown, no drag) on an unselected day adds just that one date", () => {
+  resetTestsState();
+  state.tests.scheduleForm.selectedDates = [];
+  startTestsCalendarDrag(fakeDayEl("2026-09-05"));
+  endTestsCalendarDrag();
+  assert.deepEqual(state.tests.scheduleForm.selectedDates, ["2026-09-05"]);
+});
+
+test("a plain click on an ALREADY-selected day removes just that one date - single click toggles", () => {
+  resetTestsState();
+  state.tests.scheduleForm.selectedDates = ["2026-09-05", "2026-09-06"];
+  startTestsCalendarDrag(fakeDayEl("2026-09-05"));
+  endTestsCalendarDrag();
+  assert.deepEqual(state.tests.scheduleForm.selectedDates, ["2026-09-06"]);
+});
+
+test("mousedown on day 1, drag over to day 3, selects the whole inclusive range - Booking-style range select", () => {
+  resetTestsState();
+  state.tests.scheduleForm.selectedDates = [];
+  startTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  extendTestsCalendarDrag(fakeDayEl("2026-09-11"));
+  extendTestsCalendarDrag(fakeDayEl("2026-09-12"));
+  endTestsCalendarDrag();
+  assert.deepEqual(state.tests.scheduleForm.selectedDates.sort(), ["2026-09-10", "2026-09-11", "2026-09-12"]);
+});
+
+test("dragging backward (toward the anchor) shrinks the range - days no longer covered are un-selected again, not left stranded", () => {
+  resetTestsState();
+  state.tests.scheduleForm.selectedDates = [];
+  startTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  extendTestsCalendarDrag(fakeDayEl("2026-09-14")); // drag far out first
+  extendTestsCalendarDrag(fakeDayEl("2026-09-11")); // then shrink back
+  endTestsCalendarDrag();
+  assert.deepEqual(state.tests.scheduleForm.selectedDates.sort(), ["2026-09-10", "2026-09-11"]);
+});
+
+test("a drag that starts on an already-selected day REMOVES the whole dragged-over range, not just the anchor", () => {
+  resetTestsState();
+  state.tests.scheduleForm.selectedDates = ["2026-09-10", "2026-09-11", "2026-09-12", "2026-09-20"];
+  startTestsCalendarDrag(fakeDayEl("2026-09-10")); // anchor is already selected -> this drag removes
+  extendTestsCalendarDrag(fakeDayEl("2026-09-12"));
+  endTestsCalendarDrag();
+  assert.deepEqual(state.tests.scheduleForm.selectedDates, ["2026-09-20"], "only the dragged range was removed - an unrelated already-selected date elsewhere is untouched");
+});
+
+test("a drag never selects a date before today, even if it's inside the dragged range", () => {
+  resetTestsState();
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  state.tests.scheduleForm.selectedDates = [];
+  startTestsCalendarDrag(fakeDayEl(yesterday));
+  extendTestsCalendarDrag(fakeDayEl(tomorrow));
+  endTestsCalendarDrag();
+  assert.ok(!state.tests.scheduleForm.selectedDates.includes(yesterday), "past dates must never be selectable, even mid-range");
+});
+
+test("extendTestsCalendarDrag before any startTestsCalendarDrag (no mousedown captured, e.g. drag started outside the calendar) is a safe no-op", () => {
+  resetTestsState();
+  state.tests.scheduleForm.selectedDates = [];
+  extendTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  assert.deepEqual(state.tests.scheduleForm.selectedDates, []);
+});
+
+test("Specific dates bulk submit sends the exact selected dates and shared test/time/targets, and the resulting count/dates land in state.tests.bulkResult", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "specific_dates";
+  state.tests.scheduleForm.selectedDates = ["2026-09-01", "2026-09-03"];
+  state.tests.scheduleForm.athleteIds = ["a1"];
+  state.tests.scheduleForm.timezone = "UTC";
+  state.tests.scheduleForm.opensTime = "06:00";
+  state.tests.scheduleForm.closesTime = "22:00";
+  installFetchMock((call) => {
+    if (call.url.includes("/api/tests/library")) return { status: 200, body: { tests: [{ testVersionId: "wellness-v1", schedulable: true }] } };
+    if (call.url === "/api/tests/schedules/bulk" && call.method === "POST") {
+      return {
+        status: 201,
+        body: {
+          schedules: call.body.dates.map((date, i) => ({ id: `bulk-${i}`, scheduleKind: "one_time", status: "active", startDate: date, opensTime: "06:00", closesTime: "22:00", timezone: "UTC" })),
+          count: call.body.dates.length,
+          dates: call.body.dates,
+        },
+      };
+    }
+    return { status: 404, body: {} };
+  });
+  await submitTestsForm({ dataset: { testsForm: "create-schedule-bulk" } }, { renderTests: () => {} });
+  const bulkCall = fetchCalls.find((c) => c.url === "/api/tests/schedules/bulk");
+  assert.deepEqual(bulkCall.body.dates, ["2026-09-01", "2026-09-03"]);
+  assert.deepEqual(bulkCall.body.targets, [{ kind: "athlete", id: "a1" }]);
+  assert.equal(state.tests.bulkResult.count, 2);
+  assert.deepEqual(state.tests.bulkResult.dates, ["2026-09-01", "2026-09-03"]);
+  assert.equal(state.tests.schedules.length, 2);
+  assert.equal(state.tests.scheduleForm.open, false, "the form closes on a successful bulk create");
+});
+
+test("Specific dates bulk submit with zero selected dates is a no-op - never sends a request", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "specific_dates";
+  state.tests.scheduleForm.selectedDates = [];
+  installFetchMock(() => ({ status: 200, body: {} }));
+  await submitTestsForm({ dataset: { testsForm: "create-schedule-bulk" } }, { renderTests: () => {} });
+  assert.equal(fetchCalls.length, 0);
+});
+
+test("a double-click on 'Schedule N dates' never sends a second bulk request while the first is still in flight", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "specific_dates";
+  state.tests.scheduleForm.selectedDates = ["2026-09-01"];
+  state.tests.scheduleForm.athleteIds = ["a1"];
+  let resolveLibrary;
+  fetchCalls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url, method: options.method || "GET" });
+    if (url.includes("/api/tests/library")) {
+      return new Promise((resolve) => {
+        resolveLibrary = () => resolve({ ok: true, status: 200, json: async () => ({ tests: [{ testVersionId: "wellness-v1", schedulable: true }] }) });
+      });
+    }
+    return { ok: true, status: 201, json: async () => ({ schedules: [{ id: "bulk-1" }], count: 1, dates: ["2026-09-01"] }) };
+  };
+  const first = submitTestsForm({ dataset: { testsForm: "create-schedule-bulk" } }, { renderTests: () => {} });
+  const second = submitTestsForm({ dataset: { testsForm: "create-schedule-bulk" } }, { renderTests: () => {} }); // fired while the first is still awaiting the library call
+  resolveLibrary();
+  await Promise.all([first, second]);
+  assert.equal(fetchCalls.filter((c) => c.url.includes("/api/tests/library")).length, 1, "the second, overlapping submit must be a no-op, not a second request");
 });

@@ -10135,6 +10135,118 @@ button.tests-assignment-card {
   font-size: 12px;
 }
 
+.tests-calendar {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  /* Dragging a day-cell range must never trigger the browser's own text
+     selection - it fights the mousedown/mouseover drag tracking and makes
+     the range look broken mid-drag. */
+  user-select: none;
+}
+
+.tests-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tests-calendar-weekdays,
+.tests-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.tests-calendar-weekdays span {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.tests-calendar-day {
+  aspect-ratio: 1;
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--surface);
+  color: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tests-calendar-day:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.tests-calendar-day:disabled {
+  color: var(--muted);
+  background: transparent;
+  cursor: default;
+  opacity: 0.4;
+}
+
+.tests-calendar-day-blank {
+  background: transparent;
+  border: none;
+}
+
+.tests-calendar-day.is-selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.tests-calendar-selected {
+  display: grid;
+  gap: 6px;
+}
+
+.tests-calendar-count {
+  margin: 0;
+  font-size: 12px;
+}
+
+.tests-calendar-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tests-calendar-chip {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tests-calendar-chip:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.tests-bulk-result {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 12px 36px 12px 14px;
+  background: var(--accent-soft);
+}
+
+.tests-bulk-result .wellness-back {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
 .tests-schedule-form,
 .tests-schedule-detail {
   position: relative;

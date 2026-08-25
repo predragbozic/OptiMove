@@ -26,7 +26,7 @@ import {
   submitConfirmEmailChange as submitConfirmEmailChangeAction,
 } from "./email-change-actions.js";
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
-import { handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, submitTestsForm } from "./tests-actions.js";
+import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests } from "./tests-data.js";
 import { renderTests, renderTestsBadge } from "./tests-view.js";
 import {
@@ -390,6 +390,14 @@ function bindEvents() {
   els.content.addEventListener("focusin", handleContentFocusIn);
   els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
   els.content.addEventListener("touchend", handleSwipeEnd, { passive: true });
+  // Specific-dates calendar click-and-drag (Phase 2.5): mousedown starts a
+  // drag on a day cell, mouseover (bubbles, unlike mouseenter - needed for
+  // delegation) extends it while the button is held, and mouseup - on
+  // `document`, not #content, since the mouse can be released anywhere -
+  // always ends it. See tests-actions.js's start/extend/endTestsCalendarDrag.
+  els.content.addEventListener("mousedown", handleContentMouseDown);
+  els.content.addEventListener("mouseover", handleContentMouseOver);
+  document.addEventListener("mouseup", () => endTestsCalendarDrag());
   document.addEventListener("click", handleGlobalClick);
   document.addEventListener("submit", handleGlobalSubmit);
   document.addEventListener("error", handleImageError, true);
@@ -795,6 +803,19 @@ function handleContentFocusIn(event) {
   const field = event.target.closest?.(FOCUS_SCROLL_TOP_SELECTOR);
   if (!field) return;
   requestAnimationFrame(() => field.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
+
+function handleContentMouseDown(event) {
+  const dayEl = event.target.closest('[data-action="tests-calendar-day-mousedown"]');
+  if (!dayEl) return;
+  event.preventDefault(); // stops the browser's own text-selection drag from fighting the calendar drag
+  startTestsCalendarDrag(dayEl);
+}
+
+function handleContentMouseOver(event) {
+  const dayEl = event.target.closest('[data-action="tests-calendar-day-mousedown"]');
+  if (!dayEl) return;
+  extendTestsCalendarDrag(dayEl);
 }
 
 function handleContentInput(event) {

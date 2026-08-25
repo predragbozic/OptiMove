@@ -237,13 +237,28 @@ export const emptyWellnessForm = (overrides = {}) => ({
 export const emptyScheduleForm = (overrides = {}) => ({
   open: false,
   editingScheduleId: "", // "" = create mode; set = editing this schedule (PATCH, not a parallel route)
-  hasOccurrences: false, // mirrors the schedule's hasOccurrences - blocks full-edit for a one_time schedule that already ran
+  // Both mirror the schedule's own same-named fields (GET /schedules/:id).
+  // hasOccurrences alone no longer decides whether full-edit is blocked
+  // (Phase 2.5) - a one_time schedule with an occurrence but no real
+  // activity is still editable; hasActivity is the one that actually gates
+  // it, and is what the UI explains to the coach.
+  hasOccurrences: false,
+  hasActivity: false,
+  // "one_time" | "daily" | "specific_dates" - the third is UI-only (never
+  // sent as scheduleKind to the server): submitting it calls
+  // POST /schedules/bulk instead of POST/PATCH /schedules, creating one
+  // independent one_time schedule per date in selectedDates.
   scheduleKind: "one_time",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   startDate: "",
   opensTime: "06:00",
   dueTime: "",
   closesTime: "22:00",
+  // Specific-dates calendar picker state. calendarMonth is a "YYYY-MM"
+  // string (the month currently displayed); selectedDates holds "YYYY-MM-DD"
+  // strings, order-independent (rendered sorted).
+  calendarMonth: "",
+  selectedDates: [],
   // Individually-selected athletes (real athlete uuids, combinable with the
   // team/club quick-targets below) plus the team/club single-target quick
   // option, kept alongside multi-athlete selection rather than replacing it.
@@ -276,6 +291,11 @@ export const emptyTestsState = (overrides = {}) => ({
   // Id of the schedule currently mid-delete (double-click guard + "Deleting..."
   // label on that one row's button) - "" when no delete is in flight.
   deletingScheduleId: "",
+  // Set right after a successful POST /schedules/bulk (Specific dates),
+  // cleared on the next navigation/section change - a one-time confirmation
+  // banner: "N dates scheduled: <list>", per the requirement that the coach
+  // sees exactly what was created, not just a silently-closed form.
+  bulkResult: null,
   form: null,
   ...overrides,
 });

@@ -1,7 +1,7 @@
 import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
-import { checkInUrl, patchTestsAthletePickerDom, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes } from "./tests-view.js";
+import { checkInUrl, patchTestsAthletePickerDom, patchTestsCalendarDom, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes } from "./tests-view.js";
 import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadWellnessForm } from "./tests-data.js";
 
 // Every data-action="tests-*" click/change and data-tests-form submit in the
@@ -68,9 +68,34 @@ export async function handleTestsAction(action, { renderTests }) {
   }
 
   if (type === "tests-open-schedule-form") {
-    state.tests.scheduleForm = emptyScheduleForm({ open: true, startDate: new Date().toISOString().slice(0, 10) });
+    state.tests.scheduleForm = emptyScheduleForm({
+      open: true,
+      startDate: new Date().toISOString().slice(0, 10),
+      calendarMonth: new Date().toISOString().slice(0, 7),
+    });
+    state.tests.bulkResult = null;
     renderTests();
     void loadOrgPickerData().then(renderTests).catch(() => {});
+    return true;
+  }
+  if (type === "tests-dismiss-bulk-result") {
+    state.tests.bulkResult = null;
+    renderTests();
+    return true;
+  }
+  if (type === "tests-calendar-prev-month" || type === "tests-calendar-next-month") {
+    const form = state.tests.scheduleForm;
+    const [year, month] = (form.calendarMonth || new Date().toISOString().slice(0, 7)).split("-").map(Number);
+    const delta = type === "tests-calendar-prev-month" ? -1 : 1;
+    const next = new Date(Date.UTC(year, month - 1 + delta, 1));
+    form.calendarMonth = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
+    renderTests(); // full re-render: the grid's own dimensions/labels change, no drag is in progress at this point
+    return true;
+  }
+  if (type === "tests-calendar-remove-date") {
+    const form = state.tests.scheduleForm;
+    form.selectedDates = form.selectedDates.filter((d) => d !== action.dataset.date);
+    patchTestsCalendarDom();
     return true;
   }
   if (type === "tests-close-schedule-form") {
@@ -284,16 +309,80 @@ export function handleTestsScheduleAthleteSearchInput(inputEl) {
 }
 
 // ------------------------------------------------------------
+// Specific-dates calendar: click-and-drag range selection, Booking-style.
+// Wired from app.js's own mousedown/mouseover (delegated on #content) and a
+// document-level mouseup - see handleContentMouseDown/-MouseOver/
+// handleGlobalMouseUp there. Module-level drag state (not part of `state`,
+// the app's own reactive store) deliberately: it's pure, ephemeral pointer
+// interaction, never meaningful to persist/re-render from, and every mutation
+// it causes to state.tests.scheduleForm.selectedDates is applied and painted
+// (via patchTestsCalendarDom, a targeted DOM patch - see tests-view.js)
+// immediately, on every single mouseover, not just at drag end.
+// ------------------------------------------------------------
+
+let calendarDragState = null; // { anchorDate, mode: "add" | "remove", baseSelected: Set }
+
+function calendarTodayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// Recomputes selectedDates as baseSelected (the selection BEFORE this drag
+// started) plus/minus every date from anchorDate to currentDate inclusive -
+// recomputed fresh from baseSelected on every call (not accumulated), so
+// dragging back over already-covered days correctly un-does them, exactly
+// like a booking site's date-range picker.
+function applyCalendarDragRange(currentDate) {
+  const form = state.tests.scheduleForm;
+  const { anchorDate, mode, baseSelected } = calendarDragState;
+  const [start, end] = anchorDate <= currentDate ? [anchorDate, currentDate] : [currentDate, anchorDate];
+  const todayIso = calendarTodayIso();
+  const result = new Set(baseSelected);
+  const cursor = new Date(`${start}T00:00:00Z`);
+  const endDate = new Date(`${end}T00:00:00Z`);
+  while (cursor <= endDate) {
+    const iso = cursor.toISOString().slice(0, 10);
+    if (iso >= todayIso) {
+      if (mode === "remove") result.delete(iso);
+      else result.add(iso);
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  form.selectedDates = Array.from(result);
+  patchTestsCalendarDom();
+}
+
+// mousedown on a day cell: starts a drag AND immediately applies it to just
+// that one day - a plain click (mousedown+mouseup with no mouseover between)
+// ends up calling only this, which is exactly "a single click adds or
+// removes one date". Whether this drag ADDS or REMOVES is decided once,
+// right here, from the anchor day's own current state - not re-decided per
+// cell, so the whole drag moves in one consistent direction.
+export function startTestsCalendarDrag(dayEl) {
+  const date = dayEl?.dataset?.date;
+  if (!date || dayEl.disabled) return;
+  const form = state.tests.scheduleForm;
+  const alreadySelected = form.selectedDates.includes(date);
+  calendarDragState = { anchorDate: date, mode: alreadySelected ? "remove" : "add", baseSelected: new Set(form.selectedDates) };
+  applyCalendarDragRange(date);
+}
+
+export function extendTestsCalendarDrag(dayEl) {
+  if (!calendarDragState) return;
+  const date = dayEl?.dataset?.date;
+  if (!date || dayEl.disabled) return;
+  applyCalendarDragRange(date);
+}
+
+export function endTestsCalendarDrag() {
+  calendarDragState = null;
+}
+
+// ------------------------------------------------------------
 // Edit / Delete schedule
 // ------------------------------------------------------------
 
 async function openEditSchedule(scheduleId, renderTests) {
   state.tests.error = "";
-  // A one_time schedule that already has its occurrence must never offer a
-  // misleading "edit" UI (its snapshot is immutable at the DB level too, see
-  // backend/src/routes/tests.js's PATCH handler) - checked from data already
-  // on hand (the list row / open detail), no network round trip needed just
-  // to find out it will be refused.
   const known = state.tests.schedules.find((s) => s.id === scheduleId)
     || (state.tests.scheduleDetail?.schedule.id === scheduleId ? state.tests.scheduleDetail.schedule : null);
   // cancelled is terminal (backend/src/routes/tests.js's PATCH rejects it
@@ -305,11 +394,11 @@ async function openEditSchedule(scheduleId, renderTests) {
     renderTests();
     return;
   }
-  if (known?.scheduleKind === "one_time" && known?.hasOccurrences) {
-    state.tests.error = "This one-time schedule already has its occurrence and can no longer be edited - cancel or delete it instead.";
-    renderTests();
-    return;
-  }
+  // Note: hasOccurrences ALONE no longer blocks opening the edit form
+  // (Phase 2.5) - a one_time schedule with an occurrence but no real
+  // activity yet is still editable. The real answer (hasActivity) only
+  // comes from the detail fetch below; the form itself renders the
+  // blocked-vs-allowed explanation once it has that.
   try {
     const detail = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}`);
     const targets = detail.targets || [];
@@ -317,6 +406,7 @@ async function openEditSchedule(scheduleId, renderTests) {
       open: true,
       editingScheduleId: scheduleId,
       hasOccurrences: Boolean(detail.schedule.hasOccurrences),
+      hasActivity: Boolean(detail.schedule.hasActivity),
       scheduleKind: detail.schedule.scheduleKind === "recurring" ? "daily" : "one_time",
       timezone: detail.schedule.timezone,
       startDate: detail.schedule.startDate,
@@ -394,6 +484,7 @@ export async function submitTestsForm(form, { renderTests }) {
   const kind = form.dataset.testsForm;
   if (kind === "wellness-submit") return submitWellnessForm(renderTests);
   if (kind === "create-schedule" || kind === "edit-schedule") return submitScheduleForm(renderTests);
+  if (kind === "create-schedule-bulk") return submitBulkScheduleForm(renderTests);
 }
 
 async function submitWellnessForm(renderTests) {
@@ -460,6 +551,49 @@ async function submitScheduleForm(renderTests) {
     state.tests.scheduleForm = emptyScheduleForm();
   } catch (error) {
     scheduleForm.error = error.message || (isEdit ? "Could not save this schedule." : "Could not create this schedule.");
+    scheduleForm.submitting = false;
+    renderTests();
+    return;
+  }
+  renderTests();
+}
+
+// "Specific dates" (Phase 2.5): one POST /schedules/bulk call creates N
+// independent one_time schedules sharing the same test/time/targets. Same
+// double-submit guard (scheduleForm.submitting) as submitScheduleForm above.
+async function submitBulkScheduleForm(renderTests) {
+  const scheduleForm = state.tests.scheduleForm;
+  if (scheduleForm.submitting) return;
+  if (!scheduleForm.selectedDates.length) return;
+  const targets = buildTargetsFromForm(scheduleForm);
+  scheduleForm.submitting = true;
+  scheduleForm.error = "";
+  renderTests();
+  try {
+    const library = await api("/api/tests/library");
+    const wellness = library.tests.find((t) => t.schedulable);
+    const result = await api("/api/tests/schedules/bulk", {
+      method: "POST",
+      body: JSON.stringify({
+        testVersionId: wellness?.testVersionId,
+        timezone: scheduleForm.timezone,
+        opensTime: scheduleForm.opensTime,
+        dueTime: scheduleForm.dueTime || null,
+        closesTime: scheduleForm.closesTime,
+        dates: scheduleForm.selectedDates,
+        targets,
+      }),
+    });
+    const summaryFields = targetSummaryFieldsFor(targets, state.tests.orgPickerData);
+    for (const row of result.schedules) {
+      state.tests.schedules.unshift({ ...row, ...summaryFields });
+    }
+    // The one place the coach sees exactly what was scheduled - how many
+    // dates, and which ones - not just a form that silently closed.
+    state.tests.bulkResult = { count: result.count, dates: result.dates };
+    state.tests.scheduleForm = emptyScheduleForm();
+  } catch (error) {
+    scheduleForm.error = error.message || "Could not create these schedules.";
     scheduleForm.submitting = false;
     renderTests();
     return;

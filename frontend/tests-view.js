@@ -331,7 +331,19 @@ function renderCoachScheduleHtml() {
       </label>
     </div>
     ${state.tests.scheduleForm.open ? renderScheduleFormHtml() : ""}
+    ${!state.tests.scheduleForm.open && state.tests.bulkResult ? renderBulkResultHtml(state.tests.bulkResult) : ""}
     ${state.tests.scheduleDetail ? renderScheduleDetailHtml() : renderScheduleListHtml()}
+  `;
+}
+
+function renderBulkResultHtml(result) {
+  const dates = result.dates.slice().sort();
+  return `
+    <section class="panel tests-bulk-result">
+      <button type="button" class="plain-button icon-button wellness-back" data-action="tests-dismiss-bulk-result" aria-label="Dismiss">&times;</button>
+      <p><strong>${result.count} date${result.count === 1 ? "" : "s"} scheduled.</strong></p>
+      <p class="muted">${dates.map(escapeHtml).join(", ")}</p>
+    </section>
   `;
 }
 
@@ -418,32 +430,41 @@ function renderScheduleFormHtml() {
   const form = state.tests.scheduleForm;
   const orgData = state.tests.orgPickerData;
   const isEdit = Boolean(form.editingScheduleId);
-  const blockedOneTimeEdit = isEdit && form.scheduleKind === "one_time" && form.hasOccurrences;
+  const isSpecificDates = form.scheduleKind === "specific_dates";
+  // hasActivity (not hasOccurrences alone) is what actually blocks a
+  // one_time edit now - a schedule can have an occurrence and still be
+  // freely editable, as long as nothing real has happened against it yet
+  // (see PATCH /schedules/:id's own comment, backend/src/routes/tests.js).
+  const blockedOneTimeEdit = isEdit && form.scheduleKind === "one_time" && form.hasActivity;
   return `
     <section class="panel tests-schedule-form">
       <button type="button" class="plain-button icon-button wellness-back" data-action="tests-close-schedule-form" aria-label="Close">&times;</button>
       <h3>${isEdit ? "Edit WELLNESS schedule" : "New WELLNESS schedule"}</h3>
       ${form.error ? `<p class="builder-error">${escapeHtml(form.error)}</p>` : ""}
       ${blockedOneTimeEdit ? `
-        <p class="muted">This one-time schedule already has its occurrence and can no longer be edited. Cancel or delete it instead, then create a new one.</p>
+        <p class="muted">This one-time schedule already has a started or completed response, so its targets/date/time can no longer be changed. Cancel it, then create a new schedule if you need to reschedule.</p>
       ` : `
+        ${isEdit && form.scheduleKind === "one_time" && form.hasOccurrences ? `<p class="tests-future-only-notice">This schedule's occurrence hasn't been started yet, so it's still fully editable - saving will regenerate it under the new date/time/targets.</p>` : ""}
         ${isEdit && form.scheduleKind === "daily" && form.hasOccurrences ? `<p class="tests-future-only-notice">Changes apply to future occurrences only - already-generated occurrences and assignments are not affected.</p>` : ""}
-        <form data-tests-form="${isEdit ? "edit-schedule" : "create-schedule"}">
+        <form data-tests-form="${isEdit ? "edit-schedule" : isSpecificDates ? "create-schedule-bulk" : "create-schedule"}">
           <label class="search-field">
             <span>Recurrence</span>
             <select name="scheduleKind" data-action="tests-schedule-form-field">
               <option value="one_time" ${form.scheduleKind === "one_time" ? "selected" : ""}>One-time</option>
               <option value="daily" ${form.scheduleKind === "daily" ? "selected" : ""}>Daily</option>
+              ${isEdit ? "" : `<option value="specific_dates" ${isSpecificDates ? "selected" : ""}>Specific dates</option>`}
             </select>
           </label>
           <label class="search-field">
             <span>Timezone</span>
             <input type="text" name="timezone" value="${escapeAttr(form.timezone)}" data-action="tests-schedule-form-field" required>
           </label>
+          ${isSpecificDates ? "" : `
           <label class="search-field">
             <span>Start date</span>
             <input type="date" name="startDate" value="${escapeAttr(form.startDate)}" data-action="tests-schedule-form-field" required>
           </label>
+          `}
           <label class="search-field">
             <span>Opens</span>
             <input type="time" name="opensTime" value="${escapeAttr(form.opensTime)}" data-action="tests-schedule-form-field" required>
@@ -452,6 +473,7 @@ function renderScheduleFormHtml() {
             <span>Closes</span>
             <input type="time" name="closesTime" value="${escapeAttr(form.closesTime)}" data-action="tests-schedule-form-field" required>
           </label>
+          ${isSpecificDates ? renderTestsCalendarHtml(form) : ""}
           <label class="search-field">
             <span>Club (optional quick target)</span>
             <select name="clubId" data-action="tests-schedule-form-field">
@@ -467,10 +489,96 @@ function renderScheduleFormHtml() {
             </select>
           </label>
           ${renderAthleteMultiSelectHtml(form)}
-          <button type="submit" class="plain-button" ${form.submitting ? "disabled" : ""}>${form.submitting ? "Saving..." : isEdit ? "Save changes" : "Create schedule"}</button>
+          <button type="submit" class="plain-button" data-tests-schedule-submit ${testsScheduleSubmitDisabled(form) ? "disabled" : ""}>${testsScheduleSubmitLabel(form)}</button>
         </form>
       `}
     </section>
+  `;
+}
+
+function testsScheduleSubmitDisabled(form) {
+  return form.submitting || (form.scheduleKind === "specific_dates" && !form.selectedDates.length);
+}
+
+function testsScheduleSubmitLabel(form) {
+  if (form.submitting) return "Saving...";
+  if (form.scheduleKind === "specific_dates") return `Schedule ${form.selectedDates.length} date${form.selectedDates.length === 1 ? "" : "s"}`;
+  return form.editingScheduleId ? "Save changes" : "Create schedule";
+}
+
+// ------------------------------------------------------------
+// Specific dates: click-and-drag calendar picker (state.tests.scheduleForm.
+// calendarMonth/selectedDates). A single click toggles one date; a
+// mousedown-then-drag-over-cells-then-mouseup selects the whole hovered
+// range at once, same interaction shape as a booking-site date-range
+// calendar. Drag tracking itself (mousedown/mouseover/mouseup) lives in
+// tests-actions.js/app.js - this file only ever renders the CURRENT
+// selectedDates/calendarMonth state, plus a live drag-preview class applied
+// via direct DOM patching mid-drag (patchTestsCalendarDom), never a full
+// re-render while the mouse button is down.
+// ------------------------------------------------------------
+
+const CALENDAR_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function monthMatrix(monthIso) {
+  const [year, month] = monthIso.split("-").map(Number);
+  const firstOfMonth = new Date(Date.UTC(year, month - 1, 1));
+  // Monday-first grid: JS getUTCDay() is 0=Sun..6=Sat; shift so Monday=0.
+  const leadingBlanks = (firstOfMonth.getUTCDay() + 6) % 7;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const cells = [];
+  for (let i = 0; i < leadingBlanks; i++) cells.push(null);
+  for (let day = 1; day <= daysInMonth; day++) {
+    const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    cells.push(iso);
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+export function renderTestsCalendarHtml(form) {
+  const monthIso = form.calendarMonth || new Date().toISOString().slice(0, 7);
+  const cells = monthMatrix(monthIso);
+  const [year, month] = monthIso.split("-").map(Number);
+  const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const selected = new Set(form.selectedDates);
+  return `
+    <div class="tests-calendar" data-tests-calendar>
+      <div class="tests-calendar-head">
+        <button type="button" class="plain-button icon-button" data-action="tests-calendar-prev-month" aria-label="Previous month">&larr;</button>
+        <strong>${escapeHtml(monthLabel)}</strong>
+        <button type="button" class="plain-button icon-button" data-action="tests-calendar-next-month" aria-label="Next month">&rarr;</button>
+      </div>
+      <div class="tests-calendar-weekdays">${CALENDAR_WEEKDAY_LABELS.map((label) => `<span>${label}</span>`).join("")}</div>
+      <div class="tests-calendar-grid" data-tests-calendar-grid>
+        ${cells.map((iso) => {
+          if (!iso) return `<span class="tests-calendar-day tests-calendar-day-blank" aria-hidden="true"></span>`;
+          const isPast = iso < todayIso;
+          const isSelected = selected.has(iso);
+          const dayNumber = Number(iso.slice(8, 10));
+          return `<button type="button" class="tests-calendar-day ${isSelected ? "is-selected" : ""}" data-action="tests-calendar-day-mousedown" data-date="${escapeAttr(iso)}" ${isPast ? "disabled" : ""}>${dayNumber}</button>`;
+        }).join("")}
+      </div>
+      <div class="tests-calendar-selected" data-tests-calendar-selected>
+        ${renderTestsCalendarSelectedHtml(form)}
+      </div>
+    </div>
+  `;
+}
+
+export function renderTestsCalendarSelectedHtml(form) {
+  const dates = form.selectedDates.slice().sort();
+  if (!dates.length) return `<p class="muted">No dates selected yet - click a day, or click and drag across several.</p>`;
+  return `
+    <p class="muted tests-calendar-count">${dates.length} date${dates.length === 1 ? "" : "s"} selected</p>
+    <div class="tests-calendar-chips">
+      ${dates.map((iso) => `
+        <button type="button" class="tests-calendar-chip" data-action="tests-calendar-remove-date" data-date="${escapeAttr(iso)}" title="Remove ${escapeAttr(iso)}">
+          ${escapeHtml(iso)} &times;
+        </button>
+      `).join("")}
+    </div>
   `;
 }
 
@@ -550,6 +658,41 @@ export function patchTestsAthletePickerDom() {
   if (optionsEl) optionsEl.innerHTML = renderTestsAthleteOptionsHtml(form);
   const countEl = document.querySelector("[data-tests-athlete-count]");
   if (countEl) countEl.textContent = testsAthleteCountLabel(form);
+}
+
+// Targeted DOM patch for the Specific-dates calendar - same reasoning as
+// patchTestsAthletePickerDom above: called on every mousedown/mouseover
+// during a drag selection, so it must never do a full renderTests() (would
+// abort the drag by replacing the very grid the mouse is over). Only the
+// day cells' own is-selected class and the selected-dates summary are
+// touched; the month header/grid structure itself doesn't change here
+// (that's patchTestsCalendarDom's caller's job when the month itself
+// changes - see tests-calendar-prev-month/-next-month, which do a full
+// renderTests() since there's no drag in progress at that point).
+export function patchTestsCalendarDom() {
+  const form = state.tests.scheduleForm;
+  const selected = new Set(form.selectedDates);
+  const gridEl = document.querySelector("[data-tests-calendar-grid]");
+  if (gridEl) {
+    gridEl.querySelectorAll("[data-date]").forEach((cell) => {
+      cell.classList.toggle("is-selected", selected.has(cell.dataset.date));
+    });
+  }
+  const selectedEl = document.querySelector("[data-tests-calendar-selected]");
+  if (selectedEl) selectedEl.innerHTML = renderTestsCalendarSelectedHtml(form);
+  // The submit button's own label/disabled state depends on
+  // selectedDates.length too (see testsScheduleSubmitLabel/-Disabled) -
+  // it lives outside both patched regions above, so a drag that never
+  // reaches a full renderTests() would otherwise leave it showing a stale
+  // "Schedule 0 dates"/disabled from whatever render last touched it. Found
+  // live: dragging a real range in the browser selected the days
+  // correctly but the button stayed disabled until something else forced a
+  // full re-render - this patch is what closes that gap.
+  const submitEl = document.querySelector("[data-tests-schedule-submit]");
+  if (submitEl) {
+    submitEl.disabled = testsScheduleSubmitDisabled(form);
+    submitEl.textContent = testsScheduleSubmitLabel(form);
+  }
 }
 
 // ------------------------------------------------------------

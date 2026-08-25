@@ -300,9 +300,10 @@ router.get("/assignments/:assignmentId", async (req, res, next) => {
     if (!athleteId) return;
     const assignmentResult = await query(
       `select asg.*, o.opens_at, o.closes_at, o.status as occurrence_status, tv.id as test_version_id, tv.name as test_name, tv.description as test_description,
-              a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name, a.image_url as athlete_image_url
+              a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name, a.image_url as athlete_image_url, sch.status as schedule_status
        from tests.test_assignments asg
        join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
+       join tests.test_schedules sch on sch.id = o.schedule_id
        join tests.test_versions tv on tv.id = asg.snapshot_test_version_id
        join public.athletes a on a.id = asg.athlete_id
        where asg.id = $1`,
@@ -327,18 +328,26 @@ router.get("/assignments/:assignmentId", async (req, res, next) => {
       latestAssessment = { id: row.id, status: row.status, completedAt: row.completed_at, values, wellnessScore };
     }
 
+    // canSubmit requires BOTH the occurrence's own opens/closes window AND
+    // the parent schedule still being 'active' - a cancelled or paused
+    // schedule must never offer a fillable form again, even to a coach/
+    // athlete who had this exact page open before the status changed (the
+    // real enforcement is server-side in POST /submit below; this only
+    // controls what the GET tells the client to render).
     const isOpen = occurrenceIsOpen({ status: assignment.occurrence_status, opens_at: assignment.opens_at, closes_at: assignment.closes_at });
+    const canSubmit = isOpen && assignment.schedule_status === "active";
     res.json({
       assignment: {
         id: assignment.id,
         status: assignment.status,
         occurrence: { id: assignment.occurrence_id, opensAt: assignment.opens_at, closesAt: assignment.closes_at, status: assignment.occurrence_status, isOpen },
         athlete: { id: assignment.athlete_id, name: assignment.athlete_name, imageUrl: assignment.athlete_image_url || "" },
+        scheduleStatus: assignment.schedule_status,
       },
       testVersion: { id: assignment.test_version_id, name: assignment.test_name, description: assignment.test_description },
       parameters: parametersForResponse(parameterRows),
       latestAssessment,
-      canSubmit: isOpen,
+      canSubmit,
     });
   } catch (error) { next(error); }
 });
@@ -396,6 +405,24 @@ router.post("/assignments/:assignmentId/submit", async (req, res, next) => {
 
     const occurrenceResult = await client.query(`select * from tests.test_schedule_occurrences where id = $1 for update`, [assignment.occurrence_id]);
     const occurrence = occurrenceResult.rows[0];
+
+    // Locks the parent schedule row too, for the rest of this transaction -
+    // this is what makes "cancel/pause vs a concurrent submit" a real race
+    // the DB itself resolves, not a check that can be bypassed by timing.
+    // Whichever of PATCH/DELETE (also `for update` on this same row) or
+    // this submit commits first is what the other sees once it gets the
+    // lock. A schedule the coach cancelled/paused after this exact form was
+    // already open on the athlete's screen is caught here regardless -
+    // canSubmit on the GET only ever reflected the status at load time.
+    const scheduleLockResult = await client.query(`select status from tests.test_schedules where id = $1 for update`, [occurrence.schedule_id]);
+    const scheduleStatus = scheduleLockResult.rows[0]?.status;
+    if (scheduleStatus !== "active") {
+      await client.query("rollback");
+      return res.status(409).json({
+        error: scheduleStatus === "cancelled" ? "This schedule has been cancelled." : "This schedule is currently paused.",
+      });
+    }
+
     if (!occurrenceIsOpen(occurrence)) {
       await client.query("rollback");
       return res.status(409).json({ error: "This check-in window is closed." });
@@ -575,32 +602,112 @@ router.post("/schedules", async (req, res, next) => {
 
     const owner = await resolveScheduleOwnerContext(req);
     await client.query("begin");
-    const scheduleResult = await client.query(
-      `insert into tests.test_schedules
-         (test_version_id, schedule_kind, timezone, start_date, end_date, recurrence_rule, recurrence_rule_version, opens_time, due_time, closes_time, status, created_by_user_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
-       values ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9, 'active', $10, $11, $12, $13, $14)
-       returning *`,
-      [
-        WELLNESS_TEST_VERSION_ID,
-        scheduleKind,
-        timezone,
-        startDate,
-        scheduleKind === "one_time" ? (endDate || startDate) : endDate,
-        scheduleKind === "recurring" ? JSON.stringify({ version: 1, freq: "daily" }) : null,
-        opensTime,
-        dueTime,
-        closesTime,
-        req.user.id,
-        owner.ownerScope,
-        owner.ownerUserId,
-        owner.ownerClubId,
-        owner.ownerTeamId,
-      ],
-    );
-    const schedule = scheduleResult.rows[0];
+    const schedule = await insertScheduleRow(client, { scheduleKind, timezone, startDate, endDate, opensTime, dueTime, closesTime, userId: req.user.id, owner });
     await insertTargets(client, schedule.id, resolved.targets);
     await client.query("commit");
-    res.status(201).json({ schedule: formatScheduleRow({ ...schedule, test_name: undefined }) });
+    res.status(201).json({ schedule: formatScheduleRow({ ...schedule, test_name: "WELLNESS" }) });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    respondToWriteError(res, next, error);
+  } finally {
+    client.release();
+  }
+});
+
+// Shared by POST /schedules (create) and POST /schedules/bulk (Specific
+// dates) - the one place that actually inserts a tests.test_schedules row,
+// so both call sites stay byte-for-byte identical in what they write.
+async function insertScheduleRow(client, { scheduleKind, timezone, startDate, endDate, opensTime, dueTime, closesTime, userId, owner }) {
+  const result = await client.query(
+    `insert into tests.test_schedules
+       (test_version_id, schedule_kind, timezone, start_date, end_date, recurrence_rule, recurrence_rule_version, opens_time, due_time, closes_time, status, created_by_user_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
+     values ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9, 'active', $10, $11, $12, $13, $14)
+     returning *`,
+    [
+      WELLNESS_TEST_VERSION_ID,
+      scheduleKind,
+      timezone,
+      startDate,
+      scheduleKind === "one_time" ? (endDate || startDate) : endDate,
+      scheduleKind === "recurring" ? JSON.stringify({ version: 1, freq: "daily" }) : null,
+      opensTime,
+      dueTime,
+      closesTime,
+      userId,
+      owner.ownerScope,
+      owner.ownerUserId,
+      owner.ownerClubId,
+      owner.ownerTeamId,
+    ],
+  );
+  return result.rows[0];
+}
+
+// "Specific dates" scheduling (Phase 2.5): deliberately NOT a new recurrence
+// engine or a new grouping table - a coach picking dates on a calendar just
+// creates one independent one_time schedule per unique date, sharing the
+// same test/time/timezone/targets, reusing resolveValidTargets and
+// insertScheduleRow exactly as POST /schedules does. Every created day is
+// independently editable/pausable/cancellable/deletable afterward through
+// the existing single-schedule routes above - nothing about this endpoint
+// is special once the rows exist.
+router.post("/schedules/bulk", async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    if (!requireCoachWorkspace(req, res)) return;
+    const body = req.body || {};
+    if (text(body.testVersionId) !== WELLNESS_TEST_VERSION_ID) {
+      return res.status(400).json({ error: "Only WELLNESS can be scheduled in this phase." });
+    }
+    const timezone = text(body.timezone);
+    const opensTime = text(body.opensTime);
+    const dueTime = text(body.dueTime) || null;
+    const closesTime = text(body.closesTime);
+    if (!timezone || !opensTime || !closesTime) {
+      return res.status(400).json({ error: "Timezone, opens time and closes time are required." });
+    }
+
+    const rawDates = Array.isArray(body.dates) ? body.dates : [];
+    const seenDates = new Set();
+    const dates = [];
+    for (const raw of rawDates) {
+      const date = text(raw);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: `"${raw}" is not a valid date (expected YYYY-MM-DD).` });
+      }
+      // Deduped, not rejected - a coach dragging back over an already-picked
+      // day on the calendar (or a double-submitted request) collapses to
+      // one schedule for that date, same "same target offered twice" spirit
+      // as dedupeTargets below.
+      if (seenDates.has(date)) continue;
+      seenDates.add(date);
+      dates.push(date);
+    }
+    if (!dates.length) return res.status(400).json({ error: "Choose at least one date." });
+
+    // Targets are validated ONCE, up front, and reused for every date - the
+    // exact same resolveValidTargets used by POST/PATCH /schedules, so a
+    // bulk request is never held to a looser standard. Nothing is written
+    // until every date and every target has passed.
+    const resolved = await resolveValidTargets(req, body.targets);
+    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+
+    const owner = await resolveScheduleOwnerContext(req);
+    await client.query("begin");
+    const created = [];
+    for (const date of dates) {
+      const schedule = await insertScheduleRow(client, {
+        scheduleKind: "one_time", timezone, startDate: date, endDate: date, opensTime, dueTime, closesTime, userId: req.user.id, owner,
+      });
+      await insertTargets(client, schedule.id, resolved.targets);
+      created.push(schedule);
+    }
+    await client.query("commit");
+    res.status(201).json({
+      schedules: created.map((row) => formatScheduleRow({ ...row, test_name: "WELLNESS" })),
+      count: created.length,
+      dates: created.map((row) => row.start_date),
+    });
   } catch (error) {
     await client.query("rollback").catch(() => {});
     respondToWriteError(res, next, error);
@@ -688,7 +795,40 @@ function formatScheduleRow(row) {
     teamTargetNames: row.team_target_names || undefined,
     clubTargetNames: row.club_target_names || undefined,
     hasOccurrences: typeof row.has_occurrences === "boolean" ? row.has_occurrences : undefined,
+    hasActivity: typeof row.has_activity === "boolean" ? row.has_activity : undefined,
   };
+}
+
+// Whether ANY assignment under this schedule's occurrence(s) has moved past
+// pending/untouched, or has a test_assessments row at all (draft or
+// completed). Shared by GET /schedules/:id (a plain, unlocked read - just
+// informs the coach before they open the edit form) and PATCH's own
+// edit-safety check (locked with `for update`, the real enforcement - see
+// the long comment there) so both ever answer this exact same question the
+// exact same way, never a GET that says "editable" while PATCH disagrees.
+// executor matches the loadWellnessParameters(executor) convention already
+// used elsewhere in this file: pass `query` for a plain read, or
+// `(sql, params) => client.query(sql, params)` to run inside (and lock
+// within) an open transaction.
+async function loadScheduleActivity(executor, scheduleId, { forUpdate = false } = {}) {
+  const lock = forUpdate ? " for update" : "";
+  const occurrenceRows = await executor(`select id from tests.test_schedule_occurrences where schedule_id = $1${lock}`, [scheduleId]);
+  if (!occurrenceRows.rowCount) return { hasOccurrence: false, hasActivity: false };
+  const occurrenceIds = occurrenceRows.rows.map((row) => row.id);
+  const assignmentRows = await executor(
+    `select id, status, started_at from tests.test_assignments where occurrence_id = any($1::uuid[])${lock}`,
+    [occurrenceIds],
+  );
+  const hasAssignmentActivity = assignmentRows.rows.some((row) => row.status !== "pending" || row.started_at !== null);
+  let hasAssessment = false;
+  if (assignmentRows.rowCount) {
+    const assessmentCheck = await executor(
+      `select 1 from tests.test_assessments where assignment_id = any($1::uuid[]) limit 1`,
+      [assignmentRows.rows.map((row) => row.id)],
+    );
+    hasAssessment = assessmentCheck.rowCount > 0;
+  }
+  return { hasOccurrence: true, hasActivity: hasAssignmentActivity || hasAssessment };
 }
 
 async function loadManageableSchedule(req, scheduleId) {
@@ -704,7 +844,7 @@ router.get("/schedules/:scheduleId", async (req, res, next) => {
     if (!requireCoachWorkspace(req, res)) return;
     const schedule = await loadManageableSchedule(req, req.params.scheduleId);
     if (!schedule) return res.status(404).json({ error: "Schedule not found." });
-    const [targetsResult, linkResult, occurrenceResult] = await Promise.all([
+    const [targetsResult, linkResult, activity] = await Promise.all([
       query(
         `select t.target_kind, t.target_athlete_id, t.target_team_id, t.target_club_id,
                 ${athleteDisplayNameSql} as athlete_name, tm.name as team_name, cl.name as club_name
@@ -716,10 +856,10 @@ router.get("/schedules/:scheduleId", async (req, res, next) => {
         [schedule.id],
       ),
       query(`select id, public_token, status, created_at from tests.test_access_links where schedule_id = $1 and link_kind = 'schedule' and status = 'active'`, [schedule.id]),
-      query(`select 1 from tests.test_schedule_occurrences where schedule_id = $1 limit 1`, [schedule.id]),
+      loadScheduleActivity(query, schedule.id),
     ]);
     res.json({
-      schedule: formatScheduleRow({ ...schedule, has_occurrences: occurrenceResult.rowCount > 0 }),
+      schedule: formatScheduleRow({ ...schedule, has_occurrences: activity.hasOccurrence, has_activity: activity.hasActivity }),
       targets: targetsResult.rows.map((row) => ({
         kind: row.target_kind,
         id: row.target_athlete_id || row.target_team_id || row.target_club_id,
@@ -784,11 +924,46 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
     // Full edit: validate everything FIRST, write nothing until every field
     // and every target has passed - a single unauthorized target rolls
     // back the entire edit, never a partial one.
+    //
+    // A one_time schedule that already has its occurrence is editable IF -
+    // and only if - nothing real has happened against it yet: no assignment
+    // has moved past 'pending' (started_at is Phase 1's own "in progress"
+    // signal) and no test_assessments row exists at all for any of its
+    // assignments (draft or completed - either means the athlete has real
+    // work in progress, not just an untouched invite). `for update` on the
+    // assignment rows here does double duty: it's the read that decides
+    // whether this edit may proceed, AND it locks those exact rows for the
+    // rest of this transaction, so a concurrent POST /submit (itself
+    // `select ... for update` on the same assignment row, first thing it
+    // does) is forced to wait behind this transaction rather than race it -
+    // whichever of the two commits first is authoritative; the other sees
+    // the committed outcome once its own lock is granted (a submit that
+    // loses the race sees the assignment already gone - the edit deleted
+    // the occurrence, which cascades - and correctly 404s "Assignment not
+    // found", never a corrupted half-state).
+    //
+    // When safe, the occurrence (and, via `on delete cascade`, its
+    // assignments) is deleted in this same transaction - a genuinely clean
+    // slate, not a patch of immutable columns the identity trigger would
+    // reject anyway. Nothing is regenerated eagerly here: the existing
+    // on-demand mechanism (ensureCurrentOccurrence, testsOccurrenceService.js)
+    // already owns "create the correct occurrence for the schedule's
+    // CURRENT date/time/targets, exactly when it's actually due" - eagerly
+    // generating here would risk materializing a FUTURE date's occurrence
+    // before its own date, which is exactly what that on-demand gate exists
+    // to prevent.
+    let regenerateOneTimeOccurrence = false;
     if (schedule.schedule_kind === "one_time") {
-      const hasOccurrence = await client.query(`select 1 from tests.test_schedule_occurrences where schedule_id = $1 limit 1`, [schedule.id]);
-      if (hasOccurrence.rowCount) {
-        await client.query("rollback");
-        return res.status(409).json({ error: "This one-time schedule already has its occurrence and can no longer be edited - cancel or delete it instead." });
+      const activity = await loadScheduleActivity((sql, params) => client.query(sql, params), schedule.id, { forUpdate: true });
+      if (activity.hasOccurrence) {
+        if (activity.hasActivity) {
+          await client.query("rollback");
+          return res.status(409).json({
+            error: "This one-time schedule already has a started or completed response and can no longer be edited. Cancel it, then create a new schedule instead.",
+            reason: "has_activity",
+          });
+        }
+        regenerateOneTimeOccurrence = true;
       }
     }
 
@@ -851,25 +1026,45 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
     );
 
     if (resolvedTargets) {
-      // Existing occurrences/assignments already generated under the OLD
-      // targets are never touched here - their snapshot_* columns were
-      // populated once, at generation time, and Phase 1's own
-      // protect_occurrence_identity/protect_assignment_identity_and_lifecycle
-      // triggers make them immutable afterward regardless of what this
-      // schedule row (or its targets) look like now. Replacing the target
-      // rows only changes who tests.materialize_test_assignments_for_occurrence
-      // resolves for occurrences generated FROM THIS POINT ON.
+      // For a RECURRING schedule, existing occurrences/assignments already
+      // generated under the OLD targets are never touched here - their
+      // snapshot_* columns were populated once, at generation time, and
+      // Phase 1's own protect_occurrence_identity/
+      // protect_assignment_identity_and_lifecycle triggers make them
+      // immutable afterward regardless of what this schedule row (or its
+      // targets) look like now. Replacing the target rows only changes who
+      // tests.materialize_test_assignments_for_occurrence resolves for
+      // occurrences generated FROM THIS POINT ON ("future occurrences
+      // only"). A one_time schedule's own occurrence, if any, is handled
+      // separately below (regenerateOneTimeOccurrence) - it doesn't have a
+      // "future" to apply to, only a single date, so its stale occurrence
+      // (already proven untouched above) is deleted outright instead.
       await client.query(`delete from tests.test_schedule_targets where schedule_id = $1`, [schedule.id]);
       await insertTargets(client, schedule.id, resolvedTargets);
     }
 
+    if (regenerateOneTimeOccurrence) {
+      // Cascades to test_assignments (on delete cascade, Phase 1 schema) -
+      // safe because every one of those assignment rows was just locked and
+      // proven 'pending'/untouched with no test_assessments row above, in
+      // this same transaction. Nothing is inserted here: the next on-demand
+      // call (ensureCurrentOccurrence, e.g. the next time Today is viewed -
+      // by the athlete or the coach) generates a fresh occurrence from the
+      // schedule row's now-current start_date/opens_time/closes_time and
+      // materializes assignments from its now-current targets, exactly the
+      // same as a schedule that never had an occurrence in the first place.
+      await client.query(`delete from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id]);
+    }
+
     await client.query("commit");
-    const updated = await query(
-      `select sch.*, tv.name as test_name, exists (select 1 from tests.test_schedule_occurrences o where o.schedule_id = sch.id) as has_occurrences
-       from tests.test_schedules sch join tests.test_versions tv on tv.id = sch.test_version_id where sch.id = $1`,
-      [schedule.id],
-    );
-    res.json({ schedule: formatScheduleRow(updated.rows[0]) });
+    const [updated, updatedActivity] = await Promise.all([
+      query(
+        `select sch.*, tv.name as test_name from tests.test_schedules sch join tests.test_versions tv on tv.id = sch.test_version_id where sch.id = $1`,
+        [schedule.id],
+      ),
+      loadScheduleActivity(query, schedule.id),
+    ]);
+    res.json({ schedule: formatScheduleRow({ ...updated.rows[0], has_occurrences: updatedActivity.hasOccurrence, has_activity: updatedActivity.hasActivity }) });
   } catch (error) {
     await client.query("rollback").catch(() => {});
     respondToWriteError(res, next, error);
