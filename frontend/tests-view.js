@@ -447,20 +447,10 @@ function renderScheduleFormHtml() {
         ${isEdit && form.scheduleKind === "one_time" && form.hasOccurrences ? `<p class="tests-future-only-notice">This schedule's occurrence hasn't been started yet, so it's still fully editable - saving will regenerate it under the new date/time/targets.</p>` : ""}
         ${isEdit && form.scheduleKind === "daily" && form.hasOccurrences ? `<p class="tests-future-only-notice">Changes apply to future occurrences only - already-generated occurrences and assignments are not affected.</p>` : ""}
         <form data-tests-form="${isEdit ? "edit-schedule" : isSpecificDates ? "create-schedule-bulk" : "create-schedule"}">
-          <label class="tests-show-cancelled-toggle">
-            <input type="checkbox" data-action="tests-schedule-toggle-daily" ${form.scheduleKind === "daily" ? "checked" : ""}>
-            <span>Repeat daily</span>
-          </label>
           <label class="search-field">
             <span>Timezone</span>
             <input type="text" name="timezone" value="${escapeAttr(form.timezone)}" data-action="tests-schedule-form-field" required>
           </label>
-          ${isSpecificDates ? "" : `
-          <label class="search-field">
-            <span>Start date</span>
-            <input type="date" name="startDate" value="${escapeAttr(form.startDate)}" data-action="tests-schedule-form-field" required>
-          </label>
-          `}
           <label class="search-field">
             <span>Opens</span>
             <input type="time" name="opensTime" value="${escapeAttr(form.opensTime)}" data-action="tests-schedule-form-field" required>
@@ -469,7 +459,22 @@ function renderScheduleFormHtml() {
             <span>Closes</span>
             <input type="time" name="closesTime" value="${escapeAttr(form.closesTime)}" data-action="tests-schedule-form-field" required>
           </label>
-          ${isSpecificDates ? renderTestsCalendarHtml(form) : ""}
+          <div class="tests-recurrence-toggle" role="group" aria-label="Recurrence">
+            <button type="button" class="tests-recurrence-pill ${isSpecificDates ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="false">
+              <svg class="tests-recurrence-pill-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"></rect><path d="M8 3v3"></path><path d="M16 3v3"></path><path d="M3 10h18"></path><rect x="7" y="13" width="4" height="4" rx="1"></rect></svg>
+              <span>Specific dates</span>
+            </button>
+            <button type="button" class="tests-recurrence-pill ${form.scheduleKind === "daily" ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="true">
+              <svg class="tests-recurrence-pill-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
+              <span>Repeat daily</span>
+            </button>
+          </div>
+          ${isSpecificDates ? renderTestsCalendarSectionHtml(form) : `
+          <label class="search-field">
+            <span>Start date</span>
+            <input type="date" name="startDate" value="${escapeAttr(form.startDate)}" data-action="tests-schedule-form-field" required>
+          </label>
+          `}
           <label class="search-field">
             <span>Club (optional quick target)</span>
             <select name="clubId" data-action="tests-schedule-form-field">
@@ -530,6 +535,30 @@ function monthMatrix(monthIso) {
   }
   while (cells.length % 7 !== 0) cells.push(null);
   return cells;
+}
+
+// Collapsed by default (state.tests.scheduleForm.calendarOpen) - the
+// day-grid doesn't need to stay open the whole time the form is open, only
+// while the coach is actually picking dates. This toggle button stands in
+// for it otherwise, showing a live count so the selection is still visible
+// without reopening the grid.
+function testsCalendarToggleLabel(form) {
+  const count = form.selectedDates.length;
+  return count ? `${count} date${count === 1 ? "" : "s"} selected` : "Pick dates";
+}
+
+function renderTestsCalendarSectionHtml(form) {
+  const label = testsCalendarToggleLabel(form);
+  return `
+    <div class="tests-calendar-section">
+      <button type="button" class="tests-calendar-open-toggle" data-action="tests-calendar-toggle-open" aria-expanded="${form.calendarOpen ? "true" : "false"}">
+        <svg class="tests-calendar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"></rect><path d="M8 3v3"></path><path d="M16 3v3"></path><path d="M3 10h18"></path></svg>
+        <span data-tests-calendar-toggle-label>${escapeHtml(label)}</span>
+        <span class="tests-calendar-toggle-caret">${form.calendarOpen ? "&#9650;" : "&#9660;"}</span>
+      </button>
+      ${form.calendarOpen ? renderTestsCalendarHtml(form) : ""}
+    </div>
+  `;
 }
 
 export function renderTestsCalendarHtml(form) {
@@ -683,6 +712,11 @@ export function patchTestsCalendarDom() {
   }
   const selectedEl = document.querySelector("[data-tests-calendar-selected]");
   if (selectedEl) selectedEl.innerHTML = renderTestsCalendarSelectedHtml(form);
+  // The collapse-toggle's own "N dates selected" label lives outside the
+  // patched grid/summary above (it's the button that reveals them) - same
+  // staleness risk as the submit button below if left unpatched.
+  const toggleLabelEl = document.querySelector("[data-tests-calendar-toggle-label]");
+  if (toggleLabelEl) toggleLabelEl.textContent = testsCalendarToggleLabel(form);
   // The submit button's own label/disabled state depends on
   // selectedDates.length too (see testsScheduleSubmitLabel/-Disabled) -
   // it lives outside both patched regions above, so a drag that never

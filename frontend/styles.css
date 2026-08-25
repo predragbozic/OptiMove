@@ -10149,6 +10149,90 @@ button.tests-assignment-card {
   font-size: 12px;
 }
 
+.tests-recurrence-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.tests-recurrence-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.tests-recurrence-pill-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Same light-tint + border active style as .tests-section-tabs .tab.is-active
+   above (Builder's own .builder-node-button.is-active colors) - one
+   consistent "this is selected" language across the Tests module, never the
+   generic .chip.is-active solid accent fill. */
+.tests-recurrence-pill.is-active {
+  border-color: #287e77;
+  background: #e7f5f2;
+  color: #287e77;
+}
+
+.tests-calendar-section {
+  display: grid;
+  gap: 8px;
+}
+
+.tests-calendar-open-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tests-calendar-open-toggle:hover {
+  border-color: #287e77;
+}
+
+.tests-calendar-toggle-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tests-calendar-toggle-caret {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+}
+
 .tests-calendar {
   display: grid;
   gap: 8px;

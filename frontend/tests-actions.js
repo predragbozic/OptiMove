@@ -95,17 +95,26 @@ export async function handleTestsAction(action, { renderTests }) {
     renderTests();
     return true;
   }
-  // "Repeat daily" checkbox - the only recurrence choice a coach makes
-  // directly (create mode: unchecked = the calendar/specific_dates flow,
-  // checked = daily; edit mode: unchecked = the existing schedule's own
-  // one_time date, checked = daily). Wired on click, same pattern as the
-  // "Show cancelled" checkbox above - `action` IS the checkbox element by
-  // the time its own click handler runs, so `.checked` already reflects the
-  // post-click state.
-  if (type === "tests-schedule-toggle-daily") {
+  // Recurrence pill pair ("Specific dates" / "Repeat daily") - the only
+  // recurrence choice a coach makes directly (create mode: "Specific dates"
+  // = the calendar/specific_dates flow, "Repeat daily" = daily; edit mode:
+  // "Specific dates" = the existing schedule's own one_time date, "Repeat
+  // daily" = daily). A two-button toggle rather than a checkbox - much
+  // harder to miss than a small "Repeat daily" label was.
+  if (type === "tests-schedule-set-recurrence") {
     const form = state.tests.scheduleForm;
     const isEdit = Boolean(form.editingScheduleId);
-    form.scheduleKind = action.checked ? "daily" : isEdit ? "one_time" : "specific_dates";
+    const daily = action.dataset.daily === "true";
+    form.scheduleKind = daily ? "daily" : isEdit ? "one_time" : "specific_dates";
+    renderTests();
+    return true;
+  }
+  // Collapses/expands the day-grid itself - it doesn't need to stay open
+  // the whole time the form is open, only while the coach is actually
+  // picking dates. The compact toggle button (showing "Pick dates" or
+  // "N dates selected") stands in for it otherwise.
+  if (type === "tests-calendar-toggle-open") {
+    state.tests.scheduleForm.calendarOpen = !state.tests.scheduleForm.calendarOpen;
     renderTests();
     return true;
   }

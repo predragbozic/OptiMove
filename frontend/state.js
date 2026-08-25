@@ -262,8 +262,12 @@ export const emptyScheduleForm = (overrides = {}) => ({
   closesTime: "22:00",
   // Specific-dates calendar picker state. calendarMonth is a "YYYY-MM"
   // string (the month currently displayed); selectedDates holds "YYYY-MM-DD"
-  // strings, order-independent (rendered sorted).
+  // strings, order-independent (rendered sorted). calendarOpen starts
+  // collapsed - the day-grid doesn't need to take up space until the coach
+  // actually wants to pick dates; a compact toggle button (showing "Pick
+  // dates" or "N dates selected") stands in for it until then.
   calendarMonth: "",
+  calendarOpen: false,
   selectedDates: [],
   // Individually-selected athletes (real athlete uuids, combinable with the
   // team/club quick-targets below) plus the team/club single-target quick
