@@ -219,6 +219,7 @@ export const emptyWellnessForm = (overrides = {}) => ({
   assignmentId: "",
   testName: "",
   athleteName: "",
+  athleteImageUrl: "",
   opensAt: "",
   closesAt: "",
   canSubmit: false,

@@ -1,7 +1,13 @@
 import { isAthleteMode } from "./access.js";
 import { els } from "./dom.js";
+import { renderImage } from "./media.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
+
+function renderWellnessAvatar(form) {
+  if (form.athleteImageUrl) return renderImage(form.athleteImageUrl, "wellness-avatar wellness-avatar-photo", form.athleteName);
+  return `<span class="avatar-fallback wellness-avatar">${escapeHtml(initialsFor(form.athleteName))}</span>`;
+}
 
 // Icon-above-label tabs for the coach's 4 sections (Today/Schedule/Results/
 // Test Library) - same stroke-based line-icon convention as the sidebar's
@@ -172,7 +178,7 @@ export function renderWellnessFormHtml(form, { backAction = "" } = {}) {
     <section class="panel wellness-card" aria-label="WELLNESS check-in">
       ${backAction ? `<button type="button" class="plain-button icon-button wellness-back" data-action="${escapeAttr(backAction)}" aria-label="Back">&larr;</button>` : ""}
       <div class="wellness-header">
-        <span class="avatar-fallback wellness-avatar">${escapeHtml(initialsFor(form.athleteName))}</span>
+        ${renderWellnessAvatar(form)}
         <div>
           <p class="eyebrow">${escapeHtml(form.testName || "WELLNESS")}</p>
           <h3>${escapeHtml(form.athleteName)}</h3>
@@ -247,7 +253,7 @@ function renderWellnessResultHtml(form, { backAction }) {
     <section class="panel wellness-card wellness-result" aria-label="WELLNESS result">
       ${backAction ? `<button type="button" class="plain-button icon-button wellness-back" data-action="${escapeAttr(backAction)}" aria-label="Back">&larr;</button>` : ""}
       <div class="wellness-header">
-        <span class="avatar-fallback wellness-avatar">${escapeHtml(initialsFor(form.athleteName))}</span>
+        ${renderWellnessAvatar(form)}
         <div>
           <p class="eyebrow">${escapeHtml(form.testName || "WELLNESS")}</p>
           <h3>${escapeHtml(form.athleteName)}</h3>
@@ -447,17 +453,17 @@ function renderScheduleFormHtml() {
             <input type="time" name="closesTime" value="${escapeAttr(form.closesTime)}" data-action="tests-schedule-form-field" required>
           </label>
           <label class="search-field">
-            <span>Team (optional quick target)</span>
-            <select name="teamId" data-action="tests-schedule-form-field">
-              <option value="">None</option>
-              ${(orgData?.teams || []).map((team) => `<option value="${escapeAttr(team.id)}" ${form.teamId === team.id ? "selected" : ""}>${escapeHtml(team.name)}</option>`).join("")}
-            </select>
-          </label>
-          <label class="search-field">
             <span>Club (optional quick target)</span>
             <select name="clubId" data-action="tests-schedule-form-field">
               <option value="">None</option>
               ${(orgData?.clubs || []).map((club) => `<option value="${escapeAttr(club.id)}" ${form.clubId === club.id ? "selected" : ""}>${escapeHtml(club.name)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="search-field">
+            <span>Team (optional quick target)</span>
+            <select name="teamId" data-action="tests-schedule-form-field">
+              <option value="">None</option>
+              ${(orgData?.teams || []).map((team) => `<option value="${escapeAttr(team.id)}" ${form.teamId === team.id ? "selected" : ""}>${escapeHtml(team.name)}</option>`).join("")}
             </select>
           </label>
           ${renderAthleteMultiSelectHtml(form)}

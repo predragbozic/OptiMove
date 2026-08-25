@@ -116,7 +116,8 @@ const LEGACY_FIXTURE_SQL = `
     display_name text,
     first_name text,
     last_name text,
-    athlete_id text
+    athlete_id text,
+    image_url text
   );
   create table public.user_athletes (
     id uuid primary key default gen_random_uuid(),
@@ -555,6 +556,26 @@ test("C2. deleting a schedule that already has an occurrence cancels it instead,
 
   const history = await api("/api/tests/athlete/history", { cookie: athletes[0].cookie });
   assert.equal(history.body.history.length, 1, "the athlete's own history is untouched by cancelling the schedule");
+});
+
+test("C2b. cancelling a schedule with a still-PENDING (never submitted) assignment removes it from the athlete's own Today view immediately - it must not keep showing as an actionable check-in for something the coach already cancelled", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("c2b", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  await api("/api/tests/athlete/today", { cookie: athletes[0].cookie }); // materializes today's occurrence/assignment, never submitted
+  const before = await api("/api/tests/athlete/today", { cookie: athletes[0].cookie });
+  assert.equal(before.body.assignments.length, 1, "sanity check - the pending assignment is visible before cancel");
+
+  const deleted = await api(`/api/tests/schedules/${created.body.schedule.id}`, { method: "DELETE", cookie: coachCookie });
+  assert.equal(deleted.body.action, "cancelled");
+
+  const after = await api("/api/tests/athlete/today", { cookie: athletes[0].cookie });
+  assert.equal(after.body.assignments.length, 0, "a cancelled schedule's still-pending assignment must disappear from Today");
+
+  // The underlying rows are still preserved (only hidden from the Today
+  // view, never deleted) - same "cancel preserves history" guarantee C2
+  // already covers for a completed one.
+  const assignmentRow = await query(`select id from tests.test_assignments where athlete_id = $1`, [athletes[0].athleteId]);
+  assert.equal(assignmentRow.rowCount, 1, "the assignment row itself must not be deleted, only excluded from Today");
 });
 
 test("C3. cancelling via delete revokes any active group access link", async () => {

@@ -147,6 +147,16 @@ router.get("/athlete/today", async (req, res, next) => {
     // endpoint must not undo that guarantee by re-deriving "today" from
     // step 1's membership-based schedule list instead of from the
     // assignment rows that already exist.
+    //
+    // The one exception: `sch.status <> 'cancelled'` below. DELETE
+    // /schedules/:id (see the cancel branch) intentionally never touches
+    // existing occurrence/assignment rows - they stay exactly as they are,
+    // preserved for History/Results - but a still-PENDING assignment for a
+    // schedule the coach has since cancelled must stop showing as an
+    // actionable "Today" item (a completed one is unaffected here; it
+    // always remains reachable through History regardless of schedule
+    // status, via GET /athlete/history's own query, which never joins
+    // against test_schedules at all).
     const assignmentsResult = await query(
       `select asg.*, o.opens_at, o.closes_at, o.status as occurrence_status, tv.name as test_name
        from tests.test_assignments asg
@@ -155,6 +165,7 @@ router.get("/athlete/today", async (req, res, next) => {
        join tests.test_versions tv on tv.id = asg.snapshot_test_version_id
        where asg.athlete_id = $1
          and o.scheduled_date = (now() at time zone sch.timezone)::date
+         and sch.status <> 'cancelled'
        order by o.scheduled_date desc`,
       [athleteId],
     );
@@ -289,7 +300,7 @@ router.get("/assignments/:assignmentId", async (req, res, next) => {
     if (!athleteId) return;
     const assignmentResult = await query(
       `select asg.*, o.opens_at, o.closes_at, o.status as occurrence_status, tv.id as test_version_id, tv.name as test_name, tv.description as test_description,
-              a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name
+              a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name, a.image_url as athlete_image_url
        from tests.test_assignments asg
        join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
        join tests.test_versions tv on tv.id = asg.snapshot_test_version_id
@@ -322,7 +333,7 @@ router.get("/assignments/:assignmentId", async (req, res, next) => {
         id: assignment.id,
         status: assignment.status,
         occurrence: { id: assignment.occurrence_id, opensAt: assignment.opens_at, closesAt: assignment.closes_at, status: assignment.occurrence_status, isOpen },
-        athlete: { id: assignment.athlete_id, name: assignment.athlete_name },
+        athlete: { id: assignment.athlete_id, name: assignment.athlete_name, imageUrl: assignment.athlete_image_url || "" },
       },
       testVersion: { id: assignment.test_version_id, name: assignment.test_name, description: assignment.test_description },
       parameters: parametersForResponse(parameterRows),

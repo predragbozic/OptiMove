@@ -89,6 +89,7 @@ export function formFromAssignmentDetail(data) {
     assignmentId: data.assignment.id,
     testName: data.testVersion.name,
     athleteName: data.assignment.athlete.name,
+    athleteImageUrl: data.assignment.athlete.imageUrl || "",
     opensAt: data.assignment.occurrence.opensAt,
     closesAt: data.assignment.occurrence.closesAt,
     canSubmit: data.canSubmit,

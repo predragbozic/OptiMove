@@ -10215,6 +10215,11 @@ button.tests-assignment-card {
   flex: 0 0 auto;
 }
 
+.wellness-avatar-photo {
+  object-fit: cover;
+  object-position: center top;
+}
+
 .wellness-header h3 {
   margin: 0;
 }

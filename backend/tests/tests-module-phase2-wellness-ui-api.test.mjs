@@ -127,7 +127,8 @@ const LEGACY_FIXTURE_SQL = `
     display_name text,
     first_name text,
     last_name text,
-    athlete_id text
+    athlete_id text,
+    image_url text
   );
   create table public.user_athletes (
     id uuid primary key default gen_random_uuid(),

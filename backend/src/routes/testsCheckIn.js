@@ -62,7 +62,7 @@ router.get("/:token/my-assignment", async (req, res, next) => {
 
     const assignmentResult = await query(
       `select asg.*, o.opens_at, o.closes_at, o.status as occurrence_status, tv.id as test_version_id, tv.name as test_name,
-              a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name
+              a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name, a.image_url as athlete_image_url
        from tests.test_assignments asg
        join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
        join tests.test_versions tv on tv.id = asg.snapshot_test_version_id
@@ -93,7 +93,7 @@ router.get("/:token/my-assignment", async (req, res, next) => {
         id: assignment.id,
         status: assignment.status,
         occurrence: { id: assignment.occurrence_id, opensAt: assignment.opens_at, closesAt: assignment.closes_at, status: assignment.occurrence_status, isOpen },
-        athlete: { id: assignment.athlete_id, name: assignment.athlete_name },
+        athlete: { id: assignment.athlete_id, name: assignment.athlete_name, imageUrl: assignment.athlete_image_url || "" },
       },
       testVersion: { id: assignment.test_version_id, name: assignment.test_name },
       parameters: parametersForResponse(parameterRows),
