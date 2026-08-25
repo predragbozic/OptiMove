@@ -36,6 +36,7 @@ const {
 } = await import("../tests-actions.js");
 const { testsAthleteMultiSelectVisibleAthletes, renderTestsAthleteOptionsHtml } = await import("../tests-view.js");
 const { emptyScheduleForm, state } = await import("../state.js");
+const { localDateIsoInTimeZone, localMonthIsoInTimeZone } = await import("../utils.js");
 
 function fakeDayEl(date, disabled = false) {
   return { dataset: { date }, disabled };
@@ -431,8 +432,14 @@ test("a drag that starts on an already-selected day REMOVES the whole dragged-ov
 
 test("a drag never selects a date before today, even if it's inside the dragged range", () => {
   resetTestsState();
-  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // Pinned to UTC explicitly - "today" here is derived from the schedule
+  // form's own timezone (calendarTodayIso(), tests-actions.js), not the
+  // test-runner machine's ambient local timezone, so this stays
+  // deterministic regardless of what machine/CI container runs it.
+  state.tests.scheduleForm.timezone = "UTC";
+  const now = new Date();
+  const yesterday = localDateIsoInTimeZone("UTC", new Date(now.getTime() - 24 * 60 * 60 * 1000));
+  const tomorrow = localDateIsoInTimeZone("UTC", new Date(now.getTime() + 24 * 60 * 60 * 1000));
   state.tests.scheduleForm.selectedDates = [];
   startTestsCalendarDrag(fakeDayEl(yesterday));
   extendTestsCalendarDrag(fakeDayEl(tomorrow));
@@ -445,6 +452,51 @@ test("extendTestsCalendarDrag before any startTestsCalendarDrag (no mousedown ca
   state.tests.scheduleForm.selectedDates = [];
   extendTestsCalendarDrag(fakeDayEl("2026-09-10"));
   assert.deepEqual(state.tests.scheduleForm.selectedDates, []);
+});
+
+// ------------------------------------------------------------
+// Local-date-in-timezone helper: the fix for the calendar's old
+// `new Date().toISOString().slice(...)` (always UTC) approach, which could
+// show yesterday's date in Europe/Belgrade for the first ~1-2 hours after
+// real local midnight (Belgrade is UTC+1/+2, so local midnight happens
+// while UTC is still on the previous day).
+// ------------------------------------------------------------
+
+test("localDateIsoInTimeZone resolves the LOCAL date in Europe/Belgrade, not the UTC date, just after local midnight", () => {
+  // 2026-01-15T23:30:00Z is 2026-01-16T00:30:00+01:00 in Europe/Belgrade
+  // (CET, UTC+1 in January) - local "today" is already the 16th while UTC
+  // is still on the 15th. The old `date.toISOString().slice(0, 10)`
+  // approach would have returned the UTC date here - exactly the bug.
+  const instant = new Date("2026-01-15T23:30:00Z");
+  assert.equal(localDateIsoInTimeZone("Europe/Belgrade", instant), "2026-01-16");
+  assert.equal(instant.toISOString().slice(0, 10), "2026-01-15", "sanity check: the naive UTC-based approach would have been wrong here");
+});
+
+test("localMonthIsoInTimeZone rolls over to the next month at the same Europe/Belgrade local-midnight boundary", () => {
+  // 2026-01-31T23:15:00Z is 2026-02-01T00:15:00+01:00 in Europe/Belgrade -
+  // both the day AND the month roll over locally while UTC is still January.
+  const instant = new Date("2026-01-31T23:15:00Z");
+  assert.equal(localMonthIsoInTimeZone("Europe/Belgrade", instant), "2026-02");
+});
+
+test("the calendar's past-date lockout uses the SCHEDULE's own timezone, not UTC - Europe/Belgrade just after local midnight", (t) => {
+  resetTestsState();
+  state.tests.scheduleForm.timezone = "Europe/Belgrade";
+  state.tests.scheduleForm.selectedDates = [];
+  // At this real instant, Belgrade's local date is already 2026-01-16 (see
+  // the helper test above) even though UTC is still 2026-01-15 - the old
+  // UTC-based calendarTodayIso() would have wrongly allowed selecting the
+  // 15th as "today or later".
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-01-15T23:30:00Z").getTime() });
+  try {
+    startTestsCalendarDrag(fakeDayEl("2026-01-15"));
+    extendTestsCalendarDrag(fakeDayEl("2026-01-17"));
+    endTestsCalendarDrag();
+  } finally {
+    t.mock.timers.reset();
+  }
+  assert.ok(!state.tests.scheduleForm.selectedDates.includes("2026-01-15"), "2026-01-15 is already a past date in Europe/Belgrade at this instant");
+  assert.deepEqual(state.tests.scheduleForm.selectedDates.sort(), ["2026-01-16", "2026-01-17"]);
 });
 
 test("Specific dates bulk submit sends the exact selected dates and shared test/time/targets, and the resulting count/dates land in state.tests.bulkResult", async () => {

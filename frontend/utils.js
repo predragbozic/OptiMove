@@ -5,6 +5,30 @@ export function localDateIso(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+// Local calendar date in a SPECIFIC IANA timezone (e.g. a schedule's own
+// chosen timezone) - unlike localDateIso() above (the machine/browser's OWN
+// local date), this is what a "today"/"past date" check must use once a
+// timezone has actually been chosen, so a coach in one timezone scheduling
+// for a schedule in another never sees the wrong calendar day near
+// midnight. Built from Intl.DateTimeFormat's own timezone-aware components,
+// never `date.toISOString()` (always UTC, regardless of `timeZone`).
+export function localDateIsoInTimeZone(timeZone, date = new Date()) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+    const map = {};
+    for (const part of parts) map[part.type] = part.value;
+    if (map.year && map.month && map.day) return `${map.year}-${map.month}-${map.day}`;
+  } catch {
+    // Invalid/unsupported timeZone string - fall through to the browser's
+    // own local date rather than throwing mid-render.
+  }
+  return localDateIso(date);
+}
+
+export function localMonthIsoInTimeZone(timeZone, date = new Date()) {
+  return localDateIsoInTimeZone(timeZone, date).slice(0, 7);
+}
+
 export function weekMondayIso(value) {
   const date = new Date(`${String(value).slice(0, 10)}T12:00:00`);
   if (Number.isNaN(date.getTime())) return localDateIso();

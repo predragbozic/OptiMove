@@ -28,10 +28,35 @@ const WELLNESS_INJURY_PARAMETER_ID = "a98f2afb-b458-40ff-98a7-c6b5108bba9e";
 // `=== "daily" ? recurring : one_time` ternary used to.
 const VALID_SCHEDULE_KIND_INPUTS = ["one_time", "daily"];
 
+// POST /schedules/bulk (Specific dates) hard cap - a coach drag-selecting a
+// huge range is still one request; this bounds its worst-case transaction
+// size (one insert pair per date) without picking an arbitrary-feeling
+// number - 366 is "every possible day of one calendar year, leap included".
+const MAX_BULK_DATES = 366;
+
 const athleteDisplayNameSql = `coalesce(a.display_name, a.full_name, nullif(concat_ws(' ', a.first_name, a.last_name), ''), a.source_external_id, a.athlete_id::text)`;
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+const DATE_STRING_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+// A bare regex accepts calendar-impossible strings like "2026-02-30" or
+// "2026-04-31" - Date's own constructor doesn't reject those either, it
+// silently rolls the extra days over into the next month. Validity here is
+// confirmed by round-tripping the parsed year/month/day through
+// Date.UTC(...) and checking the components come back unchanged (a rollover
+// changes at least one of them).
+function isValidGregorianDateString(value) {
+  const match = DATE_STRING_PATTERN.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function requireAthlete(req, res) {
@@ -363,13 +388,58 @@ router.post("/assignments/:assignmentId/submit", async (req, res, next) => {
 
     await client.query("begin");
 
-    const assignmentResult = await client.query(`select * from tests.test_assignments where id = $1 for update`, [req.params.assignmentId]);
-    const assignment = assignmentResult.rows[0];
-    if (!assignment) {
+    // Step 0: an UNLOCKED read that only resolves which occurrence/schedule
+    // this assignment currently belongs to - never a lock itself. This is
+    // what lets the real locks below be taken in the SAME canonical order
+    // every write path in this file now uses: schedule -> occurrence ->
+    // assignment -> assessment (see PATCH /schedules/:id, which locks in
+    // this exact order via loadScheduleActivity). The previous version of
+    // this handler locked the assignment row FIRST, then occurrence, then
+    // schedule - the exact opposite of PATCH/DELETE's order on the same
+    // three tables, a textbook lock-order inversion: two transactions each
+    // holding one lock and waiting on the other's is a real PostgreSQL
+    // deadlock (40P01), not just a slow race. Resolving the ids here,
+    // unlocked, and re-confirming the assignment once every real lock is
+    // held (below) closes that gap without ever taking a lock out of order.
+    const lookup = await client.query(
+      `select asg.id as assignment_id, asg.athlete_id, asg.occurrence_id, o.schedule_id
+       from tests.test_assignments asg
+       join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
+       where asg.id = $1`,
+      [req.params.assignmentId],
+    );
+    const lookupRow = lookup.rows[0];
+    if (!lookupRow || String(lookupRow.athlete_id) !== String(athleteId)) {
       await client.query("rollback");
       return res.status(404).json({ error: "Assignment not found." });
     }
-    if (String(assignment.athlete_id) !== String(athleteId)) {
+
+    // Canonical lock order from here on: schedule -> occurrence ->
+    // assignment -> assessment. Whichever of this transaction or a
+    // concurrent PATCH/DELETE (both lock in this same order) commits first
+    // is authoritative; the other only proceeds once it can take its own
+    // lock, and re-checks reality below rather than trusting the unlocked
+    // lookup above.
+    const scheduleLockResult = await client.query(`select status from tests.test_schedules where id = $1 for update`, [lookupRow.schedule_id]);
+    const scheduleStatus = scheduleLockResult.rows[0]?.status;
+
+    const occurrenceResult = await client.query(`select * from tests.test_schedule_occurrences where id = $1 for update`, [lookupRow.occurrence_id]);
+    const occurrence = occurrenceResult.rows[0];
+    if (!occurrence) {
+      // Lost the race against a concurrent one-time edit that safely
+      // regenerated this occurrence (PATCH deletes it; on delete cascade
+      // removes this assignment with it) after our unlocked lookup above but
+      // before we got here - a clean 404, never a crash on a missing row.
+      await client.query("rollback");
+      return res.status(404).json({ error: "Assignment not found." });
+    }
+
+    const assignmentResult = await client.query(`select * from tests.test_assignments where id = $1 for update`, [lookupRow.assignment_id]);
+    const assignment = assignmentResult.rows[0];
+    // Re-confirm reality now that every lock is held, exactly as at the
+    // unlocked lookup above - the assignment must still exist, still belong
+    // to this athlete, and still point at the occurrence we just locked.
+    if (!assignment || String(assignment.athlete_id) !== String(athleteId) || String(assignment.occurrence_id) !== String(lookupRow.occurrence_id)) {
       await client.query("rollback");
       return res.status(404).json({ error: "Assignment not found." });
     }
@@ -388,7 +458,10 @@ router.post("/assignments/:assignmentId/submit", async (req, res, next) => {
     // reused from ever handing back another athlete's own assessment id/
     // values/score - a lookup that only matched on idempotency_key alone
     // would return whatever row that key belongs to, regardless of who is
-    // asking.
+    // asking. Deliberately checked BEFORE the schedule-active/occurrence-open
+    // gates below: a replay of an already-completed submission must still
+    // succeed even if the schedule was cancelled/paused afterward - that's
+    // exactly the "completed history stays fully preserved" guarantee.
     if (idempotencyKey) {
       const existing = await client.query(
         `select id from tests.test_assessments
@@ -403,19 +476,9 @@ router.post("/assignments/:assignmentId/submit", async (req, res, next) => {
       }
     }
 
-    const occurrenceResult = await client.query(`select * from tests.test_schedule_occurrences where id = $1 for update`, [assignment.occurrence_id]);
-    const occurrence = occurrenceResult.rows[0];
-
-    // Locks the parent schedule row too, for the rest of this transaction -
-    // this is what makes "cancel/pause vs a concurrent submit" a real race
-    // the DB itself resolves, not a check that can be bypassed by timing.
-    // Whichever of PATCH/DELETE (also `for update` on this same row) or
-    // this submit commits first is what the other sees once it gets the
-    // lock. A schedule the coach cancelled/paused after this exact form was
+    // A schedule the coach cancelled/paused after this exact form was
     // already open on the athlete's screen is caught here regardless -
     // canSubmit on the GET only ever reflected the status at load time.
-    const scheduleLockResult = await client.query(`select status from tests.test_schedules where id = $1 for update`, [occurrence.schedule_id]);
-    const scheduleStatus = scheduleLockResult.rows[0]?.status;
     if (scheduleStatus !== "active") {
       await client.query("rollback");
       return res.status(409).json({
@@ -672,8 +735,8 @@ router.post("/schedules/bulk", async (req, res, next) => {
     const dates = [];
     for (const raw of rawDates) {
       const date = text(raw);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        return res.status(400).json({ error: `"${raw}" is not a valid date (expected YYYY-MM-DD).` });
+      if (!isValidGregorianDateString(date)) {
+        return res.status(400).json({ error: `"${raw}" is not a valid calendar date (expected YYYY-MM-DD).` });
       }
       // Deduped, not rejected - a coach dragging back over an already-picked
       // day on the calendar (or a double-submitted request) collapses to
@@ -684,6 +747,9 @@ router.post("/schedules/bulk", async (req, res, next) => {
       dates.push(date);
     }
     if (!dates.length) return res.status(400).json({ error: "Choose at least one date." });
+    if (dates.length > MAX_BULK_DATES) {
+      return res.status(400).json({ error: `Choose at most ${MAX_BULK_DATES} dates per request (received ${dates.length} unique dates).` });
+    }
 
     // Targets are validated ONCE, up front, and reused for every date - the
     // exact same resolveValidTargets used by POST/PATCH /schedules, so a
@@ -972,6 +1038,30 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       return res.status(400).json({ error: "scheduleKind must be 'one_time' or 'daily'." });
     }
     const scheduleKind = (body.scheduleKind !== undefined ? text(body.scheduleKind) === "daily" : schedule.schedule_kind === "recurring") ? "recurring" : "one_time";
+
+    // A daily (recurring) schedule already generates its own occurrences one
+    // day at a time, ongoing - converting it to a single one_time schedule
+    // has no safe answer for "which occurrence becomes THE one_time
+    // occurrence" once any exist, unlike a same-kind daily edit (which only
+    // ever affects FUTURE occurrences - existing ones are left alone,
+    // untouched, exactly as B2 above documents). Any occurrence at all (not
+    // just real activity - stricter than the same-kind one_time edit rule
+    // above) blocks a recurring->one_time conversion outright. Reuses the
+    // same loadScheduleActivity helper/lock order as the one_time block
+    // above rather than a second bespoke query; the two blocks can never
+    // both run for the same request since schedule.schedule_kind is a single
+    // fixed value.
+    if (schedule.schedule_kind === "recurring" && scheduleKind === "one_time") {
+      const activity = await loadScheduleActivity((sql, params) => client.query(sql, params), schedule.id, { forUpdate: true });
+      if (activity.hasOccurrence) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "This daily schedule already has generated occurrences and can't be converted to one-time. Cancel it, then create a new one-time schedule instead.",
+          reason: "recurring_has_occurrence",
+        });
+      }
+    }
+
     const timezone = body.timezone !== undefined ? text(body.timezone) : schedule.timezone;
     const startDate = body.startDate !== undefined ? text(body.startDate) : schedule.start_date;
     const endDate = body.endDate !== undefined ? (text(body.endDate) || null) : schedule.end_date;

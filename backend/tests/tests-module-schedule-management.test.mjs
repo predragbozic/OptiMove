@@ -1087,6 +1087,44 @@ test("N2. edit wins the race: it safely regenerates first, so the concurrent sub
   }
 });
 
+test("N3. real PATCH and real POST /submit fired truly concurrently (no manual SQL standing in for either side), repeated - never a raw deadlock (40P01) or 500, always exactly one clean 200 against the OTHER side's controlled 404/409", async () => {
+  // N1/N2 above prove each specific winning order deterministically, but
+  // each one imitates ONE side by hand with raw SQL instead of driving both
+  // sides through the real routes. This is the real-endpoint counterpart:
+  // both requests are genuine HTTP calls into the real Express app, fired
+  // together (Promise.all), against a fresh schedule/assignment each
+  // iteration, repeated several times to exercise both real orderings the
+  // canonical schedule -> occurrence -> assignment lock order (submit and
+  // PATCH now both use it, see POST /submit and PATCH /schedules/:id in
+  // backend/src/routes/tests.js) makes possible - and impossible to
+  // deadlock between, unlike the old, inverted submit order.
+  const ITERATIONS = 6;
+  for (let i = 0; i < ITERATIONS; i += 1) {
+    const { coachCookie, athletes } = await makeClubWithAthletes(`n3-${i}`, 1);
+    const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+    const assignmentId = await getTodayAssignmentId(athletes[0].cookie);
+
+    const [submitResult, patchResult] = await Promise.all([
+      api(`/api/tests/assignments/${assignmentId}/submit`, { method: "POST", cookie: athletes[0].cookie, body: { values: FULL_VALUES } }),
+      api(`/api/tests/schedules/${created.body.schedule.id}`, {
+        method: "PATCH", cookie: coachCookie,
+        body: { scheduleKind: "one_time", timezone: "UTC", startDate: TODAY, opensTime: "01:00", closesTime: "22:00", targets: [{ kind: "athlete", id: athletes[0].athleteId }] },
+      }),
+    ]);
+
+    for (const result of [submitResult, patchResult]) {
+      assert.notEqual(result.status, 500, `iteration ${i}: a real 500 means a raw, unhandled deadlock (40P01) or crash slipped through - never allowed`);
+    }
+
+    const outcome = `${submitResult.status}/${patchResult.status}`;
+    assert.ok(
+      ["200/409", "404/200"].includes(outcome),
+      `iteration ${i}: unexpected status pair submit=${submitResult.status}/patch=${patchResult.status} - expected submit-wins (200/409 has_activity) or edit-wins (404/200)`,
+    );
+    if (outcome === "200/409") assert.equal(patchResult.body.reason, "has_activity");
+  }
+});
+
 // ------------------------------------------------------------
 // M. "Specific dates" bulk scheduling (POST /schedules/bulk)
 // ------------------------------------------------------------
@@ -1147,6 +1185,45 @@ test("M3. one malformed date rolls back the ENTIRE bulk request - no schedule fo
   assert.equal(after.rows[0].n, before.rows[0].n);
 });
 
+test("M3b. a syntactically well-formed but calendar-impossible date (Feb 30) is rejected with a controlled 400, not silently rolled over into March - nothing is written", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m3b", 1);
+  const before = await query(`select count(*)::int as n from tests.test_schedules`);
+  const result = await api("/api/tests/schedules/bulk", {
+    method: "POST", cookie: coachCookie,
+    body: bulkCreateBody(["2026-09-12", "2026-02-30", "2026-09-14"], [{ kind: "athlete", id: athletes[0].athleteId }]),
+  });
+  assert.equal(result.status, 400);
+  const after = await query(`select count(*)::int as n from tests.test_schedules`);
+  assert.equal(after.rows[0].n, before.rows[0].n);
+});
+
+test("M3c. Feb 29 is accepted on a real leap year (2028) but rejected on a non-leap year (2026) - a bare regex can't tell these apart", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m3c", 1);
+  const leapYear = await api("/api/tests/schedules/bulk", {
+    method: "POST", cookie: coachCookie,
+    body: bulkCreateBody(["2028-02-29"], [{ kind: "athlete", id: athletes[0].athleteId }]),
+  });
+  assert.equal(leapYear.status, 201, "2028 is a real leap year - Feb 29 exists");
+
+  const before = await query(`select count(*)::int as n from tests.test_schedules`);
+  const nonLeapYear = await api("/api/tests/schedules/bulk", {
+    method: "POST", cookie: coachCookie,
+    body: bulkCreateBody(["2026-02-29"], [{ kind: "athlete", id: athletes[0].athleteId }]),
+  });
+  assert.equal(nonLeapYear.status, 400, "2026 is not a leap year - Feb 29 does not exist");
+  const after = await query(`select count(*)::int as n from tests.test_schedules`);
+  assert.equal(after.rows[0].n, before.rows[0].n);
+});
+
+test("M3d. April 31 (a real month, but one that only has 30 days) is rejected with a controlled 400", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m3d", 1);
+  const result = await api("/api/tests/schedules/bulk", {
+    method: "POST", cookie: coachCookie,
+    body: bulkCreateBody(["2026-04-31"], [{ kind: "athlete", id: athletes[0].athleteId }]),
+  });
+  assert.equal(result.status, 400);
+});
+
 test("M4. an unauthorized target rolls back the entire bulk request, across every date", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("m4", 1);
   const outsider = await makeAthlete({ name: "M4 Outsider" });
@@ -1180,4 +1257,80 @@ test("M5. each schedule created by a bulk request is independently editable and 
   const firstStillThere = await api(`/api/tests/schedules/${first.id}`, { cookie: coachCookie });
   assert.equal(firstStillThere.status, 200);
   assert.equal(firstStillThere.body.schedule.opensTime.slice(0, 5), "07:00");
+});
+
+function sequentialDates(startIso, count) {
+  const dates = [];
+  const cursor = new Date(`${startIso}T00:00:00Z`);
+  for (let i = 0; i < count; i += 1) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+test("M6. a bulk request with 367 unique dates is rejected with a controlled 400 - nothing is written, not even the first 366", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m7", 1);
+  const dates = sequentialDates("2029-01-01", 367);
+  const before = await query(`select count(*)::int as n from tests.test_schedules`);
+  const result = await api("/api/tests/schedules/bulk", { method: "POST", cookie: coachCookie, body: bulkCreateBody(dates, [{ kind: "athlete", id: athletes[0].athleteId }]) });
+  assert.equal(result.status, 400);
+  const after = await query(`select count(*)::int as n from tests.test_schedules`);
+  assert.equal(after.rows[0].n, before.rows[0].n, "an over-limit request must write nothing, not even a truncated first 366");
+});
+
+// ------------------------------------------------------------
+// O. Schedule-kind conversion rules (daily <-> one_time)
+// ------------------------------------------------------------
+
+test("O1. a daily schedule that already has a generated occurrence cannot be converted to one-time - controlled 409, existing occurrence untouched", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("o1", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }], { scheduleKind: "daily" }) });
+  assert.equal(created.status, 201);
+  // Materializes today's occurrence for the daily schedule, same as any
+  // athlete opening Today would.
+  await getTodayAssignmentId(athletes[0].cookie);
+
+  const converted = await api(`/api/tests/schedules/${created.body.schedule.id}`, {
+    method: "PATCH", cookie: coachCookie,
+    body: { scheduleKind: "one_time", timezone: "UTC", startDate: TODAY, opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athletes[0].athleteId }] },
+  });
+  assert.equal(converted.status, 409);
+  assert.equal(converted.body.reason, "recurring_has_occurrence");
+
+  const stillDaily = await query(`select schedule_kind from tests.test_schedules where id = $1`, [created.body.schedule.id]);
+  assert.equal(stillDaily.rows[0].schedule_kind, "recurring", "a rejected conversion must leave the schedule's kind unchanged");
+  const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [created.body.schedule.id]);
+  assert.equal(occurrenceRows.rowCount, 1, "the existing occurrence must survive a rejected conversion untouched");
+});
+
+test("O1b. the SAME daily schedule, edited while staying daily (no kind change), is unaffected by the conversion rule - normal future-only edit still works", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("o1b", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }], { scheduleKind: "daily" }) });
+  await getTodayAssignmentId(athletes[0].cookie);
+
+  const edited = await api(`/api/tests/schedules/${created.body.schedule.id}`, {
+    method: "PATCH", cookie: coachCookie,
+    body: { scheduleKind: "daily", timezone: "UTC", startDate: TODAY, opensTime: "05:00", closesTime: "21:00", targets: [{ kind: "athlete", id: athletes[0].athleteId }] },
+  });
+  assert.equal(edited.status, 200, "editing a daily schedule while it stays daily must never be blocked by the recurring->one_time rule");
+});
+
+test("O2. a one_time schedule without activity converts cleanly to daily via the existing safe regeneration flow", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("o2", 1);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]) });
+  await getTodayAssignmentId(athletes[0].cookie); // materializes the one_time occurrence, still untouched
+
+  const converted = await api(`/api/tests/schedules/${created.body.schedule.id}`, {
+    method: "PATCH", cookie: coachCookie,
+    body: { scheduleKind: "daily", timezone: "UTC", startDate: TODAY, opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athletes[0].athleteId }] },
+  });
+  assert.equal(converted.status, 200);
+  assert.equal(converted.body.schedule.scheduleKind, "recurring");
+
+  // The stale one_time occurrence was safely deleted (same regeneration
+  // path as a same-kind one_time edit) - the next Today view materializes a
+  // fresh one under the now-daily schedule.
+  const afterConvert = await api("/api/tests/athlete/today", { cookie: athletes[0].cookie });
+  assert.equal(afterConvert.body.assignments.length, 1, "a fresh occurrence/assignment must be generated under the new daily schedule");
 });

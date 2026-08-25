@@ -26,7 +26,7 @@ import {
   submitConfirmEmailChange as submitConfirmEmailChangeAction,
 } from "./email-change-actions.js";
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
-import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
+import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests } from "./tests-data.js";
 import { renderTests, renderTestsBadge } from "./tests-view.js";
 import {
@@ -390,14 +390,19 @@ function bindEvents() {
   els.content.addEventListener("focusin", handleContentFocusIn);
   els.content.addEventListener("touchstart", handleSwipeStart, { passive: true });
   els.content.addEventListener("touchend", handleSwipeEnd, { passive: true });
-  // Specific-dates calendar click-and-drag (Phase 2.5): mousedown starts a
-  // drag on a day cell, mouseover (bubbles, unlike mouseenter - needed for
-  // delegation) extends it while the button is held, and mouseup - on
-  // `document`, not #content, since the mouse can be released anywhere -
-  // always ends it. See tests-actions.js's start/extend/endTestsCalendarDrag.
-  els.content.addEventListener("mousedown", handleContentMouseDown);
-  els.content.addEventListener("mouseover", handleContentMouseOver);
-  document.addEventListener("mouseup", () => endTestsCalendarDrag());
+  // Specific-dates calendar click-and-drag (Phase 2.5): Pointer Events, not
+  // separate mouse/touch listeners - one code path drives mouse AND touch
+  // drags identically (see handleContentPointerMove's own comment for why
+  // mouseover-style delegation can't work for touch). pointerdown starts a
+  // drag on a day cell, pointermove (on `document`, gated to only look up a
+  // day cell while a drag is actually in progress) extends it while the
+  // pointer is held down, and pointerup/pointercancel - both on `document`,
+  // not #content, since the pointer can be released/cancelled anywhere -
+  // always end it. See tests-actions.js's start/extend/endTestsCalendarDrag.
+  els.content.addEventListener("pointerdown", handleContentPointerDown);
+  document.addEventListener("pointermove", handleContentPointerMove);
+  document.addEventListener("pointerup", () => endTestsCalendarDrag());
+  document.addEventListener("pointercancel", () => endTestsCalendarDrag());
   document.addEventListener("click", handleGlobalClick);
   document.addEventListener("submit", handleGlobalSubmit);
   document.addEventListener("error", handleImageError, true);
@@ -805,17 +810,31 @@ function handleContentFocusIn(event) {
   requestAnimationFrame(() => field.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
-function handleContentMouseDown(event) {
+function handleContentPointerDown(event) {
   const dayEl = event.target.closest('[data-action="tests-calendar-day-mousedown"]');
   if (!dayEl) return;
-  event.preventDefault(); // stops the browser's own text-selection drag from fighting the calendar drag
-  startTestsCalendarDrag(dayEl);
+  if (startTestsCalendarDrag(dayEl)) {
+    event.preventDefault(); // stops the browser's own text-selection/touch-scroll from fighting the calendar drag
+  }
 }
 
-function handleContentMouseOver(event) {
-  const dayEl = event.target.closest('[data-action="tests-calendar-day-mousedown"]');
+// Pointer Events don't give touch drags the mouse's own "mouseover fires on
+// whatever element is now under the pointer" behavior - a touch pointer's
+// move events keep reporting the ORIGINAL pointerdown target throughout the
+// whole gesture (same underlying platform behavior as plain Touch Events).
+// document.elementFromPoint() is the standard, input-agnostic way around
+// that: it works identically for mouse and touch, so this one handler
+// drives both instead of needing separate mouse/touch code paths.
+// isTestsCalendarDragging() gates the elementFromPoint() call itself (not
+// cheap to run on every pointermove across the whole app) to only the
+// moments a calendar drag is actually in progress.
+function handleContentPointerMove(event) {
+  if (!isTestsCalendarDragging()) return;
+  const dayEl = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-action="tests-calendar-day-mousedown"]');
   if (!dayEl) return;
-  extendTestsCalendarDrag(dayEl);
+  if (extendTestsCalendarDrag(dayEl)) {
+    event.preventDefault(); // stops the page/panel from scrolling under an in-progress touch drag
+  }
 }
 
 function handleContentInput(event) {
@@ -1459,7 +1478,7 @@ function handleSwipeEnd(event) {
 
 function isSwipeContext(target) {
   if (!els.mediaModal?.hidden) return false;
-  if (target.closest(".calendar-grid, .week-selector, .week-calendar-picker, .program-day-grid, .exercise-list")) return false;
+  if (target.closest(".calendar-grid, .week-selector, .week-calendar-picker, .program-day-grid, .exercise-list, .tests-calendar")) return false;
   return Boolean(target.closest(".exercise-detail, .panel, .node-grid"));
 }
 

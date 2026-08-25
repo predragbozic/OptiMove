@@ -10143,8 +10143,8 @@ button.tests-assignment-card {
   border-radius: var(--radius);
   background: var(--surface-soft);
   /* Dragging a day-cell range must never trigger the browser's own text
-     selection - it fights the mousedown/mouseover drag tracking and makes
-     the range look broken mid-drag. */
+     selection - it fights the pointerdown/pointermove drag tracking and
+     makes the range look broken mid-drag. */
   user-select: none;
 }
 
@@ -10159,6 +10159,14 @@ button.tests-assignment-card {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 4px;
+}
+
+.tests-calendar-grid {
+  /* A touch drag across day cells must select a date range, never scroll or
+     pan the page - touch-action:none tells the browser not to claim the
+     gesture for native scrolling before our own pointermove handler
+     (app.js's handleContentPointerMove) gets to decide. */
+  touch-action: none;
 }
 
 .tests-calendar-weekdays span {

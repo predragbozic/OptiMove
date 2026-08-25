@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
+import { localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
 import { checkInUrl, patchTestsAthletePickerDom, patchTestsCalendarDom, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes } from "./tests-view.js";
 import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadWellnessForm } from "./tests-data.js";
 
@@ -68,10 +69,17 @@ export async function handleTestsAction(action, { renderTests }) {
   }
 
   if (type === "tests-open-schedule-form") {
+    // Default start date/month use the browser's own local timezone (no
+    // schedule timezone has been chosen yet at this point - emptyScheduleForm
+    // defaults `timezone` to this exact same value) - never a bare UTC
+    // slice, which shows yesterday's/tomorrow's date for part of every day
+    // depending on the user's offset from UTC.
+    const defaultTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     state.tests.scheduleForm = emptyScheduleForm({
       open: true,
-      startDate: new Date().toISOString().slice(0, 10),
-      calendarMonth: new Date().toISOString().slice(0, 7),
+      timezone: defaultTimezone,
+      startDate: localDateIsoInTimeZone(defaultTimezone),
+      calendarMonth: localMonthIsoInTimeZone(defaultTimezone),
     });
     state.tests.bulkResult = null;
     renderTests();
@@ -85,7 +93,8 @@ export async function handleTestsAction(action, { renderTests }) {
   }
   if (type === "tests-calendar-prev-month" || type === "tests-calendar-next-month") {
     const form = state.tests.scheduleForm;
-    const [year, month] = (form.calendarMonth || new Date().toISOString().slice(0, 7)).split("-").map(Number);
+    const timezone = form.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const [year, month] = (form.calendarMonth || localMonthIsoInTimeZone(timezone)).split("-").map(Number);
     const delta = type === "tests-calendar-prev-month" ? -1 : 1;
     const next = new Date(Date.UTC(year, month - 1 + delta, 1));
     form.calendarMonth = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -310,20 +319,30 @@ export function handleTestsScheduleAthleteSearchInput(inputEl) {
 
 // ------------------------------------------------------------
 // Specific-dates calendar: click-and-drag range selection, Booking-style.
-// Wired from app.js's own mousedown/mouseover (delegated on #content) and a
-// document-level mouseup - see handleContentMouseDown/-MouseOver/
-// handleGlobalMouseUp there. Module-level drag state (not part of `state`,
-// the app's own reactive store) deliberately: it's pure, ephemeral pointer
-// interaction, never meaningful to persist/re-render from, and every mutation
-// it causes to state.tests.scheduleForm.selectedDates is applied and painted
-// (via patchTestsCalendarDom, a targeted DOM patch - see tests-view.js)
-// immediately, on every single mouseover, not just at drag end.
+// Wired from app.js's own Pointer Events (pointerdown delegated on #content,
+// document-level pointermove/pointerup/pointercancel) - see
+// handleContentPointerDown/-PointerMove/handleGlobalPointerEnd there. Pointer
+// Events (not separate mouse/touch listeners) is what lets one code path
+// drive both a mouse drag and a touch drag identically - a tap is just a
+// pointerdown+pointerup with no pointermove between, a touch drag is a
+// pointermove sequence exactly like a mouse drag, just routed through
+// document.elementFromPoint() in app.js instead of relying on mouseover
+// (which never fires on other elements during a touch drag - only the
+// original touch-start target keeps receiving events). Module-level drag
+// state (not part of `state`, the app's own reactive store) deliberately:
+// it's pure, ephemeral pointer interaction, never meaningful to persist/
+// re-render from, and every mutation it causes to
+// state.tests.scheduleForm.selectedDates is applied and painted (via
+// patchTestsCalendarDom, a targeted DOM patch - see tests-view.js)
+// immediately, on every single pointermove, not just at drag end.
 // ------------------------------------------------------------
 
 let calendarDragState = null; // { anchorDate, mode: "add" | "remove", baseSelected: Set }
 
 function calendarTodayIso() {
-  return new Date().toISOString().slice(0, 10);
+  const form = state.tests.scheduleForm;
+  const timezone = form.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  return localDateIsoInTimeZone(timezone);
 }
 
 // Recomputes selectedDates as baseSelected (the selection BEFORE this drag
@@ -359,22 +378,36 @@ function applyCalendarDragRange(currentDate) {
 // cell, so the whole drag moves in one consistent direction.
 export function startTestsCalendarDrag(dayEl) {
   const date = dayEl?.dataset?.date;
-  if (!date || dayEl.disabled) return;
+  if (!date || dayEl.disabled) return false;
   const form = state.tests.scheduleForm;
   const alreadySelected = form.selectedDates.includes(date);
   calendarDragState = { anchorDate: date, mode: alreadySelected ? "remove" : "add", baseSelected: new Set(form.selectedDates) };
   applyCalendarDragRange(date);
+  return true;
 }
 
+// Returns whether it actually extended an in-progress drag - app.js uses
+// this to decide whether to preventDefault() the pointermove (stopping the
+// page/panel from scrolling under a touch drag) ONLY while a calendar drag
+// is genuinely in progress, never globally.
 export function extendTestsCalendarDrag(dayEl) {
-  if (!calendarDragState) return;
+  if (!calendarDragState) return false;
   const date = dayEl?.dataset?.date;
-  if (!date || dayEl.disabled) return;
+  if (!date || dayEl.disabled) return false;
   applyCalendarDragRange(date);
+  return true;
 }
 
 export function endTestsCalendarDrag() {
   calendarDragState = null;
+}
+
+// Cheap synchronous check app.js uses to skip its (otherwise-unconditional)
+// document.elementFromPoint() lookup on every single pointermove across the
+// WHOLE app - that lookup is only worth paying for while an actual calendar
+// drag is in progress.
+export function isTestsCalendarDragging() {
+  return calendarDragState !== null;
 }
 
 // ------------------------------------------------------------

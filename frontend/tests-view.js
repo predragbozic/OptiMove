@@ -2,7 +2,7 @@ import { isAthleteMode } from "./access.js";
 import { els } from "./dom.js";
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
-import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
+import { escapeAttr, escapeHtml, initialsFor, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
 
 function renderWellnessAvatar(form) {
   if (form.athleteImageUrl) return renderImage(form.athleteImageUrl, "wellness-avatar wellness-avatar-photo", form.athleteName);
@@ -537,11 +537,18 @@ function monthMatrix(monthIso) {
 }
 
 export function renderTestsCalendarHtml(form) {
-  const monthIso = form.calendarMonth || new Date().toISOString().slice(0, 7);
+  // "Today" and the default month must reflect the SCHEDULE's own chosen
+  // timezone (falling back to the browser's own timezone before one has
+  // been picked) - never a bare UTC slice, which shows the wrong local day
+  // for part of every day depending on the coach's/schedule's offset from
+  // UTC (see the Europe/Belgrade tests in
+  // tests/tests-schedule-management.actions.test.mjs).
+  const timezone = form.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const monthIso = form.calendarMonth || localMonthIsoInTimeZone(timezone);
   const cells = monthMatrix(monthIso);
   const [year, month] = monthIso.split("-").map(Number);
   const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = localDateIsoInTimeZone(timezone);
   const selected = new Set(form.selectedDates);
   return `
     <div class="tests-calendar" data-tests-calendar>
