@@ -3035,6 +3035,20 @@ input:focus {
   color: var(--text);
 }
 
+/* The Tests module's Today/Schedule/Results/Test Library tabs carry icons
+   (TESTS_TAB_ICONS, tests-view.js) - the generic .tab.is-active solid fill
+   reads as a heavy, mismatched green block next to Builder's own icon
+   marking elsewhere in the app. Scoped to .tests-section-tabs, same
+   precedent as .athlete-tabs .tab-with-icon.is-active above, so no other
+   .tab.is-active usage is affected. Colors match Builder's own active
+   tint/border (.builder-node-button.is-active, styles.css) for uniformity -
+   the icon's stroke uses currentColor, so this tints icon + label together. */
+.tests-section-tabs .tab.is-active {
+  border-color: #287e77;
+  background: #e7f5f2;
+  color: #287e77;
+}
+
 /* ui/athlete-program-navigation-icons: Weekly plans / Specific programs
    reuse the same icon markup as the Athlete Home Quick actions
    (ICON_CALENDAR / ICON_SPECIFIC_PROGRAMS, athlete-home.js) rather than a
@@ -10260,6 +10274,16 @@ button.tests-assignment-card {
   position: relative;
   display: grid;
   gap: 12px;
+}
+
+.tests-schedule-form {
+  /* On a wide desktop viewport this panel (and the calendar inside it, which
+     has no width cap of its own - its 7 columns just grow to fill whatever
+     width they're given) would otherwise stretch to fill the entire content
+     column. min(..., 100%) caps it on desktop while staying full-width on
+     mobile automatically - same sizing idiom already used by every sized
+     modal in this app (e.g. .builder-structure-modal). */
+  max-width: min(560px, 100%);
 }
 
 .tests-schedule-form form,

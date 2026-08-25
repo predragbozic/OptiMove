@@ -77,6 +77,10 @@ export async function handleTestsAction(action, { renderTests }) {
     const defaultTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     state.tests.scheduleForm = emptyScheduleForm({
       open: true,
+      // The calendar (specific_dates) is the default create flow - there's
+      // no separate "one-time" choice to start on; the coach only ever
+      // opts INTO "daily" via the checkbox below.
+      scheduleKind: "specific_dates",
       timezone: defaultTimezone,
       startDate: localDateIsoInTimeZone(defaultTimezone),
       calendarMonth: localMonthIsoInTimeZone(defaultTimezone),
@@ -88,6 +92,20 @@ export async function handleTestsAction(action, { renderTests }) {
   }
   if (type === "tests-dismiss-bulk-result") {
     state.tests.bulkResult = null;
+    renderTests();
+    return true;
+  }
+  // "Repeat daily" checkbox - the only recurrence choice a coach makes
+  // directly (create mode: unchecked = the calendar/specific_dates flow,
+  // checked = daily; edit mode: unchecked = the existing schedule's own
+  // one_time date, checked = daily). Wired on click, same pattern as the
+  // "Show cancelled" checkbox above - `action` IS the checkbox element by
+  // the time its own click handler runs, so `.checked` already reflects the
+  // post-click state.
+  if (type === "tests-schedule-toggle-daily") {
+    const form = state.tests.scheduleForm;
+    const isEdit = Boolean(form.editingScheduleId);
+    form.scheduleKind = action.checked ? "daily" : isEdit ? "one_time" : "specific_dates";
     renderTests();
     return true;
   }

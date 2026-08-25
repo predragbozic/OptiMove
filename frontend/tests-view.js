@@ -447,13 +447,9 @@ function renderScheduleFormHtml() {
         ${isEdit && form.scheduleKind === "one_time" && form.hasOccurrences ? `<p class="tests-future-only-notice">This schedule's occurrence hasn't been started yet, so it's still fully editable - saving will regenerate it under the new date/time/targets.</p>` : ""}
         ${isEdit && form.scheduleKind === "daily" && form.hasOccurrences ? `<p class="tests-future-only-notice">Changes apply to future occurrences only - already-generated occurrences and assignments are not affected.</p>` : ""}
         <form data-tests-form="${isEdit ? "edit-schedule" : isSpecificDates ? "create-schedule-bulk" : "create-schedule"}">
-          <label class="search-field">
-            <span>Recurrence</span>
-            <select name="scheduleKind" data-action="tests-schedule-form-field">
-              <option value="one_time" ${form.scheduleKind === "one_time" ? "selected" : ""}>One-time</option>
-              <option value="daily" ${form.scheduleKind === "daily" ? "selected" : ""}>Daily</option>
-              ${isEdit ? "" : `<option value="specific_dates" ${isSpecificDates ? "selected" : ""}>Specific dates</option>`}
-            </select>
+          <label class="tests-show-cancelled-toggle">
+            <input type="checkbox" data-action="tests-schedule-toggle-daily" ${form.scheduleKind === "daily" ? "checked" : ""}>
+            <span>Repeat daily</span>
           </label>
           <label class="search-field">
             <span>Timezone</span>

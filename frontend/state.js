@@ -244,10 +244,16 @@ export const emptyScheduleForm = (overrides = {}) => ({
   // it, and is what the UI explains to the coach.
   hasOccurrences: false,
   hasActivity: false,
-  // "one_time" | "daily" | "specific_dates" - the third is UI-only (never
-  // sent as scheduleKind to the server): submitting it calls
-  // POST /schedules/bulk instead of POST/PATCH /schedules, creating one
-  // independent one_time schedule per date in selectedDates.
+  // "one_time" | "daily" | "specific_dates". The coach only ever picks
+  // between "daily" (a checkbox) and the calendar - there's no separate
+  // create-time "one-time" choice, since picking exactly one date on the
+  // same calendar IS the one-time case. "specific_dates" is the UI value
+  // for that calendar flow (never sent as scheduleKind to the server):
+  // submitting it calls POST /schedules/bulk instead of POST/PATCH
+  // /schedules, creating one independent one_time schedule per date in
+  // selectedDates (one date included). "one_time" only appears when EDITING
+  // an existing non-daily schedule (there the calendar makes no sense - an
+  // existing schedule is always exactly one date already).
   scheduleKind: "one_time",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   startDate: "",
