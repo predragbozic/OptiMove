@@ -2,7 +2,7 @@ import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
-import { checkInUrl, patchTestsAthletePickerDom, patchTestsCalendarDom, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
+import { assignmentSetFingerprint, checkInUrl, patchTestsAthletePickerDom, patchTestsCalendarDom, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
 import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadWellnessForm } from "./tests-data.js";
 
 // Every data-action="tests-*" click/change and data-tests-form submit in the
@@ -317,7 +317,7 @@ export async function handleTestsAction(action, { renderTests }) {
     return true;
   }
   if (type === "tests-reminder-clear") {
-    state.tests.reminderSelection[action.dataset.scheduleId] = [];
+    clearReminderSelection(action.dataset.scheduleId);
     renderTests();
     return true;
   }
@@ -385,27 +385,52 @@ function coachTodayGroupById(scheduleId) {
   return state.tests.coachToday.find((group) => group.schedule.id === scheduleId);
 }
 
+// Item 4 correction: reminderSelection[scheduleId] is now { fingerprint,
+// ids }, not a bare array - see assignmentSetFingerprint/reminderSelectedSet
+// (tests-view.js) for why. Every write here stamps the CURRENT fingerprint
+// alongside the ids, so a later render against a DIFFERENT set (a new
+// day's daily occurrence, a membership change) correctly recognizes this
+// stored value as stale and falls back to the default instead of showing a
+// wrong or empty list.
 function toggleReminderAthlete(scheduleId, assignmentId) {
   const group = coachTodayGroupById(scheduleId);
   if (!group) return;
-  // First interaction with this group's list materializes the implicit
-  // "all incomplete" default into an explicit array before toggling one
-  // entry out of it - see reminderSelectedSet's own comment (tests-view.js).
-  const current = new Set(state.tests.reminderSelection[scheduleId] || reminderSelectedSet(group));
+  // reminderSelectedSet already resolves the correct CURRENT set (default
+  // or a still-valid override, fingerprint-checked) - toggling always
+  // starts from that, never a possibly-stale raw stored array.
+  const current = new Set(reminderSelectedSet(group));
   if (current.has(assignmentId)) current.delete(assignmentId);
   else current.add(assignmentId);
-  state.tests.reminderSelection[scheduleId] = [...current];
+  state.tests.reminderSelection[scheduleId] = { fingerprint: assignmentSetFingerprint(group), ids: [...current] };
 }
 
 function setReminderSelectionToAllIncomplete(scheduleId) {
   const group = coachTodayGroupById(scheduleId);
   if (!group) return;
-  state.tests.reminderSelection[scheduleId] = group.athletes.filter((row) => row.status !== "completed").map((row) => row.assignmentId);
+  const ids = group.athletes.filter((row) => row.status !== "completed").map((row) => row.assignmentId);
+  state.tests.reminderSelection[scheduleId] = { fingerprint: assignmentSetFingerprint(group), ids };
 }
 
-function reminderConfirmationMessage({ notifiedCount, noUserCount }) {
+function clearReminderSelection(scheduleId) {
+  const group = coachTodayGroupById(scheduleId);
+  if (!group) return;
+  // An explicit, genuinely empty choice - stamped with the current
+  // fingerprint so it is NOT mistaken for a stale/default state and
+  // silently reset back to "select all" on the next render.
+  state.tests.reminderSelection[scheduleId] = { fingerprint: assignmentSetFingerprint(group), ids: [] };
+}
+
+// Item 5/6 correction: when nothing (or fewer than selected) got notified,
+// say why instead of a bare "Reminder sent to 0 athletes." - a coach
+// clicking Send right after a previous send, or right as a window closes,
+// needs to know it wasn't silently ignored.
+function reminderConfirmationMessage({ results = [], notifiedCount, noUserCount }) {
   let message = `Reminder sent to ${notifiedCount} athlete${notifiedCount === 1 ? "" : "s"}.`;
   if (noUserCount) message += ` ${noUserCount} athlete${noUserCount === 1 ? "" : "s"} ${noUserCount === 1 ? "has" : "have"} no app account.`;
+  const cooldownCount = results.filter((r) => r.outcome === "skippedCooldown").length;
+  if (cooldownCount) message += ` ${cooldownCount} already reminded in the last few minutes.`;
+  const closedCount = results.filter((r) => r.outcome === "skippedClosed" || r.outcome === "skippedNotOpen").length;
+  if (closedCount) message += ` ${closedCount} outside their own open check-in window.`;
   return message;
 }
 

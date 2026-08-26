@@ -300,16 +300,46 @@ export function incompleteAthletesFor(group) {
   return group.athletes.filter((row) => row.status !== "completed");
 }
 
+// Item 4 correction: a bare assignment-id array, keyed only by scheduleId,
+// went stale in two real ways - a daily schedule's own occurrence rolls
+// over to a brand-new set of assignment ids every day (same scheduleId,
+// completely different ids), and an athlete who completes their check-in
+// AFTER the coach already made a selection should immediately drop out of
+// it. A fingerprint of the CURRENT full set of assignment ids under this
+// group is what lets a stale selection be recognized as stale (a NEW day's
+// occurrence has a different fingerprint, so it doesn't even look like the
+// SAME selection at all) and reset back to the default automatically,
+// rather than the coach seeing an empty or wrong list until they manually
+// re-interact.
+export function assignmentSetFingerprint(group) {
+  return group.athletes.map((row) => row.assignmentId).slice().sort().join(",");
+}
+
 // state.tests.reminderSelection[scheduleId] is only ever written once the
 // coach actually interacts (toggles one row, or explicitly clicks Select
 // all/Clear) - until then, "podrazumevano selektuj sve nezavršene" (default:
 // every incomplete athlete selected) is computed live here, so a fresh
 // Today load never needs to eagerly populate this map for every group up
-// front.
+// front. Stored as { fingerprint, ids } (not a bare array) - see
+// assignmentSetFingerprint's own comment for why.
 export function reminderSelectedSet(group) {
-  const override = state.tests.reminderSelection[group.schedule.id];
-  if (override) return new Set(override);
-  return new Set(incompleteAthletesFor(group).map((row) => row.assignmentId));
+  const incompleteIds = new Set(incompleteAthletesFor(group).map((row) => row.assignmentId));
+  const stored = state.tests.reminderSelection[group.schedule.id];
+  if (!stored || stored.fingerprint !== assignmentSetFingerprint(group)) {
+    // No explicit choice yet for THIS exact set of assignments - either
+    // truly never interacted with, or the underlying occurrence changed
+    // (a new day's daily schedule, a membership change, ...) - default to
+    // every currently incomplete athlete, per "podrazumevano selektuj sve
+    // nezavršene".
+    return incompleteIds;
+  }
+  // An explicit choice exists for this EXACT set - still intersected with
+  // the CURRENT incomplete set, so an athlete who completes their check-in
+  // after the coach already made a selection is excluded from the count/
+  // POST immediately, without needing a new interaction. Clear (an
+  // explicit empty array, still matching the current fingerprint) stays
+  // genuinely empty here - it is never re-defaulted to "select all".
+  return new Set(stored.ids.filter((id) => incompleteIds.has(id)));
 }
 
 function renderManualReminderSectionHtml(group) {

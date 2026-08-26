@@ -1697,64 +1697,114 @@ router.post("/links/:linkId/revoke", async (req, res, next) => {
 // Every rule below mirrors an existing, already-enforced invariant
 // elsewhere in this file/the DB - this route only decides who's eligible to
 // receive a REMINDER right now, it invents no new submit/eligibility logic
-// of its own (assignmentIsOpen/schedule.status='active' already gate real
-// submission server-side regardless of what this route ever does).
+// of its own (assignmentIsOpen's own opens_at/closes_at/status shape is
+// exactly what's re-checked below, real submission is still gated
+// server-side by POST /submit regardless of what this route ever does).
 const MANUAL_REMINDER_COOLDOWN_MS = 5 * 60 * 1000;
 
-function manualReminderDedupeKey(assignmentId, cooldownBucket) {
-  // Namespaced (manual_reminder:v1:...), same convention as builder.js's
-  // own dedupe_key values on this SAME shared column (migrations_v2/
-  // 202608280900_app_notifications_dedupe_key.sql - already deployed, a
-  // plain nullable column + partial unique index, no new migration needed
-  // here). Unlike that one-shot-forever use, the bucket suffix here rotates
-  // every MANUAL_REMINDER_COOLDOWN_MS - a genuine resend after the cooldown
-  // window gets a brand-new key and succeeds; a double-click/retry WITHIN
-  // the same window collides on the unique index and is a guaranteed
-  // no-op, atomically (ON CONFLICT DO NOTHING needs no extra locking to be
-  // race-proof under concurrent requests - that's exactly what it's for).
-  return `manual_reminder:v1:${assignmentId}:${cooldownBucket}`;
-}
-
+// Round 2 hardening: the WHOLE operation runs on one client, one
+// transaction, locking in the SAME canonical order every other write path
+// in this file uses (schedule -> occurrence -> assignment - see POST
+// /assignments/:id/submit's own "Step 0" comment for why this exact order
+// matters/prevents deadlocks). This is what actually closes three real
+// races the previous version had: a reminder going out after the coach
+// just paused/cancelled the schedule, a reminder for an assignment the
+// athlete completes in the same instant, and a mid-batch failure leaving
+// some notifications written and others not (one transaction means one
+// error rolls back everything already inserted this call, never a partial
+// batch). Realtime events are only ever emitted AFTER a successful commit -
+// never for a write that could still be rolled back.
 router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
+  const assignmentIds = Array.isArray(req.body?.assignmentIds) ? [...new Set(req.body.assignmentIds.filter((id) => typeof id === "string" && id))] : [];
+  if (!requireCoachWorkspace(req, res)) return;
+  if (!assignmentIds.length) return res.status(400).json({ error: "assignmentIds is required." });
+
+  const client = await pool.connect();
+  let results;
+  const toEmit = [];
   try {
-    if (!requireCoachWorkspace(req, res)) return;
-    const scheduleResult = await query(
-      `select sch.*, tv.name as test_name from tests.test_schedules sch join tests.test_versions tv on tv.id = sch.test_version_id where sch.id = $1`,
+    await client.query("begin");
+
+    // Lock + re-read the schedule FIRST - a concurrent PATCH/DELETE (both
+    // take `for update` on this same row) queues behind our `for share`
+    // (or vice versa), so nothing about this schedule's status can change
+    // out from under the rest of this call.
+    const scheduleResult = await client.query(
+      `select sch.*, tv.name as test_name from tests.test_schedules sch join tests.test_versions tv on tv.id = sch.test_version_id where sch.id = $1 for share`,
       [req.params.scheduleId],
     );
     const schedule = scheduleResult.rows[0];
-    if (!schedule) return res.status(404).json({ error: "Schedule not found." });
+    if (!schedule) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Schedule not found." });
+    }
     // Explicit 403 (not the info-hiding 404 most of this file's other
     // routes use for "not found or not yours") - the schedule genuinely
     // exists, the coach just isn't allowed to act on it.
-    if (!canManageSchedule(req, schedule)) return res.status(403).json({ error: "Forbidden" });
-
-    const assignmentIds = Array.isArray(req.body?.assignmentIds) ? [...new Set(req.body.assignmentIds.filter((id) => typeof id === "string" && id))] : [];
-    if (!assignmentIds.length) return res.status(400).json({ error: "assignmentIds is required." });
-
-    // Schedule-level gates - checked ONCE, not per assignment: a cancelled
-    // schedule's assignments are frozen history (never remind about a
-    // check-in that no longer exists in any actionable sense); a paused
-    // schedule blocks NEW submissions entirely (routes/tests.js's own
-    // POST /submit already enforces schedule.status==='active'), so a
+    if (!canManageSchedule(req, schedule)) {
+      await client.query("rollback");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    // Schedule-level gates - checked ONCE, under the lock above, not per
+    // assignment: a cancelled schedule's assignments are frozen history
+    // (never remind about a check-in that no longer exists in any
+    // actionable sense); a paused schedule blocks NEW submissions entirely
+    // (POST /submit already enforces schedule.status==='active'), so a
     // reminder to submit would be actively misleading.
-    if (schedule.status === "cancelled") return res.status(400).json({ error: "This schedule is cancelled." });
-    if (schedule.status === "paused") return res.status(400).json({ error: "This schedule is paused - athletes can't submit right now, so a reminder would be pointless." });
+    if (schedule.status === "cancelled") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule is cancelled." });
+    }
+    if (schedule.status === "paused") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule is paused - athletes can't submit right now, so a reminder would be pointless." });
+    }
 
-    const rowsResult = await query(
-      `select asg.id, asg.status as assignment_status, asg.closes_at,
-              a.id as athlete_id, a.user_id, ${athleteDisplayNameSql} as athlete_name
+    // Unlocked lookup - only to discover which occurrence(s) these
+    // assignments currently belong to (an athlete significantly ahead/
+    // behind the schedule's own timezone can live under a DIFFERENT
+    // occurrence than another athlete under the very same schedule - see
+    // testsOccurrenceService.js), so the real lock below can be taken
+    // against a stable, sorted set - same "resolve first, lock in a fixed
+    // order second" shape POST /submit's own Step 0 already establishes,
+    // to avoid a lock-order deadlock against a concurrent request.
+    const occurrenceLookup = await client.query(
+      `select distinct o.id
+       from tests.test_assignments asg
+       join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
+       where o.schedule_id = $1 and asg.id = any($2::uuid[])
+       order by o.id`,
+      [schedule.id, assignmentIds],
+    );
+    if (occurrenceLookup.rowCount) {
+      await client.query(
+        `select id from tests.test_schedule_occurrences where id = any($1::uuid[]) order by id for share`,
+        [occurrenceLookup.rows.map((r) => r.id)],
+      );
+    }
+
+    // Lock the assignment rows themselves (FOR UPDATE - not FOR SHARE like
+    // the two levels above, since this is the row a concurrent athlete
+    // submit (POST /assignments/:id/submit, which also takes FOR UPDATE on
+    // this exact row) could be racing to complete right now). Whichever of
+    // the two transactions gets here first wins; the other blocks until it
+    // commits, then re-reads fresh reality below - never a reminder sent
+    // for an assignment that has, by the time this lock is granted,
+    // already been completed.
+    const assignmentRows = await client.query(
+      `select asg.*, a.user_id, ${athleteDisplayNameSql} as athlete_name
        from tests.test_assignments asg
        join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
        join public.athletes a on a.id = asg.athlete_id
-       where o.schedule_id = $1 and asg.id = any($2::uuid[])`,
+       where o.schedule_id = $1 and asg.id = any($2::uuid[])
+       order by asg.id
+       for update of asg`,
       [schedule.id, assignmentIds],
     );
-    const rowsById = new Map(rowsResult.rows.map((row) => [row.id, row]));
-    const now = new Date();
-    const cooldownBucket = Math.floor(now.getTime() / MANUAL_REMINDER_COOLDOWN_MS);
+    const rowsById = new Map(assignmentRows.rows.map((row) => [row.id, row]));
 
-    const results = [];
+    const now = new Date();
+    results = [];
     for (const assignmentId of assignmentIds) {
       const row = rowsById.get(assignmentId);
       if (!row) {
@@ -1762,11 +1812,23 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
         continue;
       }
       const base = { assignmentId, athleteId: row.athlete_id, athleteName: row.athlete_name };
-      if (row.assignment_status === "completed") {
+      // Item 1: the assignment's own PER-ATHLETE window (opens_at/
+      // closes_at, snapshotted at materialization in their own effective
+      // timezone) is the only thing that ever gates this - never the
+      // occurrence's shared reference window or the schedule's own
+      // timezone (see testsOccurrenceService.js's assignmentIsOpen, whose
+      // exact opens_at<=now<=closes_at && status<>'cancelled' shape this
+      // mirrors, split out here into the specific outcome each failure
+      // mode needs).
+      if (row.status === "completed") {
         results.push({ ...base, outcome: "skippedCompleted" });
         continue;
       }
-      if (["missed", "excused", "cancelled"].includes(row.assignment_status)) {
+      if (["missed", "excused", "cancelled"].includes(row.status)) {
+        results.push({ ...base, outcome: "skippedNotOpen" });
+        continue;
+      }
+      if (new Date(row.opens_at) > now) {
         results.push({ ...base, outcome: "skippedNotOpen" });
         continue;
       }
@@ -1778,11 +1840,43 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
         results.push({ ...base, outcome: "skippedNoUser" });
         continue;
       }
-      const dedupeKey = manualReminderDedupeKey(assignmentId, cooldownBucket);
-      const inserted = await query(
+
+      // Item 2: a REAL 5-minute sliding cooldown - never a fixed bucket
+      // (Math.floor(now / 5min) lets two requests seconds apart, straddling
+      // a bucket boundary, both succeed - a real bug in the first version
+      // of this route). This SELECT is safe/atomic specifically because it
+      // runs while this assignment's own row is already locked (FOR UPDATE,
+      // above): any concurrent request for the SAME assignment must
+      // acquire that SAME lock first, so it can only ever run its own
+      // version of this check after this transaction has already committed
+      // (and can then see whatever this call just inserted, if anything) -
+      // no separate advisory lock needed, the row lock IS the
+      // serialization point.
+      const cooldownResult = await client.query(
+        `select exists (
+           select 1 from public.app_notifications
+           where entity_type = 'test_assignment' and entity_id = $1 and type = 'test_manual_reminder'
+             and created_at > now() - ($2 || ' milliseconds')::interval
+         ) as in_cooldown`,
+        [assignmentId, MANUAL_REMINDER_COOLDOWN_MS],
+      );
+      if (cooldownResult.rows[0].in_cooldown) {
+        results.push({ ...base, outcome: "skippedCooldown" });
+        continue;
+      }
+
+      // dedupe_key stays populated (same shared column/convention as
+      // builder.js's own one-shot notifications - migrations_v2/
+      // 202608280900_app_notifications_dedupe_key.sql, already deployed,
+      // no new migration here) but is no longer what PREVENTS a duplicate -
+      // the cooldown SELECT above, under the assignment's own row lock, is
+      // the real, sole correctness mechanism now. A random suffix keeps
+      // this insert from ever spuriously conflicting with a genuinely
+      // separate, later send for the same assignment.
+      const dedupeKey = `manual_reminder:v1:${assignmentId}:${crypto.randomUUID()}`;
+      const inserted = await client.query(
         `insert into public.app_notifications (recipient_user_id, actor_user_id, type, title, body, entity_type, entity_id, metadata, dedupe_key)
          values ($1, $2, 'test_manual_reminder', 'WELLNESS reminder', $3, 'test_assignment', $4, $5::jsonb, $6)
-         on conflict (dedupe_key) where dedupe_key is not null do nothing
          returning id`,
         [
           row.user_id,
@@ -1793,20 +1887,30 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
           dedupeKey,
         ],
       );
-      if (inserted.rows[0]) {
-        emitRealtimeEvent(row.user_id, "notifications_changed", { notificationId: inserted.rows[0].id, type: "test_manual_reminder" });
-        results.push({ ...base, outcome: "notified" });
-      } else {
-        results.push({ ...base, outcome: "skippedCooldown" });
-      }
+      toEmit.push({ userId: row.user_id, notificationId: inserted.rows[0].id });
+      results.push({ ...base, outcome: "notified" });
     }
 
-    res.json({
-      results,
-      notifiedCount: results.filter((r) => r.outcome === "notified").length,
-      noUserCount: results.filter((r) => r.outcome === "skippedNoUser").length,
-    });
-  } catch (error) { next(error); }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    return next(error);
+  } finally {
+    client.release();
+  }
+
+  // Only after the commit above has genuinely succeeded - a realtime event
+  // for a write that got rolled back would tell an athlete's browser to
+  // fetch a notification that was never actually persisted.
+  for (const { userId, notificationId } of toEmit) {
+    emitRealtimeEvent(userId, "notifications_changed", { notificationId, type: "test_manual_reminder" });
+  }
+
+  res.json({
+    results,
+    notifiedCount: results.filter((r) => r.outcome === "notified").length,
+    noUserCount: results.filter((r) => r.outcome === "skippedNoUser").length,
+  });
 });
 
 export default router;

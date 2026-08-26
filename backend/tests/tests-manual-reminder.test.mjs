@@ -281,6 +281,21 @@ async function loginCookie(userId) {
 }
 
 const TODAY = new Date().toISOString().slice(0, 10);
+const TOMORROW = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+// Polls pg_stat_activity until some OTHER backend is genuinely blocked on a
+// lock held by `blockerPid` (via pg_blocking_pids(), not a fixed sleep) -
+// same helper already established elsewhere in this test suite, for
+// deterministic (never timing-dependent) concurrency tests.
+async function waitUntilBlockedBy(blockerPid, { timeoutMs = 5000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await adminClient.query(`select pid from pg_stat_activity where pg_blocking_pids(pid) @> array[$1]::int[]`, [blockerPid]);
+    if (result.rowCount > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`Timed out waiting for a backend to be blocked by pid ${blockerPid}`);
+}
 
 async function makeClubWithAthletes(label, count, { withUserAccount = true } = {}) {
   const clubId = await makeClub(`${label} Club`);
@@ -518,39 +533,200 @@ test("8b. two genuinely PARALLEL requests for the SAME assignment (a real double
     remind(schedule.id, coachCookie, [assignmentId]),
   ]);
   const outcomes = [r1.body.results[0].outcome, r2.body.results[0].outcome].sort();
-  assert.deepEqual(outcomes, ["notified", "skippedCooldown"], "exactly one of the two parallel requests must win - the DB's own unique index on dedupe_key makes this atomic, no extra locking needed");
+  assert.deepEqual(outcomes, ["notified", "skippedCooldown"], "exactly one of the two parallel requests must win - the assignment row's own FOR UPDATE lock is what makes this atomic: the second request can only run its own cooldown check after the first has already committed");
 
   const rows = await query(`select count(*)::int as n from public.app_notifications where type = 'test_manual_reminder' and entity_id = $1`, [assignmentId]);
   assert.equal(rows.rows[0].n, 1);
 });
 
 // ------------------------------------------------------------
-// 9. A later, genuinely new reminder is NOT permanently blocked
+// 9. A real SLIDING 5-minute cooldown - never a fixed bucket
 // ------------------------------------------------------------
 
-test("9. a reminder from an EXPIRED cooldown window (an earlier real send) never blocks a new one - the dedupe is a cooldown, not a permanent one-shot", async () => {
+// Round 2 correction: the FIRST version of this route used
+// Math.floor(now / 5min) as a "bucket" and relied on a unique index
+// collision to detect a repeat - which meant two requests seconds apart,
+// straddling a bucket boundary, could both succeed (a real bug). The
+// route now checks a genuine sliding window (`created_at > now() -
+// interval '5 minutes'`) under the assignment's own row lock - these tests
+// prove that directly, by inserting a notification row with a REAL
+// created_at timestamp (never a fabricated bucket-shaped dedupe_key) and
+// checking the boundary on actual elapsed time.
+
+test("9. a notification sent only a few SECONDS ago (well inside the 5-minute window) blocks a new send - skippedCooldown, regardless of any bucket boundary", async () => {
   const { clubId, coachCookie, athletes } = await makeClubWithAthletes("n9", 1);
   const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }]);
   const { occurrence } = await ensureOccurrenceAndAssignments(schedule.id);
   const assignmentId = await getAssignmentId(occurrence.id, athletes[0].athleteId);
 
-  // Simulate "this athlete was already reminded, but in a PREVIOUS (now
-  // expired) 5-minute cooldown window" - same dedupe_key shape the route
-  // itself builds (manual_reminder:v1:<assignmentId>:<bucket>), just with
-  // an older bucket number, so it can never collide with what THIS call
-  // computes for its own current bucket.
-  const oldBucket = Math.floor(Date.now() / (5 * 60 * 1000)) - 3;
   const athleteRow = await query(`select user_id from public.athletes where id = $1`, [athletes[0].athleteId]);
   await query(
-    `insert into public.app_notifications (recipient_user_id, type, title, body, entity_type, entity_id, metadata, dedupe_key)
-     values ($1, 'test_manual_reminder', 'WELLNESS reminder', 'earlier reminder', 'test_assignment', $2, '{}'::jsonb, $3)`,
-    [athleteRow.rows[0].user_id, assignmentId, `manual_reminder:v1:${assignmentId}:${oldBucket}`],
+    `insert into public.app_notifications (recipient_user_id, type, title, body, entity_type, entity_id, metadata, dedupe_key, created_at)
+     values ($1, 'test_manual_reminder', 'WELLNESS reminder', 'earlier reminder', 'test_assignment', $2, '{}'::jsonb, $3, now() - interval '4 seconds')`,
+    [athleteRow.rows[0].user_id, assignmentId, `manual_reminder:v1:${assignmentId}:test-old`],
   );
 
   const result = await remind(schedule.id, coachCookie, [assignmentId]);
   assert.equal(result.status, 200);
-  assert.equal(result.body.results[0].outcome, "notified", "an expired-cooldown-window reminder must never block a genuinely new one");
+  assert.equal(result.body.results[0].outcome, "skippedCooldown", "4 seconds ago is well inside the real 5-minute window");
+  const rows = await query(`select count(*)::int as n from public.app_notifications where type = 'test_manual_reminder' and entity_id = $1`, [assignmentId]);
+  assert.equal(rows.rows[0].n, 1, "no second row must have been inserted");
+});
 
+test("10. a notification sent 6+ real minutes ago (past the 5-minute window) is a legitimate later resend - notified", async () => {
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("n10", 1);
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }]);
+  const { occurrence } = await ensureOccurrenceAndAssignments(schedule.id);
+  const assignmentId = await getAssignmentId(occurrence.id, athletes[0].athleteId);
+
+  const athleteRow = await query(`select user_id from public.athletes where id = $1`, [athletes[0].athleteId]);
+  await query(
+    `insert into public.app_notifications (recipient_user_id, type, title, body, entity_type, entity_id, metadata, dedupe_key, created_at)
+     values ($1, 'test_manual_reminder', 'WELLNESS reminder', 'earlier reminder', 'test_assignment', $2, '{}'::jsonb, $3, now() - interval '6 minutes')`,
+    [athleteRow.rows[0].user_id, assignmentId, `manual_reminder:v1:${assignmentId}:test-expired`],
+  );
+
+  const result = await remind(schedule.id, coachCookie, [assignmentId]);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.results[0].outcome, "notified", "an expired (6+ minute old) reminder must never block a genuinely new one");
   const rows = await query(`select count(*)::int as n from public.app_notifications where type = 'test_manual_reminder' and entity_id = $1`, [assignmentId]);
   assert.equal(rows.rows[0].n, 2, "the old (expired) row and the new one both exist - two real, distinct sends");
+});
+
+// ------------------------------------------------------------
+// 11. Item 1: an assignment that hasn't opened yet
+// ------------------------------------------------------------
+
+test("11. an assignment whose own window has NOT opened yet is skipped (skippedNotOpen), never notified - opens_at is genuinely checked, not just closes_at", async () => {
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("n11", 1);
+
+  // Materialization eligibility is DATE-only (the athlete's own real
+  // current date must equal the occurrence's scheduled_date - see
+  // testsOccurrenceService.js/the phase4 migration, untouched this round);
+  // it is never gated by TIME-of-day. So today's own date, with an
+  // opens_time a few minutes past the real current UTC time, is what
+  // materializes a real assignment whose window genuinely hasn't opened
+  // yet - not a future scheduled_date, which would simply never
+  // materialize at all under the real target-derived generation rules.
+  const nowUtc = await query(`select (now() at time zone 'UTC')::time as t`);
+  const nowSeconds = (() => {
+    const [h, m, s] = nowUtc.rows[0].t.split(":").map(Number);
+    return h * 3600 + m * 60 + s;
+  })();
+  if (nowSeconds > 23 * 3600 + 50 * 60) {
+    // Extremely rare (this test happened to run in the last ~10 minutes of
+    // the UTC day, where "a few minutes from now" would wrap past
+    // midnight) - skip deterministically rather than flake, same
+    // convention already used elsewhere in this module (test 5).
+    return;
+  }
+  const futureSeconds = nowSeconds + 180;
+  const futureTime = `${String(Math.floor(futureSeconds / 3600)).padStart(2, "0")}:${String(Math.floor((futureSeconds % 3600) / 60)).padStart(2, "0")}`;
+
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { startDate: TODAY, endDate: TODAY, opensTime: futureTime, closesTime: "23:59" });
+  const { occurrence } = await ensureOccurrenceAndAssignments(schedule.id);
+  const assignmentId = await getAssignmentId(occurrence.id, athletes[0].athleteId);
+  assert.ok(assignmentId, "sanity: the assignment must exist - today's own date is eligible regardless of opens_time");
+
+  const assignmentRow = await query(`select opens_at from tests.test_assignments where id = $1`, [assignmentId]);
+  assert.ok(new Date(assignmentRow.rows[0].opens_at) > new Date(), "sanity: opens_at must genuinely be in the future");
+
+  const result = await remind(schedule.id, coachCookie, [assignmentId]);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.results[0].outcome, "skippedNotOpen");
+  assert.equal(result.body.notifiedCount, 0);
+  const notifCount = await query(`select count(*)::int as n from public.app_notifications where type = 'test_manual_reminder' and entity_id = $1`, [assignmentId]);
+  assert.equal(notifCount.rows[0].n, 0);
+});
+
+// ------------------------------------------------------------
+// 12. Item 3: races against a concurrent pause/cancel and a concurrent completion
+// ------------------------------------------------------------
+
+test("12. a concurrent PATCH that pauses the schedule mid-request never lets the reminder through - the whole request sees the fresh (paused) status", async () => {
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("n12", 1);
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }]);
+  const { occurrence } = await ensureOccurrenceAndAssignments(schedule.id);
+  const assignmentId = await getAssignmentId(occurrence.id, athletes[0].athleteId);
+
+  const clientA = await pool.connect();
+  try {
+    const pidResult = await clientA.query("select pg_backend_pid() as pid");
+    const blockerPid = pidResult.rows[0].pid;
+
+    await clientA.query("begin");
+    // Mirrors PATCH .../schedules/:id's own first step: lock the schedule
+    // row FOR UPDATE, but do not commit yet.
+    await clientA.query(`select * from tests.test_schedules where id = $1 for update`, [schedule.id]);
+
+    const remindPromise = remind(schedule.id, coachCookie, [assignmentId]);
+    await waitUntilBlockedBy(blockerPid);
+
+    await clientA.query(`update tests.test_schedules set status = 'paused' where id = $1`, [schedule.id]);
+    await clientA.query("commit");
+
+    const result = await remindPromise;
+    assert.equal(result.status, 400, "must see the FRESH (paused) status, never the stale 'active' it started with");
+    const notifCount = await query(`select count(*)::int as n from public.app_notifications where type = 'test_manual_reminder' and entity_id = $1`, [assignmentId]);
+    assert.equal(notifCount.rows[0].n, 0, "no reminder may ever be sent once the schedule is paused, even if the request started before the pause");
+  } finally {
+    clientA.release();
+  }
+});
+
+test("13. a concurrent submit that completes the assignment mid-request never lets the reminder through for it - skippedCompleted, not notified", async () => {
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("n13", 1);
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }]);
+  const { occurrence } = await ensureOccurrenceAndAssignments(schedule.id);
+  const assignmentId = await getAssignmentId(occurrence.id, athletes[0].athleteId);
+
+  const clientA = await pool.connect();
+  try {
+    const pidResult = await clientA.query("select pg_backend_pid() as pid");
+    const blockerPid = pidResult.rows[0].pid;
+
+    await clientA.query("begin");
+    // Mirrors POST /assignments/:id/submit's own lock on this exact row.
+    await clientA.query(`select * from tests.test_assignments where id = $1 for update`, [assignmentId]);
+
+    const remindPromise = remind(schedule.id, coachCookie, [assignmentId]);
+    await waitUntilBlockedBy(blockerPid);
+
+    await clientA.query(`update tests.test_assignments set status = 'completed', completed_at = now() where id = $1`, [assignmentId]);
+    await clientA.query("commit");
+
+    const result = await remindPromise;
+    assert.equal(result.status, 200);
+    assert.equal(result.body.results[0].outcome, "skippedCompleted", "must see the assignment as completed, the moment its own row lock is finally granted");
+    const notifCount = await query(`select count(*)::int as n from public.app_notifications where type = 'test_manual_reminder' and entity_id = $1`, [assignmentId]);
+    assert.equal(notifCount.rows[0].n, 0);
+  } finally {
+    clientA.release();
+  }
+});
+
+// ------------------------------------------------------------
+// 14. Item 3: a batch error leaves no partial writes
+// ------------------------------------------------------------
+
+test("14. a malformed id anywhere in the batch fails the WHOLE request - never a partial write for the OTHER, genuinely valid assignments in the same call", async () => {
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("n14", 2);
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }]);
+  const { occurrence } = await ensureOccurrenceAndAssignments(schedule.id);
+  const validId1 = await getAssignmentId(occurrence.id, athletes[0].athleteId);
+  const validId2 = await getAssignmentId(occurrence.id, athletes[1].athleteId);
+
+  // A non-empty, non-UUID string reaches the DB's own ::uuid[] cast inside
+  // the route's very first query, inside the SAME transaction as
+  // everything else - a real SQL-level error, not a benign "not found"
+  // skip, so it proves the WHOLE request rolls back together, never
+  // "process what you can, skip the bad one".
+  const result = await remind(schedule.id, coachCookie, [validId1, "not-a-valid-uuid", validId2]);
+  assert.ok(result.status >= 400, `expected a controlled error status, got ${result.status}`);
+
+  const notifCount = await query(
+    `select count(*)::int as n from public.app_notifications where type = 'test_manual_reminder' and entity_id = any($1::uuid[])`,
+    [[validId1, validId2]],
+  );
+  assert.equal(notifCount.rows[0].n, 0, "neither valid assignment may have been notified - the malformed id in the same batch must roll back everything");
 });

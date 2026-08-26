@@ -105,6 +105,14 @@ export async function loadTestsSection() {
   if (section === "today") {
     const data = await api("/api/tests/today");
     state.tests.coachToday = data.groups || [];
+    // Item 4/6 correction: a fresh Today load always clears the previous
+    // confirmation banner - a stale "Reminder sent to..." message from an
+    // earlier visit must never linger over a genuinely new view of the
+    // data. The SELECTION itself is intentionally NOT wiped here - see
+    // reminderSelectedSet's own fingerprint-based staleness check
+    // (tests-view.js), which self-corrects a stale selection without
+    // discarding one that's still genuinely valid.
+    state.tests.reminderResult = null;
   } else if (section === "schedule") {
     const query = state.tests.showCancelledSchedules ? "?includeCancelled=true" : "";
     const data = await api(`/api/tests/schedules${query}`);

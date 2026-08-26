@@ -357,16 +357,23 @@ export const emptyTestsState = (overrides = {}) => ({
   // sees exactly what was created, not just a silently-closed form.
   bulkResult: null,
   form: null,
-  // Manual reminder (Coach Today). reminderSelection[scheduleId] is the
-  // EXPLICIT list of currently-checked assignment ids for that schedule's
-  // group - absent/undefined means "no override yet", which the view
-  // renders as "every not-yet-completed athlete", per the "podrazumevano
-  // selektuj sve nezavršene" (select all incomplete by default) requirement,
-  // without needing to eagerly populate this map on every Today load.
-  // remindingScheduleId mirrors deletingScheduleId's own double-click-guard
-  // shape (one send in flight at a time, "" when none). reminderResult is a
-  // one-time confirmation banner ({ scheduleId, message }), cleared on the
-  // next reload/interaction with that group - same lifecycle as bulkResult.
+  // Manual reminder (Coach Today). reminderSelection[scheduleId] is
+  // { fingerprint, ids } (item 4 correction) - fingerprint is a stable
+  // snapshot of the schedule's own CURRENT full assignment-id set at the
+  // moment this choice was made (assignmentSetFingerprint, tests-view.js),
+  // ids is the explicit list of checked assignment ids. reminderSelectedSet
+  // (tests-view.js) is the only reader: it falls back to "every not-yet-
+  // completed athlete" whenever this value is absent OR its fingerprint no
+  // longer matches the group's CURRENT assignment set - which is exactly
+  // what makes a stale selection (yesterday's daily occurrence, an athlete
+  // who completed after the coach already chose) self-correct on the very
+  // next render, without needing to eagerly populate/reset this map on
+  // every Today load. remindingScheduleId mirrors deletingScheduleId's own
+  // double-click-guard shape (one send in flight at a time, "" when none).
+  // reminderResult is a one-time confirmation banner ({ scheduleId,
+  // message }), reset on every fresh coach Today load (tests-data.js) -
+  // same lifecycle intent as bulkResult, just tied to Today instead of the
+  // schedule-form flow.
   reminderSelection: {},
   remindingScheduleId: "",
   reminderResult: null,

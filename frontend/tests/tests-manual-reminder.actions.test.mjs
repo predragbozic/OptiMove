@@ -29,7 +29,7 @@ function installFetchMock(responder) {
 }
 
 const { handleTestsAction } = await import("../tests-actions.js");
-const { incompleteAthletesFor, reminderSelectedSet } = await import("../tests-view.js");
+const { assignmentSetFingerprint, incompleteAthletesFor, reminderSelectedSet } = await import("../tests-view.js");
 const { emptyTestsState, state } = await import("../state.js");
 
 function fakeAction(dataset) {
@@ -79,11 +79,12 @@ test("reminderSelectedSet defaults to every incomplete athlete when no explicit 
 // 2. Toggling / select-all / clear
 // ------------------------------------------------------------
 
-test("toggling one athlete off leaves the rest of the default selection intact (materializes the implicit default into an explicit override)", async () => {
+test("toggling one athlete off leaves the rest of the default selection intact (materializes the implicit default into an explicit override, stamped with the current fingerprint)", async () => {
   resetState();
-  state.tests.coachToday = [makeGroup("sched-1", ATHLETES)];
+  const group = makeGroup("sched-1", ATHLETES);
+  state.tests.coachToday = [group];
   await handleTestsAction(fakeAction({ action: "tests-reminder-toggle-athlete", scheduleId: "sched-1", assignmentId: "asg-1" }), { renderTests: () => {} });
-  assert.deepEqual(state.tests.reminderSelection["sched-1"], ["asg-2"]);
+  assert.deepEqual(state.tests.reminderSelection["sched-1"], { fingerprint: assignmentSetFingerprint(group), ids: ["asg-2"] });
 });
 
 test("toggling an athlete back on restores them", async () => {
@@ -91,16 +92,74 @@ test("toggling an athlete back on restores them", async () => {
   state.tests.coachToday = [makeGroup("sched-1", ATHLETES)];
   await handleTestsAction(fakeAction({ action: "tests-reminder-toggle-athlete", scheduleId: "sched-1", assignmentId: "asg-1" }), { renderTests: () => {} });
   await handleTestsAction(fakeAction({ action: "tests-reminder-toggle-athlete", scheduleId: "sched-1", assignmentId: "asg-1" }), { renderTests: () => {} });
-  assert.deepEqual(state.tests.reminderSelection["sched-1"].sort(), ["asg-1", "asg-2"]);
+  assert.deepEqual(state.tests.reminderSelection["sched-1"].ids.sort(), ["asg-1", "asg-2"]);
 });
 
 test("Clear empties the selection, Select all restores every incomplete athlete", async () => {
   resetState();
   state.tests.coachToday = [makeGroup("sched-1", ATHLETES)];
   await handleTestsAction(fakeAction({ action: "tests-reminder-clear", scheduleId: "sched-1" }), { renderTests: () => {} });
-  assert.deepEqual(state.tests.reminderSelection["sched-1"], []);
+  assert.deepEqual(state.tests.reminderSelection["sched-1"].ids, []);
   await handleTestsAction(fakeAction({ action: "tests-reminder-select-all", scheduleId: "sched-1" }), { renderTests: () => {} });
-  assert.deepEqual(state.tests.reminderSelection["sched-1"].sort(), ["asg-1", "asg-2"]);
+  assert.deepEqual(state.tests.reminderSelection["sched-1"].ids.sort(), ["asg-1", "asg-2"]);
+});
+
+// ------------------------------------------------------------
+// 2b. Item 4 correction: staleness - fingerprint-based reset
+// ------------------------------------------------------------
+
+test("Clear stays genuinely empty across re-renders of the SAME assignment set - never silently reverts to select-all", () => {
+  resetState();
+  const group = makeGroup("sched-1", ATHLETES);
+  state.tests.reminderSelection["sched-1"] = { fingerprint: assignmentSetFingerprint(group), ids: [] };
+  assert.deepEqual(reminderSelectedSet(group), new Set());
+});
+
+test("a daily schedule's NEW day (same scheduleId, entirely different assignment ids) discards yesterday's selection and defaults to today's own incomplete athletes", () => {
+  resetState();
+  const yesterday = makeGroup("daily-sched", ATHLETES);
+  // Coach explicitly narrowed yesterday's selection to just one athlete.
+  state.tests.reminderSelection["daily-sched"] = { fingerprint: assignmentSetFingerprint(yesterday), ids: ["asg-2"] };
+
+  // Today's occurrence: SAME scheduleId, brand-new assignment ids (a real
+  // daily-schedule rollover - see testsOccurrenceService.js).
+  const today = makeGroup("daily-sched", [
+    { assignmentId: "asg-101", athleteId: "ath-1", athleteName: "Ana Anić", status: "pending", wellnessScore: null, injury: false, opensAt: "", closesAt: "" },
+    { assignmentId: "asg-102", athleteId: "ath-2", athleteName: "Bojan Bojić", status: "pending", wellnessScore: null, injury: false, opensAt: "", closesAt: "" },
+  ]);
+  const selected = reminderSelectedSet(today);
+  assert.deepEqual([...selected].sort(), ["asg-101", "asg-102"], "yesterday's stale ids must never leak into today's count/POST - must default to today's own incomplete athletes");
+});
+
+test("an athlete who completes their check-in AFTER a selection was made drops out of it immediately, without a new interaction", () => {
+  resetState();
+  const beforeCompletion = makeGroup("sched-1", ATHLETES);
+  // Coach explicitly selected BOTH incomplete athletes.
+  state.tests.reminderSelection["sched-1"] = { fingerprint: assignmentSetFingerprint(beforeCompletion), ids: ["asg-1", "asg-2"] };
+
+  // asg-1's athlete completes their check-in - a fresh Today load reflects
+  // this as a status change on the SAME assignment id (not a new id), so
+  // the fingerprint (built from ALL assignment ids, not just incomplete
+  // ones) stays the SAME, but the athlete must still drop out.
+  const afterCompletion = makeGroup("sched-1", [
+    { ...ATHLETES[0], status: "completed" },
+    ATHLETES[1],
+    ATHLETES[2],
+  ]);
+  const selected = reminderSelectedSet(afterCompletion);
+  assert.deepEqual([...selected], ["asg-2"], "the now-completed athlete must never remain counted/selected");
+});
+
+test("a stale selection with NO overlap at all against the current incomplete set (e.g. everyone since completed) correctly shows zero selected, not a crash", () => {
+  resetState();
+  const group = makeGroup("sched-1", ATHLETES);
+  state.tests.reminderSelection["sched-1"] = { fingerprint: assignmentSetFingerprint(group), ids: ["asg-1", "asg-2"] };
+  const allCompleted = makeGroup("sched-1", [
+    { ...ATHLETES[0], status: "completed" },
+    { ...ATHLETES[1], status: "completed" },
+    ATHLETES[2],
+  ]);
+  assert.deepEqual(reminderSelectedSet(allCompleted), new Set());
 });
 
 // ------------------------------------------------------------
@@ -109,8 +168,9 @@ test("Clear empties the selection, Select all restores every incomplete athlete"
 
 test("Send reminder posts ONLY the currently selected assignment ids, never the full incomplete list if narrowed", async () => {
   resetState();
-  state.tests.coachToday = [makeGroup("sched-1", ATHLETES)];
-  state.tests.reminderSelection["sched-1"] = ["asg-2"];
+  const group = makeGroup("sched-1", ATHLETES);
+  state.tests.coachToday = [group];
+  state.tests.reminderSelection["sched-1"] = { fingerprint: assignmentSetFingerprint(group), ids: ["asg-2"] };
   installFetchMock((call) => {
     if (call.url === "/api/tests/schedules/sched-1/remind") return { status: 200, body: { results: [{ assignmentId: "asg-2", outcome: "notified" }], notifiedCount: 1, noUserCount: 0 } };
     return { status: 404, body: {} };
@@ -134,6 +194,34 @@ test("a zero-no-account result omits the second sentence entirely", async () => 
   installFetchMock(() => ({ status: 200, body: { results: [], notifiedCount: 3, noUserCount: 0 } }));
   await handleTestsAction(fakeAction({ action: "tests-send-reminder", scheduleId: "sched-1" }), { renderTests: () => {} });
   assert.equal(state.tests.reminderResult.message, "Reminder sent to 3 athletes.");
+});
+
+test("item 6: a 0-notified result still explains WHY when rows were skipped for cooldown - never a bare 'Reminder sent to 0 athletes.'", async () => {
+  resetState();
+  state.tests.coachToday = [makeGroup("sched-1", ATHLETES)];
+  installFetchMock(() => ({
+    status: 200,
+    body: {
+      results: [{ assignmentId: "asg-1", outcome: "skippedCooldown" }, { assignmentId: "asg-2", outcome: "skippedCooldown" }],
+      notifiedCount: 0, noUserCount: 0,
+    },
+  }));
+  await handleTestsAction(fakeAction({ action: "tests-send-reminder", scheduleId: "sched-1" }), { renderTests: () => {} });
+  assert.equal(state.tests.reminderResult.message, "Reminder sent to 0 athletes. 2 already reminded in the last few minutes.");
+});
+
+test("item 6: a 0-notified result explains WHY when rows were skipped for being outside their own window (closed or not yet open)", async () => {
+  resetState();
+  state.tests.coachToday = [makeGroup("sched-1", ATHLETES)];
+  installFetchMock(() => ({
+    status: 200,
+    body: {
+      results: [{ assignmentId: "asg-1", outcome: "skippedClosed" }, { assignmentId: "asg-2", outcome: "skippedNotOpen" }],
+      notifiedCount: 0, noUserCount: 0,
+    },
+  }));
+  await handleTestsAction(fakeAction({ action: "tests-send-reminder", scheduleId: "sched-1" }), { renderTests: () => {} });
+  assert.equal(state.tests.reminderResult.message, "Reminder sent to 0 athletes. 2 outside their own open check-in window.");
 });
 
 test("double-click guard: a second Send reminder click while one is already in flight makes no second request", async () => {
