@@ -16,11 +16,12 @@ globalThis.document = {
   querySelectorAll: () => [],
 };
 
-// reportDeviceTimezone() de-dupes by the ACTUAL resolved timezone value
-// within one module session (globalThis.Intl is never reset between
-// tests) - each test below fakes a DISTINCT timezone string so every test
-// genuinely exercises a real POST attempt, never a cache hit left over
-// from an earlier test in this same file.
+// Round 3 hardening (item 3): reportDeviceTimezone() no longer de-dupes at
+// all (globalThis.Intl is never reset between tests, and there is no more
+// session cache to reset either) - each test below still fakes a DISTINCT
+// timezone string per test purely so assertions can tell one test's POSTs
+// apart from another's, not because a shared cache would otherwise leak
+// between them.
 function withFakeTimezone(tz, fn) {
   const original = globalThis.Intl;
   globalThis.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: tz }) }) };
@@ -99,7 +100,7 @@ test("2. a FAILED timezone POST never blocks the app - Today still loads normall
   assert.equal(state.tests.error, "", "a failed timezone report must never surface as a Tests-tab error banner");
 });
 
-test("3. repeated calls with the SAME resolved timezone never re-POST within one session", async () => {
+test("3. repeated calls with the SAME resolved timezone always POST again - round 3 removed the session cache entirely (correctness over dedup: no reliable per-account identity exists at every call site, e.g. check-in-actions.js never populates state.currentUser - see reportDeviceTimezone's own header)", async () => {
   resetState();
   let postCount = 0;
   globalThis.fetch = async (url) => {
@@ -114,10 +115,33 @@ test("3. repeated calls with the SAME resolved timezone never re-POST within one
   await withFakeTimezone("Europe/Belgrade-test3", () => reportDeviceTimezone());
   await withFakeTimezone("Europe/Belgrade-test3", () => reportDeviceTimezone());
 
-  assert.equal(postCount, 1, "the same timezone value must only ever be POSTed once per session, no matter how many times it's reported");
+  assert.equal(postCount, 3, "every call must POST - the backend's own IS DISTINCT FROM guard (tests.js's POST /athlete/timezone), not a frontend cache, is what avoids an unnecessary DB write for an unchanged value");
 });
 
-test("4. a DIFFERENT resolved timezone (device timezone genuinely changed) does trigger a new POST", async () => {
+test("4. two consecutive athlete accounts on the SAME browser session, reporting the SAME timezone value, both genuinely POST - the bug a stale session-keyed-by-value-only cache used to cause (athlete A logs out, athlete B logs in on the same device/zone, B's own report gets silently skipped because the cached string still matches A's)", async () => {
+  resetState();
+  const posted = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes("/api/tests/athlete/timezone")) {
+      posted.push(JSON.parse(options.body).timezone);
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ assignments: [] }) };
+  };
+
+  // Athlete A's own session bootstrap.
+  await withFakeTimezone("Europe/Belgrade-test5", () => reportDeviceTimezone());
+  // Athlete A logs out, athlete B logs in on the SAME device, in the SAME
+  // real timezone - this module's own state was never reset by a logout in
+  // production either (there is no more cache to reset now), so this is
+  // exactly the scenario the bug lived in: the SAME resolved timezone
+  // string, reported again, for a genuinely different account.
+  await withFakeTimezone("Europe/Belgrade-test5", () => reportDeviceTimezone());
+
+  assert.deepEqual(posted, ["Europe/Belgrade-test5", "Europe/Belgrade-test5"], "both accounts' own reports must genuinely reach the backend - never silently skipped because the value happened to match a previous account's");
+});
+
+test("5. a DIFFERENT resolved timezone (device timezone genuinely changed) does trigger a new POST", async () => {
   resetState();
   const posted = [];
   globalThis.fetch = async (url, options = {}) => {

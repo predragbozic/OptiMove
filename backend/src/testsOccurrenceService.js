@@ -42,62 +42,81 @@
 // the on-demand and worker-driven paths can never disagree, and neither can
 // ever generate an occurrence for a date nobody is actually on yet.
 
+// Round 3 hardening (item 2): this used to read `schedule.status` (a value
+// the CALLER fetched at some earlier, now-stale point) and query
+// resolve_current_target_dates() BEFORE opening any transaction/lock at
+// all - a concurrent PATCH/DELETE (both take `for update` on the schedule
+// row, see backend/src/routes/tests.js) could commit ANYWHERE in that
+// window: after status/dates were read here but before generate/materialize
+// ran below. Depending on exactly when, that could mean generating an
+// occurrence for a date the schedule's NEW range no longer includes (a
+// controlled exception from tests.generate_test_schedule_occurrence turning
+// into an uncontrolled 500 at the caller), or creating one under a schedule
+// that had JUST been paused/cancelled, or a snapshot frozen from the OLD
+// target configuration.
+//
+// The fix: lock the schedule row FIRST, with `select ... for share`, as the
+// very first statement of ONE transaction that covers the ENTIRE call - the
+// status check, resolve_current_target_dates() (which itself re-reads
+// tests.test_schedules internally, and now sees this SAME already-locked,
+// necessarily-fresh row), and every generate+materialize call below, all
+// commit or roll back together. A concurrent PATCH/DELETE's own `for
+// update` simply queues behind our `for share` until we commit - nothing
+// about this schedule (status, start/end date, targets) can change out from
+// under this call anymore, so a stale-candidate-date exception is no longer
+// reachable, and there is no unmaterialized in-between state where an
+// occurrence could be created against a configuration this call never
+// actually saw. Lock order stays schedule -> occurrence -> assignment:
+// tests.generate_test_schedule_occurrence()/tests.materialize_test_
+// assignments_for_occurrence() only ever take their own occurrence-level
+// `for update` AFTER this schedule-level `for share` is already held.
+//
 // pool: the real pg Pool (every call site passes the module-level `pool`
-// from db.js, never an already-open transaction client - generate +
-// materialize get their OWN single connection/transaction here, borrowed
-// and released within this one call).
-// schedule: a full row from tests.test_schedules (only id and status are
-// read here now - date/timezone resolution happens entirely in SQL).
+// from db.js, never an already-open transaction client - this call gets its
+// OWN single connection/transaction here, borrowed and released within this
+// one call).
+// schedule: a row from tests.test_schedules - only `.id` is actually read
+// now (status is re-read fresh, under lock, below); callers may still pass
+// whatever row shape they already have on hand.
 // Returns an array of occurrence ids actually ensured to exist this call
 // (empty if the schedule isn't active or no real target currently needs a
 // date) - never a single nullable id, since more than one date can
 // genuinely be "current" at once (see header).
 export async function ensureCurrentOccurrence(pool, schedule) {
-  if (schedule.status !== "active") return [];
-
   const client = await pool.connect();
   try {
-    const datesResult = await client.query(
-      `select local_date from tests.resolve_current_target_dates($1) order by local_date`,
-      [schedule.id],
-    );
-    const candidateDates = datesResult.rows.map((row) => row.local_date);
-    if (!candidateDates.length) return [];
+    await client.query("begin");
+    try {
+      const scheduleResult = await client.query(`select * from tests.test_schedules where id = $1 for share`, [schedule.id]);
+      const freshSchedule = scheduleResult.rows[0];
+      if (!freshSchedule || freshSchedule.status !== "active") {
+        await client.query("commit");
+        return [];
+      }
 
-    const occurrenceIds = [];
-    for (const targetDate of candidateDates) {
-      // Generate + materialize share ONE transaction on ONE connection, and
-      // tests.generate_test_schedule_occurrence() (see
-      // migrations_v2/202608260900_tests_v42_occurrence_generation_lock_fix.sql)
-      // now takes `for share` on the schedule row while reading it - this
-      // serializes against a concurrent PATCH/DELETE's `for update` on that
-      // same row (backend/src/routes/tests.js), instead of racing it. Each
-      // candidate date gets its own transaction, so one date's failure
-      // never rolls back a date that already succeeded.
-      await client.query("begin");
-      try {
+      const datesResult = await client.query(
+        `select local_date from tests.resolve_current_target_dates($1) order by local_date`,
+        [schedule.id],
+      );
+      const candidateDates = datesResult.rows.map((row) => row.local_date);
+      if (!candidateDates.length) {
+        await client.query("commit");
+        return [];
+      }
+
+      const occurrenceIds = [];
+      for (const targetDate of candidateDates) {
         const occurrenceResult = await client.query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [schedule.id, targetDate]);
         const occurrenceId = occurrenceResult.rows[0].id;
         await client.query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occurrenceId]);
-        await client.query("commit");
         occurrenceIds.push(occurrenceId);
-      } catch (error) {
-        await client.query("rollback").catch(() => {});
-        // The schedule row may have just been physically deleted by a
-        // concurrent DELETE that won the race for the row lock (see the
-        // DELETE handler in backend/src/routes/tests.js) - once that DELETE
-        // commits, this call's blocked `for share` read simply finds no row
-        // left and the function raises exactly this controlled error. That
-        // is "nothing to show right now" for THIS date, never a 500 - the
-        // schedule is gone, so no occurrence/assignment must ever be
-        // created under it; still try any remaining candidate dates in case
-        // this was itself a transient race, though realistically none of
-        // them will succeed either once the schedule is truly gone.
-        if (error?.code === "P0001" && /does not exist/.test(error.message || "")) continue;
-        throw error;
       }
+      await client.query("commit");
+      return occurrenceIds;
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
     }
-    return occurrenceIds;
   } finally {
     client.release();
   }

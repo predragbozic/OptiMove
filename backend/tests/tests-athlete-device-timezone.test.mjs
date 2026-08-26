@@ -313,6 +313,24 @@ async function localDateIn(timezone) {
   return result.rows[0].d;
 }
 
+// Round 3 hardening (item 2): polls pg_stat_activity until some OTHER
+// backend is genuinely blocked on a lock held by `blockerPid` (via
+// pg_blocking_pids(), not a fixed sleep) - same helper already established
+// in tests-module-schedule-management.test.mjs/tests-notification-worker.test.mjs
+// for deterministic (never timing-dependent) concurrency tests.
+async function waitUntilBlockedBy(blockerPid, { timeoutMs = 5000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await adminClient.query(
+      `select pid from pg_stat_activity where pg_blocking_pids(pid) @> array[$1]::int[]`,
+      [blockerPid],
+    );
+    if (result.rowCount > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`Timed out waiting for a backend to be blocked by pid ${blockerPid}`);
+}
+
 async function makeClubWithAthletes(label, count, { withUserAccount = true } = {}) {
   const clubId = await makeClub(`${label} Club`);
   const coachId = await makeUser({ email: `${label}-coach-${Date.now()}-${crypto.randomBytes(2).toString("hex")}@test.local` });
@@ -1130,4 +1148,173 @@ test("20. two parallel ensureCurrentOccurrence calls for the same schedule never
     const assignmentRows = await query(`select athlete_id, count(*)::int as n from tests.test_assignments where occurrence_id = $1 group by athlete_id having count(*) > 1`, [occRow.id]);
     assert.equal(assignmentRows.rowCount, 0, "no athlete may have more than one assignment row under the same occurrence, even from the parallel race");
   }
+});
+
+// ------------------------------------------------------------
+// Round 3 hardening
+// ------------------------------------------------------------
+
+test("21. a snapshotted athlete whose membership is removed BEFORE their own local day arrives still gets their assignment from the frozen snapshot once it does - a late joiner still never does", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz21", 0);
+  const userId = await makeUser({ email: `tz21-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Removed-Before-Own-Day Athlete", userId });
+  await addMembership(athleteId, { clubId });
+  const athleteCookie = await loginCookie(userId);
+  // Pago_Pago (UTC-11) is guaranteed (25h gap, >24h) to never be on the
+  // same real date as Kiritimati (UTC+14) - the athlete's own day has
+  // definitely NOT arrived yet when snapshotted below.
+  await setDeviceTimezone(athleteCookie, "Pacific/Pago_Pago");
+  const kiritimatiToday = await localDateIn("Pacific/Kiritimati");
+
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { timezone: "UTC", startDate: kiritimatiToday, opensTime: "00:00", closesTime: "23:59" });
+  const occResult = await query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [schedule.id, kiritimatiToday]);
+  const occurrenceId = occResult.rows[0].id;
+  await query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occurrenceId]);
+
+  const snapshotBefore = await query(`select 1 from tests.test_occurrence_target_snapshot where occurrence_id = $1 and athlete_id = $2`, [occurrenceId, athleteId]);
+  assert.equal(snapshotBefore.rowCount, 1, "sanity: the athlete must already be frozen into the membership snapshot");
+  const beforeRemoval = await assignmentFor(occurrenceId, athleteId);
+  assert.equal(beforeRemoval, undefined, "sanity: not yet eligible - Pago_Pago is guaranteed not on kiritimatiToday yet");
+
+  // Membership is removed BEFORE the athlete's own local day arrives.
+  await query(`delete from public.athlete_memberships where athlete_id = $1`, [athleteId]);
+
+  // A late joiner is added to the SAME club AFTER the snapshot was already
+  // taken - must never enter it, exactly like before this round's fix.
+  const lateUserId = await makeUser({ email: `tz21-late-${Date.now()}@test.local`, roleHint: "athlete" });
+  const lateAthleteId = await makeAthlete({ name: "Late Joiner", userId: lateUserId });
+  await addMembership(lateAthleteId, { clubId });
+
+  // The athlete's own local day "arrives" (device timezone changes to
+  // Kiritimati, whose real current date is exactly kiritimatiToday).
+  await setDeviceTimezone(athleteCookie, "Pacific/Kiritimati");
+
+  // The athlete has NO membership at all anymore - GET /athlete/today's own
+  // schedule-selection query must still surface this schedule to them
+  // (via the outstanding-snapshot widening) and trigger ensureCurrentOccurrence
+  // for it, which must still materialize their assignment from the frozen
+  // snapshot despite current membership no longer targeting them at all.
+  const today = await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  assert.equal(today.status, 200);
+  const assignment = await assignmentFor(occurrenceId, athleteId);
+  assert.ok(assignment, "the removed-membership athlete must still get their assignment, from the frozen snapshot");
+  assert.equal(assignment.timezone, "Pacific/Kiritimati", "the CURRENT device_timezone (read fresh at insert time) is used");
+  assert.equal(today.body.assignments.some((a) => a.assignmentId === assignment.id), true, "it must actually show up in Today's own response, not just exist in the DB");
+
+  const lateSnapshot = await query(`select 1 from tests.test_occurrence_target_snapshot where occurrence_id = $1 and athlete_id = $2`, [occurrenceId, lateAthleteId]);
+  assert.equal(lateSnapshot.rowCount, 0, "the late joiner must never enter the frozen snapshot");
+  const lateAssignment = await assignmentFor(occurrenceId, lateAthleteId);
+  assert.equal(lateAssignment, undefined, "the late joiner must never get an assignment under this occurrence");
+});
+
+test("22. a concurrent PATCH that pauses a schedule, racing a parallel Athlete Today call, never produces a 500 and never leaves an occurrence under the now-paused schedule", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz22", 0);
+  const userId = await makeUser({ email: `tz22-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Race Paused Athlete", userId });
+  await addMembership(athleteId, { clubId });
+  const athleteCookie = await loginCookie(userId);
+
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { timezone: "UTC", startDate: TODAY, opensTime: "00:00", closesTime: "23:59" });
+
+  const clientA = await pool.connect();
+  try {
+    const pidResult = await clientA.query("select pg_backend_pid() as pid");
+    const blockerPid = pidResult.rows[0].pid;
+
+    await clientA.query("begin");
+    // Mirrors the PATCH route's own first step: lock the schedule row FOR
+    // UPDATE, but do not commit yet.
+    await clientA.query(`select * from tests.test_schedules where id = $1 for update`, [schedule.id]);
+
+    // A real Athlete Today request, through the real HTTP route - must
+    // queue behind clientA's FOR UPDATE via ensureCurrentOccurrence's own
+    // schedule-level FOR SHARE (round 3 hardening, item 2).
+    const todayPromise = api("/api/tests/athlete/today", { cookie: athleteCookie });
+    await waitUntilBlockedBy(blockerPid);
+
+    // Mirrors what PATCH .../schedules/:id would ultimately commit for a
+    // pause.
+    await clientA.query(`update tests.test_schedules set status = 'paused' where id = $1`, [schedule.id]);
+    await clientA.query("commit");
+
+    const today = await todayPromise;
+    assert.equal(today.status, 200, `must never surface as a 500: ${JSON.stringify(today.body)}`);
+    assert.equal(today.body.assignments.length, 0, "a paused schedule must produce no assignments");
+
+    const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id]);
+    assert.equal(occurrenceRows.rowCount, 0, "no occurrence may ever be created under a schedule that was concurrently paused before this call's own transaction committed");
+  } finally {
+    clientA.release();
+  }
+});
+
+test("23. a concurrent PATCH that moves a one_time schedule's date, racing a parallel Athlete Today call, never produces a 500 and never leaves an occurrence for the STALE (pre-PATCH) date", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz23", 0);
+  const userId = await makeUser({ email: `tz23-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Race Moved-Date Athlete", userId });
+  await addMembership(athleteId, { clubId });
+  const athleteCookie = await loginCookie(userId);
+
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { timezone: "UTC", startDate: TODAY, opensTime: "00:00", closesTime: "23:59" });
+  const movedDate = addDaysIso(TODAY, 10);
+
+  const clientA = await pool.connect();
+  try {
+    const pidResult = await clientA.query("select pg_backend_pid() as pid");
+    const blockerPid = pidResult.rows[0].pid;
+
+    await clientA.query("begin");
+    await clientA.query(`select * from tests.test_schedules where id = $1 for update`, [schedule.id]);
+
+    const todayPromise = api("/api/tests/athlete/today", { cookie: athleteCookie });
+    await waitUntilBlockedBy(blockerPid);
+
+    // Mirrors what PATCH .../schedules/:id would ultimately commit for a
+    // one_time date move, well outside the athlete's own real current date
+    // (this athlete has no device_timezone - falls back to UTC, so TODAY,
+    // the STALE candidate date resolved before this race, is what must
+    // never get an occurrence).
+    await clientA.query(`update tests.test_schedules set start_date = $2, end_date = $2 where id = $1`, [schedule.id, movedDate]);
+    await clientA.query("commit");
+
+    const today = await todayPromise;
+    assert.equal(today.status, 200, `must never surface as a 500: ${JSON.stringify(today.body)}`);
+
+    const staleOccurrence = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1 and scheduled_date = $2`, [schedule.id, TODAY]);
+    assert.equal(staleOccurrence.rowCount, 0, "no occurrence may ever be created for the STALE (pre-PATCH) date - only tests.resolve_current_target_dates(), read AFTER the schedule row is locked fresh, may decide the date");
+  } finally {
+    clientA.release();
+  }
+});
+
+test("24. POST /athlete/timezone with an unchanged value is a true no-op at the DB level - the frontend no longer de-dupes (item 3), so the backend's own IS DISTINCT FROM guard is what avoids an unnecessary write", async () => {
+  const userId = await makeUser({ email: `tz24-${Date.now()}@test.local`, roleHint: "athlete" });
+  await makeAthlete({ name: "No-op Guard Athlete", userId });
+  const athleteCookie = await loginCookie(userId);
+
+  const first = await setDeviceTimezone(athleteCookie, "Asia/Dubai");
+  assert.equal(first.status, 200);
+  const rowAfterFirst = await query(`select id, device_timezone, device_timezone_updated_at from public.athletes where user_id = $1`, [userId]);
+  const updatedAtAfterFirst = rowAfterFirst.rows[0].device_timezone_updated_at;
+  assert.equal(rowAfterFirst.rows[0].device_timezone, "Asia/Dubai");
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const second = await setDeviceTimezone(athleteCookie, "Asia/Dubai");
+  assert.equal(second.status, 200);
+  const rowAfterSecond = await query(`select device_timezone, device_timezone_updated_at from public.athletes where user_id = $1`, [userId]);
+  assert.equal(rowAfterSecond.rows[0].device_timezone, "Asia/Dubai");
+  assert.equal(
+    new Date(rowAfterSecond.rows[0].device_timezone_updated_at).getTime(),
+    new Date(updatedAtAfterFirst).getTime(),
+    "a repeat POST of the SAME value must not touch device_timezone_updated_at - the UPDATE's own IS DISTINCT FROM guard must have made it a true no-op",
+  );
+
+  const third = await setDeviceTimezone(athleteCookie, "Europe/Belgrade");
+  assert.equal(third.status, 200);
+  const rowAfterThird = await query(`select device_timezone, device_timezone_updated_at from public.athletes where user_id = $1`, [userId]);
+  assert.equal(rowAfterThird.rows[0].device_timezone, "Europe/Belgrade");
+  assert.ok(
+    new Date(rowAfterThird.rows[0].device_timezone_updated_at).getTime() > new Date(updatedAtAfterFirst).getTime(),
+    "a genuinely DIFFERENT value must still be written and timestamped normally",
+  );
 });

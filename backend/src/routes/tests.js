@@ -236,6 +236,22 @@ async function loadAssessmentValuesAndResult(executor, assessmentId) {
 // value is rejected as a controlled 400 via respondToWriteError, never
 // silently stored. This is the ONLY write path for public.athletes.
 // device_timezone in the whole app.
+//
+// Round 3 hardening (item 3): the frontend used to cache "have I already
+// POSTed this exact timezone value in this page session" and skip repeat
+// calls (frontend/tests-data.js's reportDeviceTimezone) - keyed only by the
+// timezone STRING, never by which account was logged in when it was sent.
+// Athlete A logging out and athlete B logging in on the same device, in the
+// same timezone, could then skip B's own POST entirely, leaving B's row
+// still carrying A's (coincidentally identical-looking, but never actually
+// B's own) reported value. The frontend now always sends this request on
+// every entry point instead of caching at all - correctness over shaving a
+// request - so this endpoint has to be the one guarding against
+// unnecessary writes: `device_timezone is distinct from $2` (NULL-safe)
+// means a repeat POST of the SAME value is a true no-op, touching neither
+// device_timezone NOR device_timezone_updated_at, while a genuinely
+// different value (a real device-timezone change, or a different account
+// under the same session) is written and timestamped exactly as before.
 router.post("/athlete/timezone", async (req, res, next) => {
   try {
     const athleteId = requireAthlete(req, res);
@@ -243,7 +259,7 @@ router.post("/athlete/timezone", async (req, res, next) => {
     const timezone = text(req.body?.timezone);
     if (!timezone) return res.status(400).json({ error: "timezone is required." });
     await query(
-      `update public.athletes set device_timezone = $2, device_timezone_updated_at = now() where id = $1`,
+      `update public.athletes set device_timezone = $2, device_timezone_updated_at = now() where id = $1 and device_timezone is distinct from $2`,
       [athleteId, timezone],
     );
     res.json({ ok: true, timezone });
@@ -337,6 +353,22 @@ router.get("/athlete/upcoming", async (req, res, next) => {
            (t.target_kind = 'athlete' and t.target_athlete_id = $1)
            or (t.target_kind = 'team' and m.athlete_id = $1)
            or (t.target_kind = 'club' and m.athlete_id = $1)
+           -- Round 3 hardening (item 1): same widening as loadSchedulesTargetingAthlete
+           -- above - a snapshotted-but-not-yet-assigned athlete stays a
+           -- candidate even after membership changes; still correctly
+           -- "upcoming" as long as their own real current date hasn't
+           -- reached the occurrence's own scheduled_date yet.
+           or exists (
+             select 1
+             from tests.test_schedule_occurrences occ
+             join tests.test_occurrence_target_snapshot snap on snap.occurrence_id = occ.id
+             where occ.schedule_id = sch.id
+               and snap.athlete_id = $1
+               and not exists (
+                 select 1 from tests.test_assignments asg
+                 where asg.occurrence_id = occ.id and asg.athlete_id = snap.athlete_id
+               )
+           )
          )
        order by sch.start_date asc`,
       [athleteId],
@@ -384,11 +416,24 @@ router.get("/athlete/history", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Round 3 hardening (item 1): CURRENT membership is not the full picture of
+// "which schedules does this athlete need ensureCurrentOccurrence() run
+// for". An athlete already frozen into an occurrence's tests.test_
+// occurrence_target_snapshot, but not yet assigned (their own local day
+// hasn't arrived), must stay a candidate for materialization even after
+// their membership is later paused/removed - otherwise this query would
+// stop surfacing that schedule to them at all, and ensureCurrentOccurrence
+// (whose own tests.resolve_current_target_dates() already accounts for
+// outstanding snapshot members - see that migration) would simply never be
+// called for it again from this athlete's own Today view. The second
+// `or exists (...)` branch below is what keeps that path reachable; a LATE
+// joiner (never snapshotted) still only ever matches via current
+// membership, same as before.
 async function loadSchedulesTargetingAthlete(athleteId, status) {
   const result = await query(
     `select distinct sch.*
      from tests.test_schedules sch
-     join tests.test_schedule_targets t on t.schedule_id = sch.id
+     left join tests.test_schedule_targets t on t.schedule_id = sch.id
      left join public.athlete_memberships m
        on (t.target_kind = 'team' and m.membership_type = 'team' and m.team_id = t.target_team_id and m.status = 'active')
        or (t.target_kind = 'club' and m.membership_type = 'club' and m.club_id = t.target_club_id and m.status = 'active')
@@ -397,6 +442,17 @@ async function loadSchedulesTargetingAthlete(athleteId, status) {
          (t.target_kind = 'athlete' and t.target_athlete_id = $1)
          or (t.target_kind = 'team' and m.athlete_id = $1)
          or (t.target_kind = 'club' and m.athlete_id = $1)
+         or exists (
+           select 1
+           from tests.test_schedule_occurrences occ
+           join tests.test_occurrence_target_snapshot snap on snap.occurrence_id = occ.id
+           where occ.schedule_id = sch.id
+             and snap.athlete_id = $1
+             and not exists (
+               select 1 from tests.test_assignments asg
+               where asg.occurrence_id = occ.id and asg.athlete_id = snap.athlete_id
+             )
+         )
        )`,
     [athleteId, status],
   );

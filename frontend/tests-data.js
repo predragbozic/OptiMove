@@ -29,27 +29,41 @@ import { emptyWellnessForm, state } from "./state.js";
 // defensive fallback for any path that reaches the Tests tab without going
 // through init(), e.g. a manual tab switch), and check-in-actions.js (the
 // authenticated group-link entry, both the already-logged-in-on-open and
-// the fresh-login-on-this-page paths). reportedTimezoneThisSession is a
-// cheap page-session cache so repeated calls across all these entry points
-// only ever send ONE real POST per distinct timezone value per session.
+// the fresh-login-on-this-page paths).
+//
+// Round 3 hardening (item 3): this used to cache "have I already POSTed
+// this exact timezone value in this page session" (a bare timezone string,
+// module-level) and skip repeat calls for the same value. That cache was
+// keyed ONLY by the timezone string, never by which account was logged in
+// when it was recorded - athlete A logging out and athlete B logging back
+// in on the same device, in the same timezone, would then silently skip
+// B's own POST entirely (the string still matched from A's earlier call),
+// leaving B's row never actually updated for B. There is no reliable
+// per-request account identity available at every one of this function's
+// call sites (check-in-actions.js in particular never populates
+// state.currentUser at all - see that file's own header), so rather than
+// invent one, this now always sends the request - correctness over shaving
+// a network call. The backend endpoint is the one that now avoids
+// unnecessary writes (an `is distinct from` no-op when the value hasn't
+// actually changed), which is where that guard actually belongs, since
+// it's the only place that reliably knows both "whose row this is" and
+// "what it already says".
 // Deliberately NOT gated on isAthleteMode() here: that's a DOM-class check
 // (document.body.classList.contains("athlete-mode")) that the check-in
 // page (check-in-actions.js) never sets - it stays in "login-mode" even
 // for a genuinely logged-in athlete, so that guard would silently skip
-// reporting on exactly the flow item 2 explicitly calls out. The backend
-// endpoint (POST /api/tests/athlete/timezone) already requires a real
-// athlete profile server-side (requireAthlete) and returns a plain 403
+// reporting on exactly the flow item 2 (round 1) explicitly calls out. The
+// backend endpoint (POST /api/tests/athlete/timezone) already requires a
+// real athlete profile server-side (requireAthlete) and returns a plain 403
 // otherwise - swallowed by the catch below exactly like any other
 // best-effort failure - so calling this from a coach session (e.g. the
 // main app's own init() bootstrap, which runs for every account) costs one
 // harmless extra request, never a wrong report.
-let reportedTimezoneThisSession = "";
 export async function reportDeviceTimezone() {
   try {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (!timezone || timezone === reportedTimezoneThisSession) return;
+    if (!timezone) return;
     await api("/api/tests/athlete/timezone", { method: "POST", body: JSON.stringify({ timezone }) });
-    reportedTimezoneThisSession = timezone;
   } catch {
     // Best-effort - see comment above.
   }

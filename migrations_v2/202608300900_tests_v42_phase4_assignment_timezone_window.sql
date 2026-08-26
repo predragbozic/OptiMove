@@ -242,6 +242,28 @@ $$;
 -- testsOccurrenceService.js's ensureCurrentOccurrence() (on-demand Today/
 -- check-in path) and testsNotificationWorker.js's occurrence-generation
 -- phase (item 3) - there is exactly one place this logic lives.
+--
+-- Round 3 hardening (item 1): CURRENT membership alone is not actually the
+-- full source of truth for "which dates does this schedule still need
+-- attention for". Scenario: an athlete is a real target when an occurrence
+-- is generated, gets frozen into tests.test_occurrence_target_snapshot, but
+-- their own local day hasn't arrived yet so no test_assignments row exists
+-- for them - then, BEFORE their own day arrives, their membership is
+-- paused/removed. from_current_targets below would no longer resolve them
+-- at all (resolve_schedule_target_athletes only returns CURRENT targets),
+-- so this occurrence's date would silently stop being a candidate and
+-- materialize_test_assignments_for_occurrence() would never be called for
+-- it again - the athlete's own frozen snapshot entry would simply never
+-- get its assignment. That breaks the Phase 1 guarantee this snapshot
+-- exists to uphold: once an athlete is snapshotted, they stay a candidate
+-- for materialization regardless of what happens to their membership
+-- afterward (a LATE joiner still correctly never enters the snapshot at
+-- all - this only concerns athletes ALREADY in it). from_outstanding_
+-- snapshot below adds every EXISTING occurrence's own date back as a
+-- candidate whenever it still has a snapshotted-but-unassigned athlete,
+-- regardless of current membership - materialize's own per-athlete
+-- eligibility check (their CURRENT device_timezone vs the occurrence's
+-- date) still decides whether anything is actually inserted on this call.
 create function tests.resolve_current_target_dates(p_schedule_id uuid)
 returns table(local_date date) language sql stable as $$
   with sch as (
@@ -254,12 +276,27 @@ returns table(local_date date) language sql stable as $$
     from tests.resolve_schedule_target_athletes(p_schedule_id) ta
     join public.athletes a on a.id = ta.athlete_id
     cross join sch
+  ),
+  from_current_targets as (
+    select distinct local_date
+    from per_athlete
+    where local_date >= start_date
+      and (end_date is null or local_date <= end_date)
+      and (schedule_kind <> 'one_time' or local_date = start_date)
+  ),
+  from_outstanding_snapshot as (
+    select distinct o.scheduled_date as local_date
+    from tests.test_schedule_occurrences o
+    join tests.test_occurrence_target_snapshot s on s.occurrence_id = o.id
+    where o.schedule_id = p_schedule_id
+      and not exists (
+        select 1 from tests.test_assignments asg
+        where asg.occurrence_id = o.id and asg.athlete_id = s.athlete_id
+      )
   )
-  select distinct local_date
-  from per_athlete
-  where local_date >= start_date
-    and (end_date is null or local_date <= end_date)
-    and (schedule_kind <> 'one_time' or local_date = start_date)
+  select local_date from from_current_targets
+  union
+  select local_date from from_outstanding_snapshot
 $$;
 
 -- Replaces the Phase 1 function - see this file's header for why this
