@@ -4,7 +4,7 @@ import { pool, query } from "../db.js";
 import { canAccessAthlete } from "../access.js";
 import { canManageClub, canManageTeamById, isPlatformAdministrator } from "../authz.js";
 import { canManageSchedule, manageableClubIds, manageableTeamIds, resolveScheduleOwnerContext } from "../testsAccess.js";
-import { ensureCurrentOccurrence, occurrenceIsOpen, assignmentIsOpen } from "../testsOccurrenceService.js";
+import { ensureCurrentOccurrence, assignmentIsOpen } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
 
 const router = Router();
@@ -1422,20 +1422,32 @@ router.get("/today", async (req, res, next) => {
 
     const groups = [];
     for (const schedule of schedulesResult.rows) {
-      const occurrenceId = await ensureCurrentOccurrence(pool, schedule);
-      if (!occurrenceId) {
-        groups.push({ schedule: formatScheduleRow(schedule), occurrence: null, counts: null, athletes: [] });
-        continue;
-      }
-      groups.push(await loadOccurrenceGroup(schedule, occurrenceId));
+      // Side effect only - ensures whichever occurrence(s) are currently
+      // relevant (today's, and/or an adjacent day's for an athlete whose
+      // own timezone diverges from the schedule's) exist. loadScheduleGroup
+      // below reads assignments directly, never a single "the" occurrence
+      // id, so there is nothing to gate on here anymore.
+      await ensureCurrentOccurrence(pool, schedule);
+      groups.push(await loadScheduleGroup(schedule));
     }
     res.json({ groups });
   } catch (error) { next(error); }
 });
 
-async function loadOccurrenceGroup(schedule, occurrenceId) {
-  const occurrenceResult = await query(`select * from tests.test_schedule_occurrences where id = $1`, [occurrenceId]);
-  const occurrence = occurrenceResult.rows[0];
+// Item 4 correction: no single occurrence-level window is shown as if it
+// applied to every athlete anymore - there isn't one "the" occurrence for
+// a schedule at any given instant once athletes can span an adjacent
+// calendar day (see testsOccurrenceService.js's ensureCurrentOccurrence).
+// Every assignment CURRENTLY relevant to this schedule - "current" meaning
+// THIS SPECIFIC athlete's own local_scheduled_date equals their own today,
+// in their own effective timezone - is pulled directly, regardless of
+// which underlying occurrence row it happens to live under. anyOpen/
+// allClosed summarize the group from each athlete's OWN window, never a
+// shared reference instant; the frontend's own group header shows the
+// schedule's wall-clock opens/closes TIME (timezone-less, already on
+// `schedule`) with a fixed "in each athlete's own timezone" label instead
+// of a single computed instant.
+async function loadScheduleGroup(schedule) {
   const rowsResult = await query(
     `select asg.id as assignment_id, asg.status as assignment_status, asg.completed_at,
             asg.opens_at, asg.closes_at,
@@ -1444,26 +1456,24 @@ async function loadOccurrenceGroup(schedule, occurrenceId) {
             tdr.result_numeric as wellness_score,
             inj.value_boolean as injury
      from tests.test_assignments asg
+     join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
      join public.athletes a on a.id = asg.athlete_id
      left join tests.test_assessments ta on ta.standalone_assignment_id = asg.id and ta.superseded_by_assessment_id is null
      left join tests.test_assessment_derived_results tdr on tdr.assessment_id = ta.id and tdr.test_version_derived_parameter_id = $2
      left join tests.test_assessment_values inj on inj.assessment_id = ta.id and inj.test_parameter_id = $3
-     where asg.occurrence_id = $1
+     where o.schedule_id = $1
+       and asg.local_scheduled_date = (now() at time zone asg.timezone)::date
      order by athlete_name asc`,
-    [occurrenceId, WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID],
+    [schedule.id, WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID],
   );
-  // The group header's own isOpen/closesAt stays occurrence-level (a coarse
-  // reference computed from the schedule's own timezone) - there is no
-  // single "the" athlete for a multi-athlete group. Per-athlete "missed"
-  // MUST use that athlete's own closes_at (asg.closes_at, their own
-  // effective timezone) - using the shared occurrence.closes_at here would
-  // mark every athlete under one occurrence missed at the exact same
-  // instant regardless of their own timezone, which is the same bug this
-  // whole phase exists to fix.
-  const isOpen = occurrenceIsOpen(occurrence);
+  const now = new Date();
   const athletes = rowsResult.rows.map((row) => {
     const completed = row.assessment_status === "completed";
-    const rowIsClosed = new Date(row.closes_at) < new Date();
+    // Per-athlete "missed" uses THAT athlete's own closes_at (their own
+    // effective timezone) - never a shared reference instant, which would
+    // mark every athlete under one occurrence missed at the exact same
+    // moment regardless of where they actually live.
+    const rowIsClosed = new Date(row.closes_at) < now;
     const missed = !completed && rowIsClosed && !["excused", "cancelled"].includes(row.assignment_status);
     const status = completed ? "completed" : missed ? "missed" : "pending";
     return {
@@ -1484,9 +1494,15 @@ async function loadOccurrenceGroup(schedule, occurrenceId) {
     pending: athletes.filter((a) => a.status === "pending").length,
     injuries: athletes.filter((a) => a.injury === true).length,
   };
+  // "any open"/"all closed" - a clearly-defined AGGREGATE computed from
+  // each real assignment's own window, never from a single occurrence-level
+  // reference window standing in for everyone.
+  const anyOpen = athletes.some((a) => a.status === "pending" && new Date(a.opensAt) <= now && new Date(a.closesAt) >= now);
+  const allClosed = athletes.length > 0 && athletes.every((a) => a.status !== "pending" || new Date(a.closesAt) < now);
   return {
     schedule: formatScheduleRow(schedule),
-    occurrence: { id: occurrence.id, scheduledDate: occurrence.scheduled_date, opensAt: occurrence.opens_at, closesAt: occurrence.closes_at, status: occurrence.status, isOpen },
+    anyOpen,
+    allClosed,
     counts,
     athletes,
   };

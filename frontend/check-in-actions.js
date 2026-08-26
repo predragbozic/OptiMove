@@ -9,7 +9,7 @@
 import { api } from "./api.js";
 import { els } from "./dom.js";
 import { emptyCheckInState, state } from "./state.js";
-import { formFromAssignmentDetail, loadPendingCount } from "./tests-data.js";
+import { formFromAssignmentDetail, loadPendingCount, reportDeviceTimezone } from "./tests-data.js";
 import { renderTestsBadge, renderWellnessFormHtml } from "./tests-view.js";
 import { escapeHtml } from "./utils.js";
 
@@ -43,6 +43,15 @@ export async function renderCheckInPage({ renderUserControls, setStatus }) {
 }
 
 async function resolveAssignment() {
+  // Phase 4 correction: this GET can itself trigger server-side
+  // materialization (testsCheckIn.js calls ensureCurrentOccurrence) - the
+  // device-timezone report must complete first, or a not-yet-known athlete
+  // could get their assignment permanently snapshotted with the schedule's
+  // fallback timezone instead of their real one. Both callers of
+  // resolveAssignment() (already-logged-in-on-open, and fresh-login-on-
+  // this-page) go through this one function, so this is the single place
+  // that needs it.
+  await reportDeviceTimezone();
   const data = await api(`/api/tests/check-in/${encodeURIComponent(state.checkIn.token)}/my-assignment`);
   if (!data.assignment) {
     state.checkIn.message = data.message || "There is nothing to check in right now.";

@@ -57,8 +57,16 @@ router.get("/:token/my-assignment", async (req, res, next) => {
     if (link.schedule_status !== "active") return res.json({ assignment: null, message: "This check-in is currently paused." });
 
     const scheduleResult = await query(`select * from tests.test_schedules where id = $1`, [link.schedule_id]);
-    const occurrenceId = await ensureCurrentOccurrence(pool, scheduleResult.rows[0]);
-    if (!occurrenceId) return res.json({ assignment: null, message: "There is nothing to check in right now." });
+    // Side effect only - ensures whichever occurrence(s) are currently
+    // relevant exist (today's, and/or an adjacent day's for an athlete
+    // whose own timezone diverges from the schedule's - see
+    // testsOccurrenceService.js's ensureCurrentOccurrence). The lookup
+    // below never targets a single specific occurrence id: this athlete's
+    // own assignment could legitimately live under EITHER one, depending
+    // on their own effective timezone, which is exactly what "local_
+    // scheduled_date = today in their OWN timezone" resolves correctly
+    // regardless of which occurrence row it's technically under.
+    await ensureCurrentOccurrence(pool, scheduleResult.rows[0]);
 
     const assignmentResult = await query(
       `select asg.*, o.status as occurrence_status, tv.id as test_version_id, tv.name as test_name,
@@ -67,8 +75,9 @@ router.get("/:token/my-assignment", async (req, res, next) => {
        join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
        join tests.test_versions tv on tv.id = asg.snapshot_test_version_id
        join public.athletes a on a.id = asg.athlete_id
-       where asg.occurrence_id = $1 and asg.athlete_id = $2`,
-      [occurrenceId, athleteId],
+       where o.schedule_id = $1 and asg.athlete_id = $2
+         and asg.local_scheduled_date = (now() at time zone asg.timezone)::date`,
+      [link.schedule_id, athleteId],
     );
     const assignment = assignmentResult.rows[0];
     if (!assignment) return res.json({ assignment: null, message: "You don't have a check-in assigned right now." });

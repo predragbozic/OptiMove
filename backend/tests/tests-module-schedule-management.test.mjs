@@ -902,8 +902,12 @@ test("J2. DELETE wins the race first: it physically removes the empty schedule, 
     await clientA.query(`delete from tests.test_schedules where id = $1`, [scheduleId]);
     await clientA.query("commit");
 
-    const occurrenceId = await generatePromise; // must resolve cleanly, never reject/throw
-    assert.equal(occurrenceId, null, "no occurrence must ever be created under a schedule that was concurrently, physically deleted");
+    const occurrenceIds = await generatePromise; // must resolve cleanly, never reject/throw
+    // Phase 4 correction: ensureCurrentOccurrence() now returns an array of
+    // 0-2 occurrence ids (never a single nullable id), since more than one
+    // logical date can be "current" at once. The deleted-schedule race still
+    // resolves to an empty array here, never a rejection.
+    assert.deepEqual(occurrenceIds, [], "no occurrence must ever be created under a schedule that was concurrently, physically deleted");
 
     const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [scheduleId]);
     assert.equal(occurrenceRows.rowCount, 0);
@@ -1304,8 +1308,13 @@ test("O1. a daily schedule that already has a generated occurrence cannot be con
 
   const stillDaily = await query(`select schedule_kind from tests.test_schedules where id = $1`, [created.body.schedule.id]);
   assert.equal(stillDaily.rows[0].schedule_kind, "recurring", "a rejected conversion must leave the schedule's kind unchanged");
+  // Phase 4 correction: an open-ended (no end_date) daily schedule's own
+  // ensureCurrentOccurrence() call unconditionally generates BOTH today's
+  // and tomorrow's occurrence (to support an athlete ahead of the schedule's
+  // own timezone) - getTodayAssignmentId() above already created both, and
+  // the rejected conversion below must leave both untouched.
   const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [created.body.schedule.id]);
-  assert.equal(occurrenceRows.rowCount, 1, "the existing occurrence must survive a rejected conversion untouched");
+  assert.equal(occurrenceRows.rowCount, 2, "the existing occurrences must survive a rejected conversion untouched");
 });
 
 test("O1b. the SAME daily schedule, edited while staying daily (no kind change), is unaffected by the conversion rule - normal future-only edit still works", async () => {

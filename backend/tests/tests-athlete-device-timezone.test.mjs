@@ -296,6 +296,23 @@ async function loginCookie(userId) {
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
+function addDaysIso(iso, delta) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+// Item 1 correction: every test below that needs "the real current local
+// date in timezone X" queries Postgres directly for it, rather than
+// assuming any fixed relationship to TODAY (UTC) - this is what makes
+// these tests deterministic regardless of what real moment they happen to
+// run at (a fixed assumption like "Pacific/Auckland is always one day
+// ahead of UTC" is only true part of the time).
+async function localDateIn(timezone) {
+  const result = await query(`select (now() at time zone $1)::date as d`, [timezone]);
+  return result.rows[0].d;
+}
+
 async function makeClubWithAthletes(label, count, { withUserAccount = true } = {}) {
   const clubId = await makeClub(`${label} Club`);
   const coachId = await makeUser({ email: `${label}-coach-${Date.now()}-${crypto.randomBytes(2).toString("hex")}@test.local` });
@@ -471,18 +488,24 @@ test("5 & 6. changing device timezone never touches an already-materialized assi
   const athleteCookie = await loginCookie(userId);
   await setDeviceTimezone(athleteCookie, "Europe/Belgrade");
 
-  // Day 1: a daily schedule, materialize today's occurrence while the
-  // athlete is still in Belgrade.
+  // Day 1 = TODAY, real - eligibility (Phase 4 correction) is evaluated
+  // against the REAL current moment, so a fixed future date unrelated to
+  // "now" would never be eligible for materialization at all. A wide
+  // [TODAY, TODAY+30] range keeps both day 1 and day 2 comfortably inside
+  // the schedule's own window regardless of which real day this runs on.
   const daily = await api("/api/tests/schedules", {
     method: "POST", cookie: coachCookie,
-    body: baseCreateBody([{ kind: "club", id: clubId }], { scheduleKind: "daily", startDate: "2027-03-01", endDate: "2027-03-10", timezone: "UTC" }),
+    body: baseCreateBody([{ kind: "club", id: clubId }], { scheduleKind: "daily", startDate: TODAY, endDate: addDaysIso(TODAY, 30), timezone: "UTC" }),
   });
   assert.equal(daily.status, 201);
   const scheduleId = daily.body.schedule.id;
+  const day1 = TODAY;
+  const day2 = addDaysIso(TODAY, 1);
 
-  const day1Occ = await query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [scheduleId, "2027-03-01"]);
+  const day1Occ = await query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [scheduleId, day1]);
   await query(`select tests.materialize_test_assignments_for_occurrence($1)`, [day1Occ.rows[0].id]);
   const day1Assignment = await assignmentFor(day1Occ.rows[0].id, athleteId);
+  assert.ok(day1Assignment, "day 1's occurrence is TODAY (real) - the athlete's own effective timezone (Europe/Belgrade fallback-equivalent here) must already be eligible");
   assert.equal(day1Assignment.timezone, "Europe/Belgrade");
   const day1OpensAt = day1Assignment.opens_at;
 
@@ -494,11 +517,29 @@ test("5 & 6. changing device timezone never touches an already-materialized assi
   assert.equal(day1AfterTravel.timezone, "Europe/Belgrade", "an already-materialized assignment's timezone must never change after the fact");
   assert.equal(new Date(day1AfterTravel.opens_at).getTime(), new Date(day1OpensAt).getTime(), "an already-materialized assignment's opens_at must never change after the fact");
 
-  // Day 2 (not yet materialized) must pick up the NEW timezone.
-  const day2Occ = await query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [scheduleId, "2027-03-02"]);
+  // Day 2 (not yet materialized) must pick up the NEW timezone. Day 2 is
+  // TOMORROW (real) - not eligible yet by "today" terms, but the snapshot/
+  // eligibility split (Phase 4 correction) means calling materialize now
+  // still correctly snapshots membership+timezone immediately (there is no
+  // "wait for the real day to arrive" gate on the SNAPSHOT step itself,
+  // only on actual assignment-row eligibility) - re-run it "tomorrow" (an
+  // athlete with no divergent timezone would need the real day to pass);
+  // here it is asserted directly against the LA-timezone snapshot the
+  // travel already produced, which is what a real day 2 cycle would use.
+  const day2Occ = await query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [scheduleId, day2]);
+  const snapshotResult = await query(
+    `select effective_timezone from tests.test_occurrence_target_snapshot where occurrence_id = $1 and athlete_id = $2`,
+    [day2Occ.rows[0].id, athleteId],
+  );
+  // Snapshot doesn't exist until materialize is called at least once for
+  // this occurrence - call it now (simulating "tomorrow's" real cycle).
   await query(`select tests.materialize_test_assignments_for_occurrence($1)`, [day2Occ.rows[0].id]);
-  const day2Assignment = await assignmentFor(day2Occ.rows[0].id, athleteId);
-  assert.equal(day2Assignment.timezone, "America/Los_Angeles", "a future, not-yet-materialized day must use the athlete's NEW current timezone");
+  const snapshotAfter = await query(
+    `select effective_timezone from tests.test_occurrence_target_snapshot where occurrence_id = $1 and athlete_id = $2`,
+    [day2Occ.rows[0].id, athleteId],
+  );
+  assert.equal(snapshotAfter.rows[0].effective_timezone, "America/Los_Angeles", "the day-2 snapshot must use the athlete's NEW current timezone, taken at snapshot time");
+  void snapshotResult;
 });
 
 // ------------------------------------------------------------
@@ -571,12 +612,18 @@ test("8. athlete Today and POST submit use the exact same assignment window - ne
   const athleteId = await makeAthlete({ name: "Today Submit Athlete", userId });
   await addMembership(athleteId, { clubId });
   const athleteCookie = await loginCookie(userId);
-  // A timezone far enough from UTC that "now" is very likely still within
-  // the assignment's open window in the athlete's OWN zone, wide open/close
-  // margins make the actual offset irrelevant to this test's assertion.
+  // A timezone far enough from UTC that this test actually exercises the
+  // cross-timezone path, with wide open/close margins so the exact offset
+  // is irrelevant to whether the window itself is open. The schedule's own
+  // startDate is set to Auckland's REAL current local date (queried
+  // directly, not assumed) - "one-time datum ostaje isti lokalni datum za
+  // svakog sportistu" means this athlete's own local_scheduled_date must
+  // equal their own today for Today to show it at all, deterministically,
+  // regardless of what UTC's own date happens to be at test-run time.
   await setDeviceTimezone(athleteCookie, "Pacific/Auckland");
+  const aucklandToday = await localDateIn("Pacific/Auckland");
 
-  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { timezone: "UTC", opensTime: "00:00", closesTime: "23:59" });
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { timezone: "UTC", startDate: aucklandToday, opensTime: "00:00", closesTime: "23:59" });
 
   const today = await api("/api/tests/athlete/today", { cookie: athleteCookie });
   assert.equal(today.status, 200);
@@ -671,4 +718,242 @@ test("10. cancelled schedule + paused schedule still correctly block submit, wit
     body: { values: { fatigue: 5, soreness: 5, sleep: 5, mood: 5, stress: 5, injury: false } },
   });
   assert.equal(submitAfterPause.status, 409);
+});
+
+// ------------------------------------------------------------
+// Correction round: occurrence generation must support the logical
+// scheduled date currently relevant to the TARGET athlete, not only the
+// schedule's own reference timezone's "today" (migrations_v2/202608300900_
+// ..._phase4_assignment_timezone_window.sql's "OCCURRENCE GENERATION ALSO
+// HAD TO CHANGE" section).
+// ------------------------------------------------------------
+
+test("11. one-time: the schedule's own zone is still on start_date-1 when a Kiritimati-ahead athlete's own day arrives - the occurrence generates EARLY, not late", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz11", 0);
+  const userId = await makeUser({ email: `tz11-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Kiritimati Athlete", userId });
+  await addMembership(athleteId, { clubId });
+  const athleteCookie = await loginCookie(userId);
+  await setDeviceTimezone(athleteCookie, "Pacific/Kiritimati");
+
+  // start_date = TOMORROW relative to the schedule's own Belgrade zone
+  // RIGHT NOW - deterministically reproduces "schedule zone is on
+  // start_date - 1" regardless of what real moment the suite runs at.
+  const belgradeToday = await localDateIn("Europe/Belgrade");
+  const startDate = addDaysIso(belgradeToday, 1);
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { timezone: "Europe/Belgrade", startDate, opensTime: "00:00", closesTime: "23:59" });
+
+  const scheduleRow = await query(`select * from tests.test_schedules where id = $1`, [schedule.id]);
+  const occurrenceIds = await ensureCurrentOccurrence(pool, scheduleRow.rows[0]);
+  assert.equal(occurrenceIds.length, 1, "the occurrence for TOMORROW's start_date must already be generated, even though the schedule's own zone is still on today");
+
+  const occ = await query(`select scheduled_date from tests.test_schedule_occurrences where id = $1`, [occurrenceIds[0]]);
+  assert.equal(String(occ.rows[0].scheduled_date), startDate);
+
+  const assignment = await assignmentFor(occurrenceIds[0], athleteId);
+  assert.ok(assignment, "the Kiritimati athlete must already have a real assignment row, before the schedule's own zone even reaches start_date");
+  assert.equal(assignment.timezone, "Pacific/Kiritimati");
+});
+
+test("one-time: an athlete whose own day has ALREADY started but the schedule's own zone hasn't reached start_date yet still gets canSubmit correctly once open", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz11b", 0);
+  const userId = await makeUser({ email: `tz11b-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Already Started Athlete", userId });
+  await addMembership(athleteId, { clubId });
+  const athleteCookie = await loginCookie(userId);
+  await setDeviceTimezone(athleteCookie, "Pacific/Kiritimati");
+
+  const belgradeToday = await localDateIn("Europe/Belgrade");
+  const startDate = addDaysIso(belgradeToday, 1);
+  await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { timezone: "Europe/Belgrade", startDate, opensTime: "00:00", closesTime: "23:59" });
+
+  const today = await api("/api/tests/athlete/today", { cookie: athleteCookie });
+  assert.equal(today.status, 200);
+  assert.equal(today.body.assignments.length, 1, "Today must already show it - it genuinely is today for this athlete's own local calendar");
+  assert.equal(today.body.assignments[0].occurrence.isOpen, true);
+});
+
+test("12. daily: two DIFFERENT logical dates are simultaneously in play - occurrences for BOTH today and tomorrow (schedule zone) exist at once, each with the correct athlete", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz12", 0);
+  const normalUserId = await makeUser({ email: `tz12-normal-${Date.now()}@test.local`, roleHint: "athlete" });
+  const normalAthleteId = await makeAthlete({ name: "Normal Athlete", userId: normalUserId });
+  await addMembership(normalAthleteId, { clubId });
+  await setDeviceTimezone(await loginCookie(normalUserId), "UTC");
+
+  const aheadUserId = await makeUser({ email: `tz12-ahead-${Date.now()}@test.local`, roleHint: "athlete" });
+  const aheadAthleteId = await makeAthlete({ name: "Ahead Athlete", userId: aheadUserId });
+  await addMembership(aheadAthleteId, { clubId });
+  await setDeviceTimezone(await loginCookie(aheadUserId), "Pacific/Kiritimati");
+
+  const utcToday = await localDateIn("UTC");
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], {
+    scheduleKind: "daily", timezone: "UTC", startDate: utcToday, endDate: addDaysIso(utcToday, 5), opensTime: "00:00", closesTime: "23:59",
+  });
+
+  const scheduleRow = await query(`select * from tests.test_schedules where id = $1`, [schedule.id]);
+  const occurrenceIds = await ensureCurrentOccurrence(pool, scheduleRow.rows[0]);
+  assert.equal(occurrenceIds.length, 2, "both today's and tomorrow's occurrences must be generated in one call");
+
+  const dates = await query(`select scheduled_date from tests.test_schedule_occurrences where id = any($1::uuid[]) order by scheduled_date`, [occurrenceIds]);
+  assert.deepEqual(dates.rows.map((r) => String(r.scheduled_date)), [utcToday, addDaysIso(utcToday, 1)]);
+
+  const todayOccId = (await query(`select id from tests.test_schedule_occurrences where schedule_id = $1 and scheduled_date = $2`, [schedule.id, utcToday])).rows[0].id;
+  const tomorrowOccId = (await query(`select id from tests.test_schedule_occurrences where schedule_id = $1 and scheduled_date = $2`, [schedule.id, addDaysIso(utcToday, 1)])).rows[0].id;
+
+  const normalUnderToday = await assignmentFor(todayOccId, normalAthleteId);
+  assert.ok(normalUnderToday, "the UTC athlete belongs under TODAY's occurrence");
+  const normalUnderTomorrow = await assignmentFor(tomorrowOccId, normalAthleteId);
+  assert.equal(normalUnderTomorrow, undefined, "the UTC athlete must not ALSO be assigned to tomorrow's occurrence yet");
+
+  // Kiritimati (UTC+14) is only SOMETIMES already on UTC's tomorrow,
+  // depending on the real time of day this runs - branch on the actual
+  // relationship (queried directly) so this assertion is deterministic
+  // either way, never a coin flip.
+  const kiritimatiToday = await localDateIn("Pacific/Kiritimati");
+  if (kiritimatiToday === addDaysIso(utcToday, 1)) {
+    const aheadUnderTomorrow = await assignmentFor(tomorrowOccId, aheadAthleteId);
+    assert.ok(aheadUnderTomorrow, "Kiritimati's own today is already UTC's tomorrow right now - the athlete belongs there");
+  } else {
+    assert.equal(kiritimatiToday, utcToday, "Kiritimati can only ever be UTC's today or UTC's today+1");
+    const aheadUnderToday = await assignmentFor(todayOccId, aheadAthleteId);
+    assert.ok(aheadUnderToday, "Kiritimati's own today still matches UTC's right now - the athlete belongs under today's occurrence instead");
+  }
+});
+
+test("daily: start/end boundaries are respected in the ATHLETE's own local calendar, not just the schedule's", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz12b", 0);
+  const userId = await makeUser({ email: `tz12b-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Boundary Athlete", userId });
+  await addMembership(athleteId, { clubId });
+  await setDeviceTimezone(await loginCookie(userId), "Pacific/Kiritimati");
+
+  const belgradeToday = await localDateIn("Europe/Belgrade");
+  // A daily schedule whose end_date is TODAY (schedule zone) - Kiritimati's
+  // own relevant date could be end_date + 1, which must be correctly
+  // EXCLUDED (out of range), never generated/assigned.
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], {
+    scheduleKind: "daily", timezone: "Europe/Belgrade", startDate: addDaysIso(belgradeToday, -3), endDate: belgradeToday, opensTime: "00:00", closesTime: "23:59",
+  });
+  const scheduleRow = await query(`select * from tests.test_schedules where id = $1`, [schedule.id]);
+  const occurrenceIds = await ensureCurrentOccurrence(pool, scheduleRow.rows[0]);
+  const dates = await query(`select scheduled_date from tests.test_schedule_occurrences where id = any($1::uuid[])`, [occurrenceIds]);
+  for (const row of dates.rows) {
+    assert.ok(String(row.scheduled_date) <= belgradeToday, `no occurrence may be generated past the schedule's own end_date (${belgradeToday}), got ${row.scheduled_date}`);
+  }
+});
+
+test("13. the worker's occurrence-generation phase catches an ahead athlete's occurrence in its very next cycle, well before the 5-minute interval would even repeat", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz13", 0);
+  const userId = await makeUser({ email: `tz13-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Worker Ahead Athlete", userId });
+  await addMembership(athleteId, { clubId });
+  await setDeviceTimezone(await loginCookie(userId), "Pacific/Kiritimati");
+
+  const belgradeToday = await localDateIn("Europe/Belgrade");
+  const startDate = addDaysIso(belgradeToday, 1);
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], {
+    timezone: "Europe/Belgrade", startDate, opensTime: "06:00", closesTime: "23:59",
+    notificationRules: [{ kind: "athlete_invitation", enabled: true }],
+  });
+
+  // A full real worker cycle, using the real wall clock - proves the
+  // WORKER's own Phase 1 SQL pre-filter genuinely picks this schedule up
+  // too (not just the on-demand ensureCurrentOccurrence path exercised
+  // directly by other tests above).
+  const summary = await processTestNotificationCycle({ now: new Date(), pool });
+  assert.ok(summary.occurrences.generated >= 1, `expected the worker to generate at least the ahead-athlete's occurrence this cycle: ${JSON.stringify(summary.occurrences)}`);
+
+  const occ = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1 and scheduled_date = $2`, [schedule.id, startDate]);
+  assert.equal(occ.rowCount, 1, "the occurrence for start_date must exist after just one worker cycle");
+  const assignment = await assignmentFor(occ.rows[0].id, athleteId);
+  assert.ok(assignment, "the assignment must already exist too - generate+materialize run in the same cycle");
+
+  if (new Date(assignment.opens_at) <= new Date()) {
+    assert.equal(summary.invitations.sent + summary.invitations.alreadySent, 1, "once the athlete's own opens_at has already arrived, the invitation must go out in this SAME cycle, not a later one");
+  }
+});
+
+// ------------------------------------------------------------
+// Item 3: DB-enforced snapshot immutability
+// ------------------------------------------------------------
+
+test("14. direct UPDATE attempts on an assignment's snapshot columns are rejected by the database itself, but normal lifecycle updates still work", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz14", 0);
+  const userId = await makeUser({ email: `tz14-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Immutable Athlete", userId });
+  await addMembership(athleteId, { clubId });
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }]);
+  const { occurrence } = await ensureOccurrenceAndAssignments(schedule.id);
+  const assignment = await assignmentFor(occurrence.id, athleteId);
+  assert.ok(assignment);
+
+  await assert.rejects(
+    () => query(`update tests.test_assignments set timezone = 'Asia/Tokyo' where id = $1`, [assignment.id]),
+    /immutable snapshot/,
+  );
+  await assert.rejects(
+    () => query(`update tests.test_assignments set opens_at = opens_at + interval '1 hour' where id = $1`, [assignment.id]),
+    /immutable snapshot/,
+  );
+  await assert.rejects(
+    () => query(`update tests.test_assignments set closes_at = closes_at + interval '1 hour' where id = $1`, [assignment.id]),
+    /immutable snapshot/,
+  );
+  await assert.rejects(
+    () => query(`update tests.test_assignments set local_scheduled_date = local_scheduled_date + 1 where id = $1`, [assignment.id]),
+    /immutable snapshot/,
+  );
+  await assert.rejects(
+    () => query(`update tests.test_assignments set due_at = closes_at where id = $1`, [assignment.id]),
+    /immutable snapshot/,
+  );
+
+  // The real lifecycle path must be completely unaffected by the new checks.
+  await query(`update tests.test_assignments set status = 'completed', completed_at = now() where id = $1`, [assignment.id]);
+  const after = await query(`select status from tests.test_assignments where id = $1`, [assignment.id]);
+  assert.equal(after.rows[0].status, "completed");
+});
+
+// ------------------------------------------------------------
+// Item 4: coach Today no longer shows a single shared occurrence-level
+// window
+// ------------------------------------------------------------
+
+test("15. coach Today never returns the old shared occurrence-level window object - anyOpen/allClosed are a clearly-defined aggregate instead", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz15", 0);
+  const userId = await makeUser({ email: `tz15-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Open Athlete", userId });
+  await addMembership(athleteId, { clubId });
+
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { timezone: "UTC", opensTime: "00:00", closesTime: "23:59" });
+  await ensureOccurrenceAndAssignments(schedule.id);
+
+  const today = await api("/api/tests/today", { cookie: coachCookie });
+  assert.equal(today.status, 200);
+  const group = today.body.groups.find((g) => g.schedule.id === schedule.id);
+  assert.ok(group, "the schedule must appear in coach Today");
+  assert.equal("occurrence" in group, false, "the old shared occurrence-level window object must be gone entirely");
+  assert.equal(typeof group.anyOpen, "boolean");
+  assert.equal(typeof group.allClosed, "boolean");
+  assert.equal(group.anyOpen, true, "with a wide-open 00:00-23:59 UTC window, the group must report at least one athlete currently open");
+  assert.equal(group.athletes[0].athleteId, athleteId);
+  assert.ok(group.athletes[0].opensAt && group.athletes[0].closesAt, "each athlete row must still carry its own window");
+});
+
+test("16. an athlete significantly AHEAD of the schedule's own timezone is genuinely VISIBLE in coach Today (previously invisible - their assignment lived under a different occurrence than the one Today looked at)", async () => {
+  const { clubId, coachCookie } = await makeClubWithAthletes("tz16", 0);
+  const userId = await makeUser({ email: `tz16-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Ahead Coach Today Athlete", userId });
+  await addMembership(athleteId, { clubId });
+  await setDeviceTimezone(await loginCookie(userId), "Pacific/Kiritimati");
+
+  const belgradeToday = await localDateIn("Europe/Belgrade");
+  const startDate = addDaysIso(belgradeToday, 1);
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }], { timezone: "Europe/Belgrade", startDate, opensTime: "00:00", closesTime: "23:59" });
+
+  const today = await api("/api/tests/today", { cookie: coachCookie });
+  const group = today.body.groups.find((g) => g.schedule.id === schedule.id);
+  assert.ok(group, "the schedule must appear at all");
+  assert.equal(group.counts.total, 1, "the ahead athlete's assignment must be counted");
+  assert.equal(group.athletes[0].athleteId, athleteId);
 });

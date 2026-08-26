@@ -389,10 +389,16 @@ test("O1. the worker creates a daily schedule's occurrence and assignments entir
   const summary = await processTestNotificationCycle({ now: new Date(), pool });
   assert.ok(summary.occurrences.generated >= 1);
 
-  const occurrenceRows = await query(`select id, assignments_materialized_at from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id]);
-  assert.equal(occurrenceRows.rowCount, 1);
-  assert.ok(occurrenceRows.rows[0].assignments_materialized_at);
-  const assignmentRows = await query(`select id from tests.test_assignments where occurrence_id = $1`, [occurrenceRows.rows[0].id]);
+  // Phase 4 correction: an open-ended (no end_date) daily schedule's own
+  // occurrence generation unconditionally covers BOTH today's and
+  // tomorrow's logical date (to support an athlete ahead of the schedule's
+  // own timezone) - so two occurrence rows now exist; only today's has
+  // eligible (same-day, standard-UTC-clock) athletes to materialize.
+  const occurrenceRows = await query(`select id, scheduled_date, assignments_materialized_at from tests.test_schedule_occurrences where schedule_id = $1 order by scheduled_date`, [schedule.id]);
+  assert.equal(occurrenceRows.rowCount, 2);
+  const todaysOccurrence = occurrenceRows.rows[0];
+  assert.ok(todaysOccurrence.assignments_materialized_at);
+  const assignmentRows = await query(`select id from tests.test_assignments where occurrence_id = $1`, [todaysOccurrence.id]);
   assert.equal(assignmentRows.rowCount, 2, "both targeted athletes must have a materialized assignment");
 });
 
@@ -838,8 +844,10 @@ test("W2. a normal CLI run (lock free) actually processes a cycle and returns ok
   assert.equal(result.ok, true);
   assert.equal(result.skipped, false);
   assert.ok(typeof result.invitations.sent === "number");
+  // Phase 4 correction: an open-ended daily schedule now unconditionally
+  // generates both today's and tomorrow's occurrence in one call.
   const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id]);
-  assert.equal(occurrenceRows.rowCount, 1);
+  assert.equal(occurrenceRows.rowCount, 2);
 });
 
 test("W3. processTestNotificationCycle makes no external network calls - only DB queries (fetch is never invoked)", async () => {

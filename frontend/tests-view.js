@@ -277,24 +277,39 @@ function renderCoachTodayHtml() {
   return groups.map(renderCoachTodayGroupHtml).join("");
 }
 
+// Item 4 correction: no single occurrence-level window is shown as if it
+// applied to every athlete anymore (backend/src/routes/tests.js's
+// loadScheduleGroup) - the header shows the schedule's own wall-clock
+// opens/closes TIME (timezone-less) with a fixed "in each athlete's own
+// timezone" label, plus a clearly-defined group status (open/not yet open/
+// closed) computed from each real assignment's own window, never a shared
+// reference instant. Per-athlete rows still carry their own status,
+// computed from their own assignment timestamps (unchanged).
+function coachTodayGroupStatusLabel(group) {
+  if (!group.counts.total) return "";
+  if (group.anyOpen) return "Open now";
+  if (group.allClosed) return "Closed";
+  return "Not yet open";
+}
+
 function renderCoachTodayGroupHtml(group) {
-  if (!group.occurrence) {
+  const { schedule, counts, athletes } = group;
+  if (!counts.total) {
     return `
       <section class="panel tests-today-group">
-        <h3>${escapeHtml(group.schedule.testName)}</h3>
+        <h3>${escapeHtml(schedule.testName)}</h3>
         <p class="muted">No check-in window today.</p>
       </section>
     `;
   }
-  const { counts, athletes, occurrence } = group;
   return `
     <section class="panel tests-today-group">
       <div class="tests-today-head">
         <div>
-          <h3>${escapeHtml(group.schedule.testName)}</h3>
-          <p class="muted">${escapeHtml(formatDateTime(occurrence.scheduledDate))} &middot; closes ${escapeHtml(formatDateTime(occurrence.closesAt))}</p>
+          <h3>${escapeHtml(schedule.testName)}</h3>
+          <p class="muted">${escapeHtml(schedule.opensTime)}&ndash;${escapeHtml(schedule.closesTime)} in each athlete's local timezone &middot; ${escapeHtml(coachTodayGroupStatusLabel(group))}</p>
         </div>
-        <button type="button" class="plain-button compact-button" data-action="tests-copy-link" data-schedule-id="${escapeAttr(group.schedule.id)}">Copy group link</button>
+        <button type="button" class="plain-button compact-button" data-action="tests-copy-link" data-schedule-id="${escapeAttr(schedule.id)}">Copy group link</button>
       </div>
       <div class="tests-counts-row">
         <span class="tests-count-chip">${counts.total} total</span>

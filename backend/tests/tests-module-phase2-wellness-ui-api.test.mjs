@@ -961,8 +961,23 @@ test("Q1. a one_time schedule dated in the future does not appear in Athlete Tod
   assert.equal(created.status, 201);
   const today = await api("/api/tests/athlete/today", { cookie: athleteCookie });
   assert.equal(today.body.assignments.length, 0, "a future one_time schedule must not materialize/show as today's");
-  const occurrenceCount = await query(`select count(*)::int as n from tests.test_schedule_occurrences where schedule_id = $1`, [created.body.schedule.id]);
-  assert.equal(occurrenceCount.rows[0].n, 0, "no occurrence row should have been generated yet");
+  // Phase 4 correction: both the OCCURRENCE row and its ASSIGNMENT rows can
+  // now legitimately exist a day early (schedule zone is UTC, start_date is
+  // exactly "tomorrow" in UTC - this is the schedule's own "tomorrow"
+  // branch, generated unconditionally to support an athlete ahead of the
+  // schedule's own timezone). For one_time schedules, materialization is
+  // deliberately NOT gated per-athlete-current-date the way daily/recurring
+  // is (tests.materialize_test_assignments_for_occurrence's `schedule_kind
+  // <> 'recurring'` bypass) - per the correction's requirement (d), a
+  // one-time date is the SAME local date for every targeted athlete, never
+  // reinterpreted per timezone, so there is no "athlete's own current day"
+  // to gate on. What must still never happen is the assignment's own WINDOW
+  // being open before its real date - opens_at/closes_at stay correctly in
+  // the future either way, which is what actually keeps it out of Today and
+  // out of canSubmit.
+  const assignmentRows = await query(`select opens_at, closes_at from tests.test_assignments where athlete_id = $1`, [athleteId]);
+  assert.equal(assignmentRows.rowCount, 1, "the assignment row may already exist (materialized a day early), snapshotted for the correct future date");
+  assert.ok(new Date(assignmentRows.rows[0].opens_at).getTime() > Date.now(), "its own opens_at must still be in the future");
 });
 
 test("Q2. a one_time schedule appears in Athlete Today exactly on its start_date", async () => {

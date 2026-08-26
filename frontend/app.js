@@ -27,7 +27,7 @@ import {
 } from "./email-change-actions.js";
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
-import { loadPendingCount as loadTestsPendingCount, loadTests } from "./tests-data.js";
+import { loadPendingCount as loadTestsPendingCount, loadTests, reportDeviceTimezone } from "./tests-data.js";
 import { renderTests, renderTestsBadge } from "./tests-view.js";
 import {
   renderAthleteHeaderToolbarHtml,
@@ -270,6 +270,13 @@ async function init() {
   ensureBackGuard();
   void loadNotifications({ silent: true });
   void loadMessages({ silent: true });
+  // Phase 4 correction: reported at authenticated app bootstrap, not only
+  // when the athlete happens to manually open the Tests tab - the nav
+  // badge fetch right below already calls GET /athlete/today, which can
+  // itself trigger materialization server-side, so the timezone report
+  // must complete first (see tests-data.js's reportDeviceTimezone for the
+  // full race-condition reasoning). No-ops instantly for a coach session.
+  await reportDeviceTimezone();
   void loadTestsPendingCount().then(renderTestsBadge);
   startRealtimeInbox((connected) => {
     state.realtimeOffline = !connected;

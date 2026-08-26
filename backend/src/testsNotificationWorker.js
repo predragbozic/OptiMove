@@ -239,30 +239,59 @@ async function upsertDigestNotification(pool, { occurrenceId, notificationKind, 
 // ------------------------------------------------------------
 
 // Everything ensureCurrentOccurrence() itself needs (status='active',
-// start/end date window, one_time-matches-its-own-date) is already
-// re-checked safely inside it - this query only adds the ONE thing that
-// service doesn't decide on its own: whether opens_time (a time-of-day, not
-// just a date) has actually arrived yet in the schedule's own timezone. A
-// schedule matched here but raced by a concurrent PATCH/DELETE simply comes
-// back null from ensureCurrentOccurrence (already handled there) and is
-// counted as "skipped", never an error.
+// start/end date window) is already re-checked safely inside it - this
+// query only adds the ONE thing that service doesn't decide on its own:
+// whether opens_time (a time-of-day, not just a date) has actually arrived
+// yet, FOR THE SCHEDULE'S OWN LOCAL TODAY specifically. A schedule matched
+// here but raced by a concurrent PATCH/DELETE simply comes back an empty
+// array from ensureCurrentOccurrence (already handled there) and is counted
+// as "skipped", never an error.
+//
+// Phase 4 correction: this used to be the ONLY gate, and it used the
+// schedule's own timezone for absolutely everything - which meant an
+// athlete significantly AHEAD of the schedule's own timezone (their own
+// local day already begun, opens_time already reached FOR THEM) would
+// never even get considered until the schedule's own local day caught up,
+// hours or a full day too late. The second OR-branch below is deliberately
+// NOT gated by opens_time-of-day - it exists purely to let
+// ensureCurrentOccurrence() (which internally always tries both the
+// schedule's own today AND the relevant adjacent day, unconditionally -
+// see that function's own header) run at all once an adjacent day could
+// plausibly matter, regardless of what time it currently is in the
+// schedule's own reference zone. This does not weaken the opens_time gate
+// for the schedule's own "today" case (still exactly as strict as before,
+// in the first OR-branch) - it only ADDS eager coverage for the one extra
+// day that a real-world timezone spread (UTC-12..UTC+14) can put into
+// play.
 async function runOccurrenceGenerationPhase(pool, summary) {
   const result = await pool.query(
     `select sch.*
      from tests.test_schedules sch
      where sch.status = 'active'
        and (
-         (sch.schedule_kind = 'one_time' and (now() at time zone sch.timezone)::date = sch.start_date)
-         or (sch.schedule_kind = 'recurring'
-             and (now() at time zone sch.timezone)::date >= sch.start_date
-             and (sch.end_date is null or (now() at time zone sch.timezone)::date <= sch.end_date))
-       )
-       and (now() at time zone sch.timezone)::time >= sch.opens_time`,
+         (
+           (
+             (sch.schedule_kind = 'one_time' and (now() at time zone sch.timezone)::date = sch.start_date)
+             or (sch.schedule_kind = 'recurring'
+                 and (now() at time zone sch.timezone)::date >= sch.start_date
+                 and (sch.end_date is null or (now() at time zone sch.timezone)::date <= sch.end_date))
+           )
+           and (now() at time zone sch.timezone)::time >= sch.opens_time
+         )
+         or (
+           sch.schedule_kind = 'one_time' and (now() at time zone sch.timezone)::date = sch.start_date - 1
+         )
+         or (
+           sch.schedule_kind = 'recurring'
+           and (now() at time zone sch.timezone)::date + 1 >= sch.start_date
+           and (sch.end_date is null or (now() at time zone sch.timezone)::date + 1 <= sch.end_date)
+         )
+       )`,
   );
   summary.occurrences.schedulesChecked = result.rowCount;
   for (const schedule of result.rows) {
-    const occurrenceId = await ensureCurrentOccurrence(pool, schedule);
-    if (occurrenceId) summary.occurrences.generated += 1;
+    const occurrenceIds = await ensureCurrentOccurrence(pool, schedule);
+    if (occurrenceIds.length) summary.occurrences.generated += occurrenceIds.length;
     else summary.occurrences.skipped += 1;
   }
 }

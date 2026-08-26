@@ -10,16 +10,41 @@ import { emptyWellnessForm, state } from "./state.js";
 // same on-demand convention notifications.js already uses (fetched when
 // needed, never polled).
 
-// Phase 4: the athlete's own device reports its IANA timezone on every
-// authenticated entry into the Tests area, via Intl - never a manual
-// picker (see backend/src/routes/tests.js's POST /athlete/timezone, which
-// strictly validates it server-side). Fire-and-forget: never blocks or
-// fails the actual Tests load, and never surfaces an error banner - the
-// schedule-level fallback timezone still covers this athlete either way.
-// reportedTimezoneThisSession is a cheap page-session cache so revisiting
-// the Tests tab repeatedly doesn't re-POST an unchanged value every time.
+// Phase 4: the athlete's own device reports its IANA timezone via Intl -
+// never a manual picker (see backend/src/routes/tests.js's POST /athlete/
+// timezone, which strictly validates it server-side). Correction: this must
+// be AWAITED, not fire-and-forget, by every caller BEFORE the first GET
+// that could trigger materialization (athlete Today/upcoming, coach Today,
+// check-in's my-assignment - all of them call ensureCurrentOccurrence()
+// server-side) - otherwise that GET can materialize an assignment using the
+// stale/fallback timezone, permanently snapshotting the wrong one for that
+// occurrence (see the DB-enforced immutability trigger in migrations_v2/
+// 202608300900_..._phase4_assignment_timezone_window.sql - once wrong, it
+// can never be corrected after the fact). A FAILED report must still never
+// block the app: this function swallows its own errors and always
+// resolves, so `await`ing it is always safe - the schedule-level fallback
+// timezone still covers this athlete either way. Callers: app.js's init()
+// (authenticated athlete app bootstrap - covers the nav badge's own
+// GET /athlete/today too, not just the Tests tab), loadTests() below (a
+// defensive fallback for any path that reaches the Tests tab without going
+// through init(), e.g. a manual tab switch), and check-in-actions.js (the
+// authenticated group-link entry, both the already-logged-in-on-open and
+// the fresh-login-on-this-page paths). reportedTimezoneThisSession is a
+// cheap page-session cache so repeated calls across all these entry points
+// only ever send ONE real POST per distinct timezone value per session.
+// Deliberately NOT gated on isAthleteMode() here: that's a DOM-class check
+// (document.body.classList.contains("athlete-mode")) that the check-in
+// page (check-in-actions.js) never sets - it stays in "login-mode" even
+// for a genuinely logged-in athlete, so that guard would silently skip
+// reporting on exactly the flow item 2 explicitly calls out. The backend
+// endpoint (POST /api/tests/athlete/timezone) already requires a real
+// athlete profile server-side (requireAthlete) and returns a plain 403
+// otherwise - swallowed by the catch below exactly like any other
+// best-effort failure - so calling this from a coach session (e.g. the
+// main app's own init() bootstrap, which runs for every account) costs one
+// harmless extra request, never a wrong report.
 let reportedTimezoneThisSession = "";
-async function reportDeviceTimezone() {
+export async function reportDeviceTimezone() {
   try {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!timezone || timezone === reportedTimezoneThisSession) return;
@@ -34,7 +59,7 @@ export async function loadTests({ setLoading, renderTests } = {}) {
   state.tests.error = "";
   if (isAthleteMode()) {
     if (!["today", "upcoming", "history"].includes(state.tests.section)) state.tests.section = "today";
-    void reportDeviceTimezone();
+    await reportDeviceTimezone();
   } else if (!["today", "schedule", "results", "library"].includes(state.tests.section)) {
     state.tests.section = "today";
   }
