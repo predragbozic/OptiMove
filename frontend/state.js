@@ -148,6 +148,14 @@ export const emptyBuilderState = (overrides = {}) => ({
   // modal's wording, whether "reusable template" is offered, and what
   // happens after a successful confirm (see builder-actions.js).
   copyIntent: "copy",
+  // Minted once per Assign attempt (crypto.randomUUID()) and reused across
+  // retries of that SAME attempt, so the backend can tell "the coach
+  // clicked Assign again after a failed request" apart from "a new assign"
+  // (backend/src/routes/builder.js's assignmentRequestId idempotency
+  // check). Cleared by resetBuilderCopyState() - i.e. on a successful
+  // confirm or on closing the picker - never on a failed attempt, so a
+  // retry naturally reuses it.
+  copyAssignmentRequestId: "",
   // Set when the plan being copied/assigned is an edit-draft (draft.plan.isEditDraft) -
   // confirming an "assign" for one of these must apply the edit-draft to its
   // original first (same /submit endpoint "Apply changes" already uses), so

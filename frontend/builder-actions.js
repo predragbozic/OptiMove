@@ -49,6 +49,7 @@ function resetBuilderCopyState() {
   state.builder.copyWeekStart = "";
   state.builder.copyIntent = "copy";
   state.builder.copyIsEditDraft = false;
+  state.builder.copyAssignmentRequestId = "";
 }
 
 function getBuilderBatchId(draft = state.builder.draft) {
@@ -329,10 +330,22 @@ export async function handleBuilderPlanAction(action, handlers) {
       // intent tells the backend which of the two business meanings this is
       // (plain Copy always stays 'draft', unchanged; Assign activates the
       // copy and notifies the athlete, in the same transaction - see
-      // backend/src/routes/builder.js).
+      // backend/src/routes/builder.js). assignmentRequestId is minted once
+      // per Assign attempt and reused across retries of this SAME attempt -
+      // it's what lets the backend treat a retried/double-clicked/raced
+      // Assign as one assignment instead of creating a second set of plans.
+      if (isAssign && !state.builder.copyAssignmentRequestId) {
+        state.builder.copyAssignmentRequestId = crypto.randomUUID();
+      }
       const created = await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(duplicateSourceId)}/duplicate`, {
         method: "POST",
-        body: JSON.stringify({ athleteId: athleteIds[0] || "", athleteIds, weekStart: state.builder.copyWeekStart, intent: isAssign ? "assign" : "copy" }),
+        body: JSON.stringify({
+          athleteId: athleteIds[0] || "",
+          athleteIds,
+          weekStart: state.builder.copyWeekStart,
+          intent: isAssign ? "assign" : "copy",
+          ...(isAssign ? { assignmentRequestId: state.builder.copyAssignmentRequestId } : {}),
+        }),
       });
       // A plain Copy always creates a new 'draft' row - the cached drafts
       // list must never be missing it.

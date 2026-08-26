@@ -6,6 +6,7 @@ import { emitRealtimeEvent } from "../realtime.js";
 
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Shared by POST /plans/:planId/submit (weekly plan / specific program
 // draft -> active) and POST /plans/:planId/duplicate (Assign to athlete) -
@@ -49,8 +50,10 @@ async function notifyPlanAssignments(client, plans, actorUserId) {
     // submit/assign for the exact same plan row always resolves to the
     // same dedupe_key, so a second attempt is a guaranteed no-op here
     // regardless of how it was triggered (double click, network retry,
-    // two parallel requests).
-    const dedupeKey = `${type}:${plan.id}`;
+    // two parallel requests). Namespaced (builder:v1:...) so this table's
+    // dedupe_key values stay unambiguous if another feature ever writes
+    // its own one-shot notifications into the same column.
+    const dedupeKey = `builder:v1:${type}:${plan.id}`;
     const inserted = await client.query(
       `insert into public.app_notifications (recipient_user_id, actor_user_id, type, title, body, entity_type, entity_id, metadata, dedupe_key)
        values ($1, $2, $3, $4, $5, 'plan', $6, $7::jsonb, $8)
@@ -291,6 +294,35 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     const targetWeekStart = source.plan_type === "weekly" ? normalizedWeekStart(req.body?.weekStart) : null;
     if (source.plan_type === "weekly" && !targetAthletes.length) return res.status(400).json({ error: "Choose at least one athlete for a weekly plan copy." });
     if (source.plan_type === "weekly" && !targetWeekStart) return res.status(400).json({ error: "Choose the target week for this copy." });
+
+    // "Assign to athlete" is business-final and must be safe against
+    // retries/double-clicks/genuine parallel requests. app_notifications'
+    // dedupe_key alone (keyed on a plan id) cannot stop a duplicate
+    // ASSIGNMENT - each retried request would still build its own brand-new
+    // plan id before that key ever comes into play. assignmentRequestId is
+    // a client-minted UUID reused across retries of the SAME attempt (see
+    // frontend/builder-actions.js's copyAssignmentRequestId) - see
+    // migrations_v2/202608290900_builder_assignment_requests.sql for the
+    // full mechanism: the request that wins the INSERT below owns the real
+    // work, every other caller with the same id blocks on that row via
+    // `select ... for update` (a plain row lock) until the owner's
+    // transaction resolves, then either replays the stored result (same
+    // user, same payload_key) or is rejected with 409 (different user or
+    // payload - a reused id is never silently treated as "the same thing").
+    let assignmentRequestId = null;
+    let payloadKey = null;
+    if (intent === "assign") {
+      assignmentRequestId = text(req.body?.assignmentRequestId);
+      if (!UUID_RE.test(assignmentRequestId)) {
+        return res.status(400).json({ error: "assignmentRequestId (a UUID) is required for Assign to athlete." });
+      }
+      payloadKey = JSON.stringify({
+        sourcePlanId: source.id,
+        athleteIds: targetAthletes.map((athlete) => athlete.id).slice().sort(),
+        weekStart: targetWeekStart || null,
+      });
+    }
+
     const targets = targetAthletes.length ? targetAthletes : [null];
     const batchId = targets.length > 1 ? randomUUID() : null;
     // "Assign" activates every created copy immediately, in the SAME
@@ -302,6 +334,55 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     const assignedPlans = [];
     client = await pool.connect();
     await client.query("begin");
+
+    if (intent === "assign") {
+      let claimed = false;
+      let replay = null;
+      // Bounded, not polling: each failed iteration only happens after a
+      // `for update` block released by someone else's commit/rollback, so
+      // 3 attempts comfortably covers even a rolled-back predecessor
+      // freeing the slot back up for a genuine retry.
+      for (let attempt = 0; attempt < 3 && !claimed && !replay; attempt += 1) {
+        const inserted = await client.query(
+          `insert into public.builder_assignment_requests (id, user_id, source_plan_id, payload_key)
+           values ($1, $2, $3, $4)
+           on conflict (id) do nothing
+           returning id`,
+          [assignmentRequestId, req.user.id, source.id, payloadKey],
+        );
+        if (inserted.rows[0]) { claimed = true; break; }
+        const locked = await client.query(
+          `select user_id, payload_key, status, result from public.builder_assignment_requests where id = $1 for update`,
+          [assignmentRequestId],
+        );
+        const existing = locked.rows[0];
+        if (!existing) continue; // the earlier claimant rolled back entirely - the slot is free again, retry the claim
+        if (String(existing.user_id) !== String(req.user.id) || existing.payload_key !== payloadKey) {
+          await client.query("rollback");
+          client.release();
+          client = null;
+          return res.status(409).json({ error: "This assignment request id was already used with different parameters." });
+        }
+        // Same user, same payload: the row can only be sitting here
+        // 'completed' with a real result - the claim below only ever
+        // commits alongside that result (same transaction), so there is no
+        // observable "committed but still pending" state to land on.
+        replay = existing.result;
+      }
+      if (replay) {
+        await client.query("commit");
+        client.release();
+        client = null;
+        return res.status(201).json({ ...(await buildDraft(await getEditablePlan(req, replay.planId))), assignments: replay.assignments });
+      }
+      if (!claimed) {
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return res.status(409).json({ error: "Could not process this assignment request, please retry." });
+      }
+    }
+
     if (source.plan_type === "weekly") {
       const conflicts = [];
       for (const target of targets) {
@@ -317,7 +398,10 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     }
     for (const target of targets) {
       const isTemplate = source.plan_type === "program" && !target;
-      const planName = `${source.name || "Program"} copy`;
+      // Assign keeps the template's own name - the athlete is receiving
+      // exactly that program, not "a copy of" it. Only a plain Copy still
+      // gets the "copy" suffix, unchanged from before.
+      const planName = intent === "assign" ? (source.name || "Program") : `${source.name || "Program"} copy`;
       const created = await client.query(
         `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days, week_start, builder_batch_id)
          values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, $9, 'builder', $10, $11, $12, $13)
@@ -345,10 +429,6 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
       [source.id, req.user.id, createdIds[0]],
     );
     const notifiedUserIds = intent === "assign" ? await notifyPlanAssignments(client, assignedPlans, req.user.id) : [];
-    await client.query("commit");
-    client.release();
-    client = null;
-    emitPlanAssignedRealtime(notifiedUserIds);
     // "assignments" lists every plan this call created (not just the first) -
     // required for a multi-athlete duplicate (e.g. the open-Builder "Assign
     // to athlete" flow, frontend/builder-actions.js) to be able to confirm
@@ -357,6 +437,20 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     // top-level plan/blocks/batch fields (the first created plan's own
     // draft shape, unchanged), so this doesn't affect them.
     const assignments = targets.map((target, index) => ({ athleteId: target?.externalId || null, planId: createdIds[index] }));
+    if (intent === "assign") {
+      // Marked 'completed' in the SAME transaction/commit as the plans and
+      // notifications themselves - a rollback anywhere above undoes the
+      // claim too, so a genuinely failed attempt leaves no idempotency
+      // trace behind and the same requestId can cleanly retry the real work.
+      await client.query(
+        `update public.builder_assignment_requests set status = 'completed', result = $2::jsonb, updated_at = now() where id = $1`,
+        [assignmentRequestId, JSON.stringify({ planId: createdIds[0], assignments })],
+      );
+    }
+    await client.query("commit");
+    client.release();
+    client = null;
+    emitPlanAssignedRealtime(notifiedUserIds);
     res.status(201).json({ ...(await buildDraft(await getEditablePlan(req, createdIds[0]))), assignments });
   } catch (error) {
     if (client) {

@@ -273,7 +273,7 @@ test("7. Assign from a template activates independent copies immediately and sen
 
   const assigned = await api(`/api/builder/plans/${templateId}/duplicate`, {
     method: "POST", cookie: coach.cookie,
-    body: { athleteIds: [athleteA.externalId, athleteB.externalId], intent: "assign" },
+    body: { athleteIds: [athleteA.externalId, athleteB.externalId], intent: "assign", assignmentRequestId: crypto.randomUUID() },
   });
   assert.equal(assigned.status, 201, `expected assign to succeed, got ${assigned.status}: ${JSON.stringify(assigned.body)}`);
   assert.equal(assigned.body.assignments.length, 2);
@@ -338,7 +338,7 @@ test("9. an athlete with no linked user account never crashes an Assign batch - 
 
   const assigned = await api(`/api/builder/plans/${templateId}/duplicate`, {
     method: "POST", cookie: coach.cookie,
-    body: { athleteIds: [athleteWithAccount.externalId, athleteNoAccount.externalId], intent: "assign" },
+    body: { athleteIds: [athleteWithAccount.externalId, athleteNoAccount.externalId], intent: "assign", assignmentRequestId: crypto.randomUUID() },
   });
   assert.equal(assigned.status, 201, `expected the batch to still succeed, got ${assigned.status}: ${JSON.stringify(assigned.body)}`);
   for (const entry of assigned.body.assignments) cleanupPlanIds.add(entry.planId);
@@ -372,6 +372,167 @@ test("10. two parallel Submit requests for the same weekly plan never produce a 
 
   const rows = await notificationsFor(athlete.userId, "weekly_plan_assigned");
   assert.equal(rows.length, 1, "exactly one of the two concurrent submits must have won the notification write");
+});
+
+// ------------------------------------------------------------
+// Assign idempotency (assignmentRequestId) - a retried/parallel/replayed
+// intent="assign" call must never create a second set of plans or
+// notifications. See migrations_v2/202608290900_builder_assignment_requests.sql
+// and the claim/replay logic in POST /plans/:planId/duplicate.
+// ------------------------------------------------------------
+
+test("Idempotency 1. a sequential replay of the same Assign request returns the exact same plan ids, creating nothing new", async () => {
+  const coach = await makeCoach("idem1");
+  const athlete = await makeAthlete(coach.id, "idem1");
+  const templateId = await makeTemplate(coach.id, "Idempotency Replay Template");
+  const body = { athleteIds: [athlete.externalId], intent: "assign", assignmentRequestId: crypto.randomUUID() };
+
+  const first = await api(`/api/builder/plans/${templateId}/duplicate`, { method: "POST", cookie: coach.cookie, body });
+  assert.equal(first.status, 201, `expected first assign to succeed, got ${first.status}: ${JSON.stringify(first.body)}`);
+  for (const entry of first.body.assignments) cleanupPlanIds.add(entry.planId);
+
+  const second = await api(`/api/builder/plans/${templateId}/duplicate`, { method: "POST", cookie: coach.cookie, body });
+  assert.equal(second.status, 201, `expected the replay to succeed too, got ${second.status}: ${JSON.stringify(second.body)}`);
+  assert.deepEqual(second.body.assignments, first.body.assignments, "a replay must return the exact same plan ids, not new ones");
+
+  const planCount = await query(`select count(*)::int as n from plans.plans where athlete_id = $1 and is_template = false`, [athlete.id]);
+  assert.equal(planCount.rows[0].n, 1, "no second plan should ever have been created");
+  const notifRows = await notificationsFor(athlete.userId, "specific_program_assigned");
+  assert.equal(notifRows.length, 1, "no second notification should ever have been created");
+});
+
+test("Idempotency 2. two parallel Assign requests with the same assignmentRequestId create only one set of plans and one notification per athlete", async () => {
+  const coach = await makeCoach("idem2");
+  const athleteA = await makeAthlete(coach.id, "idem2a");
+  const athleteB = await makeAthlete(coach.id, "idem2b");
+  const templateId = await makeTemplate(coach.id, "Idempotency Parallel Template");
+  const body = { athleteIds: [athleteA.externalId, athleteB.externalId], intent: "assign", assignmentRequestId: crypto.randomUUID() };
+
+  const [a, b] = await Promise.all([
+    api(`/api/builder/plans/${templateId}/duplicate`, { method: "POST", cookie: coach.cookie, body }),
+    api(`/api/builder/plans/${templateId}/duplicate`, { method: "POST", cookie: coach.cookie, body }),
+  ]);
+  assert.ok([a.status, b.status].every((s) => s === 201), `neither concurrent assign should ever error: ${a.status} / ${b.status} - ${JSON.stringify(a.body)} / ${JSON.stringify(b.body)}`);
+  assert.deepEqual(a.body.assignments, b.body.assignments, "both concurrent calls must resolve to the exact same assignments");
+  for (const entry of a.body.assignments) cleanupPlanIds.add(entry.planId);
+
+  const planCountA = await query(`select count(*)::int as n from plans.plans where athlete_id = $1 and is_template = false`, [athleteA.id]);
+  const planCountB = await query(`select count(*)::int as n from plans.plans where athlete_id = $1 and is_template = false`, [athleteB.id]);
+  assert.equal(planCountA.rows[0].n, 1, "only one plan should exist for athlete A");
+  assert.equal(planCountB.rows[0].n, 1, "only one plan should exist for athlete B");
+  const notifA = await notificationsFor(athleteA.userId, "specific_program_assigned");
+  const notifB = await notificationsFor(athleteB.userId, "specific_program_assigned");
+  assert.equal(notifA.length, 1);
+  assert.equal(notifB.length, 1);
+});
+
+test("Idempotency 3. the same assignmentRequestId reused with a different target list, or a different source template, returns a controlled 409 and creates nothing", async () => {
+  const coach = await makeCoach("idem3");
+  const athleteA = await makeAthlete(coach.id, "idem3a");
+  const athleteB = await makeAthlete(coach.id, "idem3b");
+  const templateId = await makeTemplate(coach.id, "Idempotency Conflict Template");
+  const requestId = crypto.randomUUID();
+
+  const first = await api(`/api/builder/plans/${templateId}/duplicate`, {
+    method: "POST", cookie: coach.cookie,
+    body: { athleteIds: [athleteA.externalId], intent: "assign", assignmentRequestId: requestId },
+  });
+  assert.equal(first.status, 201);
+  for (const entry of first.body.assignments) cleanupPlanIds.add(entry.planId);
+
+  const beforeTargets = await query(`select count(*)::int as n from plans.plans`);
+  const differentTargets = await api(`/api/builder/plans/${templateId}/duplicate`, {
+    method: "POST", cookie: coach.cookie,
+    body: { athleteIds: [athleteB.externalId], intent: "assign", assignmentRequestId: requestId },
+  });
+  assert.equal(differentTargets.status, 409, `expected 409 for the same key with a different target, got ${differentTargets.status}: ${JSON.stringify(differentTargets.body)}`);
+  const afterTargets = await query(`select count(*)::int as n from plans.plans`);
+  assert.equal(afterTargets.rows[0].n, beforeTargets.rows[0].n, "a conflicting-payload request must create no rows at all");
+
+  const otherTemplateId = await makeTemplate(coach.id, "Idempotency Conflict Other Template");
+  const secondRequestId = crypto.randomUUID();
+  const okFirst = await api(`/api/builder/plans/${templateId}/duplicate`, {
+    method: "POST", cookie: coach.cookie,
+    body: { athleteIds: [athleteA.externalId], intent: "assign", assignmentRequestId: secondRequestId },
+  });
+  assert.equal(okFirst.status, 201);
+  for (const entry of okFirst.body.assignments) cleanupPlanIds.add(entry.planId);
+  const beforeSource = await query(`select count(*)::int as n from plans.plans`);
+  const differentSource = await api(`/api/builder/plans/${otherTemplateId}/duplicate`, {
+    method: "POST", cookie: coach.cookie,
+    body: { athleteIds: [athleteA.externalId], intent: "assign", assignmentRequestId: secondRequestId },
+  });
+  assert.equal(differentSource.status, 409, `expected 409 for the same key against a different source template, got ${differentSource.status}: ${JSON.stringify(differentSource.body)}`);
+  const afterSource = await query(`select count(*)::int as n from plans.plans`);
+  assert.equal(afterSource.rows[0].n, beforeSource.rows[0].n);
+});
+
+test("Idempotency 4. a brand new assignmentRequestId legitimately re-assigns the same template again", async () => {
+  const coach = await makeCoach("idem4");
+  const athlete = await makeAthlete(coach.id, "idem4");
+  const templateId = await makeTemplate(coach.id, "Idempotency Reassign Template");
+
+  const first = await api(`/api/builder/plans/${templateId}/duplicate`, {
+    method: "POST", cookie: coach.cookie,
+    body: { athleteIds: [athlete.externalId], intent: "assign", assignmentRequestId: crypto.randomUUID() },
+  });
+  assert.equal(first.status, 201);
+  for (const entry of first.body.assignments) cleanupPlanIds.add(entry.planId);
+
+  const second = await api(`/api/builder/plans/${templateId}/duplicate`, {
+    method: "POST", cookie: coach.cookie,
+    body: { athleteIds: [athlete.externalId], intent: "assign", assignmentRequestId: crypto.randomUUID() },
+  });
+  assert.equal(second.status, 201, `expected a fresh key to succeed as a real new assignment, got ${second.status}: ${JSON.stringify(second.body)}`);
+  assert.notEqual(second.body.assignments[0].planId, first.body.assignments[0].planId, "a new key must create a genuinely new plan, not replay the old one");
+  for (const entry of second.body.assignments) cleanupPlanIds.add(entry.planId);
+
+  const planCount = await query(`select count(*)::int as n from plans.plans where athlete_id = $1 and is_template = false`, [athlete.id]);
+  assert.equal(planCount.rows[0].n, 2, "two independent assignments must now exist");
+  const notifRows = await notificationsFor(athlete.userId, "specific_program_assigned");
+  assert.equal(notifRows.length, 2, "each real assignment gets its own notification");
+});
+
+test("Idempotency 5. a multi-athlete Assign replay returns the exact same complete assignments array", async () => {
+  const coach = await makeCoach("idem5");
+  const athleteA = await makeAthlete(coach.id, "idem5a");
+  const athleteB = await makeAthlete(coach.id, "idem5b");
+  const athleteC = await makeAthlete(coach.id, "idem5c");
+  const templateId = await makeTemplate(coach.id, "Idempotency Multi Replay Template");
+  const body = { athleteIds: [athleteA.externalId, athleteB.externalId, athleteC.externalId], intent: "assign", assignmentRequestId: crypto.randomUUID() };
+
+  const first = await api(`/api/builder/plans/${templateId}/duplicate`, { method: "POST", cookie: coach.cookie, body });
+  assert.equal(first.status, 201);
+  assert.equal(first.body.assignments.length, 3);
+  for (const entry of first.body.assignments) cleanupPlanIds.add(entry.planId);
+
+  const replay = await api(`/api/builder/plans/${templateId}/duplicate`, { method: "POST", cookie: coach.cookie, body });
+  assert.equal(replay.status, 201);
+  assert.deepEqual(replay.body.assignments, first.body.assignments, "the replay must return every athlete's plan id, in the same shape, not a partial or reordered list");
+});
+
+test("Idempotency/naming 6. an assigned program keeps the template's original name; a plain Copy still gets the 'copy' suffix", async () => {
+  const coach = await makeCoach("idem6");
+  const athleteAssign = await makeAthlete(coach.id, "idem6assign");
+  const athleteCopy = await makeAthlete(coach.id, "idem6copy");
+  const templateId = await makeTemplate(coach.id, "Original Template Name");
+
+  const assigned = await api(`/api/builder/plans/${templateId}/duplicate`, {
+    method: "POST", cookie: coach.cookie,
+    body: { athleteIds: [athleteAssign.externalId], intent: "assign", assignmentRequestId: crypto.randomUUID() },
+  });
+  assert.equal(assigned.status, 201);
+  cleanupPlanIds.add(assigned.body.assignments[0].planId);
+  const assignedRow = await query(`select name from plans.plans where id = $1`, [assigned.body.assignments[0].planId]);
+  assert.equal(assignedRow.rows[0].name, "Original Template Name");
+
+  const copied = await api(`/api/builder/plans/${templateId}/duplicate`, {
+    method: "POST", cookie: coach.cookie,
+    body: { athleteIds: [athleteCopy.externalId] },
+  });
+  assert.equal(copied.status, 201);
+  cleanupPlanIds.add(copied.body.plan.id);
+  assert.equal(copied.body.plan.name, "Original Template Name copy");
 });
 
 // ------------------------------------------------------------

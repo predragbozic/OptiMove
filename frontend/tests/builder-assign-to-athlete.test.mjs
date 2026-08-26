@@ -335,3 +335,88 @@ test("11. renderCopyPlanModal: plain copy intent is unchanged - still offers 'Re
   assert.match(html, /Reusable template/);
   assert.match(html, />Create editable copy</);
 });
+
+// ------------------------------------------------------------
+// assignmentRequestId: minted once, reused across retries, reset on
+// success/close - see backend/src/routes/builder.js's idempotency check
+// and migrations_v2/202608290900_builder_assignment_requests.sql.
+// ------------------------------------------------------------
+
+test("12. confirming assign mints a UUID assignmentRequestId, sends it on /duplicate, and resets it after a successful confirm", async () => {
+  state.builder.draft = templateDraft();
+  state.builder.copyPlanId = "template-1";
+  state.builder.copyIntent = "assign";
+  state.builder.copyIsEditDraft = false;
+  state.builder.copyAthleteIds = ["athlete-a"];
+  assert.equal(state.builder.copyAssignmentRequestId, "", "no request id before the first confirm");
+  let requestBody = null;
+  installFetchMock((url, method, body) => {
+    if (url.endsWith("/duplicate")) {
+      requestBody = body;
+      return { status: 201, body: { ...templateDraft({ plan: { id: "assigned-1", isTemplate: false } }), assignments: [{ athleteId: "athlete-a", planId: "assigned-1" }] } };
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const action = fakeAction({ action: "builder-confirm-duplicate-plan" }, { textContent: "Assign" });
+
+  await handleBuilderPlanAction(action, noopHandlers());
+  assert.match(requestBody.assignmentRequestId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "a real UUID must be sent");
+  assert.equal(state.builder.copyAssignmentRequestId, "", "resetBuilderCopyState() after a successful confirm must clear it, so a later NEW assign gets a fresh id");
+});
+
+test("13. a retried assign after a failed attempt reuses the exact SAME assignmentRequestId, not a new one", async () => {
+  state.builder.draft = templateDraft();
+  state.builder.copyPlanId = "template-1";
+  state.builder.copyIntent = "assign";
+  state.builder.copyIsEditDraft = false;
+  state.builder.copyAthleteIds = ["athlete-a"];
+  let bodies = [];
+  installFetchMock((url, method, body) => {
+    bodies.push(body);
+    return { status: 500, body: { error: "Server error" } };
+  });
+  const firstAttempt = fakeAction({ action: "builder-confirm-duplicate-plan" }, { textContent: "Assign" });
+  await assert.rejects(() => handleBuilderPlanAction(firstAttempt, noopHandlers()), /Server error/);
+  const idAfterFailure = state.builder.copyAssignmentRequestId;
+  assert.notEqual(idAfterFailure, "", "a failed attempt must NOT clear the pending request id - that's what makes the next click a real retry, not a new assign");
+
+  const secondAttempt = fakeAction({ action: "builder-confirm-duplicate-plan" }, { textContent: "Assign" });
+  await assert.rejects(() => handleBuilderPlanAction(secondAttempt, noopHandlers()), /Server error/);
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].assignmentRequestId, bodies[1].assignmentRequestId, "both attempts must carry the identical id");
+  assert.equal(state.builder.copyAssignmentRequestId, idAfterFailure, "the id itself must not have changed across the retry");
+});
+
+test("14. closing the copy/assign picker resets any pending assignmentRequestId, so reopening it starts a genuinely new assign", async () => {
+  state.builder.draft = templateDraft();
+  state.builder.copyPlanId = "template-1";
+  state.builder.copyIntent = "assign";
+  state.builder.copyIsEditDraft = false;
+  state.builder.copyAthleteIds = ["athlete-a"];
+  installFetchMock(() => ({ status: 500, body: { error: "Server error" } }));
+  const failedAttempt = fakeAction({ action: "builder-confirm-duplicate-plan" }, { textContent: "Assign" });
+  await assert.rejects(() => handleBuilderPlanAction(failedAttempt, noopHandlers()), /Server error/);
+  assert.notEqual(state.builder.copyAssignmentRequestId, "", "sanity: a pending id exists after the failed attempt");
+
+  const closeAction = fakeAction({ action: "builder-close-copy-plan" });
+  const closed = await handleBuilderPlanAction(closeAction, noopHandlers());
+  assert.equal(closed, true);
+  assert.equal(state.builder.copyAssignmentRequestId, "", "closing the picker must clear the pending id");
+});
+
+test("15. a plain Copy never sends an assignmentRequestId - the idempotency mechanism is Assign-only", async () => {
+  state.builder.draft = templateDraft();
+  state.builder.copyPlanId = "template-1";
+  state.builder.copyPlanType = "program";
+  state.builder.copyAthleteIds = ["athlete-a"];
+  // A plain Copy also fires a fire-and-forget loadBuilderNodePresets()
+  // background call on success (same as test 9 above) - match its own
+  // /duplicate-only filter instead of trusting call order.
+  const calls = installFetchMock(() => ({ status: 201, body: templateDraft({ plan: { id: "copy-1", isTemplate: false } }) }));
+  const action = fakeAction({ action: "builder-confirm-duplicate-plan" }, { textContent: "Create editable copy" });
+
+  await handleBuilderPlanAction(action, noopHandlers());
+  const duplicateCall = calls.find((call) => call.url.endsWith("/duplicate"));
+  assert.ok(duplicateCall, "the /duplicate call must have happened");
+  assert.equal("assignmentRequestId" in duplicateCall.body, false, "a plain Copy's request body must not carry this field at all");
+});
