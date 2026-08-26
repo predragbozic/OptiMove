@@ -26,12 +26,14 @@ const PHASE1_PATH = path.resolve(__dirname, "../../migrations_v2/202608240900_te
 const PRESENTATION_PATH = path.resolve(__dirname, "../../migrations_v2/202608250900_tests_v42_presentation_metadata.sql");
 const SUPERSEDE_FIX_PATH = path.resolve(__dirname, "../../migrations_v2/202608250901_tests_v42_supersede_generated_column_fix.sql");
 const OCCURRENCE_LOCK_FIX_PATH = path.resolve(__dirname, "../../migrations_v2/202608260900_tests_v42_occurrence_generation_lock_fix.sql");
+const ASSIGNMENT_TIMEZONE_WINDOW_PATH = path.resolve(__dirname, "../../migrations_v2/202608300900_tests_v42_phase4_assignment_timezone_window.sql");
 const SCHEMA_NAME = "202608220900_tests_v42_schema.sql";
 const SEED_NAME = "202608221000_tests_v42_seed_wellness_fms.sql";
 const PHASE1_NAME = "202608240900_tests_v42_phase1_scheduling_execution.sql";
 const PRESENTATION_NAME = "202608250900_tests_v42_presentation_metadata.sql";
 const SUPERSEDE_FIX_NAME = "202608250901_tests_v42_supersede_generated_column_fix.sql";
 const OCCURRENCE_LOCK_FIX_NAME = "202608260900_tests_v42_occurrence_generation_lock_fix.sql";
+const ASSIGNMENT_TIMEZONE_WINDOW_NAME = "202608300900_tests_v42_phase4_assignment_timezone_window.sql";
 
 const WELLNESS_TEST_VERSION_ID = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 
@@ -186,13 +188,14 @@ let server, apiBaseUrl;
 let query, pool, createSession, hashPassword, ensureCurrentOccurrence;
 
 before(async () => {
-  const [schemaSql, seedSql, phase1Sql, presentationSql, supersedeFixSql, occurrenceLockFixSql] = await Promise.all([
+  const [schemaSql, seedSql, phase1Sql, presentationSql, supersedeFixSql, occurrenceLockFixSql, assignmentTimezoneWindowSql] = await Promise.all([
     fsp.readFile(SCHEMA_PATH, "utf8"),
     fsp.readFile(SEED_PATH, "utf8"),
     fsp.readFile(PHASE1_PATH, "utf8"),
     fsp.readFile(PRESENTATION_PATH, "utf8"),
     fsp.readFile(SUPERSEDE_FIX_PATH, "utf8"),
     fsp.readFile(OCCURRENCE_LOCK_FIX_PATH, "utf8"),
+    fsp.readFile(ASSIGNMENT_TIMEZONE_WINDOW_PATH, "utf8"),
   ]);
 
   db = await makeTempDb("primary");
@@ -209,6 +212,7 @@ before(async () => {
     [PRESENTATION_NAME]: presentationSql,
     [SUPERSEDE_FIX_NAME]: supersedeFixSql,
     [OCCURRENCE_LOCK_FIX_NAME]: occurrenceLockFixSql,
+    [ASSIGNMENT_TIMEZONE_WINDOW_NAME]: assignmentTimezoneWindowSql,
   });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
 

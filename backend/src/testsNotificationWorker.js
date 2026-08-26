@@ -272,10 +272,15 @@ async function runOccurrenceGenerationPhase(pool, summary) {
 // ------------------------------------------------------------
 
 async function runAthleteInvitationPhase(pool, now, summary) {
+  // Phase 4: gated on the ASSIGNMENT's own opens_at/closes_at (per-athlete
+  // effective timezone, snapshotted at materialization) - not the
+  // occurrence's shared reference window, or every athlete under one
+  // occurrence would be invited at the exact same instant regardless of
+  // their own device timezone.
   const result = await pool.query(
     `select asg.id as assignment_id, a.user_id as recipient_user_id,
-            o.id as occurrence_id, o.closes_at, o.due_at,
-            sch.id as schedule_id, sch.timezone
+            o.id as occurrence_id, asg.closes_at, asg.due_at, asg.timezone,
+            sch.id as schedule_id
      from tests.test_assignments asg
      join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
      join tests.test_schedules sch on sch.id = o.schedule_id
@@ -285,8 +290,8 @@ async function runAthleteInvitationPhase(pool, now, summary) {
      where sch.status = 'active'
        and o.status <> 'cancelled'
        and asg.status not in ('completed', 'cancelled')
-       and o.opens_at <= $1
-       and o.closes_at >= $1`,
+       and asg.opens_at <= $1
+       and asg.closes_at >= $1`,
     [now],
   );
   for (const row of result.rows) {
@@ -328,10 +333,14 @@ async function runAthleteInvitationPhase(pool, now, summary) {
 // ------------------------------------------------------------
 
 async function runAthleteReminderPhase(pool, now, summary) {
+  // Phase 4: same repoint as the invitation phase above - asg.due_at/
+  // asg.closes_at (per-athlete) instead of o.due_at/o.closes_at (shared).
+  // reminder_offset_minutes itself stays schedule/rule-level (it's a
+  // duration, not a timestamp, so it has no timezone dependency).
   const result = await pool.query(
     `select asg.id as assignment_id, a.user_id as recipient_user_id,
-            o.id as occurrence_id, o.closes_at, o.due_at,
-            sch.id as schedule_id, sch.timezone
+            o.id as occurrence_id, asg.closes_at, asg.due_at, asg.timezone,
+            sch.id as schedule_id
      from tests.test_assignments asg
      join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
      join tests.test_schedules sch on sch.id = o.schedule_id
@@ -341,8 +350,8 @@ async function runAthleteReminderPhase(pool, now, summary) {
      where sch.status = 'active'
        and o.status <> 'cancelled'
        and asg.status not in ('completed', 'cancelled')
-       and $1 <= o.closes_at
-       and $1 >= (coalesce(o.due_at, o.closes_at) - (r.reminder_offset_minutes || ' minutes')::interval)`,
+       and $1 <= asg.closes_at
+       and $1 >= (coalesce(asg.due_at, asg.closes_at) - (r.reminder_offset_minutes || ' minutes')::interval)`,
     [now],
   );
   for (const row of result.rows) {

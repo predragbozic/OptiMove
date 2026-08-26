@@ -10,10 +10,31 @@ import { emptyWellnessForm, state } from "./state.js";
 // same on-demand convention notifications.js already uses (fetched when
 // needed, never polled).
 
+// Phase 4: the athlete's own device reports its IANA timezone on every
+// authenticated entry into the Tests area, via Intl - never a manual
+// picker (see backend/src/routes/tests.js's POST /athlete/timezone, which
+// strictly validates it server-side). Fire-and-forget: never blocks or
+// fails the actual Tests load, and never surfaces an error banner - the
+// schedule-level fallback timezone still covers this athlete either way.
+// reportedTimezoneThisSession is a cheap page-session cache so revisiting
+// the Tests tab repeatedly doesn't re-POST an unchanged value every time.
+let reportedTimezoneThisSession = "";
+async function reportDeviceTimezone() {
+  try {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!timezone || timezone === reportedTimezoneThisSession) return;
+    await api("/api/tests/athlete/timezone", { method: "POST", body: JSON.stringify({ timezone }) });
+    reportedTimezoneThisSession = timezone;
+  } catch {
+    // Best-effort - see comment above.
+  }
+}
+
 export async function loadTests({ setLoading, renderTests } = {}) {
   state.tests.error = "";
   if (isAthleteMode()) {
     if (!["today", "upcoming", "history"].includes(state.tests.section)) state.tests.section = "today";
+    void reportDeviceTimezone();
   } else if (!["today", "schedule", "results", "library"].includes(state.tests.section)) {
     state.tests.section = "today";
   }

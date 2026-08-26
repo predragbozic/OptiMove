@@ -426,6 +426,74 @@ export function checkInUrl(publicToken) {
   return `${window.location.origin}/tests/check-in/${publicToken}`;
 }
 
+// Shared header for every collapsible section in this form (Athletes,
+// Notifications, Advanced settings) - one summary line, one caret, matching
+// the existing .tests-calendar-open-toggle shape already established for
+// the calendar's own collapse toggle.
+function renderCollapsibleSectionHeaderHtml({ isOpen, toggleAction, label, summary }) {
+  return `
+    <button type="button" class="tests-calendar-open-toggle tests-collapsible-toggle" data-action="${toggleAction}" aria-expanded="${isOpen ? "true" : "false"}">
+      <span class="tests-collapsible-label">${escapeHtml(label)}${summary ? ` <span class="tests-collapsible-summary">&middot; ${escapeHtml(summary)}</span>` : ""}</span>
+      <span class="tests-calendar-toggle-caret">${isOpen ? "&#9650;" : "&#9660;"}</span>
+    </button>
+  `;
+}
+
+function testsAthleteSectionSummary(form) {
+  return form.athleteIds.length ? `${form.athleteIds.length} selected` : "None selected";
+}
+
+function renderAthleteSectionHtml(form) {
+  return `
+    <div class="tests-collapsible-section">
+      ${renderCollapsibleSectionHeaderHtml({ isOpen: form.athletesSectionOpen, toggleAction: "tests-toggle-athletes-section", label: "Athletes", summary: testsAthleteSectionSummary(form) })}
+      ${form.athletesSectionOpen ? renderAthleteMultiSelectHtml(form) : ""}
+    </div>
+  `;
+}
+
+const NOTIFICATION_KIND_SHORT_LABELS = {
+  athlete_invitation: "Invitation",
+  athlete_reminder: "Reminder",
+  coach_digest: "Live summary",
+  final_digest: "Final summary",
+};
+
+function testsNotificationsSummary(form) {
+  const enabled = ["athlete_invitation", "athlete_reminder", "coach_digest", "final_digest"]
+    .filter((kind) => notificationRuleFor(form, kind).enabled)
+    .map((kind) => NOTIFICATION_KIND_SHORT_LABELS[kind]);
+  return enabled.length ? enabled.join(" + ") : "None enabled";
+}
+
+function renderNotificationsCollapsibleHtml(form) {
+  return `
+    <div class="tests-collapsible-section">
+      ${renderCollapsibleSectionHeaderHtml({ isOpen: form.notificationsSectionOpen, toggleAction: "tests-toggle-notifications-section", label: "Notifications", summary: testsNotificationsSummary(form) })}
+      ${form.notificationsSectionOpen ? renderNotificationsSectionHtml(form) : ""}
+    </div>
+  `;
+}
+
+// The fallback timezone tucked away here (never a prominent top-level
+// field) - it only matters for an athlete whose own device timezone isn't
+// known yet (see the "Times follow each athlete's device timezone." note
+// shown in the main form body instead).
+function renderAdvancedSettingsHtml(form) {
+  return `
+    <div class="tests-collapsible-section tests-advanced-settings">
+      ${renderCollapsibleSectionHeaderHtml({ isOpen: form.advancedSettingsOpen, toggleAction: "tests-toggle-advanced-settings", label: "Advanced settings", summary: "" })}
+      ${form.advancedSettingsOpen ? `
+        <label class="search-field">
+          <span>Fallback timezone</span>
+          <input type="text" name="timezone" value="${escapeAttr(form.timezone)}" data-action="tests-schedule-form-field" required>
+        </label>
+        <p class="muted">Used only for an athlete whose own device timezone isn't known yet (they've never opened the app), or for the "Upcoming" preview before that day's check-in has been created.</p>
+      ` : ""}
+    </div>
+  `;
+}
+
 function renderScheduleFormHtml() {
   const form = state.tests.scheduleForm;
   const orgData = state.tests.orgPickerData;
@@ -446,52 +514,52 @@ function renderScheduleFormHtml() {
       ` : `
         ${isEdit && form.scheduleKind === "one_time" && form.hasOccurrences ? `<p class="tests-future-only-notice">This schedule's occurrence hasn't been started yet, so it's still fully editable - saving will regenerate it under the new date/time/targets.</p>` : ""}
         ${isEdit && form.scheduleKind === "daily" && form.hasOccurrences ? `<p class="tests-future-only-notice">Changes apply to future occurrences only - already-generated occurrences and assignments are not affected.</p>` : ""}
-        <form data-tests-form="${isEdit ? "edit-schedule" : isSpecificDates ? "create-schedule-bulk" : "create-schedule"}">
-          <label class="search-field">
-            <span>Timezone</span>
-            <input type="text" name="timezone" value="${escapeAttr(form.timezone)}" data-action="tests-schedule-form-field" required>
-          </label>
-          <label class="search-field">
-            <span>Opens</span>
-            <input type="time" name="opensTime" value="${escapeAttr(form.opensTime)}" data-action="tests-schedule-form-field" required>
-          </label>
-          <label class="search-field">
-            <span>Closes</span>
-            <input type="time" name="closesTime" value="${escapeAttr(form.closesTime)}" data-action="tests-schedule-form-field" required>
-          </label>
-          <div class="tests-recurrence-toggle" role="group" aria-label="Recurrence">
-            <button type="button" class="tests-recurrence-pill ${isSpecificDates ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="false">
-              <svg class="tests-recurrence-pill-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"></rect><path d="M8 3v3"></path><path d="M16 3v3"></path><path d="M3 10h18"></path><rect x="7" y="13" width="4" height="4" rx="1"></rect></svg>
-              <span>Specific dates</span>
-            </button>
-            <button type="button" class="tests-recurrence-pill ${form.scheduleKind === "daily" ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="true">
-              <svg class="tests-recurrence-pill-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
-              <span>Repeat daily</span>
-            </button>
+        <form data-tests-form="${isEdit ? "edit-schedule" : isSpecificDates ? "create-schedule-bulk" : "create-schedule"}" class="tests-schedule-form-body">
+          <div class="tests-schedule-form-scroll">
+            <!-- "Na vrhu forme" - the recurrence choice comes first, and
+                 clicking either pill immediately opens the SAME calendar
+                 component below it (no separate open-the-calendar step). -->
+            <div class="tests-recurrence-toggle" role="group" aria-label="Recurrence">
+              <button type="button" class="tests-recurrence-pill ${isSpecificDates ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="false">
+                <svg class="tests-recurrence-pill-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"></rect><path d="M8 3v3"></path><path d="M16 3v3"></path><path d="M3 10h18"></path><rect x="7" y="13" width="4" height="4" rx="1"></rect></svg>
+                <span>Specific dates</span>
+              </button>
+              <button type="button" class="tests-recurrence-pill ${form.scheduleKind === "daily" ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="true">
+                <svg class="tests-recurrence-pill-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
+                <span>Repeat daily</span>
+              </button>
+            </div>
+            ${renderTestsCalendarSectionHtml(form)}
+            <label class="search-field">
+              <span>Opens</span>
+              <input type="time" name="opensTime" value="${escapeAttr(form.opensTime)}" data-action="tests-schedule-form-field" required>
+            </label>
+            <label class="search-field">
+              <span>Closes</span>
+              <input type="time" name="closesTime" value="${escapeAttr(form.closesTime)}" data-action="tests-schedule-form-field" required>
+            </label>
+            <p class="muted tests-timezone-info">Times follow each athlete's device timezone.</p>
+            <label class="search-field">
+              <span>Club (optional quick target)</span>
+              <select name="clubId" data-action="tests-schedule-form-field">
+                <option value="">None</option>
+                ${(orgData?.clubs || []).map((club) => `<option value="${escapeAttr(club.id)}" ${form.clubId === club.id ? "selected" : ""}>${escapeHtml(club.name)}</option>`).join("")}
+              </select>
+            </label>
+            <label class="search-field">
+              <span>Team (optional quick target)</span>
+              <select name="teamId" data-action="tests-schedule-form-field">
+                <option value="">None</option>
+                ${(orgData?.teams || []).map((team) => `<option value="${escapeAttr(team.id)}" ${form.teamId === team.id ? "selected" : ""}>${escapeHtml(team.name)}</option>`).join("")}
+              </select>
+            </label>
+            ${renderAthleteSectionHtml(form)}
+            ${renderNotificationsCollapsibleHtml(form)}
+            ${renderAdvancedSettingsHtml(form)}
           </div>
-          ${isSpecificDates ? renderTestsCalendarSectionHtml(form) : `
-          <label class="search-field">
-            <span>Start date</span>
-            <input type="date" name="startDate" value="${escapeAttr(form.startDate)}" data-action="tests-schedule-form-field" required>
-          </label>
-          `}
-          <label class="search-field">
-            <span>Club (optional quick target)</span>
-            <select name="clubId" data-action="tests-schedule-form-field">
-              <option value="">None</option>
-              ${(orgData?.clubs || []).map((club) => `<option value="${escapeAttr(club.id)}" ${form.clubId === club.id ? "selected" : ""}>${escapeHtml(club.name)}</option>`).join("")}
-            </select>
-          </label>
-          <label class="search-field">
-            <span>Team (optional quick target)</span>
-            <select name="teamId" data-action="tests-schedule-form-field">
-              <option value="">None</option>
-              ${(orgData?.teams || []).map((team) => `<option value="${escapeAttr(team.id)}" ${form.teamId === team.id ? "selected" : ""}>${escapeHtml(team.name)}</option>`).join("")}
-            </select>
-          </label>
-          ${renderAthleteMultiSelectHtml(form)}
-          ${renderNotificationsSectionHtml(form)}
-          <button type="submit" class="plain-button" data-tests-schedule-submit ${testsScheduleSubmitDisabled(form) ? "disabled" : ""}>${testsScheduleSubmitLabel(form)}</button>
+          <div class="tests-schedule-form-actions">
+            <button type="submit" class="plain-button" data-tests-schedule-submit ${testsScheduleSubmitDisabled(form) ? "disabled" : ""}>${testsScheduleSubmitLabel(form)}</button>
+          </div>
         </form>
       `}
     </section>
@@ -516,7 +584,6 @@ function renderNotificationsSectionHtml(form) {
   const finalDigestRule = notificationRuleFor(form, "final_digest");
   return `
     <div class="tests-notifications-section">
-      <h4>Notifications</h4>
       ${!configured ? `<p class="muted">Notifications aren't configured for this schedule yet - enable and save to start sending.</p>` : ""}
       <label class="tests-notification-rule">
         <input type="checkbox" data-action="tests-notification-rule-toggle" data-kind="athlete_invitation" ${invitationRule.enabled ? "checked" : ""}>
@@ -545,7 +612,10 @@ function renderNotificationsSectionHtml(form) {
 }
 
 function testsScheduleSubmitDisabled(form) {
-  return form.submitting || (form.scheduleKind === "specific_dates" && !form.selectedDates.length);
+  if (form.submitting) return true;
+  if (form.scheduleKind === "specific_dates") return !form.selectedDates.length;
+  if (form.scheduleKind === "daily") return !form.startDate || !form.endDate;
+  return !form.startDate; // one_time (edit)
 }
 
 function testsScheduleSubmitLabel(form) {
@@ -584,14 +654,72 @@ function monthMatrix(monthIso) {
   return cells;
 }
 
-// Collapsed by default (state.tests.scheduleForm.calendarOpen) - the
-// day-grid doesn't need to stay open the whole time the form is open, only
-// while the coach is actually picking dates. This toggle button stands in
-// for it otherwise, showing a live count so the selection is still visible
-// without reopening the grid.
-function testsCalendarToggleLabel(form) {
-  const count = form.selectedDates.length;
-  return count ? `${count} date${count === 1 ? "" : "s"} selected` : "Pick dates";
+// ONE calendar component, three interaction modes driven entirely by
+// scheduleKind (never two separate calendars): "multi" (specific_dates -
+// click toggles a day, drag adds/removes a whole range, order-independent
+// selectedDates array), "range" (daily - click/drag defines a contiguous
+// startDate..endDate span), "single" (one_time - editing an existing
+// non-daily schedule; the calendar's own date column can only ever hold
+// one value, so a click/drag both just move startDate===endDate to
+// wherever the pointer is). See testsCalendarSelectedSet below for the
+// shared highlight logic all three modes render through.
+export function testsCalendarMode(form) {
+  if (form.scheduleKind === "specific_dates") return "multi";
+  if (form.scheduleKind === "daily") return "range";
+  return "single";
+}
+
+function rangeDateSet(start, end) {
+  if (!start || !end) return new Set();
+  const [from, to] = start <= end ? [start, end] : [end, start];
+  const result = new Set();
+  const cursor = new Date(`${from}T00:00:00Z`);
+  const last = new Date(`${to}T00:00:00Z`);
+  while (cursor <= last) {
+    result.add(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return result;
+}
+
+// Every day cell's highlight, across all three modes, comes from this one
+// Set - the grid rendering/patching code never branches on mode itself.
+export function testsCalendarSelectedSet(form) {
+  const mode = testsCalendarMode(form);
+  if (mode === "multi") return new Set(form.selectedDates);
+  return rangeDateSet(form.startDate, form.endDate);
+}
+
+// A fixed locale ("en-GB"), not the browser's own (undefined) - the spec's
+// own example format is "26 Aug – 10 Sep" (day, then month); leaving the
+// locale undefined would make the ORDER depend on the viewer's own system
+// settings (many US-locale browsers render "Sep 10" instead), which is not
+// what was asked for.
+function formatShortDate(iso) {
+  if (!iso) return "";
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
+// Collapsed by default (state.tests.scheduleForm.calendarOpen) - but now
+// auto-opened the instant a recurrence pill is clicked (tests-actions.js's
+// tests-schedule-set-recurrence), so this toggle is only ever needed to
+// RE-collapse it afterward, to save space once dates are already picked.
+// Shows a live summary in every mode: "N dates selected" (multi), "Daily ·
+// 26 Aug – 10 Sep" (range, per the spec's own example), or a short date
+// (single).
+export function testsCalendarToggleLabel(form) {
+  const mode = testsCalendarMode(form);
+  if (mode === "multi") {
+    const count = form.selectedDates.length;
+    return count ? `${count} date${count === 1 ? "" : "s"} selected` : "Pick dates";
+  }
+  if (!form.startDate || !form.endDate) return mode === "range" ? "Pick start and end dates" : "Pick a date";
+  if (mode === "range") {
+    return form.startDate === form.endDate
+      ? `Daily · ${formatShortDate(form.startDate)}`
+      : `Daily · ${formatShortDate(form.startDate)} – ${formatShortDate(form.endDate)}`;
+  }
+  return formatShortDate(form.startDate);
 }
 
 function renderTestsCalendarSectionHtml(form) {
@@ -621,7 +749,7 @@ export function renderTestsCalendarHtml(form) {
   const [year, month] = monthIso.split("-").map(Number);
   const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
   const todayIso = localDateIsoInTimeZone(timezone);
-  const selected = new Set(form.selectedDates);
+  const selected = testsCalendarSelectedSet(form);
   return `
     <div class="tests-calendar" data-tests-calendar>
       <div class="tests-calendar-head">
@@ -647,6 +775,13 @@ export function renderTestsCalendarHtml(form) {
 }
 
 export function renderTestsCalendarSelectedHtml(form) {
+  const mode = testsCalendarMode(form);
+  if (mode !== "multi") {
+    if (!form.startDate || !form.endDate) {
+      return `<p class="muted">${mode === "range" ? "Click a day, or click and drag, to set the start and end." : "Click a day to pick the date."}</p>`;
+    }
+    return `<p class="muted tests-calendar-count">${escapeHtml(testsCalendarToggleLabel(form))}</p>`;
+  }
   const dates = form.selectedDates.slice().sort();
   if (!dates.length) return `<p class="muted">No dates selected yet - click a day, or click and drag across several.</p>`;
   return `
@@ -750,7 +885,7 @@ export function patchTestsAthletePickerDom() {
 // renderTests() since there's no drag in progress at that point).
 export function patchTestsCalendarDom() {
   const form = state.tests.scheduleForm;
-  const selected = new Set(form.selectedDates);
+  const selected = testsCalendarSelectedSet(form);
   const gridEl = document.querySelector("[data-tests-calendar-grid]");
   if (gridEl) {
     gridEl.querySelectorAll("[data-date]").forEach((cell) => {

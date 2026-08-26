@@ -253,27 +253,41 @@ export const emptyScheduleForm = (overrides = {}) => ({
   hasOccurrences: false,
   hasActivity: false,
   // "one_time" | "daily" | "specific_dates". The coach only ever picks
-  // between "daily" (a checkbox) and the calendar - there's no separate
-  // create-time "one-time" choice, since picking exactly one date on the
-  // same calendar IS the one-time case. "specific_dates" is the UI value
-  // for that calendar flow (never sent as scheduleKind to the server):
-  // submitting it calls POST /schedules/bulk instead of POST/PATCH
-  // /schedules, creating one independent one_time schedule per date in
-  // selectedDates (one date included). "one_time" only appears when EDITING
-  // an existing non-daily schedule (there the calendar makes no sense - an
-  // existing schedule is always exactly one date already).
+  // between the two top-level pills - "Specific dates" and "Repeat daily" -
+  // and BOTH open the exact same calendar component (mobile scheduling
+  // redesign - see tests-view.js's renderTestsCalendarSectionHtml). Create
+  // mode: "Specific dates" = "specific_dates" (multi-select mode - never
+  // sent as scheduleKind to the server: submitting it calls POST /schedules/
+  // bulk instead of POST /schedules, creating one independent one_time
+  // schedule per date in selectedDates), "Repeat daily" = "daily" (range
+  // mode - one recurring schedule with start/end dates from
+  // startDate/endDate). Edit mode: "Specific dates" = "one_time" (the
+  // existing schedule's own single date - the calendar is used in range
+  // mode there too, but the interaction always collapses start===end since
+  // a one_time schedule structurally has only one date column), "Repeat
+  // daily" = "daily" (range mode, startDate/endDate).
   scheduleKind: "one_time",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   startDate: "",
+  // Only meaningful in "daily" (range) mode - the recurring schedule's own
+  // end_date. Empty string means "not chosen yet" (required before submit,
+  // unlike the schedule model's own end_date column, which CAN be null/
+  // open-ended - this form always asks for a concrete end so a coach can't
+  // accidentally create a schedule with no end in sight).
+  endDate: "",
   opensTime: "06:00",
   dueTime: "",
   closesTime: "22:00",
-  // Specific-dates calendar picker state. calendarMonth is a "YYYY-MM"
-  // string (the month currently displayed); selectedDates holds "YYYY-MM-DD"
-  // strings, order-independent (rendered sorted). calendarOpen starts
-  // collapsed - the day-grid doesn't need to take up space until the coach
-  // actually wants to pick dates; a compact toggle button (showing "Pick
-  // dates" or "N dates selected") stands in for it until then.
+  // Calendar picker state, shared by BOTH interaction modes (see the
+  // scheduleKind comment above). calendarMonth is a "YYYY-MM" string (the
+  // month currently displayed). selectedDates (multi-select mode only)
+  // holds "YYYY-MM-DD" strings, order-independent (rendered sorted). Range
+  // mode (daily/one_time) reads/writes startDate/endDate directly instead -
+  // selectedDates stays empty and unused in that mode. calendarOpen now
+  // auto-opens the instant a recurrence pill is clicked (mobile redesign:
+  // no more separate "open the calendar" step) but can still be manually
+  // re-collapsed afterward via the same toggle, to save space once dates
+  // are already picked.
   calendarMonth: "",
   calendarOpen: false,
   selectedDates: [],
@@ -294,6 +308,24 @@ export const emptyScheduleForm = (overrides = {}) => ({
   athleteSearch: "",
   teamId: "",
   clubId: "",
+  // Mobile scheduling redesign: Athletes/Notifications are collapsible
+  // sections with a summary line ("Athletes · 14 selected", "Notifications ·
+  // Invitation + reminder") on narrow viewports, fully expanded (unchanged
+  // from before) on desktop. Defaults here are the DESKTOP defaults (always
+  // open) - tests-open-schedule-form/openEditSchedule override both to
+  // false on a narrow viewport when the form is first opened. Explicit
+  // state (not a bare CSS media query) specifically so a later full
+  // re-render (e.g. toggling a notification checkbox) never snaps an
+  // already-open section shut out from under whatever the coach was doing
+  // inside it.
+  athletesSectionOpen: true,
+  notificationsSectionOpen: true,
+  // "Advanced settings": the fallback timezone field, tucked away by
+  // default on every viewport (not just mobile) - it only matters for an
+  // athlete whose own device timezone is still unknown, so it doesn't need
+  // the prominence of a top-level field. Starts collapsed both on create
+  // and on edit.
+  advancedSettingsOpen: false,
   submitting: false,
   error: "",
   ...overrides,

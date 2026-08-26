@@ -4,7 +4,7 @@ import { pool, query } from "../db.js";
 import { canAccessAthlete } from "../access.js";
 import { canManageClub, canManageTeamById, isPlatformAdministrator } from "../authz.js";
 import { canManageSchedule, manageableClubIds, manageableTeamIds, resolveScheduleOwnerContext } from "../testsAccess.js";
-import { ensureCurrentOccurrence, occurrenceIsOpen } from "../testsOccurrenceService.js";
+import { ensureCurrentOccurrence, occurrenceIsOpen, assignmentIsOpen } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
 
 const router = Router();
@@ -229,6 +229,27 @@ async function loadAssessmentValuesAndResult(executor, assessmentId) {
 // Athlete: today / upcoming / history
 // ------------------------------------------------------------
 
+// Phase 4: the athlete's own device reports its IANA timezone here on every
+// authenticated entry into the Tests area - never a manual picker. Strictly
+// validated (public.validate_athlete_device_timezone trigger, migrations_v2/
+// 202608300900_..._phase4_assignment_timezone_window.sql) - an invalid
+// value is rejected as a controlled 400 via respondToWriteError, never
+// silently stored. This is the ONLY write path for public.athletes.
+// device_timezone in the whole app.
+router.post("/athlete/timezone", async (req, res, next) => {
+  try {
+    const athleteId = requireAthlete(req, res);
+    if (!athleteId) return;
+    const timezone = text(req.body?.timezone);
+    if (!timezone) return res.status(400).json({ error: "timezone is required." });
+    await query(
+      `update public.athletes set device_timezone = $2, device_timezone_updated_at = now() where id = $1`,
+      [athleteId, timezone],
+    );
+    res.json({ ok: true, timezone });
+  } catch (error) { respondToWriteError(res, next, error); }
+});
+
 router.get("/athlete/today", async (req, res, next) => {
   try {
     const athleteId = requireAthlete(req, res);
@@ -267,16 +288,20 @@ router.get("/athlete/today", async (req, res, next) => {
     // always remains reachable through History regardless of schedule
     // status, via GET /athlete/history's own query, which never joins
     // against test_schedules at all).
+    // "Today" is evaluated in the ASSIGNMENT's own snapshotted timezone
+    // (asg.timezone - the athlete's effective timezone at materialization
+    // time), never the schedule's - two athletes under the same occurrence
+    // can genuinely disagree about whether "today" has arrived/ended.
     const assignmentsResult = await query(
-      `select asg.*, o.opens_at, o.closes_at, o.status as occurrence_status, tv.name as test_name
+      `select asg.*, o.status as occurrence_status, tv.name as test_name
        from tests.test_assignments asg
        join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
        join tests.test_schedules sch on sch.id = o.schedule_id
        join tests.test_versions tv on tv.id = asg.snapshot_test_version_id
        where asg.athlete_id = $1
-         and o.scheduled_date = (now() at time zone sch.timezone)::date
+         and asg.local_scheduled_date = (now() at time zone asg.timezone)::date
          and sch.status <> 'cancelled'
-       order by o.scheduled_date desc`,
+       order by asg.local_scheduled_date desc`,
       [athleteId],
     );
     const rows = [];
@@ -291,17 +316,23 @@ router.get("/athlete/upcoming", async (req, res, next) => {
   try {
     const athleteId = requireAthlete(req, res);
     if (!athleteId) return;
+    // No assignment row exists yet for these (nothing materialized) - the
+    // preview uses the athlete's own LAST KNOWN effective timezone
+    // (device_timezone, falling back to the schedule's) exactly as a real
+    // future materialization would, per the spec's "last known timezone is
+    // used for a future, not-yet-materialized assignment" rule.
     const result = await query(
-      `select distinct sch.id, sch.start_date, sch.opens_time, sch.timezone, tv.name as test_name
+      `select distinct sch.id, sch.start_date, sch.opens_time, coalesce(a.device_timezone, sch.timezone) as timezone, tv.name as test_name
        from tests.test_schedules sch
        join tests.test_versions tv on tv.id = sch.test_version_id
+       join public.athletes a on a.id = $1
        left join tests.test_schedule_targets t on t.schedule_id = sch.id
        left join public.athlete_memberships m
          on (t.target_kind = 'team' and m.membership_type = 'team' and m.team_id = t.target_team_id and m.status = 'active' and m.athlete_id = $1)
          or (t.target_kind = 'club' and m.membership_type = 'club' and m.club_id = t.target_club_id and m.status = 'active' and m.athlete_id = $1)
        where sch.status = 'active'
          and sch.schedule_kind = 'one_time'
-         and sch.start_date > (now() at time zone sch.timezone)::date
+         and sch.start_date > (now() at time zone coalesce(a.device_timezone, sch.timezone))::date
          and (
            (t.target_kind = 'athlete' and t.target_athlete_id = $1)
            or (t.target_kind = 'team' and m.athlete_id = $1)
@@ -389,12 +420,18 @@ async function formatAthleteAssignmentRow(assignment) {
     assignmentId: assignment.id,
     status: assignment.status,
     testName: assignment.test_name,
+    // Field kept named "occurrence" for response-shape/frontend compat, but
+    // opensAt/closesAt/isOpen now come from the ASSIGNMENT's own per-athlete
+    // window (assignment.opens_at/due_at/closes_at, snapshotted at
+    // materialization in the athlete's own effective timezone), not the
+    // shared occurrence-level window - see testsOccurrenceService.js's
+    // assignmentIsOpen().
     occurrence: {
       id: assignment.occurrence_id,
       opensAt: assignment.opens_at,
       closesAt: assignment.closes_at,
       status: assignment.occurrence_status,
-      isOpen: occurrenceIsOpen({ status: assignment.occurrence_status, opens_at: assignment.opens_at, closes_at: assignment.closes_at }),
+      isOpen: assignmentIsOpen(assignment),
     },
     latestAssessment,
   };
@@ -409,7 +446,7 @@ router.get("/assignments/:assignmentId", async (req, res, next) => {
     const athleteId = requireAthlete(req, res);
     if (!athleteId) return;
     const assignmentResult = await query(
-      `select asg.*, o.opens_at, o.closes_at, o.status as occurrence_status, tv.id as test_version_id, tv.name as test_name, tv.description as test_description,
+      `select asg.*, o.status as occurrence_status, tv.id as test_version_id, tv.name as test_name, tv.description as test_description,
               a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name, a.image_url as athlete_image_url, sch.status as schedule_status
        from tests.test_assignments asg
        join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
@@ -444,7 +481,7 @@ router.get("/assignments/:assignmentId", async (req, res, next) => {
     // athlete who had this exact page open before the status changed (the
     // real enforcement is server-side in POST /submit below; this only
     // controls what the GET tells the client to render).
-    const isOpen = occurrenceIsOpen({ status: assignment.occurrence_status, opens_at: assignment.opens_at, closes_at: assignment.closes_at });
+    const isOpen = assignmentIsOpen(assignment);
     const canSubmit = isOpen && assignment.schedule_status === "active";
     res.json({
       assignment: {
@@ -571,7 +608,13 @@ router.post("/assignments/:assignmentId/submit", async (req, res, next) => {
       });
     }
 
-    if (!occurrenceIsOpen(occurrence)) {
+    // The real submit-time gate: the ASSIGNMENT's own window (per-athlete
+    // effective timezone, snapshotted at materialization), never the
+    // occurrence's shared reference window - see testsOccurrenceService.js's
+    // assignmentIsOpen(). `occurrence` above is still locked/re-confirmed
+    // for the lock-ordering reasons explained at step 0, even though its own
+    // opens_at/closes_at no longer gate this decision.
+    if (!assignmentIsOpen(assignment)) {
       await client.query("rollback");
       return res.status(409).json({ error: "This check-in window is closed." });
     }
@@ -1395,6 +1438,7 @@ async function loadOccurrenceGroup(schedule, occurrenceId) {
   const occurrence = occurrenceResult.rows[0];
   const rowsResult = await query(
     `select asg.id as assignment_id, asg.status as assignment_status, asg.completed_at,
+            asg.opens_at, asg.closes_at,
             a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name,
             ta.id as assessment_id, ta.status as assessment_status,
             tdr.result_numeric as wellness_score,
@@ -1408,11 +1452,19 @@ async function loadOccurrenceGroup(schedule, occurrenceId) {
      order by athlete_name asc`,
     [occurrenceId, WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID],
   );
+  // The group header's own isOpen/closesAt stays occurrence-level (a coarse
+  // reference computed from the schedule's own timezone) - there is no
+  // single "the" athlete for a multi-athlete group. Per-athlete "missed"
+  // MUST use that athlete's own closes_at (asg.closes_at, their own
+  // effective timezone) - using the shared occurrence.closes_at here would
+  // mark every athlete under one occurrence missed at the exact same
+  // instant regardless of their own timezone, which is the same bug this
+  // whole phase exists to fix.
   const isOpen = occurrenceIsOpen(occurrence);
-  const isClosed = new Date(occurrence.closes_at) < new Date();
   const athletes = rowsResult.rows.map((row) => {
     const completed = row.assessment_status === "completed";
-    const missed = !completed && isClosed && !["excused", "cancelled"].includes(row.assignment_status);
+    const rowIsClosed = new Date(row.closes_at) < new Date();
+    const missed = !completed && rowIsClosed && !["excused", "cancelled"].includes(row.assignment_status);
     const status = completed ? "completed" : missed ? "missed" : "pending";
     return {
       assignmentId: row.assignment_id,
@@ -1421,6 +1473,8 @@ async function loadOccurrenceGroup(schedule, occurrenceId) {
       status,
       wellnessScore: row.wellness_score != null ? Number(row.wellness_score) : null,
       injury: row.injury,
+      opensAt: row.opens_at,
+      closesAt: row.closes_at,
     };
   });
   const counts = {

@@ -10,7 +10,7 @@
 // actually logged in.
 import { Router } from "express";
 import { pool, query } from "../db.js";
-import { ensureCurrentOccurrence, occurrenceIsOpen } from "../testsOccurrenceService.js";
+import { ensureCurrentOccurrence, assignmentIsOpen } from "../testsOccurrenceService.js";
 import { athleteDisplayNameSql, loadAssessmentValuesAndResult, loadWellnessParameters, parametersForResponse } from "./tests.js";
 
 const router = Router();
@@ -61,7 +61,7 @@ router.get("/:token/my-assignment", async (req, res, next) => {
     if (!occurrenceId) return res.json({ assignment: null, message: "There is nothing to check in right now." });
 
     const assignmentResult = await query(
-      `select asg.*, o.opens_at, o.closes_at, o.status as occurrence_status, tv.id as test_version_id, tv.name as test_name,
+      `select asg.*, o.status as occurrence_status, tv.id as test_version_id, tv.name as test_name,
               a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name, a.image_url as athlete_image_url
        from tests.test_assignments asg
        join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
@@ -87,7 +87,7 @@ router.get("/:token/my-assignment", async (req, res, next) => {
       latestAssessment = { id: row.id, status: row.status, completedAt: row.completed_at, values, wellnessScore };
     }
 
-    const isOpen = occurrenceIsOpen({ status: assignment.occurrence_status, opens_at: assignment.opens_at, closes_at: assignment.closes_at });
+    const isOpen = assignmentIsOpen(assignment);
     res.json({
       assignment: {
         id: assignment.id,

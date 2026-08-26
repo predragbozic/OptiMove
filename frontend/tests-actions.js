@@ -2,7 +2,7 @@ import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
-import { checkInUrl, patchTestsAthletePickerDom, patchTestsCalendarDom, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes } from "./tests-view.js";
+import { checkInUrl, patchTestsAthletePickerDom, patchTestsCalendarDom, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
 import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadWellnessForm } from "./tests-data.js";
 
 // Every data-action="tests-*" click/change and data-tests-form submit in the
@@ -20,6 +20,17 @@ import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSecti
 // "whichever one is active" is unambiguous.
 function activeWellnessForm() {
   return state.checkIn.form || state.tests.form;
+}
+
+// Mobile scheduling redesign: Athletes/Notifications default collapsed only
+// on a narrow viewport (matches the app's existing mobile breakpoint - see
+// styles.css's @media (max-width: 760px) rules, e.g.
+// .builder-mobile-sticky-bar) - read once, when the form is first opened,
+// not on every render, so an in-flight window resize never surprises a
+// coach mid-edit by silently collapsing/expanding a section they already
+// interacted with.
+function isMobileScheduleFormViewport() {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 760px)").matches;
 }
 
 export async function handleTestsAction(action, { renderTests }) {
@@ -69,21 +80,28 @@ export async function handleTestsAction(action, { renderTests }) {
   }
 
   if (type === "tests-open-schedule-form") {
+    resetTestsCalendarInteractionState();
     // Default start date/month use the browser's own local timezone (no
     // schedule timezone has been chosen yet at this point - emptyScheduleForm
     // defaults `timezone` to this exact same value) - never a bare UTC
     // slice, which shows yesterday's/tomorrow's date for part of every day
     // depending on the user's offset from UTC.
     const defaultTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const mobile = isMobileScheduleFormViewport();
     state.tests.scheduleForm = emptyScheduleForm({
       open: true,
       // The calendar (specific_dates) is the default create flow - there's
       // no separate "one-time" choice to start on; the coach only ever
-      // opts INTO "daily" via the checkbox below.
+      // opts INTO "daily" via the pill below.
       scheduleKind: "specific_dates",
       timezone: defaultTimezone,
       startDate: localDateIsoInTimeZone(defaultTimezone),
       calendarMonth: localMonthIsoInTimeZone(defaultTimezone),
+      calendarOpen: true, // "Klik na bilo koju opciju mora odmah otvoriti isti calendar component" - true from the very first render too, not just after a pill click
+      // Mobile compaction: Athletes/Notifications start collapsed on a
+      // narrow viewport, expanded (unchanged) on desktop.
+      athletesSectionOpen: !mobile,
+      notificationsSectionOpen: !mobile,
       // Visible MVP defaults for a NEW schedule (spec: invitation on,
       // reminder on at 60 minutes, both coach digests on) - the coach sees
       // these checked in the form and can change any of them before saving;
@@ -116,6 +134,25 @@ export async function handleTestsAction(action, { renderTests }) {
     const isEdit = Boolean(form.editingScheduleId);
     const daily = action.dataset.daily === "true";
     form.scheduleKind = daily ? "daily" : isEdit ? "one_time" : "specific_dates";
+    // "Klik na bilo koju opciju mora odmah otvoriti isti calendar
+    // component" - no separate "open the calendar" step needed anymore.
+    form.calendarOpen = true;
+    resetTestsCalendarInteractionState();
+    renderTests();
+    return true;
+  }
+  if (type === "tests-toggle-athletes-section") {
+    state.tests.scheduleForm.athletesSectionOpen = !state.tests.scheduleForm.athletesSectionOpen;
+    renderTests();
+    return true;
+  }
+  if (type === "tests-toggle-notifications-section") {
+    state.tests.scheduleForm.notificationsSectionOpen = !state.tests.scheduleForm.notificationsSectionOpen;
+    renderTests();
+    return true;
+  }
+  if (type === "tests-toggle-advanced-settings") {
+    state.tests.scheduleForm.advancedSettingsOpen = !state.tests.scheduleForm.advancedSettingsOpen;
     renderTests();
     return true;
   }
@@ -166,6 +203,7 @@ export async function handleTestsAction(action, { renderTests }) {
   }
   if (type === "tests-close-schedule-form") {
     state.tests.scheduleForm = emptyScheduleForm();
+    resetTestsCalendarInteractionState();
     renderTests();
     return true;
   }
@@ -410,7 +448,19 @@ export function handleTestsScheduleAthleteSearchInput(inputEl) {
 // immediately, on every single pointermove, not just at drag end.
 // ------------------------------------------------------------
 
-let calendarDragState = null; // { anchorDate, mode: "add" | "remove", baseSelected: Set }
+let calendarDragState = null; // multi: {kind:"multi", anchorDate, mode:"add"|"remove", baseSelected} | range/single: {kind:"range"|"single", anchorDate, extended}
+// Range mode's two-CLICK flow ("Prvi datum predstavlja početak. Drugi datum
+// predstavlja kraj.") - the day of a plain click (no drag) that started a
+// fresh single-day range, remembered until the NEXT plain click completes
+// it (or a real drag/mode-switch/form-close supersedes it). Deliberately
+// module-level, like calendarDragState, not part of reactive state - it's
+// pure interaction bookkeeping between two separate pointer sessions.
+let pendingRangeStart = null;
+
+export function resetTestsCalendarInteractionState() {
+  calendarDragState = null;
+  pendingRangeStart = null;
+}
 
 function calendarTodayIso() {
   const form = state.tests.scheduleForm;
@@ -443,19 +493,34 @@ function applyCalendarDragRange(currentDate) {
   patchTestsCalendarDom();
 }
 
-// mousedown on a day cell: starts a drag AND immediately applies it to just
-// that one day - a plain click (mousedown+mouseup with no mouseover between)
-// ends up calling only this, which is exactly "a single click adds or
-// removes one date". Whether this drag ADDS or REMOVES is decided once,
-// right here, from the anchor day's own current state - not re-decided per
-// cell, so the whole drag moves in one consistent direction.
+function applyRangeSpan(form, a, b) {
+  form.startDate = a <= b ? a : b;
+  form.endDate = a <= b ? b : a;
+  patchTestsCalendarDom();
+}
+
+// mousedown on a day cell. Multi mode (specific_dates): starts a drag AND
+// immediately applies it to just that one day - a plain click ends up
+// calling only this, which is exactly "a single click adds or removes one
+// date"; whether the drag ADDS or REMOVES is decided once, from the anchor
+// day's own current state. Range/single mode (daily / one_time edit):
+// provisionally shows a one-day span at the anchor - extendTestsCalendarDrag
+// grows it into a real range if a drag follows; endTestsCalendarDrag below
+// resolves the two-CLICK ("first date = start, second date = end") flow if
+// it doesn't.
 export function startTestsCalendarDrag(dayEl) {
   const date = dayEl?.dataset?.date;
   if (!date || dayEl.disabled) return false;
   const form = state.tests.scheduleForm;
-  const alreadySelected = form.selectedDates.includes(date);
-  calendarDragState = { anchorDate: date, mode: alreadySelected ? "remove" : "add", baseSelected: new Set(form.selectedDates) };
-  applyCalendarDragRange(date);
+  const mode = testsCalendarMode(form);
+  if (mode === "multi") {
+    const alreadySelected = form.selectedDates.includes(date);
+    calendarDragState = { kind: "multi", anchorDate: date, mode: alreadySelected ? "remove" : "add", baseSelected: new Set(form.selectedDates) };
+    applyCalendarDragRange(date);
+    return true;
+  }
+  calendarDragState = { kind: mode, anchorDate: date, extended: false };
+  applyRangeSpan(form, date, date);
   return true;
 }
 
@@ -467,12 +532,41 @@ export function extendTestsCalendarDrag(dayEl) {
   if (!calendarDragState) return false;
   const date = dayEl?.dataset?.date;
   if (!date || dayEl.disabled) return false;
-  applyCalendarDragRange(date);
+  const form = state.tests.scheduleForm;
+  if (calendarDragState.kind === "multi") {
+    applyCalendarDragRange(date);
+    return true;
+  }
+  calendarDragState.extended = true;
+  if (calendarDragState.kind === "single") applyRangeSpan(form, date, date);
+  else applyRangeSpan(form, calendarDragState.anchorDate, date);
   return true;
 }
 
 export function endTestsCalendarDrag() {
+  const drag = calendarDragState;
   calendarDragState = null;
+  if (!drag || drag.kind === "multi" || drag.kind === "single") return;
+  if (drag.extended) {
+    // A real drag already fully resolved the range live, in
+    // extendTestsCalendarDrag - any earlier pending two-click state is now
+    // stale.
+    pendingRangeStart = null;
+    return;
+  }
+  // Range mode, no drag occurred - this was a plain click. Two-click flow:
+  // the first plain click of a fresh selection just remembers its day
+  // (already shown as a provisional one-day span by startTestsCalendarDrag
+  // above); a second plain click on a DIFFERENT day completes the range
+  // between them.
+  const form = state.tests.scheduleForm;
+  if (pendingRangeStart && pendingRangeStart !== drag.anchorDate) {
+    applyRangeSpan(form, pendingRangeStart, drag.anchorDate);
+    pendingRangeStart = null;
+  } else {
+    applyRangeSpan(form, drag.anchorDate, drag.anchorDate);
+    pendingRangeStart = drag.anchorDate;
+  }
 }
 
 // Cheap synchronous check app.js uses to skip its (otherwise-unconditional)
@@ -508,20 +602,33 @@ async function openEditSchedule(scheduleId, renderTests) {
   try {
     const detail = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}`);
     const targets = detail.targets || [];
+    resetTestsCalendarInteractionState();
+    const mobile = isMobileScheduleFormViewport();
+    const timezone = detail.schedule.timezone;
     state.tests.scheduleForm = emptyScheduleForm({
       open: true,
       editingScheduleId: scheduleId,
       hasOccurrences: Boolean(detail.schedule.hasOccurrences),
       hasActivity: Boolean(detail.schedule.hasActivity),
       scheduleKind: detail.schedule.scheduleKind === "recurring" ? "daily" : "one_time",
-      timezone: detail.schedule.timezone,
+      timezone,
       startDate: detail.schedule.startDate,
+      // A legacy daily schedule created before this field existed may have
+      // no end_date at all (open-ended) - default the range calendar's end
+      // to match start (a valid, submittable one-day span the coach can
+      // then drag/click to extend), rather than leaving it blank and
+      // blocking Save on a schedule that already existed just fine before.
+      endDate: detail.schedule.endDate || detail.schedule.startDate,
+      calendarMonth: localMonthIsoInTimeZone(timezone),
+      calendarOpen: true,
       opensTime: detail.schedule.opensTime,
       dueTime: detail.schedule.dueTime || "",
       closesTime: detail.schedule.closesTime,
       athleteIds: targets.filter((t) => t.kind === "athlete").map((t) => t.id),
       teamId: targets.find((t) => t.kind === "team")?.id || "",
       clubId: targets.find((t) => t.kind === "club")?.id || "",
+      athletesSectionOpen: !mobile,
+      notificationsSectionOpen: !mobile,
       // [] here means "never configured" (see state.js's own comment) - the
       // form renders that as a visible unconfigured state, never silently
       // treating it as either all-enabled or all-disabled.
@@ -646,6 +753,12 @@ async function submitScheduleForm(renderTests) {
       scheduleKind: scheduleForm.scheduleKind,
       timezone: scheduleForm.timezone,
       startDate: scheduleForm.startDate,
+      // Only "daily" carries a real end_date - a one_time schedule's own
+      // endDate is always just its startDate again (the backend already
+      // defaults it that way too, see insertScheduleRow/PATCH in
+      // backend/src/routes/tests.js), so there's nothing meaningful to send
+      // for it here.
+      endDate: scheduleForm.scheduleKind === "daily" ? (scheduleForm.endDate || null) : null,
       opensTime: scheduleForm.opensTime,
       dueTime: scheduleForm.dueTime || null,
       closesTime: scheduleForm.closesTime,

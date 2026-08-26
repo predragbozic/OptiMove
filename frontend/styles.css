@@ -10392,11 +10392,6 @@ button.tests-assignment-card {
   background: var(--surface-soft);
 }
 
-.tests-notifications-section h4 {
-  margin: 0;
-  font-size: 13px;
-}
-
 .tests-notification-rule {
   display: inline-flex;
   align-items: center;
@@ -10408,6 +10403,124 @@ button.tests-assignment-card {
 .tests-notification-reminder-offset {
   margin-left: 22px;
   max-width: 260px;
+}
+
+/* Mobile scheduling redesign: Athletes/Notifications/Advanced settings all
+   share one collapsible shape - same toggle look as the calendar's own
+   .tests-calendar-open-toggle (reused directly via a second class on the
+   button, see tests-view.js's renderCollapsibleSectionHeaderHtml), so a
+   coach sees one consistent "tap to expand" language across the whole
+   form, not three different affordances. */
+.tests-collapsible-section {
+  display: grid;
+  gap: 8px;
+}
+
+.tests-collapsible-label {
+  /* min-width:0 is required for text-overflow:ellipsis to actually take
+     effect on a flex child - without it, a flex item's default min-width:
+     auto lets it grow to its own content's natural width regardless of the
+     container's real boundary, silently defeating the ellipsis/overflow
+     rules below and pushing the whole toggle (and the page) wider than the
+     viewport. Found live at a 375px viewport: a long Notifications summary
+     ("Invitation + Reminder + Live summary + Final summary") overflowed the
+     panel instead of truncating. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tests-collapsible-summary {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.tests-timezone-info {
+  margin: -4px 0 0;
+  font-size: 12px;
+}
+
+/* Form-body/scroll/actions wrapper: display:contents on anything wider than
+   the mobile breakpoint below means these wrapper divs are fully
+   transparent to layout - their children stay direct items of
+   .tests-schedule-form-body's own grid (the existing ".tests-schedule-form
+   form { display:grid; gap:10px }" rule above still applies to it
+   unchanged), so desktop's visual layout/spacing is completely unaffected
+   by this markup existing at all. */
+.tests-schedule-form-scroll,
+.tests-schedule-form-actions {
+  display: contents;
+}
+
+@media (max-width: 760px) {
+  /* Item 2/6 of the mobile redesign - no horizontal overflow anywhere in
+     this form, at 360-390px viewports. overflow-y: visible (overriding
+     .panel's own overflow:hidden) matters specifically for the sticky
+     action bar below: position:sticky sticks to the nearest ancestor whose
+     own overflow isn't "visible", and .panel's overflow:hidden would
+     otherwise become that ancestor - trapping the button's "stuck" edge to
+     this panel's own box instead of the real page viewport it needs to
+     stay pinned to. */
+  .tests-schedule-form {
+    max-width: 100%;
+    overflow-x: hidden;
+    overflow-y: visible;
+  }
+
+  .tests-schedule-form-body {
+    display: flex;
+    flex-direction: column;
+    /* Leaves room for the sticky action bar below so the last real field
+       is never hidden behind it - same idiom as
+       .builder-mobile-sticky-bar's own containing modal. */
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .tests-schedule-form-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* Item 2: "Glavno Schedule/Save dugme mora biti sticky pri dnu mobilnog
+     viewport-a" - sticks to the bottom of whatever scrolls this panel
+     (the page itself, in normal in-tab use), not just this form's own
+     content, so it's always reachable without hunting for it below a long
+     form. */
+  .tests-schedule-form-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 4;
+    display: block;
+    margin: 8px -16px -16px;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+  }
+
+  .tests-schedule-form-actions button {
+    width: 100%;
+  }
+
+  /* Item 2: "normalne mobilne checkbox dimenzije" - scoped to this form
+     only, so Builder's own reuse of the exact same .builder-checkmark/
+     .checkbox-toggle-all classes elsewhere is completely untouched. */
+  .tests-schedule-form .builder-checkmark {
+    width: 20px;
+    height: 20px;
+  }
+
+  .tests-schedule-form .checkbox-toggle-all {
+    width: 28px;
+    height: 28px;
+  }
+
+  .tests-schedule-form .checkbox-toggle-all span {
+    width: 16px;
+    height: 16px;
+  }
 }
 
 .tests-link-box {

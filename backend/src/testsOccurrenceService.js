@@ -89,3 +89,21 @@ export function occurrenceIsOpen(occurrence, now = new Date()) {
   const closesAt = new Date(occurrence.closes_at);
   return now >= opensAt && now <= closesAt;
 }
+
+// Phase 4 (per-athlete timezone-correct windows): the real, per-assignment
+// equivalent of occurrenceIsOpen above - every "is this open" decision in
+// the app must use THIS assignment's own opens_at/closes_at (computed at
+// materialization time in the athlete's own effective timezone, see
+// migrations_v2/202608300900_..._phase4_assignment_timezone_window.sql),
+// never the parent occurrence's shared reference window, or two athletes
+// under the same occurrence with different device timezones would
+// incorrectly see/be gated by the exact same absolute instant.
+// occurrenceIsOpen() itself is kept (unremoved) as the coarse,
+// schedule-timezone reference check some readers still legitimately use
+// (e.g. the coach Today group header, which has no single "the" athlete).
+export function assignmentIsOpen(assignment, now = new Date()) {
+  if (assignment.status === "cancelled") return false;
+  const opensAt = new Date(assignment.opens_at);
+  const closesAt = new Date(assignment.closes_at);
+  return now >= opensAt && now <= closesAt;
+}

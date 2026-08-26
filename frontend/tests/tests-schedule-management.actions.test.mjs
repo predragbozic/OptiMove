@@ -34,8 +34,9 @@ const {
   startTestsCalendarDrag,
   extendTestsCalendarDrag,
   endTestsCalendarDrag,
+  resetTestsCalendarInteractionState,
 } = await import("../tests-actions.js");
-const { testsAthleteMultiSelectVisibleAthletes, renderTestsAthleteOptionsHtml } = await import("../tests-view.js");
+const { testsAthleteMultiSelectVisibleAthletes, renderTestsAthleteOptionsHtml, testsCalendarMode, testsCalendarToggleLabel } = await import("../tests-view.js");
 const { emptyScheduleForm, state } = await import("../state.js");
 const { localDateIsoInTimeZone, localMonthIsoInTimeZone } = await import("../utils.js");
 
@@ -58,10 +59,20 @@ function resetTestsState() {
   state.tests.schedules = [];
   state.tests.scheduleDetail = null;
   state.tests.orgPickerData = { teams: [{ id: "team-1", name: "First Team" }], clubs: [{ id: "club-1", name: "Main Club" }] };
-  state.tests.scheduleForm = emptyScheduleForm({ open: true, startDate: "2026-08-25" });
+  // scheduleKind: "specific_dates" - the calendar's drag/click semantics
+  // are now mode-aware (mobile scheduling redesign: the SAME calendar
+  // component also drives daily's range mode and one_time's single-date
+  // mode - see tests-view.js's testsCalendarMode), and this file's own
+  // drag tests below specifically exercise MULTI-SELECT mode.
+  state.tests.scheduleForm = emptyScheduleForm({ open: true, startDate: "2026-08-25", scheduleKind: "specific_dates" });
   state.tests.deletingScheduleId = "";
   state.tests.error = "";
   queried = {};
+  // Calendar drag/click interaction state (pendingRangeStart etc.) is
+  // module-level in tests-actions.js, not part of `state` - reset it here
+  // too so one test's mid-interaction state (including one that fails
+  // partway through a two-click sequence) never leaks into the next.
+  resetTestsCalendarInteractionState();
 }
 
 // ------------------------------------------------------------
@@ -693,4 +704,195 @@ test("bulk (Specific dates) submit sends the same notificationRules alongside da
   await submitTestsForm({ dataset: { testsForm: "create-schedule-bulk" } }, { renderTests: () => {} });
   const bulkCall = fetchCalls.find((c) => c.url === "/api/tests/schedules/bulk");
   assert.deepEqual(bulkCall.body.notificationRules, [{ kind: "final_digest", enabled: true }]);
+});
+
+// ------------------------------------------------------------
+// Mobile scheduling redesign: ONE calendar, three interaction modes
+// ------------------------------------------------------------
+
+test("11. Specific dates uses multi-select mode on the shared calendar (mode identity check)", () => {
+  resetTestsState();
+  assert.equal(state.tests.scheduleForm.scheduleKind, "specific_dates");
+  assert.equal(testsCalendarMode(state.tests.scheduleForm), "multi");
+});
+
+test("12. Repeat daily uses range mode on the SAME calendar component - a plain click sets a 1-day span, a second click completes the range", () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "daily";
+  assert.equal(testsCalendarMode(state.tests.scheduleForm), "range");
+
+  startTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  endTestsCalendarDrag();
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-10", "first click = start (also a valid 1-day span on its own)");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-10");
+  assert.equal(testsCalendarToggleLabel(state.tests.scheduleForm), "Daily · 10 Sept");
+
+  startTestsCalendarDrag(fakeDayEl("2026-09-15"));
+  endTestsCalendarDrag();
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-10", "second click = end - the range between the two clicks");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-15");
+  assert.equal(testsCalendarToggleLabel(state.tests.scheduleForm), "Daily · 10 Sept – 15 Sept");
+});
+
+test("12b. Repeat daily: clicking an EARLIER date second still resolves start<=end correctly, order-independent", () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "daily";
+  startTestsCalendarDrag(fakeDayEl("2026-09-15"));
+  endTestsCalendarDrag();
+  startTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  endTestsCalendarDrag();
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-10");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-15");
+});
+
+test("12c. Repeat daily: a real drag (mousedown then move) resolves the range in one gesture, no second click needed", () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "daily";
+  startTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  extendTestsCalendarDrag(fakeDayEl("2026-09-11"));
+  extendTestsCalendarDrag(fakeDayEl("2026-09-13"));
+  endTestsCalendarDrag();
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-10");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-13");
+
+  // A THIRD click afterward starts a fresh selection, not a third endpoint.
+  startTestsCalendarDrag(fakeDayEl("2026-09-20"));
+  endTestsCalendarDrag();
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-20");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-20");
+});
+
+test("one_time (editing an existing schedule's own date) uses single-date mode - a click just moves the one date, never a range", () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "one_time";
+  state.tests.scheduleForm.editingScheduleId = "sched-1";
+  assert.equal(testsCalendarMode(state.tests.scheduleForm), "single");
+
+  startTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  extendTestsCalendarDrag(fakeDayEl("2026-09-12"));
+  endTestsCalendarDrag();
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-12", "single mode always follows the pointer, never accumulates a real span");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-12");
+  assert.equal(testsCalendarToggleLabel(state.tests.scheduleForm), "12 Sept");
+});
+
+test("13. extendTestsCalendarDrag in range/single mode is a safe no-op with no prior startTestsCalendarDrag", () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "daily";
+  const startDateBefore = state.tests.scheduleForm.startDate;
+  const handled = extendTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  assert.equal(handled, false);
+  assert.equal(state.tests.scheduleForm.startDate, startDateBefore, "must be left completely untouched");
+});
+
+test("switching the recurrence pill auto-opens the calendar immediately - no separate 'open the calendar' step", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.calendarOpen = false;
+  await handleTestsAction(fakeAction({ action: "tests-schedule-set-recurrence", daily: "true" }), { renderTests: () => {} });
+  assert.equal(state.tests.scheduleForm.calendarOpen, true);
+  assert.equal(state.tests.scheduleForm.scheduleKind, "daily");
+});
+
+// ------------------------------------------------------------
+// Daily schedules now have a real end date (spec: "Drugi datum predstavlja
+// kraj... Kreira se jedan recurring/daily schedule sa start_date i
+// end_date")
+// ------------------------------------------------------------
+
+test("creating a daily schedule sends the picked endDate; a one_time create/edit never sends a real endDate", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "daily";
+  state.tests.scheduleForm.startDate = "2026-09-10";
+  state.tests.scheduleForm.endDate = "2026-09-20";
+  state.tests.scheduleForm.athleteIds = ["a1"];
+  installFetchMock((call) => {
+    if (call.url.includes("/api/tests/library")) return { status: 200, body: { tests: [{ testVersionId: "wellness-v1", schedulable: true }] } };
+    return { status: 201, body: { schedule: { id: "daily-1" } } };
+  });
+  await submitTestsForm({ dataset: { testsForm: "create-schedule" } }, { renderTests: () => {} });
+  const createCall = fetchCalls.find((c) => c.url === "/api/tests/schedules");
+  assert.equal(createCall.body.endDate, "2026-09-20");
+
+  resetTestsState();
+  state.tests.scheduleForm.scheduleKind = "one_time";
+  state.tests.scheduleForm.editingScheduleId = "sched-1";
+  state.tests.scheduleForm.startDate = "2026-09-10";
+  state.tests.scheduleForm.endDate = "2026-09-10";
+  installFetchMock(() => ({ status: 200, body: { schedule: { id: "sched-1" } } }));
+  await submitTestsForm({ dataset: { testsForm: "edit-schedule" } }, { renderTests: () => {} });
+  const patchCall = fetchCalls.find((c) => c.url === "/api/tests/schedules/sched-1");
+  assert.equal(patchCall.body.endDate, null);
+});
+
+test("opening an existing daily schedule for editing pre-fills endDate from the server; a legacy open-ended one defaults endDate to startDate", async () => {
+  resetTestsState();
+  state.tests.schedules = [{ id: "daily-open", scheduleKind: "daily", hasOccurrences: false }];
+  installFetchMock((call) => (call.url === "/api/tests/schedules/daily-open"
+    ? { status: 200, body: { schedule: { id: "daily-open", scheduleKind: "recurring", hasOccurrences: false, hasActivity: false, timezone: "UTC", startDate: "2026-09-01", endDate: "2026-09-30", opensTime: "06:00", dueTime: null, closesTime: "22:00" }, targets: [], link: null, notificationRules: [] } }
+    : { status: 404, body: {} }));
+  await handleTestsAction(fakeAction({ action: "tests-open-edit-schedule", scheduleId: "daily-open" }), { renderTests: () => {} });
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-01");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-30");
+
+  resetTestsState();
+  state.tests.schedules = [{ id: "daily-legacy", scheduleKind: "daily", hasOccurrences: false }];
+  installFetchMock((call) => (call.url === "/api/tests/schedules/daily-legacy"
+    ? { status: 200, body: { schedule: { id: "daily-legacy", scheduleKind: "recurring", hasOccurrences: false, hasActivity: false, timezone: "UTC", startDate: "2026-09-01", endDate: null, opensTime: "06:00", dueTime: null, closesTime: "22:00" }, targets: [], link: null, notificationRules: [] } }
+    : { status: 404, body: {} }));
+  await handleTestsAction(fakeAction({ action: "tests-open-edit-schedule", scheduleId: "daily-legacy" }), { renderTests: () => {} });
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-01");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-01", "an open-ended legacy schedule defaults its end to start, so it stays immediately submittable, not blocked");
+});
+
+// ------------------------------------------------------------
+// Mobile compaction: collapsible sections start collapsed on a narrow
+// viewport, expanded (unchanged) on desktop; toggling/re-rendering never
+// drops already-entered form data.
+// ------------------------------------------------------------
+
+function withViewport(matches, fn) {
+  const original = globalThis.window;
+  globalThis.window = { confirm: () => true, matchMedia: () => ({ matches }) };
+  try { return fn(); } finally { globalThis.window = original; }
+}
+
+test("17. desktop (no narrow-viewport match): Athletes/Notifications sections default OPEN when the create form opens - no regression from before this feature", async () => {
+  resetTestsState();
+  await withViewport(false, () => handleTestsAction(fakeAction({ action: "tests-open-schedule-form" }), { renderTests: () => {} }));
+  assert.equal(state.tests.scheduleForm.athletesSectionOpen, true);
+  assert.equal(state.tests.scheduleForm.notificationsSectionOpen, true);
+});
+
+test("a narrow (mobile) viewport: Athletes/Notifications sections default COLLAPSED when the create form opens", async () => {
+  resetTestsState();
+  await withViewport(true, () => handleTestsAction(fakeAction({ action: "tests-open-schedule-form" }), { renderTests: () => {} }));
+  assert.equal(state.tests.scheduleForm.athletesSectionOpen, false);
+  assert.equal(state.tests.scheduleForm.notificationsSectionOpen, false);
+});
+
+test("16. toggling the Athletes/Notifications sections open/closed never clears already-selected athletes, dates, times, or notification rules", async () => {
+  resetTestsState();
+  const form = state.tests.scheduleForm;
+  form.athleteIds = ["a1", "a2"];
+  form.notificationRules = [{ kind: "athlete_invitation", enabled: true }];
+  form.selectedDates = ["2026-09-05", "2026-09-06"];
+  form.opensTime = "07:30";
+
+  await handleTestsAction(fakeAction({ action: "tests-toggle-athletes-section" }), { renderTests: () => {} });
+  await handleTestsAction(fakeAction({ action: "tests-toggle-notifications-section" }), { renderTests: () => {} });
+  await handleTestsAction(fakeAction({ action: "tests-toggle-athletes-section" }), { renderTests: () => {} });
+
+  assert.deepEqual(state.tests.scheduleForm.athleteIds, ["a1", "a2"]);
+  assert.deepEqual(state.tests.scheduleForm.notificationRules, [{ kind: "athlete_invitation", enabled: true }]);
+  assert.deepEqual(state.tests.scheduleForm.selectedDates, ["2026-09-05", "2026-09-06"]);
+  assert.equal(state.tests.scheduleForm.opensTime, "07:30");
+});
+
+test("the Advanced settings (fallback timezone) section toggles independently and never clears the timezone value", async () => {
+  resetTestsState();
+  state.tests.scheduleForm.timezone = "Europe/Belgrade";
+  assert.equal(state.tests.scheduleForm.advancedSettingsOpen, false, "starts collapsed by default, on every viewport");
+  await handleTestsAction(fakeAction({ action: "tests-toggle-advanced-settings" }), { renderTests: () => {} });
+  assert.equal(state.tests.scheduleForm.advancedSettingsOpen, true);
+  assert.equal(state.tests.scheduleForm.timezone, "Europe/Belgrade");
 });

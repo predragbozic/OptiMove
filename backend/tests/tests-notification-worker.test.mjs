@@ -30,6 +30,7 @@ const MIGRATION_FILES = [
   "202608250901_tests_v42_supersede_generated_column_fix.sql",
   "202608260900_tests_v42_occurrence_generation_lock_fix.sql",
   "202608270900_tests_v42_phase3_notification_dispatch_link.sql",
+  "202608300900_tests_v42_phase4_assignment_timezone_window.sql",
 ];
 
 const WELLNESS_TEST_VERSION_ID = "7a386bd1-d25e-4651-9012-e76d9dc32559";
