@@ -961,23 +961,18 @@ test("Q1. a one_time schedule dated in the future does not appear in Athlete Tod
   assert.equal(created.status, 201);
   const today = await api("/api/tests/athlete/today", { cookie: athleteCookie });
   assert.equal(today.body.assignments.length, 0, "a future one_time schedule must not materialize/show as today's");
-  // Phase 4 correction: both the OCCURRENCE row and its ASSIGNMENT rows can
-  // now legitimately exist a day early (schedule zone is UTC, start_date is
-  // exactly "tomorrow" in UTC - this is the schedule's own "tomorrow"
-  // branch, generated unconditionally to support an athlete ahead of the
-  // schedule's own timezone). For one_time schedules, materialization is
-  // deliberately NOT gated per-athlete-current-date the way daily/recurring
-  // is (tests.materialize_test_assignments_for_occurrence's `schedule_kind
-  // <> 'recurring'` bypass) - per the correction's requirement (d), a
-  // one-time date is the SAME local date for every targeted athlete, never
-  // reinterpreted per timezone, so there is no "athlete's own current day"
-  // to gate on. What must still never happen is the assignment's own WINDOW
-  // being open before its real date - opens_at/closes_at stay correctly in
-  // the future either way, which is what actually keeps it out of Today and
-  // out of canSubmit.
-  const assignmentRows = await query(`select opens_at, closes_at from tests.test_assignments where athlete_id = $1`, [athleteId]);
-  assert.equal(assignmentRows.rowCount, 1, "the assignment row may already exist (materialized a day early), snapshotted for the correct future date");
-  assert.ok(new Date(assignmentRows.rows[0].opens_at).getTime() > Date.now(), "its own opens_at must still be in the future");
+  // Round 2 correction: occurrence/assignment generation is target-derived
+  // (tests.resolve_current_target_dates) - the athlete has no device
+  // timezone (falls back to the schedule's own UTC), and their real current
+  // date is TODAY, not "tomorrow" (start_date) - so neither the occurrence
+  // NOR the assignment exists yet at all. Materialization is also no longer
+  // bypassed for one_time schedules (round 2 correction, item 2): an
+  // athlete is only ever inserted once their own real current date actually
+  // equals the occurrence's scheduled_date, one_time included.
+  const occurrenceRows = await query(`select count(*)::int as n from tests.test_schedule_occurrences where schedule_id = $1`, [created.body.schedule.id]);
+  assert.equal(occurrenceRows.rows[0].n, 0, "no occurrence should have been generated yet - nobody is really on start_date");
+  const assignmentRows = await query(`select count(*)::int as n from tests.test_assignments where athlete_id = $1`, [athleteId]);
+  assert.equal(assignmentRows.rows[0].n, 0, "no assignment should have materialized yet");
 });
 
 test("Q2. a one_time schedule appears in Athlete Today exactly on its start_date", async () => {
@@ -1004,7 +999,21 @@ test("Q3. a one_time schedule no longer appears as today's once its date has pas
   const scheduleId = scheduleRow.rows[0].id;
   await query(`insert into tests.test_schedule_targets (schedule_id, target_kind, target_athlete_id) values ($1, 'athlete', $2)`, [scheduleId, athleteId]);
   const occ = await query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [scheduleId, yesterday]);
-  await query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occ.rows[0].id]);
+  // Round 2 correction: materialize_test_assignments_for_occurrence() now
+  // gates every insert (one_time included) on the athlete's own real
+  // current date matching the occurrence's date - calling it here for a
+  // genuinely past date would correctly insert nothing. This fixture
+  // deliberately simulates "already materialized back on its own real day"
+  // historical state directly, bypassing the live function precisely
+  // because we're constructing a past snapshot, not exercising the
+  // function's own real-time eligibility (already covered elsewhere).
+  await query(`insert into tests.test_occurrence_target_snapshot (occurrence_id, athlete_id) values ($1, $2)`, [occ.rows[0].id, athleteId]);
+  await query(
+    `insert into tests.test_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at)
+     select $1, $2, 'UTC', $3::date, ($3::date + time '00:00') at time zone 'UTC', null, ($3::date + time '23:59') at time zone 'UTC'`,
+    [occ.rows[0].id, athleteId, yesterday],
+  );
+  await query(`update tests.test_schedule_occurrences set assignments_materialized_at = now() where id = $1`, [occ.rows[0].id]);
   const assignmentCheck = await query(`select id from tests.test_assignments where occurrence_id = $1 and athlete_id = $2`, [occ.rows[0].id, athleteId]);
   assert.equal(assignmentCheck.rowCount, 1, "sanity check: the assignment really was materialized for yesterday");
 

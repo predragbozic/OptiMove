@@ -238,56 +238,26 @@ async function upsertDigestNotification(pool, { occurrenceId, notificationKind, 
 // Phase 1: occurrence/assignment generation
 // ------------------------------------------------------------
 
-// Everything ensureCurrentOccurrence() itself needs (status='active',
-// start/end date window) is already re-checked safely inside it - this
-// query only adds the ONE thing that service doesn't decide on its own:
-// whether opens_time (a time-of-day, not just a date) has actually arrived
-// yet, FOR THE SCHEDULE'S OWN LOCAL TODAY specifically. A schedule matched
-// here but raced by a concurrent PATCH/DELETE simply comes back an empty
-// array from ensureCurrentOccurrence (already handled there) and is counted
-// as "skipped", never an error.
+// Round 2 correction (item 3): this used to run its OWN SQL pre-filter,
+// independently guessing "today"/"tomorrow" from the schedule's own
+// reference timezone - exactly the same flawed reasoning ensureCurrentOccurrence()
+// itself used to have (see that function's own header for the concrete
+// counter-example: a schedule far enough ahead of an athlete's own timezone
+// needs a date the schedule's own "today"/"tomorrow" guess can never reach).
+// A worker-only date guess could also disagree with the on-demand Today/
+// check-in path, and could generate an occurrence before any real target
+// was actually on that date yet.
 //
-// Phase 4 correction: this used to be the ONLY gate, and it used the
-// schedule's own timezone for absolutely everything - which meant an
-// athlete significantly AHEAD of the schedule's own timezone (their own
-// local day already begun, opens_time already reached FOR THEM) would
-// never even get considered until the schedule's own local day caught up,
-// hours or a full day too late. The second OR-branch below is deliberately
-// NOT gated by opens_time-of-day - it exists purely to let
-// ensureCurrentOccurrence() (which internally always tries both the
-// schedule's own today AND the relevant adjacent day, unconditionally -
-// see that function's own header) run at all once an adjacent day could
-// plausibly matter, regardless of what time it currently is in the
-// schedule's own reference zone. This does not weaken the opens_time gate
-// for the schedule's own "today" case (still exactly as strict as before,
-// in the first OR-branch) - it only ADDS eager coverage for the one extra
-// day that a real-world timezone spread (UTC-12..UTC+14) can put into
-// play.
+// The fix: the worker asks the exact same question, through the exact same
+// function, for every active schedule - ensureCurrentOccurrence() (which
+// internally resolves candidate dates via tests.resolve_current_target_dates(),
+// the schedule's REAL current targets' REAL current local dates, never a
+// worker-only guess). A schedule with no real target on a currently-relevant
+// date this cycle simply comes back an empty array (already handled there)
+// and is counted as "skipped", never an error - and, critically, never
+// generates a premature occurrence for a date nobody is on yet.
 async function runOccurrenceGenerationPhase(pool, summary) {
-  const result = await pool.query(
-    `select sch.*
-     from tests.test_schedules sch
-     where sch.status = 'active'
-       and (
-         (
-           (
-             (sch.schedule_kind = 'one_time' and (now() at time zone sch.timezone)::date = sch.start_date)
-             or (sch.schedule_kind = 'recurring'
-                 and (now() at time zone sch.timezone)::date >= sch.start_date
-                 and (sch.end_date is null or (now() at time zone sch.timezone)::date <= sch.end_date))
-           )
-           and (now() at time zone sch.timezone)::time >= sch.opens_time
-         )
-         or (
-           sch.schedule_kind = 'one_time' and (now() at time zone sch.timezone)::date = sch.start_date - 1
-         )
-         or (
-           sch.schedule_kind = 'recurring'
-           and (now() at time zone sch.timezone)::date + 1 >= sch.start_date
-           and (sch.end_date is null or (now() at time zone sch.timezone)::date + 1 <= sch.end_date)
-         )
-       )`,
-  );
+  const result = await pool.query(`select * from tests.test_schedules where status = 'active'`);
   summary.occurrences.schedulesChecked = result.rowCount;
   for (const schedule of result.rows) {
     const occurrenceIds = await ensureCurrentOccurrence(pool, schedule);

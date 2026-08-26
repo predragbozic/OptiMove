@@ -46,30 +46,48 @@
 -- fallback for an athlete whose own timezone is not yet known, and the
 -- still-authoritative basis for occurrence GENERATION timing (see below).
 --
--- OCCURRENCE GENERATION ALSO HAD TO CHANGE (correction after this
--- migration's first draft): generating only "today's" occurrence, in the
--- SCHEDULE's own timezone, is not just a cosmetic gap - it means an athlete
--- significantly AHEAD of the schedule's own timezone (e.g. a Europe/
--- Belgrade schedule, an athlete on Pacific/Kiritimati, UTC+14) can already
--- be on their own correct calendar date while the schedule's own reference
--- clock is still on the PREVIOUS day - no occurrence row (and therefore no
--- assignment row) exists for them yet AT ALL, not just one with the wrong
--- window. tests.generate_test_schedule_occurrence() itself is unchanged
--- (still generic: any (schedule_id, scheduled_date) pair, idempotent) -
--- what changed is WHICH dates backend/src/testsOccurrenceService.js's
--- ensureCurrentOccurrence() and the worker's Phase 1 SQL now consider
--- "current": both the schedule's own local TODAY (gated on opens_time
--- reached, exactly as before) AND the adjacent day that could already/
--- still be relevant to an athlete whose own timezone diverges from the
--- schedule's (one_time: the day BEFORE start_date, ungated - the fixed
--- start_date can already be "now" for an ahead athlete before the
--- schedule's own clock even reaches it; daily: TOMORROW relative to the
--- schedule's own today, ungated, for the same reason). The realistic
--- worldwide timezone spread (UTC-12..UTC+14, ~26h) never needs more than
--- one adjacent day of lookahead. test_schedule_occurrences.opens_at/
--- due_at/closes_at stay exactly as before - a coarse, schedule-level
--- REFERENCE window - but readers must no longer treat it as a stand-in for
--- "the" window everyone shares (see item 4/coach Today below).
+-- OCCURRENCE GENERATION, ROUND 2 CORRECTION: the first draft of this
+-- migration (and its immediate follow-up) computed candidate dates purely
+-- from the SCHEDULE's own reference timezone ("today" and one adjacent day
+-- in whichever direction an athlete might diverge). That is still wrong,
+-- and not just cosmetically: a schedule in Pacific/Kiritimati (UTC+14)
+-- targeting an athlete in America/Adak (UTC-12, ~26h behind) needs an
+-- occurrence for a date that, at the athlete's own 06:00 on that date, the
+-- SCHEDULE's own reference clock has already rolled a full day PAST it -
+-- checking only the schedule's own "today" and "tomorrow" can never reach a
+-- date that is a full day BEHIND the schedule's own current date, so this
+-- occurrence would never be generated at all. Any fixed, hardcoded
+-- direction/offset guessed from the schedule's own timezone has the same
+-- flaw for some pair of real target timezones - the realistic worldwide
+-- spread is ~26h, wider than a single "one adjacent day" guess can ever
+-- safely cover in a fixed direction.
+--
+-- The fix: candidate dates are derived from the schedule's REAL, currently
+-- resolved target athletes and each one's own REAL current local date - not
+-- guessed from the schedule's own timezone at all. tests.resolve_current_
+-- target_dates(p_schedule_id) below resolves the schedule's current targets
+-- (the exact same union tests.resolve_schedule_target_athletes() reuses for
+-- the membership snapshot), reads each one's own effective timezone
+-- (coalesce(athlete.device_timezone, schedule.timezone) - the schedule's
+-- timezone stays exactly what it always was: a per-athlete FALLBACK, never
+-- something that determines candidate dates on its own), computes each
+-- one's own real current local date, and returns the DISTINCT dates that
+-- are both currently relevant (a one_time schedule only ever has ONE valid
+-- date - start_date itself, generated once at least one real target is
+-- actually on it; a daily/recurring schedule returns every distinct date
+-- its real targets currently occupy) and inside [start_date, end_date].
+-- Both backend/src/testsOccurrenceService.js's ensureCurrentOccurrence()
+-- (the on-demand Today/check-in path) and testsNotificationWorker.js's own
+-- occurrence-generation phase call this SAME function for this SAME
+-- decision - neither one invents its own date logic anymore, so they can
+-- never disagree with each other, and neither can ever generate an
+-- occurrence for a date that no real target is actually on yet.
+-- tests.generate_test_schedule_occurrence() itself is unchanged (still
+-- generic: any (schedule_id, scheduled_date) pair, idempotent).
+-- test_schedule_occurrences.opens_at/due_at/closes_at stay exactly as
+-- before - a coarse, schedule-level REFERENCE window - but readers must no
+-- longer treat it as a stand-in for "the" window everyone shares (see item
+-- 4/coach Today below).
 --
 -- SEMANTICS (matches the spec's own worked example precisely): a specific
 -- scheduled_date (e.g. 2026-08-26) is the SAME calendar-date value for every
@@ -82,29 +100,44 @@
 -- `(scheduled_date + time) at time zone tz` formula exactly, just swapping
 -- in the athlete's own effective timezone instead of the schedule's.
 --
--- SNAPSHOT TIMING (corrected): MEMBERSHIP (which athletes this schedule
--- targets, resolved via test_schedule_targets/athlete_memberships) is still
--- frozen exactly ONCE per occurrence, into the new
--- tests.test_occurrence_target_snapshot table below - a team member added
--- AFTER that point must never retroactively appear under this occurrence
--- (preserves the exact guarantee Phase 1 already had). ELIGIBILITY,
--- though, is evaluated on EVERY call to materialize_test_assignments_for_
--- occurrence(): a snapshotted athlete's own test_assignments row is only
--- actually inserted once (now() at time zone their effective_timezone)::
--- date matches this occurrence's own scheduled_date - for a one_time
--- schedule this is trivially true for everyone immediately (there is only
--- ever one date), but for a daily/recurring schedule it means an athlete
--- significantly ahead of the schedule's own timezone is correctly left
--- out of TODAY's (schedule-zone) occurrence and picked up on a LATER call,
--- once their own local day actually reaches this occurrence's date -
+-- SNAPSHOT TIMING, ROUND 2 CORRECTION: MEMBERSHIP (which athletes this
+-- schedule targets) is still frozen exactly ONCE per occurrence, into
+-- tests.test_occurrence_target_snapshot below - a team member added AFTER
+-- that point must never retroactively appear under this occurrence
+-- (preserves the exact guarantee Phase 1 already had). But the snapshot now
+-- freezes ONLY membership (occurrence_id + athlete_id) - it no longer also
+-- freezes each athlete's effective_timezone at that same moment. The first
+-- draft froze both together, which meant a device-timezone change AFTER the
+-- membership snapshot but BEFORE that athlete's own assignment row actually
+-- got inserted (a real, reachable window - the snapshot can be taken well
+-- before an ahead-of-schedule athlete's own local day actually arrives) was
+-- silently ignored - the stale, already-frozen zone would be used instead
+-- of the athlete's real current one. Now materialize_test_assignments_for_
+-- occurrence() reads each snapshotted athlete's CURRENT public.athletes.
+-- device_timezone fresh, on every call, at the moment it actually decides
+-- whether to insert their row - so a timezone change after the snapshot but
+-- before insertion correctly uses the NEW zone, while an assignment that
+-- has ALREADY been inserted is completely unaffected either way (its own
+-- row's timezone/window is already fixed, and the immutability trigger
+-- below forbids changing it afterward regardless of what the athlete's
+-- current device_timezone says). ELIGIBILITY - whether a snapshotted
+-- athlete's row gets inserted on THIS call at all - is the SAME condition
+-- for both one_time and recurring/daily now (round 2 correction: the first
+-- draft let a one_time schedule insert every snapshotted athlete's row
+-- unconditionally, bypassing this check entirely, which contradicts "a
+-- one-time date is never reinterpreted per timezone" - a one_time
+-- occurrence only ever has ONE real scheduled_date, and an athlete is only
+-- ever inserted once (now() at time zone their CURRENT effective_timezone)
+-- ::date actually equals it): (now() at time zone effective_timezone)::date
+-- = v_occurrence.scheduled_date. For daily/recurring this is exactly what
+-- lets an athlete significantly ahead of the schedule's own reference
+-- timezone be correctly left out of an occurrence dated before their own
+-- real day, and picked up once their own local day actually reaches it -
 -- without ever re-resolving membership. Each athlete's own INSERT still
 -- only ever happens once (`on conflict (occurrence_id, athlete_id) do
 -- nothing`), and once inserted, a DB trigger (below) makes their timezone/
 -- local_scheduled_date/opens_at/due_at/closes_at genuinely immutable - not
--- just an unenforced convention. A device-timezone change after an
--- athlete's OWN assignment row has been inserted therefore can only ever
--- affect FUTURE, not-yet-materialized assignments - exactly the "travel
--- doesn't retroactively change today's already-open window" rule.
+-- just an unenforced convention.
 --
 -- BACKFILL: every existing test_assignments row is backfilled from its own
 -- occurrence's/schedule's already-existing values (their effective
@@ -166,12 +199,68 @@ alter table tests.test_assignments add column if not exists closes_at timestampt
 create table tests.test_occurrence_target_snapshot (
   occurrence_id uuid not null references tests.test_schedule_occurrences(id) on delete cascade,
   athlete_id uuid not null references public.athletes(id) on delete restrict,
-  effective_timezone varchar(64) not null,
   created_at timestamptz not null default now(),
   primary key (occurrence_id, athlete_id)
 );
 
 create index test_occurrence_target_snapshot_athlete_id_idx on tests.test_occurrence_target_snapshot (athlete_id);
+
+-- The single source of truth for "which athletes does this schedule
+-- currently target" - the exact same union-of-rules resolution Phase 1
+-- always used (test_schedule_targets, resolved against currently-active
+-- athlete_memberships for team/club targets), now factored into its own
+-- function so both the membership-snapshot step below AND tests.resolve_
+-- current_target_dates() (which needs the same set, to know whose local
+-- dates actually matter) can never drift apart from each other.
+create function tests.resolve_schedule_target_athletes(p_schedule_id uuid)
+returns table(athlete_id uuid) language sql stable as $$
+  select t.target_athlete_id as athlete_id
+  from tests.test_schedule_targets t
+  where t.schedule_id = p_schedule_id and t.target_kind = 'athlete'
+
+  union
+
+  select m.athlete_id
+  from tests.test_schedule_targets t
+  join public.athlete_memberships m
+    on m.membership_type = 'team' and m.team_id = t.target_team_id and m.status = 'active'
+  where t.schedule_id = p_schedule_id and t.target_kind = 'team'
+
+  union
+
+  select m.athlete_id
+  from tests.test_schedule_targets t
+  join public.athlete_memberships m
+    on m.membership_type = 'club' and m.club_id = t.target_club_id and m.status = 'active'
+  where t.schedule_id = p_schedule_id and t.target_kind = 'club'
+$$;
+
+-- Round 2 correction (item 1): the ONLY thing that decides which occurrence
+-- date(s) a schedule currently needs - see this file's header for the full
+-- reasoning and the counter-example that ruled out guessing from the
+-- schedule's own timezone. Called identically by backend/src/
+-- testsOccurrenceService.js's ensureCurrentOccurrence() (on-demand Today/
+-- check-in path) and testsNotificationWorker.js's occurrence-generation
+-- phase (item 3) - there is exactly one place this logic lives.
+create function tests.resolve_current_target_dates(p_schedule_id uuid)
+returns table(local_date date) language sql stable as $$
+  with sch as (
+    select * from tests.test_schedules where id = p_schedule_id
+  ),
+  per_athlete as (
+    select
+      (now() at time zone coalesce(a.device_timezone, sch.timezone))::date as local_date,
+      sch.schedule_kind, sch.start_date, sch.end_date
+    from tests.resolve_schedule_target_athletes(p_schedule_id) ta
+    join public.athletes a on a.id = ta.athlete_id
+    cross join sch
+  )
+  select distinct local_date
+  from per_athlete
+  where local_date >= start_date
+    and (end_date is null or local_date <= end_date)
+    and (schedule_kind <> 'one_time' or local_date = start_date)
+$$;
 
 -- Replaces the Phase 1 function - see this file's header for why this
 -- replacement is safe/additive. Locking behavior (FOR UPDATE on the
@@ -205,76 +294,57 @@ begin
   -- orphan it while the occurrence itself still exists.
 
   if v_occurrence.assignments_materialized_at is null then
-    -- Freeze the target-athlete membership snapshot exactly ONCE, using the
-    -- exact same union-of-targets resolution Phase 1 always used. A team/
-    -- club member added AFTER this point must never appear here later -
-    -- this INSERT (into the snapshot table, not test_assignments itself)
-    -- never runs again for this occurrence.
-    with target_athletes as (
-      select t.target_athlete_id as athlete_id
-      from tests.test_schedule_targets t
-      where t.schedule_id = v_schedule.id and t.target_kind = 'athlete'
-
-      union
-
-      select m.athlete_id
-      from tests.test_schedule_targets t
-      join public.athlete_memberships m
-        on m.membership_type = 'team' and m.team_id = t.target_team_id and m.status = 'active'
-      where t.schedule_id = v_schedule.id and t.target_kind = 'team'
-
-      union
-
-      select m.athlete_id
-      from tests.test_schedule_targets t
-      join public.athlete_memberships m
-        on m.membership_type = 'club' and m.club_id = t.target_club_id and m.status = 'active'
-      where t.schedule_id = v_schedule.id and t.target_kind = 'club'
-    )
-    insert into tests.test_occurrence_target_snapshot (occurrence_id, athlete_id, effective_timezone)
-    select
-      p_occurrence_id,
-      ta.athlete_id,
-      -- "Poslednja poznata timezone sportiste ... ili test_schedules.
-      -- timezone kao fallback" - read fresh at snapshot time (the athlete's
-      -- effective timezone is itself frozen here too, alongside membership -
-      -- a device-timezone change after THIS point only ever affects a
-      -- DIFFERENT, later occurrence, never this one).
-      coalesce(a.device_timezone, v_schedule.timezone)
-    from target_athletes ta
-    join public.athletes a on a.id = ta.athlete_id
+    -- Freeze ONLY membership, exactly ONCE, using the same target
+    -- resolution the rest of this migration shares (tests.resolve_
+    -- schedule_target_athletes). A team/club member added AFTER this point
+    -- must never appear here later - this INSERT never runs again for this
+    -- occurrence. Effective_timezone is deliberately NOT frozen here
+    -- anymore (round 2 correction) - see this file's header for why: it is
+    -- read fresh, per athlete, below, at the moment their row actually gets
+    -- inserted, not at snapshot time.
+    insert into tests.test_occurrence_target_snapshot (occurrence_id, athlete_id)
+    select p_occurrence_id, ta.athlete_id
+    from tests.resolve_schedule_target_athletes(v_schedule.id) ta
     on conflict (occurrence_id, athlete_id) do nothing;
 
     update tests.test_schedule_occurrences set assignments_materialized_at = now() where id = p_occurrence_id;
   end if;
 
   -- Every call (first or repeated) inserts real assignment rows for
-  -- whichever snapshotted athletes are ELIGIBLE right now: a one_time
-  -- schedule's occurrence has only ever one true date, so every
-  -- snapshotted athlete is always eligible immediately; a daily/recurring
-  -- occurrence only includes an athlete once THEIR OWN current local date
-  -- (their snapshotted effective_timezone) reaches this occurrence's own
-  -- scheduled_date - this is what lets an athlete significantly ahead of
-  -- the schedule's own reference timezone still get assigned, on a LATER
-  -- cycle, once their own day catches up, without ever re-resolving
+  -- whichever snapshotted athletes are ELIGIBLE right now, reading each
+  -- one's CURRENT device_timezone fresh (round 2 correction - never the
+  -- stale value from whenever the membership snapshot happened to be
+  -- taken): eligible means (now() at time zone their CURRENT effective_
+  -- timezone)::date equals this occurrence's own scheduled_date - the SAME
+  -- condition for one_time and daily/recurring alike (round 2 correction:
+  -- the old one_time bypass let every snapshotted athlete's row insert
+  -- unconditionally, which contradicted "a one-time date is never
+  -- reinterpreted per timezone" - a one_time occurrence has exactly one
+  -- real scheduled_date, and an athlete is only ever inserted once their
+  -- own real local date actually reaches it). This is what lets an athlete
+  -- significantly ahead of (or behind) the schedule's own reference
+  -- timezone still get assigned, on a LATER cycle, once their own day
+  -- actually reaches this occurrence's date - without ever re-resolving
   -- membership. Each athlete's own row is still only ever inserted once
-  -- (on conflict do nothing) - once eligible and inserted, its window is
-  -- immutable (see the trigger below).
+  -- (on conflict do nothing) - once inserted, its window is immutable (see
+  -- the trigger below), so a device-timezone change afterward can only ever
+  -- affect a DIFFERENT, not-yet-inserted assignment.
   insert into tests.test_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at)
   select
     p_occurrence_id,
-    s.athlete_id,
-    s.effective_timezone,
+    e.athlete_id,
+    e.effective_timezone,
     v_occurrence.scheduled_date,
-    (v_occurrence.scheduled_date + v_schedule.opens_time) at time zone s.effective_timezone,
-    case when v_schedule.due_time is null then null else (v_occurrence.scheduled_date + v_schedule.due_time) at time zone s.effective_timezone end,
-    (v_occurrence.scheduled_date + v_schedule.closes_time) at time zone s.effective_timezone
-  from tests.test_occurrence_target_snapshot s
-  where s.occurrence_id = p_occurrence_id
-    and (
-      v_schedule.schedule_kind <> 'recurring'
-      or (now() at time zone s.effective_timezone)::date = v_occurrence.scheduled_date
-    )
+    (v_occurrence.scheduled_date + v_schedule.opens_time) at time zone e.effective_timezone,
+    case when v_schedule.due_time is null then null else (v_occurrence.scheduled_date + v_schedule.due_time) at time zone e.effective_timezone end,
+    (v_occurrence.scheduled_date + v_schedule.closes_time) at time zone e.effective_timezone
+  from (
+    select s.athlete_id, coalesce(a.device_timezone, v_schedule.timezone) as effective_timezone
+    from tests.test_occurrence_target_snapshot s
+    join public.athletes a on a.id = s.athlete_id
+    where s.occurrence_id = p_occurrence_id
+  ) e
+  where (now() at time zone e.effective_timezone)::date = v_occurrence.scheduled_date
   on conflict (occurrence_id, athlete_id) do nothing;
 
   get diagnostics v_inserted_count = row_count;

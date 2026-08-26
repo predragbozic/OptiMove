@@ -1308,13 +1308,12 @@ test("O1. a daily schedule that already has a generated occurrence cannot be con
 
   const stillDaily = await query(`select schedule_kind from tests.test_schedules where id = $1`, [created.body.schedule.id]);
   assert.equal(stillDaily.rows[0].schedule_kind, "recurring", "a rejected conversion must leave the schedule's kind unchanged");
-  // Phase 4 correction: an open-ended (no end_date) daily schedule's own
-  // ensureCurrentOccurrence() call unconditionally generates BOTH today's
-  // and tomorrow's occurrence (to support an athlete ahead of the schedule's
-  // own timezone) - getTodayAssignmentId() above already created both, and
-  // the rejected conversion below must leave both untouched.
+  // Round 2 correction: occurrence generation is target-derived - the one
+  // UTC-fallback athlete's real current date is always exactly TODAY, so
+  // getTodayAssignmentId() above created exactly one occurrence, and the
+  // rejected conversion below must leave it untouched.
   const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [created.body.schedule.id]);
-  assert.equal(occurrenceRows.rowCount, 2, "the existing occurrences must survive a rejected conversion untouched");
+  assert.equal(occurrenceRows.rowCount, 1, "the existing occurrence must survive a rejected conversion untouched");
 });
 
 test("O1b. the SAME daily schedule, edited while staying daily (no kind change), is unaffected by the conversion rule - normal future-only edit still works", async () => {

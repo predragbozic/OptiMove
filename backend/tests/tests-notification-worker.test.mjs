@@ -389,27 +389,37 @@ test("O1. the worker creates a daily schedule's occurrence and assignments entir
   const summary = await processTestNotificationCycle({ now: new Date(), pool });
   assert.ok(summary.occurrences.generated >= 1);
 
-  // Phase 4 correction: an open-ended (no end_date) daily schedule's own
-  // occurrence generation unconditionally covers BOTH today's and
-  // tomorrow's logical date (to support an athlete ahead of the schedule's
-  // own timezone) - so two occurrence rows now exist; only today's has
-  // eligible (same-day, standard-UTC-clock) athletes to materialize.
-  const occurrenceRows = await query(`select id, scheduled_date, assignments_materialized_at from tests.test_schedule_occurrences where schedule_id = $1 order by scheduled_date`, [schedule.id]);
-  assert.equal(occurrenceRows.rowCount, 2);
-  const todaysOccurrence = occurrenceRows.rows[0];
-  assert.ok(todaysOccurrence.assignments_materialized_at);
-  const assignmentRows = await query(`select id from tests.test_assignments where occurrence_id = $1`, [todaysOccurrence.id]);
+  // Round 2 correction: occurrence generation is target-derived, via the
+  // exact same tests.resolve_current_target_dates() the on-demand path
+  // uses - both athletes are UTC-fallback (no device_timezone), so their
+  // real current date is always exactly TODAY, never "tomorrow" too. Only
+  // ONE occurrence (today's) is genuinely needed here.
+  const occurrenceRows = await query(`select id, scheduled_date, assignments_materialized_at from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id]);
+  assert.equal(occurrenceRows.rowCount, 1);
+  assert.equal(String(occurrenceRows.rows[0].scheduled_date), TODAY);
+  assert.ok(occurrenceRows.rows[0].assignments_materialized_at);
+  const assignmentRows = await query(`select id from tests.test_assignments where occurrence_id = $1`, [occurrenceRows.rows[0].id]);
   assert.equal(assignmentRows.rowCount, 2, "both targeted athletes must have a materialized assignment");
 });
 
-test("O2. a one_time schedule's date and opens_time are both respected - not yet due (future opens_time today) generates nothing, due generates exactly one occurrence", async () => {
+test("O2. a one_time schedule's date is respected regardless of opens_time - generation is date-only, the WINDOW (not the row) is what keeps a not-yet-open assignment un-submittable", async () => {
+  // Round 2 correction: occurrence/assignment generation is no longer
+  // opens_time-gated at all (that gate lived only in the worker's own,
+  // now-removed, schedule-timezone-based pre-filter) - the worker asks the
+  // exact same target-derived date question the on-demand Today/check-in
+  // path always has, which has never cared about time-of-day. What still
+  // keeps a "not due yet today" assignment from being submittable is its
+  // OWN opens_at, still correctly in the future - proven directly below,
+  // not by the occurrence/assignment row failing to exist at all.
   const { coachCookie, athletes } = await makeClubWithAthletes("o2", 1);
   const notYetDue = await createScheduleWithRules(coachCookie, [{ kind: "athlete", id: athletes[0].athleteId }], {
     overrides: { startDate: TODAY, opensTime: "23:59", closesTime: "23:59" },
   });
   await processTestNotificationCycle({ now: new Date(), pool });
-  const notYetDueRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [notYetDue.id]);
-  assert.equal(notYetDueRows.rowCount, 0, "opens_time (23:59) has not arrived yet today - nothing should be generated");
+  const notYetDueRows = await query(`select id, opens_at from tests.test_schedule_occurrences where schedule_id = $1`, [notYetDue.id]);
+  assert.equal(notYetDueRows.rowCount, 1, "the occurrence/assignment row is generated regardless of opens_time - only the window governs submission");
+  const notYetDueAssignment = await query(`select opens_at from tests.test_assignments where occurrence_id = $1`, [notYetDueRows.rows[0].id]);
+  assert.ok(new Date(notYetDueAssignment.rows[0].opens_at).getTime() > Date.now(), "opens_at (23:59 today) must still be genuinely in the future");
 
   const due = await createScheduleWithRules(coachCookie, [{ kind: "athlete", id: athletes[0].athleteId }], {
     overrides: { startDate: TODAY, opensTime: "00:00" },
@@ -844,10 +854,10 @@ test("W2. a normal CLI run (lock free) actually processes a cycle and returns ok
   assert.equal(result.ok, true);
   assert.equal(result.skipped, false);
   assert.ok(typeof result.invitations.sent === "number");
-  // Phase 4 correction: an open-ended daily schedule now unconditionally
-  // generates both today's and tomorrow's occurrence in one call.
+  // Round 2 correction: occurrence generation is target-derived - the one
+  // UTC-fallback athlete's real current date is always exactly TODAY.
   const occurrenceRows = await query(`select id from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id]);
-  assert.equal(occurrenceRows.rowCount, 2);
+  assert.equal(occurrenceRows.rowCount, 1);
 });
 
 test("W3. processTestNotificationCycle makes no external network calls - only DB queries (fetch is never invoked)", async () => {

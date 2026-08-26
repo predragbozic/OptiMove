@@ -10,89 +10,58 @@
 // already idempotent/lock-protected - no new locking or state is invented
 // here.
 //
-// Date math is always done IN POSTGRES, in the schedule's own IANA timezone
-// (`now() at time zone $1`), never in JS with the server's local clock -
-// this is what makes "today" mean the same calendar date for the schedule's
-// timezone regardless of which timezone the backend process itself runs in.
+// Date math is always done IN POSTGRES, never in JS with the server's local
+// clock.
 //
-// Phase 4 correction: this used to compute exactly ONE "current" date
-// (today, in the schedule's own timezone) and generate/materialize a single
-// occurrence for it. That is not enough - an athlete significantly AHEAD of
-// the schedule's own reference timezone (e.g. a Europe/Belgrade schedule,
-// an athlete on Pacific/Kiritimati, UTC+14) can already be on their own
-// correct calendar date while the schedule's own reference clock is still
-// on the PREVIOUS day, so no occurrence (and therefore no assignment) would
-// exist for them at all. This function now always considers the adjacent
-// day too (one_time: the day BEFORE start_date; daily: the day AFTER
-// today), for every call, unconditionally (no time-of-day gating here -
-// that stays exclusively in testsNotificationWorker.js's own Phase 1 SQL
-// pre-filter, which decides WHETHER to bother calling this function on a
-// given cycle at all; once called, this function has always tried
-// whatever "today" needed regardless of opens_time, and that is preserved
-// unchanged for the interactive/on-demand callers below). The realistic
-// worldwide timezone spread (UTC-12..UTC+14, ~26h) never needs more than
-// one adjacent day of lookahead - see migrations_v2/202608300900_..._
-// phase4_assignment_timezone_window.sql for the full reasoning, and
-// tests.materialize_test_assignments_for_occurrence() for how each
-// snapshotted athlete only actually gets assigned once THEIR OWN local day
-// reaches whichever occurrence's scheduled_date is correct for them (never
-// creating one occurrence per athlete - still exactly per (schedule,
-// date)).
+// Round 2 correction (item 1): candidate dates are no longer guessed from
+// the SCHEDULE's own reference timezone at all - not even "today plus one
+// adjacent day". That approach (this function's own previous version) was a
+// real bug, not a theoretical edge case: a schedule in Pacific/Kiritimati
+// (UTC+14) targeting an athlete in America/Adak (UTC-12, ~26h behind) needs
+// an occurrence for a date that, at the athlete's own 06:00 on that date,
+// the SCHEDULE's own reference clock has already rolled a FULL DAY PAST it
+// - checking only the schedule's own "today" and "tomorrow" can never reach
+// a date a full day BEHIND the schedule's own current date, so that
+// occurrence would never be generated at all. Any fixed, hardcoded
+// direction guessed from the schedule's own timezone has the same flaw for
+// some real pair of target timezones.
+//
+// tests.resolve_current_target_dates(p_schedule_id) (migrations_v2/
+// 202608300900_..._phase4_assignment_timezone_window.sql) is now the single
+// source of candidate dates: it resolves the schedule's REAL current
+// targets, reads each one's own effective timezone (device_timezone, or the
+// schedule's timezone as a fallback - the schedule's timezone never
+// determines candidate dates on its own anymore), computes each one's real
+// current local date, and returns the distinct dates that are both
+// currently relevant (a one_time schedule only ever returns start_date
+// itself, and only once at least one real target is actually on it; daily/
+// recurring returns every distinct date its real targets currently occupy)
+// and inside [start_date, end_date]. testsNotificationWorker.js's own
+// occurrence-generation phase calls this exact same function for this exact
+// same decision (item 3) - there is exactly one place this logic lives, so
+// the on-demand and worker-driven paths can never disagree, and neither can
+// ever generate an occurrence for a date nobody is actually on yet.
 
 // pool: the real pg Pool (every call site passes the module-level `pool`
 // from db.js, never an already-open transaction client - generate +
 // materialize get their OWN single connection/transaction here, borrowed
 // and released within this one call).
-// schedule: a full row from tests.test_schedules (needs id, status,
-// schedule_kind, timezone, start_date, end_date, opens_time - opens_time
-// is not read here, only by the worker's own pre-filter).
+// schedule: a full row from tests.test_schedules (only id and status are
+// read here now - date/timezone resolution happens entirely in SQL).
 // Returns an array of occurrence ids actually ensured to exist this call
-// (empty if the schedule isn't active or no candidate date currently
-// applies) - never a single nullable id, since more than one date can
+// (empty if the schedule isn't active or no real target currently needs a
+// date) - never a single nullable id, since more than one date can
 // genuinely be "current" at once (see header).
 export async function ensureCurrentOccurrence(pool, schedule) {
   if (schedule.status !== "active") return [];
 
   const client = await pool.connect();
   try {
-    const localDateResult = await client.query(
-      `select (now() at time zone $1)::date as local_today,
-              (now() at time zone $1)::date + 1 as local_tomorrow`,
-      [schedule.timezone],
+    const datesResult = await client.query(
+      `select local_date from tests.resolve_current_target_dates($1) order by local_date`,
+      [schedule.id],
     );
-    const { local_today: localToday, local_tomorrow: localTomorrow } = localDateResult.rows[0];
-
-    // One-time: only ever the ONE fixed date (start_date === end_date,
-    // enforced at the schema level). Triggers when the schedule's own zone
-    // is EITHER exactly on start_date (the normal case) OR its own
-    // TOMORROW already equals start_date (equivalently: the schedule's own
-    // zone is currently one day BEFORE start_date) - this second case is
-    // what an athlete significantly AHEAD of the schedule's own timezone
-    // needs: per this file's own worked example (Europe/Belgrade schedule,
-    // Pacific/Kiritimati athlete, opens 06:00), the exact instant the
-    // athlete's own start_date-06:00 arrives, the SCHEDULE's own zone is
-    // still one full day behind (start_date - 1) - "local_tomorrow ===
-    // start_date" is the correct, direct way to detect that, not "local_
-    // yesterday === start_date" (an earlier draft of this function had
-    // that backwards - caught by a real cross-timezone test, see
-    // backend/tests/tests-athlete-device-timezone.test.mjs). No day-AFTER
-    // catch-up branch is needed: an athlete BEHIND the schedule's own
-    // timezone still has their own start_date-labeled day arrive later
-    // ON THE SAME schedule-zone calendar day the normal "today" trigger
-    // already covers, never crossing into the day after.
-    // Daily/recurring: today and tomorrow, each clamped to [start_date,
-    // end_date] - "svaki lokalni kalendarski dan sportiste od start_date do
-    // end_date" applies per-athlete inside materialize_test_assignments_
-    // for_occurrence(), not here; this only decides which OCCURRENCE rows
-    // (dates) could possibly be needed by anyone right now.
-    const candidateDates = [];
-    if (schedule.schedule_kind === "one_time") {
-      if (localToday === schedule.start_date || localTomorrow === schedule.start_date) candidateDates.push(schedule.start_date);
-    } else {
-      const inRange = (d) => d >= schedule.start_date && (!schedule.end_date || d <= schedule.end_date);
-      if (inRange(localToday)) candidateDates.push(localToday);
-      if (inRange(localTomorrow)) candidateDates.push(localTomorrow);
-    }
+    const candidateDates = datesResult.rows.map((row) => row.local_date);
     if (!candidateDates.length) return [];
 
     const occurrenceIds = [];
