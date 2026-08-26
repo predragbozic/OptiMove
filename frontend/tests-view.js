@@ -292,6 +292,61 @@ function coachTodayGroupStatusLabel(group) {
   return "Not yet open";
 }
 
+// Manual reminder (hotfix). Only athletes who have NOT completed this
+// occurrence's own check-in are ever reminder candidates - a completed
+// athlete simply isn't offered a checkbox at all, rather than being shown
+// disabled (nothing useful the coach could do with it).
+export function incompleteAthletesFor(group) {
+  return group.athletes.filter((row) => row.status !== "completed");
+}
+
+// state.tests.reminderSelection[scheduleId] is only ever written once the
+// coach actually interacts (toggles one row, or explicitly clicks Select
+// all/Clear) - until then, "podrazumevano selektuj sve nezavršene" (default:
+// every incomplete athlete selected) is computed live here, so a fresh
+// Today load never needs to eagerly populate this map for every group up
+// front.
+export function reminderSelectedSet(group) {
+  const override = state.tests.reminderSelection[group.schedule.id];
+  if (override) return new Set(override);
+  return new Set(incompleteAthletesFor(group).map((row) => row.assignmentId));
+}
+
+function renderManualReminderSectionHtml(group) {
+  const incomplete = incompleteAthletesFor(group);
+  if (!incomplete.length) return "";
+  const scheduleId = group.schedule.id;
+  const selected = reminderSelectedSet(group);
+  const allSelected = incomplete.every((row) => selected.has(row.assignmentId));
+  const sending = state.tests.remindingScheduleId === scheduleId;
+  const result = state.tests.reminderResult && state.tests.reminderResult.scheduleId === scheduleId ? state.tests.reminderResult : null;
+  return `
+    <div class="tests-reminder-section">
+      <div class="tests-reminder-head">
+        <span class="tests-reminder-title">Hasn't completed it yet</span>
+        <div class="tests-reminder-select-actions">
+          <button type="button" class="plain-button compact-button" data-action="tests-reminder-select-all" data-schedule-id="${escapeAttr(scheduleId)}" ${allSelected ? "disabled" : ""}>Select all</button>
+          <button type="button" class="plain-button compact-button" data-action="tests-reminder-clear" data-schedule-id="${escapeAttr(scheduleId)}" ${selected.size ? "" : "disabled"}>Clear</button>
+        </div>
+      </div>
+      <div class="tests-reminder-list">
+        ${incomplete.map((row) => `
+          <label class="tests-reminder-row">
+            <input type="checkbox" class="builder-checkmark" data-action="tests-reminder-toggle-athlete" data-schedule-id="${escapeAttr(scheduleId)}" data-assignment-id="${escapeAttr(row.assignmentId)}" ${selected.has(row.assignmentId) ? "checked" : ""}>
+            <span class="tests-reminder-row-name">${escapeHtml(row.athleteName)}</span>
+            <span class="tests-status-pill tests-status-${escapeAttr(row.status)}">${escapeHtml(statusLabel(row.status))}</span>
+          </label>
+        `).join("")}
+      </div>
+      ${result ? `<p class="tests-reminder-confirmation" role="status">${escapeHtml(result.message)}</p>` : ""}
+      <div class="tests-reminder-actions">
+        <button type="button" class="plain-button compact-button" data-action="tests-send-reminder" data-schedule-id="${escapeAttr(scheduleId)}" ${sending || !selected.size ? "disabled" : ""}>${sending ? "Sending..." : `Send reminder (${selected.size})`}</button>
+        <button type="button" class="plain-button compact-button" data-action="tests-copy-viber" data-schedule-id="${escapeAttr(scheduleId)}" ${selected.size ? "" : "disabled"}>Copy for Viber</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderCoachTodayGroupHtml(group) {
   const { schedule, counts, athletes } = group;
   if (!counts.total) {
@@ -328,6 +383,7 @@ function renderCoachTodayGroupHtml(group) {
           </div>
         `).join("")}
       </div>
+      ${renderManualReminderSectionHtml(group)}
     </section>
   `;
 }
@@ -509,7 +565,7 @@ function renderAdvancedSettingsHtml(form) {
   `;
 }
 
-function renderScheduleFormHtml() {
+export function renderScheduleFormHtml() {
   const form = state.tests.scheduleForm;
   const orgData = state.tests.orgPickerData;
   const isEdit = Boolean(form.editingScheduleId);
@@ -535,25 +591,32 @@ function renderScheduleFormHtml() {
                  clicking either pill immediately opens the SAME calendar
                  component below it (no separate open-the-calendar step). -->
             <div class="tests-recurrence-toggle" role="group" aria-label="Recurrence">
-              <button type="button" class="tests-recurrence-pill ${isSpecificDates ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="false">
+              <button type="button" class="tests-recurrence-pill ${isSpecificDates ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="false" aria-label="Specific dates">
                 <svg class="tests-recurrence-pill-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"></rect><path d="M8 3v3"></path><path d="M16 3v3"></path><path d="M3 10h18"></path><rect x="7" y="13" width="4" height="4" rx="1"></rect></svg>
-                <span>Specific dates</span>
+                <span aria-hidden="true" class="tests-recurrence-pill-label-full">Specific dates</span>
+                <span aria-hidden="true" class="tests-recurrence-pill-label-short">Dates</span>
               </button>
-              <button type="button" class="tests-recurrence-pill ${form.scheduleKind === "daily" ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="true">
+              <button type="button" class="tests-recurrence-pill ${form.scheduleKind === "daily" ? "is-active" : ""}" data-action="tests-schedule-set-recurrence" data-daily="true" aria-label="Repeat daily">
                 <svg class="tests-recurrence-pill-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
-                <span>Repeat daily</span>
+                <span aria-hidden="true" class="tests-recurrence-pill-label-full">Repeat daily</span>
+                <span aria-hidden="true" class="tests-recurrence-pill-label-short">Daily</span>
               </button>
             </div>
             ${renderTestsCalendarSectionHtml(form)}
-            <label class="search-field">
-              <span>Opens</span>
-              <input type="time" name="opensTime" value="${escapeAttr(form.opensTime)}" data-action="tests-schedule-form-field" required>
-            </label>
-            <label class="search-field">
-              <span>Closes</span>
-              <input type="time" name="closesTime" value="${escapeAttr(form.closesTime)}" data-action="tests-schedule-form-field" required>
-            </label>
-            <p class="muted tests-timezone-info">Times follow each athlete's device timezone.</p>
+            <div class="tests-time-row">
+              <label class="search-field">
+                <span>Opens</span>
+                <input type="time" name="opensTime" value="${escapeAttr(form.opensTime)}" data-action="tests-schedule-form-field" required>
+              </label>
+              <label class="search-field">
+                <span>Closes</span>
+                <input type="time" name="closesTime" value="${escapeAttr(form.closesTime)}" data-action="tests-schedule-form-field" required>
+              </label>
+            </div>
+            <p class="muted tests-timezone-info">
+              <span class="tests-timezone-info-full">Times follow each athlete's device timezone.</span>
+              <span class="tests-timezone-info-short">Follows each athlete's own timezone.</span>
+            </p>
             <label class="search-field">
               <span>Club (optional quick target)</span>
               <select name="clubId" data-action="tests-schedule-form-field">

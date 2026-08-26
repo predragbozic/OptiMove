@@ -71,6 +71,15 @@ test("an athlete_reminder row routes to the SAME notification-open-test-assignme
   assert.ok(panelHtml.includes('data-assignment-id="asg-2"'));
 });
 
+test("a test_manual_reminder row (mobile scheduling hotfix, item 4/5) routes to the SAME notification-open-test-assignment action as invitation/reminder", () => {
+  resetNotificationsState();
+  state.notifications.rows = [baseRow({ type: "test_manual_reminder", entity_type: "test_assignment", entity_id: "asg-3" })];
+  renderNotifications();
+  assert.ok(panelHtml.includes('data-action="notification-open-test-assignment"'));
+  assert.ok(panelHtml.includes('data-assignment-id="asg-3"'));
+  assert.ok(panelHtml.includes("Open check-in"));
+});
+
 test("a coach_digest row routes to notification-open-tests-today", () => {
   resetNotificationsState();
   state.notifications.rows = [baseRow({ type: "test_coach_digest", entity_type: "test_occurrence", entity_id: "occ-1", metadata: { scheduleId: "sched-1" } })];

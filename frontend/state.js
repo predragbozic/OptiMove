@@ -357,6 +357,19 @@ export const emptyTestsState = (overrides = {}) => ({
   // sees exactly what was created, not just a silently-closed form.
   bulkResult: null,
   form: null,
+  // Manual reminder (Coach Today). reminderSelection[scheduleId] is the
+  // EXPLICIT list of currently-checked assignment ids for that schedule's
+  // group - absent/undefined means "no override yet", which the view
+  // renders as "every not-yet-completed athlete", per the "podrazumevano
+  // selektuj sve nezavršene" (select all incomplete by default) requirement,
+  // without needing to eagerly populate this map on every Today load.
+  // remindingScheduleId mirrors deletingScheduleId's own double-click-guard
+  // shape (one send in flight at a time, "" when none). reminderResult is a
+  // one-time confirmation banner ({ scheduleId, message }), cleared on the
+  // next reload/interaction with that group - same lifecycle as bulkResult.
+  reminderSelection: {},
+  remindingScheduleId: "",
+  reminderResult: null,
   ...overrides,
 });
 

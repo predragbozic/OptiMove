@@ -6,6 +6,7 @@ import { canManageClub, canManageTeamById, isPlatformAdministrator } from "../au
 import { canManageSchedule, manageableClubIds, manageableTeamIds, resolveScheduleOwnerContext } from "../testsAccess.js";
 import { ensureCurrentOccurrence, assignmentIsOpen } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
+import { emitRealtimeEvent } from "../realtime.js";
 
 const router = Router();
 
@@ -1683,6 +1684,128 @@ router.post("/links/:linkId/revoke", async (req, res, next) => {
     if (!schedule) return res.status(404).json({ error: "Link not found." });
     await query(`update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where id = $1 and status = 'active'`, [link.id, req.user.id]);
     res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+// ------------------------------------------------------------
+// Coach: manual reminder (hotfix - a coach-triggered nudge for whichever
+// assignments they pick right now, independent of the automated
+// athlete_reminder worker rule, which stays untouched and may not even be
+// enabled/running for a given schedule - see testsNotificationWorker.js).
+// ------------------------------------------------------------
+
+// Every rule below mirrors an existing, already-enforced invariant
+// elsewhere in this file/the DB - this route only decides who's eligible to
+// receive a REMINDER right now, it invents no new submit/eligibility logic
+// of its own (assignmentIsOpen/schedule.status='active' already gate real
+// submission server-side regardless of what this route ever does).
+const MANUAL_REMINDER_COOLDOWN_MS = 5 * 60 * 1000;
+
+function manualReminderDedupeKey(assignmentId, cooldownBucket) {
+  // Namespaced (manual_reminder:v1:...), same convention as builder.js's
+  // own dedupe_key values on this SAME shared column (migrations_v2/
+  // 202608280900_app_notifications_dedupe_key.sql - already deployed, a
+  // plain nullable column + partial unique index, no new migration needed
+  // here). Unlike that one-shot-forever use, the bucket suffix here rotates
+  // every MANUAL_REMINDER_COOLDOWN_MS - a genuine resend after the cooldown
+  // window gets a brand-new key and succeeds; a double-click/retry WITHIN
+  // the same window collides on the unique index and is a guaranteed
+  // no-op, atomically (ON CONFLICT DO NOTHING needs no extra locking to be
+  // race-proof under concurrent requests - that's exactly what it's for).
+  return `manual_reminder:v1:${assignmentId}:${cooldownBucket}`;
+}
+
+router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
+  try {
+    if (!requireCoachWorkspace(req, res)) return;
+    const scheduleResult = await query(
+      `select sch.*, tv.name as test_name from tests.test_schedules sch join tests.test_versions tv on tv.id = sch.test_version_id where sch.id = $1`,
+      [req.params.scheduleId],
+    );
+    const schedule = scheduleResult.rows[0];
+    if (!schedule) return res.status(404).json({ error: "Schedule not found." });
+    // Explicit 403 (not the info-hiding 404 most of this file's other
+    // routes use for "not found or not yours") - the schedule genuinely
+    // exists, the coach just isn't allowed to act on it.
+    if (!canManageSchedule(req, schedule)) return res.status(403).json({ error: "Forbidden" });
+
+    const assignmentIds = Array.isArray(req.body?.assignmentIds) ? [...new Set(req.body.assignmentIds.filter((id) => typeof id === "string" && id))] : [];
+    if (!assignmentIds.length) return res.status(400).json({ error: "assignmentIds is required." });
+
+    // Schedule-level gates - checked ONCE, not per assignment: a cancelled
+    // schedule's assignments are frozen history (never remind about a
+    // check-in that no longer exists in any actionable sense); a paused
+    // schedule blocks NEW submissions entirely (routes/tests.js's own
+    // POST /submit already enforces schedule.status==='active'), so a
+    // reminder to submit would be actively misleading.
+    if (schedule.status === "cancelled") return res.status(400).json({ error: "This schedule is cancelled." });
+    if (schedule.status === "paused") return res.status(400).json({ error: "This schedule is paused - athletes can't submit right now, so a reminder would be pointless." });
+
+    const rowsResult = await query(
+      `select asg.id, asg.status as assignment_status, asg.closes_at,
+              a.id as athlete_id, a.user_id, ${athleteDisplayNameSql} as athlete_name
+       from tests.test_assignments asg
+       join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
+       join public.athletes a on a.id = asg.athlete_id
+       where o.schedule_id = $1 and asg.id = any($2::uuid[])`,
+      [schedule.id, assignmentIds],
+    );
+    const rowsById = new Map(rowsResult.rows.map((row) => [row.id, row]));
+    const now = new Date();
+    const cooldownBucket = Math.floor(now.getTime() / MANUAL_REMINDER_COOLDOWN_MS);
+
+    const results = [];
+    for (const assignmentId of assignmentIds) {
+      const row = rowsById.get(assignmentId);
+      if (!row) {
+        results.push({ assignmentId, outcome: "skippedNotFound" });
+        continue;
+      }
+      const base = { assignmentId, athleteId: row.athlete_id, athleteName: row.athlete_name };
+      if (row.assignment_status === "completed") {
+        results.push({ ...base, outcome: "skippedCompleted" });
+        continue;
+      }
+      if (["missed", "excused", "cancelled"].includes(row.assignment_status)) {
+        results.push({ ...base, outcome: "skippedNotOpen" });
+        continue;
+      }
+      if (new Date(row.closes_at) < now) {
+        results.push({ ...base, outcome: "skippedClosed" });
+        continue;
+      }
+      if (!row.user_id) {
+        results.push({ ...base, outcome: "skippedNoUser" });
+        continue;
+      }
+      const dedupeKey = manualReminderDedupeKey(assignmentId, cooldownBucket);
+      const inserted = await query(
+        `insert into public.app_notifications (recipient_user_id, actor_user_id, type, title, body, entity_type, entity_id, metadata, dedupe_key)
+         values ($1, $2, 'test_manual_reminder', 'WELLNESS reminder', $3, 'test_assignment', $4, $5::jsonb, $6)
+         on conflict (dedupe_key) where dedupe_key is not null do nothing
+         returning id`,
+        [
+          row.user_id,
+          req.user.id,
+          `${schedule.test_name || "Your coach"} sent you a reminder to complete today's questionnaire.`,
+          assignmentId,
+          JSON.stringify({ scheduleId: schedule.id, assignmentId }),
+          dedupeKey,
+        ],
+      );
+      if (inserted.rows[0]) {
+        emitRealtimeEvent(row.user_id, "notifications_changed", { notificationId: inserted.rows[0].id, type: "test_manual_reminder" });
+        results.push({ ...base, outcome: "notified" });
+      } else {
+        results.push({ ...base, outcome: "skippedCooldown" });
+      }
+    }
+
+    res.json({
+      results,
+      notifiedCount: results.filter((r) => r.outcome === "notified").length,
+      noUserCount: results.filter((r) => r.outcome === "skippedNoUser").length,
+    });
   } catch (error) { next(error); }
 });
 

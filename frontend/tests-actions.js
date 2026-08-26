@@ -2,7 +2,7 @@ import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
-import { checkInUrl, patchTestsAthletePickerDom, patchTestsCalendarDom, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
+import { checkInUrl, patchTestsAthletePickerDom, patchTestsCalendarDom, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
 import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadWellnessForm } from "./tests-data.js";
 
 // Every data-action="tests-*" click/change and data-tests-form submit in the
@@ -306,6 +306,29 @@ export async function handleTestsAction(action, { renderTests }) {
     await openResult(action.dataset.assessmentId, renderTests);
     return true;
   }
+  if (type === "tests-reminder-toggle-athlete") {
+    toggleReminderAthlete(action.dataset.scheduleId, action.dataset.assignmentId);
+    renderTests();
+    return true;
+  }
+  if (type === "tests-reminder-select-all") {
+    setReminderSelectionToAllIncomplete(action.dataset.scheduleId);
+    renderTests();
+    return true;
+  }
+  if (type === "tests-reminder-clear") {
+    state.tests.reminderSelection[action.dataset.scheduleId] = [];
+    renderTests();
+    return true;
+  }
+  if (type === "tests-send-reminder") {
+    await sendManualReminder(action.dataset.scheduleId, renderTests);
+    return true;
+  }
+  if (type === "tests-copy-viber") {
+    await copyViberMessageForSchedule(action.dataset.scheduleId);
+    return true;
+  }
 
   return false;
 }
@@ -352,6 +375,87 @@ async function copyGroupLinkForSchedule(scheduleId) {
   } catch {
     // best-effort - nothing to surface for a toolbar shortcut copy action
   }
+}
+
+// ------------------------------------------------------------
+// Manual reminder (Coach Today) - hotfix
+// ------------------------------------------------------------
+
+function coachTodayGroupById(scheduleId) {
+  return state.tests.coachToday.find((group) => group.schedule.id === scheduleId);
+}
+
+function toggleReminderAthlete(scheduleId, assignmentId) {
+  const group = coachTodayGroupById(scheduleId);
+  if (!group) return;
+  // First interaction with this group's list materializes the implicit
+  // "all incomplete" default into an explicit array before toggling one
+  // entry out of it - see reminderSelectedSet's own comment (tests-view.js).
+  const current = new Set(state.tests.reminderSelection[scheduleId] || reminderSelectedSet(group));
+  if (current.has(assignmentId)) current.delete(assignmentId);
+  else current.add(assignmentId);
+  state.tests.reminderSelection[scheduleId] = [...current];
+}
+
+function setReminderSelectionToAllIncomplete(scheduleId) {
+  const group = coachTodayGroupById(scheduleId);
+  if (!group) return;
+  state.tests.reminderSelection[scheduleId] = group.athletes.filter((row) => row.status !== "completed").map((row) => row.assignmentId);
+}
+
+function reminderConfirmationMessage({ notifiedCount, noUserCount }) {
+  let message = `Reminder sent to ${notifiedCount} athlete${notifiedCount === 1 ? "" : "s"}.`;
+  if (noUserCount) message += ` ${noUserCount} athlete${noUserCount === 1 ? "" : "s"} ${noUserCount === 1 ? "has" : "have"} no app account.`;
+  return message;
+}
+
+async function sendManualReminder(scheduleId, renderTests) {
+  const group = coachTodayGroupById(scheduleId);
+  if (!group || state.tests.remindingScheduleId) return;
+  const assignmentIds = [...reminderSelectedSet(group)];
+  if (!assignmentIds.length) return;
+  state.tests.remindingScheduleId = scheduleId;
+  state.tests.reminderResult = null;
+  renderTests();
+  try {
+    const result = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}/remind`, {
+      method: "POST",
+      body: JSON.stringify({ assignmentIds }),
+    });
+    state.tests.reminderResult = { scheduleId, message: reminderConfirmationMessage(result) };
+  } catch (error) {
+    state.tests.reminderResult = { scheduleId, message: error.message || "Could not send the reminder." };
+  } finally {
+    state.tests.remindingScheduleId = "";
+    renderTests();
+  }
+}
+
+// "Ako link ne postoji, ponudi da se kreira postojećim bezbednim mehanizmom
+// ili kopiraj poruku bez linka" - reuses the exact same fetch-or-create flow
+// copyGroupLinkForSchedule already established; a failure of that (network,
+// or the coach simply has no manageable access to create one) falls back to
+// a linkless message rather than ever fabricating a public URL.
+async function copyViberMessageForSchedule(scheduleId) {
+  const group = coachTodayGroupById(scheduleId);
+  if (!group) return;
+  const selected = reminderSelectedSet(group);
+  const names = group.athletes.filter((row) => selected.has(row.assignmentId)).map((row) => row.athleteName);
+  if (!names.length) return;
+  let linkUrl = "";
+  try {
+    const detail = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}`);
+    const link = detail.link || (await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}/link`, { method: "POST" })).link;
+    linkUrl = checkInUrl(link.publicToken);
+  } catch {
+    // Existing secure mechanism unavailable right now - fall back to a
+    // linkless message below rather than inventing public access.
+  }
+  const namesText = names.join(", ");
+  const message = linkUrl
+    ? `WELLNESS još nisu popunili: ${namesText}. Molimo popunite anketu: ${linkUrl}`
+    : `WELLNESS još nisu popunili: ${namesText}.`;
+  await copyToClipboard(message);
 }
 
 async function copyToClipboard(text) {

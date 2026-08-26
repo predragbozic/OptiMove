@@ -191,8 +191,11 @@ function renderNotificationRow(row) {
   const isConversationNotification = row.entity_type === "message_conversation" && row.entity_id;
   // Phase 3A: WELLNESS notifications (testsNotificationWorker.js). Invitation
   // and reminder both deep-link to the athlete's own assignment; the two
-  // coach digests both open Tests, but to different sections.
-  const isTestAssignmentNotification = (row.type === "test_athlete_invitation" || row.type === "test_athlete_reminder") && row.entity_type === "test_assignment" && row.entity_id;
+  // coach digests both open Tests, but to different sections. test_manual_reminder
+  // (backend/src/routes/tests.js's POST /schedules/:scheduleId/remind, a
+  // coach-triggered nudge independent of the automated worker rule) reuses
+  // the exact same deep-link - same entity shape, same destination.
+  const isTestAssignmentNotification = (row.type === "test_athlete_invitation" || row.type === "test_athlete_reminder" || row.type === "test_manual_reminder") && row.entity_type === "test_assignment" && row.entity_id;
   const isCoachDigestNotification = row.type === "test_coach_digest" && row.entity_type === "test_occurrence";
   const isFinalDigestNotification = row.type === "test_final_digest" && row.entity_type === "test_occurrence";
   // Builder plan-assignment notifications (backend/src/routes/builder.js's

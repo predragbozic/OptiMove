@@ -10071,6 +10071,85 @@ button.tests-assignment-card {
   color: var(--accent);
 }
 
+/* Manual reminder (Coach Today) - hotfix */
+
+.tests-reminder-section {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.tests-reminder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tests-reminder-title {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.tests-reminder-select-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.tests-reminder-list {
+  display: grid;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.tests-reminder-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tests-reminder-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tests-reminder-confirmation {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tests-reminder-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px) {
+  .tests-reminder-actions {
+    flex-direction: column;
+  }
+
+  .tests-reminder-actions button {
+    width: 100%;
+  }
+}
+
 /* Coach: Schedule */
 
 .tests-schedule-toolbar {
@@ -10152,10 +10231,17 @@ button.tests-assignment-card {
 .tests-recurrence-toggle {
   display: flex;
   gap: 8px;
+  /* min-width:0 on the flex CONTAINER isn't what matters here - it's each
+     PILL below needing it (flex items default to min-width:auto, which
+     lets their own intrinsic content width - icon + un-wrapping text -
+     push the whole row wider than the panel, the same class of bug the
+     calendar grid below has). Kept here too for defensiveness. */
+  min-width: 0;
 }
 
 .tests-recurrence-pill {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10168,6 +10254,15 @@ button.tests-assignment-card {
   font-weight: 700;
   color: var(--text);
   cursor: pointer;
+}
+
+/* Item 2 (mobile scheduling hotfix): a compact segmented control - the
+   short label ("Dates"/"Daily") is what actually renders under 760px,
+   the full one above it; the button's own aria-label carries the real
+   accessible name regardless of which span is visible, so this is purely
+   cosmetic, never a loss of context for assistive tech. */
+.tests-recurrence-pill-label-short {
+  display: none;
 }
 
 .tests-recurrence-pill-icon {
@@ -10193,6 +10288,15 @@ button.tests-assignment-card {
 
 .tests-calendar-section {
   display: grid;
+  /* Item 1 (mobile scheduling hotfix): an implicit single-column grid track
+     defaults to `auto` sizing, which can still grow past the container's
+     own available width to fit a child's min-content size ("grid
+     blowout") - minmax(0, 1fr) is what actually caps it. This exact
+     pattern was the real root cause of the whole form's overflow at
+     375px, found live: the toggle button below (100% width, but as an
+     unconstrained grid item) rendered at its own content's natural width
+     instead of the container's. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -10255,7 +10359,14 @@ button.tests-assignment-card {
 .tests-calendar-weekdays,
 .tests-calendar-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  /* minmax(0, 1fr), not a bare 1fr (item 1, mobile scheduling hotfix): a
+     bare `1fr` track still respects each grid ITEM's default min-width:auto
+     (its own content's intrinsic min-content width) - at a narrow enough
+     viewport that can force every column wider than the track actually has
+     room for, pushing the whole grid (and everything containing it) past
+     the viewport's edge. minmax(0, 1fr) is what actually lets a column
+     shrink below its content's natural size instead of forcing overflow. */
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -10277,6 +10388,7 @@ button.tests-assignment-card {
 
 .tests-calendar-day {
   aspect-ratio: 1;
+  min-width: 0;
   min-height: 32px;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -10413,6 +10525,12 @@ button.tests-assignment-card {
    form, not three different affordances. */
 .tests-collapsible-section {
   display: grid;
+  /* Item 1 (mobile scheduling hotfix) - same grid-blowout fix as
+     .tests-calendar-section above; this is the ONE actually responsible
+     for the form's real 375px overflow (verified live: this section's own
+     toggle button rendered at 448px inside a 322px-wide container before
+     this rule). */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -10442,6 +10560,29 @@ button.tests-assignment-card {
   font-size: 12px;
 }
 
+.tests-timezone-info-short {
+  display: none;
+}
+
+/* Item 3 (mobile scheduling hotfix): Opens/Closes as two equal columns in
+   one row by default, everywhere - minmax(0, 1fr) (not a bare 1fr) so a
+   narrow <input type="time"> never forces the row wider than its
+   container, same reasoning as the calendar grid above. Only an
+   EXTREMELY narrow viewport (below any real device this app supports)
+   falls back to stacking, purely as a last-resort safety net, never
+   triggered at the 360-390px range these forms are actually verified at. */
+.tests-time-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 320px) {
+  .tests-time-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Form-body/scroll/actions wrapper: display:contents on anything wider than
    the mobile breakpoint below means these wrapper divs are fully
    transparent to layout - their children stay direct items of
@@ -10469,9 +10610,23 @@ button.tests-assignment-card {
     overflow-y: visible;
   }
 
+  /* Item 1 (mobile scheduling hotfix), the actual root cause: min-width
+     defaults to `auto` (own intrinsic content size) for a flex/grid ITEM at
+     EVERY nesting level independently - .tests-schedule-form-body is a grid
+     item of .tests-schedule-form's own grid; once .tests-schedule-form-scroll/
+     -actions switch from display:contents to real flex containers below,
+     THEY become flex items of -body, and everything inside -scroll becomes
+     a flex item of THAT. Fixing only the innermost level (the calendar's
+     own 7-column grid, already minmax(0, 1fr)) was not enough - each outer
+     level still defaulted to min-width:auto and could still force the next
+     level out wider, all the way up. Verified live at 375px: before this
+     block covered every level, .tests-schedule-form's own scrollWidth
+     (481px) exceeded its clientWidth (354px) - overflow-x:hidden below was
+     only ever clipping that real 127px of content, never fitting it. */
   .tests-schedule-form-body {
     display: flex;
     flex-direction: column;
+    min-width: 0;
     /* Leaves room for the sticky action bar below so the last real field
        is never hidden behind it - same idiom as
        .builder-mobile-sticky-bar's own containing modal. */
@@ -10481,7 +10636,16 @@ button.tests-assignment-card {
   .tests-schedule-form-scroll {
     display: flex;
     flex-direction: column;
+    min-width: 0;
     gap: 10px;
+  }
+
+  .tests-schedule-form-actions {
+    min-width: 0;
+  }
+
+  .tests-schedule-form-scroll > * {
+    min-width: 0;
   }
 
   /* Item 2: "Glavno Schedule/Save dugme mora biti sticky pri dnu mobilnog
@@ -10520,6 +10684,31 @@ button.tests-assignment-card {
   .tests-schedule-form .checkbox-toggle-all span {
     width: 16px;
     height: 16px;
+  }
+
+  /* Item 2: compact segmented control - shorter on a phone ("Dates"/
+     "Daily"), smaller height/padding, still a clearly large enough touch
+     target (the whole pill stays clickable, not just the text). */
+  .tests-recurrence-pill {
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+
+  .tests-recurrence-pill-label-full {
+    display: none;
+  }
+
+  .tests-recurrence-pill-label-short {
+    display: inline;
+  }
+
+  /* Item 3: keep the explanation, shorten the wording. */
+  .tests-timezone-info-full {
+    display: none;
+  }
+
+  .tests-timezone-info-short {
+    display: inline;
   }
 }
 
