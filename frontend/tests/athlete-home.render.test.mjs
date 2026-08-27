@@ -151,3 +151,54 @@ test("header shows the athlete's real name and today's date, with a brief unobtr
   assert.ok(html.includes("Real Athlete Name"));
   assert.ok(html.includes("10.08.2026"));
 });
+
+// === Item 5: the WELLNESS card ===
+
+function baseHomeData(overrides = {}) {
+  return {
+    athlete: { name: "Test Athlete", imageUrl: "" },
+    today: { date: "2026-08-10", hasTraining: true, planId: "plan-1", planName: "Week 1", sessionCount: 1, itemCount: 3 },
+    week: emptyWeek(),
+    programs: { rows: [], total: 0 },
+    wellness: { count: 0, assignmentId: null, testName: "", closesAt: null },
+    ...overrides,
+  };
+}
+
+test("no open WELLNESS assignment: no card rendered at all", () => {
+  const html = renderAthleteHomeHtml({ data: baseHomeData(), error: "" });
+  assert.ok(!html.includes("WELLNESS questionnaire"));
+  assert.ok(!html.includes('data-action="athlete-home-open-wellness"'));
+});
+
+test("exactly one open assignment: a single actionable card with a real assignment id, deep-linking straight to it", () => {
+  const data = baseHomeData({ wellness: { count: 1, assignmentId: "asg-1", testName: "WELLNESS", closesAt: "2026-08-10T22:00:00.000Z" } });
+  const html = renderAthleteHomeHtml({ data, error: "" });
+  assert.ok(html.includes("WELLNESS questionnaire"));
+  assert.ok(html.includes('data-action="athlete-home-open-wellness"'));
+  assert.ok(html.includes('data-count="1"'));
+  assert.ok(html.includes('data-assignment-id="asg-1"'));
+  assert.ok(html.includes("Complete now"));
+});
+
+test("more than one open assignment: shows a count and 'View all' instead of a single assignment id", () => {
+  const data = baseHomeData({ wellness: { count: 3, assignmentId: "asg-1", testName: "WELLNESS", closesAt: "2026-08-10T22:00:00.000Z" } });
+  const html = renderAthleteHomeHtml({ data, error: "" });
+  assert.ok(html.includes('data-count="3"'));
+  assert.ok(html.includes("3 check-ins waiting"));
+  assert.ok(html.includes("View all"));
+});
+
+test("the WELLNESS card renders directly above 'Today's training'", () => {
+  const data = baseHomeData({ wellness: { count: 1, assignmentId: "asg-1", testName: "WELLNESS", closesAt: "2026-08-10T22:00:00.000Z" } });
+  const html = renderAthleteHomeHtml({ data, error: "" });
+  const wellnessIndex = html.indexOf("WELLNESS questionnaire");
+  const todayIndex = html.indexOf("Today's training");
+  assert.ok(wellnessIndex >= 0 && todayIndex >= 0 && wellnessIndex < todayIndex);
+});
+
+test("a missing wellness field (e.g. an older cached response shape) never throws - just renders no card", () => {
+  const data = baseHomeData();
+  delete data.wellness;
+  assert.doesNotThrow(() => renderAthleteHomeHtml({ data, error: "" }));
+});
