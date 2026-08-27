@@ -619,7 +619,7 @@ function renderRecipientPickerTabsHtml(form) {
       ${RECIPIENT_PICKER_TABS.map((tab) => {
         const count = testsRecipientTabCount(form, tab.id);
         return `
-          <button type="button" class="tests-recipient-picker-tab ${form.recipientPickerTab === tab.id ? "is-active" : ""}" role="tab" aria-selected="${form.recipientPickerTab === tab.id ? "true" : "false"}" data-action="tests-recipient-picker-set-tab" data-tab="${tab.id}">
+          <button type="button" class="tests-recipient-picker-tab ${form.recipientPickerTab === tab.id ? "is-active" : ""}" role="tab" aria-selected="${form.recipientPickerTab === tab.id ? "true" : "false"}" data-action="tests-recipient-picker-set-tab" data-recipient-tab="${tab.id}">
             ${tab.label}${count ? ` <span class="tests-recipient-picker-tab-count">${count}</span>` : ""}
           </button>
         `;

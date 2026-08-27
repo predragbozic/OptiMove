@@ -296,7 +296,14 @@ export async function handleTestsAction(action, { renderTests }) {
     return true;
   }
   if (type === "tests-recipient-picker-set-tab") {
-    state.tests.scheduleForm.recipientPickerTab = action.dataset.tab;
+    // "data-tab" is a reserved attribute name elsewhere in this app -
+    // app.js's handleGlobalClick treats ANY element with data-tab, anywhere
+    // in the document, as a top-level sidebar tab switch (event.target.
+    // closest("[data-tab]")), which fires BEFORE this handler and would
+    // hijack a click on the picker's own Clubs/Teams/Athletes tab into
+    // switching state.activeTab to a garbage value instead - found live.
+    // data-recipient-tab avoids that collision entirely.
+    state.tests.scheduleForm.recipientPickerTab = action.dataset.recipientTab;
     patchRecipientPickerPanelDom();
     return true;
   }

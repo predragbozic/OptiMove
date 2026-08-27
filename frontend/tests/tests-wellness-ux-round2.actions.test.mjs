@@ -146,10 +146,23 @@ test("select-all/clear on the Clubs tab only ever touches clubIds, never teamIds
 test("switching the picker's own tab updates recipientPickerTab and renders that tab's own content", async () => {
   resetTestsState();
   await handleTestsAction(fakeAction({ action: "tests-open-recipient-picker" }), { renderTests: () => {} });
-  await handleTestsAction(fakeAction({ action: "tests-recipient-picker-set-tab", tab: "teams" }), { renderTests: () => {} });
+  await handleTestsAction(fakeAction({ action: "tests-recipient-picker-set-tab", recipientTab: "teams" }), { renderTests: () => {} });
   assert.equal(state.tests.scheduleForm.recipientPickerTab, "teams");
   const html = renderRecipientPickerHtml(state.tests.scheduleForm);
   assert.ok(html.includes("First Team"));
+});
+
+// Found live: "data-tab" is a reserved attribute app.js's handleGlobalClick
+// treats as a top-level sidebar tab switch, ANYWHERE in the document
+// (event.target.closest("[data-tab]")) - a picker tab button using that
+// exact attribute name gets hijacked into switching state.activeTab to a
+// garbage value and blanking the whole page, before this module's own
+// handler ever runs. data-recipient-tab avoids the collision.
+test("the picker's own tab buttons never use the reserved 'data-tab' attribute (collides with app.js's global sidebar tab-switch handler)", () => {
+  resetTestsState();
+  const html = renderRecipientPickerHtml(state.tests.scheduleForm);
+  assert.ok(!/\sdata-tab=/.test(html), "must never emit a bare data-tab attribute anywhere in the picker");
+  assert.ok(html.includes("data-recipient-tab="));
 });
 
 test("submitting combines individually-selected athletes with MULTIPLE clubs and MULTIPLE teams into one targets array - the backend's own multi-target model, not a single-club/single-team limitation", async () => {
