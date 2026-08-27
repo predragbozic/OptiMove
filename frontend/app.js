@@ -1879,7 +1879,12 @@ async function openTestAssignment(assignmentId) {
   await openTestAssignmentForm(assignmentId, renderTests);
 }
 
-// Coach live digest click - switches to Tests -> Today.
+// Coach live digest click - switches to Tests -> Today. loadTests()/
+// loadTestsSection() (tests-data.js) already branch internally on
+// isAthleteMode(), so this same function also correctly opens the
+// ATHLETE's own Today list when called from an athlete session (Home's
+// "multiple WELLNESS assignments waiting" card, item 5) - no separate
+// athlete-only variant needed.
 async function openTestsToday() {
   state.activeTab = "tests";
   state.tests.section = "today";
@@ -1984,6 +1989,16 @@ async function handleContentClick(event) {
   }
   if (type === "athlete-home-open-today" || type === "athlete-home-open-day") {
     await openWeeklyPlanOnDate(action.dataset.date || localDateIso());
+    return;
+  }
+  if (type === "athlete-home-open-wellness") {
+    const count = Number(action.dataset.count || 0);
+    // A single open assignment deep-links straight to it (the exact same
+    // flow a WELLNESS notification click already uses); more than one
+    // routes to the athlete's own Tests -> Today list instead of guessing
+    // which one to open.
+    if (count === 1 && action.dataset.assignmentId) await openTestAssignment(action.dataset.assignmentId);
+    else await openTestsToday();
     return;
   }
   if (type === "specific-program-close") {

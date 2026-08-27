@@ -1,6 +1,18 @@
 import { renderImage } from "./media.js";
 import { escapeAttr, escapeHtml, formatDate, formatWeekday, programInitials } from "./utils.js";
 
+// Same small local formatter tests-view.js already keeps for itself (not
+// exported from utils.js) - duplicated here rather than importing the much
+// larger tests-view.js module just for one date/time string.
+function formatWellnessClosesAt(value) {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleString(undefined, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return String(value);
+  }
+}
+
 // hotfix/athlete-home-mobile-layout: the exact same icon paths as the
 // athlete sidebar's own nav buttons (see data-athlete-tab="calendar" /
 // "programs" / "athlete-library" / "athlete-settings" in athlete.html) -
@@ -35,6 +47,7 @@ export function renderAthleteHomeHtml({ data, error }) {
   const athlete = data.athlete || {};
   const today = data.today || {};
   const week = data.week || { days: [] };
+  const wellness = data.wellness || { count: 0 };
   // hotfix/athlete-home-mobile-layout: Active specific programs was removed
   // from Home entirely - an athlete already reaches every assigned program
   // through the Specific programs quick action/tab, and a growing card list
@@ -45,10 +58,33 @@ export function renderAthleteHomeHtml({ data, error }) {
   return `
     <section class="content-section athlete-home">
       ${renderAthleteHomeHeader(athlete, today)}
+      ${renderWellnessCard(wellness)}
       ${renderTodayCard(today)}
       ${renderWeekStrip(week)}
       ${renderQuickActions()}
     </section>
+  `;
+}
+
+// Item 5: a compact card, directly above "Today's training", for an open
+// not-yet-completed WELLNESS assignment - backend/src/routes/athleteHome.js
+// already resolves `wellness` from the exact same shared occurrence/
+// assignment logic GET /api/tests/athlete/today uses (never a duplicate),
+// already scoped to the logged-in athlete's own assignment(s) only, and
+// already excludes anything completed/cancelled/outside its own open
+// window - this renders nothing when count is 0, so there is no separate
+// client-side eligibility check to keep in sync with the backend's.
+function renderWellnessCard(wellness) {
+  if (!wellness.count) return "";
+  const multiple = wellness.count > 1;
+  return `
+    <button type="button" class="panel athlete-home-wellness" data-action="athlete-home-open-wellness" data-count="${wellness.count}" data-assignment-id="${escapeAttr(wellness.assignmentId || "")}">
+      <div class="athlete-home-wellness-body">
+        <p class="eyebrow">WELLNESS questionnaire</p>
+        <p class="muted">${multiple ? `${wellness.count} check-ins waiting` : `Available until ${escapeHtml(formatWellnessClosesAt(wellness.closesAt))}`}</p>
+      </div>
+      <span class="athlete-home-wellness-cta">${multiple ? "View all" : "Complete now"} &rsaquo;</span>
+    </button>
   `;
 }
 

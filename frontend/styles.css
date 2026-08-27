@@ -9761,6 +9761,44 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   align-self: flex-start;
 }
 
+/* Item 5: compact, tappable WELLNESS card - sits directly above "Today's
+   training" (see athlete-home.js's renderAthleteHomeHtml). A real <button>
+   (not a div+role=button) so keyboard activation works for free, same
+   convention as .tests-schedule-card-open. */
+.athlete-home-wellness {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border-color: var(--accent, #1f7a6f);
+  background: color-mix(in srgb, var(--accent, #1f7a6f) 8%, white);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.athlete-home-wellness-body {
+  min-width: 0;
+}
+
+.athlete-home-wellness-body p {
+  margin: 0;
+}
+
+.athlete-home-wellness-body .eyebrow {
+  margin-bottom: 2px;
+}
+
+.athlete-home-wellness-cta {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--accent, #1f7a6f);
+  white-space: nowrap;
+}
+
 .athlete-home-week {
   display: flex;
   flex-direction: column;

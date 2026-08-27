@@ -122,6 +122,106 @@ export async function ensureCurrentOccurrence(pool, schedule) {
   }
 }
 
+// Item 5 (Athlete Home WELLNESS card): the shared "ensure today's
+// occurrences exist, then read this athlete's own today's assignments"
+// step - previously inlined only in GET /api/tests/athlete/today
+// (backend/src/routes/tests.js), now also called by GET /api/athlete-home
+// so the two never duplicate this same occurrence-generation + assignment
+// query. Returns RAW assignment rows (asg.* plus occurrence_status/
+// test_name) - callers decide how much further formatting (if any) their
+// own view needs; GET /athlete/today still formats each row with its own
+// formatAthleteAssignmentRow (an extra per-row latest-assessment lookup
+// Home doesn't need), Home only reads the few fields it actually shows.
+//
+// pool/query: passed in, not imported here, matching ensureCurrentOccurrence's
+// own convention above (every call site already has both from db.js).
+export async function loadAthleteTodayTestAssignments(pool, query, athleteId) {
+  // Step 1: for every ACTIVE schedule CURRENTLY targeting this athlete
+  // (direct, or via a current team/club membership), ensure today's/the
+  // one-time occurrence exists - idempotent, on-demand materialization.
+  //
+  // Round 3 hardening (item 1): CURRENT membership is not the full picture
+  // of "which schedules does this athlete need ensureCurrentOccurrence()
+  // run for". An athlete already frozen into an occurrence's tests.test_
+  // occurrence_target_snapshot, but not yet assigned (their own local day
+  // hasn't arrived), must stay a candidate for materialization even after
+  // their membership is later paused/removed - otherwise this query would
+  // stop surfacing that schedule to them at all, and ensureCurrentOccurrence
+  // (whose own tests.resolve_current_target_dates() already accounts for
+  // outstanding snapshot members - see that migration) would simply never
+  // be called for it again. The second `or exists (...)` branch below is
+  // what keeps that path reachable; a LATE joiner (never snapshotted) still
+  // only ever matches via current membership, same as before.
+  const schedulesResult = await query(
+    `select distinct sch.*
+     from tests.test_schedules sch
+     left join tests.test_schedule_targets t on t.schedule_id = sch.id
+     left join public.athlete_memberships m
+       on (t.target_kind = 'team' and m.membership_type = 'team' and m.team_id = t.target_team_id and m.status = 'active')
+       or (t.target_kind = 'club' and m.membership_type = 'club' and m.club_id = t.target_club_id and m.status = 'active')
+     where sch.status = 'active'
+       and (
+         (t.target_kind = 'athlete' and t.target_athlete_id = $1)
+         or (t.target_kind = 'team' and m.athlete_id = $1)
+         or (t.target_kind = 'club' and m.athlete_id = $1)
+         or exists (
+           select 1
+           from tests.test_schedule_occurrences occ
+           join tests.test_occurrence_target_snapshot snap on snap.occurrence_id = occ.id
+           where occ.schedule_id = sch.id
+             and snap.athlete_id = $1
+             and not exists (
+               select 1 from tests.test_assignments asg
+               where asg.occurrence_id = occ.id and asg.athlete_id = snap.athlete_id
+             )
+         )
+       )`,
+    [athleteId],
+  );
+  for (const schedule of schedulesResult.rows) {
+    await ensureCurrentOccurrence(pool, schedule);
+  }
+
+  // Step 2: the athlete's OWN already-materialized assignments, for TODAY's
+  // occurrence in each occurrence's own schedule timezone, are the real
+  // source of truth for what Today/Home show - queried directly from
+  // test_assignments, never re-derived from CURRENT membership. This is
+  // what keeps an assignment visible even after the athlete's team/club
+  // membership is later paused/removed/changed:
+  // materialize_test_assignments_for_occurrence() (Phase 1) already
+  // guarantees a later membership change never retroactively adds/removes
+  // rows for an occurrence that was already materialized - this function
+  // must not undo that guarantee by re-deriving "today" from step 1's
+  // membership-based schedule list instead of from the assignment rows
+  // that already exist.
+  //
+  // The one exception: `sch.status <> 'cancelled'` below. DELETE
+  // /schedules/:id intentionally never touches existing occurrence/
+  // assignment rows - they stay exactly as they are, preserved for
+  // History/Results - but a still-PENDING assignment for a schedule the
+  // coach has since cancelled must stop showing as an actionable Today/
+  // Home item (a completed one is unaffected here; it always remains
+  // reachable through History regardless of schedule status).
+  //
+  // "Today" is evaluated in the ASSIGNMENT's own snapshotted timezone
+  // (asg.timezone - the athlete's effective timezone at materialization
+  // time), never the schedule's - two athletes under the same occurrence
+  // can genuinely disagree about whether "today" has arrived/ended.
+  const assignmentsResult = await query(
+    `select asg.*, o.status as occurrence_status, tv.name as test_name
+     from tests.test_assignments asg
+     join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
+     join tests.test_schedules sch on sch.id = o.schedule_id
+     join tests.test_versions tv on tv.id = asg.snapshot_test_version_id
+     where asg.athlete_id = $1
+       and asg.local_scheduled_date = (now() at time zone asg.timezone)::date
+       and sch.status <> 'cancelled'
+     order by asg.local_scheduled_date desc`,
+    [athleteId],
+  );
+  return assignmentsResult.rows;
+}
+
 // Phase 4 (per-athlete timezone-correct windows): the ONLY "is this open"
 // check left in the app - every reader gates on THIS assignment's own
 // opens_at/closes_at (computed at materialization time in the athlete's own

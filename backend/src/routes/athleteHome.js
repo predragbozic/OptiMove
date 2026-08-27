@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { query } from "../db.js";
+import { pool, query } from "../db.js";
+import { assignmentIsOpen, loadAthleteTodayTestAssignments } from "../testsOccurrenceService.js";
 
 const router = Router();
 
@@ -31,7 +32,7 @@ router.get("/", async (req, res, next) => {
     const athleteId = req.authz?.athleteId;
     if (!athleteId) return res.status(403).json({ error: "NO_ATHLETE_PROFILE" });
 
-    const [athleteResult, weekResult, programsResult] = await Promise.all([
+    const [athleteResult, weekResult, programsResult, wellnessAssignments] = await Promise.all([
       // 1) Athlete identity for the header (name/photo) - a single row by
       // primary key, not a scan.
       query(
@@ -96,11 +97,30 @@ router.get("/", async (req, res, next) => {
          order by program_order nulls last, plan_name`,
         [athleteId],
       ),
+      // 4) Item 5: the athlete's own open, not-yet-completed WELLNESS
+      // assignment(s) for today, for the compact card shown just above
+      // "Today's training". Shares the exact same "ensure occurrences,
+      // then read today's real assignment rows" logic GET /api/tests/
+      // athlete/today uses (testsOccurrenceService.js's
+      // loadAthleteTodayTestAssignments) - never a second, duplicated copy
+      // of that occurrence-generation/query logic. This call itself is
+      // what may materialize a brand-new assignment on-demand, so it must
+      // never run before this athlete's device timezone has already been
+      // reported for this session - callers of GET /api/athlete-home are
+      // required to await reportDeviceTimezone() first, exactly the same
+      // ordering rule every other Tests entry point already follows (see
+      // frontend/tests-data.js's own header comment).
+      loadAthleteTodayTestAssignments(pool, query, athleteId),
     ]);
 
     const athleteRow = athleteResult.rows[0] || {};
     const todayRow = weekResult.rows.find((row) => row.is_today) || null;
     const programRows = programsResult.rows;
+    // Only a genuinely actionable assignment counts here - pending AND
+    // currently inside its own open window (assignmentIsOpen already
+    // excludes a cancelled assignment and anything outside opens_at/
+    // closes_at) - a completed or missed one must never show as pending.
+    const openWellness = wellnessAssignments.filter((row) => row.status === "pending" && assignmentIsOpen(row));
 
     res.json({
       athlete: {
@@ -131,6 +151,16 @@ router.get("/", async (req, res, next) => {
           itemCount: row.item_count,
         })),
         total: programRows.length,
+      },
+      // Item 5: the WELLNESS card. count > 1 means the Home card should
+      // route to the Tests Today list rather than opening a single
+      // assignment directly - assignmentId/testName/closesAt below are
+      // only ever the first one's, used only when count === 1.
+      wellness: {
+        count: openWellness.length,
+        assignmentId: openWellness[0]?.id || null,
+        testName: openWellness[0]?.test_name || "",
+        closesAt: openWellness[0]?.closes_at || null,
       },
     });
   } catch (error) {

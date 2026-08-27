@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
+import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
 import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
@@ -1021,6 +1022,11 @@ async function submitWellnessForm(renderTests) {
     wellnessForm.injuryReported = result.values?.injury === true;
     wellnessForm.canSubmit = true;
     void loadPendingCount().then(renderTestsBadge);
+    // Item 5: a completed WELLNESS submit must never leave the Home card
+    // showing a stale "still pending" state - invalidate its cache so the
+    // next Home visit re-fetches instead of serving the cached snapshot
+    // from before this submit (same pattern Builder mutations already use).
+    invalidateAthleteHomeCache();
   } catch (error) {
     wellnessForm.error = error.message || "Could not save this check-in.";
   } finally {
