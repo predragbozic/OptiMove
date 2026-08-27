@@ -10354,6 +10354,26 @@ button.tests-assignment-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tests-calendar-head-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tests-calendar-head-actions {
+  margin-left: auto;
+}
+
+.tests-calendar-closed-summary {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
 }
 
 .tests-calendar-weekdays,
@@ -10493,6 +10513,55 @@ button.tests-assignment-card {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.tests-recipients-row {
+  display: grid;
+  gap: 4px;
+}
+
+.tests-recipients-trigger-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tests-recipient-picker-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--line, #dfe4e8);
+  margin-top: 10px;
+}
+
+.tests-recipient-picker-tab {
+  padding: 8px 4px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted, #667085);
+  cursor: pointer;
+}
+
+.tests-recipient-picker-tab.is-active {
+  color: var(--accent, #1f6f68);
+  border-bottom-color: var(--accent, #1f6f68);
+}
+
+.tests-recipient-picker-tab-count {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-soft, #e7f5f2);
+  color: var(--accent, #1f6f68);
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .tests-notifications-section {

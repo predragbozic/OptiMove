@@ -140,8 +140,8 @@ test("select-all after search then clearing the search does not silently re-add 
 test("submitting a schedule combines individually-selected athletes with the team/club quick targets into one targets array", async () => {
   resetTestsState();
   state.tests.scheduleForm.athleteIds = ["a1", "a2"];
-  state.tests.scheduleForm.teamId = "team-1";
-  state.tests.scheduleForm.clubId = "club-1";
+  state.tests.scheduleForm.teamIds = ["team-1"];
+  state.tests.scheduleForm.clubIds = ["club-1"];
   state.tests.scheduleForm.timezone = "UTC";
   state.tests.scheduleForm.opensTime = "06:00";
   state.tests.scheduleForm.closesTime = "22:00";
@@ -233,7 +233,7 @@ test("editing a schedule with no occurrence loads its real targets/kind/times in
   assert.equal(form.editingScheduleId, "sched-1");
   assert.equal(form.open, true);
   assert.deepEqual(form.athleteIds, ["a1"]);
-  assert.equal(form.teamId, "team-1");
+  assert.deepEqual(form.teamIds, ["team-1"]);
   assert.equal(form.opensTime, "07:00");
 });
 
@@ -856,21 +856,19 @@ function withViewport(matches, fn) {
   try { return fn(); } finally { globalThis.window = original; }
 }
 
-test("17. desktop (no narrow-viewport match): Athletes/Notifications sections default OPEN when the create form opens - no regression from before this feature", async () => {
+test("17. desktop (no narrow-viewport match): the Notifications section defaults OPEN when the create form opens - no regression from before this feature", async () => {
   resetTestsState();
   await withViewport(false, () => handleTestsAction(fakeAction({ action: "tests-open-schedule-form" }), { renderTests: () => {} }));
-  assert.equal(state.tests.scheduleForm.athletesSectionOpen, true);
   assert.equal(state.tests.scheduleForm.notificationsSectionOpen, true);
 });
 
-test("a narrow (mobile) viewport: Athletes/Notifications sections default COLLAPSED when the create form opens", async () => {
+test("a narrow (mobile) viewport: the Notifications section defaults COLLAPSED when the create form opens", async () => {
   resetTestsState();
   await withViewport(true, () => handleTestsAction(fakeAction({ action: "tests-open-schedule-form" }), { renderTests: () => {} }));
-  assert.equal(state.tests.scheduleForm.athletesSectionOpen, false);
   assert.equal(state.tests.scheduleForm.notificationsSectionOpen, false);
 });
 
-test("16. toggling the Athletes/Notifications sections open/closed never clears already-selected athletes, dates, times, or notification rules", async () => {
+test("16. toggling the Notifications section open/closed never clears already-selected athletes, dates, times, or notification rules", async () => {
   resetTestsState();
   const form = state.tests.scheduleForm;
   form.athleteIds = ["a1", "a2"];
@@ -878,9 +876,8 @@ test("16. toggling the Athletes/Notifications sections open/closed never clears 
   form.selectedDates = ["2026-09-05", "2026-09-06"];
   form.opensTime = "07:30";
 
-  await handleTestsAction(fakeAction({ action: "tests-toggle-athletes-section" }), { renderTests: () => {} });
   await handleTestsAction(fakeAction({ action: "tests-toggle-notifications-section" }), { renderTests: () => {} });
-  await handleTestsAction(fakeAction({ action: "tests-toggle-athletes-section" }), { renderTests: () => {} });
+  await handleTestsAction(fakeAction({ action: "tests-toggle-notifications-section" }), { renderTests: () => {} });
 
   assert.deepEqual(state.tests.scheduleForm.athleteIds, ["a1", "a2"]);
   assert.deepEqual(state.tests.scheduleForm.notificationRules, [{ kind: "athlete_invitation", enabled: true }]);

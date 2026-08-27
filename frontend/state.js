@@ -301,24 +301,51 @@ export const emptyScheduleForm = (overrides = {}) => ({
   // with the visible MVP defaults instead; the coach sees and can change
   // them before the first save, they are never a hidden backend default.
   notificationRules: [],
-  // Individually-selected athletes (real athlete uuids, combinable with the
-  // team/club quick-targets below) plus the team/club single-target quick
-  // option, kept alongside multi-athlete selection rather than replacing it.
+  // Recipients (item 1, Builder-style picker): athletes/teams/clubs are all
+  // arrays now - the backend's own targets model (backend/src/routes/
+  // tests.js's insertTargets/resolveValidTargets) always supported an
+  // arbitrary MIX of any number of athlete/team/club target rows; teamId/
+  // clubId being bare single strings here was purely a frontend limitation
+  // of the old raw-<select> UI, never a backend one - so widening these to
+  // arrays needed no backend change at all. Combinable, never mutually
+  // exclusive - an athlete can be targeted directly AND via a team/club
+  // they belong to at the same time; the backend's own union-based
+  // materialization already de-duplicates that down to one real assignment
+  // per athlete regardless.
   athleteIds: [],
   athleteSearch: "",
-  teamId: "",
-  clubId: "",
-  // Mobile scheduling redesign: Athletes/Notifications are collapsible
-  // sections with a summary line ("Athletes · 14 selected", "Notifications ·
-  // Invitation + reminder") on narrow viewports, fully expanded (unchanged
-  // from before) on desktop. Defaults here are the DESKTOP defaults (always
-  // open) - tests-open-schedule-form/openEditSchedule override both to
-  // false on a narrow viewport when the form is first opened. Explicit
-  // state (not a bare CSS media query) specifically so a later full
-  // re-render (e.g. toggling a notification checkbox) never snaps an
-  // already-open section shut out from under whatever the coach was doing
-  // inside it.
-  athletesSectionOpen: true,
+  teamIds: [],
+  clubIds: [],
+  // The single, unified "Recipients" bottom-sheet picker (replaces the old
+  // raw Club/Team <select> pair + the separate Athletes collapsible - see
+  // tests-view.js's renderRecipientPickerHtml, styled with Builder's own
+  // .builder-athlete-overlay/-picker/-option/-checkmark classes). recipient
+  // PickerTab is which of the 3 tabs is currently showing ("clubs" |
+  // "teams" | "athletes"). recipientPickerSnapshot is taken the instant the
+  // picker opens ({ athleteIds, teamIds, clubIds }, all arrays) so its own
+  // X (cancel) can revert every change made during this one open/close
+  // session, mirroring the calendar's own cancel snapshot below - Confirm
+  // (check) just closes without restoring anything.
+  recipientPickerOpen: false,
+  recipientPickerTab: "athletes",
+  recipientPickerSnapshot: null,
+  // Item 2 (direct calendar open/close): taken the instant the calendar
+  // opens (a Dates/Daily pill click - tests-actions.js's tests-schedule-
+  // set-recurrence is the ONLY way to open it now, the old separate "Pick
+  // dates"/"N dates selected" toggle row is gone) - { selectedDates,
+  // startDate, endDate }, whichever of these the CURRENT mode actually
+  // uses. The calendar's own header X restores this and closes; its own
+  // check just closes, keeping whatever was picked during this session.
+  calendarCancelSnapshot: null,
+  // Mobile scheduling redesign: Notifications is a collapsible section with
+  // a summary line ("Notifications · 2 athlete · 2 coach") on narrow
+  // viewports, fully expanded (unchanged from before) on desktop. Default
+  // here is the DESKTOP default (always open) - tests-open-schedule-form/
+  // openEditSchedule override it to false on a narrow viewport when the
+  // form is first opened. Explicit state (not a bare CSS media query)
+  // specifically so a later full re-render (e.g. toggling a notification
+  // switch) never snaps an already-open section shut out from under
+  // whatever the coach was doing inside it.
   notificationsSectionOpen: true,
   // "Advanced settings": the fallback timezone field, tucked away by
   // default on every viewport (not just mobile) - it only matters for an
@@ -326,6 +353,13 @@ export const emptyScheduleForm = (overrides = {}) => ({
   // the prominence of a top-level field. Starts collapsed both on create
   // and on edit.
   advancedSettingsOpen: false,
+  // Item 4 ("Schedule again"): the id of the ORIGINAL schedule this form's
+  // settings were copied FROM, purely for the form's own header/labeling -
+  // NEVER used as editingScheduleId, so submitting this form always goes
+  // through the normal CREATE path (POST /schedules or /schedules/bulk),
+  // never a PATCH of the original. "" in every other mode (plain create,
+  // real edit).
+  scheduleAgainFromId: "",
   submitting: false,
   error: "",
   ...overrides,

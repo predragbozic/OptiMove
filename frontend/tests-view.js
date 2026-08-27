@@ -1,4 +1,5 @@
 import { isAthleteMode } from "./access.js";
+import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { els } from "./dom.js";
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
@@ -540,17 +541,182 @@ function renderCollapsibleSectionHeaderHtml({ isOpen, toggleAction, label, summa
   `;
 }
 
-function testsAthleteSectionSummary(form) {
-  return form.athleteIds.length ? `${form.athleteIds.length} selected` : "None selected";
+// Item 1 (Builder-style Recipients picker): replaces the old raw Club/Team
+// <select> pair + the separate Athletes collapsible with a SINGLE trigger
+// that opens a Builder-style bottom-sheet/modal with Clubs/Teams/Athletes
+// tabs, built on Builder's own .builder-athlete-overlay/-picker/-option/
+// -checkmark classes (see builder-modals.js's renderBuilderAthletePicker,
+// the template this mirrors) so it looks and behaves like the rest of the
+// app's pickers instead of inventing a new visual language. Combinable, not
+// mutually exclusive - clubIds/teamIds/athleteIds are three independent
+// arrays; the backend's own targets model already unions them (see
+// backend/src/routes/tests.js's insertTargets/resolveValidTargets).
+const RECIPIENT_PICKER_TABS = [
+  { id: "clubs", label: "Clubs" },
+  { id: "teams", label: "Teams" },
+  { id: "athletes", label: "Athletes" },
+];
+
+function testsRecipientsTotalSelected(form) {
+  return form.clubIds.length + form.teamIds.length + form.athleteIds.length;
 }
 
-function renderAthleteSectionHtml(form) {
+function testsRecipientsTriggerLabel(form) {
+  const total = testsRecipientsTotalSelected(form);
+  return total ? `Recipients · ${total} selected` : "Choose recipients";
+}
+
+function renderRecipientsTriggerHtml(form) {
   return `
-    <div class="tests-collapsible-section">
-      ${renderCollapsibleSectionHeaderHtml({ isOpen: form.athletesSectionOpen, toggleAction: "tests-toggle-athletes-section", label: "Athletes", summary: testsAthleteSectionSummary(form) })}
-      ${form.athletesSectionOpen ? renderAthleteMultiSelectHtml(form) : ""}
+    <div class="builder-assignment-row tests-recipients-row">
+      <span class="builder-field-label">Recipients</span>
+      <button class="builder-athlete-trigger" type="button" data-action="tests-open-recipient-picker" aria-haspopup="dialog">
+        <span class="builder-athlete-trigger-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" class="tests-recipients-trigger-icon" aria-hidden="true"><circle cx="9" cy="8" r="3.2"></circle><path d="M3.5 20a5.5 5.5 0 0 1 11 0"></path><circle cx="17.5" cy="8.5" r="2.6"></circle><path d="M15 13.2a5 5 0 0 1 6 4.9"></path></svg>
+        </span>
+        <span><strong>${escapeHtml(testsRecipientsTriggerLabel(form))}</strong></span>
+        <span class="button-icon">&gt;</span>
+      </button>
     </div>
   `;
+}
+
+function testsRecipientTabCount(form, tabId) {
+  if (tabId === "clubs") return form.clubIds.length;
+  if (tabId === "teams") return form.teamIds.length;
+  return form.athleteIds.length;
+}
+
+function renderRecipientPickerTabsHtml(form) {
+  return `
+    <div class="tests-recipient-picker-tabs" role="tablist">
+      ${RECIPIENT_PICKER_TABS.map((tab) => {
+        const count = testsRecipientTabCount(form, tab.id);
+        return `
+          <button type="button" class="tests-recipient-picker-tab ${form.recipientPickerTab === tab.id ? "is-active" : ""}" role="tab" aria-selected="${form.recipientPickerTab === tab.id ? "true" : "false"}" data-action="tests-recipient-picker-set-tab" data-tab="${tab.id}">
+            ${tab.label}${count ? ` <span class="tests-recipient-picker-tab-count">${count}</span>` : ""}
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderRecipientOrgOptionsHtml({ items, selectedIds, kind, emptyLabel }) {
+  if (!items.length) return `<p class="muted">${escapeHtml(emptyLabel)}</p>`;
+  const selected = new Set(selectedIds);
+  return items.map((item) => {
+    const isSelected = selected.has(item.id);
+    return `
+      <button type="button" class="builder-athlete-option ${isSelected ? "is-selected" : ""}" data-action="tests-recipient-picker-toggle" data-kind="${kind}" data-id="${escapeAttr(item.id)}">
+        <span class="builder-athlete-trigger-icon">${escapeHtml(initialsFor(item.name))}</span>
+        <span><strong>${escapeHtml(item.name)}</strong>${item.subtitle ? `<small>${escapeHtml(item.subtitle)}</small>` : ""}</span>
+        <span class="builder-checkmark" aria-hidden="true">${isSelected ? "&#10003;" : ""}</span>
+      </button>
+    `;
+  }).join("");
+}
+
+function renderRecipientOrgSelectAllHtml({ items, selectedIds, kind }) {
+  const selected = new Set(selectedIds);
+  const allSelected = items.length > 0 && items.every((item) => selected.has(item.id));
+  return `
+    <button type="button" class="checkbox-toggle-all ${allSelected ? "is-checked" : ""}" data-action="tests-recipient-picker-select-all" data-kind="${kind}" aria-label="${allSelected ? "Uncheck all" : "Check all"}" ${items.length ? "" : "disabled"}>
+      <span aria-hidden="true">${allSelected ? "&#10003;" : ""}</span>
+    </button>
+    <span class="muted">Select all</span>
+    <button type="button" class="plain-button compact-button" data-action="tests-recipient-picker-clear" data-kind="${kind}" ${selectedIds.length ? "" : "disabled"}>Clear all</button>
+  `;
+}
+
+function renderRecipientClubsTabHtml(form, orgData) {
+  const clubs = orgData?.clubs || [];
+  return `
+    <div class="builder-athlete-select-all">
+      ${renderRecipientOrgSelectAllHtml({ items: clubs, selectedIds: form.clubIds, kind: "club" })}
+    </div>
+    <div class="builder-athlete-options tests-athlete-options">
+      ${renderRecipientOrgOptionsHtml({ items: clubs.map((club) => ({ id: club.id, name: club.name })), selectedIds: form.clubIds, kind: "club", emptyLabel: "No clubs available." })}
+    </div>
+  `;
+}
+
+function renderRecipientTeamsTabHtml(form, orgData) {
+  const teams = orgData?.teams || [];
+  return `
+    <div class="builder-athlete-select-all">
+      ${renderRecipientOrgSelectAllHtml({ items: teams, selectedIds: form.teamIds, kind: "team" })}
+    </div>
+    <div class="builder-athlete-options tests-athlete-options">
+      ${renderRecipientOrgOptionsHtml({ items: teams.map((team) => ({ id: team.id, name: team.name, subtitle: team.club_name || "" })), selectedIds: form.teamIds, kind: "team", emptyLabel: "No teams available." })}
+    </div>
+  `;
+}
+
+function renderRecipientAthletesTabHtml(form) {
+  return `
+    <label class="search-field">
+      <span>Search athletes</span>
+      <input type="search" placeholder="Search athletes by name" value="${escapeAttr(form.athleteSearch)}" data-action="tests-schedule-athlete-search">
+    </label>
+    <div class="builder-athlete-select-all" data-tests-athlete-select-all>
+      ${renderTestsAthleteSelectAllHtml(form)}
+    </div>
+    <div class="builder-athlete-options tests-athlete-options" data-tests-athlete-options>
+      ${renderTestsAthleteOptionsHtml(form)}
+    </div>
+    <p class="muted tests-athlete-count" data-tests-athlete-count>${testsAthleteCountLabel(form)}</p>
+  `;
+}
+
+export function renderRecipientPickerHtml(form) {
+  const orgData = state.tests.orgPickerData;
+  const tab = form.recipientPickerTab;
+  return `
+    <div class="builder-athlete-overlay tests-recipient-picker-overlay">
+      <button class="builder-athlete-backdrop" type="button" data-action="tests-recipient-picker-cancel" aria-label="Close recipients picker"></button>
+      <section class="panel builder-athlete-picker tests-recipient-picker" role="dialog" aria-modal="true" aria-label="Choose recipients">
+        <div class="builder-section-panel-head">
+          <div>
+            <strong>Recipients</strong>
+            <p class="muted">Any mix of clubs, teams and individual athletes.</p>
+          </div>
+          <div class="builder-athlete-picker-head-actions">
+            <button class="plain-button icon-button builder-athlete-picker-cancel" type="button" data-action="tests-recipient-picker-cancel" aria-label="Cancel" title="Cancel">${ICON_X}</button>
+            <button class="plain-button icon-button builder-athlete-picker-continue" type="button" data-action="tests-recipient-picker-confirm" aria-label="Confirm" title="Confirm">${ICON_CHECK}</button>
+          </div>
+        </div>
+        <div data-tests-recipient-picker-tabs>
+          ${renderRecipientPickerTabsHtml(form)}
+        </div>
+        <div data-tests-recipient-picker-panel>
+          ${tab === "clubs" ? renderRecipientClubsTabHtml(form, orgData) : tab === "teams" ? renderRecipientTeamsTabHtml(form, orgData) : renderRecipientAthletesTabHtml(form)}
+        </div>
+        <div class="builder-copy-plan-footer">
+          <span class="muted" data-tests-recipient-picker-total>${testsRecipientsTotalSelected(form)} selected total</span>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+// Targeted DOM patch for the recipient picker's tab bar/panel/footer (same
+// reasoning as patchTestsAthletePickerDom - a toggle/select-all click must
+// never do a full renderTests(), which would blow away the picker's own
+// scroll position/open state mid-interaction).
+export function patchRecipientPickerPanelDom() {
+  const form = state.tests.scheduleForm;
+  const orgData = state.tests.orgPickerData;
+  const tabsEl = document.querySelector("[data-tests-recipient-picker-tabs]");
+  if (tabsEl) tabsEl.innerHTML = renderRecipientPickerTabsHtml(form);
+  const panelEl = document.querySelector("[data-tests-recipient-picker-panel]");
+  if (panelEl) {
+    panelEl.innerHTML = form.recipientPickerTab === "clubs" ? renderRecipientClubsTabHtml(form, orgData)
+      : form.recipientPickerTab === "teams" ? renderRecipientTeamsTabHtml(form, orgData)
+      : renderRecipientAthletesTabHtml(form);
+  }
+  const totalEl = document.querySelector("[data-tests-recipient-picker-total]");
+  if (totalEl) totalEl.textContent = `${testsRecipientsTotalSelected(form)} selected total`;
 }
 
 const NOTIFICATION_KIND_SHORT_LABELS = {
@@ -597,7 +763,6 @@ function renderAdvancedSettingsHtml(form) {
 
 export function renderScheduleFormHtml() {
   const form = state.tests.scheduleForm;
-  const orgData = state.tests.orgPickerData;
   const isEdit = Boolean(form.editingScheduleId);
   const isSpecificDates = form.scheduleKind === "specific_dates";
   // hasActivity (not hasOccurrences alone) is what actually blocks a
@@ -647,21 +812,7 @@ export function renderScheduleFormHtml() {
               <span class="tests-timezone-info-full">Times follow each athlete's device timezone.</span>
               <span class="tests-timezone-info-short">Follows each athlete's own timezone.</span>
             </p>
-            <label class="search-field">
-              <span>Club (optional quick target)</span>
-              <select name="clubId" data-action="tests-schedule-form-field">
-                <option value="">None</option>
-                ${(orgData?.clubs || []).map((club) => `<option value="${escapeAttr(club.id)}" ${form.clubId === club.id ? "selected" : ""}>${escapeHtml(club.name)}</option>`).join("")}
-              </select>
-            </label>
-            <label class="search-field">
-              <span>Team (optional quick target)</span>
-              <select name="teamId" data-action="tests-schedule-form-field">
-                <option value="">None</option>
-                ${(orgData?.teams || []).map((team) => `<option value="${escapeAttr(team.id)}" ${form.teamId === team.id ? "selected" : ""}>${escapeHtml(team.name)}</option>`).join("")}
-              </select>
-            </label>
-            ${renderAthleteSectionHtml(form)}
+            ${renderRecipientsTriggerHtml(form)}
             ${renderNotificationsCollapsibleHtml(form)}
             ${renderAdvancedSettingsHtml(form)}
           </div>
@@ -670,6 +821,7 @@ export function renderScheduleFormHtml() {
           </div>
         </form>
       `}
+      ${form.recipientPickerOpen ? renderRecipientPickerHtml(form) : ""}
     </section>
   `;
 }
@@ -830,16 +982,15 @@ export function testsCalendarToggleLabel(form) {
   return formatShortDate(form.startDate);
 }
 
+// Item 2: no more separate "Pick dates"/toggle row - Dates/Daily are the
+// ONLY controls that open the calendar (tests-actions.js's
+// tests-schedule-set-recurrence). While closed, this renders just a compact
+// summary line below the recurrence pills; clicking either pill again
+// reopens the calendar (that handler always sets calendarOpen = true).
 function renderTestsCalendarSectionHtml(form) {
-  const label = testsCalendarToggleLabel(form);
   return `
     <div class="tests-calendar-section">
-      <button type="button" class="tests-calendar-open-toggle" data-action="tests-calendar-toggle-open" aria-expanded="${form.calendarOpen ? "true" : "false"}">
-        <svg class="tests-calendar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"></rect><path d="M8 3v3"></path><path d="M16 3v3"></path><path d="M3 10h18"></path></svg>
-        <span data-tests-calendar-toggle-label>${escapeHtml(label)}</span>
-        <span class="tests-calendar-toggle-caret">${form.calendarOpen ? "&#9650;" : "&#9660;"}</span>
-      </button>
-      ${form.calendarOpen ? renderTestsCalendarHtml(form) : ""}
+      ${form.calendarOpen ? renderTestsCalendarHtml(form) : `<p class="tests-calendar-closed-summary muted" data-tests-calendar-toggle-label>${escapeHtml(testsCalendarToggleLabel(form))}</p>`}
     </div>
   `;
 }
@@ -861,9 +1012,15 @@ export function renderTestsCalendarHtml(form) {
   return `
     <div class="tests-calendar" data-tests-calendar>
       <div class="tests-calendar-head">
-        <button type="button" class="plain-button icon-button" data-action="tests-calendar-prev-month" aria-label="Previous month">&larr;</button>
-        <strong>${escapeHtml(monthLabel)}</strong>
-        <button type="button" class="plain-button icon-button" data-action="tests-calendar-next-month" aria-label="Next month">&rarr;</button>
+        <div class="tests-calendar-head-nav">
+          <button type="button" class="plain-button icon-button" data-action="tests-calendar-prev-month" aria-label="Previous month">&larr;</button>
+          <strong>${escapeHtml(monthLabel)}</strong>
+          <button type="button" class="plain-button icon-button" data-action="tests-calendar-next-month" aria-label="Next month">&rarr;</button>
+        </div>
+        <div class="builder-athlete-picker-head-actions tests-calendar-head-actions">
+          <button type="button" class="plain-button icon-button builder-athlete-picker-cancel" data-action="tests-calendar-cancel" aria-label="Cancel" title="Cancel">${ICON_X}</button>
+          <button type="button" class="plain-button icon-button builder-athlete-picker-continue" data-action="tests-calendar-confirm" aria-label="Confirm" title="Confirm">${ICON_CHECK}</button>
+        </div>
       </div>
       <div class="tests-calendar-weekdays">${CALENDAR_WEEKDAY_LABELS.map((label) => `<span>${label}</span>`).join("")}</div>
       <div class="tests-calendar-grid" data-tests-calendar-grid>
@@ -980,6 +1137,13 @@ export function patchTestsAthletePickerDom() {
   if (optionsEl) optionsEl.innerHTML = renderTestsAthleteOptionsHtml(form);
   const countEl = document.querySelector("[data-tests-athlete-count]");
   if (countEl) countEl.textContent = testsAthleteCountLabel(form);
+  // The athlete tab lives inside the Recipients picker now - its own tab
+  // badge count and the picker's footer total must stay live too, same
+  // reasoning as the club/team tab's own patchRecipientPickerPanelDom.
+  const tabsEl = document.querySelector("[data-tests-recipient-picker-tabs]");
+  if (tabsEl) tabsEl.innerHTML = renderRecipientPickerTabsHtml(form);
+  const totalEl = document.querySelector("[data-tests-recipient-picker-total]");
+  if (totalEl) totalEl.textContent = `${testsRecipientsTotalSelected(form)} selected total`;
 }
 
 // Targeted DOM patch for the Specific-dates calendar - same reasoning as

@@ -2,7 +2,7 @@ import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
-import { assignmentSetFingerprint, checkInUrl, patchTestsAthletePickerDom, patchTestsCalendarDom, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
+import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
 import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadWellnessForm } from "./tests-data.js";
 
 // Every data-action="tests-*" click/change and data-tests-form submit in the
@@ -98,9 +98,10 @@ export async function handleTestsAction(action, { renderTests }) {
       startDate: localDateIsoInTimeZone(defaultTimezone),
       calendarMonth: localMonthIsoInTimeZone(defaultTimezone),
       calendarOpen: true, // "Klik na bilo koju opciju mora odmah otvoriti isti calendar component" - true from the very first render too, not just after a pill click
-      // Mobile compaction: Athletes/Notifications start collapsed on a
-      // narrow viewport, expanded (unchanged) on desktop.
-      athletesSectionOpen: !mobile,
+      calendarCancelSnapshot: { selectedDates: [] }, // matches multi mode's own snapshot shape - a brand-new form starts with nothing picked
+      // Mobile compaction: Notifications starts collapsed on a narrow
+      // viewport, expanded (unchanged) on desktop. Athletes is now a tab
+      // inside the Recipients picker, not a standalone collapsible section.
       notificationsSectionOpen: !mobile,
       // Visible MVP defaults for a NEW schedule (spec: invitation on,
       // reminder on at 60 minutes, both coach digests on) - the coach sees
@@ -138,11 +139,28 @@ export async function handleTestsAction(action, { renderTests }) {
     // component" - no separate "open the calendar" step needed anymore.
     form.calendarOpen = true;
     resetTestsCalendarInteractionState();
+    // Item 2: snapshot whatever this mode's own fields already held, taken
+    // the instant the calendar opens - the calendar header's own X restores
+    // exactly this if the coach backs out of everything picked in this one
+    // open/close session.
+    form.calendarCancelSnapshot = snapshotCalendarFields(form);
     renderTests();
     return true;
   }
-  if (type === "tests-toggle-athletes-section") {
-    state.tests.scheduleForm.athletesSectionOpen = !state.tests.scheduleForm.athletesSectionOpen;
+  if (type === "tests-calendar-cancel") {
+    const form = state.tests.scheduleForm;
+    restoreCalendarFields(form, form.calendarCancelSnapshot);
+    form.calendarCancelSnapshot = null;
+    form.calendarOpen = false;
+    resetTestsCalendarInteractionState();
+    renderTests();
+    return true;
+  }
+  if (type === "tests-calendar-confirm") {
+    const form = state.tests.scheduleForm;
+    form.calendarCancelSnapshot = null;
+    form.calendarOpen = false;
+    resetTestsCalendarInteractionState();
     renderTests();
     return true;
   }
@@ -173,15 +191,6 @@ export async function handleTestsAction(action, { renderTests }) {
       form.notificationRules.push(rule);
     }
     rule.enabled = action.checked;
-    renderTests();
-    return true;
-  }
-  // Collapses/expands the day-grid itself - it doesn't need to stay open
-  // the whole time the form is open, only while the coach is actually
-  // picking dates. The compact toggle button (showing "Pick dates" or
-  // "N dates selected") stands in for it otherwise.
-  if (type === "tests-calendar-toggle-open") {
-    state.tests.scheduleForm.calendarOpen = !state.tests.scheduleForm.calendarOpen;
     renderTests();
     return true;
   }
@@ -248,6 +257,73 @@ export async function handleTestsAction(action, { renderTests }) {
   if (type === "tests-schedule-clear-all-athletes") {
     state.tests.scheduleForm.athleteIds = [];
     patchTestsAthletePickerDom();
+    return true;
+  }
+  // Item 1: the unified Recipients picker (Clubs/Teams/Athletes tabs). Open
+  // snapshots the current selection so its own X (cancel) can revert
+  // everything picked in this one open/close session, mirroring the
+  // calendar's own cancel snapshot above - Confirm (check) just closes.
+  if (type === "tests-open-recipient-picker") {
+    const form = state.tests.scheduleForm;
+    if (!state.tests.orgPickerData) await loadOrgPickerData();
+    form.recipientPickerOpen = true;
+    form.recipientPickerSnapshot = { athleteIds: form.athleteIds.slice(), teamIds: form.teamIds.slice(), clubIds: form.clubIds.slice() };
+    renderTests();
+    return true;
+  }
+  if (type === "tests-recipient-picker-cancel") {
+    const form = state.tests.scheduleForm;
+    if (form.recipientPickerSnapshot) {
+      form.athleteIds = form.recipientPickerSnapshot.athleteIds.slice();
+      form.teamIds = form.recipientPickerSnapshot.teamIds.slice();
+      form.clubIds = form.recipientPickerSnapshot.clubIds.slice();
+    }
+    form.recipientPickerSnapshot = null;
+    form.recipientPickerOpen = false;
+    renderTests();
+    return true;
+  }
+  if (type === "tests-recipient-picker-confirm") {
+    const form = state.tests.scheduleForm;
+    form.recipientPickerSnapshot = null;
+    form.recipientPickerOpen = false;
+    renderTests();
+    return true;
+  }
+  if (type === "tests-recipient-picker-set-tab") {
+    state.tests.scheduleForm.recipientPickerTab = action.dataset.tab;
+    patchRecipientPickerPanelDom();
+    return true;
+  }
+  if (type === "tests-recipient-picker-toggle") {
+    const kind = action.dataset.kind;
+    const id = action.dataset.id;
+    const form = state.tests.scheduleForm;
+    const key = kind === "club" ? "clubIds" : "teamIds";
+    const list = form[key];
+    const index = list.indexOf(id);
+    if (index >= 0) list.splice(index, 1);
+    else list.push(id);
+    patchRecipientPickerPanelDom();
+    return true;
+  }
+  if (type === "tests-recipient-picker-select-all") {
+    const kind = action.dataset.kind;
+    const form = state.tests.scheduleForm;
+    const orgData = state.tests.orgPickerData;
+    const items = kind === "club" ? orgData?.clubs || [] : orgData?.teams || [];
+    const key = kind === "club" ? "clubIds" : "teamIds";
+    const selected = new Set(form[key]);
+    for (const item of items) selected.add(item.id);
+    form[key] = Array.from(selected);
+    patchRecipientPickerPanelDom();
+    return true;
+  }
+  if (type === "tests-recipient-picker-clear") {
+    const kind = action.dataset.kind;
+    const form = state.tests.scheduleForm;
+    form[kind === "club" ? "clubIds" : "teamIds"] = [];
+    patchRecipientPickerPanelDom();
     return true;
   }
   if (type === "tests-delete-schedule") {
@@ -591,6 +667,25 @@ export function resetTestsCalendarInteractionState() {
   pendingRangeStart = null;
 }
 
+// Item 2: what the calendar's own header X restores. Keyed on the mode's
+// own fields (multi -> selectedDates, range/single -> startDate/endDate) so
+// switching mode never tries to "restore" a field the new mode doesn't use.
+function snapshotCalendarFields(form) {
+  const mode = testsCalendarMode(form);
+  if (mode === "multi") return { selectedDates: form.selectedDates.slice() };
+  return { startDate: form.startDate, endDate: form.endDate };
+}
+
+function restoreCalendarFields(form, snapshot) {
+  if (!snapshot) return;
+  if (Object.prototype.hasOwnProperty.call(snapshot, "selectedDates")) {
+    form.selectedDates = snapshot.selectedDates.slice();
+    return;
+  }
+  form.startDate = snapshot.startDate;
+  form.endDate = snapshot.endDate;
+}
+
 function calendarTodayIso() {
   const form = state.tests.scheduleForm;
   const timezone = form.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -672,30 +767,43 @@ export function extendTestsCalendarDrag(dayEl) {
   return true;
 }
 
+// Item 2: "Daily" must auto-close the calendar once its range is genuinely
+// COMPLETED (a finished drag, or the second click of the two-click flow) -
+// but never after just the first click/date, which would otherwise create a
+// one-day daily schedule by accident. Returns true exactly when it closed
+// the calendar, so app.js's pointerup/pointercancel listeners know to run a
+// full renderTests() (a structural show/hide, not something the lightweight
+// patchTestsCalendarDom() can express). "single" mode (one_time edit) never
+// auto-closes, preserving its existing edit-mode behavior.
 export function endTestsCalendarDrag() {
   const drag = calendarDragState;
   calendarDragState = null;
-  if (!drag || drag.kind === "multi" || drag.kind === "single") return;
+  if (!drag || drag.kind === "multi" || drag.kind === "single") return false;
+  const form = state.tests.scheduleForm;
   if (drag.extended) {
     // A real drag already fully resolved the range live, in
     // extendTestsCalendarDrag - any earlier pending two-click state is now
-    // stale.
+    // stale, and the range is genuinely complete.
     pendingRangeStart = null;
-    return;
+    form.calendarOpen = false;
+    form.calendarCancelSnapshot = null;
+    return true;
   }
   // Range mode, no drag occurred - this was a plain click. Two-click flow:
   // the first plain click of a fresh selection just remembers its day
   // (already shown as a provisional one-day span by startTestsCalendarDrag
-  // above); a second plain click on a DIFFERENT day completes the range
-  // between them.
-  const form = state.tests.scheduleForm;
+  // above) and must NOT close the calendar yet; a second plain click on a
+  // DIFFERENT day completes the range between them and closes it.
   if (pendingRangeStart && pendingRangeStart !== drag.anchorDate) {
     applyRangeSpan(form, pendingRangeStart, drag.anchorDate);
     pendingRangeStart = null;
-  } else {
-    applyRangeSpan(form, drag.anchorDate, drag.anchorDate);
-    pendingRangeStart = drag.anchorDate;
+    form.calendarOpen = false;
+    form.calendarCancelSnapshot = null;
+    return true;
   }
+  applyRangeSpan(form, drag.anchorDate, drag.anchorDate);
+  pendingRangeStart = drag.anchorDate;
+  return false;
 }
 
 // Cheap synchronous check app.js uses to skip its (otherwise-unconditional)
@@ -750,13 +858,16 @@ async function openEditSchedule(scheduleId, renderTests) {
       endDate: detail.schedule.endDate || detail.schedule.startDate,
       calendarMonth: localMonthIsoInTimeZone(timezone),
       calendarOpen: true,
+      // Range/single mode's own snapshot shape (see snapshotCalendarFields) -
+      // an edit form opens with the calendar already showing the existing
+      // schedule's dates, so "before this calendar-opening" is exactly that.
+      calendarCancelSnapshot: { startDate: detail.schedule.startDate, endDate: detail.schedule.endDate || detail.schedule.startDate },
       opensTime: detail.schedule.opensTime,
       dueTime: detail.schedule.dueTime || "",
       closesTime: detail.schedule.closesTime,
       athleteIds: targets.filter((t) => t.kind === "athlete").map((t) => t.id),
-      teamId: targets.find((t) => t.kind === "team")?.id || "",
-      clubId: targets.find((t) => t.kind === "club")?.id || "",
-      athletesSectionOpen: !mobile,
+      teamIds: targets.filter((t) => t.kind === "team").map((t) => t.id),
+      clubIds: targets.filter((t) => t.kind === "club").map((t) => t.id),
       notificationsSectionOpen: !mobile,
       // [] here means "never configured" (see state.js's own comment) - the
       // form renders that as a visible unconfigured state, never silently
@@ -800,8 +911,8 @@ async function deleteSchedule(action, renderTests) {
 
 function buildTargetsFromForm(form) {
   const targets = form.athleteIds.map((id) => ({ kind: "athlete", id }));
-  if (form.teamId) targets.push({ kind: "team", id: form.teamId });
-  if (form.clubId) targets.push({ kind: "club", id: form.clubId });
+  for (const id of form.teamIds) targets.push({ kind: "team", id });
+  for (const id of form.clubIds) targets.push({ kind: "club", id });
   return targets;
 }
 

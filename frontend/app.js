@@ -408,8 +408,12 @@ function bindEvents() {
   // always end it. See tests-actions.js's start/extend/endTestsCalendarDrag.
   els.content.addEventListener("pointerdown", handleContentPointerDown);
   document.addEventListener("pointermove", handleContentPointerMove);
-  document.addEventListener("pointerup", () => endTestsCalendarDrag());
-  document.addEventListener("pointercancel", () => endTestsCalendarDrag());
+  // Item 2 (Daily auto-close): endTestsCalendarDrag() returns true exactly
+  // when it just auto-closed the calendar on a genuinely completed range -
+  // that's a structural show/hide the lightweight patchTestsCalendarDom()
+  // can't express, so only THAT case gets a full renderTests().
+  document.addEventListener("pointerup", () => { if (endTestsCalendarDrag()) renderTests(); });
+  document.addEventListener("pointercancel", () => { if (endTestsCalendarDrag()) renderTests(); });
   document.addEventListener("click", handleGlobalClick);
   document.addEventListener("submit", handleGlobalSubmit);
   document.addEventListener("error", handleImageError, true);
