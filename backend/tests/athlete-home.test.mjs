@@ -20,6 +20,11 @@ let baseUrl;
 const cleanupUserIds = new Set();
 const cleanupAthleteIds = new Set();
 const cleanupPlanIds = new Set();
+// Item 5 (WELLNESS Home card): tests.test_schedules cascades (on delete
+// cascade) down through targets/occurrences/assignments/assessments, so
+// deleting just the schedule row is enough - but it must happen BEFORE the
+// athletes/users cleanup above, since assignment rows reference athlete_id.
+const cleanupScheduleIds = new Set();
 
 before(async () => {
   server = http.createServer(app);
@@ -29,6 +34,18 @@ before(async () => {
 
 after(async () => {
   await runCleanupSteps([
+    // test_assessments.assignment_id/standalone_assignment_id are both
+    // `on delete restrict` (deliberate - see the schema migration's own
+    // comment on that column) - a completed WELLNESS submit's own
+    // assessment row would otherwise block the schedule cascade below, so
+    // it must be cleared first.
+    ["test assessments", () => cleanupScheduleIds.size && query(
+      `delete from tests.test_assessments
+       where assignment_id in (select id from tests.test_assignments where occurrence_id in (select id from tests.test_schedule_occurrences where schedule_id = any($1::uuid[])))
+          or standalone_assignment_id in (select id from tests.test_assignments where occurrence_id in (select id from tests.test_schedule_occurrences where schedule_id = any($1::uuid[])))`,
+      [[...cleanupScheduleIds]],
+    )],
+    ["test schedules", () => cleanupScheduleIds.size && query(`delete from tests.test_schedules where id = any($1::uuid[])`, [[...cleanupScheduleIds]])],
     ["plans", () => cleanupPlanIds.size && query(`delete from plans.plans where id = any($1::uuid[])`, [[...cleanupPlanIds]])],
     ["athletes", () => cleanupAthleteIds.size && query(`delete from public.athletes where id = any($1::uuid[])`, [[...cleanupAthleteIds]])],
     ["users", () => cleanupUserIds.size && query(`delete from public.users where id = any($1::uuid[])`, [[...cleanupUserIds]])],
@@ -385,6 +402,117 @@ test("11. an archived athlete profile that still has an active login keeps seein
 test("12. an unauthenticated request is rejected", async () => {
   const res = await api("/api/athlete-home");
   assert.equal(res.status, 401);
+});
+
+// === Item 5: the WELLNESS card ===
+
+// WELLNESS's real seeded test version (migrations_v2/202608221000_tests_v42_
+// seed_wellness_fms.sql) - same UUID tests-module-schedule-management.test.mjs
+// (the disposable-DB harness) uses; this file runs against the real DB where
+// that seed already exists.
+const WELLNESS_TEST_VERSION_ID = "7a386bd1-d25e-4651-9012-e76d9dc32559";
+const WELLNESS_FULL_VALUES = { fatigue: 2, sleep: 4, soreness: 0, stress: 6, mood: 8, injury: false };
+
+async function makeCoachCookie() {
+  const coach = await makeCoach();
+  const token = await createSession(coach.id);
+  return { coachId: coach.id, coachCookie: cookieFor(token) };
+}
+
+// A coach can only target an athlete they're actually linked to
+// (validateTarget -> canAccessAthlete, backend/src/access.js) - a direct
+// public.user_athletes row is the simplest real link for this fixture,
+// same table an "assign athlete to coach" flow would populate.
+async function linkCoachToAthlete(coachId, athleteId) {
+  await query(`insert into public.user_athletes (user_id, athlete_id, is_active) values ($1, $2, true)`, [coachId, athleteId]);
+}
+
+// One_time schedule, targeting the athlete directly, open all day today -
+// mirrors baseCreateBody from tests-module-schedule-management.test.mjs
+// (the disposable-DB sibling), just posted through a real coach session
+// against the real DB this file already runs against.
+async function makeOpenWellnessSchedule({ coachCookie, athleteId }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const res = await fetch(`${baseUrl}/api/tests/schedules`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: coachCookie },
+    body: JSON.stringify({
+      testVersionId: WELLNESS_TEST_VERSION_ID,
+      scheduleKind: "one_time",
+      timezone: "UTC",
+      startDate: today,
+      opensTime: "00:00",
+      closesTime: "23:59",
+      targets: [{ kind: "athlete", id: athleteId }],
+    }),
+  });
+  const body = await res.json();
+  if (res.status !== 201) throw new Error(`Could not create WELLNESS schedule fixture: ${res.status} ${JSON.stringify(body)}`);
+  cleanupScheduleIds.add(body.schedule.id);
+  return body.schedule.id;
+}
+
+test("13. an open, not-yet-completed WELLNESS assignment shows on Home as a single actionable card", async () => {
+  const { coachId, coachCookie } = await makeCoachCookie();
+  const user = await makeUser({ email: await uniqueEmail("home-wellness-open") });
+  const athleteId = await makeAthlete({ userId: user.id, name: "Wellness Open Athlete" });
+  await linkCoachToAthlete(coachId, athleteId);
+  await makeOpenWellnessSchedule({ coachCookie, athleteId });
+  const token = await createSession(user.id);
+
+  const res = await api("/api/athlete-home", { cookie: cookieFor(token) });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.wellness.count, 1, "GET /api/athlete-home materializes today's occurrence on demand, same as GET /api/tests/athlete/today");
+  assert.ok(res.body.wellness.assignmentId, "a real assignment id must be returned so the Home card can deep-link straight to it");
+  assert.equal(res.body.wellness.testName, "WELLNESS");
+  assert.ok(res.body.wellness.closesAt);
+});
+
+test("14. no WELLNESS schedule at all: wellness.count is 0, never an error", async () => {
+  const user = await makeUser({ email: await uniqueEmail("home-wellness-none") });
+  await makeAthlete({ userId: user.id, name: "No Wellness Athlete" });
+  const token = await createSession(user.id);
+
+  const res = await api("/api/athlete-home", { cookie: cookieFor(token) });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.wellness, { count: 0, assignmentId: null, testName: "", closesAt: null });
+});
+
+test("15. once the athlete completes it, the same assignment immediately stops counting as pending on the very next Home read", async () => {
+  const { coachId, coachCookie } = await makeCoachCookie();
+  const user = await makeUser({ email: await uniqueEmail("home-wellness-done") });
+  const athleteId = await makeAthlete({ userId: user.id, name: "Wellness Done Athlete" });
+  await linkCoachToAthlete(coachId, athleteId);
+  const scheduleId = await makeOpenWellnessSchedule({ coachCookie, athleteId });
+  // A completed tests.test_assessments row is deliberately immutable at the
+  // DB level (a trigger refuses to physically delete a completed/
+  // invalidated assessment - "use supersede instead"), which this test is
+  // about to create on purpose. That makes the normal schedule/athlete/user
+  // cleanup below impossible to run all the way through for THIS fixture
+  // without fighting that same real product invariant - so this one
+  // fixture is deliberately excluded from cleanup and left in place,
+  // clearly named/emailed as test data, exactly like a real completed
+  // assessment would be retained permanently in production.
+  cleanupScheduleIds.delete(scheduleId);
+  cleanupAthleteIds.delete(athleteId);
+  cleanupUserIds.delete(user.id);
+  cleanupUserIds.delete(coachId);
+  const token = await createSession(user.id);
+  const athleteCookie = cookieFor(token);
+
+  const before2 = await api("/api/athlete-home", { cookie: athleteCookie });
+  assert.equal(before2.body.wellness.count, 1);
+  const assignmentId = before2.body.wellness.assignmentId;
+
+  const submitted = await fetch(`${baseUrl}/api/tests/assignments/${encodeURIComponent(assignmentId)}/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: athleteCookie },
+    body: JSON.stringify({ values: WELLNESS_FULL_VALUES }),
+  });
+  assert.equal(submitted.status, 200);
+
+  const after2 = await api("/api/athlete-home", { cookie: athleteCookie });
+  assert.equal(after2.body.wellness.count, 0, "a completed assignment must never keep showing as pending on Home");
 });
 
 void loginAndGetHome;
