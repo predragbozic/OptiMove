@@ -230,6 +230,10 @@ export async function handleTestsAction(action, { renderTests }) {
     await openEditSchedule(action.dataset.scheduleId, renderTests);
     return true;
   }
+  if (type === "tests-schedule-again") {
+    await openScheduleAgain(action.dataset.scheduleId, renderTests);
+    return true;
+  }
   if (type === "tests-toggle-show-cancelled") {
     state.tests.showCancelledSchedules = action.checked;
     if (action.checked && state.tests.section === "schedule") await reloadSection(renderTests);
@@ -436,6 +440,7 @@ async function openResult(assessmentId, renderTests) {
       canSubmit: false,
       result: { wellnessScore: data.wellnessScore },
       injuryReported: data.values?.injury === true,
+      scheduleId: data.scheduleId || "",
     });
   } catch (error) {
     state.tests.error = error.message || "Could not load this result.";
@@ -876,6 +881,60 @@ async function openEditSchedule(scheduleId, renderTests) {
     });
   } catch (error) {
     state.tests.error = error.message || "Could not open this schedule for editing.";
+  }
+  renderTests();
+  void loadOrgPickerData().then(renderTests).catch(() => {});
+}
+
+// Item 4: "Schedule again" - loads the ORIGINAL schedule read-only (the
+// same GET already used for edit/detail) and opens a brand-new schedule
+// form pre-filled from it, but this is deliberately never editingScheduleId
+// - only scheduleAgainFromId (display/labeling only). That keeps the form's
+// own isEdit check false, so submitting it always goes through the normal
+// CREATE path (POST /schedules or /schedules/bulk - see submitTestsForm's
+// dispatch on scheduleForm.scheduleKind), never a PATCH of the original.
+// The original schedule, its occurrences/assignments/results and its
+// access link are never touched by any of this. Per spec: copies test
+// version (looked up fresh at submit time anyway, nothing to copy here),
+// Dates/Daily mode, targets, times, notification rules, and the fallback
+// timezone; never copies dates/start/end/status/history/results/link/
+// metadata - those simply aren't read from `detail` at all below.
+async function openScheduleAgain(scheduleId, renderTests) {
+  state.tests.error = "";
+  try {
+    const detail = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}`);
+    const targets = detail.targets || [];
+    resetTestsCalendarInteractionState();
+    const mobile = isMobileScheduleFormViewport();
+    const timezone = detail.schedule.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    // recurring -> "daily" (same mode, fresh start/end still required);
+    // one_time -> "specific_dates" (a fresh, create-mode multi-date pick -
+    // there's no meaningful "one_time schedule-again" distinct from just
+    // picking new dates).
+    const scheduleKind = detail.schedule.scheduleKind === "recurring" ? "daily" : "specific_dates";
+    state.tests.scheduleForm = emptyScheduleForm({
+      open: true,
+      scheduleAgainFromId: scheduleId,
+      scheduleKind,
+      timezone,
+      calendarMonth: localMonthIsoInTimeZone(timezone),
+      // Deliberately no startDate/endDate/selectedDates here - "Schedule
+      // again" requires picking NEW dates, never inherits the original's.
+      // emptyScheduleForm's own defaults ("", "", []) already leave them
+      // unset, which is exactly what's needed.
+      calendarOpen: true,
+      calendarCancelSnapshot: scheduleKind === "daily" ? { startDate: "", endDate: "" } : { selectedDates: [] },
+      opensTime: detail.schedule.opensTime,
+      dueTime: detail.schedule.dueTime || "",
+      closesTime: detail.schedule.closesTime,
+      athleteIds: targets.filter((t) => t.kind === "athlete").map((t) => t.id),
+      teamIds: targets.filter((t) => t.kind === "team").map((t) => t.id),
+      clubIds: targets.filter((t) => t.kind === "club").map((t) => t.id),
+      notificationsSectionOpen: !mobile,
+      notificationRules: (detail.notificationRules || []).map((rule) => ({ ...rule })),
+    });
+  } catch (error) {
+    state.tests.error = error.message || "Could not load this schedule to reuse.";
   }
   renderTests();
   void loadOrgPickerData().then(renderTests).catch(() => {});

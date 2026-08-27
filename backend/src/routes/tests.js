@@ -1640,7 +1640,7 @@ router.get("/results/:assessmentId", async (req, res, next) => {
     if (!row) return res.status(404).json({ error: "Result not found." });
     if (!row.schedule_id || !canManageSchedule(req, row)) return res.status(404).json({ error: "Result not found." });
     const { values, wellnessScore } = await loadAssessmentValuesAndResult(query, row.id);
-    res.json({ assessmentId: row.id, athleteName: row.athlete_name, completedAt: row.completed_at, status: row.status, values, wellnessScore });
+    res.json({ assessmentId: row.id, athleteName: row.athlete_name, completedAt: row.completed_at, status: row.status, values, wellnessScore, scheduleId: row.schedule_id });
   } catch (error) { next(error); }
 });
 

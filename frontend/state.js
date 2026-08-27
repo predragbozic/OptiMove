@@ -239,6 +239,11 @@ export const emptyWellnessForm = (overrides = {}) => ({
   result: null, // { wellnessScore } once a submit has succeeded this page load
   latestAssessment: null, // a previously-saved answer, if any (pre-fills values/answered)
   idempotencyKey: "",
+  // Item 4 ("Schedule again" from a result-detail view): only ever set by
+  // the coach's own openResult (tests-actions.js), never by the athlete's
+  // own submit/correction flow - gates the "Schedule again" button on
+  // renderWellnessResultHtml.
+  scheduleId: "",
   ...overrides,
 });
 

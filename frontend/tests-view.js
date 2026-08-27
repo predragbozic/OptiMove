@@ -264,6 +264,7 @@ function renderWellnessResultHtml(form, { backAction }) {
       <p class="muted">Lower is better</p>
       ${form.injuryReported ? `<p class="tests-injury-flag">You reported pain or injury today.</p>` : ""}
       ${form.canSubmit ? `<button type="button" class="plain-button compact-button" data-action="tests-correct-answer">Correct my answer</button>` : ""}
+      ${form.scheduleId ? `<button type="button" class="plain-button compact-button" data-action="tests-schedule-again" data-schedule-id="${escapeAttr(form.scheduleId)}">Schedule again</button>` : ""}
     </section>
   `;
 }
@@ -493,13 +494,19 @@ function renderScheduleCardHtml(row) {
         <p class="muted">${escapeHtml(row.startDate || "")} &middot; ${escapeHtml(row.opensTime)}&ndash;${escapeHtml(row.closesTime)} ${escapeHtml(row.timezone)}</p>
       </button>
       ${row.status === "cancelled"
-        ? `<p class="muted tests-cancelled-note">Cancelled - read-only. Historical results, if any, remain available in History/Results. Create a new schedule to reuse these targets.</p>`
+        ? `
+        <p class="muted tests-cancelled-note">Cancelled - read-only. Historical results, if any, remain available in History/Results.</p>
+        <div class="tests-schedule-card-actions">
+          <button type="button" class="plain-button compact-button" data-action="tests-schedule-again" data-schedule-id="${escapeAttr(row.id)}">Schedule again</button>
+        </div>
+      `
         : `
         <div class="tests-schedule-card-actions">
           <button type="button" class="plain-button compact-button" data-action="tests-open-edit-schedule" data-schedule-id="${escapeAttr(row.id)}">Edit</button>
           ${row.status === "active"
             ? `<button type="button" class="plain-button compact-button" data-action="tests-set-schedule-status" data-schedule-id="${escapeAttr(row.id)}" data-status="paused">Pause</button>`
             : `<button type="button" class="plain-button compact-button" data-action="tests-set-schedule-status" data-schedule-id="${escapeAttr(row.id)}" data-status="active">Activate</button>`}
+          <button type="button" class="plain-button compact-button" data-action="tests-schedule-again" data-schedule-id="${escapeAttr(row.id)}">Schedule again</button>
           <button type="button" class="plain-button compact-button tests-delete-button" data-action="tests-delete-schedule" data-schedule-id="${escapeAttr(row.id)}" data-test-name="${escapeAttr(row.testName)}" data-has-occurrences="${row.hasOccurrences ? "true" : "false"}" ${deleting ? "disabled" : ""}>${deleting ? "Deleting..." : "Delete"}</button>
         </div>
       `}
@@ -516,12 +523,18 @@ function renderScheduleDetailHtml() {
       <p class="muted">${escapeHtml(schedule.opensTime)}&ndash;${escapeHtml(schedule.closesTime)} ${escapeHtml(schedule.timezone)}</p>
       <p>Targets: ${targets.map((t) => escapeHtml(t.name || t.id)).join(", ") || "none"}</p>
       ${schedule.status === "cancelled"
-        ? `<p class="muted tests-cancelled-note">Cancelled - read-only. It can no longer be edited or reactivated. Historical results, if any, remain available in History/Results. Create a new schedule to reuse these targets.</p>`
+        ? `
+        <p class="muted tests-cancelled-note">Cancelled - read-only. It can no longer be edited or reactivated. Historical results, if any, remain available in History/Results.</p>
+        <div class="tests-schedule-actions">
+          <button type="button" class="plain-button compact-button" data-action="tests-schedule-again" data-schedule-id="${escapeAttr(schedule.id)}">Schedule again</button>
+        </div>
+      `
         : `<div class="tests-schedule-actions">
         <button type="button" class="plain-button compact-button" data-action="tests-open-edit-schedule" data-schedule-id="${escapeAttr(schedule.id)}">Edit</button>
         ${schedule.status === "active"
           ? `<button type="button" class="plain-button compact-button" data-action="tests-set-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="paused">Pause</button>`
           : `<button type="button" class="plain-button compact-button" data-action="tests-set-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="active">Activate</button>`}
+        <button type="button" class="plain-button compact-button" data-action="tests-schedule-again" data-schedule-id="${escapeAttr(schedule.id)}">Schedule again</button>
         <button type="button" class="plain-button compact-button tests-delete-button" data-action="tests-delete-schedule" data-schedule-id="${escapeAttr(schedule.id)}" data-test-name="${escapeAttr(schedule.testName)}" data-has-occurrences="${schedule.hasOccurrences ? "true" : "false"}" ${state.tests.deletingScheduleId === schedule.id ? "disabled" : ""}>${state.tests.deletingScheduleId === schedule.id ? "Deleting..." : "Delete"}</button>
       </div>`}
       <div class="tests-link-box">
@@ -777,6 +790,11 @@ function renderAdvancedSettingsHtml(form) {
 export function renderScheduleFormHtml() {
   const form = state.tests.scheduleForm;
   const isEdit = Boolean(form.editingScheduleId);
+  // Item 4: "Schedule again" visually looks like a prefilled edit (a title
+  // that says so, plus a notice below explaining the new-dates requirement)
+  // but is NEVER actually editingScheduleId - see openScheduleAgain's own
+  // comment for why that distinction matters for submission.
+  const isScheduleAgain = Boolean(form.scheduleAgainFromId);
   const isSpecificDates = form.scheduleKind === "specific_dates";
   // hasActivity (not hasOccurrences alone) is what actually blocks a
   // one_time edit now - a schedule can have an occurrence and still be
@@ -786,7 +804,8 @@ export function renderScheduleFormHtml() {
   return `
     <section class="panel tests-schedule-form">
       <button type="button" class="plain-button icon-button wellness-back" data-action="tests-close-schedule-form" aria-label="Close">&times;</button>
-      <h3>${isEdit ? "Edit WELLNESS schedule" : "New WELLNESS schedule"}</h3>
+      <h3>${isEdit ? "Edit WELLNESS schedule" : isScheduleAgain ? "Schedule again" : "New WELLNESS schedule"}</h3>
+      ${isScheduleAgain ? `<p class="muted">Settings copied from the original schedule - pick new dates below to create an independent new schedule. The original and its results are unaffected.</p>` : ""}
       ${form.error ? `<p class="builder-error">${escapeHtml(form.error)}</p>` : ""}
       ${blockedOneTimeEdit ? `
         <p class="muted">This one-time schedule already has a started or completed response, so its targets/date/time can no longer be changed. Cancel it, then create a new schedule if you need to reschedule.</p>
