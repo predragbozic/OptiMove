@@ -174,14 +174,14 @@ export async function handleTestsAction(action, { renderTests }) {
     renderTests();
     return true;
   }
-  // One of the 4 Notifications checkboxes (invitation/reminder/coach live
-  // digest/final digest). Click-dispatched, same pattern as "Show
-  // cancelled" above - `action` is the checkbox element itself by the time
-  // its own click handler runs, so `.checked` already reflects the
-  // post-click state. A kind not yet present in notificationRules (an
-  // unconfigured existing schedule, or a kind the coach hasn't touched yet)
-  // is created on first interaction rather than requiring every kind to
-  // already have a row.
+  // One of the 4 compact Notifications switch rows (invitation/reminder/
+  // coach live digest/final digest) - item 3's redesign made this a plain
+  // button (role="switch"), not a native checkbox, so it flips its own
+  // `enabled` in state directly rather than reading a DOM `.checked`. Same
+  // backend contract/rule shape as before this redesign. A kind not yet
+  // present in notificationRules (an unconfigured existing schedule, or a
+  // kind the coach hasn't touched yet) is created on first interaction
+  // rather than requiring every kind to already have a row.
   if (type === "tests-notification-rule-toggle") {
     const kind = action.dataset.kind;
     const form = state.tests.scheduleForm;
@@ -190,7 +190,7 @@ export async function handleTestsAction(action, { renderTests }) {
       rule = kind === "athlete_reminder" ? { kind, enabled: false, reminderOffsetMinutes: 60 } : { kind, enabled: false };
       form.notificationRules.push(rule);
     }
-    rule.enabled = action.checked;
+    rule.enabled = !rule.enabled;
     renderTests();
     return true;
   }

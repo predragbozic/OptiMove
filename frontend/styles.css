@@ -10098,24 +10098,30 @@ button.tests-assignment-card {
 
 .tests-reminder-select-actions {
   display: flex;
-  gap: 6px;
+  gap: 10px;
 }
 
 .tests-reminder-list {
   display: grid;
-  gap: 2px;
-  max-height: 240px;
+  gap: 0;
+  max-height: 220px;
   overflow-y: auto;
 }
 
 .tests-reminder-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  padding: 6px 4px;
-  font-size: 13px;
+  min-height: 28px;
+  padding: 3px 4px;
+  font-size: 12.5px;
   cursor: pointer;
+}
+
+.tests-reminder-checkbox {
+  width: 15px;
+  height: 15px;
 }
 
 .tests-reminder-row-name {
@@ -10573,17 +10579,71 @@ button.tests-assignment-card {
   background: var(--surface-soft);
 }
 
-.tests-notification-rule {
-  display: inline-flex;
+/* Item 3: compact rows - a small pill switch instead of a native checkbox,
+   which read as too large/visually disconnected from the rest of this
+   compact form. */
+.tests-notification-row {
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 13px;
+}
+
+.tests-notification-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line, #dfe4e8);
+  border-radius: 999px;
+  background: var(--surface, #fff);
   cursor: pointer;
 }
 
-.tests-notification-reminder-offset {
-  margin-left: 22px;
-  max-width: 260px;
+.tests-notification-switch.is-on {
+  border-color: var(--accent, #1f6f68);
+  background: var(--accent, #1f6f68);
+}
+
+.tests-notification-switch-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(14, 28, 37, .3);
+  transition: left .12s ease;
+}
+
+.tests-notification-switch.is-on .tests-notification-switch-knob {
+  left: 15px;
+}
+
+.tests-notification-row-label {
+  min-width: 0;
+}
+
+.tests-notification-inline-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 42px;
+  font-size: 12px;
+  color: var(--muted, #667085);
+}
+
+.tests-notification-offset-input {
+  width: 80px;
+  min-width: 72px;
+  max-width: 88px;
+  padding: 4px 6px;
+  border: 1px solid var(--line, #dfe4e8);
+  border-radius: 6px;
+  font-size: 13px;
+  text-align: center;
 }
 
 /* Mobile scheduling redesign: Athletes/Notifications/Advanced settings all

@@ -343,6 +343,15 @@ export function reminderSelectedSet(group) {
   return new Set(stored.ids.filter((id) => incompleteIds.has(id)));
 }
 
+// Item 3 (compaction): the athlete's name/status is already shown, in full,
+// in the status table right above this section - repeating a status pill
+// per row here would just be a duplicate of that same information, so each
+// row here is now just a small checkbox + name. A single pending athlete
+// skips the list/select-all/clear affordances entirely (nothing left to
+// choose between) and collapses straight to a one-line title + the two
+// compact actions - preserves the exact same selection/cooldown/loading/
+// result-message behavior underneath (reminderSelectedSet's own default
+// already resolves to "that one athlete" with nothing stored yet).
 function renderManualReminderSectionHtml(group) {
   const incomplete = incompleteAthletesFor(group);
   if (!incomplete.length) return "";
@@ -351,27 +360,31 @@ function renderManualReminderSectionHtml(group) {
   const allSelected = incomplete.every((row) => selected.has(row.assignmentId));
   const sending = state.tests.remindingScheduleId === scheduleId;
   const result = state.tests.reminderResult && state.tests.reminderResult.scheduleId === scheduleId ? state.tests.reminderResult : null;
+  const single = incomplete.length === 1;
   return `
     <div class="tests-reminder-section">
       <div class="tests-reminder-head">
-        <span class="tests-reminder-title">Hasn't completed it yet</span>
+        <span class="tests-reminder-title">${single ? `Hasn't completed it: ${escapeHtml(incomplete[0].athleteName)}` : "Hasn't completed it yet"}</span>
+        ${single ? "" : `
         <div class="tests-reminder-select-actions">
-          <button type="button" class="plain-button compact-button" data-action="tests-reminder-select-all" data-schedule-id="${escapeAttr(scheduleId)}" ${allSelected ? "disabled" : ""}>Select all</button>
-          <button type="button" class="plain-button compact-button" data-action="tests-reminder-clear" data-schedule-id="${escapeAttr(scheduleId)}" ${selected.size ? "" : "disabled"}>Clear</button>
+          <button type="button" class="text-action" data-action="tests-reminder-select-all" data-schedule-id="${escapeAttr(scheduleId)}" ${allSelected ? "disabled" : ""}>Select all</button>
+          <button type="button" class="text-action" data-action="tests-reminder-clear" data-schedule-id="${escapeAttr(scheduleId)}" ${selected.size ? "" : "disabled"}>Clear</button>
         </div>
+        `}
       </div>
+      ${single ? "" : `
       <div class="tests-reminder-list">
         ${incomplete.map((row) => `
           <label class="tests-reminder-row">
-            <input type="checkbox" class="builder-checkmark" data-action="tests-reminder-toggle-athlete" data-schedule-id="${escapeAttr(scheduleId)}" data-assignment-id="${escapeAttr(row.assignmentId)}" ${selected.has(row.assignmentId) ? "checked" : ""}>
+            <input type="checkbox" class="tests-reminder-checkbox" data-action="tests-reminder-toggle-athlete" data-schedule-id="${escapeAttr(scheduleId)}" data-assignment-id="${escapeAttr(row.assignmentId)}" ${selected.has(row.assignmentId) ? "checked" : ""}>
             <span class="tests-reminder-row-name">${escapeHtml(row.athleteName)}</span>
-            <span class="tests-status-pill tests-status-${escapeAttr(row.status)}">${escapeHtml(statusLabel(row.status))}</span>
           </label>
         `).join("")}
       </div>
+      `}
       ${result ? `<p class="tests-reminder-confirmation" role="status">${escapeHtml(result.message)}</p>` : ""}
       <div class="tests-reminder-actions">
-        <button type="button" class="plain-button compact-button" data-action="tests-send-reminder" data-schedule-id="${escapeAttr(scheduleId)}" ${sending || !selected.size ? "disabled" : ""}>${sending ? "Sending..." : `Send reminder (${selected.size})`}</button>
+        <button type="button" class="plain-button compact-button" data-action="tests-send-reminder" data-schedule-id="${escapeAttr(scheduleId)}" ${sending || !selected.size ? "disabled" : ""}>${sending ? "Sending..." : single ? "Send reminder" : `Send reminder (${selected.size})`}</button>
         <button type="button" class="plain-button compact-button" data-action="tests-copy-viber" data-schedule-id="${escapeAttr(scheduleId)}" ${selected.size ? "" : "disabled"}>Copy for Viber</button>
       </div>
     </div>
@@ -719,18 +732,18 @@ export function patchRecipientPickerPanelDom() {
   if (totalEl) totalEl.textContent = `${testsRecipientsTotalSelected(form)} selected total`;
 }
 
-const NOTIFICATION_KIND_SHORT_LABELS = {
-  athlete_invitation: "Invitation",
-  athlete_reminder: "Reminder",
-  coach_digest: "Live summary",
-  final_digest: "Final summary",
-};
+// Item 3: the collapsible summary groups by AUDIENCE ("2 athlete · 2
+// coach"), not by listing each rule's own name - much shorter at a glance,
+// and the two groups below (athlete-facing rows vs coach-facing rows) use
+// the exact same grouping.
+const NOTIFICATION_ATHLETE_KINDS = ["athlete_invitation", "athlete_reminder"];
+const NOTIFICATION_COACH_KINDS = ["coach_digest", "final_digest"];
 
 function testsNotificationsSummary(form) {
-  const enabled = ["athlete_invitation", "athlete_reminder", "coach_digest", "final_digest"]
-    .filter((kind) => notificationRuleFor(form, kind).enabled)
-    .map((kind) => NOTIFICATION_KIND_SHORT_LABELS[kind]);
-  return enabled.length ? enabled.join(" + ") : "None enabled";
+  const athleteCount = NOTIFICATION_ATHLETE_KINDS.filter((kind) => notificationRuleFor(form, kind).enabled).length;
+  const coachCount = NOTIFICATION_COACH_KINDS.filter((kind) => notificationRuleFor(form, kind).enabled).length;
+  if (!athleteCount && !coachCount) return "None enabled";
+  return `${athleteCount} athlete · ${coachCount} coach`;
 }
 
 function renderNotificationsCollapsibleHtml(form) {
@@ -836,6 +849,22 @@ function notificationRuleFor(form, kind) {
   return form.notificationRules.find((rule) => rule.kind === kind) || { kind, enabled: false };
 }
 
+// Item 3: one small pill-shaped switch button per row (not a native
+// checkbox, which reads as visually heavier/disconnected from the rest of
+// this compact form) - data-action stays "tests-notification-rule-toggle"
+// on every one, same backend contract/rule shape as before, just a
+// different control rendering it.
+function renderNotificationSwitchRow({ kind, label, checked }) {
+  return `
+    <div class="tests-notification-row">
+      <button type="button" class="tests-notification-switch ${checked ? "is-on" : ""}" role="switch" aria-checked="${checked ? "true" : "false"}" aria-label="${escapeAttr(label)}" data-action="tests-notification-rule-toggle" data-kind="${kind}">
+        <span class="tests-notification-switch-knob" aria-hidden="true"></span>
+      </button>
+      <span class="tests-notification-row-label">${escapeHtml(label)}</span>
+    </div>
+  `;
+}
+
 function renderNotificationsSectionHtml(form) {
   const configured = form.notificationRules.length > 0;
   const reminderRule = notificationRuleFor(form, "athlete_reminder");
@@ -845,28 +874,17 @@ function renderNotificationsSectionHtml(form) {
   return `
     <div class="tests-notifications-section">
       ${!configured ? `<p class="muted">Notifications aren't configured for this schedule yet - enable and save to start sending.</p>` : ""}
-      <label class="tests-notification-rule">
-        <input type="checkbox" data-action="tests-notification-rule-toggle" data-kind="athlete_invitation" ${invitationRule.enabled ? "checked" : ""}>
-        <span>Notify athletes when the questionnaire opens</span>
-      </label>
-      <label class="tests-notification-rule">
-        <input type="checkbox" data-action="tests-notification-rule-toggle" data-kind="athlete_reminder" ${reminderRule.enabled ? "checked" : ""}>
-        <span>Remind athletes who have not completed it</span>
-      </label>
+      ${renderNotificationSwitchRow({ kind: "athlete_invitation", label: "Notify athletes when it opens", checked: invitationRule.enabled })}
+      ${renderNotificationSwitchRow({ kind: "athlete_reminder", label: "Remind incomplete athletes", checked: reminderRule.enabled })}
       ${reminderRule.enabled ? `
-      <label class="search-field tests-notification-reminder-offset">
-        <span>Minutes before due time (or close time, if no due time is set)</span>
-        <input type="number" name="reminderOffsetMinutes" min="1" step="1" value="${escapeAttr(reminderRule.reminderOffsetMinutes || 60)}" data-action="tests-schedule-form-field">
-      </label>
+      <div class="tests-notification-inline-control">
+        <span>Remind</span>
+        <input type="number" name="reminderOffsetMinutes" min="1" step="1" class="tests-notification-offset-input" value="${escapeAttr(reminderRule.reminderOffsetMinutes || 60)}" data-action="tests-schedule-form-field" aria-label="Minutes before due time, or close time if no due time is set">
+        <span>min before close</span>
+      </div>
       ` : ""}
-      <label class="tests-notification-rule">
-        <input type="checkbox" data-action="tests-notification-rule-toggle" data-kind="coach_digest" ${coachDigestRule.enabled ? "checked" : ""}>
-        <span>Show me a live completion summary</span>
-      </label>
-      <label class="tests-notification-rule">
-        <input type="checkbox" data-action="tests-notification-rule-toggle" data-kind="final_digest" ${finalDigestRule.enabled ? "checked" : ""}>
-        <span>Send a final summary when the questionnaire closes</span>
-      </label>
+      ${renderNotificationSwitchRow({ kind: "coach_digest", label: "Live completion summary", checked: coachDigestRule.enabled })}
+      ${renderNotificationSwitchRow({ kind: "final_digest", label: "Final summary when it closes", checked: finalDigestRule.enabled })}
     </div>
   `;
 }
