@@ -1036,9 +1036,18 @@ router.get("/weekly", async (req, res, next) => {
     // Pre-filtered to schedules that COULD occupy this week at all
     // (start_date <= weekEnd and (open-ended or end_date >= weekStart)) -
     // the exact same access predicate GET /schedules already uses, so this
-    // view's authorization story is identical, not a parallel one.
+    // view's authorization story is identical, not a parallel one. The
+    // three target-summary subqueries are the EXACT same ones GET
+    // /schedules already carries (item 1 correction) - two schedules for
+    // the same test at the same time on the same day are otherwise
+    // visually indistinguishable ("06:00 WELLNESS" twice), which defeats
+    // the whole point of a weekly overview built to disambiguate multiple
+    // tests per day in the first place.
     const schedulesResult = await query(
-      `select sch.*, tv.name as test_name
+      `select sch.*, tv.name as test_name,
+              (select count(*)::int from tests.test_schedule_targets t where t.schedule_id = sch.id and t.target_kind = 'athlete') as athlete_target_count,
+              (select string_agg(tm.name, ', ' order by tm.name) from tests.test_schedule_targets t join public.teams tm on tm.id = t.target_team_id where t.schedule_id = sch.id and t.target_kind = 'team') as team_target_names,
+              (select string_agg(cl.name, ', ' order by cl.name) from tests.test_schedule_targets t join public.clubs cl on cl.id = t.target_club_id where t.schedule_id = sch.id and t.target_kind = 'club') as club_target_names
        from tests.test_schedules sch
        join tests.test_versions tv on tv.id = sch.test_version_id
        where (sch.status <> 'cancelled' or $6::boolean)
@@ -1074,12 +1083,26 @@ router.get("/weekly", async (req, res, next) => {
     let countsByKey = new Map();
     let resultsByKey = new Map();
     if (scheduleIds.length) {
+      // Item 3 correction: "pending" used to mean "not completed and not
+      // yet closed", which conflated a genuinely OPEN assignment with one
+      // that hasn't even opened yet - a schedule dated tomorrow, once
+      // materialized, would show "0/N completed" instead of the real
+      // "Upcoming" state. Every bucket here is computed from THIS
+      // assignment's own opens_at/closes_at (already the athlete's real
+      // effective-timezone window, snapshotted at materialization - never
+      // a schedule-timezone shortcut): not_yet_open (now < opens_at),
+      // open_pending (opens_at <= now <= closes_at, still actionable),
+      // missed (now > closes_at, never completed), and skipped (a
+      // terminal excused/cancelled assignment status, which is neither a
+      // real completion nor a real miss). completed is unchanged.
       const countsResult = await query(
         `select o.schedule_id, asg.local_scheduled_date,
                 count(*)::int as total,
                 count(*) filter (where asg.status = 'completed')::int as completed,
-                count(*) filter (where asg.status not in ('completed', 'excused', 'cancelled') and asg.closes_at < now())::int as missed,
-                count(*) filter (where asg.status not in ('completed', 'excused', 'cancelled') and asg.closes_at >= now())::int as pending
+                count(*) filter (where asg.status in ('excused', 'cancelled'))::int as skipped,
+                count(*) filter (where asg.status not in ('completed', 'excused', 'cancelled') and now() < asg.opens_at)::int as not_yet_open,
+                count(*) filter (where asg.status not in ('completed', 'excused', 'cancelled') and now() >= asg.opens_at and now() <= asg.closes_at)::int as open_pending,
+                count(*) filter (where asg.status not in ('completed', 'excused', 'cancelled') and now() > asg.closes_at)::int as missed
          from tests.test_assignments asg
          join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
          where o.schedule_id = any($1::uuid[]) and asg.local_scheduled_date between $2::date and $3::date
@@ -1088,7 +1111,8 @@ router.get("/weekly", async (req, res, next) => {
       );
       for (const row of countsResult.rows) {
         countsByKey.set(`${row.schedule_id}|${row.local_scheduled_date}`, {
-          total: row.total, completed: row.completed, missed: row.missed, pending: row.pending,
+          total: row.total, completed: row.completed, skipped: row.skipped,
+          notYetOpen: row.not_yet_open, openPending: row.open_pending, missed: row.missed,
         });
       }
       const resultsResult = await query(
@@ -1123,6 +1147,15 @@ router.get("/weekly", async (req, res, next) => {
           occurrenceExists: countsByKey.has(key),
           counts: countsByKey.get(key) || null,
           resultsCount: resultsByKey.get(key) || 0,
+          // Item 1 correction: structured, not pre-formatted - each tab
+          // builds its own compact recipient line from these same three
+          // fields (identical shape to formatScheduleRow's own athlete
+          // TargetCount/teamTargetNames/clubTargetNames).
+          targetSummary: {
+            athleteTargetCount: schedule.athlete_target_count != null ? Number(schedule.athlete_target_count) : 0,
+            teamTargetNames: schedule.team_target_names || "",
+            clubTargetNames: schedule.club_target_names || "",
+          },
         });
       }
     }
@@ -1681,6 +1714,28 @@ async function loadScheduleGroupForDate(schedule, dateIso) {
 // Coach: Results
 // ------------------------------------------------------------
 
+// Deferred, deliberately (weekly-calendar correction, item 4): the coach
+// Results module - both this route and GET /weekly's own resultsCount
+// query below - is schedule-bound. Every row requires the join chain
+// test_assessments -> test_assignments (inner) -> test_schedule_occurrences
+// -> test_schedules to resolve at all, since that chain is the ONLY way
+// this route knows which coach/schedule a result belongs to (the access
+// predicate itself is `sch.owner_scope`-based). tests.test_assessments.
+// assignment_id IS schema-nullable (no NOT NULL, no check constraint
+// requires it - see migrations_v2/202608240900_..._phase1_scheduling_
+// execution.sql), reserved for a hypothetical future coach-manual-entry/
+// device-import path that does NOT exist today - a grep of this entire
+// backend confirms both `insert into tests.test_assessments` call sites
+// (this file's own submit/correction handler) always supply a real
+// assignment_id from a live assignment. An assignment-less row can
+// therefore only ever appear via a manual DB write (never this app), and
+// if/when a coach-manual-entry feature is ever built, it will need its own
+// explicit decision about which coach/schedule (if any) such a row belongs
+// to - improvising an inner-join-bypassing fallback here now, with no real
+// feature driving it, would just be guessing at authorization for data
+// that can't currently exist. See tests-weekly-calendar.test.mjs's own K1
+// for a test that proves (not just asserts) this exclusion is real and
+// stable.
 router.get("/results", async (req, res, next) => {
   try {
     if (!requireCoachWorkspace(req, res)) return;

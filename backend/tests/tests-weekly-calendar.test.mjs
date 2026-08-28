@@ -267,6 +267,10 @@ async function makeClub(name) {
   const result = await query(`insert into public.clubs (name) values ($1) returning id`, [name]);
   return result.rows[0].id;
 }
+async function makeTeam(clubId, name) {
+  const result = await query(`insert into public.teams (club_id, name) values ($1,$2) returning id`, [clubId, name]);
+  return result.rows[0].id;
+}
 async function makeAthlete({ name, userId = null }) {
   const result = await query(`insert into public.athletes (user_id, full_name, display_name) values ($1,$2,$2) returning id`, [userId, name]);
   return result.rows[0].id;
@@ -482,7 +486,7 @@ test("C3. historical results of a schedule that was later cancelled remain visib
 // D. Operational counts (Today tab)
 // ------------------------------------------------------------
 
-test("D1. counts (completed/pending/missed) reflect real already-materialized assignments for the requested date, with occurrenceExists correctly true/false", async () => {
+test("D1. counts (completed/openPending/notYetOpen/missed) reflect real already-materialized assignments for the requested date, with occurrenceExists correctly true/false", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("d1", 2);
   const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody(athletes.map((a) => ({ kind: "athlete", id: a.athleteId })), { startDate: TODAY }) });
   const beforeMaterialize = await api(`/api/tests/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
@@ -499,7 +503,9 @@ test("D1. counts (completed/pending/missed) reflect real already-materialized as
   assert.equal(sessionAfter.occurrenceExists, true);
   assert.equal(sessionAfter.counts.total, 2);
   assert.equal(sessionAfter.counts.completed, 1);
-  assert.equal(sessionAfter.counts.pending, 1);
+  assert.equal(sessionAfter.counts.openPending, 1, "the other athlete's assignment is open now (00:00-23:59 today) and not yet completed");
+  assert.equal(sessionAfter.counts.notYetOpen, 0);
+  assert.equal(sessionAfter.counts.missed, 0);
   void created;
 });
 
@@ -648,4 +654,104 @@ test("H1. an athlete whose own effective timezone diverges from the schedule's s
   const weekly = await api(`/api/tests/weekly?weekStart=${weekStartForLocalDate}`, { cookie: coachCookie });
   const session = sessionsOn(weekly.body, localDate)[0];
   assert.ok(session, "the weekly grid, keyed by local_scheduled_date, must show this athlete's assignment on THEIR OWN local date");
+});
+
+// ------------------------------------------------------------
+// I. Item 1 correction: target summary distinguishes same-time sessions
+// ------------------------------------------------------------
+
+test("I1. two WELLNESS schedules on the SAME date and the SAME opens time, but targeting DIFFERENT teams, are clearly distinguished in the payload via their own targetSummary", async () => {
+  const clubId = await makeClub("I1 Club");
+  const teamA = await makeTeam(clubId, "First team");
+  const teamB = await makeTeam(clubId, "Recovery group");
+  const coachId = await makeUser({ email: `i1-coach-${Date.now()}-${crypto.randomBytes(2).toString("hex")}@test.local` });
+  await grantClubAdmin(coachId, clubId);
+  const coachCookie = await loginCookie(coachId);
+
+  const createdA = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "team", id: teamA }], { startDate: TODAY, opensTime: "06:00" }) });
+  const createdB = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "team", id: teamB }], { startDate: TODAY, opensTime: "06:00" }) });
+  assert.equal(createdA.status, 201);
+  assert.equal(createdB.status, 201);
+
+  const weekly = await api(`/api/tests/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const sessions = sessionsOn(weekly.body, TODAY);
+  assert.equal(sessions.length, 2, "both same-time same-day sessions are present, never merged");
+  const byTeam = Object.fromEntries(sessions.map((s) => [s.targetSummary.teamTargetNames, s]));
+  assert.ok(byTeam["First team"], "the first schedule's own targetSummary names its real team");
+  assert.ok(byTeam["Recovery group"], "the second schedule's own targetSummary names ITS real team - not the same one");
+  assert.notEqual(byTeam["First team"].scheduleId, byTeam["Recovery group"].scheduleId);
+  for (const s of sessions) {
+    assert.equal(s.targetSummary.athleteTargetCount, 0, "team-only targets carry no direct athlete-target count");
+    assert.equal(s.targetSummary.clubTargetNames, "");
+  }
+});
+
+test("I2. a schedule targeting individual athletes directly reports a real athleteTargetCount, with no team/club names", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("i2", 3);
+  await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody(athletes.map((a) => ({ kind: "athlete", id: a.athleteId })), { startDate: TODAY }) });
+  const weekly = await api(`/api/tests/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const session = sessionsOn(weekly.body, TODAY)[0];
+  assert.equal(session.targetSummary.athleteTargetCount, 3);
+  assert.equal(session.targetSummary.teamTargetNames, "");
+  assert.equal(session.targetSummary.clubTargetNames, "");
+});
+
+// ------------------------------------------------------------
+// J. Item 3 correction: Upcoming/Scheduled/Missed status semantics
+// ------------------------------------------------------------
+
+test("J1. no assignment materialized at all -> occurrenceExists is false and counts is null (the frontend renders this as 'Scheduled', never 'Upcoming')", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("j1", 1);
+  await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }], { startDate: TODAY, opensTime: "00:00", closesTime: "23:59" }) });
+  const weekly = await api(`/api/tests/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const session = sessionsOn(weekly.body, TODAY)[0];
+  assert.equal(session.occurrenceExists, false);
+  assert.equal(session.counts, null);
+});
+
+test("J2. an assignment that exists but hasn't opened yet is notYetOpen, never counted as openPending - the exact bug this correction fixes", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("j2", 1);
+  // A near-end-of-day window (23:58-23:59 UTC) - deliberately NOT a
+  // computed "now + N hours" time, which would wrap past midnight (and
+  // become a time BEFORE "now" on the same calendar day, defeating the
+  // test's own intent) whenever this happens to run late in the UTC day.
+  // materialized via GET /athlete/today, but this athlete's own assignment
+  // window hasn't started yet for virtually the entire day.
+  await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }], { startDate: TODAY, timezone: "UTC", opensTime: "23:58", closesTime: "23:59" }) });
+  await api("/api/tests/athlete/today", { cookie: athletes[0].cookie });
+  const weekly = await api(`/api/tests/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const session = sessionsOn(weekly.body, TODAY)[0];
+  assert.equal(session.occurrenceExists, true, "the assignment row DOES exist");
+  assert.equal(session.counts.total, 1);
+  assert.equal(session.counts.notYetOpen, 1, "not yet open - opens_at is still in the future");
+  assert.equal(session.counts.openPending, 0, "must NOT be counted as open/pending - it isn't open yet");
+  assert.equal(session.counts.completed, 0);
+  assert.equal(session.counts.missed, 0);
+});
+
+// ------------------------------------------------------------
+// K. Item 4 correction: assignment-less results are deliberately out of
+// scope today - this test PROVES the current exclusion, it doesn't just
+// assert a wish. See tests.js's own long comment right above GET /results
+// for the full reasoning (nothing in this app ever creates such a row -
+// this is schema-legal but application-unreachable today).
+// ------------------------------------------------------------
+
+test("K1. an assignment-less completed assessment (schema-legal - assignment_id is nullable - but never produced by any current code path) is excluded from both GET /results and GET /weekly's resultsCount", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k1", 1);
+  await query(
+    `insert into tests.test_assessments (athlete_id, test_version_id, assignment_id, source, status, completed_at)
+     values ($1, $2, null, 'coach_manual', 'completed', now())`,
+    [athletes[0].athleteId, WELLNESS_TEST_VERSION_ID],
+  );
+
+  const flatResults = await api(`/api/tests/results`, { cookie: coachCookie });
+  assert.ok(
+    !flatResults.body.results.some((r) => r.athleteId === athletes[0].athleteId),
+    "an assignment-less assessment can never resolve a schedule/coach owner through the required assignment->occurrence->schedule chain, so it must never appear in the coach's flat Results list",
+  );
+
+  const weekly = await api(`/api/tests/weekly?weekStart=${THIS_WEEK_START}&includeCancelled=true`, { cookie: coachCookie });
+  const anySessionHasResults = weekly.body.days.some((d) => d.sessions.some((s) => s.resultsCount > 0));
+  assert.equal(anySessionHasResults, false, "no schedule's own resultsCount is inflated by a result that isn't attributable to any schedule");
 });
