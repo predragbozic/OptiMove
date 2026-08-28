@@ -11365,3 +11365,532 @@ button.tests-assignment-card {
     font-size: 12px;
   }
 }
+
+/* ============================================================
+   Training load (RPE/sRPE), first complete phase.
+
+   Deliberately its OWN visual language, never a copy of Tests' green-
+   heavy tests-status/tests-weekly CSS classes above: white surfaces,
+   neutral gray borders (var(--line)/var(--line-strong)), dark text
+   (var(--text)), muted secondary text (var(--muted)), var(--accent) used
+   only for a small indicator, focus ring, or status pill - never a full
+   background fill on a selected day, never more than one accent border
+   on screen at once. "Today" and "selected" are visually distinct (a
+   thin accent underline vs. a soft accent-tinted fill+border) but both
+   stay quiet - neither is a solid dark block.
+   ============================================================ */
+
+/* -------------------- Athlete: Home card -------------------- */
+
+.training-load-home-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.training-load-home-card-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.training-load-home-card-cta {
+  flex: none;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* -------------------- Shared overlay shell (session list / RPE form) -------------------- */
+
+.training-load-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+@media (min-width: 640px) {
+  .training-load-overlay {
+    align-items: center;
+  }
+}
+
+.training-load-overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 24, 30, 0.32);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.training-load-list-panel,
+.training-load-rpe-panel {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 420px;
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: var(--shadow);
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+@media (min-width: 640px) {
+  .training-load-list-panel,
+  .training-load-rpe-panel {
+    border-radius: var(--radius);
+  }
+}
+
+.training-load-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.training-load-list-rows {
+  display: grid;
+  gap: 6px;
+}
+
+.training-load-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.training-load-list-row-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* -------------------- Status pills (never color alone - always paired with real text) -------------------- */
+
+.training-load-status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+}
+
+.training-load-status-rated {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent-soft);
+}
+
+.training-load-status-unrated {
+  color: var(--muted);
+}
+
+/* -------------------- Athlete: RPE form -------------------- */
+
+.training-load-rpe-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.training-load-rpe-slider-block {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.training-load-rpe-slider-value {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.training-load-rpe-slider-number {
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1;
+}
+
+.training-load-rpe-slider-descriptor {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.training-load-rpe-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.training-load-rpe-slider-anchors {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.training-load-rpe-duration-label,
+.training-load-rpe-note-label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.training-load-rpe-duration-input,
+.training-load-rpe-note-input {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.training-load-rpe-duration-input {
+  max-width: 140px;
+}
+
+.training-load-rpe-note-input {
+  resize: vertical;
+  min-height: 44px;
+}
+
+.training-load-rpe-duration-input:focus,
+.training-load-rpe-note-input:focus,
+.training-load-rpe-slider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.training-load-rpe-srpe-preview {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.training-load-rpe-srpe-preview strong {
+  color: var(--text);
+}
+
+.training-load-rpe-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.training-load-rpe-save {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.training-load-rpe-save:disabled {
+  opacity: 0.5;
+}
+
+/* -------------------- Coach: Training load tab -------------------- */
+
+.training-load-root {
+  display: grid;
+  gap: 12px;
+}
+
+.training-load-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.training-load-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 3px;
+}
+
+.training-load-tab {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: calc(var(--radius) - 3px);
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.training-load-tab.is-active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(22, 34, 45, 0.08);
+}
+
+.training-load-filter-button.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.training-load-weekly {
+  display: grid;
+  gap: 10px;
+}
+
+.training-load-weekly-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.training-load-weekly-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.training-load-weekly-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.training-load-weekly-day {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  position: relative;
+}
+
+/* "today" - a thin accent underline only, never a fill. */
+.training-load-weekly-day.is-today {
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+
+/* "selected" - a soft accent tint + border, clearly different from
+   "today"'s underline, but still quiet (never a solid dark fill). */
+.training-load-weekly-day.is-selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.training-load-weekly-day-name {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.training-load-weekly-day-number {
+  font-weight: 700;
+}
+
+.training-load-weekly-day-count {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 0 6px;
+  min-width: 16px;
+}
+
+.training-load-weekly-agenda {
+  display: grid;
+  gap: 6px;
+}
+
+.training-load-empty {
+  padding: 16px 0;
+  text-align: center;
+}
+
+.training-load-session-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+}
+
+.training-load-session-row.is-clickable {
+  cursor: pointer;
+}
+
+.training-load-session-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.training-load-session-main {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.training-load-session-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.training-load-session-subtitle {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.training-load-daily-total {
+  margin: 0 0 2px;
+  font-size: 13px;
+}
+
+/* -------------------- Coach: Results summary + 7-day load bar -------------------- */
+
+.training-load-results-summary {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.training-load-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@media (min-width: 520px) {
+  .training-load-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.training-load-summary-tile {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.training-load-summary-value {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.training-load-summary-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.training-load-bar-chart {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  align-items: end;
+  height: 72px;
+}
+
+.training-load-bar-col {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  justify-items: center;
+  gap: 4px;
+  height: 100%;
+}
+
+.training-load-bar-track {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.training-load-bar-fill {
+  width: 100%;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+}
+
+.training-load-bar-label {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* -------------------- Coach: Club/Team/Athletes filter picker -------------------- */
+/* Reuses .builder-athlete-overlay/-picker/-option/checkbox-toggle-all
+   (Builder-style, per the feature's own requirement) - only the tab strip
+   below is new markup, styled to match .tests-recipient-picker-tab. */
+
+.training-load-filter-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+@media (max-width: 480px) {
+  .training-load-summary-value {
+    font-size: 16px;
+  }
+
+  .training-load-rpe-slider-number {
+    font-size: 26px;
+  }
+}

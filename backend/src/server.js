@@ -20,6 +20,7 @@ import messagesRouter from "./routes/messages.js";
 import taxonomyRouter from "./routes/taxonomy.js";
 import testsRouter from "./routes/tests.js";
 import testsCheckInRouter from "./routes/testsCheckIn.js";
+import trainingLoadRouter from "./routes/trainingLoad.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
@@ -83,6 +84,7 @@ app.use("/api/messages", requireAuth, messagesRouter);
 // backend/src/routes/testsCheckIn.js).
 app.use("/api/tests/check-in", testsCheckInRouter);
 app.use("/api/tests", requireAuth, testsRouter);
+app.use("/api/training-load", requireAuth, trainingLoadRouter);
 app.get("/api/realtime", requireAuth, realtimeRouter);
 
 // Dev/test: this is a plain ES-modules frontend with no build step - script

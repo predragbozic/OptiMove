@@ -447,6 +447,73 @@ export const emptyTestsState = (overrides = {}) => ({
   ...overrides,
 });
 
+// Training load (RPE/sRPE), first complete phase. Deliberately its OWN
+// state slice, never reusing/extending state.tests - a Weekly-plan
+// training session is not a WELLNESS-style schedule, and this feature
+// must not become entangled with Tests' own weekly-nav/reminder/schedule-
+// form machinery (see the feature's own instructions: reuse the date math
+// and weekly-navigator BEHAVIOR, never the state or CSS).
+export const emptyTrainingLoadFilter = () => ({ clubIds: [], teamIds: [], athleteIds: [] });
+
+export const emptyTrainingLoadFilterPicker = (overrides = {}) => ({
+  open: false,
+  tab: "clubs",
+  search: "",
+  ...overrides,
+});
+
+// One RPE entry form at a time - opened for a specific plan_session (from
+// the Athlete Home card or a weekly-view click), populated from whatever
+// session summary is already on hand (no extra fetch needed to open it).
+// savedFeedback is set on a successful submit so the form can show the
+// compact "RPE 7 - 60 min - sRPE 420 AU" confirmation before closing,
+// rather than just vanishing.
+export const emptyRpeForm = (overrides = {}) => ({
+  sessionId: "",
+  sessionName: "",
+  amPm: "",
+  bta: "",
+  sessionTime: "",
+  date: "",
+  rpe: 5,
+  durationMinutes: "",
+  note: "",
+  saving: false,
+  error: "",
+  savedFeedback: null,
+  ...overrides,
+});
+
+export const emptyTrainingLoadState = (overrides = {}) => ({
+  // Coach tab (Today/Schedule/Results) - same shared weekly navigator
+  // shape/behavior as tests.weekly (see frontend/tests-data.js's own
+  // loadTestsWeekly for the request-generation-token race guard this
+  // mirrors), its own independent instance.
+  section: "today",
+  weekly: {
+    today: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
+    schedule: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
+    results: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
+  },
+  filter: emptyTrainingLoadFilter(),
+  filterPicker: emptyTrainingLoadFilterPicker(),
+  // A snapshot of `filter` taken the instant the picker opens, restored on
+  // Cancel - toggling inside the picker mutates `filter` live (so Confirm
+  // needs no extra copy step), Cancel needs something to revert to.
+  filterSnapshotAtOpen: null,
+  orgPickerData: null,
+  // Athlete: today's own weekly-plan sessions + rated/not-rated status -
+  // fetched on demand (never cached - see loadTrainingLoadAthleteToday's
+  // own header comment for why), independent of the coach-side `weekly`
+  // slice above.
+  athleteToday: { date: "", sessions: [], loading: false, error: "" },
+  // Home card with >1 unrated session opens this list instead of a single
+  // session's RPE form directly.
+  showSessionList: false,
+  rpeForm: null,
+  ...overrides,
+});
+
 export const emptyCheckInState = (overrides = {}) => ({
   token: "",
   loading: true,
@@ -490,6 +557,10 @@ export const createInitialState = () => ({
   weekSelectorOpen: false,
   pendingScrollDate: "",
   lastWeeklyData: null,
+  // The last GET /api/athlete-home response - see app.js's renderAthleteHome/
+  // renderAthleteHomeFromCache for why a training-load athlete action needs
+  // this to redraw the whole Home surface without a re-fetch.
+  lastAthleteHomeData: null,
   lastProgramBundle: null,
   lastTemplates: [],
   templateAllowedScopes: TEMPLATE_SCOPES,
@@ -534,6 +605,7 @@ export const createInitialState = () => ({
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
   tests: emptyTestsState(),
+  trainingLoad: emptyTrainingLoadState(),
   checkIn: emptyCheckInState(),
   // feature/mobile-messages-fullscreen: menuOpen is the mobile thread
   // header's 3-dot overflow menu (Hide/Block live there on mobile instead

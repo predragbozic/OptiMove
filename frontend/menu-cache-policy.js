@@ -143,4 +143,11 @@ export const MENU_CACHE_POLICIES = {
     rationale:
       "feature/tests-wellness-phase2: deliberately NOT wired into view-cache.js. Every one of Tests' sections (coach Today/Schedule/Results, athlete Today/Upcoming/History) reflects state that changes on nearly every visit - a coach checking in mid-day, an athlete who just answered, an assignment/occurrence window opening or closing - so a 30s-fresh cache would routinely show a stale completion count or a check-in the athlete can no longer act on. loadTests() (tests-data.js) always issues a real fetch on entry; onWorkspaceChanged() (app.js) also calls it plainly, matching the other workspace-scoped tabs' re-fetch-on-switch behavior without going through the cache layer. The nav badge (pending assignment count) follows notifications.js's own on-demand convention instead: fetched once at session bootstrap and after a successful submit, never polled.",
   },
+  "training-load": {
+    label: "Training load",
+    policy: "always-refresh",
+    namespace: null,
+    rationale:
+      "feature/rpe-srpe-session-load, first complete phase: same reasoning as tests' own entry above - rated/not-rated status changes on nearly every visit (an athlete submitting RPE, a coach checking in mid-day), so a 30s-fresh cache would routinely show a stale count. loadTrainingLoad() (app.js) always issues a real fetch on entry via loadTrainingLoadWeekly() (training-load-data.js), which has its own per-section request-generation-token guard (mirroring tests-data.js's loadTestsWeekly) instead of going through the cache layer.",
+  },
 };

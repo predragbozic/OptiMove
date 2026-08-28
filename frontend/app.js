@@ -61,6 +61,9 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
+import { handleTrainingLoadAction } from "./training-load-actions.js";
+import { loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
+import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import { els } from "./dom.js";
 import {
   handleExerciseDetailAction,
@@ -934,6 +937,16 @@ function handleContentInput(event) {
     return;
   }
 
+  // Training load's RPE slider/duration/note inputs and the coach filter's
+  // athlete-search box all carry their own data-action directly on the
+  // input element itself (same convention as the WELLNESS slider above) -
+  // handleTrainingLoadAction reads the live value straight off it.
+  const trainingLoadInput = event.target.closest("[data-action^='training-load-']");
+  if (trainingLoadInput && trainingLoadInput.matches("input, textarea")) {
+    void handleTrainingLoadAction(trainingLoadInput, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });
+    return;
+  }
+
   const input = event.target.closest("[data-builder-exercise-search]");
   if (!input) return;
   state.builder.exerciseQuery = input.value;
@@ -1739,6 +1752,7 @@ async function loadActiveTab() {
   if (state.activeTab === "coaches") return loadCoaches();
   if (state.activeTab === "builder") return loadBuilder();
   if (state.activeTab === "tests") return loadTests({ setLoading, renderTests });
+  if (state.activeTab === "training-load") return loadTrainingLoad();
   return loadExercises({ renderExercises, setLoading });
 }
 
@@ -1766,11 +1780,66 @@ async function loadAthleteHome({ forceRefresh = false } = {}) {
   els.context.textContent = "Home";
   els.title.textContent = "Home";
   els.toolbar.innerHTML = "";
-  return loadAthleteHomeData({ setLoading, renderAthleteHome, forceRefresh });
+  // Training load's own Session feedback card is deliberately NOT part of
+  // the cached GET /api/athlete-home payload (see training-load-data.js's
+  // own header comment - rated/not-rated status changes on nearly every
+  // visit, most of all right after a submit) - fetched as its own,
+  // uncached, parallel call instead.
+  return Promise.all([
+    loadAthleteHomeData({ setLoading, renderAthleteHome, forceRefresh }),
+    loadTrainingLoadAthleteToday().then(renderAthleteHomeFromCache),
+  ]);
 }
 
+// state.lastAthleteHomeData is the only way a training-load athlete action
+// (rate a session, dismiss the saved confirmation) can redraw the WHOLE
+// Home surface (header/wellness/today/week-strip/quick actions, not just
+// its own card) without re-fetching GET /api/athlete-home itself.
 function renderAthleteHome({ data, error }) {
+  if (data) state.lastAthleteHomeData = data;
   els.content.innerHTML = renderAthleteHomeHtml({ data, error });
+}
+
+function renderAthleteHomeFromCache() {
+  if (state.activeTab !== "athlete-home") return;
+  els.content.innerHTML = renderAthleteHomeHtml({ data: state.lastAthleteHomeData, error: "" });
+}
+
+// Coach "Training load" tab (Today/Schedule/Results) - own weekly fetch,
+// same request-generation-token guard as Tests' own weekly nav (see
+// training-load-data.js's loadTrainingLoadWeekly).
+async function loadTrainingLoad({ forceRefresh = false } = {}) {
+  state.navStack = [];
+  els.context.textContent = "Training load";
+  els.title.textContent = "Training load";
+  els.toolbar.innerHTML = "";
+  if (!state.trainingLoad.weekly[state.trainingLoad.section].data || forceRefresh) {
+    await loadTrainingLoadWeekly(state.trainingLoad.section);
+  }
+  renderTrainingLoad();
+}
+
+function renderTrainingLoad() {
+  els.content.innerHTML = renderTrainingLoadCoachHtml();
+}
+
+// Every training-load-* action can fire from either surface it appears on
+// (the athlete's own Home card/RPE form, or the coach's Training load tab)
+// - picks the right re-render for whichever is actually on screen, same
+// convention as renderActiveTestsSurface below.
+function renderActiveTrainingLoadSurface() {
+  if (state.activeTab === "athlete-home") return renderAthleteHomeFromCache();
+  if (state.activeTab === "training-load") return renderTrainingLoad();
+}
+
+// Schedule tab click-through ("klik otvara postojeći Weekly plan/session,
+// ne pravi poseban RPE schedule") - reuses the EXACT same navigation
+// coach-home-open-athlete already does (select the athlete, land on a
+// specific date in the real Weekly plan Calendar), never a new view.
+async function openWeeklyPlanForAthleteOnDate(athleteId, date) {
+  state.selectedAthleteId = athleteId;
+  state.athletesExpanded = false;
+  await openWeeklyPlanOnDate(date);
 }
 
 // Mirrors weekly-actions.js's "week-day-select" branch exactly (same
@@ -2117,6 +2186,7 @@ async function handleContentClick(event) {
   if (await handleTaxonomyAction(action, { renderOrganizationPanel })) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
   if (await handleTestsAction(action, { renderTests: renderActiveTestsSurface })) return;
+  if (await handleTrainingLoadAction(action, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate })) return;
   handleMediaAction(action);
 }
 
