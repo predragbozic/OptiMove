@@ -977,6 +977,166 @@ function formatScheduleRow(row) {
   };
 }
 
+// ------------------------------------------------------------
+// Weekly calendar (shared read-only projection - Today/Schedule/Results)
+// ------------------------------------------------------------
+
+// db.js sets a custom type parser for DATE columns (OID 1082) that returns
+// them as plain "YYYY-MM-DD" strings, never a parsed JS Date - so every
+// date value read from tests.test_schedules/test_schedule_occurrences below
+// is already a bare ISO string, safely comparable/sortable as text with no
+// timezone conversion risk. addDaysIso is the one place this file needs
+// actual date arithmetic (walking a recurring schedule's date range day by
+// day) - anchored at UTC noon so a UTC-DST-less day-add can never itself
+// roll onto the wrong calendar date.
+function addDaysIso(iso, days) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// Pure application-layer projection - there is no DB view/function for
+// this (tests.resolve_current_target_dates is deliberately "now"-anchored,
+// for on-demand materialization, not a browsable date-range query - see
+// its own migration comment). Read-only: never touches test_schedule_
+// occurrences, so browsing an arbitrary past/future week can never
+// materialize anything - that stays the exclusive job of
+// ensureCurrentOccurrence(), which nothing in this section calls.
+// one_time: at most one date (its own start_date, if inside the range).
+// recurring: only "daily" is ever created by this app's own UI - any other
+// freq value (defensive, should never happen) yields no dates rather than
+// guessing. Bounded daily clips to end_date; open-ended daily (end_date
+// null) clips to the requested range itself, which is exactly "only
+// within the currently viewed week" for a range that IS one week.
+function scheduleOccupiedDatesInRange(schedule, rangeStartIso, rangeEndIso) {
+  const dates = [];
+  if (schedule.schedule_kind === "one_time") {
+    if (schedule.start_date >= rangeStartIso && schedule.start_date <= rangeEndIso) dates.push(schedule.start_date);
+    return dates;
+  }
+  if (schedule.recurrence_rule?.freq !== "daily") return dates;
+  const from = schedule.start_date > rangeStartIso ? schedule.start_date : rangeStartIso;
+  const upperBound = schedule.end_date && schedule.end_date < rangeEndIso ? schedule.end_date : rangeEndIso;
+  for (let cursor = from; cursor <= upperBound; cursor = addDaysIso(cursor, 1)) {
+    dates.push(cursor);
+  }
+  return dates;
+}
+
+router.get("/weekly", async (req, res, next) => {
+  try {
+    if (!requireCoachWorkspace(req, res)) return;
+    const weekStart = text(req.query?.weekStart);
+    if (!isValidGregorianDateString(weekStart)) return res.status(400).json({ error: "weekStart must be a valid YYYY-MM-DD date." });
+    const weekEnd = addDaysIso(weekStart, 6);
+    const includeCancelled = text(req.query?.includeCancelled) === "true";
+    const clubIds = manageableClubIds(req.authz);
+    const teamIds = manageableTeamIds(req.authz);
+
+    // Pre-filtered to schedules that COULD occupy this week at all
+    // (start_date <= weekEnd and (open-ended or end_date >= weekStart)) -
+    // the exact same access predicate GET /schedules already uses, so this
+    // view's authorization story is identical, not a parallel one.
+    const schedulesResult = await query(
+      `select sch.*, tv.name as test_name
+       from tests.test_schedules sch
+       join tests.test_versions tv on tv.id = sch.test_version_id
+       where (sch.status <> 'cancelled' or $6::boolean)
+         and sch.start_date <= $5::date
+         and (sch.end_date is null or sch.end_date >= $7::date)
+         and (
+           $4::boolean
+           or (sch.owner_scope = 'user' and sch.owner_user_id = $1)
+           or (sch.owner_scope = 'club' and sch.owner_club_id = any($2::uuid[]))
+           or (sch.owner_scope = 'team' and sch.owner_team_id = any($3::uuid[]))
+         )`,
+      [req.user.id, clubIds || [], teamIds || [], isPlatformAdministrator(req.authz), weekEnd, includeCancelled, weekStart],
+    );
+
+    // { "<scheduleId>": [ "date", ... ] } - kept only for schedules that
+    // actually land on at least one day this week.
+    const occupiedByScheduleId = new Map();
+    for (const schedule of schedulesResult.rows) {
+      const dates = scheduleOccupiedDatesInRange(schedule, weekStart, weekEnd);
+      if (dates.length) occupiedByScheduleId.set(schedule.id, dates);
+    }
+    const scheduleIds = [...occupiedByScheduleId.keys()];
+
+    // Two batched, read-only lookups for whatever's ALREADY materialized
+    // this week (never all scheduleIds x 7 days - only scheduleIds that
+    // occupy this week at all, and only real existing rows) - counts per
+    // (schedule, date) for the Today tab's operational status, and
+    // completed-results counts per (schedule, date) for the Results tab.
+    // Both keyed by asg.local_scheduled_date (the assignment's own
+    // immutable snapshotted calendar date), never o.scheduled_date or
+    // completed_at - see the item 5 correction on GET /results below for
+    // why that distinction matters.
+    let countsByKey = new Map();
+    let resultsByKey = new Map();
+    if (scheduleIds.length) {
+      const countsResult = await query(
+        `select o.schedule_id, asg.local_scheduled_date,
+                count(*)::int as total,
+                count(*) filter (where asg.status = 'completed')::int as completed,
+                count(*) filter (where asg.status not in ('completed', 'excused', 'cancelled') and asg.closes_at < now())::int as missed,
+                count(*) filter (where asg.status not in ('completed', 'excused', 'cancelled') and asg.closes_at >= now())::int as pending
+         from tests.test_assignments asg
+         join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
+         where o.schedule_id = any($1::uuid[]) and asg.local_scheduled_date between $2::date and $3::date
+         group by o.schedule_id, asg.local_scheduled_date`,
+        [scheduleIds, weekStart, weekEnd],
+      );
+      for (const row of countsResult.rows) {
+        countsByKey.set(`${row.schedule_id}|${row.local_scheduled_date}`, {
+          total: row.total, completed: row.completed, missed: row.missed, pending: row.pending,
+        });
+      }
+      const resultsResult = await query(
+        `select o.schedule_id, asg.local_scheduled_date, count(*)::int as results_count
+         from tests.test_assessments ta
+         join tests.test_assignments asg on asg.id = ta.assignment_id
+         join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
+         where ta.status = 'completed' and ta.superseded_by_assessment_id is null
+           and o.schedule_id = any($1::uuid[]) and asg.local_scheduled_date between $2::date and $3::date
+         group by o.schedule_id, asg.local_scheduled_date`,
+        [scheduleIds, weekStart, weekEnd],
+      );
+      for (const row of resultsResult.rows) {
+        resultsByKey.set(`${row.schedule_id}|${row.local_scheduled_date}`, row.results_count);
+      }
+    }
+
+    const byDate = new Map();
+    for (let d = weekStart; d <= weekEnd; d = addDaysIso(d, 1)) byDate.set(d, []);
+    for (const schedule of schedulesResult.rows) {
+      const dates = occupiedByScheduleId.get(schedule.id);
+      if (!dates) continue;
+      for (const date of dates) {
+        const key = `${schedule.id}|${date}`;
+        byDate.get(date).push({
+          scheduleId: schedule.id,
+          testName: schedule.test_name,
+          scheduleKind: schedule.schedule_kind,
+          scheduleStatus: schedule.status,
+          opensTime: schedule.opens_time,
+          closesTime: schedule.closes_time,
+          occurrenceExists: countsByKey.has(key),
+          counts: countsByKey.get(key) || null,
+          resultsCount: resultsByKey.get(key) || 0,
+        });
+      }
+    }
+    res.json({
+      weekStart,
+      weekEnd,
+      days: [...byDate.entries()].map(([date, sessions]) => ({
+        date,
+        sessions: sessions.sort((a, b) => (a.opensTime || "").localeCompare(b.opensTime || "")),
+      })),
+    });
+  } catch (error) { next(error); }
+});
+
 // Whether ANY assignment under this schedule's occurrence(s) has moved past
 // pending/untouched, or has a test_assessments row at all (draft or
 // completed). Shared by GET /schedules/:id (a plain, unlocked read - just
@@ -1051,6 +1211,23 @@ router.get("/schedules/:scheduleId", async (req, res, next) => {
       // "don't silently start sending" requirement.
       notificationRules,
     });
+  } catch (error) { next(error); }
+});
+
+// Weekly calendar click-through target: the same per-athlete-status +
+// manual-reminder detail GET /today already renders (renderCoachTodayGroupHtml/
+// renderManualReminderSectionHtml on the frontend), just for an arbitrary
+// date the coach is BROWSING rather than only "today". Read-only - see
+// loadScheduleGroupForDate's own comment for why this can never
+// materialize anything.
+router.get("/schedules/:scheduleId/group", async (req, res, next) => {
+  try {
+    if (!requireCoachWorkspace(req, res)) return;
+    const date = text(req.query?.date);
+    if (!isValidGregorianDateString(date)) return res.status(400).json({ error: "date must be a valid YYYY-MM-DD date." });
+    const schedule = await loadManageableSchedule(req, req.params.scheduleId);
+    if (!schedule) return res.status(404).json({ error: "Schedule not found." });
+    res.json({ group: await loadScheduleGroupForDate(schedule, date) });
   } catch (error) { next(error); }
 });
 
@@ -1418,7 +1595,12 @@ router.get("/today", async (req, res, next) => {
 // schedule's wall-clock opens/closes TIME (timezone-less, already on
 // `schedule`) with a fixed "in each athlete's own timezone" label instead
 // of a single computed instant.
-async function loadScheduleGroup(schedule) {
+// Shared by loadScheduleGroup (the live "today", per-athlete-timezone
+// comparison GET /today has always used) and loadScheduleGroupForDate (the
+// weekly calendar's static-date click-through, below) - dateClauseSql is
+// the WHERE fragment that decides which assignments belong to "this view",
+// dateParams are its own extra bind params (appended after $1-$3).
+async function loadScheduleGroupRows(schedule, dateClauseSql, dateParams) {
   const rowsResult = await query(
     `select asg.id as assignment_id, asg.status as assignment_status, asg.completed_at,
             asg.opens_at, asg.closes_at,
@@ -1433,9 +1615,9 @@ async function loadScheduleGroup(schedule) {
      left join tests.test_assessment_derived_results tdr on tdr.assessment_id = ta.id and tdr.test_version_derived_parameter_id = $2
      left join tests.test_assessment_values inj on inj.assessment_id = ta.id and inj.test_parameter_id = $3
      where o.schedule_id = $1
-       and asg.local_scheduled_date = (now() at time zone asg.timezone)::date
+       and ${dateClauseSql}
      order by athlete_name asc`,
-    [schedule.id, WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID],
+    [schedule.id, WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID, ...dateParams],
   );
   const now = new Date();
   const athletes = rowsResult.rows.map((row) => {
@@ -1479,6 +1661,22 @@ async function loadScheduleGroup(schedule) {
   };
 }
 
+async function loadScheduleGroup(schedule) {
+  return loadScheduleGroupRows(schedule, "asg.local_scheduled_date = (now() at time zone asg.timezone)::date", []);
+}
+
+// Weekly calendar click-through (item: "Klik otvara postojeći pregled
+// sportista, njihove statuse i ručni reminder") - reuses the EXACT same
+// group shape/rendering GET /today already drives, just keyed by a STATIC
+// calendar date instead of "now" in each athlete's own timezone. Read-only:
+// never calls ensureCurrentOccurrence, so a future date nobody has visited
+// yet (no occurrence/assignment rows exist) simply comes back with an
+// empty athletes list and all-zero counts - never an error, never a side
+// effect that creates one.
+async function loadScheduleGroupForDate(schedule, dateIso) {
+  return loadScheduleGroupRows(schedule, "asg.local_scheduled_date = $4::date", [dateIso]);
+}
+
 // ------------------------------------------------------------
 // Coach: Results
 // ------------------------------------------------------------
@@ -1489,12 +1687,18 @@ router.get("/results", async (req, res, next) => {
     const clubIds = manageableClubIds(req.authz);
     const teamIds = manageableTeamIds(req.authz);
     const scheduleId = text(req.query?.scheduleId) || null;
+    // Weekly calendar correction: an optional exact-date filter, additive -
+    // omitted, this endpoint's existing behavior (every result, any date)
+    // is unchanged. Filters on asg.local_scheduled_date (see below for why
+    // that's the right column), never o.scheduled_date/completed_at.
+    const date = text(req.query?.date) || null;
+    if (date && !isValidGregorianDateString(date)) return res.status(400).json({ error: "date must be a valid YYYY-MM-DD date." });
     const result = await query(
       `select ta.id as assessment_id, ta.completed_at,
               a.id as athlete_id, ${athleteDisplayNameSql} as athlete_name,
               tdr.result_numeric as wellness_score,
               inj.value_boolean as injury,
-              o.scheduled_date, sch.id as schedule_id
+              o.scheduled_date, asg.local_scheduled_date, sch.id as schedule_id
        from tests.test_assessments ta
        join tests.test_assignments asg on asg.id = ta.assignment_id
        join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
@@ -1506,13 +1710,14 @@ router.get("/results", async (req, res, next) => {
          and ta.status = 'completed'
          and ta.test_version_id = $3
          and ($8::uuid is null or sch.id = $8)
+         and ($9::date is null or asg.local_scheduled_date = $9::date)
          and (
            $7::boolean
            or (sch.owner_scope = 'user' and sch.owner_user_id = $4)
            or (sch.owner_scope = 'club' and sch.owner_club_id = any($5::uuid[]))
            or (sch.owner_scope = 'team' and sch.owner_team_id = any($6::uuid[]))
          )
-       order by o.scheduled_date desc, athlete_name asc
+       order by asg.local_scheduled_date desc, athlete_name asc
        limit 300`,
       // clubIds/teamIds are separate parameters ($5/$6) - a schedule owned
       // by a club never matches against teamIds and vice versa, even if a
@@ -1520,7 +1725,7 @@ router.get("/results", async (req, res, next) => {
       // A previous version of this query merged both into one array and
       // reused it for both branches - a real authorization bug, not just a
       // style issue.
-      [WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID, WELLNESS_TEST_VERSION_ID, req.user.id, clubIds || [], teamIds || [], isPlatformAdministrator(req.authz), scheduleId],
+      [WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID, WELLNESS_TEST_VERSION_ID, req.user.id, clubIds || [], teamIds || [], isPlatformAdministrator(req.authz), scheduleId, date],
     );
     res.json({
       results: result.rows.map((row) => ({
@@ -1531,6 +1736,16 @@ router.get("/results", async (req, res, next) => {
         wellnessScore: row.wellness_score != null ? Number(row.wellness_score) : null,
         injury: row.injury,
         scheduledDate: row.scheduled_date,
+        // Weekly calendar correction: grouping/ordering now keys off this
+        // (the assignment's own immutable snapshotted calendar date), not
+        // o.scheduled_date (the occurrence-level date, which CAN diverge
+        // from an individual athlete's own local_scheduled_date - see
+        // testsOccurrenceService.js) and never completed_at (a UTC instant,
+        // wrong for grouping "which day this result belongs to" for an
+        // athlete whose local day differs from UTC's). scheduledDate is
+        // kept alongside for backward compat - nothing existing reads it
+        // for grouping today, but nothing needs to stop working either.
+        localScheduledDate: row.local_scheduled_date,
         scheduleId: row.schedule_id,
       })),
     });
