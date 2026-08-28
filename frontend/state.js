@@ -511,6 +511,14 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // session's RPE form directly.
   showSessionList: false,
   rpeForm: null,
+  // Item 4 correction: the athlete's own "This week" overlay - the Home
+  // card only ever shows TODAY's sessions, so a not-yet-rated session from
+  // yesterday or earlier had no UI path to reach at all. Its own single
+  // weekly nav (not the coach's Today/Schedule/Results shape - there's
+  // nothing to switch between here), opened from a small, always-visible
+  // link on Home regardless of today's own unrated count.
+  athleteWeeklyOpen: false,
+  athleteWeekly: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
   ...overrides,
 });
 

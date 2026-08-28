@@ -49,12 +49,13 @@ function sessionLabel(session) {
 // ------------------------------------------------------------
 
 // Composes whichever athlete-side overlay (if any) is currently open - the
-// "more than one session" list, or the RPE form itself (including its own
-// post-submit confirmation state). Appended alongside the Home card;
-// `position: fixed` styling means it doesn't matter where in the DOM tree
-// this lands.
+// RPE form takes priority (it can be opened while the weekly overlay or
+// the "more than one session" list is also open, and must render on top
+// of either), then the weekly overlay, then the list. `position: fixed`
+// styling means it doesn't matter where in the DOM tree this lands.
 export function renderTrainingLoadAthleteOverlaysHtml() {
   if (state.trainingLoad.rpeForm) return renderRpeFormHtml(state.trainingLoad.rpeForm);
+  if (state.trainingLoad.athleteWeeklyOpen) return renderTrainingLoadAthleteWeeklyHtml();
   if (state.trainingLoad.showSessionList) return renderTrainingLoadSessionListHtml(state.trainingLoad.athleteToday);
   return "";
 }
@@ -75,8 +76,24 @@ export function renderTrainingLoadHomeCardHtml(athleteToday) {
   `;
 }
 
+// Item 4 correction: a permanent, always-visible link to the athlete's own
+// weekly training-load overlay - unlike the Home card above (which only
+// ever reflects TODAY's own unrated count and disappears entirely once
+// that's zero), this stays reachable regardless, so a not-yet-rated
+// session from yesterday or earlier always has a real UI path.
+export function renderTrainingLoadWeekLinkHtml() {
+  return `
+    <button type="button" class="training-load-week-link" data-action="training-load-athlete-weekly-open">
+      This week's training load &rsaquo;
+    </button>
+  `;
+}
+
 // The "more than one session waiting" list - opened from the Home card,
-// each row deep-links straight into the RPE form for that one session.
+// each row deep-links straight into the RPE form for that one session. A
+// rated row is a plain, non-clickable summary (never re-opens a blank
+// form that would only end in a 409 - see training-load-actions.js's own
+// openRpeFormForSessionId guard, this is the matching render-side gate).
 export function renderTrainingLoadSessionListHtml(athleteToday) {
   const sessions = athleteToday?.sessions || [];
   return `
@@ -88,17 +105,131 @@ export function renderTrainingLoadSessionListHtml(athleteToday) {
           <button class="plain-button icon-button" type="button" data-action="training-load-close-list" aria-label="Close">&times;</button>
         </div>
         <div class="training-load-list-rows">
-          ${sessions.map((session) => `
-            <button type="button" class="training-load-list-row" data-action="training-load-open-rpe-form" data-session-id="${escapeAttr(session.sessionId)}">
-              <span class="training-load-list-row-name">${escapeHtml(sessionLabel(session))}</span>
-              ${session.rated
-                ? `<span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>`
-                : `<span class="training-load-status-pill training-load-status-unrated">Rate session &rsaquo;</span>`}
-            </button>
-          `).join("")}
+          ${sessions.map((session) => renderAthleteSessionRowHtml(session)).join("")}
         </div>
       </section>
     </div>
+  `;
+}
+
+function renderAthleteSessionRowHtml(session) {
+  if (session.rated) {
+    return `
+      <div class="training-load-list-row is-rated">
+        <span class="training-load-list-row-name">${escapeHtml(sessionLabel(session))}</span>
+        <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>
+      </div>
+    `;
+  }
+  return `
+    <button type="button" class="training-load-list-row" data-action="training-load-open-rpe-form" data-session-id="${escapeAttr(session.sessionId)}">
+      <span class="training-load-list-row-name">${escapeHtml(sessionLabel(session))}</span>
+      <span class="training-load-status-pill training-load-status-unrated">Rate session &rsaquo;</span>
+    </button>
+  `;
+}
+
+// ------------------------------------------------------------
+// Athlete: "This week" weekly overlay (item 4 correction) - a single
+// weekly nav (no Today/Schedule/Results sub-tabs - those are coach
+// concepts), same Prev/Next/Today/7-day-strip behavior as the coach side,
+// its own markup. Today or an earlier day's session opens the RPE form
+// (or shows its rated summary); a future day's sessions are always
+// disabled - the backend independently enforces this too (a future-dated
+// session 400s), this is just the UI never offering it in the first place.
+// ------------------------------------------------------------
+
+export function renderTrainingLoadAthleteWeeklyHtml() {
+  const nav = state.trainingLoad.athleteWeekly;
+  const todayIso = localDateIso();
+  return `
+    <div class="training-load-overlay">
+      <button class="training-load-overlay-backdrop" type="button" data-action="training-load-athlete-weekly-close" aria-label="Close"></button>
+      <section class="panel training-load-athlete-weekly-panel" role="dialog" aria-modal="true" aria-label="This week's training load">
+        <div class="training-load-list-head">
+          <h3>This week's training load</h3>
+          <button class="plain-button icon-button" type="button" data-action="training-load-athlete-weekly-close" aria-label="Close">&times;</button>
+        </div>
+        ${nav.loading && !nav.data ? `<p class="muted training-load-empty">Loading...</p>` : ""}
+        ${nav.error ? `<p class="builder-error">${escapeHtml(nav.error)}</p>` : ""}
+        ${nav.data ? renderAthleteWeeklyShellHtml(nav, todayIso) : ""}
+      </section>
+    </div>
+  `;
+}
+
+function renderAthleteWeeklyShellHtml(nav, todayIso) {
+  const selectedDay = nav.data.days.find((d) => d.date === nav.selectedDate) || nav.data.days[0];
+  return `
+    <div class="training-load-weekly">
+      <div class="training-load-weekly-nav">
+        <button type="button" class="plain-button icon-button training-load-weekly-arrow" data-action="training-load-athlete-weekly-prev-week" aria-label="Previous week">&larr;</button>
+        <div class="training-load-weekly-range">
+          <strong>${escapeHtml(formatDate(nav.data.weekStart))} - ${escapeHtml(formatDate(nav.data.weekEnd))}</strong>
+          <button type="button" class="plain-button compact-button training-load-weekly-today-button" data-action="training-load-athlete-weekly-today">Today</button>
+        </div>
+        <button type="button" class="plain-button icon-button training-load-weekly-arrow" data-action="training-load-athlete-weekly-next-week" aria-label="Next week">&rarr;</button>
+      </div>
+      <div class="training-load-weekly-strip" role="tablist" aria-label="Select a day">
+        ${nav.data.days.map((day) => {
+          const isSelected = day.date === selectedDay?.date;
+          const isToday = day.date === todayIso;
+          const dayNumber = Number(day.date.slice(8, 10));
+          const count = day.sessions.length;
+          return `
+            <button type="button" class="training-load-weekly-day ${isSelected ? "is-selected" : ""} ${isToday ? "is-today" : ""}" role="tab" aria-selected="${isSelected ? "true" : "false"}" data-action="training-load-athlete-weekly-select-day" data-date="${escapeAttr(day.date)}">
+              <span class="training-load-weekly-day-name">${escapeHtml(formatWeekday(day.date))}</span>
+              <span class="training-load-weekly-day-number">${dayNumber}</span>
+              ${count ? `<span class="training-load-weekly-day-count" aria-hidden="true">${count}</span>` : ""}
+            </button>
+          `;
+        }).join("")}
+      </div>
+      <div class="training-load-weekly-agenda">
+        ${selectedDay && selectedDay.sessions.length
+          ? selectedDay.sessions.map((session) => renderAthleteWeeklySessionRowHtml(session, selectedDay.date, todayIso)).join("")
+          : `<p class="muted training-load-empty">No training sessions this day.</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderAthleteWeeklySessionRowHtml(session, date, todayIso) {
+  // Future is always disabled (the backend independently enforces this
+  // too - see this file's own header comment). A rated session shows its
+  // summary but is never clickable again (see renderAthleteSessionRowHtml's
+  // own comment on why).
+  const isFuture = date > todayIso;
+  if (session.rated) {
+    return `
+      <div class="training-load-session-row">
+        <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
+        <span class="training-load-session-main">
+          <span class="training-load-session-name">${escapeHtml(sessionLabel(session))}</span>
+        </span>
+        <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>
+      </div>
+    `;
+  }
+  if (isFuture) {
+    return `
+      <div class="training-load-session-row" aria-disabled="true">
+        <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
+        <span class="training-load-session-main">
+          <span class="training-load-session-name">${escapeHtml(sessionLabel(session))}</span>
+        </span>
+        <span class="training-load-status-pill training-load-status-unrated">Not yet</span>
+      </div>
+    `;
+  }
+  return `
+    <button type="button" class="training-load-session-row is-clickable" data-action="training-load-open-rpe-form" data-session-id="${escapeAttr(session.sessionId)}">
+      <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
+      <span class="training-load-session-main">
+        <span class="training-load-session-name">${escapeHtml(sessionLabel(session))}</span>
+      </span>
+      <span class="training-load-status-pill training-load-status-unrated">Rate session &rsaquo;</span>
+    </button>
   `;
 }
 

@@ -11894,3 +11894,50 @@ button.tests-assignment-card {
     font-size: 26px;
   }
 }
+
+/* -------------------- Athlete: "This week" link + weekly overlay (item 4 correction) -------------------- */
+
+.training-load-week-link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 2px 2px 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.training-load-athlete-weekly-panel {
+  width: 100%;
+  max-width: 480px;
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: var(--shadow);
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  position: relative;
+  z-index: 1;
+}
+
+@media (min-width: 640px) {
+  .training-load-athlete-weekly-panel {
+    border-radius: var(--radius);
+  }
+}
+
+/* A rated row inside a list (no longer a <button>) keeps the same layout
+   as its clickable sibling, just without the pointer affordance. */
+.training-load-list-row.is-rated {
+  cursor: default;
+}
+
+.training-load-session-row[aria-disabled="true"] {
+  opacity: 0.5;
+}

@@ -14,8 +14,10 @@ import pg from "pg";
 import * as runner from "../src/migrate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATION_PATH = path.resolve(__dirname, "../../migrations_v2/202608310900_training_load_v1_session_feedback.sql");
-const MIGRATION_NAME = "202608310900_training_load_v1_session_feedback.sql";
+const MIGRATION_V1_PATH = path.resolve(__dirname, "../../migrations_v2/202608310900_training_load_v1_session_feedback.sql");
+const MIGRATION_V1_NAME = "202608310900_training_load_v1_session_feedback.sql";
+const MIGRATION_V2_PATH = path.resolve(__dirname, "../../migrations_v2/202608320900_training_load_v2_logical_session_identity.sql");
+const MIGRATION_V2_NAME = "202608320900_training_load_v2_logical_session_identity.sql";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -209,7 +211,10 @@ let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
 
 before(async () => {
-  const migrationSql = await fsp.readFile(MIGRATION_PATH, "utf8");
+  const [migrationV1Sql, migrationV2Sql] = await Promise.all([
+    fsp.readFile(MIGRATION_V1_PATH, "utf8"),
+    fsp.readFile(MIGRATION_V2_PATH, "utf8"),
+  ]);
 
   db = await makeTempDb("primary");
   adminClient = new pg.Client({ connectionString: db.url });
@@ -218,7 +223,7 @@ before(async () => {
   assert.equal(ownCheck.rows[0].db, db.name, "SAFETY: test connection landed on an unexpected database");
 
   await adminClient.query(LEGACY_FIXTURE_SQL);
-  migrationsDir = await writeMigrationsDir("primary", { [MIGRATION_NAME]: migrationSql });
+  migrationsDir = await writeMigrationsDir("primary", { [MIGRATION_V1_NAME]: migrationV1Sql, [MIGRATION_V2_NAME]: migrationV2Sql });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
 
   process.env.DATABASE_URL = db.url;
@@ -281,6 +286,27 @@ async function makeAthlete({ name, userId = null }) {
 }
 async function grantClubAdmin(userId, clubId) {
   await query(`insert into public.user_club_roles (user_id, club_id, role) values ($1,$2,'club_admin')`, [userId, clubId]);
+}
+async function grantTeamCoach(userId, teamId) {
+  await query(`insert into public.user_team_roles (user_id, team_id, role) values ($1,$2,'team_coach')`, [userId, teamId]);
+}
+async function grantGlobalRole(userId, role) {
+  await query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,$2,true)`, [userId, role]);
+}
+async function linkPrivateCoachAthlete(userId, athleteId) {
+  await query(`insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active) values ($1,$2,'coach',true)`, [userId, athleteId]);
+}
+// The real, authoritative "which workspace is this account currently
+// presenting as" mechanism (backend/src/workspace.js's own
+// resolveActiveWorkspace) - only takes effect if the account genuinely
+// holds the matching real role/FK (an unmatched preference silently falls
+// back, exactly as it does in production).
+async function setActiveWorkspace(userId, type, scopeId = null) {
+  await query(
+    `insert into public.user_workspace_preferences (user_id, workspace_type, scope_id, updated_at) values ($1,$2,$3,now())
+     on conflict (user_id) do update set workspace_type = excluded.workspace_type, scope_id = excluded.scope_id, updated_at = now()`,
+    [userId, type, scopeId],
+  );
 }
 async function loginCookie(userId) {
   const token = await createSession(userId);
@@ -421,6 +447,33 @@ test("B9. a note over 500 characters is rejected", async () => {
   const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
   const res = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30, "x".repeat(501)) });
   assert.equal(res.status, 400);
+});
+
+// Correction: Number(null) === 0 and Number("") === 0 used to let a
+// missing/null rpe silently pass validation as a false "RPE 0" - only a
+// real JSON integer number is ever accepted now.
+test("B10. rpe: null is rejected outright, never silently coerced to RPE 0", async () => {
+  const { athletes } = await makeClubWithAthletes("b10", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  const res = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(null, 30) });
+  assert.equal(res.status, 400);
+});
+
+test("B11. rpe as a string (e.g. \"5\") is rejected - the client must send a real JSON number, not a numeric string", async () => {
+  const { athletes } = await makeClubWithAthletes("b11", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  const res = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody("5", 30) });
+  assert.equal(res.status, 400);
+});
+
+test("B12. durationMinutes: null or an empty string is rejected outright, never silently coerced to 0", async () => {
+  const { athletes } = await makeClubWithAthletes("b12", 1);
+  const sessionA = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  const sessionB = await makeActiveSessionOn(athletes[0].athleteId, YESTERDAY);
+  const resNull = await api(`/api/training-load/sessions/${sessionA}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, null) });
+  assert.equal(resNull.status, 400);
+  const resEmpty = await api(`/api/training-load/sessions/${sessionB}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, "") });
+  assert.equal(resEmpty.status, 400);
 });
 
 // ------------------------------------------------------------
@@ -652,6 +705,158 @@ test("I3. renaming the plan/session after submission never changes the already-s
 });
 
 // ------------------------------------------------------------
+// I-continued. Stable logical_session_id - a session row recreated with
+// the SAME logical_session_id (simulating builder.js's applyEditDraft,
+// without needing the full HTTP Builder flow - see backend/tests/
+// training-load-builder-edit-draft.test.mjs for the real end-to-end
+// regression) must be recognized as already-rated, never double-counted.
+// ------------------------------------------------------------
+
+test("I4. a session row deleted and recreated with the SAME logical_session_id is recognized as already-rated - the historical query never returns it a second time", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("i4", 1);
+  const planId = await makeWeeklyPlan(athletes[0].athleteId, { name: "I4 plan" });
+  const dayId = await makePlanDay(planId, TODAY);
+  const sessionId = await makeSession(dayId, { name: "I4 session" });
+  const logicalIdResult = await query(`select logical_session_id from plans.plan_sessions where id = $1`, [sessionId]);
+  const logicalId = logicalIdResult.rows[0].logical_session_id;
+
+  const submit = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(7, 60) });
+  assert.equal(submit.status, 201);
+
+  // Simulates applyEditDraft(): delete the old row, insert a NEW row for
+  // the same logical training session, explicitly carrying the SAME
+  // logical_session_id forward (exactly what copyDaySessions'
+  // preserveLogicalId:true does).
+  await query(`delete from plans.plan_sessions where id = $1`, [sessionId]);
+  const recreated = await query(
+    `insert into plans.plan_sessions (plan_day_id, name, logical_session_id) values ($1,$2,$3) returning id`,
+    [dayId, "I4 session (recreated)", logicalId],
+  );
+  const newSessionId = recreated.rows[0].id;
+
+  const today = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  const row = today.body.sessions.find((s) => s.sessionId === newSessionId);
+  assert.ok(row, "the recreated row appears under its own new id");
+  assert.equal(row.rated, true, "and is correctly recognized as already-rated via the shared logical_session_id");
+  assert.equal(row.feedback.srpe, 420);
+
+  const weekly = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const allSessions = weekly.body.days.flatMap((d) => d.sessions);
+  const ratedRows = allSessions.filter((s) => s.rated && s.feedback?.srpe === 420);
+  assert.equal(ratedRows.length, 1, "the result must appear exactly ONCE across the whole week - never duplicated as both a live row and a historical row");
+  assert.equal(ratedRows[0].historical, false, "it's reachable through the LIVE session, not the historical/orphaned fallback");
+});
+
+test("I5. an identical retry against the RECREATED row (same logical_session_id) is still a clean 200 idempotent no-op, and a genuinely different retry is still 409", async () => {
+  const { athletes } = await makeClubWithAthletes("i5", 1);
+  const planId = await makeWeeklyPlan(athletes[0].athleteId);
+  const dayId = await makePlanDay(planId, TODAY);
+  const sessionId = await makeSession(dayId);
+  const logicalIdResult = await query(`select logical_session_id from plans.plan_sessions where id = $1`, [sessionId]);
+  const logicalId = logicalIdResult.rows[0].logical_session_id;
+  await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(7, 60) });
+  await query(`delete from plans.plan_sessions where id = $1`, [sessionId]);
+  const recreated = await query(`insert into plans.plan_sessions (plan_day_id, logical_session_id) values ($1,$2) returning id`, [dayId, logicalId]);
+  const newSessionId = recreated.rows[0].id;
+
+  const retrySame = await api(`/api/training-load/sessions/${newSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(7, 60) });
+  assert.equal(retrySame.status, 200);
+  const retryDifferent = await api(`/api/training-load/sessions/${newSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(9, 90) });
+  assert.equal(retryDifferent.status, 409);
+
+  const countResult = await query(`select count(*)::int as n from training_load.session_feedback where logical_session_id = $1`, [logicalId]);
+  assert.equal(countResult.rows[0].n, 1);
+});
+
+test("I6. a session copied to a DIFFERENT day as a genuinely new training session gets its own logical_session_id and is independently ratable - never inheriting an old result", async () => {
+  const { athletes } = await makeClubWithAthletes("i6", 1);
+  const planId = await makeWeeklyPlan(athletes[0].athleteId);
+  const dayId = await makePlanDay(planId, TODAY);
+  const sessionId = await makeSession(dayId, { name: "Original" });
+  await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(7, 60) });
+
+  // A day-to-day copy (copyDaySessions with its default preserveLogicalId:
+  // false) - a genuinely different training session, must NOT carry the
+  // source's logical_session_id, so it must default to a fresh one.
+  const otherDayId = await makePlanDay(planId, YESTERDAY);
+  const copied = await query(
+    `insert into plans.plan_sessions (plan_day_id, name) values ($1,$2) returning id, logical_session_id`,
+    [otherDayId, "Copied to another day"],
+  );
+  const copiedSessionId = copied.rows[0].id;
+  const sourceLogicalId = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [sessionId])).rows[0].logical_session_id;
+  assert.notEqual(copied.rows[0].logical_session_id, sourceLogicalId, "a copy to a new day must never share the source's logical identity");
+
+  const res = await api(`/api/training-load/sessions/${copiedSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(4, 20) });
+  assert.equal(res.status, 201, "the copy is a genuinely new, independently-ratable session");
+});
+
+// ------------------------------------------------------------
+// I-trigger. DB-enforced snapshot immutability.
+// ------------------------------------------------------------
+
+test("I7. a direct UPDATE of a business/snapshot column (rpe) is rejected by the DB trigger, not just by the API layer", async () => {
+  const { athletes } = await makeClubWithAthletes("i7", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
+  await assert.rejects(
+    () => query(`update training_load.session_feedback set rpe = 9 where plan_session_id = $1`, [sessionId]),
+    /immutable snapshot/,
+  );
+});
+
+test("I8. a direct UPDATE of the athlete_note or session_date snapshot columns is also rejected", async () => {
+  const { athletes } = await makeClubWithAthletes("i8", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30, "original note") });
+  await assert.rejects(() => query(`update training_load.session_feedback set athlete_note = 'tampered' where plan_session_id = $1`, [sessionId]));
+  await assert.rejects(() => query(`update training_load.session_feedback set session_date = session_date - 1 where plan_session_id = $1`, [sessionId]));
+});
+
+test("I9. the DB's own ON DELETE SET NULL on plan_session_id still works - the ONE column the trigger must never block", async () => {
+  const { athletes } = await makeClubWithAthletes("i9", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
+  await assert.doesNotReject(() => query(`delete from plans.plan_sessions where id = $1`, [sessionId]));
+  const row = (await query(`select plan_session_id from training_load.session_feedback where session_date = $1 order by created_at desc limit 1`, [TODAY])).rows[0];
+  assert.equal(row.plan_session_id, null);
+});
+
+// ------------------------------------------------------------
+// I-race. Transaction/lock safety - a concurrent Builder delete racing a
+// POST must never produce a raw 500 or a result for an invalid session.
+// ------------------------------------------------------------
+
+test("I10. if the session row is deleted by a concurrent transaction while a submit is resolving it, the submit cleanly 404s - never a foreign-key 500", async () => {
+  const { athletes } = await makeClubWithAthletes("i10", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+
+  // A second, independent connection simulating a concurrent Builder
+  // edit/delete - takes the row lock first, deletes it, and commits,
+  // exactly like applyEditDraft's own deleteBlockTreeWithClient would.
+  const raceClient = new pg.Client({ connectionString: db.url });
+  await raceClient.connect();
+  await raceClient.query("begin");
+  await raceClient.query("select id from plans.plan_sessions where id = $1 for update", [sessionId]);
+  await raceClient.query("delete from plans.plan_sessions where id = $1", [sessionId]);
+
+  const submitPromise = api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
+  // Give the POST a moment to reach its own `for update` lock wait before
+  // the race connection commits and releases the row - not required for
+  // correctness (the assertion holds either way - see this test file's
+  // own design note), but makes the "genuinely blocked, then unblocks to
+  // find nothing" path the one actually exercised most of the time.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  await raceClient.query("commit");
+  await raceClient.end();
+
+  const res = await submitPromise;
+  assert.equal(res.status, 404, "never a raw 500, and never a result created against an already-invalid session");
+  const countResult = await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athletes[0].athleteId]);
+  assert.equal(countResult.rows[0].n, 0, "no feedback row was ever created for the deleted session");
+});
+
+// ------------------------------------------------------------
 // J. Athlete local date / timezone boundary
 // ------------------------------------------------------------
 
@@ -714,7 +919,12 @@ test("K3. an invalid weekStart is a controlled 400, not a 500", async () => {
   assert.equal(res.status, 400);
 });
 
-test("K4. Club filter narrows the weekly view to only that club's athletes", async () => {
+// Correction: a coach's CURRENT ACTIVE WORKSPACE (not the union of every
+// club/team they happen to administer) is now the mandatory scope - a
+// coach who administers two clubs but is currently working in Club A's
+// workspace must never see Club B's athletes at all, filter or no
+// filter. See coachWorkspaceScopeSql in trainingLoad.js.
+test("K4. a coach's active CLUB workspace scopes the weekly view to ONLY that club's athletes, even when the same coach also administers a different club", async () => {
   const clubA = await makeClubWithAthletes("k4a", 1);
   const clubB = await makeClubWithAthletes("k4b", 1);
   // Both clubs managed by the SAME coach (an independent coach admining two clubs).
@@ -724,13 +934,126 @@ test("K4. Club filter narrows the weekly view to only that club's athletes", asy
   await api(`/api/training-load/sessions/${sessionA}/rpe`, { method: "POST", cookie: clubA.athletes[0].cookie, body: rpeBody(5, 30) });
   await api(`/api/training-load/sessions/${sessionB}/rpe`, { method: "POST", cookie: clubB.athletes[0].cookie, body: rpeBody(6, 40) });
 
-  const unfiltered = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: clubA.coachCookie });
-  const unfilteredIds = unfiltered.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
-  assert.ok(unfilteredIds.includes(sessionA) && unfilteredIds.includes(sessionB), "both clubs visible without a filter");
+  await setActiveWorkspace(clubA.coachId, "club", clubA.clubId);
+  const inClubA = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: clubA.coachCookie });
+  const idsInA = inClubA.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.ok(idsInA.includes(sessionA) && !idsInA.includes(sessionB), "only club A's athlete, even though this coach also administers club B");
 
-  const filtered = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}&clubIds=${clubA.clubId}`, { cookie: clubA.coachCookie });
-  const filteredIds = filtered.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
-  assert.ok(filteredIds.includes(sessionA) && !filteredIds.includes(sessionB), "only club A's athlete remains once filtered to club A");
+  await setActiveWorkspace(clubA.coachId, "club", clubB.clubId);
+  const inClubB = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: clubA.coachCookie });
+  const idsInB = inClubB.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.ok(idsInB.includes(sessionB) && !idsInB.includes(sessionA), "switching the active workspace to club B flips which athletes are visible");
+});
+
+test("K4b. within a workspace scope, the Club/Team/Athlete filter can only NARROW - it can never widen past the mandatory workspace boundary", async () => {
+  const clubA = await makeClubWithAthletes("k4c", 1);
+  const clubB = await makeClubWithAthletes("k4d", 1);
+  await grantClubAdmin(clubA.coachId, clubB.clubId);
+  const sessionB = await makeActiveSessionOn(clubB.athletes[0].athleteId, TODAY);
+  await api(`/api/training-load/sessions/${sessionB}/rpe`, { method: "POST", cookie: clubB.athletes[0].cookie, body: rpeBody(6, 40) });
+
+  await setActiveWorkspace(clubA.coachId, "club", clubA.clubId);
+  // Explicitly asking for club B's athlete WHILE the active workspace is
+  // club A must still return nothing - the filter is inside the
+  // workspace scope, never an escape hatch out of it.
+  const res = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}&athleteIds=${clubB.athletes[0].athleteId}`, { cookie: clubA.coachCookie });
+  const ids = res.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.ok(!ids.includes(sessionB));
+});
+
+test("K4c. a TEAM workspace scopes the weekly view to only that team's athletes", async () => {
+  const { clubId, coachId, coachCookie, athletes } = await makeClubWithAthletes("k4e", 2);
+  const teamId = await makeTeam(clubId, "K4e Team");
+  await grantTeamCoach(coachId, teamId);
+  await query(`insert into public.athlete_memberships (athlete_id, team_id, membership_type, status) values ($1,$2,'team','active')`, [athletes[0].athleteId, teamId]);
+  const sessionTeam = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  const sessionOther = await makeActiveSessionOn(athletes[1].athleteId, TODAY);
+  await api(`/api/training-load/sessions/${sessionTeam}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
+  await api(`/api/training-load/sessions/${sessionOther}/rpe`, { method: "POST", cookie: athletes[1].cookie, body: rpeBody(6, 40) });
+
+  await setActiveWorkspace(coachId, "team", teamId);
+  const res = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const ids = res.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.ok(ids.includes(sessionTeam) && !ids.includes(sessionOther), "the OTHER athlete (same club, not this team) must be invisible from a team workspace, even without a filter");
+});
+
+test("K4d. a PRIVATE-COACH workspace scopes the weekly view to only this coach's own direct athlete relationships - never via an unrelated club/team role", async () => {
+  const { coachId, coachCookie, athletes } = await makeClubWithAthletes("k4f", 1);
+  await grantGlobalRole(coachId, "independent_coach");
+  const privateAthleteId = await makeAthlete({ name: "K4f Private Athlete" });
+  await linkPrivateCoachAthlete(coachId, privateAthleteId);
+  const sessionPrivate = await makeActiveSessionOn(privateAthleteId, TODAY);
+  const sessionClub = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+
+  await setActiveWorkspace(coachId, "private_coach", null);
+  const res = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const ids = res.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.ok(ids.includes(sessionPrivate) && !ids.includes(sessionClub), "the club-role-managed athlete must be invisible from the private-coach workspace, even though the same account also holds that club role");
+});
+
+test("K4e. a PLATFORM workspace sees every athlete, unrestricted", async () => {
+  const clubA = await makeClubWithAthletes("k4g", 1);
+  const platformUserId = await makeUser({ email: `k4g-platform-${Date.now()}@test.local` });
+  await grantGlobalRole(platformUserId, "platform_admin");
+  const platformCookie = await loginCookie(platformUserId);
+  await setActiveWorkspace(platformUserId, "platform", null);
+  const sessionA = await makeActiveSessionOn(clubA.athletes[0].athleteId, TODAY);
+
+  const res = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: platformCookie });
+  const ids = res.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.ok(ids.includes(sessionA));
+});
+
+test("K4f. a multi-role account (real athlete profile AND real club_admin coach role) sees strictly different data depending on which workspace is currently active - existence of an athlete profile must never hijack a genuine coach request", async () => {
+  const club = await makeClubWithAthletes("k4h", 1);
+  // The coach account ITSELF also has a real athlete profile (a genuine
+  // dual-role account), with its own weekly-plan session.
+  const dualUserId = club.coachId;
+  const dualAthleteId = await makeAthlete({ name: "K4h Dual-role Athlete", userId: dualUserId });
+  await query(`update public.athletes set device_timezone = 'UTC' where id = $1`, [dualAthleteId]);
+  const dualCookie = club.coachCookie;
+  const ownSession = await makeActiveSessionOn(dualAthleteId, TODAY);
+  const clubMemberSession = await makeActiveSessionOn(club.athletes[0].athleteId, TODAY);
+
+  await setActiveWorkspace(dualUserId, "athlete", null);
+  const asAthlete = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: dualCookie });
+  const athleteIds = asAthlete.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.deepEqual(athleteIds.sort(), [ownSession].sort(), "in athlete workspace, only their OWN session - never the club roster, even though they administer it");
+
+  await setActiveWorkspace(dualUserId, "club", club.clubId);
+  const asCoach = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: dualCookie });
+  const coachIds = asCoach.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.ok(coachIds.includes(clubMemberSession), "in club workspace, the real athlete roster is visible");
+  assert.ok(!coachIds.includes(ownSession), "the coach's OWN session (a different athlete_id relationship) is not part of the club roster query and must not leak in either");
+});
+
+test("K4g. Club + direct Athlete filters combine as a UNION (club roster OR the extra named athlete), never an AND", async () => {
+  const clubA = await makeClubWithAthletes("k4i", 1);
+  // A private-coach-managed athlete, unrelated to the club, reachable only
+  // via a direct relationship - the coach must be in a workspace wide
+  // enough to see both at once, so this uses the platform workspace as
+  // the outer scope (a platform admin can legitimately combine any mix).
+  const platformUserId = await makeUser({ email: `k4i-platform-${Date.now()}@test.local` });
+  await grantGlobalRole(platformUserId, "platform_admin");
+  const platformCookie = await loginCookie(platformUserId);
+  await setActiveWorkspace(platformUserId, "platform", null);
+  const outsideAthleteId = await makeAthlete({ name: "K4i Outside Athlete" });
+
+  const sessionClub = await makeActiveSessionOn(clubA.athletes[0].athleteId, TODAY);
+  const sessionOutside = await makeActiveSessionOn(outsideAthleteId, TODAY);
+  const sessionNeither = await makeActiveSessionOn((await makeClubWithAthletes("k4i-neither", 1)).athletes[0].athleteId, TODAY);
+
+  const res = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}&clubIds=${clubA.clubId}&athleteIds=${outsideAthleteId}`, { cookie: platformCookie });
+  const ids = res.body.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.ok(ids.includes(sessionClub), "the club's own athlete is included (club match)");
+  assert.ok(ids.includes(sessionOutside), "the unrelated named athlete is ALSO included (union, not intersection)");
+  assert.ok(!ids.includes(sessionNeither), "an athlete matching NEITHER condition is still excluded");
+});
+
+test("K4h. a malformed filter id is a controlled 400, never a raw Postgres 500", async () => {
+  const { coachCookie } = await makeClubWithAthletes("k4j", 1);
+  const res = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}&athleteIds=not-a-real-uuid`, { cookie: coachCookie });
+  assert.equal(res.status, 400);
 });
 
 test("K5. Team filter narrows the weekly view to only that team's athletes", async () => {

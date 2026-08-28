@@ -40,13 +40,14 @@ function installDeferredFetchMock() {
   return deferreds;
 }
 
-const { handleTrainingLoadAction } = await import("../training-load-actions.js");
+const { handleTrainingLoadAction, resetTrainingLoadForWorkspaceChange } = await import("../training-load-actions.js");
 const { loadTrainingLoadWeekly } = await import("../training-load-data.js");
 const {
   formatFeedbackSummary,
   formatSrpe,
   renderTrainingLoadHomeCardHtml,
   renderTrainingLoadResultsHtml,
+  renderTrainingLoadSessionListHtml,
   isRpeFormValid,
 } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, emptyRpeForm, state } = await import("../state.js");
@@ -280,7 +281,12 @@ test("D10. closing the form WITHOUT having saved never re-fetches anything", asy
 // E. Coach: section switch, week navigation, request-race guard
 // ------------------------------------------------------------
 
-test("E1. switching sections fetches that section's own week exactly once, and reuses it on a repeat switch", async () => {
+// Correction (item 3 - "always-refresh" policy): switching sections must
+// ALWAYS issue a real fetch, even back to a section that already has data
+// from earlier this session - menu-cache-policy.js declares this tab
+// "always-refresh" for the same reason Tests' own weekly nav never skips
+// a fetch either (rated/not-rated status changes on nearly every visit).
+test("E1. switching sections ALWAYS fetches that section's own week fresh - never skipped just because it already has data from an earlier visit", async () => {
   resetState();
   let calls = 0;
   installFetchMock(() => { calls += 1; return { status: 200, body: weekPayload("2026-08-24") }; });
@@ -288,9 +294,9 @@ test("E1. switching sections fetches that section's own week exactly once, and r
   assert.equal(state.trainingLoad.section, "schedule");
   assert.equal(calls, 1);
   await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "today" }), { renderTrainingLoad });
-  assert.equal(calls, 2, "today's own data hasn't been loaded yet this session");
+  assert.equal(calls, 2);
   await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "schedule" }), { renderTrainingLoad });
-  assert.equal(calls, 2, "schedule's data is already cached in state - switching back doesn't re-fetch");
+  assert.equal(calls, 3, "switching back to schedule must fetch again, even though it already has data from the first visit");
 });
 
 test("E2. Prev/Next/Today shift the week exactly 7 days, matching the Tests weekly nav contract", async () => {
@@ -395,4 +401,162 @@ test("G2. Results only ever lists RATED sessions in the agenda - an unrated plan
   const html = renderTrainingLoadResultsHtml();
   assert.equal((html.match(/training-load-session-row/g) || []).length > 0, true);
   assert.ok(!html.includes("Not rated"), "Results never shows an unrated row at all");
+});
+
+// ------------------------------------------------------------
+// H. Correction: filter Confirm invalidates ALL THREE sections, and a
+// combined Club + Athlete filter is sent as a genuine union on the wire.
+// ------------------------------------------------------------
+
+test("H1. Confirm drops the OTHER two sections' cached data too, not just the currently-open one - a later switch into them must fetch fresh, never show stale pre-filter data", async () => {
+  resetState();
+  state.trainingLoad.section = "today";
+  state.trainingLoad.weekly.today.data = weekPayload("2026-08-24");
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24");
+  state.trainingLoad.weekly.results.data = weekPayload("2026-08-24");
+  installFetchMock((call) => (call.url === "/api/organization" ? { status: 200, body: { clubs: [], teams: [], athletes: [] } } : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-open" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-toggle", kind: "athlete", id: "ath-1" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-confirm" }), { renderTrainingLoad });
+  assert.ok(state.trainingLoad.weekly.today.data, "the current section was refetched immediately, so it has fresh data again");
+  assert.equal(state.trainingLoad.weekly.schedule.data, null, "schedule's stale pre-filter data must be dropped, even though it isn't the open sub-tab");
+  assert.equal(state.trainingLoad.weekly.results.data, null, "results' stale pre-filter data must be dropped too");
+});
+
+test("H2. a combined Club + Athlete filter sends BOTH params on the same request - a real union, not one replacing the other", async () => {
+  resetState();
+  installFetchMock((call) => (call.url === "/api/organization" ? { status: 200, body: { clubs: [], teams: [], athletes: [] } } : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-open" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-toggle", kind: "club", id: "club-1" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-toggle", kind: "athlete", id: "ath-9" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-confirm" }), { renderTrainingLoad });
+  const finalCall = fetchCalls[fetchCalls.length - 1];
+  assert.ok(finalCall.url.includes("clubIds=club-1"));
+  assert.ok(finalCall.url.includes("athleteIds=ath-9"));
+});
+
+// ------------------------------------------------------------
+// I. Correction: workspace switch reset - filter/org-picker/weekly
+// payload for the OLD workspace must never leak into the new one, and a
+// late response from before the switch must never land afterward.
+// ------------------------------------------------------------
+
+test("I1. resetTrainingLoadForWorkspaceChange clears the filter, the org-picker roster, and every section's cached weekly payload", () => {
+  resetState();
+  state.trainingLoad.filter.clubIds = ["club-1"];
+  state.trainingLoad.filter.athleteIds = ["ath-1"];
+  state.trainingLoad.orgPickerData = { clubs: [{ id: "club-1", name: "Old club" }], teams: [], athletes: [] };
+  state.trainingLoad.weekly.today.data = weekPayload("2026-08-24");
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24");
+  state.trainingLoad.weekly.results.data = weekPayload("2026-08-24");
+  state.trainingLoad.athleteWeekly.data = weekPayload("2026-08-24");
+  state.trainingLoad.filterPicker.open = true;
+
+  resetTrainingLoadForWorkspaceChange();
+
+  assert.deepEqual(state.trainingLoad.filter, { clubIds: [], teamIds: [], athleteIds: [] });
+  assert.equal(state.trainingLoad.orgPickerData, null);
+  assert.equal(state.trainingLoad.weekly.today.data, null);
+  assert.equal(state.trainingLoad.weekly.schedule.data, null);
+  assert.equal(state.trainingLoad.weekly.results.data, null);
+  assert.equal(state.trainingLoad.athleteWeekly.data, null);
+  assert.equal(state.trainingLoad.filterPicker.open, false);
+});
+
+test("I2. a response already in flight when the workspace switch happens is dropped as stale, even though nothing re-fetched that section afterward", async () => {
+  resetState();
+  const deferreds = installDeferredFetchMock();
+  const inFlight = loadTrainingLoadWeekly("today");
+  assert.equal(deferreds.length, 1);
+  // The workspace switch happens WHILE the request above is still
+  // in flight - no new fetch for "today" is issued as part of this
+  // particular switch (Training load isn't necessarily the active tab).
+  resetTrainingLoadForWorkspaceChange();
+  deferreds[0].resolve({ status: 200, body: weekPayload("2026-08-24") });
+  await inFlight;
+  assert.equal(state.trainingLoad.weekly.today.data, null, "the stale in-flight response must never overwrite the just-reset state");
+  assert.equal(state.trainingLoad.weekly.today.loading, false, "and must never leave loading stuck either");
+});
+
+// ------------------------------------------------------------
+// J. Correction (item 4): a rated session can never re-open a blank RPE
+// form - from either the Home list or the weekly overlay.
+// ------------------------------------------------------------
+
+test("J1. clicking a RATED row in the Home session list is a no-op - never opens a form that would only 409", async () => {
+  resetState();
+  state.trainingLoad.athleteToday = {
+    date: "2026-08-24",
+    sessions: [{ sessionId: "s1", sessionName: "Rated session", amPm: "", bta: "", sessionTime: "", rated: true, feedback: { rpe: 5, durationMinutes: 30, srpe: 150 } }],
+    loading: false,
+    error: "",
+  };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-rpe-form", sessionId: "s1" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.rpeForm, null);
+});
+
+test("J2. a rated row never renders as a clickable button in the session list - a plain, non-interactive summary instead", () => {
+  const html = renderTrainingLoadSessionListHtml({
+    date: "2026-08-24",
+    sessions: [{ sessionId: "s1", sessionName: "Rated session", amPm: "", bta: "", sessionTime: "", rated: true, feedback: { rpe: 5, durationMinutes: 30, srpe: 150 } }],
+  });
+  assert.ok(!html.includes('data-action="training-load-open-rpe-form" data-session-id="s1"'));
+  assert.ok(html.includes("is-rated"));
+});
+
+test("J3. clicking a RATED row from the weekly overlay (not just today's Home list) is also a no-op", async () => {
+  resetState();
+  state.trainingLoad.athleteWeekly.data = weekPayload("2026-08-24", {
+    "2026-08-24": [{ sessionId: "s1", sessionName: "Rated session", amPm: "", bta: "", sessionTime: "", rated: true, feedback: { rpe: 5, durationMinutes: 30, srpe: 150 } }],
+  });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-rpe-form", sessionId: "s1" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.rpeForm, null);
+});
+
+// ------------------------------------------------------------
+// K. Athlete "This week" weekly overlay (item 4) - opening, nav, and
+// resolving a PAST unrated session that Home's own today-only card would
+// never surface.
+// ------------------------------------------------------------
+
+test("K1. opening the weekly overlay fetches once (if not already loaded) and shows it", async () => {
+  resetState();
+  let calls = 0;
+  installFetchMock(() => { calls += 1; return { status: 200, body: weekPayload("2026-08-24") }; });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-athlete-weekly-open" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.athleteWeeklyOpen, true);
+  assert.equal(calls, 1);
+  assert.ok(state.trainingLoad.athleteWeekly.data);
+});
+
+test("K2. Prev/Next/Today on the athlete's own weekly overlay shift by 7 days, same contract as the coach nav", async () => {
+  resetState();
+  state.trainingLoad.athleteWeekly.weekStart = "2026-08-24";
+  state.trainingLoad.athleteWeekly.selectedDate = "2026-08-24";
+  installFetchMock(() => ({ status: 200, body: weekPayload("2026-08-31") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-athlete-weekly-next-week" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.athleteWeekly.weekStart, "2026-08-31");
+});
+
+test("K3. a not-yet-rated session from an EARLIER day (never shown on Home's today-only card) opens the RPE form correctly from the weekly overlay", async () => {
+  resetState();
+  state.trainingLoad.athleteWeekly.data = weekPayload("2026-08-24", {
+    "2026-08-25": [{ sessionId: "s-yesterday", sessionName: "Yesterday's session", amPm: "", bta: "", sessionTime: "", rated: false, feedback: null }],
+  });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-rpe-form", sessionId: "s-yesterday" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.rpeForm.sessionId, "s-yesterday");
+  assert.equal(state.trainingLoad.rpeForm.date, "2026-08-25", "the form's date comes from the weekly overlay's own day, not Home's today");
+});
+
+test("K4. closing the overlay after a successful save also refreshes the weekly overlay's own data, not just Home's today card", async () => {
+  resetState();
+  state.trainingLoad.athleteWeeklyOpen = true;
+  state.trainingLoad.athleteWeekly.weekStart = "2026-08-24";
+  state.trainingLoad.rpeForm = emptyRpeForm({ sessionId: "s1" });
+  state.trainingLoad.rpeForm.savedFeedback = { rpe: 5, durationMinutes: 30, srpe: 150, note: "", submittedAt: "" };
+  const calledUrls = [];
+  installFetchMock((call) => { calledUrls.push(call.url); return { status: 200, body: call.url.includes("athlete/today") ? { date: "2026-08-24", sessions: [] } : weekPayload("2026-08-24") }; });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-close-rpe-form" }), { renderTrainingLoad });
+  assert.ok(calledUrls.some((u) => u.includes("/athlete/today")));
+  assert.ok(calledUrls.some((u) => u.includes("/weekly")));
 });

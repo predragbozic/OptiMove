@@ -500,7 +500,13 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
         plan.visibility || "private", plan.is_template, plan.start_date, plan.duration_days, plan.week_start, plan.id, plan.builder_batch_id || null,
       ],
     );
-    if (plan.plan_type === "weekly") await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start);
+    // preserveLogicalId: true - this is the FIRST leg of the live <-> edit-
+    // draft round trip (the second leg is applyEditDraft's own call below).
+    // A session copied here still represents the SAME real training
+    // session the coach is about to edit, not a new one - see
+    // copyDaySessions' own comment on why that distinction matters for
+    // training_load.session_feedback's stable identity.
+    if (plan.plan_type === "weekly") await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start, { preserveLogicalId: true });
     else await copyProgramTree(client, plan.id, created.rows[0].id);
     await client.query("commit");
     client.release();
@@ -1334,7 +1340,13 @@ async function applyEditDraft(req, draftPlan) {
        where id = $1`,
       [source.id, draftPlan.name, draftPlan.note, draftPlan.icon_url, draftPlan.color, draftPlan.visibility || "private", draftPlan.is_template],
     );
-    if (draftPlan.plan_type === "weekly") await copyWeeklyPlanTree(client, draftPlan.id, source.id, draftPlan.week_start);
+    // preserveLogicalId: true - the SECOND leg of the round trip (see the
+    // matching comment on the live -> edit-draft copy in POST /plans/
+    // :planId/edit above). Everything else that recreates a weekly plan's
+    // session tree (assign/duplicate to a new plan, batch-sync to a
+    // sibling plan) is a genuinely different logical session and must
+    // never pass this flag.
+    if (draftPlan.plan_type === "weekly") await copyWeeklyPlanTree(client, draftPlan.id, source.id, draftPlan.week_start, { preserveLogicalId: true });
     else await copyProgramTree(client, draftPlan.id, source.id);
     const draftDays = await client.query("select id from plans.plan_days where plan_id = $1", [draftPlan.id]);
     for (const day of draftDays.rows) await deleteBlockTreeWithClient(client, day.id);
@@ -1404,7 +1416,7 @@ export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
   }
 }
 
-async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeekStart) {
+async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeekStart, { preserveLogicalId = false } = {}) {
   const existingTargetDays = await client.query("select id from plans.plan_days where plan_id = $1", [targetPlanId]);
   for (const targetDay of existingTargetDays.rows) await deleteBlockTreeWithClient(client, targetDay.id);
   await createWeeklyDays(client, targetPlanId, targetWeekStart);
@@ -1469,7 +1481,7 @@ async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeek
       ],
     );
     await deleteDayContentWithClient(client, targetDay.id);
-    await copyDaySessions(client, sourceDay.id, targetDay.id);
+    await copyDaySessions(client, sourceDay.id, targetDay.id, { preserveLogicalId });
   }
 }
 
@@ -1488,19 +1500,38 @@ function normalizedWeekday(dayOrder) {
 // below and directly by the day-to-day/cross-plan-block "paste" endpoints,
 // where a day with several AM/PM/etc. sessions used to mean one sequential
 // awaited query per session before any content was copied).
-export async function copyDaySessions(client, sourceDayId, targetDayId) {
+//
+// preserveLogicalId (training_load/RPE hardening): plans.plan_sessions.
+// logical_session_id is training_load.session_feedback's own stable
+// dedup/lookup key (see migrations_v2/202608320900_..._v2_logical_
+// session_identity.sql) - a copy that represents "the SAME real training
+// session, just round-tripped through an edit" (the live<->edit-draft
+// cycle, see copyWeeklyPlanTree below) must carry the source's own
+// logical_session_id forward so an already-submitted RPE result is still
+// recognized against the recreated row. Every OTHER copy (a genuinely
+// different logical session - assign/duplicate to a new athlete, batch-
+// sync to a sibling plan, day-to-day/cross-plan-block paste) must NOT
+// inherit it - the default false here simply omits the column from the
+// INSERT, so plans.plan_sessions' own `default gen_random_uuid()` mints a
+// fresh identity, exactly as a brand-new session would get.
+export async function copyDaySessions(client, sourceDayId, targetDayId, { preserveLogicalId = false } = {}) {
   const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [sourceDayId]);
   if (!sessions.rowCount) return;
+  const columns = preserveLogicalId
+    ? "plan_day_id, am_pm, bta, session_order, name, logical_session_id"
+    : "plan_day_id, am_pm, bta, session_order, name";
   const values = [];
   const params = [];
   let column = 0;
   sessions.rows.forEach((session) => {
-    const row = [targetDayId, session.am_pm, session.bta, session.session_order, session.name];
+    const row = preserveLogicalId
+      ? [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.logical_session_id]
+      : [targetDayId, session.am_pm, session.bta, session.session_order, session.name];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
   });
   const created = await client.query(
-    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name)
+    `insert into plans.plan_sessions (${columns})
      values ${values.join(", ")} returning id`,
     params,
   );

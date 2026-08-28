@@ -9,9 +9,12 @@ import { localDateIsoInTimeZone, weekMondayIso } from "./utils.js";
 // selectedDate to today only on first visit"), not its state or code.
 
 // Item 2 correction's own request-race guard, mirrored exactly: a rapid
-// double Next-week click, or a rapid filter change, must never let an
-// OLDER/slower response overwrite a NEWER one already applied.
-const weeklyRequestGeneration = { today: 0, schedule: 0, results: 0 };
+// double Next-week click, a rapid filter change, or a workspace switch,
+// must never let an OLDER/slower response overwrite a NEWER one already
+// applied. "athlete" is a fourth, independent key for the athlete's own
+// single weekly nav (see loadTrainingLoadAthleteWeekly below) - entirely
+// separate from the coach's three tabs, never sharing a counter with them.
+const weeklyRequestGeneration = { today: 0, schedule: 0, results: 0, athlete: 0 };
 
 function clampSelectedDateToWeek(selectedDate, data) {
   if (data.days.some((d) => d.date === selectedDate)) return selectedDate;
@@ -27,33 +30,52 @@ function trainingLoadFilterQuery() {
   return parts.length ? `&${parts.join("&")}` : "";
 }
 
-// Shared weekly calendar (coach Today/Schedule/Results tabs, AND the
-// athlete's own read of GET /api/training-load/weekly for their Weekly
-// plan overlay - see training-load-athlete-overlay.js). Each tab keeps its
-// own independent week/date, same as tests.weekly.
-export async function loadTrainingLoadWeekly(section) {
-  const nav = state.trainingLoad.weekly[section];
+async function loadTrainingLoadWeeklyInto(nav, generationKey, extraQuery) {
   if (!nav.weekStart) {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const today = localDateIsoInTimeZone(timezone);
     nav.weekStart = weekMondayIso(today);
     nav.selectedDate = today;
   }
-  const generation = ++weeklyRequestGeneration[section];
+  const generation = ++weeklyRequestGeneration[generationKey];
   nav.loading = true;
   nav.error = "";
   try {
-    const query = `?weekStart=${encodeURIComponent(nav.weekStart)}${trainingLoadFilterQuery()}`;
+    const query = `?weekStart=${encodeURIComponent(nav.weekStart)}${extraQuery}`;
     const data = await api(`/api/training-load/weekly${query}`);
-    if (generation !== weeklyRequestGeneration[section]) return; // stale - a newer request already started, drop this response entirely
+    if (generation !== weeklyRequestGeneration[generationKey]) return; // stale - a newer request (a nav change, a filter confirm, or a workspace switch) already started, drop this response entirely
     nav.data = data;
     nav.selectedDate = clampSelectedDateToWeek(nav.selectedDate, data);
     nav.loading = false;
   } catch (error) {
-    if (generation !== weeklyRequestGeneration[section]) return;
+    if (generation !== weeklyRequestGeneration[generationKey]) return;
     nav.error = error.message || "Could not load the training load calendar.";
     nav.loading = false;
   }
+}
+
+// Coach Today/Schedule/Results tabs - each keeps its own independent week/
+// date, same as tests.weekly, scoped/filtered by state.trainingLoad.filter
+// + the caller's current workspace (see trainingLoad.js's own coach-side
+// scoping).
+export async function loadTrainingLoadWeekly(section) {
+  return loadTrainingLoadWeeklyInto(state.trainingLoad.weekly[section], section, trainingLoadFilterQuery());
+}
+
+// The athlete's own weekly training-load overlay (item 4 correction) -
+// GET /api/training-load/weekly self-scopes automatically for an athlete
+// caller (see trainingLoad.js), so no filter query is ever sent here.
+export async function loadTrainingLoadAthleteWeekly() {
+  return loadTrainingLoadWeeklyInto(state.trainingLoad.athleteWeekly, "athlete", "");
+}
+
+// Correction: called on a workspace switch, BEFORE any new fetch is
+// necessarily issued (Training load might not even be the active tab
+// right now) - bumping every generation counter guarantees an already-
+// in-flight request for the OLD workspace can never land and overwrite
+// state after the switch, even if nothing re-fetches immediately.
+export function invalidateAllTrainingLoadWeeklyGenerations() {
+  for (const key of Object.keys(weeklyRequestGeneration)) weeklyRequestGeneration[key] += 1;
 }
 
 // Athlete's own today - deliberately NOT cached (same reasoning tests-

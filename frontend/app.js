@@ -61,7 +61,7 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { handleTrainingLoadAction } from "./training-load-actions.js";
+import { handleTrainingLoadAction, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
 import { loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import { els } from "./dom.js";
@@ -1808,14 +1808,20 @@ function renderAthleteHomeFromCache() {
 // Coach "Training load" tab (Today/Schedule/Results) - own weekly fetch,
 // same request-generation-token guard as Tests' own weekly nav (see
 // training-load-data.js's loadTrainingLoadWeekly).
-async function loadTrainingLoad({ forceRefresh = false } = {}) {
+// Correction: menu-cache-policy.js declares this tab "always-refresh" (the
+// same reasoning as Tests' own entry - rated/not-rated status changes on
+// nearly every visit) - every entry into this tab must issue a real fetch,
+// never skip it just because SOME data already happens to be sitting in
+// state from an earlier visit this session. `forceRefresh` used to gate an
+// otherwise-skipped fetch; it's kept as a parameter only so callers that
+// want to be explicit about why they're here still can, but it no longer
+// changes behavior - loadTrainingLoadWeekly always runs.
+async function loadTrainingLoad() {
   state.navStack = [];
   els.context.textContent = "Training load";
   els.title.textContent = "Training load";
   els.toolbar.innerHTML = "";
-  if (!state.trainingLoad.weekly[state.trainingLoad.section].data || forceRefresh) {
-    await loadTrainingLoadWeekly(state.trainingLoad.section);
-  }
+  await loadTrainingLoadWeekly(state.trainingLoad.section);
   renderTrainingLoad();
 }
 
@@ -2323,12 +2329,21 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
 // workspace this account happened to already visit earlier in the session
 // is re-verified against the server rather than trusted purely from cache.
 async function onWorkspaceChanged() {
+  // Correction: a workspace switch changes WHICH athletes' data Training
+  // load's coach scope resolves to (see backend/src/routes/trainingLoad.js's
+  // coachWorkspaceScopeSql) - the OLD workspace's filter selection, org-
+  // picker roster, and cached weekly payload must never silently carry
+  // over into the new one, even for a tab that isn't currently open (so a
+  // later re-entry into it never renders a stale cross-workspace flash
+  // before its own fresh fetch lands).
+  resetTrainingLoadForWorkspaceChange();
   if (state.activeTab === "organization") return renderOrganizationPanel();
   if (state.activeTab === "coach-home") return loadCoachHome({ forceRefresh: true });
   if (state.activeTab === "coaches") return loadCoaches({ forceRefresh: true });
   if (state.activeTab === "templates") return loadTemplates({ forceRefresh: true });
   if (state.activeTab === "exercises") return loadExercises({ renderExercises, setLoading }, { forceRefresh: true });
   if (state.activeTab === "tests") return loadTests({ setLoading, renderTests });
+  if (state.activeTab === "training-load") return loadTrainingLoad();
 }
 
 // The shared post-mutation refresh every organization-actions.js handler
