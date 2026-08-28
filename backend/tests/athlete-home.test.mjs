@@ -411,7 +411,6 @@ test("12. an unauthenticated request is rejected", async () => {
 // (the disposable-DB harness) uses; this file runs against the real DB where
 // that seed already exists.
 const WELLNESS_TEST_VERSION_ID = "7a386bd1-d25e-4651-9012-e76d9dc32559";
-const WELLNESS_FULL_VALUES = { fatigue: 2, sleep: 4, soreness: 0, stress: 6, mood: 8, injury: false };
 
 async function makeCoachCookie() {
   const coach = await makeCoach();
@@ -478,25 +477,29 @@ test("14. no WELLNESS schedule at all: wellness.count is 0, never an error", asy
   assert.deepEqual(res.body.wellness, { count: 0, assignmentId: null, testName: "", closesAt: null });
 });
 
-test("15. once the athlete completes it, the same assignment immediately stops counting as pending on the very next Home read", async () => {
+// Round 2 correction: this used to submit a REAL answer through POST
+// /assignments/:id/submit to prove a completed assignment stops counting -
+// but that creates a genuinely completed tests.test_assessments row, which
+// a DB trigger refuses to ever physically delete ("use supersede
+// instead"). That made this fixture permanently unremovable, so every
+// full-suite run left a new coach/athlete/schedule/assignment/assessment
+// behind in the shared dev database - not an acceptable test pattern.
+// Flipping the assignment's own `status` column directly (the exact same
+// end-state a real submit leaves the ROW in - see
+// tests.materialize_test_assignments_for_occurrence/the submit route's own
+// UPDATE) exercises the SAME Home-side filter (`row.status === "pending"`,
+// backend/src/routes/athleteHome.js) without ever creating an assessment
+// row at all, so this fixture is fully cleanable via the normal cleanup
+// sets below - no exclusion needed. The frontend's own "a real submit
+// invalidates the Home cache" behavior is covered separately, and
+// deterministically, in frontend/tests/tests-wellness-ux-round2.actions.test.mjs
+// (a spy on invalidateAthleteHomeCache, not a real network round-trip).
+test("15. a completed assignment stops counting as pending on the very next Home read", async () => {
   const { coachId, coachCookie } = await makeCoachCookie();
   const user = await makeUser({ email: await uniqueEmail("home-wellness-done") });
   const athleteId = await makeAthlete({ userId: user.id, name: "Wellness Done Athlete" });
   await linkCoachToAthlete(coachId, athleteId);
-  const scheduleId = await makeOpenWellnessSchedule({ coachCookie, athleteId });
-  // A completed tests.test_assessments row is deliberately immutable at the
-  // DB level (a trigger refuses to physically delete a completed/
-  // invalidated assessment - "use supersede instead"), which this test is
-  // about to create on purpose. That makes the normal schedule/athlete/user
-  // cleanup below impossible to run all the way through for THIS fixture
-  // without fighting that same real product invariant - so this one
-  // fixture is deliberately excluded from cleanup and left in place,
-  // clearly named/emailed as test data, exactly like a real completed
-  // assessment would be retained permanently in production.
-  cleanupScheduleIds.delete(scheduleId);
-  cleanupAthleteIds.delete(athleteId);
-  cleanupUserIds.delete(user.id);
-  cleanupUserIds.delete(coachId);
+  await makeOpenWellnessSchedule({ coachCookie, athleteId });
   const token = await createSession(user.id);
   const athleteCookie = cookieFor(token);
 
@@ -504,15 +507,63 @@ test("15. once the athlete completes it, the same assignment immediately stops c
   assert.equal(before2.body.wellness.count, 1);
   const assignmentId = before2.body.wellness.assignmentId;
 
-  const submitted = await fetch(`${baseUrl}/api/tests/assignments/${encodeURIComponent(assignmentId)}/submit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Cookie: athleteCookie },
-    body: JSON.stringify({ values: WELLNESS_FULL_VALUES }),
-  });
-  assert.equal(submitted.status, 200);
+  await query(`update tests.test_assignments set status = 'completed', completed_at = now() where id = $1`, [assignmentId]);
 
   const after2 = await api("/api/athlete-home", { cookie: athleteCookie });
   assert.equal(after2.body.wellness.count, 0, "a completed assignment must never keep showing as pending on Home");
+});
+
+// === Correction: a paused schedule must never look actionable on Home ===
+
+test("16. a materialized pending assignment disappears from Home the moment its own schedule is paused, even though it's still inside its open window", async () => {
+  const { coachId, coachCookie } = await makeCoachCookie();
+  const user = await makeUser({ email: await uniqueEmail("home-wellness-paused") });
+  const athleteId = await makeAthlete({ userId: user.id, name: "Wellness Paused Athlete" });
+  await linkCoachToAthlete(coachId, athleteId);
+  const scheduleId = await makeOpenWellnessSchedule({ coachCookie, athleteId });
+  const token = await createSession(user.id);
+  const athleteCookie = cookieFor(token);
+
+  const before3 = await api("/api/athlete-home", { cookie: athleteCookie });
+  assert.equal(before3.body.wellness.count, 1, "materialized and open before the pause");
+
+  const paused = await fetch(`${baseUrl}/api/tests/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: coachCookie },
+    body: JSON.stringify({ status: "paused" }),
+  });
+  assert.equal(paused.status, 200);
+
+  const after3 = await api("/api/athlete-home", { cookie: athleteCookie });
+  assert.equal(after3.body.wellness.count, 0, "a paused schedule's assignment must never show as a 'Complete now' actionable card, matching what POST /assignments/:id/submit already enforces (409 'This schedule is currently paused.')");
+});
+
+test("17. reactivating the same schedule brings the card back, since the assignment is still inside its own open window", async () => {
+  const { coachId, coachCookie } = await makeCoachCookie();
+  const user = await makeUser({ email: await uniqueEmail("home-wellness-reactivated") });
+  const athleteId = await makeAthlete({ userId: user.id, name: "Wellness Reactivated Athlete" });
+  await linkCoachToAthlete(coachId, athleteId);
+  const scheduleId = await makeOpenWellnessSchedule({ coachCookie, athleteId });
+  const token = await createSession(user.id);
+  const athleteCookie = cookieFor(token);
+
+  await fetch(`${baseUrl}/api/tests/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: coachCookie },
+    body: JSON.stringify({ status: "paused" }),
+  });
+  assert.equal((await api("/api/athlete-home", { cookie: athleteCookie })).body.wellness.count, 0);
+
+  const reactivated = await fetch(`${baseUrl}/api/tests/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: coachCookie },
+    body: JSON.stringify({ status: "active" }),
+  });
+  assert.equal(reactivated.status, 200);
+
+  const after4 = await api("/api/athlete-home", { cookie: athleteCookie });
+  assert.equal(after4.body.wellness.count, 1, "reactivating must bring the card straight back, no re-materialization needed - the assignment row never went anywhere");
+  assert.ok(after4.body.wellness.assignmentId);
 });
 
 void loginAndGetHome;

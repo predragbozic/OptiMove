@@ -41,6 +41,8 @@ const {
   testsCalendarMode,
 } = await import("../tests-view.js");
 const { emptyScheduleForm, emptyWellnessForm, state } = await import("../state.js");
+const { athleteHomeContextKey } = await import("../athlete-home-data.js");
+const { clearAllViewCache, setCacheData, getCacheEntry, hasCachedData } = await import("../view-cache.js");
 
 function fakeDayEl(date, disabled = false) {
   return { dataset: { date }, disabled };
@@ -237,6 +239,40 @@ test("Daily does NOT close after just the first click - only once the range is g
   assert.equal(state.tests.scheduleForm.endDate, "2026-09-15");
 });
 
+// Found live (touch device): a real touch pointer reports tiny sub-pixel
+// pointermove events even during what the user experiences as a single,
+// stationary tap - extendTestsCalendarDrag(dayEl) fires for each one, still
+// resolving to the SAME day cell every time. That jitter alone must never
+// be treated as "the range was genuinely extended".
+test("same-cell pointermove jitter (touch jitter within the anchor day) never marks the drag as extended - the calendar waits for a real second date", () => {
+  resetTestsState({ calendarOpen: true, scheduleKind: "daily", startDate: "", endDate: "" });
+  startTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  extendTestsCalendarDrag(fakeDayEl("2026-09-10")); // same cell, e.g. a 1px finger wobble
+  extendTestsCalendarDrag(fakeDayEl("2026-09-10")); // and again
+  const closed = endTestsCalendarDrag();
+  assert.equal(closed, false, "same-cell jitter must never be mistaken for a completed one-day drag");
+  assert.equal(state.tests.scheduleForm.calendarOpen, true, "the calendar must stay open, waiting for a real second date");
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-10", "the provisional one-day span is still shown while waiting");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-10");
+
+  // The two-click flow still works normally after this - a genuine second
+  // date completes the range and closes the calendar.
+  startTestsCalendarDrag(fakeDayEl("2026-09-16"));
+  const closedOnSecondClick = endTestsCalendarDrag();
+  assert.equal(closedOnSecondClick, true);
+  assert.equal(state.tests.scheduleForm.startDate, "2026-09-10");
+  assert.equal(state.tests.scheduleForm.endDate, "2026-09-16");
+});
+
+test("a genuine drag to a DIFFERENT cell still closes on pointerup, even if it wobbles back onto the anchor cell first", () => {
+  resetTestsState({ calendarOpen: true, scheduleKind: "daily", startDate: "", endDate: "" });
+  startTestsCalendarDrag(fakeDayEl("2026-09-10"));
+  extendTestsCalendarDrag(fakeDayEl("2026-09-12")); // real move to a different day - extended = true
+  extendTestsCalendarDrag(fakeDayEl("2026-09-10")); // wobbles back onto the anchor before lifting
+  const closed = endTestsCalendarDrag();
+  assert.equal(closed, true, "once genuinely extended, a later same-cell wobble must not un-mark it");
+});
+
 test("Daily closes after a real drag that resolves the whole range in one gesture", () => {
   resetTestsState({ calendarOpen: true, scheduleKind: "daily", startDate: "", endDate: "" });
   startTestsCalendarDrag(fakeDayEl("2026-09-10"));
@@ -408,4 +444,64 @@ test("the result-detail view offers 'Schedule again' when the result carries a s
   const withoutSchedule = emptyWellnessForm({ testName: "WELLNESS", athleteName: "Ana", canSubmit: true, result: { wellnessScore: 5 }, scheduleId: "" });
   const htmlWithout = renderWellnessFormHtml(withoutSchedule, {});
   assert.ok(!htmlWithout.includes('data-action="tests-schedule-again"'), "the athlete's own submitted-answer view never sets scheduleId, so it must never show this button");
+});
+
+// Found live: renderTestsSectionHtml() gives state.tests.form priority over
+// state.tests.section - clicking "Schedule again" from a result-detail view
+// (state.tests.form still set to the old result) built the new scheduleForm
+// correctly but never actually SHOWED it, since the old result view kept
+// rendering on top of it. openScheduleAgain must clear state.tests.form
+// (and force section = "schedule", and close any open scheduleDetail) on
+// success so the new form is what actually renders next.
+test("clicking Schedule again from an open Result-detail view (state.tests.form set, section = results) actually shows the new prefilled form, not the old result again", async () => {
+  resetTestsState();
+  state.tests.section = "results";
+  state.tests.form = emptyWellnessForm({ testName: "WELLNESS", athleteName: "Ana", canSubmit: false, result: { wellnessScore: 6 }, scheduleId: "sched-orig" });
+  state.tests.scheduleDetail = { schedule: { id: "sched-other" }, targets: [], link: null };
+  installFetchMock((call) => (call.url === "/api/tests/schedules/sched-orig"
+    ? {
+      status: 200,
+      body: {
+        schedule: { id: "sched-orig", scheduleKind: "one_time", hasOccurrences: false, hasActivity: false, timezone: "UTC", startDate: "2026-04-01", opensTime: "06:00", closesTime: "22:00" },
+        targets: [{ kind: "athlete", id: "a1" }],
+        notificationRules: [],
+        link: null,
+      },
+    }
+    : { status: 404, body: {} }));
+
+  await handleTestsAction(fakeAction({ action: "tests-schedule-again", scheduleId: "sched-orig" }), { renderTests: () => {} });
+
+  assert.equal(state.tests.form, null, "the old result view must be cleared, or renderTestsSectionHtml() would keep showing it instead of the new form");
+  assert.equal(state.tests.section, "schedule");
+  assert.equal(state.tests.scheduleDetail, null, "the original schedule's own detail view must not linger behind the new form either");
+  assert.equal(state.tests.scheduleForm.open, true);
+  assert.equal(state.tests.scheduleForm.scheduleAgainFromId, "sched-orig");
+  // Prove renderTestsSectionHtml() would now actually render the new form,
+  // not the old result - the whole point of the bug being fixed.
+  const html = renderScheduleFormHtml();
+  assert.ok(html.includes("Schedule again"));
+});
+
+// Item 4 correction: a completed WELLNESS assessment is immutable at the
+// DB level (used to force the backend test's own fixture permanently
+// unremovable) - the "does a real submit invalidate the Home cache" case
+// is covered here instead, deterministically, with no network/DB round
+// trip at all: prime the cache directly, submit, and confirm it was
+// cleared. See backend/tests/athlete-home.test.mjs's own updated comment
+// for the full story.
+test("a real WELLNESS submit invalidates the Athlete Home view cache, so a later Home visit re-fetches instead of showing a stale pending card", async () => {
+  clearAllViewCache();
+  state.currentUser = { id: "u1", activeWorkspace: { type: "athlete", scopeId: null } };
+  const contextKey = athleteHomeContextKey();
+  setCacheData("athlete-home", contextKey, { wellness: { count: 1, assignmentId: "asg-9", testName: "WELLNESS", closesAt: "2026-01-01T00:00:00.000Z" } });
+  assert.equal(hasCachedData(getCacheEntry("athlete-home", contextKey)), true, "sanity: the cache was actually primed");
+
+  state.tests.form = emptyWellnessForm({ assignmentId: "asg-9", testName: "WELLNESS", canSubmit: false });
+  installFetchMock((call) => (call.url.includes("/submit")
+    ? { status: 200, body: { wellnessScore: 4, values: { injury: false } } }
+    : { status: 404, body: {} }));
+  await submitTestsForm({ dataset: { testsForm: "wellness-submit" } }, { renderTests: () => {} });
+
+  assert.equal(hasCachedData(getCacheEntry("athlete-home", contextKey)), false, "a successful submit must invalidate the Home cache entry, never leave a stale pending snapshot behind");
 });

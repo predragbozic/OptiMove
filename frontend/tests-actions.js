@@ -774,7 +774,18 @@ export function extendTestsCalendarDrag(dayEl) {
     applyCalendarDragRange(date);
     return true;
   }
-  calendarDragState.extended = true;
+  // Item 3 correction: a same-cell pointermove (finger jitter within the
+  // anchor day - a real touch pointer reports tiny sub-pixel moves even on
+  // an intentional single tap, and app.js's handleContentPointerMove calls
+  // this on every one of them) must never count as "the range was
+  // genuinely extended" - only crossing into a DIFFERENT day cell is a real
+  // drag. Without this guard, that jitter alone set extended = true on the
+  // very first tap, and the following pointerup then treated a plain
+  // single tap as a COMPLETED one-day range and auto-closed the Daily
+  // calendar before a second date was ever chosen. Once genuinely
+  // extended, it stays extended even if a later move wobbles back onto the
+  // anchor cell - this only ever sets the flag, never clears it.
+  if (date !== calendarDragState.anchorDate) calendarDragState.extended = true;
   if (calendarDragState.kind === "single") applyRangeSpan(form, date, date);
   else applyRangeSpan(form, calendarDragState.anchorDate, date);
   return true;
@@ -941,6 +952,18 @@ async function openScheduleAgain(scheduleId, renderTests) {
       notificationsSectionOpen: !mobile,
       notificationRules: (detail.notificationRules || []).map((rule) => ({ ...rule })),
     });
+    // Round 2 correction: "Schedule again" is reachable from the result-
+    // detail view too (state.tests.form set, via openResult), where
+    // renderTestsSectionHtml() gives state.tests.form priority over
+    // state.tests.section - without clearing it here, the newly-built
+    // scheduleForm above would silently never be shown, and the coach
+    // would just keep looking at the same old result. Also force
+    // section = "schedule" (reachable from Today/Results too) and close
+    // any open scheduleDetail (the ORIGINAL schedule's own detail view,
+    // which must not linger behind/instead of the new form either).
+    state.tests.form = null;
+    state.tests.section = "schedule";
+    state.tests.scheduleDetail = null;
   } catch (error) {
     state.tests.error = error.message || "Could not load this schedule to reuse.";
   }

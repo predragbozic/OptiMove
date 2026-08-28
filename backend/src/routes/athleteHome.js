@@ -116,11 +116,14 @@ router.get("/", async (req, res, next) => {
     const athleteRow = athleteResult.rows[0] || {};
     const todayRow = weekResult.rows.find((row) => row.is_today) || null;
     const programRows = programsResult.rows;
-    // Only a genuinely actionable assignment counts here - pending AND
-    // currently inside its own open window (assignmentIsOpen already
-    // excludes a cancelled assignment and anything outside opens_at/
-    // closes_at) - a completed or missed one must never show as pending.
-    const openWellness = wellnessAssignments.filter((row) => row.status === "pending" && assignmentIsOpen(row));
+    // Only a genuinely actionable assignment counts here - pending, its own
+    // SCHEDULE still active (assignmentIsOpen only checks the assignment's
+    // own status/opens_at/closes_at, never the schedule's - a paused
+    // schedule's still-open assignment would otherwise keep showing as
+    // "Complete now" even though POST /assignments/:id/submit already
+    // rejects it), AND currently inside its own open window - a completed
+    // or missed one must never show as pending either.
+    const openWellness = wellnessAssignments.filter((row) => row.status === "pending" && row.schedule_status === "active" && assignmentIsOpen(row));
 
     res.json({
       athlete: {

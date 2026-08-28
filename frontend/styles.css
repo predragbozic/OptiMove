@@ -10185,12 +10185,28 @@ button.tests-assignment-card {
 }
 
 @media (max-width: 760px) {
+  /* Round 2 correction: this used to be flex-direction:column + full-width
+     buttons, stacking "Send reminder"/"Copy for Viber" into two full mobile
+     rows - exactly the oversized-block problem item 3 of this round was
+     meant to fix. Two equal compact columns instead; only an EXTREMELY
+     narrow viewport (see the 320px block below) still stacks them. */
   .tests-reminder-actions {
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .tests-reminder-actions button {
     width: 100%;
+    min-width: 0;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+}
+
+@media (max-width: 320px) {
+  .tests-reminder-actions {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

@@ -207,8 +207,16 @@ export async function loadAthleteTodayTestAssignments(pool, query, athleteId) {
   // (asg.timezone - the athlete's effective timezone at materialization
   // time), never the schedule's - two athletes under the same occurrence
   // can genuinely disagree about whether "today" has arrived/ended.
+  // schedule_status is exposed here (not filtered further than excluding
+  // cancelled - see above) so that CALLERS can each apply their own agreed
+  // "actionable" definition. GET /athlete/today keeps its existing
+  // behavior unchanged (a paused schedule's assignment still appears,
+  // read-only in effect since POST /assignments/:id/submit independently
+  // rejects it); the Athlete Home WELLNESS card is stricter (paused must
+  // never show as a "Complete now" actionable card at all) - see
+  // athleteHome.js's own openWellness filter.
   const assignmentsResult = await query(
-    `select asg.*, o.status as occurrence_status, tv.name as test_name
+    `select asg.*, o.status as occurrence_status, sch.status as schedule_status, tv.name as test_name
      from tests.test_assignments asg
      join tests.test_schedule_occurrences o on o.id = asg.occurrence_id
      join tests.test_schedules sch on sch.id = o.schedule_id
