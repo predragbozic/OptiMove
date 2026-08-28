@@ -341,22 +341,51 @@ function renderWeeklyStripDayHtml(section, day, isSelected, todayIso) {
 
 // A single compact status per session row (never color alone - always
 // paired with real text, matching this app's existing .tests-status-pill
-// convention). "Upcoming" whenever nothing is materialized yet (a future
-// date, or a past/today date nobody has ever visited) - never a fabricated
-// per-athlete breakdown for data that doesn't exist server-side.
+// convention). Item 3 correction: this now distinguishes "nothing
+// materialized yet" (Scheduled) from "assignments exist but none of them
+// have opened yet" (Upcoming) - the backend's own counts (notYetOpen/
+// openPending/completed/missed) are already computed from each real
+// assignment's own opens_at/closes_at, never a schedule-timezone shortcut,
+// so this is purely a label decision over numbers the backend already got
+// right.
 function weeklySessionStatusInfo(session) {
-  if (!session.occurrenceExists || !session.counts || session.counts.total === 0) return { label: "Upcoming", cls: "upcoming" };
-  const { total, completed, missed } = session.counts;
+  if (!session.occurrenceExists || !session.counts || session.counts.total === 0) return { label: "Scheduled", cls: "upcoming" };
+  const { total, completed, notYetOpen, openPending } = session.counts;
   if (completed === total) return { label: "Completed", cls: "completed" };
-  if (completed + missed === total) return { label: `${completed}/${total} · missed`, cls: "missed" };
+  if (notYetOpen === total) return { label: "Upcoming", cls: "upcoming" };
+  const stillActionable = openPending > 0 || notYetOpen > 0;
+  if (!stillActionable) {
+    // Every assignment has been resolved one way or another (completed/
+    // skipped/missed) and nothing is left pending or not-yet-open - a
+    // closed, incomplete session.
+    return completed === 0 ? { label: "Missed", cls: "missed" } : { label: `${completed}/${total} · missed`, cls: "missed" };
+  }
   return { label: `${completed}/${total} completed`, cls: "pending" };
 }
 
-function renderWeeklySessionRowShell({ dataAction, dataAttrs, opensTime, title, pillClass, pillLabel }) {
+// Item 1 correction: the same test at the same time on the same day is
+// otherwise indistinguishable ("06:00 WELLNESS" twice) - this compact
+// second line names WHO it's for, built from the exact same structured
+// targetSummary fields GET /schedules already computed (never a bare
+// pre-formatted string from the backend, so each tab can compose its own
+// wording around it).
+function testsWeeklyRecipientLabel(targetSummary) {
+  if (!targetSummary) return "No targets";
+  const parts = [];
+  if (targetSummary.teamTargetNames) parts.push(targetSummary.teamTargetNames);
+  if (targetSummary.clubTargetNames) parts.push(targetSummary.clubTargetNames);
+  if (targetSummary.athleteTargetCount) parts.push(`${targetSummary.athleteTargetCount} athlete${targetSummary.athleteTargetCount === 1 ? "" : "s"}`);
+  return parts.join(" + ") || "No targets";
+}
+
+function renderWeeklySessionRowShell({ dataAction, dataAttrs, opensTime, title, subtitle, pillClass, pillLabel }) {
   return `
     <button type="button" class="tests-weekly-session" data-action="${dataAction}" ${dataAttrs}>
       <span class="tests-weekly-session-time">${escapeHtml((opensTime || "").slice(0, 5))}</span>
-      <span class="tests-weekly-session-name">${escapeHtml(title)}</span>
+      <span class="tests-weekly-session-main">
+        <span class="tests-weekly-session-name">${escapeHtml(title)}</span>
+        ${subtitle ? `<span class="tests-weekly-session-subtitle">${escapeHtml(subtitle)}</span>` : ""}
+      </span>
       <span class="tests-status-pill tests-status-${escapeAttr(pillClass)}">${escapeHtml(pillLabel)}</span>
     </button>
   `;
@@ -384,14 +413,25 @@ export function renderCoachTodayWeeklyHtml() {
     weekEnd: nav.data.weekEnd,
     selectedDate: nav.selectedDate,
     emptyAgendaText: "Nothing scheduled for this day.",
-    renderSessionRow: (session, date) => renderWeeklySessionRowShell({
-      dataAction: "tests-weekly-open-today-session",
-      dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}" data-date="${escapeAttr(date)}"`,
-      opensTime: session.opensTime,
-      title: session.testName,
-      pillClass: weeklySessionStatusInfo(session).cls,
-      pillLabel: weeklySessionStatusInfo(session).label,
-    }),
+    renderSessionRow: (session, date) => {
+      const status = weeklySessionStatusInfo(session);
+      const who = testsWeeklyRecipientLabel(session.targetSummary);
+      // The real materialized total (session.counts.total) - not the
+      // static target count, which for a team/club target doesn't reflect
+      // resolved membership at all - is what "18 athletes" actually means
+      // here; before anything is materialized there's no real count yet
+      // to show, so the subtitle is just who it's for.
+      const subtitle = session.counts ? `${who} · ${session.counts.total} athlete${session.counts.total === 1 ? "" : "s"}` : who;
+      return renderWeeklySessionRowShell({
+        dataAction: "tests-weekly-open-today-session",
+        dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}" data-date="${escapeAttr(date)}"`,
+        opensTime: session.opensTime,
+        title: session.testName,
+        subtitle,
+        pillClass: status.cls,
+        pillLabel: status.label,
+      });
+    },
   });
 }
 
@@ -399,7 +439,7 @@ function renderTodayGroupDetailHtml() {
   return `
     <div class="tests-weekly-detail">
       <button type="button" class="plain-button compact-button" data-action="tests-weekly-close-detail">&larr; Back to calendar</button>
-      ${state.tests.weeklyGroupDetailLoading ? `<p class="muted tests-empty">Loading...</p>` : renderCoachTodayGroupHtml(state.tests.weeklyGroupDetail.group)}
+      ${state.tests.weeklyGroupDetailLoading ? `<p class="muted tests-empty">Loading...</p>` : renderCoachTodayGroupHtml(state.tests.weeklyGroupDetail.group, { date: state.tests.weeklyGroupDetail.date })}
     </div>
   `;
 }
@@ -442,6 +482,18 @@ export function assignmentSetFingerprint(group) {
   return group.athletes.map((row) => row.assignmentId).slice().sort().join(",");
 }
 
+// Item 3 correction: a reminder is only ever useful against an assignment
+// that is CURRENTLY inside its own opens_at/closes_at window - the manual-
+// reminder worker/route already skips anything outside it (see the
+// "skippedNotOpen"/"skippedClosed" outcomes reminderConfirmationMessage
+// already handles) - defaulting to "select all incomplete" regardless of
+// window would pre-arm the Send button for a future or already-closed
+// weekly session it can't actually do anything useful against.
+function isAthleteRowCurrentlyOpen(row) {
+  const now = Date.now();
+  return new Date(row.opensAt).getTime() <= now && now <= new Date(row.closesAt).getTime();
+}
+
 // state.tests.reminderSelection[scheduleId] is only ever written once the
 // coach actually interacts (toggles one row, or explicitly clicks Select
 // all/Clear) - until then, "podrazumevano selektuj sve nezavršene" (default:
@@ -456,9 +508,15 @@ export function reminderSelectedSet(group) {
     // No explicit choice yet for THIS exact set of assignments - either
     // truly never interacted with, or the underlying occurrence changed
     // (a new day's daily schedule, a membership change, ...) - default to
-    // every currently incomplete athlete, per "podrazumevano selektuj sve
-    // nezavršene".
-    return incompleteIds;
+    // every currently incomplete athlete that's ALSO currently open (item
+    // 3 correction - see isAthleteRowCurrentlyOpen above). The checkbox
+    // list itself still shows every incomplete athlete regardless of
+    // window (the coach keeps full manual control, and the backend
+    // gracefully skips a non-open one rather than erroring) - only the
+    // DEFAULT pre-selection narrows to what's actually actionable right
+    // now, per "podrazumevano selektuj sve nezavršene [koje su trenutno
+    // otvorene]".
+    return new Set(incompleteAthletesFor(group).filter(isAthleteRowCurrentlyOpen).map((row) => row.assignmentId));
   }
   // An explicit choice exists for this EXACT set - still intersected with
   // the CURRENT incomplete set, so an athlete who completes their check-in
@@ -517,13 +575,22 @@ function renderManualReminderSectionHtml(group) {
   `;
 }
 
-function renderCoachTodayGroupHtml(group) {
+// Item 3 correction: this used to hardcode "No check-in window today." -
+// wrong wording for a weekly click-through, which can open this same
+// zero-athletes state for ANY date in the visible week, not just today
+// (a genuinely future date nobody has visited yet, most commonly). `date`
+// (the exact date this detail was opened for - state.tests.
+// weeklyGroupDetail.date) lets the message say what's actually true.
+function renderCoachTodayGroupHtml(group, { date } = {}) {
   const { schedule, counts, athletes } = group;
   if (!counts.total) {
+    const message = date && date !== testsWeeklyTodayIso()
+      ? `Assignments have not been created for ${escapeHtml(formatDayMonth(date))} yet.`
+      : "No check-in window today.";
     return `
       <section class="panel tests-today-group">
         <h3>${escapeHtml(schedule.testName)}</h3>
-        <p class="muted">No check-in window today.</p>
+        <p class="muted">${message}</p>
       </section>
     `;
   }
@@ -610,7 +677,8 @@ export function renderScheduleWeeklyHtml() {
       dataAction: "tests-open-schedule",
       dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}"`,
       opensTime: session.opensTime,
-      title: `${session.testName} · ${session.scheduleKind === "recurring" ? "Daily" : "One-time"}`,
+      title: session.testName,
+      subtitle: `${session.scheduleKind === "recurring" ? "Daily" : "One-time"} · ${testsWeeklyRecipientLabel(session.targetSummary)}`,
       pillClass: session.scheduleStatus,
       pillLabel: session.scheduleStatus,
     }),
@@ -1361,6 +1429,7 @@ function renderResultsWeeklyHtml() {
       dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}" data-date="${escapeAttr(date)}"`,
       opensTime: session.opensTime,
       title: session.testName,
+      subtitle: `${testsWeeklyRecipientLabel(session.targetSummary)} · ${session.resultsCount} result${session.resultsCount === 1 ? "" : "s"}`,
       pillClass: "completed",
       pillLabel: `${session.resultsCount} result${session.resultsCount === 1 ? "" : "s"}`,
     }),

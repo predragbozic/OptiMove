@@ -10200,12 +10200,30 @@ button.tests-assignment-card {
   color: var(--muted);
 }
 
+.tests-weekly-session-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .tests-weekly-session-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 700;
+}
+
+/* Item 1 correction: the compact "who this is for" second line - without
+   it, two same-time same-day sessions for the same test are visually
+   identical. */
+.tests-weekly-session-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .tests-weekly-detail {

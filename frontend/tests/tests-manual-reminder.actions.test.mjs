@@ -52,10 +52,21 @@ function resetState() {
   queried = {};
 }
 
+// Item 3 correction: reminderSelectedSet's own DEFAULT selection now
+// requires an athlete's assignment to be CURRENTLY inside its own
+// opens_at/closes_at window (never just "incomplete") - these fixtures
+// need a real, currently-open window for that default to still include
+// them, matching what a real live/open Coach Today session actually looks
+// like. window() below is deliberately Date.now()-anchored, not a fixed
+// literal, so this file never goes stale.
+function window_() {
+  return { opensAt: new Date(Date.now() - 3600000).toISOString(), closesAt: new Date(Date.now() + 3600000).toISOString() };
+}
+
 const ATHLETES = [
-  { assignmentId: "asg-1", athleteId: "ath-1", athleteName: "Ana Anić", status: "pending", wellnessScore: null, injury: false, opensAt: "", closesAt: "" },
-  { assignmentId: "asg-2", athleteId: "ath-2", athleteName: "Bojan Bojić", status: "pending", wellnessScore: null, injury: false, opensAt: "", closesAt: "" },
-  { assignmentId: "asg-3", athleteId: "ath-3", athleteName: "Cvijeta Cvić", status: "completed", wellnessScore: 5, injury: false, opensAt: "", closesAt: "" },
+  { assignmentId: "asg-1", athleteId: "ath-1", athleteName: "Ana Anić", status: "pending", wellnessScore: null, injury: false, ...window_() },
+  { assignmentId: "asg-2", athleteId: "ath-2", athleteName: "Bojan Bojić", status: "pending", wellnessScore: null, injury: false, ...window_() },
+  { assignmentId: "asg-3", athleteId: "ath-3", athleteName: "Cvijeta Cvić", status: "completed", wellnessScore: 5, injury: false, ...window_() },
 ];
 
 // ------------------------------------------------------------
@@ -124,8 +135,8 @@ test("a daily schedule's NEW day (same scheduleId, entirely different assignment
   // Today's occurrence: SAME scheduleId, brand-new assignment ids (a real
   // daily-schedule rollover - see testsOccurrenceService.js).
   const today = makeGroup("daily-sched", [
-    { assignmentId: "asg-101", athleteId: "ath-1", athleteName: "Ana Anić", status: "pending", wellnessScore: null, injury: false, opensAt: "", closesAt: "" },
-    { assignmentId: "asg-102", athleteId: "ath-2", athleteName: "Bojan Bojić", status: "pending", wellnessScore: null, injury: false, opensAt: "", closesAt: "" },
+    { assignmentId: "asg-101", athleteId: "ath-1", athleteName: "Ana Anić", status: "pending", wellnessScore: null, injury: false, ...window_() },
+    { assignmentId: "asg-102", athleteId: "ath-2", athleteName: "Bojan Bojić", status: "pending", wellnessScore: null, injury: false, ...window_() },
   ]);
   const selected = reminderSelectedSet(today);
   assert.deepEqual([...selected].sort(), ["asg-101", "asg-102"], "yesterday's stale ids must never leak into today's count/POST - must default to today's own incomplete athletes");

@@ -31,6 +31,7 @@ const {
   renderCoachTodayWeeklyHtml,
   renderScheduleWeeklyHtml,
   renderCoachResultsSectionHtml,
+  reminderSelectedSet,
 } = await import("../tests-view.js");
 const { emptyTestsState, state } = await import("../state.js");
 
@@ -68,6 +69,7 @@ function session(overrides = {}) {
     occurrenceExists: false,
     counts: null,
     resultsCount: 0,
+    targetSummary: { athleteTargetCount: 0, teamTargetNames: "", clubTargetNames: "" },
     ...overrides,
   };
 }
@@ -199,28 +201,46 @@ test("D3. a paused or cancelled schedule's session never shows on the Today agen
   assert.equal((html.match(/data-action="tests-weekly-open-today-session"/g) || []).length, 1);
 });
 
-test("D4. an upcoming (not yet materialized) session shows 'Upcoming', never a fabricated per-athlete breakdown", () => {
+test("D4a. no assignment materialized at all shows 'Scheduled', never 'Upcoming' or a fabricated per-athlete breakdown", () => {
   resetState();
   const date = "2026-08-24";
   state.tests.weekly.today.data = weekPayload(date, { [date]: [session({ occurrenceExists: false, counts: null })] });
   state.tests.weekly.today.selectedDate = date;
   const html = renderCoachTodayWeeklyHtml();
-  assert.ok(html.includes(">Upcoming<"));
+  assert.ok(html.includes(">Scheduled<"));
+  assert.ok(!html.includes(">Upcoming<"));
 });
 
-test("D5. a fully-completed session shows Completed; a mixed session shows a completed/total fraction - status is always text, never color alone", () => {
+// Item 3 correction: THIS is the exact bug being fixed - assignments that
+// DO exist but haven't opened yet used to render as a fractional
+// "0/N completed" instead of the honest "Upcoming".
+test("D4b. assignments exist but none of them have opened yet shows 'Upcoming', never a fabricated 0/N completed fraction", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.tests.weekly.today.data = weekPayload(date, {
+    [date]: [session({ occurrenceExists: true, counts: { total: 3, completed: 0, notYetOpen: 3, openPending: 0, missed: 0 } })],
+  });
+  state.tests.weekly.today.selectedDate = date;
+  const html = renderCoachTodayWeeklyHtml();
+  assert.ok(html.includes(">Upcoming<"));
+  assert.ok(!html.includes("0/3"));
+});
+
+test("D5. a fully-completed session shows Completed; a mixed (still-actionable) session shows a completed/total fraction; a fully-closed-and-incomplete session shows Missed - status is always text, never color alone", () => {
   resetState();
   const date = "2026-08-24";
   state.tests.weekly.today.data = weekPayload(date, {
     [date]: [
-      session({ scheduleId: "s1", occurrenceExists: true, counts: { total: 3, completed: 3, missed: 0, pending: 0 } }),
-      session({ scheduleId: "s2", occurrenceExists: true, counts: { total: 4, completed: 1, missed: 0, pending: 3 } }),
+      session({ scheduleId: "s1", occurrenceExists: true, counts: { total: 3, completed: 3, notYetOpen: 0, openPending: 0, missed: 0 } }),
+      session({ scheduleId: "s2", occurrenceExists: true, counts: { total: 4, completed: 1, notYetOpen: 0, openPending: 3, missed: 0 } }),
+      session({ scheduleId: "s3", occurrenceExists: true, counts: { total: 2, completed: 0, notYetOpen: 0, openPending: 0, missed: 2 } }),
     ],
   });
   state.tests.weekly.today.selectedDate = date;
   const html = renderCoachTodayWeeklyHtml();
   assert.ok(html.includes(">Completed<"));
   assert.ok(html.includes("1/4 completed"));
+  assert.ok(html.includes(">Missed<"));
 });
 
 test("D6. clicking a session opens the group detail via GET /schedules/:id/group?date=, reusing the existing per-athlete/manual-reminder rendering; a Back button returns to the calendar", async () => {
@@ -251,13 +271,104 @@ test("D7. the manual-reminder action suite (toggle/select-all/send) works agains
       allClosed: false,
       counts: { total: 2, completed: 0, missed: 0, pending: 2, injuries: 0 },
       athletes: [
-        { assignmentId: "asg-1", athleteId: "ath-1", athleteName: "Ana Anić", status: "pending", wellnessScore: null, injury: false, opensAt: "", closesAt: "" },
-        { assignmentId: "asg-2", athleteId: "ath-2", athleteName: "Bojan Bojić", status: "pending", wellnessScore: null, injury: false, opensAt: "", closesAt: "" },
+        { assignmentId: "asg-1", athleteId: "ath-1", athleteName: "Ana Anić", status: "pending", wellnessScore: null, injury: false, opensAt: new Date(Date.now() - 3600000).toISOString(), closesAt: new Date(Date.now() + 3600000).toISOString() },
+        { assignmentId: "asg-2", athleteId: "ath-2", athleteName: "Bojan Bojić", status: "pending", wellnessScore: null, injury: false, opensAt: new Date(Date.now() - 3600000).toISOString(), closesAt: new Date(Date.now() + 3600000).toISOString() },
       ],
     },
   };
   await handleTestsAction(fakeAction({ action: "tests-reminder-toggle-athlete", scheduleId: "sched-1", assignmentId: "asg-1" }), { renderTests: () => {} });
   assert.deepEqual(state.tests.reminderSelection["sched-1"].ids, ["asg-2"]);
+});
+
+// Item 3 correction: a future or already-closed weekly session must never
+// default to an active "select all" reminder send - the backend already
+// skips a non-open assignment as a no-op, so pre-arming Send for it would
+// just be offering to send a useless reminder.
+test("D8. the default reminder selection excludes an incomplete athlete whose own window is NOT currently open (future not-yet-open, or already-closed) - never a blind select-all", () => {
+  resetState();
+  const notYetOpen = { assignmentId: "asg-future", athleteId: "a1", athleteName: "Future Athlete", status: "pending", wellnessScore: null, injury: false, opensAt: new Date(Date.now() + 3600000).toISOString(), closesAt: new Date(Date.now() + 7200000).toISOString() };
+  const alreadyClosed = { assignmentId: "asg-closed", athleteId: "a2", athleteName: "Closed Athlete", status: "pending", wellnessScore: null, injury: false, opensAt: new Date(Date.now() - 7200000).toISOString(), closesAt: new Date(Date.now() - 3600000).toISOString() };
+  const currentlyOpen = { assignmentId: "asg-open", athleteId: "a3", athleteName: "Open Athlete", status: "pending", wellnessScore: null, injury: false, opensAt: new Date(Date.now() - 3600000).toISOString(), closesAt: new Date(Date.now() + 3600000).toISOString() };
+  const group = { schedule: { id: "sched-future" }, athletes: [notYetOpen, alreadyClosed, currentlyOpen] };
+  const selected = reminderSelectedSet(group);
+  assert.deepEqual([...selected], ["asg-open"], "only the currently-open athlete is pre-selected by default");
+});
+
+test("D9. a session where NOTHING is currently open defaults the reminder selection to fully empty - Send is never pre-armed for a useless send", () => {
+  resetState();
+  const notYetOpen = { assignmentId: "asg-future", athleteId: "a1", athleteName: "Future Athlete", status: "pending", wellnessScore: null, injury: false, opensAt: new Date(Date.now() + 3600000).toISOString(), closesAt: new Date(Date.now() + 7200000).toISOString() };
+  const group = { schedule: { id: "sched-future2" }, athletes: [notYetOpen] };
+  const selected = reminderSelectedSet(group);
+  assert.equal(selected.size, 0);
+});
+
+// ------------------------------------------------------------
+// D-target. Item 1 correction: same-time same-day sessions are
+// distinguished by a compact recipient subtitle, per tab
+// ------------------------------------------------------------
+
+test("two same-time same-day Today sessions for different teams render distinguishable subtitles", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.tests.weekly.today.data = weekPayload(date, {
+    [date]: [
+      session({ scheduleId: "s1", opensTime: "06:00:00", targetSummary: { athleteTargetCount: 0, teamTargetNames: "First team", clubTargetNames: "" }, occurrenceExists: true, counts: { total: 18, completed: 0, notYetOpen: 0, openPending: 18, missed: 0 } }),
+      session({ scheduleId: "s2", opensTime: "06:00:00", targetSummary: { athleteTargetCount: 0, teamTargetNames: "Recovery group", clubTargetNames: "" } }),
+    ],
+  });
+  state.tests.weekly.today.selectedDate = date;
+  const html = renderCoachTodayWeeklyHtml();
+  assert.ok(html.includes("First team · 18 athletes"), "the real materialized total, not a static target count, is what 'N athletes' means here");
+  assert.ok(html.includes("Recovery group"));
+});
+
+test("the Schedule tab's subtitle combines the recurrence kind with the recipient", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.tests.weekly.schedule.data = weekPayload(date, {
+    [date]: [session({ scheduleKind: "recurring", targetSummary: { athleteTargetCount: 0, teamTargetNames: "First team", clubTargetNames: "" } })],
+  });
+  state.tests.weekly.schedule.selectedDate = date;
+  const html = renderScheduleWeeklyHtml();
+  assert.ok(html.includes("Daily · First team"));
+});
+
+test("the Results tab's subtitle combines the recipient with the results count", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.tests.weekly.results.data = weekPayload(date, {
+    [date]: [session({ resultsCount: 14, targetSummary: { athleteTargetCount: 0, teamTargetNames: "First team", clubTargetNames: "" } })],
+  });
+  state.tests.weekly.results.selectedDate = date;
+  const html = renderCoachResultsSectionHtml();
+  assert.ok(html.includes("First team · 14 results"));
+});
+
+test("an individually-targeted session (no team/club) falls back to an athlete-count recipient label", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.tests.weekly.schedule.data = weekPayload(date, {
+    [date]: [session({ targetSummary: { athleteTargetCount: 3, teamTargetNames: "", clubTargetNames: "" } })],
+  });
+  state.tests.weekly.schedule.selectedDate = date;
+  const html = renderScheduleWeeklyHtml();
+  assert.ok(html.includes("3 athletes"));
+});
+
+// ------------------------------------------------------------
+// D-message. Item 3 correction: the zero-athletes detail message is date-aware
+// ------------------------------------------------------------
+
+test("clicking a NOT-yet-materialized FUTURE date's session shows a date-specific message, never the hardcoded 'No check-in window today.'", async () => {
+  resetState();
+  const futureDate = "2026-09-15";
+  installFetchMock((call) => (call.url === `/api/tests/schedules/s1/group?date=${futureDate}`
+    ? { status: 200, body: { group: { schedule: { id: "s1", testName: "WELLNESS", opensTime: "06:00", closesTime: "22:00" }, anyOpen: false, allClosed: false, counts: { total: 0, completed: 0, missed: 0, pending: 0, injuries: 0 }, athletes: [] } } }
+    : { status: 404, body: {} }));
+  await handleTestsAction(fakeAction({ action: "tests-weekly-open-today-session", scheduleId: "s1", date: futureDate }), { renderTests: () => {} });
+  const html = renderCoachTodayWeeklyHtml();
+  assert.ok(!html.includes("No check-in window today."), "must never claim this is 'today' for an arbitrary future date");
+  assert.ok(html.includes("have not been created"));
 });
 
 // ------------------------------------------------------------
