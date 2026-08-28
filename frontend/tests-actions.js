@@ -55,7 +55,16 @@ export async function handleTestsAction(action, { renderTests }) {
   if (type === "tests-weekly-prev-week" || type === "tests-weekly-next-week") {
     const section = action.dataset.section;
     const nav = state.tests.weekly[section];
-    nav.weekStart = addDaysIso(nav.weekStart, type === "tests-weekly-prev-week" ? -7 : 7);
+    const delta = type === "tests-weekly-prev-week" ? -7 : 7;
+    nav.weekStart = addDaysIso(nav.weekStart, delta);
+    // Item 2 correction: shift selectedDate by the SAME delta so the same
+    // weekday stays selected across the week change (Prev/Next used to
+    // leave selectedDate parked in the old week - the renderer only
+    // temporarily fell back to that week's first day; the state itself
+    // never actually caught up). loadTestsWeekly's own
+    // clampSelectedDateToWeek is still the final authority once the real
+    // response comes back, in case this shift ever lands outside it.
+    if (nav.selectedDate) nav.selectedDate = addDaysIso(nav.selectedDate, delta);
     await loadTestsWeekly(section, { includeCancelled: weeklyIncludeCancelledFor(section) });
     renderTests();
     return true;

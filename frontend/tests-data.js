@@ -177,6 +177,26 @@ export async function loadScheduleDetail(scheduleId) {
   state.tests.scheduleDetail = data;
 }
 
+// Item 2 correction: a request-generation token PER SECTION, so a rapid
+// double Next-week click (or a fast Show-cancelled toggle-toggle) can never
+// let an OLDER, slower-to-resolve response overwrite a NEWER week's
+// already-applied data/error/loading state. Each call to loadTestsWeekly
+// stamps its own generation the instant it starts; only the call that is
+// STILL the latest one for that section by the time its response actually
+// arrives is allowed to write anything back into state - a stale response
+// is silently dropped in full (never even flips loading back to false,
+// since a newer in-flight request already owns that).
+const weeklyRequestGeneration = { today: 0, schedule: 0, results: 0 };
+
+// A week-nav response's own days array is the only trustworthy source for
+// "is this date still valid" - clamps back to the response's own weekStart
+// if the previously-selected date somehow isn't one of the 7 returned days
+// (e.g. a request race, or a DST-adjacent edge in the date math elsewhere).
+function clampSelectedDateToWeek(selectedDate, data) {
+  if (data.days.some((d) => d.date === selectedDate)) return selectedDate;
+  return data.weekStart;
+}
+
 // Weekly calendar (shared across Today/Schedule/Results). Deliberately NOT
 // the shared view-cache (view-cache.js) - same reasoning as the rest of
 // this module (see the file header): operational counts and results
@@ -194,14 +214,19 @@ export async function loadTestsWeekly(section, { includeCancelled = false } = {}
     nav.weekStart = weekMondayIso(today);
     nav.selectedDate = today;
   }
+  const generation = ++weeklyRequestGeneration[section];
   nav.loading = true;
   nav.error = "";
   try {
     const query = `?weekStart=${encodeURIComponent(nav.weekStart)}${includeCancelled ? "&includeCancelled=true" : ""}`;
-    nav.data = await api(`/api/tests/weekly${query}`);
+    const data = await api(`/api/tests/weekly${query}`);
+    if (generation !== weeklyRequestGeneration[section]) return; // a newer request has since started - this response is stale, drop it entirely
+    nav.data = data;
+    nav.selectedDate = clampSelectedDateToWeek(nav.selectedDate, data);
+    nav.loading = false;
   } catch (error) {
+    if (generation !== weeklyRequestGeneration[section]) return;
     nav.error = error.message || "Could not load the weekly calendar.";
-  } finally {
     nav.loading = false;
   }
 }

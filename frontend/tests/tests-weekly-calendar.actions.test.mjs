@@ -25,6 +25,24 @@ function installFetchMock(responder) {
   };
 }
 
+// Item 2: a controllable-resolution-order fetch mock, for deterministically
+// proving the request-race guard - each call's own resolution is held
+// until the test explicitly releases it, in whatever order the test
+// chooses (never relying on real timing/setTimeout).
+function installDeferredFetchMock() {
+  const deferreds = [];
+  fetchCalls = [];
+  globalThis.fetch = (url, options = {}) => {
+    const call = { url, method: options.method || "GET", body: options.body ? JSON.parse(options.body) : undefined };
+    fetchCalls.push(call);
+    let resolve;
+    const promise = new Promise((res) => { resolve = res; });
+    deferreds.push({ call, resolve: (result) => resolve({ ok: result.status < 300, status: result.status, json: async () => result.body }) });
+    return promise;
+  };
+  return deferreds;
+}
+
 const { handleTestsAction } = await import("../tests-actions.js");
 const { loadTestsWeekly } = await import("../tests-data.js");
 const {
@@ -135,6 +153,67 @@ test("B3. the Today button jumps back to today's real date/week and re-fetches",
   installFetchMock(() => ({ status: 200, body: weekPayload("2026-08-24") }));
   await handleTestsAction(fakeAction({ action: "tests-weekly-today", section: "schedule" }), { renderTests: () => {} });
   assert.notEqual(state.tests.weekly.schedule.weekStart, "2026-09-21");
+});
+
+// Item 2 correction: deterministic request-race tests. Real timing
+// (setTimeout races) would be flaky by construction - these use a fetch
+// mock whose responses are resolved in an order the test itself controls,
+// so "the older request's response arrives after the newer one" is a fact
+// guaranteed by the test, not a hope about scheduling.
+test("B4. a rapid double Next-week click - the SECOND request's response resolving before the FIRST's still leaves the newer week applied, and the stale older response is dropped", async () => {
+  resetState();
+  state.tests.weekly.schedule.weekStart = "2026-08-24";
+  state.tests.weekly.schedule.selectedDate = "2026-08-24";
+  state.tests.weekly.schedule.data = weekPayload("2026-08-24");
+  const deferreds = installDeferredFetchMock();
+
+  const firstClick = handleTestsAction(fakeAction({ action: "tests-weekly-next-week", section: "schedule" }), { renderTests: () => {} });
+  const secondClick = handleTestsAction(fakeAction({ action: "tests-weekly-next-week", section: "schedule" }), { renderTests: () => {} });
+
+  assert.equal(deferreds.length, 2, "both clicks issued their own fetch");
+  assert.equal(state.tests.weekly.schedule.weekStart, "2026-09-07", "state already reflects two +7 shifts synchronously, before either response lands");
+
+  // Resolve the NEWER (second) request first, then the older/stale one -
+  // the literal "obrnutim redom" (reverse order) scenario the user asked for.
+  deferreds[1].resolve({ status: 200, body: weekPayload("2026-09-07") });
+  await secondClick;
+  assert.equal(state.tests.weekly.schedule.data.weekStart, "2026-09-07");
+  assert.equal(state.tests.weekly.schedule.loading, false);
+
+  deferreds[0].resolve({ status: 200, body: weekPayload("2026-08-31") });
+  await firstClick;
+  assert.equal(state.tests.weekly.schedule.data.weekStart, "2026-09-07", "the stale first response must never overwrite the already-applied newer week");
+  assert.equal(state.tests.weekly.schedule.loading, false, "the stale response must never leave loading incorrectly toggled");
+  assert.equal(state.tests.weekly.schedule.error, "", "the stale response must never surface an error either");
+});
+
+test("B5. rapid Show-cancelled toggle on/off - a late-arriving stale response (including a stale ERROR) must never surface once a newer response already landed", async () => {
+  resetState();
+  state.tests.weekly.results.weekStart = "2026-08-24";
+  state.tests.weekly.results.selectedDate = "2026-08-24";
+  const deferreds = installDeferredFetchMock();
+
+  const toggleOn = loadTestsWeekly("results", { includeCancelled: true });
+  const toggleOff = loadTestsWeekly("results", { includeCancelled: false });
+
+  assert.equal(deferreds.length, 2);
+  assert.ok(deferreds[0].call.url.includes("includeCancelled=true"));
+  assert.ok(!deferreds[1].call.url.includes("includeCancelled=true"));
+
+  // The NEWER (toggle-off) request resolves first with real data; the OLDER
+  // (toggle-on) request resolves afterward as a stale ERROR - must never
+  // surface, and must never re-flip loading back on.
+  deferreds[1].resolve({ status: 200, body: weekPayload("2026-08-24") });
+  await toggleOff;
+  assert.equal(state.tests.weekly.results.data.weekStart, "2026-08-24");
+  assert.equal(state.tests.weekly.results.loading, false);
+  assert.equal(state.tests.weekly.results.error, "");
+
+  deferreds[0].resolve({ status: 500, body: { error: "boom" } });
+  await toggleOn;
+  assert.equal(state.tests.weekly.results.error, "", "a stale error response must never surface once a newer response already succeeded");
+  assert.equal(state.tests.weekly.results.loading, false, "a stale response must never leave loading stuck/re-toggled");
+  assert.ok(state.tests.weekly.results.data, "the newer successful data must remain in place");
 });
 
 // ------------------------------------------------------------
