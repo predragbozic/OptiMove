@@ -348,19 +348,30 @@ function renderWeeklyStripDayHtml(section, day, isSelected, todayIso) {
 // assignment's own opens_at/closes_at, never a schedule-timezone shortcut,
 // so this is purely a label decision over numbers the backend already got
 // right.
+// Correction: `skipped` (excused/cancelled) assignments are never something
+// an athlete could have completed - they must never count against the
+// completion denominator, and a session that's ENTIRELY skipped must never
+// be labeled "Missed" (missed === 0 there) or misread as trivially
+// "Completed" (0 completed out of a denominator of 0). `denominator` is the
+// real, actionable assignment count (total minus skipped) - every other
+// comparison below is against THAT, not the raw total.
 function weeklySessionStatusInfo(session) {
   if (!session.occurrenceExists || !session.counts || session.counts.total === 0) return { label: "Scheduled", cls: "upcoming" };
-  const { total, completed, notYetOpen, openPending } = session.counts;
-  if (completed === total) return { label: "Completed", cls: "completed" };
-  if (notYetOpen === total) return { label: "Upcoming", cls: "upcoming" };
+  const { total, completed, notYetOpen, openPending, skipped } = session.counts;
+  const denominator = total - skipped;
+  if (denominator === 0) return { label: "Skipped", cls: "skipped" };
+  if (completed === denominator) return { label: "Completed", cls: "completed" };
+  if (notYetOpen === denominator) return { label: "Upcoming", cls: "upcoming" };
   const stillActionable = openPending > 0 || notYetOpen > 0;
   if (!stillActionable) {
-    // Every assignment has been resolved one way or another (completed/
-    // skipped/missed) and nothing is left pending or not-yet-open - a
-    // closed, incomplete session.
-    return completed === 0 ? { label: "Missed", cls: "missed" } : { label: `${completed}/${total} · missed`, cls: "missed" };
+    // Every real (non-skipped) assignment has been resolved one way or
+    // another and nothing is left pending or not-yet-open - a closed,
+    // incomplete session. completed < denominator here is guaranteed (the
+    // completed === denominator case already returned above), so this is
+    // never reached with missed === 0.
+    return completed === 0 ? { label: "Missed", cls: "missed" } : { label: `${completed}/${denominator} · missed`, cls: "missed" };
   }
-  return { label: `${completed}/${total} completed`, cls: "pending" };
+  return { label: `${completed}/${denominator} completed`, cls: "pending" };
 }
 
 // Item 1 correction: the same test at the same time on the same day is
@@ -494,6 +505,21 @@ function isAthleteRowCurrentlyOpen(row) {
   return new Date(row.opensAt).getTime() <= now && now <= new Date(row.closesAt).getTime();
 }
 
+// Correction: this is now the ONE source of truth for "is this athlete a
+// valid reminder candidate right now" - not completed, a status that's
+// actually reminder-appropriate (row.status is only ever "completed",
+// "missed", or "pending" - see loadScheduleGroupRows on the backend; only
+// "pending" qualifies), and currently inside their own opens_at/closes_at
+// window. Every reminder entry point (default selection, the stored-
+// selection intersection, manual toggle, Select all, Send, Copy for Viber)
+// must go through this - previously only the DEFAULT selection was gated
+// on the window, so a manual click, Select all, or a stored selection
+// carried over from an earlier interaction could all still re-arm Send/
+// Copy for a future or already-closed assignment.
+export function remindableAthletesFor(group) {
+  return group.athletes.filter((row) => row.status === "pending" && isAthleteRowCurrentlyOpen(row));
+}
+
 // state.tests.reminderSelection[scheduleId] is only ever written once the
 // coach actually interacts (toggles one row, or explicitly clicks Select
 // all/Clear) - until then, "podrazumevano selektuj sve nezavršene" (default:
@@ -502,29 +528,23 @@ function isAthleteRowCurrentlyOpen(row) {
 // front. Stored as { fingerprint, ids } (not a bare array) - see
 // assignmentSetFingerprint's own comment for why.
 export function reminderSelectedSet(group) {
-  const incompleteIds = new Set(incompleteAthletesFor(group).map((row) => row.assignmentId));
+  const remindableIds = new Set(remindableAthletesFor(group).map((row) => row.assignmentId));
   const stored = state.tests.reminderSelection[group.schedule.id];
   if (!stored || stored.fingerprint !== assignmentSetFingerprint(group)) {
     // No explicit choice yet for THIS exact set of assignments - either
     // truly never interacted with, or the underlying occurrence changed
     // (a new day's daily schedule, a membership change, ...) - default to
-    // every currently incomplete athlete that's ALSO currently open (item
-    // 3 correction - see isAthleteRowCurrentlyOpen above). The checkbox
-    // list itself still shows every incomplete athlete regardless of
-    // window (the coach keeps full manual control, and the backend
-    // gracefully skips a non-open one rather than erroring) - only the
-    // DEFAULT pre-selection narrows to what's actually actionable right
-    // now, per "podrazumevano selektuj sve nezavršene [koje su trenutno
-    // otvorene]".
-    return new Set(incompleteAthletesFor(group).filter(isAthleteRowCurrentlyOpen).map((row) => row.assignmentId));
+    // every currently remindable athlete.
+    return new Set(remindableIds);
   }
   // An explicit choice exists for this EXACT set - still intersected with
-  // the CURRENT incomplete set, so an athlete who completes their check-in
-  // after the coach already made a selection is excluded from the count/
-  // POST immediately, without needing a new interaction. Clear (an
-  // explicit empty array, still matching the current fingerprint) stays
-  // genuinely empty here - it is never re-defaulted to "select all".
-  return new Set(stored.ids.filter((id) => incompleteIds.has(id)));
+  // the CURRENT remindable set (not merely "incomplete"), so an athlete
+  // who completes their check-in, or whose window closes, after the coach
+  // already made a selection is excluded from the count/POST immediately,
+  // without needing a new interaction. Clear (an explicit empty array,
+  // still matching the current fingerprint) stays genuinely empty here -
+  // it is never re-defaulted to "select all".
+  return new Set(stored.ids.filter((id) => remindableIds.has(id)));
 }
 
 // Item 3 (compaction): the athlete's name/status is already shown, in full,
@@ -541,7 +561,12 @@ function renderManualReminderSectionHtml(group) {
   if (!incomplete.length) return "";
   const scheduleId = group.schedule.id;
   const selected = reminderSelectedSet(group);
-  const allSelected = incomplete.every((row) => selected.has(row.assignmentId));
+  const remindableIds = new Set(remindableAthletesFor(group).map((row) => row.assignmentId));
+  // "Select all" only ever means "select every currently-remindable
+  // athlete" - compared against remindableIds, never the full incomplete
+  // list, or it would stay permanently enabled whenever any incomplete
+  // athlete is outside their own window (nothing left to add there).
+  const allSelected = remindableIds.size > 0 && [...remindableIds].every((id) => selected.has(id));
   const sending = state.tests.remindingScheduleId === scheduleId;
   const result = state.tests.reminderResult && state.tests.reminderResult.scheduleId === scheduleId ? state.tests.reminderResult : null;
   const single = incomplete.length === 1;
@@ -551,19 +576,22 @@ function renderManualReminderSectionHtml(group) {
         <span class="tests-reminder-title">${single ? `Hasn't completed it: ${escapeHtml(incomplete[0].athleteName)}` : "Hasn't completed it yet"}</span>
         ${single ? "" : `
         <div class="tests-reminder-select-actions">
-          <button type="button" class="text-action" data-action="tests-reminder-select-all" data-schedule-id="${escapeAttr(scheduleId)}" ${allSelected ? "disabled" : ""}>Select all</button>
+          <button type="button" class="text-action" data-action="tests-reminder-select-all" data-schedule-id="${escapeAttr(scheduleId)}" ${allSelected || !remindableIds.size ? "disabled" : ""}>Select all</button>
           <button type="button" class="text-action" data-action="tests-reminder-clear" data-schedule-id="${escapeAttr(scheduleId)}" ${selected.size ? "" : "disabled"}>Clear</button>
         </div>
         `}
       </div>
       ${single ? "" : `
       <div class="tests-reminder-list">
-        ${incomplete.map((row) => `
-          <label class="tests-reminder-row">
-            <input type="checkbox" class="tests-reminder-checkbox" data-action="tests-reminder-toggle-athlete" data-schedule-id="${escapeAttr(scheduleId)}" data-assignment-id="${escapeAttr(row.assignmentId)}" ${selected.has(row.assignmentId) ? "checked" : ""}>
+        ${incomplete.map((row) => {
+          const remindable = remindableIds.has(row.assignmentId);
+          return `
+          <label class="tests-reminder-row${remindable ? "" : " tests-reminder-row-disabled"}">
+            <input type="checkbox" class="tests-reminder-checkbox" data-action="tests-reminder-toggle-athlete" data-schedule-id="${escapeAttr(scheduleId)}" data-assignment-id="${escapeAttr(row.assignmentId)}" ${selected.has(row.assignmentId) ? "checked" : ""} ${remindable ? "" : "disabled"}>
             <span class="tests-reminder-row-name">${escapeHtml(row.athleteName)}</span>
           </label>
-        `).join("")}
+        `;
+        }).join("")}
       </div>
       `}
       ${result ? `<p class="tests-reminder-confirmation" role="status">${escapeHtml(result.message)}</p>` : ""}

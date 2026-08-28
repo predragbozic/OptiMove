@@ -3,7 +3,7 @@ import { isAthleteMode } from "./access.js";
 import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
-import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
+import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, remindableAthletesFor, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
 import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadTestsWeekly, loadWellnessForm } from "./tests-data.js";
 
 // Every data-action="tests-*" click/change and data-tests-form submit in the
@@ -466,7 +466,7 @@ export async function handleTestsAction(action, { renderTests }) {
     return true;
   }
   if (type === "tests-reminder-select-all") {
-    setReminderSelectionToAllIncomplete(action.dataset.scheduleId);
+    setReminderSelectionToAllRemindable(action.dataset.scheduleId);
     renderTests();
     return true;
   }
@@ -631,6 +631,14 @@ function coachTodayGroupById(scheduleId) {
 function toggleReminderAthlete(scheduleId, assignmentId) {
   const group = coachTodayGroupById(scheduleId);
   if (!group) return;
+  // Correction: a manual click must never be able to ADD an assignment
+  // that isn't currently remindable (future/already-closed) - the checkbox
+  // is rendered disabled for exactly this reason, but this guard covers
+  // any path that still reaches this handler (e.g. a stale DOM, or a
+  // direct action dispatch in tests) rather than relying on the disabled
+  // attribute alone.
+  const remindableIds = new Set(remindableAthletesFor(group).map((row) => row.assignmentId));
+  if (!remindableIds.has(assignmentId)) return;
   // reminderSelectedSet already resolves the correct CURRENT set (default
   // or a still-valid override, fingerprint-checked) - toggling always
   // starts from that, never a possibly-stale raw stored array.
@@ -640,10 +648,14 @@ function toggleReminderAthlete(scheduleId, assignmentId) {
   state.tests.reminderSelection[scheduleId] = { fingerprint: assignmentSetFingerprint(group), ids: [...current] };
 }
 
-function setReminderSelectionToAllIncomplete(scheduleId) {
+// Correction: "Select all" now means "select every currently-remindable
+// athlete", never every merely-incomplete one - previously this could
+// re-arm Send/Copy for a future or already-closed assignment the coach
+// could do nothing useful with.
+function setReminderSelectionToAllRemindable(scheduleId) {
   const group = coachTodayGroupById(scheduleId);
   if (!group) return;
-  const ids = group.athletes.filter((row) => row.status !== "completed").map((row) => row.assignmentId);
+  const ids = remindableAthletesFor(group).map((row) => row.assignmentId);
   state.tests.reminderSelection[scheduleId] = { fingerprint: assignmentSetFingerprint(group), ids };
 }
 

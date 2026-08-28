@@ -29,7 +29,7 @@ function installFetchMock(responder) {
 }
 
 const { handleTestsAction } = await import("../tests-actions.js");
-const { assignmentSetFingerprint, incompleteAthletesFor, reminderSelectedSet } = await import("../tests-view.js");
+const { assignmentSetFingerprint, incompleteAthletesFor, remindableAthletesFor, reminderSelectedSet } = await import("../tests-view.js");
 const { emptyTestsState, state } = await import("../state.js");
 
 function fakeAction(dataset) {
@@ -113,6 +113,97 @@ test("Clear empties the selection, Select all restores every incomplete athlete"
   assert.deepEqual(state.tests.reminderSelection["sched-1"].ids, []);
   await handleTestsAction(fakeAction({ action: "tests-reminder-select-all", scheduleId: "sched-1" }), { renderTests: () => {} });
   assert.deepEqual(state.tests.reminderSelection["sched-1"].ids.sort(), ["asg-1", "asg-2"]);
+});
+
+// ------------------------------------------------------------
+// 2c. Correction: reminder ELIGIBILITY (not completed, appropriate
+// status, currently inside its own opens_at/closes_at window) must be
+// enforced everywhere - default selection, stored-selection intersection,
+// manual toggle, Select all, Send, and Copy for Viber - not just the
+// default. Previously only the default selection was window-gated: a
+// manual click, Select all, or a stored selection carried over from an
+// earlier interaction could all still re-arm Send/Copy for a future or
+// already-closed assignment.
+// ------------------------------------------------------------
+
+function futureWindow() {
+  return { opensAt: new Date(Date.now() + 3600000).toISOString(), closesAt: new Date(Date.now() + 7200000).toISOString() };
+}
+function closedWindow() {
+  return { opensAt: new Date(Date.now() - 7200000).toISOString(), closesAt: new Date(Date.now() - 3600000).toISOString() };
+}
+
+const MIXED_ATHLETES = [
+  { assignmentId: "asg-open", athleteId: "ath-open", athleteName: "Open Ana", status: "pending", wellnessScore: null, injury: false, ...window_() },
+  { assignmentId: "asg-future", athleteId: "ath-future", athleteName: "Future Bojan", status: "pending", wellnessScore: null, injury: false, ...futureWindow() },
+  { assignmentId: "asg-closed", athleteId: "ath-closed", athleteName: "Closed Cvijeta", status: "pending", wellnessScore: null, injury: false, ...closedWindow() },
+];
+
+test("remindableAthletesFor excludes a not-yet-open and an already-closed assignment, keeping only the currently-open one", () => {
+  const group = makeGroup("sched-1", MIXED_ATHLETES);
+  const remindable = remindableAthletesFor(group);
+  assert.deepEqual(remindable.map((a) => a.assignmentId), ["asg-open"]);
+});
+
+test("a manual click can never select a NOT-YET-OPEN (future) assignment - toggling it is a silent no-op", async () => {
+  resetState();
+  state.tests.coachToday = [makeGroup("sched-1", MIXED_ATHLETES)];
+  await handleTestsAction(fakeAction({ action: "tests-reminder-toggle-athlete", scheduleId: "sched-1", assignmentId: "asg-future" }), { renderTests: () => {} });
+  assert.ok(!state.tests.reminderSelection["sched-1"], "toggling a non-remindable assignment must not even create a stored selection");
+});
+
+test("a manual click can never select an ALREADY-CLOSED assignment either", async () => {
+  resetState();
+  state.tests.coachToday = [makeGroup("sched-1", MIXED_ATHLETES)];
+  await handleTestsAction(fakeAction({ action: "tests-reminder-toggle-athlete", scheduleId: "sched-1", assignmentId: "asg-closed" }), { renderTests: () => {} });
+  assert.ok(!state.tests.reminderSelection["sched-1"]);
+});
+
+test("Select all only ever selects the currently-remindable subset, never a future or closed assignment", async () => {
+  resetState();
+  state.tests.coachToday = [makeGroup("sched-1", MIXED_ATHLETES)];
+  await handleTestsAction(fakeAction({ action: "tests-reminder-select-all", scheduleId: "sched-1" }), { renderTests: () => {} });
+  assert.deepEqual(state.tests.reminderSelection["sched-1"].ids, ["asg-open"]);
+});
+
+test("a previously-stored selection that included a since-closed/not-yet-open assignment drops it on the next resolve, without a new interaction", () => {
+  resetState();
+  const group = makeGroup("sched-1", MIXED_ATHLETES);
+  // Coach had explicitly selected all three at some earlier point (the
+  // fingerprint matches the CURRENT set of assignment ids - only their
+  // windows have since changed, e.g. time has simply passed).
+  state.tests.reminderSelection["sched-1"] = { fingerprint: assignmentSetFingerprint(group), ids: ["asg-open", "asg-future", "asg-closed"] };
+  const selected = reminderSelectedSet(group);
+  assert.deepEqual([...selected], ["asg-open"], "the stored selection must be intersected with the CURRENT remindable set, not merely the incomplete set");
+});
+
+test("Send reminder can never include a future/closed assignment even if it somehow made it into the stored selection", async () => {
+  resetState();
+  const group = makeGroup("sched-1", MIXED_ATHLETES);
+  state.tests.coachToday = [group];
+  state.tests.reminderSelection["sched-1"] = { fingerprint: assignmentSetFingerprint(group), ids: ["asg-open", "asg-future", "asg-closed"] };
+  installFetchMock((call) => {
+    if (call.url === "/api/tests/schedules/sched-1/remind") return { status: 200, body: { results: [{ assignmentId: "asg-open", outcome: "notified" }], notifiedCount: 1, noUserCount: 0 } };
+    return { status: 404, body: {} };
+  });
+  await handleTestsAction(fakeAction({ action: "tests-send-reminder", scheduleId: "sched-1" }), { renderTests: () => {} });
+  assert.deepEqual(fetchCalls[0].body.assignmentIds, ["asg-open"]);
+});
+
+test("Copy for Viber can never include a future/closed assignment's name even if it somehow made it into the stored selection", async () => {
+  resetState();
+  const group = makeGroup("sched-1", MIXED_ATHLETES);
+  state.tests.coachToday = [group];
+  state.tests.reminderSelection["sched-1"] = { fingerprint: assignmentSetFingerprint(group), ids: ["asg-open", "asg-future", "asg-closed"] };
+  let copied = "";
+  globalThis.navigator.clipboard.writeText = async (text) => { copied = text; };
+  installFetchMock((call) => {
+    if (call.url === "/api/tests/schedules/sched-1") return { status: 200, body: { link: { id: "link-1", publicToken: "TOKEN123" } } };
+    return { status: 404, body: {} };
+  });
+  await handleTestsAction(fakeAction({ action: "tests-copy-viber", scheduleId: "sched-1" }), { renderTests: () => {} });
+  assert.ok(copied.includes("Open Ana"));
+  assert.ok(!copied.includes("Future Bojan") && !copied.includes("Closed Cvijeta"));
 });
 
 // ------------------------------------------------------------

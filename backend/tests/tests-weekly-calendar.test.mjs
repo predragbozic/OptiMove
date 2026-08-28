@@ -711,14 +711,38 @@ test("J1. no assignment materialized at all -> occurrenceExists is false and cou
 
 test("J2. an assignment that exists but hasn't opened yet is notYetOpen, never counted as openPending - the exact bug this correction fixes", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("j2", 1);
-  // A near-end-of-day window (23:58-23:59 UTC) - deliberately NOT a
-  // computed "now + N hours" time, which would wrap past midnight (and
-  // become a time BEFORE "now" on the same calendar day, defeating the
-  // test's own intent) whenever this happens to run late in the UTC day.
-  // materialized via GET /athlete/today, but this athlete's own assignment
-  // window hasn't started yet for virtually the entire day.
-  await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }], { startDate: TODAY, timezone: "UTC", opensTime: "23:58", closesTime: "23:59" }) });
-  await api("/api/tests/athlete/today", { cookie: athletes[0].cookie });
+  // Correction: the previous version of this test drove materialization
+  // through the real API (POST /schedules + GET /athlete/today), using a
+  // near-midnight wall-clock window (23:58-23:59 UTC) to keep the
+  // computed opens_at in the future. That wall-clock/date math is
+  // re-evaluated against whatever "now" the test happens to run at -
+  // during the literal 23:58-23:59 UTC window itself, the assertions below
+  // would fail. Rather than picking a "safer" wall-clock time (any fixed
+  // or computed wall-clock window still has SOME collision risk against
+  // real time), this fixture bypasses ensureCurrentOccurrence's wall-clock
+  // computation entirely: it creates the schedule/occurrence normally
+  // (their own window is irrelevant here - GET /weekly's counts query only
+  // ever reads the ASSIGNMENT's own opens_at/closes_at), then inserts the
+  // assignment row directly with a real, absolute future opens_at/closes_at
+  // (now + a fixed offset) computed once in JS - an absolute instant is
+  // unconditionally in the future relative to whatever "now" the test
+  // happens to run at, with no wraparound/reinterpretation possible. This
+  // is a plain INSERT, never a later UPDATE of these columns - the DB's
+  // own immutability trigger (tests.protect_assignment_identity_and_
+  // lifecycle, `before update`) only guards UPDATE, so a same-INSERT
+  // snapshot is unaffected by it and always was the intended way to seed
+  // one.
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coachCookie, body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }], { startDate: TODAY, timezone: "UTC" }) });
+  const scheduleId = created.body.schedule.id;
+  const occurrenceResult = await query(`select tests.generate_test_schedule_occurrence($1, $2::date) as id`, [scheduleId, TODAY]);
+  const occurrenceId = occurrenceResult.rows[0].id;
+  const opensAt = new Date(Date.now() + 6 * 3600 * 1000);
+  const closesAt = new Date(Date.now() + 7 * 3600 * 1000);
+  await query(
+    `insert into tests.test_assignments (occurrence_id, athlete_id, snapshot_test_version_id, status, timezone, local_scheduled_date, opens_at, closes_at)
+     values ($1, $2, $3, 'pending', 'UTC', $4::date, $5, $6)`,
+    [occurrenceId, athletes[0].athleteId, WELLNESS_TEST_VERSION_ID, TODAY, opensAt.toISOString(), closesAt.toISOString()],
+  );
   const weekly = await api(`/api/tests/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
   const session = sessionsOn(weekly.body, TODAY)[0];
   assert.equal(session.occurrenceExists, true, "the assignment row DOES exist");

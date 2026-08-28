@@ -297,7 +297,7 @@ test("D4b. assignments exist but none of them have opened yet shows 'Upcoming', 
   resetState();
   const date = "2026-08-24";
   state.tests.weekly.today.data = weekPayload(date, {
-    [date]: [session({ occurrenceExists: true, counts: { total: 3, completed: 0, notYetOpen: 3, openPending: 0, missed: 0 } })],
+    [date]: [session({ occurrenceExists: true, counts: { total: 3, completed: 0, notYetOpen: 3, openPending: 0, missed: 0, skipped: 0 } })],
   });
   state.tests.weekly.today.selectedDate = date;
   const html = renderCoachTodayWeeklyHtml();
@@ -310,9 +310,9 @@ test("D5. a fully-completed session shows Completed; a mixed (still-actionable) 
   const date = "2026-08-24";
   state.tests.weekly.today.data = weekPayload(date, {
     [date]: [
-      session({ scheduleId: "s1", occurrenceExists: true, counts: { total: 3, completed: 3, notYetOpen: 0, openPending: 0, missed: 0 } }),
-      session({ scheduleId: "s2", occurrenceExists: true, counts: { total: 4, completed: 1, notYetOpen: 0, openPending: 3, missed: 0 } }),
-      session({ scheduleId: "s3", occurrenceExists: true, counts: { total: 2, completed: 0, notYetOpen: 0, openPending: 0, missed: 2 } }),
+      session({ scheduleId: "s1", occurrenceExists: true, counts: { total: 3, completed: 3, notYetOpen: 0, openPending: 0, missed: 0, skipped: 0 } }),
+      session({ scheduleId: "s2", occurrenceExists: true, counts: { total: 4, completed: 1, notYetOpen: 0, openPending: 3, missed: 0, skipped: 0 } }),
+      session({ scheduleId: "s3", occurrenceExists: true, counts: { total: 2, completed: 0, notYetOpen: 0, openPending: 0, missed: 2, skipped: 0 } }),
     ],
   });
   state.tests.weekly.today.selectedDate = date;
@@ -320,6 +320,60 @@ test("D5. a fully-completed session shows Completed; a mixed (still-actionable) 
   assert.ok(html.includes(">Completed<"));
   assert.ok(html.includes("1/4 completed"));
   assert.ok(html.includes(">Missed<"));
+});
+
+// Correction: `skipped` (excused/cancelled) assignments are never
+// something an athlete could have completed - they must never count
+// against the completion denominator, and must never be reported as
+// "Missed" (missed === 0 there).
+test("D5b. every assignment skipped (excused/cancelled) shows Skipped - never Missed (missed === 0), never a misleading Completed", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.tests.weekly.today.data = weekPayload(date, {
+    [date]: [session({ occurrenceExists: true, counts: { total: 2, completed: 0, notYetOpen: 0, openPending: 0, missed: 0, skipped: 2 } })],
+  });
+  state.tests.weekly.today.selectedDate = date;
+  const html = renderCoachTodayWeeklyHtml();
+  assert.ok(html.includes(">Skipped<"));
+  assert.ok(!html.includes(">Missed<"));
+  assert.ok(!html.includes(">Completed<"));
+});
+
+test("D5c. completed + skipped, no missed, shows Completed - skipped athletes are excluded from the completion denominator", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.tests.weekly.today.data = weekPayload(date, {
+    [date]: [session({ occurrenceExists: true, counts: { total: 3, completed: 2, notYetOpen: 0, openPending: 0, missed: 0, skipped: 1 } })],
+  });
+  state.tests.weekly.today.selectedDate = date;
+  const html = renderCoachTodayWeeklyHtml();
+  assert.ok(html.includes(">Completed<"));
+  assert.ok(!html.includes(">Missed<"));
+});
+
+test("D5d. completed + missed (no skipped) still shows the missed fraction against the real total, unchanged", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.tests.weekly.today.data = weekPayload(date, {
+    [date]: [session({ occurrenceExists: true, counts: { total: 3, completed: 1, notYetOpen: 0, openPending: 0, missed: 2, skipped: 0 } })],
+  });
+  state.tests.weekly.today.selectedDate = date;
+  const html = renderCoachTodayWeeklyHtml();
+  assert.ok(html.includes("1/3"));
+  assert.ok(html.includes(">Missed<") || html.includes("· missed"));
+});
+
+test("D5e. skipped + currently open (still actionable) shows the completed/denominator fraction against only the real assignments, excluding the skipped one", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.tests.weekly.today.data = weekPayload(date, {
+    [date]: [session({ occurrenceExists: true, counts: { total: 3, completed: 0, notYetOpen: 0, openPending: 2, missed: 0, skipped: 1 } })],
+  });
+  state.tests.weekly.today.selectedDate = date;
+  const html = renderCoachTodayWeeklyHtml();
+  assert.ok(html.includes("0/2 completed"), "the denominator must exclude the skipped assignment (2 real, actionable ones - not 3)");
+  assert.ok(!html.includes(">Missed<"));
+  assert.ok(!html.includes(">Skipped<"));
 });
 
 test("D6. clicking a session opens the group detail via GET /schedules/:id/group?date=, reusing the existing per-athlete/manual-reminder rendering; a Back button returns to the calendar", async () => {
@@ -391,7 +445,7 @@ test("two same-time same-day Today sessions for different teams render distingui
   const date = "2026-08-24";
   state.tests.weekly.today.data = weekPayload(date, {
     [date]: [
-      session({ scheduleId: "s1", opensTime: "06:00:00", targetSummary: { athleteTargetCount: 0, teamTargetNames: "First team", clubTargetNames: "" }, occurrenceExists: true, counts: { total: 18, completed: 0, notYetOpen: 0, openPending: 18, missed: 0 } }),
+      session({ scheduleId: "s1", opensTime: "06:00:00", targetSummary: { athleteTargetCount: 0, teamTargetNames: "First team", clubTargetNames: "" }, occurrenceExists: true, counts: { total: 18, completed: 0, notYetOpen: 0, openPending: 18, missed: 0, skipped: 0 } }),
       session({ scheduleId: "s2", opensTime: "06:00:00", targetSummary: { athleteTargetCount: 0, teamTargetNames: "Recovery group", clubTargetNames: "" } }),
     ],
   });

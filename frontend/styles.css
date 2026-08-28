@@ -10053,6 +10053,13 @@ button.tests-assignment-card {
   color: var(--danger);
 }
 
+/* Excused/cancelled assignments were never actually missed - a neutral
+   treatment, distinct from the danger-red .tests-status-missed. */
+.tests-status-skipped {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
 /* Weekly calendar (shared across Today/Schedule/Results) - reuses the
    app's own surface/border/radius/accent tokens (var(--surface)/var(--line)/
    var(--radius)/var(--accent)) and the existing .tests-status-pill
@@ -10349,6 +10356,16 @@ button.tests-assignment-card {
   padding: 3px 4px;
   font-size: 12.5px;
   cursor: pointer;
+}
+
+/* Not-yet-open / already-closed assignments stay visible (full incomplete
+   list, matching the always-shown status table above) but are not
+   reminder candidates - a disabled checkbox communicates that directly,
+   instead of hiding the row and losing the "who's still incomplete"
+   picture. */
+.tests-reminder-row-disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .tests-reminder-checkbox {
