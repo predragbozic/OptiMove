@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
 import { emptyWellnessForm, state } from "./state.js";
+import { localDateIsoInTimeZone, weekMondayIso } from "./utils.js";
 
 // Tests module (Phase 2 - WELLNESS). Deliberately plain fetch-on-entry, not
 // the shared view-cache (view-cache.js) other tabs use - Today's counts and
@@ -103,8 +104,7 @@ export async function loadTestsSection() {
     return;
   }
   if (section === "today") {
-    const data = await api("/api/tests/today");
-    state.tests.coachToday = data.groups || [];
+    await loadTestsWeekly("today");
     // Item 4/6 correction: a fresh Today load always clears the previous
     // confirmation banner - a stale "Reminder sent to..." message from an
     // earlier visit must never linger over a genuinely new view of the
@@ -114,13 +114,16 @@ export async function loadTestsSection() {
     // discarding one that's still genuinely valid.
     state.tests.reminderResult = null;
   } else if (section === "schedule") {
-    const query = state.tests.showCancelledSchedules ? "?includeCancelled=true" : "";
-    const data = await api(`/api/tests/schedules${query}`);
-    state.tests.schedules = data.schedules || [];
+    // "Show cancelled" now drives the weekly projection's own
+    // includeCancelled param, same contract GET /schedules always had.
+    await loadTestsWeekly("schedule", { includeCancelled: state.tests.showCancelledSchedules });
   } else if (section === "results") {
-    const query = state.tests.resultsScheduleId ? `?scheduleId=${encodeURIComponent(state.tests.resultsScheduleId)}` : "";
-    const data = await api(`/api/tests/results${query}`);
-    state.tests.results = data.results || [];
+    // Historical results must stay visible even once their own schedule is
+    // later paused/cancelled - always includeCancelled here, independent
+    // of the Schedule tab's own toggle (a coach browsing Results should
+    // never lose a real completed result just because nobody happened to
+    // check "Show cancelled").
+    await loadTestsWeekly("results", { includeCancelled: true });
   } else if (section === "library") {
     const data = await api("/api/tests/library");
     state.tests.library = { tests: data.tests || [], batteries: data.batteries || [] };
@@ -172,6 +175,35 @@ export function formFromAssignmentDetail(data) {
 export async function loadScheduleDetail(scheduleId) {
   const data = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}`);
   state.tests.scheduleDetail = data;
+}
+
+// Weekly calendar (shared across Today/Schedule/Results). Deliberately NOT
+// the shared view-cache (view-cache.js) - same reasoning as the rest of
+// this module (see the file header): operational counts and results
+// change on nearly every visit. Seeds weekStart/selectedDate to "today"
+// ONLY the first time this tab's own nav has never been touched
+// (item: "zasebno sačuvana izabrana nedelja i datum za svaki tab" - each
+// tab keeps its own week/date across tab switches from then on); every
+// call still re-fetches the CURRENTLY set week fresh, exactly like the
+// rest of this module's own always-fetch-on-entry convention.
+export async function loadTestsWeekly(section, { includeCancelled = false } = {}) {
+  const nav = state.tests.weekly[section];
+  if (!nav.weekStart) {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const today = localDateIsoInTimeZone(timezone);
+    nav.weekStart = weekMondayIso(today);
+    nav.selectedDate = today;
+  }
+  nav.loading = true;
+  nav.error = "";
+  try {
+    const query = `?weekStart=${encodeURIComponent(nav.weekStart)}${includeCancelled ? "&includeCancelled=true" : ""}`;
+    nav.data = await api(`/api/tests/weekly${query}`);
+  } catch (error) {
+    nav.error = error.message || "Could not load the weekly calendar.";
+  } finally {
+    nav.loading = false;
+  }
 }
 
 export async function loadOrgPickerData() {

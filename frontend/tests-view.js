@@ -3,7 +3,7 @@ import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { els } from "./dom.js";
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
-import { escapeAttr, escapeHtml, initialsFor, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
+import { escapeAttr, escapeHtml, formatDayMonth, formatWeekday, initialsFor, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
 
 function renderWellnessAvatar(form) {
   if (form.athleteImageUrl) return renderImage(form.athleteImageUrl, "wellness-avatar wellness-avatar-photo", form.athleteName);
@@ -92,9 +92,9 @@ function renderTestsSectionHtml() {
     return renderAthleteTodayHtml();
   }
   if (state.tests.section === "schedule") return renderCoachScheduleHtml();
-  if (state.tests.section === "results") return renderCoachResultsHtml();
+  if (state.tests.section === "results") return renderCoachResultsSectionHtml();
   if (state.tests.section === "library") return renderCoachLibraryHtml();
-  return renderCoachTodayHtml();
+  return renderCoachTodayWeeklyHtml();
 }
 
 // ------------------------------------------------------------
@@ -270,13 +270,138 @@ function renderWellnessResultHtml(form, { backAction }) {
 }
 
 // ------------------------------------------------------------
+// Weekly calendar (shared across Today/Schedule/Results) - a reusable
+// week navigator + compact 7-day strip + selected-day agenda, driven by
+// GET /api/tests/weekly (backend/src/routes/tests.js). One unified layout
+// at every width (not a separate desktop-only 7-column grid) - the strip
+// always fits 7 compact day buttons (same shape as Athlete Home's own
+// week strip, athlete-home.js), and the agenda below it never has to
+// squeeze a full schedule/athlete card into a narrow day column, which is
+// exactly the "don't push full cards into narrow mobile columns"
+// requirement. Each of the 3 tabs supplies its own session-row renderer
+// and its own day-filter (Results only ever shows days with results;
+// Today only ever shows active schedules, matching what the OLD /today
+// endpoint always scoped to) - the navigator/strip/agenda shell itself is
+// identical for all three.
+// ------------------------------------------------------------
+
+function testsWeeklyTodayIso() {
+  return localDateIsoInTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+}
+
+function formatWeekRangeLabel(weekStart, weekEnd) {
+  return `${formatDayMonth(weekStart)} – ${formatDayMonth(weekEnd)}`;
+}
+
+// `days` is ALREADY the tab-appropriate filtered array (see each tab's own
+// wrapper below) - this shell itself has no per-tab filtering logic at
+// all, so it can't drift out of sync with whichever rule each tab applies.
+function renderWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate, renderSessionRow, emptyAgendaText, headerExtra = "" }) {
+  const todayIso = testsWeeklyTodayIso();
+  const selectedDay = days.find((d) => d.date === selectedDate) || days[0];
+  return `
+    <div class="tests-weekly">
+      ${headerExtra}
+      <div class="tests-weekly-nav">
+        <button type="button" class="plain-button icon-button tests-weekly-arrow" data-action="tests-weekly-prev-week" data-section="${section}" aria-label="Previous week">&larr;</button>
+        <div class="tests-weekly-range">
+          <strong>${escapeHtml(formatWeekRangeLabel(weekStart, weekEnd))}</strong>
+          <button type="button" class="plain-button compact-button tests-weekly-today-button" data-action="tests-weekly-today" data-section="${section}">Today</button>
+        </div>
+        <button type="button" class="plain-button icon-button tests-weekly-arrow" data-action="tests-weekly-next-week" data-section="${section}" aria-label="Next week">&rarr;</button>
+      </div>
+      <div class="tests-weekly-strip" role="tablist" aria-label="Select a day">
+        ${days.map((day) => renderWeeklyStripDayHtml(section, day, day.date === selectedDay?.date, todayIso)).join("")}
+      </div>
+      <div class="tests-weekly-agenda">
+        ${selectedDay && selectedDay.sessions.length
+          // Sorted by time defensively here too (the backend already
+          // returns them sorted - see GET /api/tests/weekly - but the
+          // agenda's own "sessions sorted by time" requirement shouldn't
+          // silently depend on that never changing upstream).
+          ? selectedDay.sessions.slice().sort((a, b) => (a.opensTime || "").localeCompare(b.opensTime || "")).map((session) => renderSessionRow(session, selectedDay.date)).join("")
+          : `<p class="muted tests-empty">${escapeHtml(emptyAgendaText)}</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderWeeklyStripDayHtml(section, day, isSelected, todayIso) {
+  const isToday = day.date === todayIso;
+  const dayNumber = Number(day.date.slice(8, 10));
+  const count = day.sessions.length;
+  return `
+    <button type="button" class="tests-weekly-day ${isSelected ? "is-selected" : ""} ${isToday ? "is-today" : ""}" role="tab" aria-selected="${isSelected ? "true" : "false"}" data-action="tests-weekly-select-day" data-section="${section}" data-date="${escapeAttr(day.date)}" aria-label="${escapeAttr(formatWeekday(day.date))} ${dayNumber}${count ? `, ${count} test${count === 1 ? "" : "s"}` : ""}">
+      <span class="tests-weekly-day-name">${escapeHtml(formatWeekday(day.date))}</span>
+      <span class="tests-weekly-day-number">${dayNumber}</span>
+      ${count ? `<span class="tests-weekly-day-count" aria-hidden="true">${count}</span>` : ""}
+    </button>
+  `;
+}
+
+// A single compact status per session row (never color alone - always
+// paired with real text, matching this app's existing .tests-status-pill
+// convention). "Upcoming" whenever nothing is materialized yet (a future
+// date, or a past/today date nobody has ever visited) - never a fabricated
+// per-athlete breakdown for data that doesn't exist server-side.
+function weeklySessionStatusInfo(session) {
+  if (!session.occurrenceExists || !session.counts || session.counts.total === 0) return { label: "Upcoming", cls: "upcoming" };
+  const { total, completed, missed } = session.counts;
+  if (completed === total) return { label: "Completed", cls: "completed" };
+  if (completed + missed === total) return { label: `${completed}/${total} · missed`, cls: "missed" };
+  return { label: `${completed}/${total} completed`, cls: "pending" };
+}
+
+function renderWeeklySessionRowShell({ dataAction, dataAttrs, opensTime, title, pillClass, pillLabel }) {
+  return `
+    <button type="button" class="tests-weekly-session" data-action="${dataAction}" ${dataAttrs}>
+      <span class="tests-weekly-session-time">${escapeHtml((opensTime || "").slice(0, 5))}</span>
+      <span class="tests-weekly-session-name">${escapeHtml(title)}</span>
+      <span class="tests-status-pill tests-status-${escapeAttr(pillClass)}">${escapeHtml(pillLabel)}</span>
+    </button>
+  `;
+}
+
+// ------------------------------------------------------------
 // Coach: Today
 // ------------------------------------------------------------
 
-function renderCoachTodayHtml() {
-  const groups = state.tests.coachToday;
-  if (!groups.length) return `<p class="muted tests-empty">No active WELLNESS schedules yet. Create one from the Schedule tab.</p>`;
-  return groups.map(renderCoachTodayGroupHtml).join("");
+export function renderCoachTodayWeeklyHtml() {
+  const nav = state.tests.weekly.today;
+  if (state.tests.weeklyGroupDetail || state.tests.weeklyGroupDetailLoading) return renderTodayGroupDetailHtml();
+  if (nav.loading && !nav.data) return `<p class="muted tests-empty">Loading weekly calendar...</p>`;
+  if (nav.error) return `<p class="builder-error">${escapeHtml(nav.error)}</p>`;
+  if (!nav.data) return "";
+  // Today only ever shows ACTIVE schedules' sessions - the exact same
+  // scope the old GET /today always had (it queried `where sch.status =
+  // 'active'` directly) - a paused/cancelled schedule simply never
+  // appeared there, so it must not suddenly appear here either.
+  const days = nav.data.days.map((day) => ({ ...day, sessions: day.sessions.filter((s) => s.scheduleStatus === "active") }));
+  return renderWeeklyShellHtml({
+    section: "today",
+    days,
+    weekStart: nav.data.weekStart,
+    weekEnd: nav.data.weekEnd,
+    selectedDate: nav.selectedDate,
+    emptyAgendaText: "Nothing scheduled for this day.",
+    renderSessionRow: (session, date) => renderWeeklySessionRowShell({
+      dataAction: "tests-weekly-open-today-session",
+      dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}" data-date="${escapeAttr(date)}"`,
+      opensTime: session.opensTime,
+      title: session.testName,
+      pillClass: weeklySessionStatusInfo(session).cls,
+      pillLabel: weeklySessionStatusInfo(session).label,
+    }),
+  });
+}
+
+function renderTodayGroupDetailHtml() {
+  return `
+    <div class="tests-weekly-detail">
+      <button type="button" class="plain-button compact-button" data-action="tests-weekly-close-detail">&larr; Back to calendar</button>
+      ${state.tests.weeklyGroupDetailLoading ? `<p class="muted tests-empty">Loading...</p>` : renderCoachTodayGroupHtml(state.tests.weeklyGroupDetail.group)}
+    </div>
+  `;
 }
 
 // Item 4 correction: no single occurrence-level window is shown as if it
@@ -448,7 +573,7 @@ function renderCoachScheduleHtml() {
     </div>
     ${state.tests.scheduleForm.open ? renderScheduleFormHtml() : ""}
     ${!state.tests.scheduleForm.open && state.tests.bulkResult ? renderBulkResultHtml(state.tests.bulkResult) : ""}
-    ${state.tests.scheduleDetail ? renderScheduleDetailHtml() : renderScheduleListHtml()}
+    ${state.tests.scheduleDetail ? renderScheduleDetailHtml() : renderScheduleWeeklyHtml()}
   `;
 }
 
@@ -463,55 +588,33 @@ function renderBulkResultHtml(result) {
   `;
 }
 
-function targetSummaryFor(row) {
-  const parts = [];
-  if (row.athleteTargetCount) parts.push(`${row.athleteTargetCount} athlete${row.athleteTargetCount === 1 ? "" : "s"}`);
-  if (row.teamTargetNames) parts.push(`Team: ${row.teamTargetNames}`);
-  if (row.clubTargetNames) parts.push(`Club: ${row.clubTargetNames}`);
-  return parts.join(" + ") || "No targets";
-}
-
-function renderScheduleListHtml() {
-  const rows = state.tests.showCancelledSchedules ? state.tests.schedules : state.tests.schedules.filter((row) => row.status !== "cancelled");
-  if (!rows.length) return `<p class="muted tests-empty">No WELLNESS schedules yet.</p>`;
-  return `
-    <div class="tests-card-list">
-      ${rows.map((row) => renderScheduleCardHtml(row)).join("")}
-    </div>
-  `;
-}
-
-function renderScheduleCardHtml(row) {
-  const deleting = state.tests.deletingScheduleId === row.id;
-  return `
-    <div class="panel tests-assignment-card tests-schedule-card">
-      <button type="button" class="tests-schedule-card-open" data-action="tests-open-schedule" data-schedule-id="${escapeAttr(row.id)}">
-        <div class="tests-assignment-card-head">
-          <span class="tests-assignment-card-title">${escapeHtml(row.testName)} &middot; ${row.scheduleKind === "recurring" ? "Daily" : "One-time"}</span>
-          <span class="tests-status-pill tests-status-${escapeAttr(row.status)}">${escapeHtml(row.status)}</span>
-        </div>
-        <p class="muted">${targetSummaryFor(row)}</p>
-        <p class="muted">${escapeHtml(row.startDate || "")} &middot; ${escapeHtml(row.opensTime)}&ndash;${escapeHtml(row.closesTime)} ${escapeHtml(row.timezone)}</p>
-      </button>
-      ${row.status === "cancelled"
-        ? `
-        <p class="muted tests-cancelled-note">Cancelled - read-only. Historical results, if any, remain available in History/Results.</p>
-        <div class="tests-schedule-card-actions">
-          <button type="button" class="plain-button compact-button" data-action="tests-schedule-again" data-schedule-id="${escapeAttr(row.id)}">Schedule again</button>
-        </div>
-      `
-        : `
-        <div class="tests-schedule-card-actions">
-          <button type="button" class="plain-button compact-button" data-action="tests-open-edit-schedule" data-schedule-id="${escapeAttr(row.id)}">Edit</button>
-          ${row.status === "active"
-            ? `<button type="button" class="plain-button compact-button" data-action="tests-set-schedule-status" data-schedule-id="${escapeAttr(row.id)}" data-status="paused">Pause</button>`
-            : `<button type="button" class="plain-button compact-button" data-action="tests-set-schedule-status" data-schedule-id="${escapeAttr(row.id)}" data-status="active">Activate</button>`}
-          <button type="button" class="plain-button compact-button" data-action="tests-schedule-again" data-schedule-id="${escapeAttr(row.id)}">Schedule again</button>
-          <button type="button" class="plain-button compact-button tests-delete-button" data-action="tests-delete-schedule" data-schedule-id="${escapeAttr(row.id)}" data-test-name="${escapeAttr(row.testName)}" data-has-occurrences="${row.hasOccurrences ? "true" : "false"}" ${deleting ? "disabled" : ""}>${deleting ? "Deleting..." : "Delete"}</button>
-        </div>
-      `}
-    </div>
-  `;
+// Weekly calendar replaces the old vertical schedule-card list entirely
+// (item: "sadašnje vertikalne liste... neće biti pregledne") - clicking a
+// session opens the EXISTING schedule-detail view (renderScheduleDetailHtml
+// below, unchanged - Edit/Pause-Activate/Schedule again/Delete all still
+// live there), so the compact calendar row itself only ever needs a time +
+// name + status pill, never the old card's own inline action row.
+export function renderScheduleWeeklyHtml() {
+  const nav = state.tests.weekly.schedule;
+  if (nav.loading && !nav.data) return `<p class="muted tests-empty">Loading weekly calendar...</p>`;
+  if (nav.error) return `<p class="builder-error">${escapeHtml(nav.error)}</p>`;
+  if (!nav.data) return "";
+  return renderWeeklyShellHtml({
+    section: "schedule",
+    days: nav.data.days,
+    weekStart: nav.data.weekStart,
+    weekEnd: nav.data.weekEnd,
+    selectedDate: nav.selectedDate,
+    emptyAgendaText: "No WELLNESS scheduled for this day.",
+    renderSessionRow: (session) => renderWeeklySessionRowShell({
+      dataAction: "tests-open-schedule",
+      dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}"`,
+      opensTime: session.opensTime,
+      title: `${session.testName} · ${session.scheduleKind === "recurring" ? "Daily" : "One-time"}`,
+      pillClass: session.scheduleStatus,
+      pillLabel: session.scheduleStatus,
+    }),
+  });
 }
 
 function renderScheduleDetailHtml() {
@@ -1227,7 +1330,53 @@ export function patchTestsCalendarDom() {
 // Coach: Results
 // ------------------------------------------------------------
 
-function renderCoachResultsHtml() {
+// Weekly calendar (item: "Grupiši rezultate po test sesiji i njenom
+// assignment.local_scheduled_date") is the primary Results view now; the
+// EXISTING flat results list below (renderCoachResultsListHtml, unchanged
+// markup) becomes the "more than one result this day" drill-in, reused
+// exactly as-is (item: "Klik otvara postojeći Results detail").
+export function renderCoachResultsSectionHtml() {
+  if (state.tests.resultsListFilter) return renderResultsListFilteredHtml();
+  return renderResultsWeeklyHtml();
+}
+
+function renderResultsWeeklyHtml() {
+  const nav = state.tests.weekly.results;
+  if (nav.loading && !nav.data) return `<p class="muted tests-empty">Loading weekly calendar...</p>`;
+  if (nav.error) return `<p class="builder-error">${escapeHtml(nav.error)}</p>`;
+  if (!nav.data) return "";
+  // Results only ever shows days/sessions that actually HAVE a result -
+  // an upcoming or resultless session has nothing to show here (it's
+  // already visible on the Today/Schedule tabs).
+  const days = nav.data.days.map((day) => ({ ...day, sessions: day.sessions.filter((s) => s.resultsCount > 0) }));
+  return renderWeeklyShellHtml({
+    section: "results",
+    days,
+    weekStart: nav.data.weekStart,
+    weekEnd: nav.data.weekEnd,
+    selectedDate: nav.selectedDate,
+    emptyAgendaText: "No results for this day.",
+    renderSessionRow: (session, date) => renderWeeklySessionRowShell({
+      dataAction: "tests-weekly-open-results",
+      dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}" data-date="${escapeAttr(date)}"`,
+      opensTime: session.opensTime,
+      title: session.testName,
+      pillClass: "completed",
+      pillLabel: `${session.resultsCount} result${session.resultsCount === 1 ? "" : "s"}`,
+    }),
+  });
+}
+
+function renderResultsListFilteredHtml() {
+  return `
+    <div class="tests-weekly-detail">
+      <button type="button" class="plain-button compact-button" data-action="tests-weekly-close-results-list">&larr; Back to calendar</button>
+      ${renderCoachResultsListHtml()}
+    </div>
+  `;
+}
+
+function renderCoachResultsListHtml() {
   const rows = state.tests.results;
   if (!rows.length) return `<p class="muted tests-empty">No WELLNESS results yet.</p>`;
   return `

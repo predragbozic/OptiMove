@@ -10037,6 +10037,182 @@ button.tests-assignment-card {
   color: #9a6a1c;
 }
 
+.tests-status-upcoming,
+.tests-status-active {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.tests-status-paused {
+  background: #fdf1de;
+  color: #9a6a1c;
+}
+
+.tests-status-cancelled {
+  background: #f5e3e3;
+  color: var(--danger);
+}
+
+/* Weekly calendar (shared across Today/Schedule/Results) - reuses the
+   app's own surface/border/radius/accent tokens (var(--surface)/var(--line)/
+   var(--radius)/var(--accent)) and the existing .tests-status-pill
+   convention, rather than introducing a new card aesthetic. The day strip
+   mirrors Athlete Home's own week strip (.athlete-home-week-strip/-day)
+   almost exactly - same proven "7 compact day buttons, always fits, no
+   horizontal overflow at 360px" shape - just with a count badge instead of
+   a bare dot, since a coach needs to see HOW MANY tests are on a day, not
+   just whether any exist. One unified layout at every width (no separate
+   desktop-only 7-column event grid) - a day's own sessions always render
+   as a below-the-strip agenda list, which is also what keeps a full
+   schedule/athlete card from ever being squeezed into a narrow day
+   column. */
+.tests-weekly {
+  display: grid;
+  gap: 10px;
+}
+
+.tests-weekly-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tests-weekly-arrow {
+  flex-shrink: 0;
+}
+
+.tests-weekly-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.tests-weekly-range strong {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tests-weekly-today-button {
+  flex-shrink: 0;
+}
+
+.tests-weekly-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.tests-weekly-day {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 52px;
+  min-width: 0;
+  padding: 6px 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+}
+
+.tests-weekly-day.is-today {
+  border-color: var(--accent);
+  border-width: 2px;
+}
+
+.tests-weekly-day.is-selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.tests-weekly-day-name {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tests-weekly-day.is-selected .tests-weekly-day-name {
+  color: #fff;
+  opacity: 0.85;
+}
+
+.tests-weekly-day-number {
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.tests-weekly-day-count {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 15px;
+  text-align: center;
+}
+
+.tests-weekly-day.is-selected .tests-weekly-day-count {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.tests-weekly-agenda {
+  display: grid;
+  gap: 6px;
+}
+
+.tests-weekly-session {
+  display: grid;
+  grid-template-columns: minmax(44px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tests-weekly-session:hover {
+  border-color: var(--accent);
+}
+
+.tests-weekly-session-time {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.tests-weekly-session-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.tests-weekly-detail {
+  display: grid;
+  gap: 10px;
+}
+
 /* Coach: Today */
 
 .tests-today-group {

@@ -416,6 +416,34 @@ export const emptyTestsState = (overrides = {}) => ({
   reminderSelection: {},
   remindingScheduleId: "",
   reminderResult: null,
+  // Tests weekly calendar (shared across Today/Schedule/Results - the same
+  // reusable weekly navigator inside all three). weekly[section] holds
+  // each tab's OWN independent week/date/data ("zasebno sačuvana izabrana
+  // nedelja i datum za svaki tab") - weekStart/selectedDate start "" until
+  // that tab is first opened (the loader seeds "today", never hardcoded
+  // here since this module has no timezone context of its own). `data` is
+  // the last GET /api/tests/weekly response for that tab's own week
+  // ({ weekStart, weekEnd, days: [...] } or null before the first load);
+  // loading/error are per-tab too, so switching tabs never shows a stale
+  // spinner/error from a different tab's own fetch.
+  weekly: {
+    today: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
+    schedule: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
+    results: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
+  },
+  // Today tab's own click-through detail ("Klik otvara postojeći pregled
+  // sportista, njihove statuse i ručni reminder") - reuses the EXACT
+  // existing per-schedule group card/manual-reminder rendering, just
+  // sourced from GET /schedules/:id/group for whichever date is selected.
+  // null when nothing is open; { scheduleId, date, group } once resolved.
+  weeklyGroupDetail: null,
+  weeklyGroupDetailLoading: false,
+  // Results tab: a day with more than one result opens the EXISTING flat
+  // results list, pre-filtered to that one schedule+date ("Klik otvara
+  // postojeći Results detail" - a single result instead opens the
+  // existing single-result view directly, unchanged). null shows the
+  // weekly calendar itself; { scheduleId, date } shows the filtered list.
+  resultsListFilter: null,
   ...overrides,
 });
 

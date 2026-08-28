@@ -2,9 +2,9 @@ import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
 import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
-import { localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
+import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
 import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
-import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadWellnessForm } from "./tests-data.js";
+import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadTestsWeekly, loadWellnessForm } from "./tests-data.js";
 
 // Every data-action="tests-*" click/change and data-tests-form submit in the
 // Tests tab routes through here, mirroring the per-feature dispatch
@@ -42,7 +42,58 @@ export async function handleTestsAction(action, { renderTests }) {
     state.tests.section = action.dataset.section;
     state.tests.scheduleDetail = null;
     state.tests.form = null;
+    state.tests.weeklyGroupDetail = null;
+    state.tests.resultsListFilter = null;
     await reloadSection(renderTests);
+    return true;
+  }
+
+  // ------------------------------------------------------------
+  // Weekly calendar (shared across Today/Schedule/Results)
+  // ------------------------------------------------------------
+
+  if (type === "tests-weekly-prev-week" || type === "tests-weekly-next-week") {
+    const section = action.dataset.section;
+    const nav = state.tests.weekly[section];
+    nav.weekStart = addDaysIso(nav.weekStart, type === "tests-weekly-prev-week" ? -7 : 7);
+    await loadTestsWeekly(section, { includeCancelled: weeklyIncludeCancelledFor(section) });
+    renderTests();
+    return true;
+  }
+  if (type === "tests-weekly-today") {
+    const section = action.dataset.section;
+    const nav = state.tests.weekly[section];
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const today = localDateIsoInTimeZone(timezone);
+    nav.weekStart = weekMondayIso(today);
+    nav.selectedDate = today;
+    await loadTestsWeekly(section, { includeCancelled: weeklyIncludeCancelledFor(section) });
+    renderTests();
+    return true;
+  }
+  if (type === "tests-weekly-select-day") {
+    // The whole week's data is already loaded - picking a different day
+    // just changes which one is shown, no re-fetch needed.
+    state.tests.weekly[action.dataset.section].selectedDate = action.dataset.date;
+    renderTests();
+    return true;
+  }
+  if (type === "tests-weekly-open-today-session") {
+    await openWeeklyTodaySession(action.dataset.scheduleId, action.dataset.date, renderTests);
+    return true;
+  }
+  if (type === "tests-weekly-close-detail") {
+    state.tests.weeklyGroupDetail = null;
+    renderTests();
+    return true;
+  }
+  if (type === "tests-weekly-open-results") {
+    await openWeeklyResultsSession(action.dataset.scheduleId, action.dataset.date, renderTests);
+    return true;
+  }
+  if (type === "tests-weekly-close-results-list") {
+    state.tests.resultsListFilter = null;
+    renderTests();
     return true;
   }
 
@@ -237,7 +288,12 @@ export async function handleTestsAction(action, { renderTests }) {
   }
   if (type === "tests-toggle-show-cancelled") {
     state.tests.showCancelledSchedules = action.checked;
-    if (action.checked && state.tests.section === "schedule") await reloadSection(renderTests);
+    // Weekly calendar correction: unlike the old flat list (which
+    // over-fetched with includeCancelled and re-filtered client-side, so
+    // unchecking needed no request), the weekly projection is fetched with
+    // includeCancelled already baked in - both directions need a real
+    // re-fetch now, not just a client-side re-filter.
+    if (state.tests.section === "schedule") await reloadSection(renderTests);
     else renderTests();
     return true;
   }
@@ -356,6 +412,7 @@ export async function handleTestsAction(action, { renderTests }) {
       }
       const row = state.tests.schedules.find((s) => s.id === action.dataset.scheduleId);
       if (row) row.status = action.dataset.status;
+      refreshTestsWeeklyAfterMutation(renderTests);
     } catch (error) {
       state.tests.error = error.message || "Could not update the schedule.";
     }
@@ -456,6 +513,74 @@ async function openResult(assessmentId, renderTests) {
   renderTests();
 }
 
+// Historical results must survive a schedule being paused/cancelled later
+// (Results tab), Today never showed a paused/cancelled schedule at all
+// (unchanged from the old GET /today's own `where status = 'active'`), and
+// Schedule follows the coach's own "Show cancelled" toggle - three
+// different answers to the same includeCancelled question, kept in one
+// place so week-nav/today/mutation-refresh can never disagree about it.
+function weeklyIncludeCancelledFor(section) {
+  if (section === "schedule") return state.tests.showCancelledSchedules;
+  if (section === "results") return true;
+  return false;
+}
+
+// Any mutation that changes a schedule's own existence/status (create,
+// edit, pause/activate, cancel/delete) must refresh whichever weekly
+// tab(s) the coach has already visited THIS session (all three derive from
+// the same underlying schedules) - otherwise the calendar would keep
+// showing stale data until the coach happened to navigate away and back.
+// Fire-and-forget + a follow-up render, same convention as this file's own
+// loadOrgPickerData().then(renderTests) elsewhere - never blocks the
+// mutation's own immediate render on a second network round trip. Only
+// tabs with `.data` already loaded are refreshed - never a tab nobody has
+// opened yet this session.
+function refreshTestsWeeklyAfterMutation(renderTests) {
+  for (const section of ["today", "schedule", "results"]) {
+    if (state.tests.weekly[section].data) {
+      void loadTestsWeekly(section, { includeCancelled: weeklyIncludeCancelledFor(section) }).then(renderTests).catch(() => {});
+    }
+  }
+}
+
+// Today tab's click-through (item: "Klik otvara postojeći pregled
+// sportista, njihove statuse i ručni reminder") - reuses the exact GET
+// /today group shape/rendering, just for whichever date is selected.
+async function openWeeklyTodaySession(scheduleId, date, renderTests) {
+  state.tests.weeklyGroupDetailLoading = true;
+  state.tests.weeklyGroupDetail = null;
+  renderTests();
+  try {
+    const data = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}/group?date=${encodeURIComponent(date)}`);
+    state.tests.weeklyGroupDetail = { scheduleId, date, group: data.group };
+  } catch (error) {
+    state.tests.error = error.message || "Could not load this session.";
+  } finally {
+    state.tests.weeklyGroupDetailLoading = false;
+    renderTests();
+  }
+}
+
+// Results tab's click-through - exactly one result opens the EXISTING
+// single-result view directly (openResult, unchanged); more than one opens
+// the EXISTING flat results list, pre-filtered to this one schedule+date
+// (item: "Klik otvara postojeći Results detail" either way).
+async function openWeeklyResultsSession(scheduleId, date, renderTests) {
+  try {
+    const data = await api(`/api/tests/results?scheduleId=${encodeURIComponent(scheduleId)}&date=${encodeURIComponent(date)}`);
+    const rows = data.results || [];
+    if (rows.length === 1) {
+      await openResult(rows[0].assessmentId, renderTests);
+      return;
+    }
+    state.tests.results = rows;
+    state.tests.resultsListFilter = { scheduleId, date };
+  } catch (error) {
+    state.tests.error = error.message || "Could not load these results.";
+  }
+  renderTests();
+}
+
 async function copyGroupLinkForSchedule(scheduleId) {
   try {
     const detail = await api(`/api/tests/schedules/${encodeURIComponent(scheduleId)}`);
@@ -470,7 +595,20 @@ async function copyGroupLinkForSchedule(scheduleId) {
 // Manual reminder (Coach Today) - hotfix
 // ------------------------------------------------------------
 
+// Weekly calendar correction: the coach Today view is no longer a bulk
+// list of every active schedule's group (state.tests.coachToday, now
+// always []) - it's the weekly calendar's own click-through detail for
+// exactly ONE schedule+date at a time (state.tests.weeklyGroupDetail, set
+// by tests-weekly-open-today-session below). All the manual-reminder
+// helpers past this point (toggle/select-all/clear/send/copy) only ever
+// need "the group currently open", so they keep working completely
+// unchanged either way - state.tests.coachToday is kept as a fallback
+// purely so this function (and therefore the whole reminder action suite)
+// stays testable in isolation without needing the full weekly-calendar
+// fetch/open flow (see tests/tests-manual-reminder.actions.test.mjs, which
+// still populates coachToday directly).
 function coachTodayGroupById(scheduleId) {
+  if (state.tests.weeklyGroupDetail?.scheduleId === scheduleId) return state.tests.weeklyGroupDetail.group;
   return state.tests.coachToday.find((group) => group.schedule.id === scheduleId);
 }
 
@@ -991,6 +1129,7 @@ async function deleteSchedule(action, renderTests) {
       if (row) row.status = "cancelled";
     }
     if (state.tests.scheduleDetail?.schedule.id === scheduleId) state.tests.scheduleDetail = null;
+    refreshTestsWeeklyAfterMutation(renderTests);
   } catch (error) {
     state.tests.error = error.message || "Could not delete this schedule.";
   } finally {
@@ -1118,6 +1257,7 @@ async function submitScheduleForm(renderTests) {
     // redundant re-fetch of the whole list.
     if (state.tests.scheduleDetail?.schedule.id === merged.id) await loadScheduleDetail(merged.id);
     state.tests.scheduleForm = emptyScheduleForm();
+    refreshTestsWeeklyAfterMutation(renderTests);
   } catch (error) {
     scheduleForm.error = error.message || (isEdit ? "Could not save this schedule." : "Could not create this schedule.");
     scheduleForm.submitting = false;
@@ -1162,6 +1302,7 @@ async function submitBulkScheduleForm(renderTests) {
     // dates, and which ones - not just a form that silently closed.
     state.tests.bulkResult = { count: result.count, dates: result.dates };
     state.tests.scheduleForm = emptyScheduleForm();
+    refreshTestsWeeklyAfterMutation(renderTests);
   } catch (error) {
     scheduleForm.error = error.message || "Could not create these schedules.";
     scheduleForm.submitting = false;
