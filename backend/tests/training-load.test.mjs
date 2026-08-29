@@ -20,6 +20,10 @@ const MIGRATION_V2_PATH = path.resolve(__dirname, "../../migrations_v2/202608320
 const MIGRATION_V2_NAME = "202608320900_training_load_v2_logical_session_identity.sql";
 const MIGRATION_V3_PATH = path.resolve(__dirname, "../../migrations_v2/202609010900_training_load_v3_rpe_enabled.sql");
 const MIGRATION_V3_NAME = "202609010900_training_load_v3_rpe_enabled.sql";
+const MIGRATION_V4_PATH = path.resolve(__dirname, "../../migrations_v2/202609011000_training_load_v4_external_scheduling.sql");
+const MIGRATION_V4_NAME = "202609011000_training_load_v4_external_scheduling.sql";
+const MIGRATION_V5_PATH = path.resolve(__dirname, "../../migrations_v2/202609011100_training_load_v5_unified_result_source.sql");
+const MIGRATION_V5_NAME = "202609011100_training_load_v5_unified_result_source.sql";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -214,10 +218,12 @@ let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
 
 before(async () => {
-  const [migrationV1Sql, migrationV2Sql, migrationV3Sql] = await Promise.all([
+  const [migrationV1Sql, migrationV2Sql, migrationV3Sql, migrationV4Sql, migrationV5Sql] = await Promise.all([
     fsp.readFile(MIGRATION_V1_PATH, "utf8"),
     fsp.readFile(MIGRATION_V2_PATH, "utf8"),
     fsp.readFile(MIGRATION_V3_PATH, "utf8"),
+    fsp.readFile(MIGRATION_V4_PATH, "utf8"),
+    fsp.readFile(MIGRATION_V5_PATH, "utf8"),
   ]);
 
   db = await makeTempDb("primary");
@@ -227,7 +233,13 @@ before(async () => {
   assert.equal(ownCheck.rows[0].db, db.name, "SAFETY: test connection landed on an unexpected database");
 
   await adminClient.query(LEGACY_FIXTURE_SQL);
-  migrationsDir = await writeMigrationsDir("primary", { [MIGRATION_V1_NAME]: migrationV1Sql, [MIGRATION_V2_NAME]: migrationV2Sql, [MIGRATION_V3_NAME]: migrationV3Sql });
+  migrationsDir = await writeMigrationsDir("primary", {
+    [MIGRATION_V1_NAME]: migrationV1Sql,
+    [MIGRATION_V2_NAME]: migrationV2Sql,
+    [MIGRATION_V3_NAME]: migrationV3Sql,
+    [MIGRATION_V4_NAME]: migrationV4Sql,
+    [MIGRATION_V5_NAME]: migrationV5Sql,
+  });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
 
   process.env.DATABASE_URL = db.url;
