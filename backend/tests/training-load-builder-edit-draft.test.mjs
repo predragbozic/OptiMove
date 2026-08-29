@@ -19,32 +19,23 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
 import { runCleanupSteps } from "./_test-cleanup.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATION_V2_PATH = path.resolve(__dirname, "../../migrations_v2/202608320900_training_load_v2_logical_session_identity.sql");
-
-// Reads the fixup block straight out of the actual shipped migration file -
-// never a hand-copied duplicate that could silently drift from what
-// production will really run.
-async function extractFixupSql() {
-  const full = await fsp.readFile(MIGRATION_V2_PATH, "utf8");
-  const startMarker = "with draft_plans as (";
-  const endMarker = "-- 4. Snapshot immutability trigger.";
-  const startIdx = full.indexOf(startMarker);
-  const endIdx = full.indexOf(endMarker, startIdx);
-  if (startIdx === -1 || endIdx === -1) {
-    throw new Error("could not locate the migration's fixup block - has the migration file's shape changed?");
-  }
-  return full.slice(startIdx, endIdx);
-}
+// Round 3: the slot-based re-correlation fixup this file used to exercise
+// was removed (see migrations_v2/
+// 202608320900_training_load_v2_logical_session_identity.sql's own section
+// 3 comment) - a slot key describes a session's CURRENT position, not its
+// identity over time, and heuristically matching on it could both miss a
+// real pair (the coach changed the draft's own slot before migration) and
+// wrongly match an unrelated one (the coach deleted the original session
+// and created a new, different one at the same slot). Replaced with an
+// explicit legacy_pre_migration_draft marker + a submission block on the
+// live plan - see the tests below, which flip that marker directly via SQL
+// to stand in for a draft the migration's own backfill would have marked.
 
 let server;
 let baseUrl;
@@ -261,20 +252,22 @@ test("a real Builder Edit -> Save and finish round trip preserves an already-sub
 });
 
 // ------------------------------------------------------------
-// Item 1 correction: a draft that was ALREADY OPEN before the v2
-// migration's fixup ran - so its sessions' logical_session_id, as
-// independently backfilled by the migration's own ALTER TABLE ... DEFAULT
-// gen_random_uuid(), never correlated with its live counterpart's - must
-// still round-trip correctly once the migration's fixup has corrected it.
-// A real edit-draft, opened through the real Builder "Edit" endpoint,
-// stands in for that pre-existing draft; its session's logical_session_id
-// is then deliberately corrupted to an independent id (exactly what an
-// un-fixed-up pre-existing draft would look like), and the ACTUAL fixup
-// SQL shipped in the migration file is run directly against it - proving
-// the real production statement repairs a real, un-simulated draft/live
-// pair under the real schema, not a hand-reconstructed approximation.
+// Item 1 correction, round 3: a draft that was ALREADY OPEN before the v2
+// migration ran can no longer be trusted to round-trip via slot-matching
+// (see the migration file's own section 3 comment - a slot key is not a
+// safe identity mechanism). Instead, the migration marks exactly the
+// edit-drafts that existed at migration time (legacy_pre_migration_draft),
+// and POST /sessions/:sessionId/rpe refuses new submissions against a live
+// plan for as long as one of its legacy drafts remains open. A real
+// edit-draft, opened through the real Builder "Edit" endpoint, stands in
+// for that pre-existing draft (flipped to legacy_pre_migration_draft =
+// true directly via SQL, exactly what the migration's own backfill would
+// have done to it). Its session's own slot is ALSO changed before saving -
+// counter-example 1 from the correction: a slot-matching fixup would have
+// found no live-side match at all here, but the block never depended on
+// slot matching in the first place.
 // ------------------------------------------------------------
-test("a PRE-EXISTING edit-draft (its logical_session_id independently backfilled, never correlated with its live plan's) round-trips correctly once the migration's own fixup SQL has corrected it - one result, never re-rateable, never a duplicate", async () => {
+test("a real legacy pre-migration draft (its own session slot changed before saving) blocks new RPE on its live plan, and saving it through the real Builder flow correctly lifts the block - one result, never re-rateable, never a duplicate", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
 
@@ -282,49 +275,34 @@ test("a PRE-EXISTING edit-draft (its logical_session_id independently backfilled
   const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
   const liveSessionId = await makeRealSession(dayId, "Pre-existing draft scenario session", "AM");
 
-  // Open a real edit-draft through the real Builder "Edit" flow. Since v2
-  // (including preserveLogicalId) is already applied locally, this
-  // naturally copies the live session's CORRECT logical_session_id onto
-  // the draft - so it must be deliberately corrupted below to stand in for
-  // a draft that predates the fix.
+  // Open a real edit-draft through the real Builder "Edit" flow, then mark
+  // it legacy - exactly what the migration's own backfill would have done
+  // to a draft that was already open at migration time.
   const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
   assert.equal(editRes.status, 200, `expected the edit-draft to open, got ${editRes.status}: ${JSON.stringify(editRes.body)}`);
   const draftPlanId = editRes.body.plan.id;
   cleanupPlanIds.add(draftPlanId);
+  await query(`update plans.plans set legacy_pre_migration_draft = true where id = $1`, [draftPlanId]);
 
+  // Counter-example 1: the coach changes the draft's OWN copy of this
+  // session's slot before saving - a slot-matching fixup would find no
+  // live-side match here at all.
   const draftSessionResult = await query(
     `select ps.id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1`,
     [draftPlanId],
   );
-  const draftSessionId = draftSessionResult.rows[0].id;
+  await query(`update plans.plan_sessions set am_pm = 'PM' where id = $1`, [draftSessionResult.rows[0].id]);
 
-  // Corrupt the draft's copy to an independent id - what it would actually
-  // look like if this draft had been created by an old, pre-v2 build
-  // (before logical_session_id or preserveLogicalId existed) and then
-  // simply received its own, uncorrelated value from the migration's
-  // per-row ALTER TABLE ... DEFAULT gen_random_uuid() backfill.
-  await query(`update plans.plan_sessions set logical_session_id = gen_random_uuid() where id = $1`, [draftSessionId]);
-  const liveLogicalIdBefore = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [liveSessionId])).rows[0].logical_session_id;
-  const draftLogicalIdCorrupted = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [draftSessionId])).rows[0].logical_session_id;
-  assert.notEqual(draftLogicalIdCorrupted, liveLogicalIdBefore, "setup check: draft and live must start out mismatched, exactly like a real pre-existing draft would after v2's naive per-row backfill");
+  // While the legacy draft is pending, a new submission against the live
+  // plan's session is controlled-rejected, never a 500, and creates no row.
+  const blocked = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 6, durationMinutes: 50 } });
+  assert.equal(blocked.status, 409, `expected 409 while the legacy draft is pending, got ${blocked.status}: ${JSON.stringify(blocked.body)}`);
+  const feedbackBeforeSave = await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athlete.athleteId]);
+  assert.equal(feedbackBeforeSave.rows[0].n, 0, "no row must exist while blocked");
 
-  // Run the ACTUAL fixup SQL shipped in the migration file - not a
-  // hand-copied duplicate - directly against local OPTIMOVE's real schema.
-  const fixupSql = await extractFixupSql();
-  await query(fixupSql);
-
-  const draftLogicalIdFixed = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [draftSessionId])).rows[0].logical_session_id;
-  assert.equal(draftLogicalIdFixed, liveLogicalIdBefore, "the fixup must re-correlate the pre-existing draft's session with its live counterpart");
-
-  // The athlete rates the live session - exactly as they could have done
-  // between the migration running and the coach next saving this
-  // pre-existing draft.
-  const submit = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 6, durationMinutes: 50 } });
-  assert.equal(submit.status, 201, `expected 201, got ${submit.status}: ${JSON.stringify(submit.body)}`);
-
-  // The coach saves the pre-existing draft through the REAL Builder submit
-  // flow (applyEditDraft). Now that the fixup has corrected its
-  // logical_session_id, this must correctly preserve the athlete's result.
+  // The coach saves the legacy draft through the REAL Builder submit flow
+  // (applyEditDraft) - its row is deleted as an unconditional last step,
+  // taking the marker with it.
   const submitDraftRes = await api(`/api/builder/plans/${draftPlanId}/submit`, { method: "POST", cookie: coach.cookie });
   assert.equal(submitDraftRes.status, 200, `expected the edit-draft to apply back onto the live plan, got ${submitDraftRes.status}: ${JSON.stringify(submitDraftRes.body)}`);
   assert.equal(submitDraftRes.body.plan.id, livePlanId);
@@ -336,20 +314,50 @@ test("a PRE-EXISTING edit-draft (its logical_session_id independently backfilled
   const recreatedSessionId = recreatedResult.rows[0].id;
   assert.notEqual(recreatedSessionId, liveSessionId, "applyEditDraft really did delete and recreate the row");
 
-  const feedbackCountResult = await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athlete.athleteId]);
-  assert.equal(feedbackCountResult.rows[0].n, 1, "exactly one result - never duplicated by the round trip");
+  const submit = await api(`/api/training-load/sessions/${recreatedSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 6, durationMinutes: 50 } });
+  assert.equal(submit.status, 201, `expected 201 once the legacy draft is gone, got ${submit.status}: ${JSON.stringify(submit.body)}`);
+
+  const feedbackAfter = await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athlete.athleteId]);
+  assert.equal(feedbackAfter.rows[0].n, 1, "exactly one result - never duplicated");
 
   const today = await api("/api/training-load/athlete/today", { cookie: athlete.cookie });
   const todayRow = today.body.sessions.find((s) => s.sessionId === recreatedSessionId);
   assert.ok(todayRow, "the recreated session resolves on Athlete Home");
-  assert.equal(todayRow.rated, true, "must be recognized as already rated - never shown as Not rated again");
-  assert.equal(todayRow.feedback.rpe, 6);
+  assert.equal(todayRow.rated, true);
 
   const retrySame = await api(`/api/training-load/sessions/${recreatedSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 6, durationMinutes: 50 } });
-  assert.equal(retrySame.status, 200, "an identical retry against the recreated session must be idempotent, never a new 201");
+  assert.equal(retrySame.status, 200, "an identical retry must be idempotent, never a new 201");
 
   const retryDifferent = await api(`/api/training-load/sessions/${recreatedSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 9, durationMinutes: 90 } });
   assert.equal(retryDifferent.status, 409, "a genuinely different retry must be rejected, never silently accepted as a new 201");
+});
+
+test("a real legacy pre-migration draft blocks new RPE on its live plan, and DISCARDING it (real DELETE /plans/:planId, never touching the live plan) lifts the block - the ORIGINAL live session rates normally", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+
+  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
+  const liveSessionId = await makeRealSession(dayId, "Pre-existing draft, discard scenario", "AM");
+
+  const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(editRes.status, 200);
+  const draftPlanId = editRes.body.plan.id;
+  await query(`update plans.plans set legacy_pre_migration_draft = true where id = $1`, [draftPlanId]);
+
+  const blocked = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 30 } });
+  assert.equal(blocked.status, 409);
+
+  // Discard through the real generic delete-plan endpoint - never touches
+  // the live plan at all.
+  const discardRes = await api(`/api/builder/plans/${draftPlanId}`, { method: "DELETE", cookie: coach.cookie });
+  assert.equal(discardRes.status, 200, `expected the discard to succeed, got ${discardRes.status}: ${JSON.stringify(discardRes.body)}`);
+
+  const submit = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 30 } });
+  assert.equal(submit.status, 201, `expected 201 against the untouched original live session, got ${submit.status}: ${JSON.stringify(submit.body)}`);
+
+  const feedbackCountResult = await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athlete.athleteId]);
+  assert.equal(feedbackCountResult.rows[0].n, 1);
 });
 
 // ------------------------------------------------------------

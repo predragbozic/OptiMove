@@ -220,8 +220,12 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
 
     const sessionResult = await client.query(
       `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time,
-              pd.date as session_date, p.name as plan_name, p.week_start, p.athlete_id,
-              p.plan_type, p.status, p.is_active, p.is_edit_draft
+              pd.date as session_date, p.id as plan_id, p.name as plan_name, p.week_start, p.athlete_id,
+              p.plan_type, p.status, p.is_active, p.is_edit_draft,
+              exists (
+                select 1 from plans.plans ld
+                where ld.edit_source_plan_id = p.id and ld.is_edit_draft and ld.legacy_pre_migration_draft
+              ) as has_pending_legacy_draft
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id
@@ -244,6 +248,19 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
     if (!actionable || session.athlete_id !== athleteId) {
       await client.query("rollback");
       return res.status(404).json({ error: "Training session not found." });
+    }
+
+    // Legacy pre-migration edit-draft policy (see migrations_v2/
+    // 202608320900_training_load_v2_logical_session_identity.sql's own
+    // comment): a draft that already existed at migration time was never
+    // proven to share this live session's identity - there is no safe way
+    // to know without guessing. Block new submissions against this live
+    // plan until the coach saves or discards that draft; both paths
+    // delete the draft row (and its marker with it) through the existing
+    // Builder flow, at which point this check simply stops firing.
+    if (session.has_pending_legacy_draft) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This plan has a pending update from before a recent system upgrade. Ask your coach to finish or discard it, then try again." });
     }
 
     const localToday = await athleteLocalDate(athleteId, (sql, params) => client.query(sql, params));

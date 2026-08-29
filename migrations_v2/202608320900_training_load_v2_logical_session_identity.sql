@@ -80,66 +80,62 @@ alter table training_load.session_feedback add constraint session_feedback_athle
 create index if not exists session_feedback_logical_session_id_idx on training_load.session_feedback (logical_session_id);
 
 -- ------------------------------------------------------------
--- 3. Fixup: correlate every PRE-EXISTING edit-draft's sessions with their
---    live plan's sessions. Step 1's backfill gave every already-existing
---    row - a live plan's sessions AND its already-open edit-draft's own
---    copies of the "same" sessions - its own, independently random
---    logical_session_id, because that ALTER has no way to know a draft
---    and its live plan are supposed to share identity per session; only
---    builder.js's copyDaySessions/copyWeeklyPlanTree (via their
---    preserveLogicalId option) know how to carry logical_session_id
---    across a live<->draft round trip, and that logic never ran for a
---    draft that was already open before this migration - it was
---    created by an OLDER version of the live->draft copy, back when
---    logical_session_id didn't exist yet to preserve.
+-- 3. Legacy pre-migration edit-draft policy.
 --
---    Left uncorrected: an athlete rates the live session (fine, using
---    the live session's own logical_session_id); the coach later saves
---    the pre-existing draft; applyEditDraft() deletes the live tree and
---    recreates it, this time carrying over the DRAFT's (different,
---    independently-backfilled) logical_session_id - so the recreated
---    live session no longer matches the already-submitted result's
---    logical_session_id at all. The result becomes orphaned/historical,
---    the recreated session looks "Not rated", and a second submit would
---    succeed - a real duplicate.
+--    An earlier version of this fixup tried to re-correlate a
+--    PRE-EXISTING edit-draft's sessions with their live plan's by
+--    matching same calendar date + (am_pm, bta, session_order) slot.
+--    That is NOT a safe identity mechanism and has been removed: a slot
+--    key describes a session's CURRENT position, not its identity over
+--    time, and the old schema has no real, permanent source_session_id
+--    to check it against. Two concrete ways it goes wrong:
+--      - The coach changed a session's own am_pm/bta/session_order
+--        inside the pre-existing draft before this migration ran: the
+--        slot key no longer matches its live counterpart at all (a
+--        false NEGATIVE) - the draft keeps its own independently-
+--        backfilled id, and saving it later still orphans/reopens an
+--        already-submitted result exactly like the original bug.
+--      - The coach deleted the original session inside the draft and
+--        created a genuinely NEW, unrelated one that happens to land on
+--        the same date/slot: the old fixup would match them anyway (a
+--        false POSITIVE) - worse than the original bug, since it
+--        actively mis-attributes a real athlete's result onto a
+--        completely different training session.
+--    plan_sessions_day_slot_unique only proves no two rows share a slot
+--    AT ONE MOMENT - it proves nothing about continuity of identity
+--    across an edit.
 --
---    Fix: for every currently-open edit-draft (is_edit_draft = true,
---    edit_source_plan_id pointing at its live source plan - both
---    real, populated columns; see plans.plans), match each draft
---    session to its live counterpart by same calendar date
---    (plans.plan_days.date - plan_days_plan_date_unique already
---    guarantees at most one day per date per plan) plus the exact slot
---    key plan_sessions_day_slot_unique already enforces per plan_day -
---    (am_pm, bta, session_order), nulls folded to '' / -1 exactly like
---    that index does - and overwrite the draft session's own backfilled
---    logical_session_id with the live session's. A draft session with NO
---    live-side match (e.g. a day or slot only ever added while editing,
---    never yet published) is intentionally left with its own fresh id -
---    that IS a genuinely new, not-yet-live session, and correctly gets
---    its own identity rather than being force-linked to something it
---    isn't.
+--    Since RPE/sRPE has never been deployed, there are zero production
+--    results at the moment this migration runs - the only real risk is
+--    a NEW submission landing during the short window between this
+--    migration and the coach next saving or discarding a pre-existing
+--    draft. So instead of guessing identity, this migration marks
+--    exactly the edit-drafts that already existed at migration time,
+--    and the API (see trainingLoad.js's POST /sessions/:sessionId/rpe)
+--    refuses new RPE submissions against a live plan for as long as one
+--    of its legacy drafts remains open:
+--      - the coach saves the legacy draft -> applyEditDraft() deletes
+--        that draft row (its existing, unconditional last step) -> the
+--        marker disappears with it -> the recreated live sessions
+--        (now carrying the draft's own, single, consistent
+--        logical_session_id per session via preserveLogicalId) become
+--        normally ratable, with nothing to have orphaned since nothing
+--        could have been submitted while it was blocked;
+--      - the coach discards the legacy draft (DELETE /plans/:planId)
+--        -> the draft row, and its marker, are deleted the same way ->
+--        the ORIGINAL live sessions (never touched by a discard) are
+--        immediately ratable again, exactly as if the draft had never
+--        been opened.
+--    A live plan with no legacy draft (the overwhelming majority - most
+--    plans were never mid-edit at the exact moment this migration ran)
+--    is completely unaffected; a brand new edit-draft opened AFTER this
+--    migration is never marked (default false) and was never in danger
+--    in the first place, since it always carries a consistent
+--    logical_session_id via the existing preserveLogicalId round trip.
 -- ------------------------------------------------------------
-with draft_plans as (
-  select p.id as draft_plan_id, p.edit_source_plan_id as live_plan_id
-  from plans.plans p
-  where coalesce(p.is_edit_draft, false) and p.edit_source_plan_id is not null
-),
-matched_sessions as (
-  select ds.id as draft_session_id, ls.logical_session_id as live_logical_session_id
-  from draft_plans dp
-  join plans.plan_days dd on dd.plan_id = dp.draft_plan_id and dd.date is not null
-  join plans.plan_days ld on ld.plan_id = dp.live_plan_id and ld.date = dd.date
-  join plans.plan_sessions ds on ds.plan_day_id = dd.id
-  join plans.plan_sessions ls on ls.plan_day_id = ld.id
-    and coalesce(ls.am_pm, '') = coalesce(ds.am_pm, '')
-    and coalesce(ls.bta, '') = coalesce(ds.bta, '')
-    and coalesce(ls.session_order, -1) = coalesce(ds.session_order, -1)
-)
-update plans.plan_sessions target
-set logical_session_id = matched_sessions.live_logical_session_id
-from matched_sessions
-where target.id = matched_sessions.draft_session_id
-  and target.logical_session_id <> matched_sessions.live_logical_session_id;
+alter table plans.plans add column if not exists legacy_pre_migration_draft boolean not null default false;
+
+update plans.plans set legacy_pre_migration_draft = true where coalesce(is_edit_draft, false);
 
 -- ------------------------------------------------------------
 -- 4. Snapshot immutability trigger. INSERT is completely unaffected (this

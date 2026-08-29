@@ -392,16 +392,19 @@ function rpeBody(rpe, durationMinutes, note) {
   return { rpe, durationMinutes, ...(note !== undefined ? { note } : {}) };
 }
 
-// Item 1 correction: reads the migration's own fixup block straight out of
-// the actual shipped file, never a hand-copied duplicate that could drift.
-async function extractFixupSql() {
+// Item 1 correction, round 3: reads the migration's own legacy-draft-marker
+// block straight out of the actual shipped file, never a hand-copied
+// duplicate that could drift. (The earlier slot-matching fixup this used to
+// extract was removed - see the migration file's own section 3 comment for
+// why a slot key can never safely stand in for identity across an edit.)
+async function extractLegacyDraftPolicySql() {
   const full = await fsp.readFile(MIGRATION_V2_PATH, "utf8");
-  const startMarker = "with draft_plans as (";
+  const startMarker = "alter table plans.plans add column if not exists legacy_pre_migration_draft";
   const endMarker = "-- 4. Snapshot immutability trigger.";
   const startIdx = full.indexOf(startMarker);
   const endIdx = full.indexOf(endMarker, startIdx);
   if (startIdx === -1 || endIdx === -1) {
-    throw new Error("could not locate the migration's fixup block - has the migration file's shape changed?");
+    throw new Error("could not locate the migration's legacy-draft-policy block - has the migration file's shape changed?");
   }
   return full.slice(startIdx, endIdx);
 }
@@ -1134,47 +1137,177 @@ test("L1. browsing the weekly view, including a future week with nothing materia
 });
 
 // ------------------------------------------------------------
-// M. Item 1 correction: the migration's own fixup correlates a
-// PRE-EXISTING edit-draft's sessions with their live plan's, by exact
-// (date, am_pm, bta, session_order) slot match - and deliberately leaves a
-// draft session with NO live-side match (a genuinely new, not-yet-published
-// session) with its own independent id.
+// M. Item 1 correction, round 3: slot-based re-correlation (date + am_pm +
+// bta + session_order) was removed - it is NOT a safe identity mechanism,
+// since a slot key describes a session's CURRENT position, not its
+// identity over time. Two concrete failures it had: (a) the coach changed
+// the draft session's own slot before migration -> the old fixup found no
+// match at all (false negative) -> saving the draft still orphaned an
+// already-submitted result; (b) the coach deleted the original draft
+// session and created an unrelated new one at the same slot -> the old
+// fixup matched them anyway (false positive) -> a result got attributed to
+// a completely different training session. Replaced with an explicit,
+// safe policy: mark exactly the edit-drafts that already existed at
+// migration time, and refuse new RPE submissions against their live plan
+// until the coach saves or discards that draft - see trainingLoad.js's own
+// POST /sessions/:sessionId/rpe and the migration file's section 3
+// comment. This is safe specifically because RPE/sRPE was never deployed
+// before this migration, so there are zero production results to protect
+// at the moment it runs - only a short window afterward.
 // ------------------------------------------------------------
 
-test("M1. the fixup re-correlates a matching draft/live session pair by date+slot, and leaves a non-matching draft session's own independent id untouched", async () => {
-  const { athletes } = await makeClubWithAthletes("m1", 1);
-  const athleteId = athletes[0].athleteId;
-
-  const liveDate = THIS_WEEK_START;
-  const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: liveDate });
-  const liveDayId = await makePlanDay(livePlanId, liveDate);
-  const matchedLiveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Morning session" });
-
+// A pre-existing (legacy) edit-draft, with its own day/session at a
+// caller-chosen slot - simulates "this draft already existed at migration
+// time" without needing to actually re-run the migration mid-test.
+async function makeLegacyEditDraft(athleteId, livePlanId, date, draftSessionOverrides = {}) {
   const draftPlanResult = await query(
-    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, edit_source_plan_id, week_start)
-     values ('weekly', $1, 'Weekly plan (edit-draft)', 'draft', false, true, $2, $3) returning id`,
-    [athleteId, livePlanId, liveDate],
+    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, edit_source_plan_id, legacy_pre_migration_draft, week_start)
+     values ('weekly', $1, 'Weekly plan (edit-draft)', 'draft', false, true, $2, true, $3) returning id`,
+    [athleteId, livePlanId, date],
   );
   const draftPlanId = draftPlanResult.rows[0].id;
-  const draftDayId = await makePlanDay(draftPlanId, liveDate);
-  // Same date, same (am_pm, bta, session_order) slot as the live session
-  // above - this is the pair the fixup must re-correlate.
-  const matchedDraftSessionId = await makeSession(draftDayId, { amPm: "AM", sessionOrder: 0, name: "Morning session (draft copy)" });
-  // A DIFFERENT slot on the same draft day - e.g. a session the coach added
-  // only while editing, never yet published - must keep its OWN id.
-  const unmatchedDraftSessionId = await makeSession(draftDayId, { amPm: "PM", sessionOrder: 0, name: "New session added only in the draft" });
+  const draftDayId = await makePlanDay(draftPlanId, date);
+  const draftSessionId = await makeSession(draftDayId, { amPm: "AM", sessionOrder: 0, name: "Draft session", ...draftSessionOverrides });
+  return { draftPlanId, draftDayId, draftSessionId };
+}
 
-  const matchedLiveLogicalId = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [matchedLiveSessionId])).rows[0].logical_session_id;
-  const matchedDraftLogicalIdBefore = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [matchedDraftSessionId])).rows[0].logical_session_id;
-  const unmatchedDraftLogicalIdBefore = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [unmatchedDraftSessionId])).rows[0].logical_session_id;
-  assert.notEqual(matchedDraftLogicalIdBefore, matchedLiveLogicalId, "setup check: these two independently-backfilled ids must start out different");
+test("M1. the migration's own backfill marks a pre-existing edit-draft as legacy, and leaves a normal (post-migration) draft unmarked", async () => {
+  const { athletes } = await makeClubWithAthletes("m1", 1);
+  const athleteId = athletes[0].athleteId;
+  const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START });
 
-  const fixupSql = await extractFixupSql();
-  await query(fixupSql);
+  // Simulates the exact moment right after the migration's own ALTER TABLE
+  // ... DEFAULT false has run, but before its UPDATE has - a pre-existing
+  // draft (is_edit_draft = true already) still reads legacy = false here.
+  const preExistingDraftResult = await query(
+    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, edit_source_plan_id, legacy_pre_migration_draft)
+     values ('weekly', $1, 'Pre-existing draft', 'draft', false, true, $2, false) returning id`,
+    [athleteId, livePlanId],
+  );
+  const preExistingDraftId = preExistingDraftResult.rows[0].id;
+  // A genuinely normal (non-draft) plan must never be touched by the
+  // backfill either, regardless of its own legacy_pre_migration_draft
+  // value.
+  const normalPlanId = await makeWeeklyPlan(athleteId);
 
-  const matchedDraftLogicalIdAfter = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [matchedDraftSessionId])).rows[0].logical_session_id;
-  const unmatchedDraftLogicalIdAfter = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [unmatchedDraftSessionId])).rows[0].logical_session_id;
+  const policySql = await extractLegacyDraftPolicySql();
+  await query(policySql);
 
-  assert.equal(matchedDraftLogicalIdAfter, matchedLiveLogicalId, "the matching draft session must be re-correlated with its live counterpart");
-  assert.equal(unmatchedDraftLogicalIdAfter, unmatchedDraftLogicalIdBefore, "a draft session with no live-side match must keep its own independent id - it IS a genuinely new session");
+  const preExistingAfter = (await query(`select legacy_pre_migration_draft from plans.plans where id = $1`, [preExistingDraftId])).rows[0].legacy_pre_migration_draft;
+  const normalAfter = (await query(`select legacy_pre_migration_draft from plans.plans where id = $1`, [normalPlanId])).rows[0].legacy_pre_migration_draft;
+  assert.equal(preExistingAfter, true, "an is_edit_draft=true row already present at migration time must be marked legacy");
+  assert.equal(normalAfter, false, "a normal, non-draft plan must never be marked legacy");
+
+  // A draft opened AFTER the migration (the normal, ongoing case) must
+  // never be marked either - only rows that were ALREADY is_edit_draft=true
+  // when the backfill actually ran.
+  const postMigrationDraftResult = await query(
+    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, edit_source_plan_id)
+     values ('weekly', $1, 'Post-migration draft', 'draft', false, true, $2) returning id`,
+    [athleteId, livePlanId],
+  );
+  assert.equal(
+    (await query(`select legacy_pre_migration_draft from plans.plans where id = $1`, [postMigrationDraftResult.rows[0].id])).rows[0].legacy_pre_migration_draft,
+    false,
+    "a draft created after the migration ran must default to false - it always carries a consistent logical_session_id via the existing preserveLogicalId round trip and was never at risk",
+  );
+});
+
+test("M2. a legacy draft whose session's OWN SLOT was changed before migration still correctly blocks new RPE on the live plan - never relies on slot matching", async () => {
+  const { athletes } = await makeClubWithAthletes("m2", 1);
+  const athleteId = athletes[0].athleteId;
+  const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START });
+  const liveDayId = await makePlanDay(livePlanId, TODAY);
+  const liveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Live session" });
+
+  // Counter-example 1: the coach changed the draft's OWN copy of this
+  // session's slot (AM -> PM) before this migration ran - a slot-matching
+  // fixup would find no live-side match at all here.
+  await makeLegacyEditDraft(athleteId, livePlanId, TODAY, { amPm: "PM", sessionOrder: 0, name: "Draft session (slot changed)" });
+
+  const res = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });
+  assert.equal(res.status, 409, `expected 409 while a legacy draft is pending, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const feedbackCount = (await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athleteId])).rows[0].n;
+  assert.equal(feedbackCount, 0, "no row must be created while blocked");
+});
+
+test("M3. a legacy draft whose session was DELETED and replaced by an unrelated new one at the same slot still correctly blocks new RPE - never mis-attributes a result", async () => {
+  const { athletes } = await makeClubWithAthletes("m3", 1);
+  const athleteId = athletes[0].athleteId;
+  const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START });
+  const liveDayId = await makePlanDay(livePlanId, TODAY);
+  const liveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Live session" });
+
+  // Counter-example 2: the coach deleted the draft's original session and
+  // created a genuinely NEW, unrelated one that happens to land on the
+  // SAME slot as the live session - a slot-matching fixup would wrongly
+  // treat these as "the same" session.
+  await makeLegacyEditDraft(athleteId, livePlanId, TODAY, { amPm: "AM", sessionOrder: 0, name: "Unrelated new draft session (same slot)" });
+
+  const res = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });
+  assert.equal(res.status, 409, `expected 409 while a legacy draft is pending, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const feedbackCount = (await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athleteId])).rows[0].n;
+  assert.equal(feedbackCount, 0, "no row must be created while blocked - nothing exists yet that a later save could mis-attribute");
+});
+
+test("M4. after the legacy draft is SAVED (its row deleted, simulating applyEditDraft's own unconditional last step), RPE against the recreated live session succeeds normally, exactly once", async () => {
+  const { athletes } = await makeClubWithAthletes("m4", 1);
+  const athleteId = athletes[0].athleteId;
+  const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START });
+  const liveDayId = await makePlanDay(livePlanId, TODAY);
+  const liveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Live session" });
+  const { draftPlanId } = await makeLegacyEditDraft(athleteId, livePlanId, TODAY, { amPm: "PM", sessionOrder: 0 });
+
+  const blocked = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });
+  assert.equal(blocked.status, 409);
+
+  // applyEditDraft()'s own unconditional last step: delete the draft plan
+  // row - the marker disappears with it, since it lives on that same row.
+  await query(`delete from plans.plans where id = $1`, [draftPlanId]);
+
+  const submitted = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });
+  assert.equal(submitted.status, 201, `expected 201 once the legacy draft is gone, got ${submitted.status}: ${JSON.stringify(submitted.body)}`);
+
+  const retry = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });
+  assert.equal(retry.status, 200, "an identical retry must be idempotent, never a second 201");
+  const feedbackCount = (await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athleteId])).rows[0].n;
+  assert.equal(feedbackCount, 1, "exactly one result - no double logical training");
+});
+
+test("M5. after the legacy draft is DISCARDED (its row deleted without ever touching the live plan), RPE against the ORIGINAL live session succeeds normally", async () => {
+  const { athletes } = await makeClubWithAthletes("m5", 1);
+  const athleteId = athletes[0].athleteId;
+  const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START });
+  const liveDayId = await makePlanDay(livePlanId, TODAY);
+  const liveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Live session" });
+  const { draftPlanId } = await makeLegacyEditDraft(athleteId, livePlanId, TODAY, { amPm: "PM", sessionOrder: 0 });
+
+  const blocked = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });
+  assert.equal(blocked.status, 409);
+
+  // Discard: the generic DELETE /plans/:planId path (never touches the
+  // live plan at all).
+  await query(`delete from plans.plans where id = $1`, [draftPlanId]);
+
+  const submitted = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(7, 55) });
+  assert.equal(submitted.status, 201, `expected 201 against the untouched original live session, got ${submitted.status}: ${JSON.stringify(submitted.body)}`);
+  const feedbackCount = (await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athleteId])).rows[0].n;
+  assert.equal(feedbackCount, 1);
+});
+
+test("M6. a NORMAL (non-legacy) edit-draft never blocks RPE on its own live plan - the block is specific to legacy_pre_migration_draft, not every open draft", async () => {
+  const { athletes } = await makeClubWithAthletes("m6", 1);
+  const athleteId = athletes[0].athleteId;
+  const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START });
+  const liveDayId = await makePlanDay(livePlanId, TODAY);
+  const liveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Live session" });
+
+  await query(
+    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, edit_source_plan_id, legacy_pre_migration_draft)
+     values ('weekly', $1, 'Normal edit-draft', 'draft', false, true, $2, false) returning id`,
+    [athleteId, livePlanId],
+  );
+
+  const res = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });
+  assert.equal(res.status, 201, `a normal, non-legacy open draft must never block RPE, got ${res.status}: ${JSON.stringify(res.body)}`);
 });
