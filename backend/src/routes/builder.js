@@ -1254,6 +1254,24 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
   }
 }
 
+// Training load hardening: batch-sync deletes-and-recreates a sibling's
+// ENTIRE session tree from the source plan's own current content, always
+// minting a fresh logical_session_id for every recreated session (never
+// the source's own - that would make a DIFFERENT athlete's session look
+// like it shares identity with the source athlete's one). That's exactly
+// right for the ONLY scenario this mechanism was ever meant for: keeping
+// not-yet-published sibling DRAFTS in sync with each other while a coach
+// is still building a batch-assigned plan, before any of them has a real
+// athlete-facing history yet. It is never safe once a sibling is ACTIVE
+// (published) - an athlete could already have submitted real RPE against
+// one of its real sessions, and wiping the tree would silently orphan
+// that result and re-open the recreated session for a second, duplicate
+// submission (training_load.session_feedback has no way to know the
+// recreated session is "the same" one, since batch-sync never attempts
+// the live<->edit-draft style identity-preservation applyEditDraft's own
+// round trip does). So this only ever targets DRAFT siblings - an ACTIVE
+// or ARCHIVED one is never touched, regardless of what the source plan's
+// own status is.
 async function syncBatchFromPlan(sourcePlan, user) {
   if (!sourcePlan?.id || sourcePlan.is_edit_draft) return;
   const client = await pool.connect();
@@ -1281,7 +1299,7 @@ async function syncBatchFromPlan(sourcePlan, user) {
          and created_by_user_id = $3
          and coalesce(is_active, true)
          and not coalesce(is_edit_draft, false)
-         and coalesce(status, 'draft') <> 'archived'
+         and status = 'draft'
        order by created_at`,
       [sourceRow.builder_batch_id, sourceRow.id, user.id],
     );

@@ -80,7 +80,69 @@ alter table training_load.session_feedback add constraint session_feedback_athle
 create index if not exists session_feedback_logical_session_id_idx on training_load.session_feedback (logical_session_id);
 
 -- ------------------------------------------------------------
--- 3. Snapshot immutability trigger. INSERT is completely unaffected (this
+-- 3. Fixup: correlate every PRE-EXISTING edit-draft's sessions with their
+--    live plan's sessions. Step 1's backfill gave every already-existing
+--    row - a live plan's sessions AND its already-open edit-draft's own
+--    copies of the "same" sessions - its own, independently random
+--    logical_session_id, because that ALTER has no way to know a draft
+--    and its live plan are supposed to share identity per session; only
+--    builder.js's copyDaySessions/copyWeeklyPlanTree (via their
+--    preserveLogicalId option) know how to carry logical_session_id
+--    across a live<->draft round trip, and that logic never ran for a
+--    draft that was already open before this migration - it was
+--    created by an OLDER version of the live->draft copy, back when
+--    logical_session_id didn't exist yet to preserve.
+--
+--    Left uncorrected: an athlete rates the live session (fine, using
+--    the live session's own logical_session_id); the coach later saves
+--    the pre-existing draft; applyEditDraft() deletes the live tree and
+--    recreates it, this time carrying over the DRAFT's (different,
+--    independently-backfilled) logical_session_id - so the recreated
+--    live session no longer matches the already-submitted result's
+--    logical_session_id at all. The result becomes orphaned/historical,
+--    the recreated session looks "Not rated", and a second submit would
+--    succeed - a real duplicate.
+--
+--    Fix: for every currently-open edit-draft (is_edit_draft = true,
+--    edit_source_plan_id pointing at its live source plan - both
+--    real, populated columns; see plans.plans), match each draft
+--    session to its live counterpart by same calendar date
+--    (plans.plan_days.date - plan_days_plan_date_unique already
+--    guarantees at most one day per date per plan) plus the exact slot
+--    key plan_sessions_day_slot_unique already enforces per plan_day -
+--    (am_pm, bta, session_order), nulls folded to '' / -1 exactly like
+--    that index does - and overwrite the draft session's own backfilled
+--    logical_session_id with the live session's. A draft session with NO
+--    live-side match (e.g. a day or slot only ever added while editing,
+--    never yet published) is intentionally left with its own fresh id -
+--    that IS a genuinely new, not-yet-live session, and correctly gets
+--    its own identity rather than being force-linked to something it
+--    isn't.
+-- ------------------------------------------------------------
+with draft_plans as (
+  select p.id as draft_plan_id, p.edit_source_plan_id as live_plan_id
+  from plans.plans p
+  where coalesce(p.is_edit_draft, false) and p.edit_source_plan_id is not null
+),
+matched_sessions as (
+  select ds.id as draft_session_id, ls.logical_session_id as live_logical_session_id
+  from draft_plans dp
+  join plans.plan_days dd on dd.plan_id = dp.draft_plan_id and dd.date is not null
+  join plans.plan_days ld on ld.plan_id = dp.live_plan_id and ld.date = dd.date
+  join plans.plan_sessions ds on ds.plan_day_id = dd.id
+  join plans.plan_sessions ls on ls.plan_day_id = ld.id
+    and coalesce(ls.am_pm, '') = coalesce(ds.am_pm, '')
+    and coalesce(ls.bta, '') = coalesce(ds.bta, '')
+    and coalesce(ls.session_order, -1) = coalesce(ds.session_order, -1)
+)
+update plans.plan_sessions target
+set logical_session_id = matched_sessions.live_logical_session_id
+from matched_sessions
+where target.id = matched_sessions.draft_session_id
+  and target.logical_session_id <> matched_sessions.live_logical_session_id;
+
+-- ------------------------------------------------------------
+-- 4. Snapshot immutability trigger. INSERT is completely unaffected (this
 --    only ever fires BEFORE UPDATE). The one column allowed to change is
 --    plan_session_id - required so Postgres's own `on delete set null` FK
 --    action (itself implemented as an UPDATE under the hood, which DOES

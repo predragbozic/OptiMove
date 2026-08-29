@@ -48,6 +48,7 @@ const {
   renderTrainingLoadHomeCardHtml,
   renderTrainingLoadResultsHtml,
   renderTrainingLoadSessionListHtml,
+  renderTrainingLoadFilterPickerHtml,
   isRpeFormValid,
 } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, emptyRpeForm, state } = await import("../state.js");
@@ -358,10 +359,14 @@ test("F2. Confirm applies the (already-live) filter change and re-fetches the cu
 
 test("F3. Select all / Clear all operate on the currently-visible (search-filtered) athletes only", async () => {
   resetState();
-  state.athletes = [
-    { athlete_uuid: "a1", athlete: "Ana Anić", athlete_id: "1" },
-    { athlete_uuid: "a2", athlete: "Bojan Bojić", athlete_id: "2" },
-  ];
+  state.trainingLoad.orgPickerData = {
+    clubs: [],
+    teams: [],
+    athletes: [
+      { id: "a1", name: "Ana Anić", athlete_id: "1" },
+      { id: "a2", name: "Bojan Bojić", athlete_id: "2" },
+    ],
+  };
   state.trainingLoad.filterPicker.search = "ana";
   await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-select-all", kind: "athlete" }), { renderTrainingLoad });
   assert.deepEqual(state.trainingLoad.filter.athleteIds, ["a1"], "only the search-matched athlete is selected");
@@ -519,7 +524,7 @@ test("J3. clicking a RATED row from the weekly overlay (not just today's Home li
 // never surface.
 // ------------------------------------------------------------
 
-test("K1. opening the weekly overlay fetches once (if not already loaded) and shows it", async () => {
+test("K1. opening the weekly overlay always fetches fresh, even if it was already loaded from an earlier open", async () => {
   resetState();
   let calls = 0;
   installFetchMock(() => { calls += 1; return { status: 200, body: weekPayload("2026-08-24") }; });
@@ -527,6 +532,28 @@ test("K1. opening the weekly overlay fetches once (if not already loaded) and sh
   assert.equal(state.trainingLoad.athleteWeeklyOpen, true);
   assert.equal(calls, 1);
   assert.ok(state.trainingLoad.athleteWeekly.data);
+
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-athlete-weekly-close" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.athleteWeeklyOpen, false);
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-athlete-weekly-open" }), { renderTrainingLoad });
+  assert.equal(calls, 2, "a second open must fetch again, never skip just because .data already exists from the first open");
+});
+
+test("K1b. a stale response from an earlier open never overwrites a fresher one already applied - close, a changed response, then reopen shows the new data", async () => {
+  resetState();
+  state.trainingLoad.athleteWeekly.data = weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "old-session", rated: false })] });
+  const deferreds = installDeferredFetchMock();
+  const openPromise = handleTrainingLoadAction(fakeAction({ action: "training-load-athlete-weekly-open" }), { renderTrainingLoad });
+  // A slow first open's response resolves AFTER the coach changed the plan
+  // and reopened - the newer open's own response must win.
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-athlete-weekly-close" }), { renderTrainingLoad });
+  const secondOpenPromise = handleTrainingLoadAction(fakeAction({ action: "training-load-athlete-weekly-open" }), { renderTrainingLoad });
+  deferreds[1].resolve({ status: 200, body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "new-session", rated: false })] }) });
+  await secondOpenPromise;
+  deferreds[0].resolve({ status: 200, body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "old-session", rated: false })] }) });
+  await openPromise;
+  const sessionIds = state.trainingLoad.athleteWeekly.data.days.flatMap((d) => d.sessions.map((s) => s.sessionId));
+  assert.deepEqual(sessionIds, ["new-session"], "the stale first-open response must be dropped, never overwrite the fresher reopen");
 });
 
 test("K2. Prev/Next/Today on the athlete's own weekly overlay shift by 7 days, same contract as the coach nav", async () => {
@@ -559,4 +586,41 @@ test("K4. closing the overlay after a successful save also refreshes the weekly 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-close-rpe-form" }), { renderTrainingLoad });
   assert.ok(calledUrls.some((u) => u.includes("/athlete/today")));
   assert.ok(calledUrls.some((u) => u.includes("/weekly")));
+});
+
+// ------------------------------------------------------------
+// L. Correction: the Athletes tab of the filter picker is workspace-scoped
+// (state.trainingLoad.orgPickerData, from /api/organization), never the
+// account-wide global roster - one account with two workspaces must see
+// only the active workspace's own athletes, with no leakage after a switch.
+// ------------------------------------------------------------
+
+test("L1. switching workspaces swaps the picker's Athletes tab roster entirely - no old name or selection lingers", async () => {
+  resetState();
+  state.trainingLoad.filterPicker.tab = "athletes";
+  installFetchMock((call) => (call.url === "/api/organization"
+    ? { status: 200, body: { clubs: [], teams: [], athletes: [{ id: "a1", name: "Ana (Club A)", athlete_id: "1" }] } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-open" }), { renderTrainingLoad });
+  let html = renderTrainingLoadFilterPickerHtml();
+  assert.ok(html.includes("Ana (Club A)"), "Club A's athlete must be shown while Club A is active");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-toggle", kind: "athlete", id: "a1" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-confirm" }), { renderTrainingLoad });
+  assert.deepEqual(state.trainingLoad.filter.athleteIds, ["a1"]);
+
+  // Simulate switching the active workspace (Club A -> Club B): the app's
+  // workspace-switch handler always calls this before anything re-fetches.
+  resetTrainingLoadForWorkspaceChange();
+  state.trainingLoad.filterPicker.tab = "athletes";
+  installFetchMock((call) => (call.url === "/api/organization"
+    ? { status: 200, body: { clubs: [], teams: [], athletes: [{ id: "b1", name: "Boris (Club B)", athlete_id: "9" }] } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-open" }), { renderTrainingLoad });
+  html = renderTrainingLoadFilterPickerHtml();
+  assert.ok(html.includes("Boris (Club B)"), "Club B's athlete must be shown once Club B is active");
+  assert.ok(!html.includes("Ana (Club A)"), "Club A's athlete must never leak into Club B's picker");
+  assert.deepEqual(state.trainingLoad.filter.athleteIds, [], "the old workspace's selection must not linger after the switch");
+
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-select-all", kind: "athlete" }), { renderTrainingLoad });
+  assert.deepEqual(state.trainingLoad.filter.athleteIds, ["b1"], "Select all after a switch only takes the currently-shown workspace's athletes");
 });

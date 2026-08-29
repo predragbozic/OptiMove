@@ -160,6 +160,7 @@ const LEGACY_FIXTURE_SQL = `
     add column status text not null default 'draft',
     add column is_active boolean not null default true,
     add column is_edit_draft boolean not null default false,
+    add column edit_source_plan_id uuid references plans.plans(id),
     add column week_start date,
     add column created_at timestamptz not null default now(),
     add column updated_at timestamptz not null default now();
@@ -391,6 +392,20 @@ function rpeBody(rpe, durationMinutes, note) {
   return { rpe, durationMinutes, ...(note !== undefined ? { note } : {}) };
 }
 
+// Item 1 correction: reads the migration's own fixup block straight out of
+// the actual shipped file, never a hand-copied duplicate that could drift.
+async function extractFixupSql() {
+  const full = await fsp.readFile(MIGRATION_V2_PATH, "utf8");
+  const startMarker = "with draft_plans as (";
+  const endMarker = "-- 4. Snapshot immutability trigger.";
+  const startIdx = full.indexOf(startMarker);
+  const endIdx = full.indexOf(endMarker, startIdx);
+  if (startIdx === -1 || endIdx === -1) {
+    throw new Error("could not locate the migration's fixup block - has the migration file's shape changed?");
+  }
+  return full.slice(startIdx, endIdx);
+}
+
 // ------------------------------------------------------------
 // A. sRPE calculation - always DB-derived, never client-accepted
 // ------------------------------------------------------------
@@ -562,6 +577,12 @@ test("E5. a coach outside an athlete's club never sees that athlete in the weekl
   assert.equal(res.status, 200);
   const allSessions = res.body.days.flatMap((d) => d.sessions);
   assert.ok(!allSessions.some((s) => s.athleteId === inClub.athletes[0].athleteId), "an athlete outside the coach's workspace must never appear");
+});
+
+test("E6. a malformed sessionId (not a real UUID) is a controlled 404, never a raw Postgres 22P02 type-mismatch 500", async () => {
+  const { athletes } = await makeClubWithAthletes("e6", 1);
+  const res = await api("/api/training-load/sessions/not-a-real-uuid/rpe", { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
+  assert.equal(res.status, 404, "must be rejected before it ever reaches a UUID comparison in SQL");
 });
 
 // ------------------------------------------------------------
@@ -1110,4 +1131,50 @@ test("L1. browsing the weekly view, including a future week with nothing materia
   assert.equal(afterCount, beforeCount);
   assert.equal(afterPlanCount, beforePlanCount);
   assert.equal(afterSessionCount, beforeSessionCount);
+});
+
+// ------------------------------------------------------------
+// M. Item 1 correction: the migration's own fixup correlates a
+// PRE-EXISTING edit-draft's sessions with their live plan's, by exact
+// (date, am_pm, bta, session_order) slot match - and deliberately leaves a
+// draft session with NO live-side match (a genuinely new, not-yet-published
+// session) with its own independent id.
+// ------------------------------------------------------------
+
+test("M1. the fixup re-correlates a matching draft/live session pair by date+slot, and leaves a non-matching draft session's own independent id untouched", async () => {
+  const { athletes } = await makeClubWithAthletes("m1", 1);
+  const athleteId = athletes[0].athleteId;
+
+  const liveDate = THIS_WEEK_START;
+  const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: liveDate });
+  const liveDayId = await makePlanDay(livePlanId, liveDate);
+  const matchedLiveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Morning session" });
+
+  const draftPlanResult = await query(
+    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, edit_source_plan_id, week_start)
+     values ('weekly', $1, 'Weekly plan (edit-draft)', 'draft', false, true, $2, $3) returning id`,
+    [athleteId, livePlanId, liveDate],
+  );
+  const draftPlanId = draftPlanResult.rows[0].id;
+  const draftDayId = await makePlanDay(draftPlanId, liveDate);
+  // Same date, same (am_pm, bta, session_order) slot as the live session
+  // above - this is the pair the fixup must re-correlate.
+  const matchedDraftSessionId = await makeSession(draftDayId, { amPm: "AM", sessionOrder: 0, name: "Morning session (draft copy)" });
+  // A DIFFERENT slot on the same draft day - e.g. a session the coach added
+  // only while editing, never yet published - must keep its OWN id.
+  const unmatchedDraftSessionId = await makeSession(draftDayId, { amPm: "PM", sessionOrder: 0, name: "New session added only in the draft" });
+
+  const matchedLiveLogicalId = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [matchedLiveSessionId])).rows[0].logical_session_id;
+  const matchedDraftLogicalIdBefore = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [matchedDraftSessionId])).rows[0].logical_session_id;
+  const unmatchedDraftLogicalIdBefore = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [unmatchedDraftSessionId])).rows[0].logical_session_id;
+  assert.notEqual(matchedDraftLogicalIdBefore, matchedLiveLogicalId, "setup check: these two independently-backfilled ids must start out different");
+
+  const fixupSql = await extractFixupSql();
+  await query(fixupSql);
+
+  const matchedDraftLogicalIdAfter = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [matchedDraftSessionId])).rows[0].logical_session_id;
+  const unmatchedDraftLogicalIdAfter = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [unmatchedDraftSessionId])).rows[0].logical_session_id;
+
+  assert.equal(matchedDraftLogicalIdAfter, matchedLiveLogicalId, "the matching draft session must be re-correlated with its live counterpart");
+  assert.equal(unmatchedDraftLogicalIdAfter, unmatchedDraftLogicalIdBefore, "a draft session with no live-side match must keep its own independent id - it IS a genuinely new session");
 });

@@ -19,11 +19,32 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { app } from "../src/server.js";
 import { query, pool } from "../src/db.js";
 import { createSession, hashPassword } from "../src/auth.js";
 import { runCleanupSteps } from "./_test-cleanup.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIGRATION_V2_PATH = path.resolve(__dirname, "../../migrations_v2/202608320900_training_load_v2_logical_session_identity.sql");
+
+// Reads the fixup block straight out of the actual shipped migration file -
+// never a hand-copied duplicate that could silently drift from what
+// production will really run.
+async function extractFixupSql() {
+  const full = await fsp.readFile(MIGRATION_V2_PATH, "utf8");
+  const startMarker = "with draft_plans as (";
+  const endMarker = "-- 4. Snapshot immutability trigger.";
+  const startIdx = full.indexOf(startMarker);
+  const endIdx = full.indexOf(endMarker, startIdx);
+  if (startIdx === -1 || endIdx === -1) {
+    throw new Error("could not locate the migration's fixup block - has the migration file's shape changed?");
+  }
+  return full.slice(startIdx, endIdx);
+}
 
 let server;
 let baseUrl;
@@ -150,17 +171,17 @@ async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0) {
   );
   return sessionResult.rows[0].id;
 }
+function dayOrderForDate(date) {
+  const d = new Date(`${date}T00:00:00Z`);
+  const raw = d.getUTCDay();
+  return raw === 0 ? 7 : raw;
+}
 
 test("a real Builder Edit -> Save and finish round trip preserves an already-submitted RPE result: one result, recognized as rated, never duplicated - and a genuinely new session added afterward is still independently ratable", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
 
   const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
-  const dayOrderForDate = (date) => {
-    const d = new Date(`${date}T00:00:00Z`);
-    const raw = d.getUTCDay();
-    return raw === 0 ? 7 : raw;
-  };
   const todayDayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
   const yesterdayDayId = await makeRealDay(livePlanId, YESTERDAY, dayOrderForDate(YESTERDAY));
   const todaySessionId = await makeRealSession(todayDayId, "Today session", "AM");
@@ -237,4 +258,163 @@ test("a real Builder Edit -> Save and finish round trip preserves an already-sub
   const addedSessionId = await makeRealSession(newYesterdayDayId, "Newly added session", null, 1);
   const addedSubmit = await api(`/api/training-load/sessions/${addedSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 3, durationMinutes: 15 } });
   assert.equal(addedSubmit.status, 201, "a genuinely new session must never be blocked or pre-rated because of an unrelated logical_session_id");
+});
+
+// ------------------------------------------------------------
+// Item 1 correction: a draft that was ALREADY OPEN before the v2
+// migration's fixup ran - so its sessions' logical_session_id, as
+// independently backfilled by the migration's own ALTER TABLE ... DEFAULT
+// gen_random_uuid(), never correlated with its live counterpart's - must
+// still round-trip correctly once the migration's fixup has corrected it.
+// A real edit-draft, opened through the real Builder "Edit" endpoint,
+// stands in for that pre-existing draft; its session's logical_session_id
+// is then deliberately corrupted to an independent id (exactly what an
+// un-fixed-up pre-existing draft would look like), and the ACTUAL fixup
+// SQL shipped in the migration file is run directly against it - proving
+// the real production statement repairs a real, un-simulated draft/live
+// pair under the real schema, not a hand-reconstructed approximation.
+// ------------------------------------------------------------
+test("a PRE-EXISTING edit-draft (its logical_session_id independently backfilled, never correlated with its live plan's) round-trips correctly once the migration's own fixup SQL has corrected it - one result, never re-rateable, never a duplicate", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+
+  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
+  const liveSessionId = await makeRealSession(dayId, "Pre-existing draft scenario session", "AM");
+
+  // Open a real edit-draft through the real Builder "Edit" flow. Since v2
+  // (including preserveLogicalId) is already applied locally, this
+  // naturally copies the live session's CORRECT logical_session_id onto
+  // the draft - so it must be deliberately corrupted below to stand in for
+  // a draft that predates the fix.
+  const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(editRes.status, 200, `expected the edit-draft to open, got ${editRes.status}: ${JSON.stringify(editRes.body)}`);
+  const draftPlanId = editRes.body.plan.id;
+  cleanupPlanIds.add(draftPlanId);
+
+  const draftSessionResult = await query(
+    `select ps.id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1`,
+    [draftPlanId],
+  );
+  const draftSessionId = draftSessionResult.rows[0].id;
+
+  // Corrupt the draft's copy to an independent id - what it would actually
+  // look like if this draft had been created by an old, pre-v2 build
+  // (before logical_session_id or preserveLogicalId existed) and then
+  // simply received its own, uncorrelated value from the migration's
+  // per-row ALTER TABLE ... DEFAULT gen_random_uuid() backfill.
+  await query(`update plans.plan_sessions set logical_session_id = gen_random_uuid() where id = $1`, [draftSessionId]);
+  const liveLogicalIdBefore = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [liveSessionId])).rows[0].logical_session_id;
+  const draftLogicalIdCorrupted = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [draftSessionId])).rows[0].logical_session_id;
+  assert.notEqual(draftLogicalIdCorrupted, liveLogicalIdBefore, "setup check: draft and live must start out mismatched, exactly like a real pre-existing draft would after v2's naive per-row backfill");
+
+  // Run the ACTUAL fixup SQL shipped in the migration file - not a
+  // hand-copied duplicate - directly against local OPTIMOVE's real schema.
+  const fixupSql = await extractFixupSql();
+  await query(fixupSql);
+
+  const draftLogicalIdFixed = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [draftSessionId])).rows[0].logical_session_id;
+  assert.equal(draftLogicalIdFixed, liveLogicalIdBefore, "the fixup must re-correlate the pre-existing draft's session with its live counterpart");
+
+  // The athlete rates the live session - exactly as they could have done
+  // between the migration running and the coach next saving this
+  // pre-existing draft.
+  const submit = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 6, durationMinutes: 50 } });
+  assert.equal(submit.status, 201, `expected 201, got ${submit.status}: ${JSON.stringify(submit.body)}`);
+
+  // The coach saves the pre-existing draft through the REAL Builder submit
+  // flow (applyEditDraft). Now that the fixup has corrected its
+  // logical_session_id, this must correctly preserve the athlete's result.
+  const submitDraftRes = await api(`/api/builder/plans/${draftPlanId}/submit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(submitDraftRes.status, 200, `expected the edit-draft to apply back onto the live plan, got ${submitDraftRes.status}: ${JSON.stringify(submitDraftRes.body)}`);
+  assert.equal(submitDraftRes.body.plan.id, livePlanId);
+
+  const recreatedResult = await query(
+    `select ps.id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1 and pd.date = $2`,
+    [livePlanId, TODAY],
+  );
+  const recreatedSessionId = recreatedResult.rows[0].id;
+  assert.notEqual(recreatedSessionId, liveSessionId, "applyEditDraft really did delete and recreate the row");
+
+  const feedbackCountResult = await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athlete.athleteId]);
+  assert.equal(feedbackCountResult.rows[0].n, 1, "exactly one result - never duplicated by the round trip");
+
+  const today = await api("/api/training-load/athlete/today", { cookie: athlete.cookie });
+  const todayRow = today.body.sessions.find((s) => s.sessionId === recreatedSessionId);
+  assert.ok(todayRow, "the recreated session resolves on Athlete Home");
+  assert.equal(todayRow.rated, true, "must be recognized as already rated - never shown as Not rated again");
+  assert.equal(todayRow.feedback.rpe, 6);
+
+  const retrySame = await api(`/api/training-load/sessions/${recreatedSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 6, durationMinutes: 50 } });
+  assert.equal(retrySame.status, 200, "an identical retry against the recreated session must be idempotent, never a new 201");
+
+  const retryDifferent = await api(`/api/training-load/sessions/${recreatedSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 9, durationMinutes: 90 } });
+  assert.equal(retryDifferent.status, 409, "a genuinely different retry must be rejected, never silently accepted as a new 201");
+});
+
+// ------------------------------------------------------------
+// Item 2 correction: POST /plans/:planId/sync-batch must never touch an
+// ACTIVE (published) sibling plan - only a genuinely pre-publish DRAFT
+// sibling. Before this correction, syncBatchFromPlan()'s sibling query only
+// excluded 'archived', so an ACTIVE sibling was swept in too - its entire
+// session tree deleted and recreated from the source plan's current
+// content, with fresh logical_session_id values, orphaning any RPE the
+// sibling's own athlete had already submitted and re-opening the recreated
+// session for a duplicate submit.
+// ------------------------------------------------------------
+test("a batch-sync against an ALREADY-PUBLISHED sibling plan must never touch it - a sibling athlete's already-submitted RPE stays linked to the exact same session, never orphaned or re-openable", async () => {
+  const coach = await makeCoachWithClub();
+  const athleteA = await makeAthleteInClub(coach.clubId);
+  const athleteB = await makeAthleteInClub(coach.clubId);
+
+  // Two independently-published (ACTIVE) weekly plans for two different
+  // athletes, sharing one builder_batch_id - exactly what a batch
+  // assignment leaves behind once both siblings have already been
+  // individually published.
+  const sourcePlanId = await makeRealWeeklyPlan(coach.coachId, athleteA.athleteId);
+  const siblingPlanId = await makeRealWeeklyPlan(coach.coachId, athleteB.athleteId);
+  const batchIdResult = await query(`select gen_random_uuid() as id`);
+  const batchId = batchIdResult.rows[0].id;
+  await query(`update plans.plans set builder_batch_id = $1 where id = any($2::uuid[])`, [batchId, [sourcePlanId, siblingPlanId]]);
+
+  const sourceDayId = await makeRealDay(sourcePlanId, TODAY, dayOrderForDate(TODAY));
+  await makeRealSession(sourceDayId, "Source athlete's session", "AM");
+  const siblingDayId = await makeRealDay(siblingPlanId, TODAY, dayOrderForDate(TODAY));
+  const siblingSessionId = await makeRealSession(siblingDayId, "Sibling athlete's own session", "AM");
+
+  // Athlete B (the sibling) already rated their own, already-published
+  // session before any further batch-sync happens.
+  const submit = await api(`/api/training-load/sessions/${siblingSessionId}/rpe`, { method: "POST", cookie: athleteB.cookie, body: { rpe: 6, durationMinutes: 40 } });
+  assert.equal(submit.status, 201, `expected 201, got ${submit.status}: ${JSON.stringify(submit.body)}`);
+
+  // The coach later triggers a batch-sync from the SOURCE (athlete A's)
+  // plan - e.g. after tweaking athlete A's own already-published plan and
+  // wanting the change reflected across the batch.
+  const syncRes = await api(`/api/builder/plans/${sourcePlanId}/sync-batch`, { method: "POST", cookie: coach.cookie });
+  assert.equal(syncRes.status, 200, `expected sync-batch to succeed, got ${syncRes.status}: ${JSON.stringify(syncRes.body)}`);
+
+  // The sibling's ACTIVE plan must be entirely untouched - same session row,
+  // never deleted-and-recreated.
+  const siblingSessionsAfter = await query(
+    `select ps.id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1`,
+    [siblingPlanId],
+  );
+  assert.equal(siblingSessionsAfter.rowCount, 1);
+  assert.equal(siblingSessionsAfter.rows[0].id, siblingSessionId, "an ACTIVE sibling's session row must never be deleted/recreated by a batch-sync");
+
+  // The already-submitted result must still be recognized as rated against
+  // that same session - never orphaned, never duplicated, never re-openable.
+  const feedbackCountResult = await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athleteB.athleteId]);
+  assert.equal(feedbackCountResult.rows[0].n, 1, "exactly one result for the sibling athlete - a batch-sync against an active sibling must never orphan or duplicate it");
+
+  const today = await api("/api/training-load/athlete/today", { cookie: athleteB.cookie });
+  const todayRow = today.body.sessions.find((s) => s.sessionId === siblingSessionId);
+  assert.ok(todayRow, "the sibling's session still resolves under its original id");
+  assert.equal(todayRow.rated, true, "must still show as rated, never reset to Not rated by an unrelated batch-sync");
+
+  const retrySame = await api(`/api/training-load/sessions/${siblingSessionId}/rpe`, { method: "POST", cookie: athleteB.cookie, body: { rpe: 6, durationMinutes: 40 } });
+  assert.equal(retrySame.status, 200, "an identical retry is still idempotent - the session was never re-opened");
+
+  const retryDifferent = await api(`/api/training-load/sessions/${siblingSessionId}/rpe`, { method: "POST", cookie: athleteB.cookie, body: { rpe: 9, durationMinutes: 90 } });
+  assert.equal(retryDifferent.status, 409, "a genuinely different retry must still be rejected - never a fresh 201 against a re-opened session");
 });

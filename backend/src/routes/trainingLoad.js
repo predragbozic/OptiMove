@@ -187,6 +187,14 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
     const athleteId = requireAthlete(req, res);
     if (!athleteId) return;
     const sessionId = req.params.sessionId;
+    // A malformed id (not a real UUID) can never match a real session -
+    // reject it BEFORE it ever reaches a `ps.id = $1` comparison, or
+    // Postgres itself rejects the query with a raw 22P02 type-mismatch
+    // error (a 500, and a distinguishable response from the info-hiding
+    // 404 every other not-found/not-yours/not-actionable case below uses).
+    if (!UUID_PATTERN.test(sessionId)) {
+      return res.status(404).json({ error: "Training session not found." });
+    }
 
     // Correction: only a real JSON integer number is ever accepted -
     // Number(null) === 0 and Number("") === 0 used to let a missing/null

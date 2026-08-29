@@ -602,10 +602,21 @@ function renderFilterOptionsHtml({ items, selectedIds, kind, emptyLabel }) {
   }).join("");
 }
 
-function trainingLoadFilterVisibleAthletes() {
-  const roster = state.athletes || [];
+// Correction: the athlete roster for this picker must come from
+// state.trainingLoad.orgPickerData (GET /api/organization - already
+// scoped to the CURRENT active workspace, exactly like the Clubs/Teams
+// tabs right above), never the global state.athletes roster (GET /api/
+// admin/athletes - the union of every athlete this account can reach
+// through ANY of its roles, regardless of which workspace is active
+// right now). Using the wrong roster let a Club A picker show Club B's
+// athletes too - the backend's own mandatory workspace scope already
+// rejected them, so picking one just produced a silently-empty result,
+// but the picker itself was showing options that could never actually
+// match anything.
+export function trainingLoadFilterVisibleAthletes() {
+  const roster = state.trainingLoad.orgPickerData?.athletes || [];
   const search = state.trainingLoad.filterPicker.search.trim().toLowerCase();
-  return search ? roster.filter((athlete) => (athlete.athlete || "").toLowerCase().includes(search)) : roster;
+  return search ? roster.filter((athlete) => (athlete.name || "").toLowerCase().includes(search)) : roster;
 }
 
 function renderFilterTabPanelHtml() {
@@ -632,8 +643,8 @@ function renderFilterTabPanelHtml() {
       <span>Search athletes</span>
       <input type="search" placeholder="Search athletes by name" value="${escapeAttr(picker.search)}" data-action="training-load-filter-athlete-search">
     </label>
-    <div class="builder-athlete-select-all">${renderFilterSelectAllHtml({ items: visible.map((a) => ({ id: a.athlete_uuid })), selectedIds: filter.athleteIds, kind: "athlete" })}</div>
-    <div class="builder-athlete-options">${renderFilterOptionsHtml({ items: visible.map((a) => ({ id: a.athlete_uuid, name: a.athlete, subtitle: `ID ${a.athlete_id}` })), selectedIds: filter.athleteIds, kind: "athlete", emptyLabel: "No athletes match." })}</div>
+    <div class="builder-athlete-select-all">${renderFilterSelectAllHtml({ items: visible.map((a) => ({ id: a.id })), selectedIds: filter.athleteIds, kind: "athlete" })}</div>
+    <div class="builder-athlete-options">${renderFilterOptionsHtml({ items: visible.map((a) => ({ id: a.id, name: a.name, subtitle: a.athlete_id ? `ID ${a.athlete_id}` : "" })), selectedIds: filter.athleteIds, kind: "athlete", emptyLabel: "No athletes match." })}</div>
   `;
 }
 

@@ -8,7 +8,7 @@ import {
   loadTrainingLoadWeekly,
   submitRpe,
 } from "./training-load-data.js";
-import { isRpeFormValid, renderRpeSliderInnerHtml } from "./training-load-view.js";
+import { isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 // Every data-action="training-load-*" click/input in the Athlete Home card/
 // RPE form/weekly overlay and the coach Training Load tab routes through
@@ -66,8 +66,14 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // to reach otherwise.
 
   if (type === "training-load-athlete-weekly-open") {
+    // Correction: every open must re-fetch, never skip just because a
+    // previous open already populated .data - the coach may have changed
+    // the plan, or a result may have been entered from another device,
+    // since this overlay was last opened. The existing "athlete" request-
+    // generation counter (loadTrainingLoadWeeklyInto) already guards
+    // against a stale response landing after a newer one, so this is safe.
     state.trainingLoad.athleteWeeklyOpen = true;
-    if (!state.trainingLoad.athleteWeekly.data) await loadTrainingLoadAthleteWeekly();
+    await loadTrainingLoadAthleteWeekly();
     renderTrainingLoad();
     return true;
   }
@@ -254,6 +260,12 @@ function toggleFilterId(kind, id) {
   else list.push(id);
 }
 
+// Correction: reuses training-load-view.js's own trainingLoadFilterVisibleAthletes
+// (the workspace-scoped orgPickerData roster, search-filtered) instead of
+// re-deriving a second, independent (and previously wrong) athlete list
+// here - one source of truth for "which athletes does this picker
+// currently show", so Select all can never select something the render
+// path itself wouldn't have offered.
 function selectAllFilter(kind) {
   const orgData = state.trainingLoad.orgPickerData;
   if (kind === "club") {
@@ -261,10 +273,7 @@ function selectAllFilter(kind) {
   } else if (kind === "team") {
     state.trainingLoad.filter.teamIds = (orgData?.teams || []).map((t) => t.id);
   } else {
-    const roster = state.athletes || [];
-    const search = state.trainingLoad.filterPicker.search.trim().toLowerCase();
-    const visible = search ? roster.filter((a) => (a.athlete || "").toLowerCase().includes(search)) : roster;
-    state.trainingLoad.filter.athleteIds = visible.map((a) => a.athlete_uuid);
+    state.trainingLoad.filter.athleteIds = trainingLoadFilterVisibleAthletes().map((a) => a.id);
   }
 }
 
