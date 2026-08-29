@@ -118,3 +118,14 @@ export async function submitRpe(sessionId, { rpe, durationMinutes, note }) {
     body: JSON.stringify({ rpe, durationMinutes, note: note || "" }),
   });
 }
+
+// Training Load Schedule tab's own quick RPE ON/OFF toggle. A 409 with
+// error: "hasExistingResults" is a real, expected outcome (not a failure) -
+// the caller shows a confirm dialog and retries with
+// confirmDisableWithResults: true if the coach confirms.
+export async function toggleSessionRpeEnabled(sessionId, rpeEnabled, confirmDisableWithResults = false) {
+  return api(`/api/training-load/sessions/${encodeURIComponent(sessionId)}/rpe-enabled`, {
+    method: "PATCH",
+    body: JSON.stringify({ rpeEnabled, ...(confirmDisableWithResults ? { confirmDisableWithResults: true } : {}) }),
+  });
+}

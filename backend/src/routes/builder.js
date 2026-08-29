@@ -578,8 +578,12 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
     const sourceSessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [block.id]);
     for (const session of sourceSessions.rows) {
       const createdSession = await client.query(
-        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name) values ($1, $2, $3, $4, $5, $6) returning id",
-        [newBlockId, session.am_pm, session.bta, session.session_time, session.session_order, session.name],
+        // rpe_enabled is a content property (like am_pm/bta/name), always
+        // copied unconditionally - see the migration's own header comment
+        // on why this must never be selectively omitted the way
+        // logical_session_id (an identity mechanism) is.
+        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled) values ($1, $2, $3, $4, $5, $6, $7) returning id",
+        [newBlockId, session.am_pm, session.bta, session.session_time, session.session_order, session.name, session.rpe_enabled],
       );
       await copySessionContent(client, session.id, createdSession.rows[0].id);
     }
@@ -795,9 +799,10 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", async (req, res, next
     );
     await client.query("begin");
     const created = await client.query(
-      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name)
-       values ($1, $2, $3, $4, $5) returning id`,
-      [target.id, source.am_pm, source.bta, nextOrderResult.rows[0].next_order, source.name],
+      // rpe_enabled: content property, always copied unconditionally.
+      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name, rpe_enabled)
+       values ($1, $2, $3, $4, $5, $6) returning id`,
+      [target.id, source.am_pm, source.bta, nextOrderResult.rows[0].next_order, source.name, source.rpe_enabled],
     );
     await copySessionContent(client, source.id, created.rows[0].id);
     await client.query("commit");
@@ -851,9 +856,17 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
     // empty name already clears the name field below.
     const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
     const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
+    // rpeEnabled follows the exact same "only touched when the request
+    // body actually includes the key" partial-update rule as amPm/bta
+    // above - Builder's edit-draft session settings form is a staging
+    // area (nothing is "live" until Submit), so no confirm-before-disable
+    // check is needed here even if the session already has RPE results;
+    // that gate belongs on the Training Load quick-toggle route instead
+    // (see PATCH /api/training-load/sessions/:sessionId/rpe-enabled).
+    const rpeEnabled = req.body?.rpeEnabled !== undefined ? Boolean(req.body.rpeEnabled) : session.rpe_enabled;
     await query(
-      "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, updated_at = now() where id = $1",
-      [session.id, sessionTimeValue(req.body?.time), nullableText(req.body?.name), amPm, bta],
+      "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, rpe_enabled = $6, updated_at = now() where id = $1",
+      [session.id, sessionTimeValue(req.body?.time), nullableText(req.body?.name), amPm, bta, rpeEnabled],
     );
     return respondWithDraft(req, res, req.user, session.plan);
   } catch (error) { next(error); }
@@ -1136,7 +1149,7 @@ router.delete("/items/:itemId", async (req, res, next) => {
 async function buildDraft(plan) {
   const result = await query(
     `select pd.id as block_id, pd.block_index, pd.block_name, pd.block_type, pd.date, pd.day_order, pd.day_note,
-            ps.id as session_id, ps.am_pm, ps.bta, ps.session_time, ps.session_order, ps.name as session_name,
+            ps.id as session_id, ps.am_pm, ps.bta, ps.session_time, ps.session_order, ps.name as session_name, ps.rpe_enabled,
             pn.id as node_id, pn.parent_id, pn.node_type, pn.name as node_name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order,
             pi.id as item_id, pi.exercise_id, pi.title, pi.description, pi.image_url, pi.video_url, pi.sets, pi.reps, pi.load, pi.item_order
      from plans.plan_days pd
@@ -1152,7 +1165,7 @@ async function buildDraft(plan) {
     const block = blocks.get(row.block_id);
     if (!row.session_id) return;
     let session = block.sessions.find((value) => value.id === row.session_id);
-    if (!session) { session = { id: row.session_id, amPm: row.am_pm || "", bta: row.bta || "", time: row.session_time ? String(row.session_time).slice(0, 5) : "", name: row.session_name || "", nodes: [] }; block.sessions.push(session); }
+    if (!session) { session = { id: row.session_id, amPm: row.am_pm || "", bta: row.bta || "", time: row.session_time ? String(row.session_time).slice(0, 5) : "", name: row.session_name || "", rpeEnabled: row.rpe_enabled !== false, nodes: [] }; block.sessions.push(session); }
     if (!row.node_id) return;
     let node = session.nodes.find((value) => value.id === row.node_id);
     if (!node) {
@@ -1420,12 +1433,13 @@ export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
   const sessionParams = [];
   let sessionColumn = 0;
   sessions.rows.forEach((session) => {
-    const row = [sourceDayIdToTargetDayId.get(session.plan_day_id), session.am_pm, session.bta, session.session_order, session.name];
+    // rpe_enabled: content property, always copied unconditionally.
+    const row = [sourceDayIdToTargetDayId.get(session.plan_day_id), session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled];
     sessionValues.push(`(${row.map(() => `$${++sessionColumn}`).join(", ")})`);
     sessionParams.push(...row);
   });
   const createdSessions = await client.query(
-    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name)
+    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name, rpe_enabled)
      values ${sessionValues.join(", ")} returning id`,
     sessionParams,
   );
@@ -1535,16 +1549,22 @@ function normalizedWeekday(dayOrder) {
 export async function copyDaySessions(client, sourceDayId, targetDayId, { preserveLogicalId = false } = {}) {
   const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [sourceDayId]);
   if (!sessions.rowCount) return;
+  // rpe_enabled is a CONTENT property (like am_pm/bta/name) - always
+  // copied, in BOTH branches below. Unlike logical_session_id (an
+  // identity mechanism, selectively preserved only for the live<->
+  // edit-draft round trip), there is no copy path in this app where
+  // silently re-enabling RPE on a session the coach explicitly turned it
+  // off for would be the right default.
   const columns = preserveLogicalId
-    ? "plan_day_id, am_pm, bta, session_order, name, logical_session_id"
-    : "plan_day_id, am_pm, bta, session_order, name";
+    ? "plan_day_id, am_pm, bta, session_order, name, rpe_enabled, logical_session_id"
+    : "plan_day_id, am_pm, bta, session_order, name, rpe_enabled";
   const values = [];
   const params = [];
   let column = 0;
   sessions.rows.forEach((session) => {
     const row = preserveLogicalId
-      ? [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.logical_session_id]
-      : [targetDayId, session.am_pm, session.bta, session.session_order, session.name];
+      ? [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled, session.logical_session_id]
+      : [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
   });
@@ -2012,7 +2032,7 @@ async function getCopySourceBlock(req, blockId) {
 // too, with zero new clipboard type.
 async function getCopySourceSession(req, sessionId) {
   const result = await query(
-    "select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1",
+    "select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, ps.rpe_enabled, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1",
     [sessionId],
   );
   const row = result.rows[0]; if (!row) return null;
@@ -2045,10 +2065,10 @@ async function getEditableBlock(req, blockId) {
 }
 
 async function getEditableSession(req, sessionId) {
-  const result = await query("select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
+  const result = await query("select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, ps.rpe_enabled, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
   const row = result.rows[0]; if (!row) return null;
   const plan = await getEditablePlan(req, row.plan_id);
-  return plan ? { id: row.id, am_pm: row.am_pm, bta: row.bta, session_time: row.session_time, name: row.name, plan } : null;
+  return plan ? { id: row.id, am_pm: row.am_pm, bta: row.bta, session_time: row.session_time, name: row.name, rpe_enabled: row.rpe_enabled, plan } : null;
 }
 
 async function getEditableNode(req, nodeId) {

@@ -379,9 +379,14 @@ function renderTrainingLoadStripDayHtml(section, day, isSelected, todayIso) {
 }
 
 function renderCoachSessionRowHtml(session) {
+  // A disabled+unrated session was never actually a rating request in the
+  // first place - "RPE off" is informational only (no reminder controls,
+  // never counted as pending), distinct from a genuine "Not rated".
   const status = session.rated
     ? { label: formatFeedbackSummary(session.feedback), cls: "rated" }
-    : { label: "Not rated", cls: "unrated" };
+    : session.rpeEnabled === false
+      ? { label: "RPE off", cls: "off" }
+      : { label: "Not rated", cls: "unrated" };
   return `
     <div class="training-load-session-row">
       <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
@@ -415,24 +420,44 @@ export function renderTrainingLoadTodayHtml() {
 // (data-action="training-load-open-weekly-plan"), never a separate RPE-
 // specific schedule screen. A historical (session-deleted) row has no
 // live session left to open, so it renders as a plain, non-clickable row.
+// PLANNED · RPE ON / PLANNED · RPE OFF - "OUTSIDE PLAN" (external
+// sessions) is a separate row kind added once external scheduling ships.
+function renderScheduleRpeStateBadgeHtml(session) {
+  const on = session.rpeEnabled !== false;
+  return `<span class="training-load-rpe-state-badge ${on ? "is-on" : "is-off"}">PLANNED &middot; RPE ${on ? "ON" : "OFF"}</span>`;
+}
+
 function renderScheduleSessionRowHtml(session, date) {
   const status = session.rated
     ? { label: formatFeedbackSummary(session.feedback), cls: "rated" }
-    : { label: "Not rated", cls: "unrated" };
+    : session.rpeEnabled === false
+      ? { label: "RPE off", cls: "off" }
+      : { label: "Not rated", cls: "unrated" };
   const clickable = !session.historical;
   const attrs = clickable
     ? `type="button" data-action="training-load-open-weekly-plan" data-athlete-id="${escapeAttr(session.athleteId)}" data-date="${escapeAttr(date)}"`
     : "";
   const Tag = clickable ? "button" : "div";
+  const canToggle = clickable && session.sessionId;
   return `
-    <${Tag} class="training-load-session-row ${clickable ? "is-clickable" : ""}" ${attrs}>
-      <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
-      <span class="training-load-session-main">
-        <span class="training-load-session-name">${escapeHtml(session.athleteName)}</span>
-        <span class="training-load-session-subtitle">${escapeHtml(sessionLabel(session))}</span>
-      </span>
-      <span class="training-load-status-pill training-load-status-${status.cls}">${escapeHtml(status.label)}</span>
-    </${Tag}>
+    <div class="training-load-schedule-row">
+      <${Tag} class="training-load-session-row ${clickable ? "is-clickable" : ""}" ${attrs}>
+        <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
+        <span class="training-load-session-main">
+          <span class="training-load-session-name">${escapeHtml(session.athleteName)}</span>
+          <span class="training-load-session-subtitle">${escapeHtml(sessionLabel(session))}${session.historical ? " · from a since-changed plan" : ""}</span>
+        </span>
+        <span class="training-load-status-pill training-load-status-${status.cls}">${escapeHtml(status.label)}</span>
+      </${Tag}>
+      ${canToggle ? `
+        <div class="training-load-schedule-row-toggle">
+          ${renderScheduleRpeStateBadgeHtml(session)}
+          <button type="button" class="plain-button compact-button" data-action="training-load-toggle-session-rpe" data-session-id="${escapeAttr(session.sessionId)}" data-currently-enabled="${session.rpeEnabled !== false ? "true" : "false"}">
+            ${session.rpeEnabled !== false ? "Turn RPE off" : "Turn RPE on"}
+          </button>
+        </div>
+      ` : ""}
+    </div>
   `;
 }
 
@@ -466,7 +491,14 @@ function computeWeeklyAggregates(data) {
     date: day.date,
     srpe: day.sessions.filter((s) => s.rated).reduce((sum, s) => sum + s.feedback.srpe, 0),
   }));
-  return { totalSrpe, totalDuration, avgRpe, ratedCount: rated.length, plannedCount: allSessions.length, dailySrpe };
+  // Per-session RPE opt-out: a disabled session with no result yet was
+  // never actually asking to be rated, so it must never count toward the
+  // "rated/planned" completion denominator (rpeEnabled defaults to true
+  // for external/historical rows, so this only ever excludes a genuinely
+  // disabled, still-unrated planned session). One that already has a
+  // result still counts - it's already in `rated` above either way.
+  const countedTowardPlanned = allSessions.filter((s) => s.rpeEnabled !== false || s.rated);
+  return { totalSrpe, totalDuration, avgRpe, ratedCount: rated.length, plannedCount: countedTowardPlanned.length, dailySrpe };
 }
 
 function renderTrainingLoadBarChartHtml(dailySrpe) {

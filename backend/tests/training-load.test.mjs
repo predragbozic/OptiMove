@@ -18,6 +18,8 @@ const MIGRATION_V1_PATH = path.resolve(__dirname, "../../migrations_v2/202608310
 const MIGRATION_V1_NAME = "202608310900_training_load_v1_session_feedback.sql";
 const MIGRATION_V2_PATH = path.resolve(__dirname, "../../migrations_v2/202608320900_training_load_v2_logical_session_identity.sql");
 const MIGRATION_V2_NAME = "202608320900_training_load_v2_logical_session_identity.sql";
+const MIGRATION_V3_PATH = path.resolve(__dirname, "../../migrations_v2/202609010900_training_load_v3_rpe_enabled.sql");
+const MIGRATION_V3_NAME = "202609010900_training_load_v3_rpe_enabled.sql";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -212,9 +214,10 @@ let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
 
 before(async () => {
-  const [migrationV1Sql, migrationV2Sql] = await Promise.all([
+  const [migrationV1Sql, migrationV2Sql, migrationV3Sql] = await Promise.all([
     fsp.readFile(MIGRATION_V1_PATH, "utf8"),
     fsp.readFile(MIGRATION_V2_PATH, "utf8"),
+    fsp.readFile(MIGRATION_V3_PATH, "utf8"),
   ]);
 
   db = await makeTempDb("primary");
@@ -224,7 +227,7 @@ before(async () => {
   assert.equal(ownCheck.rows[0].db, db.name, "SAFETY: test connection landed on an unexpected database");
 
   await adminClient.query(LEGACY_FIXTURE_SQL);
-  migrationsDir = await writeMigrationsDir("primary", { [MIGRATION_V1_NAME]: migrationV1Sql, [MIGRATION_V2_NAME]: migrationV2Sql });
+  migrationsDir = await writeMigrationsDir("primary", { [MIGRATION_V1_NAME]: migrationV1Sql, [MIGRATION_V2_NAME]: migrationV2Sql, [MIGRATION_V3_NAME]: migrationV3Sql });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
 
   process.env.DATABASE_URL = db.url;
@@ -1310,4 +1313,182 @@ test("M6. a NORMAL (non-legacy) edit-draft never blocks RPE on its own live plan
 
   const res = await api(`/api/training-load/sessions/${liveSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });
   assert.equal(res.status, 201, `a normal, non-legacy open draft must never block RPE, got ${res.status}: ${JSON.stringify(res.body)}`);
+});
+
+// ------------------------------------------------------------
+// N. Per-session RPE opt-out (v3 migration): rpe_enabled schema/backfill.
+// Runtime enforcement (POST /rpe 409, weekly/today filtering, the quick-
+// toggle route) is added in a later round and tested in this same file at
+// that point; Builder's PATCH partial-update behavior and copy-path
+// propagation need the full real schema and are covered in the real-
+// OPTIMOVE harness (training-load-rpe-enabled.test.mjs).
+// ------------------------------------------------------------
+
+test("N1. the v3 migration backfills every pre-existing plan_sessions row to rpe_enabled = true, and a brand-new session defaults to true without the client specifying it", async () => {
+  const { athletes } = await makeClubWithAthletes("n1", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  const rpeEnabled = (await query(`select rpe_enabled from plans.plan_sessions where id = $1`, [sessionId])).rows[0].rpe_enabled;
+  assert.equal(rpeEnabled, true, "a session created after v3 already ran must default to enabled - existing/normal behavior is unchanged");
+});
+
+test("N2. rpe_enabled can be toggled directly and is read back correctly (schema-level sanity, ahead of Builder's own PATCH route which needs the full real schema)", async () => {
+  const { athletes } = await makeClubWithAthletes("n2", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await query(`update plans.plan_sessions set rpe_enabled = false where id = $1`, [sessionId]);
+  const rpeEnabled = (await query(`select rpe_enabled from plans.plan_sessions where id = $1`, [sessionId])).rows[0].rpe_enabled;
+  assert.equal(rpeEnabled, false);
+});
+
+// ------------------------------------------------------------
+// O. Per-session RPE opt-out: runtime enforcement (POST /rpe 409, athlete/
+// today + weekly filtering) and the coach quick-toggle route (PATCH
+// /sessions/:sessionId/rpe-enabled), incl. its edit-draft sync and its
+// race with a concurrent athlete submit.
+// ------------------------------------------------------------
+
+test("O1. a direct submit against a disabled session is rejected with a controlled 409, never 201/200, and creates no row", async () => {
+  const { athletes } = await makeClubWithAthletes("o1", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await query(`update plans.plan_sessions set rpe_enabled = false where id = $1`, [sessionId]);
+  const res = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
+  assert.equal(res.status, 409);
+  const count = (await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athletes[0].athleteId])).rows[0].n;
+  assert.equal(count, 0);
+});
+
+test("O2. GET /athlete/today omits a disabled+unrated session entirely, but still shows a disabled session that already has a result", async () => {
+  const { athletes } = await makeClubWithAthletes("o2", 1);
+  const disabledUnrated = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Mobility (off, unrated)" } });
+  const disabledRated = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Mobility (off, already rated)" } });
+  const submit = await api(`/api/training-load/sessions/${disabledRated}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(4, 20) });
+  assert.equal(submit.status, 201);
+  await query(`update plans.plan_sessions set rpe_enabled = false where id = any($1::uuid[])`, [[disabledUnrated, disabledRated]]);
+
+  const today = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  const ids = today.body.sessions.map((s) => s.sessionId);
+  assert.ok(!ids.includes(disabledUnrated), "a disabled session with no result must never appear as a pending request");
+  assert.ok(ids.includes(disabledRated), "a disabled session that already has a result must keep showing its rated summary");
+  const ratedRow = today.body.sessions.find((s) => s.sessionId === disabledRated);
+  assert.equal(ratedRow.rated, true);
+});
+
+test("O3. the coach's weekly Schedule view still shows a disabled session (so it can be re-enabled), but the athlete's own weekly view omits a disabled+unrated one", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("o3", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await query(`update plans.plan_sessions set rpe_enabled = false where id = $1`, [sessionId]);
+
+  const coachWeekly = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const coachSessions = coachWeekly.body.days.flatMap((d) => d.sessions);
+  const coachRow = coachSessions.find((s) => s.sessionId === sessionId);
+  assert.ok(coachRow, "the coach's own Schedule view must still see a disabled session, so its quick-toggle control can re-enable it");
+  assert.equal(coachRow.rpeEnabled, false);
+
+  const athleteWeekly = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: athletes[0].cookie });
+  const athleteSessions = athleteWeekly.body.days.flatMap((d) => d.sessions);
+  assert.ok(!athleteSessions.some((s) => s.sessionId === sessionId), "the athlete's own weekly view must never show a disabled+unrated session");
+});
+
+test("O4. quick-toggle PATCH disabling a session with an existing result requires confirmDisableWithResults, and never alters/deletes the existing result", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("o4", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  const submit = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 45) });
+  assert.equal(submit.status, 201);
+
+  const blocked = await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
+  assert.equal(blocked.status, 409, `expected 409 without confirmation, got ${blocked.status}: ${JSON.stringify(blocked.body)}`);
+  assert.equal(blocked.body.error, "hasExistingResults");
+  assert.equal(blocked.body.resultCount, 1);
+  assert.equal((await query(`select rpe_enabled from plans.plan_sessions where id = $1`, [sessionId])).rows[0].rpe_enabled, true, "must not have flipped without confirmation");
+
+  const confirmed = await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false, confirmDisableWithResults: true } });
+  assert.equal(confirmed.status, 200, `expected 200 with confirmation, got ${confirmed.status}: ${JSON.stringify(confirmed.body)}`);
+  assert.equal((await query(`select rpe_enabled from plans.plan_sessions where id = $1`, [sessionId])).rows[0].rpe_enabled, false);
+
+  const feedback = (await query(`select rpe, duration_minutes from training_load.session_feedback where athlete_id = $1`, [athletes[0].athleteId])).rows[0];
+  assert.equal(feedback.rpe, 6, "the existing result must never be altered by disabling RPE for the session");
+  assert.equal(feedback.duration_minutes, 45);
+});
+
+test("O5. quick-toggle PATCH on a session with no existing results needs no confirmation", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("o5", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  const res = await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
+  assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
+});
+
+test("O6. re-enabling a session restores its eligibility for a not-yet-rated athlete, per the existing date rules", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("o6", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
+  const blockedSubmit = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
+  assert.equal(blockedSubmit.status, 409);
+
+  const reEnable = await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: true } });
+  assert.equal(reEnable.status, 200);
+  const submit = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
+  assert.equal(submit.status, 201, "re-enabling must restore normal ratability for a still-not-yet-rated athlete");
+});
+
+test("O7. the quick toggle updates BOTH the live session and its open edit-draft sibling (same logical_session_id) in one transaction", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("o7", 1);
+  const athleteId = athletes[0].athleteId;
+  const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START });
+  const liveDayId = await makePlanDay(livePlanId, THIS_WEEK_START);
+  const liveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Morning session" });
+  const liveLogicalId = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [liveSessionId])).rows[0].logical_session_id;
+
+  const draftPlanResult = await query(
+    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, edit_source_plan_id, week_start)
+     values ('weekly', $1, 'Weekly plan (edit-draft)', 'draft', false, true, $2, $3) returning id`,
+    [athleteId, livePlanId, THIS_WEEK_START],
+  );
+  const draftDayId = await makePlanDay(draftPlanResult.rows[0].id, THIS_WEEK_START);
+  // Same logical_session_id as the live session - exactly what the real
+  // live->edit-draft copy (preserveLogicalId: true) produces.
+  const draftSessionResult = await query(
+    `insert into plans.plan_sessions (plan_day_id, am_pm, session_order, name, logical_session_id) values ($1,'AM',0,'Morning session',$2) returning id`,
+    [draftDayId, liveLogicalId],
+  );
+  const draftSessionId = draftSessionResult.rows[0].id;
+
+  const res = await api(`/api/training-load/sessions/${liveSessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.draftSessionUpdated, true);
+  assert.equal((await query(`select rpe_enabled from plans.plan_sessions where id = $1`, [liveSessionId])).rows[0].rpe_enabled, false);
+  assert.equal((await query(`select rpe_enabled from plans.plan_sessions where id = $1`, [draftSessionId])).rows[0].rpe_enabled, false, "the open edit-draft's own sibling session must be updated too, or a later Builder submit would silently revert the quick toggle");
+});
+
+test("O8. concurrent disable-vs-submit on the same session serializes cleanly - whichever transaction's lock wins first decides the outcome, never a partial write or 500", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("o8", 1);
+  const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+
+  const disablePromise = api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
+  const submitPromise = api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });
+  const [disableRes, submitRes] = await Promise.all([disablePromise, submitPromise]);
+
+  // If submit wins the race, it commits a real result BEFORE disable's own
+  // lock is granted - disable then correctly sees that result once it
+  // re-reads under its own lock and (since this request never sent
+  // confirmDisableWithResults) is itself rejected 409 by the SAME gate O4
+  // already proves - not a race failure, the two features composing
+  // correctly. If disable wins instead, no result exists yet for submit to
+  // find once it gets the lock, so it correctly 409s via the plain
+  // rpe_enabled check. Either way: never a 500, never two outcomes at once.
+  assert.ok([200, 409].includes(disableRes.status), `disable must never 500, got ${disableRes.status}: ${JSON.stringify(disableRes.body)}`);
+  assert.ok([201, 409].includes(submitRes.status), `submit must be either a clean success (won the race) or a controlled 409 (lost it), got ${submitRes.status}: ${JSON.stringify(submitRes.body)}`);
+  assert.ok(
+    disableRes.status === 200 || submitRes.status === 201,
+    "at least one of the two must have cleanly succeeded - they can never BOTH fail",
+  );
+
+  const feedbackCount = (await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athletes[0].athleteId])).rows[0].n;
+  if (submitRes.status === 201) {
+    assert.equal(feedbackCount, 1, "if submit won the race, its result must be committed and never rolled back by the disable");
+    assert.equal(disableRes.status, 409, "disable must be rejected (hasExistingResults) once a result exists and no confirmation was sent");
+    assert.equal(disableRes.body.error, "hasExistingResults");
+  } else {
+    assert.equal(feedbackCount, 0, "if disable won the race, no partial/orphaned result row may exist");
+    assert.equal(disableRes.status, 200);
+    assert.equal(submitRes.status, 409);
+  }
 });

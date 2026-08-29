@@ -7768,6 +7768,10 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-session-time-input { width: 84px; min-height: 24px; padding: 2px 4px; font-size: 12px; color: var(--muted, #667085); }
 .builder-session-time-input:focus { color: var(--text, #20242a); }
 .builder-session-name-input { width: 130px; min-height: 24px; padding: 2px 4px; font-size: 12px; }
+.builder-session-rpe-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted, #667085); background: #fff; border: 1px solid var(--line); }
+.builder-session-rpe-toggle.is-on { color: var(--text, #20242a); }
+.builder-session-rpe-toggle-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex: none; }
+.builder-session-rpe-toggle.is-on .builder-session-rpe-toggle-dot { background: var(--accent); }
 .builder-session-select { width: 96px; min-height: 24px; padding: 2px 4px; font-size: 12px; color: var(--muted, #667085); }
 .builder-session-select:has(option:checked:not([value=""])) { color: var(--text, #20242a); }
 .builder-session span:last-child, .builder-node-button small { color: var(--muted, #667085); font-size: 12px; font-weight: 600; }
@@ -11509,6 +11513,36 @@ button.tests-assignment-card {
 
 .training-load-status-unrated {
   color: var(--muted);
+}
+
+.training-load-status-off {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.training-load-schedule-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.training-load-schedule-row-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px 6px;
+}
+
+.training-load-rpe-state-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.training-load-rpe-state-badge.is-on {
+  color: var(--accent);
 }
 
 /* -------------------- Athlete: RPE form -------------------- */

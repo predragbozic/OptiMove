@@ -7,6 +7,7 @@ import {
   loadTrainingLoadOrgPickerData,
   loadTrainingLoadWeekly,
   submitRpe,
+  toggleSessionRpeEnabled,
 } from "./training-load-data.js";
 import { isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
@@ -142,6 +143,35 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-rpe-submit") {
     await submitRpeForm(renderTrainingLoad);
+    return true;
+  }
+
+  // Training Load Schedule tab's quick RPE ON/OFF toggle. Turning RPE ON
+  // never needs confirmation. Turning it OFF needs a real, server-checked
+  // confirmation ONLY when the session already has a recorded result -
+  // the backend's own 409 { error: "hasExistingResults" } is what decides
+  // this, never a client-side guess, since the frontend's own session
+  // object doesn't carry a reliable "how many results already exist"
+  // count.
+  if (type === "training-load-toggle-session-rpe") {
+    const sessionId = action.dataset.sessionId;
+    if (!sessionId) return true;
+    const currentlyEnabled = action.dataset.currentlyEnabled === "true";
+    const nextEnabled = !currentlyEnabled;
+    try {
+      await toggleSessionRpeEnabled(sessionId, nextEnabled);
+    } catch (error) {
+      if (error.status === 409 && error.message === "hasExistingResults") {
+        if (!window.confirm("This session already has a recorded RPE result. Turning RPE off will stop new submissions, but the existing result stays in Results. Continue?")) {
+          return true;
+        }
+        await toggleSessionRpeEnabled(sessionId, nextEnabled, true);
+      } else {
+        throw error;
+      }
+    }
+    await loadTrainingLoadWeekly(state.trainingLoad.section);
+    renderTrainingLoad();
     return true;
   }
 

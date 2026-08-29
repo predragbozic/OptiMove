@@ -143,6 +143,12 @@ router.get("/athlete/today", async (req, res, next) => {
        where ${WEEKLY_PLAN_SESSION_FILTER_SQL}
          and p.athlete_id = $1
          and pd.date = $2::date
+         -- Per-session RPE opt-out: a disabled session with NO existing
+         -- result is never shown to the athlete as a request at all (not
+         -- pending, not "Not rated"). One that already has a result from
+         -- before it was disabled keeps showing as its already-rated
+         -- summary - existing history is never hidden.
+         and (coalesce(ps.rpe_enabled, true) or sf.id is not null)
        order by ps.session_order`,
       [athleteId, localToday],
     );
@@ -219,7 +225,7 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
     await client.query("begin");
 
     const sessionResult = await client.query(
-      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time,
+      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled,
               pd.date as session_date, p.id as plan_id, p.name as plan_name, p.week_start, p.athlete_id,
               p.plan_type, p.status, p.is_active, p.is_edit_draft,
               exists (
@@ -263,6 +269,15 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
       return res.status(409).json({ error: "This plan has a pending update from before a recent system upgrade. Ask your coach to finish or discard it, then try again." });
     }
 
+    // Per-session RPE opt-out: unlike the not-found/not-yours/not-actionable
+    // cases above, a coach explicitly turning RPE off for a real, visible
+    // session is not something worth hiding from the athlete behind a bare
+    // 404 - a distinguishable, controlled 409 is the correct response here.
+    if (session.rpe_enabled === false) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "RPE isn't being collected for this session." });
+    }
+
     const localToday = await athleteLocalDate(athleteId, (sql, params) => client.query(sql, params));
     if (localToday && session.session_date > localToday) {
       await client.query("rollback");
@@ -304,6 +319,109 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
     await client.query("commit");
     if (identical) return res.status(200).json({ feedback: formatFeedback({ feedback_id: existing.id, ...existing }) });
     return res.status(409).json({ error: "This session already has a submitted result." });
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+    }
+    next(error);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// Coach quick toggle (Training Load -> Schedule tab). Locks the live
+// session row FIRST (same `for update of ps` pattern as the athlete's own
+// submit route above), so a concurrent submit-vs-disable race serializes
+// cleanly on that one row: whichever transaction's lock is granted first
+// wins outright - if submit wins, the result commits and stays untouched;
+// if disable wins, the submit that was waiting re-reads rpe_enabled=false
+// and gets the controlled 409 the submit route already implements. Never
+// a partial write, never a 500.
+router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
+  let client;
+  try {
+    if (!requireCoachWorkspace(req, res)) return;
+    const sessionId = req.params.sessionId;
+    if (!UUID_PATTERN.test(sessionId)) return res.status(404).json({ error: "Training session not found." });
+    if (typeof req.body?.rpeEnabled !== "boolean") {
+      return res.status(400).json({ error: "rpeEnabled must be a boolean." });
+    }
+    const rpeEnabled = req.body.rpeEnabled;
+    const confirmDisableWithResults = req.body?.confirmDisableWithResults === true;
+
+    client = await pool.connect();
+    await client.query("begin");
+
+    const sessionResult = await client.query(
+      `select ps.id as session_id, ps.logical_session_id, p.id as plan_id, p.athlete_id
+       from plans.plan_sessions ps
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       join plans.plans p on p.id = pd.plan_id
+       where ps.id = $1
+         and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
+       for update of ps`,
+      [sessionId],
+    );
+    const session = sessionResult.rows[0];
+    if (!session) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
+
+    // Real workspace-authorization gate, not just a UI-level restriction -
+    // the same EXISTS-against-athlete_memberships/user_athletes shape every
+    // other coach-facing query in this file already uses.
+    const scope = await coachWorkspaceScopeSql(req, "a", 2);
+    const accessResult = await client.query(
+      `select 1 from public.athletes a where a.id = $1 ${scope.sql}`,
+      [session.athlete_id, ...scope.params],
+    );
+    if (!accessResult.rowCount) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
+
+    // Disabling a session that already has at least one submitted result
+    // needs an explicit, informed confirmation - a real server-side gate
+    // (confirmDisableWithResults must be sent back on the SAME request the
+    // frontend re-submits after the coach confirms), not just a UI dialog
+    // a different/careless client could bypass. Matching by
+    // logical_session_id alone already scopes this to real, submitted
+    // planned results for this exact logical session - nothing else could
+    // ever share that id.
+    if (rpeEnabled === false && !confirmDisableWithResults) {
+      const existingCountResult = await client.query(
+        `select count(*)::int as n from training_load.session_feedback where logical_session_id = $1`,
+        [session.logical_session_id],
+      );
+      if (existingCountResult.rows[0].n > 0) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "hasExistingResults", resultCount: existingCountResult.rows[0].n });
+      }
+    }
+
+    // If this live plan currently has an open edit-draft, its own copy of
+    // this same session (same logical_session_id, carried over by
+    // preserveLogicalId - see builder.js) must be updated in the SAME
+    // transaction, or a later Builder "Save and finish" would silently
+    // revert this quick toggle back to whatever the draft still has.
+    const draftSessionResult = await client.query(
+      `select ps2.id
+       from plans.plans d
+       join plans.plan_days pd2 on pd2.plan_id = d.id
+       join plans.plan_sessions ps2 on ps2.plan_day_id = pd2.id
+       where d.edit_source_plan_id = $1 and d.is_edit_draft
+         and ps2.logical_session_id = $2
+       for update of ps2`,
+      [session.plan_id, session.logical_session_id],
+    );
+    const idsToUpdate = [session.session_id, ...draftSessionResult.rows.map((row) => row.id)];
+    await client.query(
+      `update plans.plan_sessions set rpe_enabled = $1, updated_at = now() where id = any($2::uuid[])`,
+      [rpeEnabled, idsToUpdate],
+    );
+    await client.query("commit");
+    return res.json({ sessionId: session.session_id, rpeEnabled, draftSessionUpdated: draftSessionResult.rowCount > 0 });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -433,7 +551,13 @@ router.get("/weekly", async (req, res, next) => {
     if (workspace?.type === "athlete") {
       if (!req.authz.athleteId) return res.status(403).json({ error: "This account has no athlete profile." });
       params.push(req.authz.athleteId);
-      scopeSqlLive = `and p.athlete_id = $${params.length}`;
+      // Same rule as GET /athlete/today: the athlete's own weekly view
+      // (this endpoint doubles as the athlete's weekly overlay) must never
+      // show a disabled session that has no result yet - only the coach's
+      // own Schedule tab (the `else` branch below) needs every session
+      // visible, disabled or not, so its quick-toggle control can re-enable
+      // one. A disabled session that already has a result stays visible.
+      scopeSqlLive = `and p.athlete_id = $${params.length} and (coalesce(ps.rpe_enabled, true) or sf.id is not null)`;
       scopeSqlSf = `and sf.athlete_id = $${params.length}`;
     } else {
       if (!requireCoachWorkspace(req, res)) return;
@@ -448,7 +572,7 @@ router.get("/weekly", async (req, res, next) => {
     }
 
     const liveResult = await query(
-      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time,
+      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled,
               pd.date as session_date, p.id as plan_id, p.name as plan_name,
               a.id as athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
@@ -521,6 +645,11 @@ router.get("/weekly", async (req, res, next) => {
         rated: row.feedback_id != null,
         feedback: formatFeedback(row),
         historical: false,
+        // rpe_enabled defaults to true for any pre-v3 row read through a
+        // driver/pool that hasn't picked up the column yet - never really
+        // reachable in practice (the column is NOT NULL DEFAULT true), but
+        // coalesced defensively the same way the SQL-side reads already are.
+        rpeEnabled: row.rpe_enabled !== false,
       });
     }
     for (const row of orphanedResult.rows) {
@@ -539,6 +668,10 @@ router.get("/weekly", async (req, res, next) => {
         rated: true,
         feedback: formatFeedback(row),
         historical: true,
+        // A historical/orphaned row has no live plan_sessions row to read
+        // rpe_enabled from at all - it's always already-rated, so this
+        // is never read as an actionable "off" state either way.
+        rpeEnabled: true,
       });
     }
 

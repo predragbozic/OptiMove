@@ -47,6 +47,7 @@ const {
   formatSrpe,
   renderTrainingLoadHomeCardHtml,
   renderTrainingLoadResultsHtml,
+  renderTrainingLoadScheduleHtml,
   renderTrainingLoadSessionListHtml,
   renderTrainingLoadFilterPickerHtml,
   isRpeFormValid,
@@ -95,6 +96,7 @@ function session(overrides = {}) {
     rated: false,
     feedback: null,
     historical: false,
+    rpeEnabled: true,
     ...overrides,
   };
 }
@@ -408,6 +410,22 @@ test("G2. Results only ever lists RATED sessions in the agenda - an unrated plan
   assert.ok(!html.includes("Not rated"), "Results never shows an unrated row at all");
 });
 
+test("G3. a disabled+unrated session never counts toward the rated/planned denominator, but a disabled session that already has a result still counts (and contributes to sRPE)", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.trainingLoad.weekly.results.data = weekPayload(date, {
+    [date]: [
+      session({ sessionId: "s1", rated: true, feedback: { rpe: 6, durationMinutes: 50, srpe: 300 } }),
+      session({ sessionId: "s2", rated: false, rpeEnabled: false }),
+      session({ sessionId: "s3", rated: true, rpeEnabled: false, feedback: { rpe: 4, durationMinutes: 20, srpe: 80 } }),
+    ],
+  });
+  state.trainingLoad.weekly.results.selectedDate = date;
+  const html = renderTrainingLoadResultsHtml();
+  assert.ok(html.includes("2/2"), "s2 (disabled, unrated) must be excluded from the denominator entirely - 2 rated out of 2 counted, not out of 3");
+  assert.ok(html.includes("380 AU"), "s3's already-recorded result (disabled or not) must still contribute to the weekly sRPE total: 300 + 80 = 380");
+});
+
 // ------------------------------------------------------------
 // H. Correction: filter Confirm invalidates ALL THREE sections, and a
 // combined Club + Athlete filter is sent as a genuine union on the wire.
@@ -623,4 +641,76 @@ test("L1. switching workspaces swaps the picker's Athletes tab roster entirely -
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-select-all", kind: "athlete" }), { renderTrainingLoad });
   assert.deepEqual(state.trainingLoad.filter.athleteIds, ["b1"], "Select all after a switch only takes the currently-shown workspace's athletes");
+});
+
+// ------------------------------------------------------------
+// P. Training Load Schedule tab: the quick RPE ON/OFF toggle.
+// ------------------------------------------------------------
+
+test("P1. turning RPE off (no existing results) sends rpeEnabled: false with no confirmation dialog, then refetches the current section", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  installFetchMock(() => ({ status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "true" }), { renderTrainingLoad });
+  assert.equal(fetchCalls.length, 2, "one PATCH toggle call, then one GET refetch of the current section");
+  assert.equal(fetchCalls[0].method, "PATCH");
+  assert.match(fetchCalls[0].url, /\/sessions\/sess-1\/rpe-enabled$/);
+  assert.equal(fetchCalls[0].body.rpeEnabled, false);
+  assert.equal(fetchCalls[0].body.confirmDisableWithResults, undefined, "no confirmation flag on the first attempt");
+});
+
+test("P2. turning RPE on never needs confirmation, regardless of existing results", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  installFetchMock(() => ({ status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "false" }), { renderTrainingLoad });
+  assert.equal(fetchCalls[0].body.rpeEnabled, true);
+});
+
+test("P3. a 409 hasExistingResults shows a confirm dialog - Cancel leaves rpe_enabled untouched and never retries", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  const originalConfirm = globalThis.window.confirm;
+  globalThis.window.confirm = () => false;
+  try {
+    installFetchMock((call) => (call.method === "PATCH" ? { status: 409, body: { error: "hasExistingResults", resultCount: 2 } } : { status: 200, body: weekPayload("2026-08-24") }));
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "true" }), { renderTrainingLoad });
+    assert.equal(fetchCalls.length, 1, "Cancel must never retry the request or refetch anything");
+    assert.equal(fetchCalls[0].method, "PATCH");
+  } finally {
+    globalThis.window.confirm = originalConfirm;
+  }
+});
+
+test("P4. a 409 hasExistingResults, then Confirm, retries with confirmDisableWithResults: true and refetches on success", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  const originalConfirm = globalThis.window.confirm;
+  globalThis.window.confirm = () => true;
+  try {
+    let patchCount = 0;
+    installFetchMock((call) => {
+      if (call.method === "PATCH") {
+        patchCount += 1;
+        if (patchCount === 1) return { status: 409, body: { error: "hasExistingResults", resultCount: 2 } };
+        return { status: 200, body: { sessionId: "sess-1", rpeEnabled: false, draftSessionUpdated: false } };
+      }
+      return { status: 200, body: weekPayload("2026-08-24") };
+    });
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "true" }), { renderTrainingLoad });
+    assert.equal(fetchCalls.length, 3, "first PATCH (409), confirmed retry PATCH (200), then the refetch");
+    assert.equal(fetchCalls[1].method, "PATCH");
+    assert.equal(fetchCalls[1].body.rpeEnabled, false);
+    assert.equal(fetchCalls[1].body.confirmDisableWithResults, true, "the retry must carry the confirmation flag");
+  } finally {
+    globalThis.window.confirm = originalConfirm;
+  }
+});
+
+test("P5. a session with no sessionId in its dataset is a safe no-op - never a crash", async () => {
+  resetState();
+  installFetchMock(() => ({ status: 200, body: weekPayload("2026-08-24") }));
+  const result = await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe" }), { renderTrainingLoad });
+  assert.equal(result, true);
+  assert.equal(fetchCalls.length, 0);
 });

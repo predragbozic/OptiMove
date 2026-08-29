@@ -608,6 +608,23 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     handlers.renderBuilder();
     return true;
   }
+  // Per-session RPE opt-out (Builder side). A plain <input type="checkbox">
+  // inside the session's own autosave form would NOT work with the
+  // existing "only touched when the request body includes the key"
+  // partial-update pattern PATCH /sessions/:sessionId relies on -
+  // FormData simply OMITS an unchecked checkbox's field entirely, so
+  // unchecking it could never actually turn RPE off. A discrete toggle
+  // action (mirroring builder-pick-session-am-pm/-bta above) always sends
+  // an explicit true/false instead.
+  if (type === "builder-toggle-session-rpe") {
+    const sessionId = action.dataset.sessionId || "";
+    const session = findBuilderSession(state.builder.draft, sessionId);
+    if (!session) return true;
+    const payload = withBatchSyncPayload({ rpeEnabled: !session.rpeEnabled });
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/sessions/${encodeURIComponent(sessionId)}`, { method: "PATCH", body: JSON.stringify(payload) }));
+    handlers.renderBuilder();
+    return true;
+  }
   if (type === "builder-close-structure-modal") {
     state.builder.structureModalOpen = false;
     handlers.renderBuilder();
