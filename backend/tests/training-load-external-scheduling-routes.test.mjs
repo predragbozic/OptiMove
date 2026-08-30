@@ -27,6 +27,7 @@ const MIGRATIONS = [
   ["202609011000_training_load_v4_external_scheduling.sql"],
   ["202609011100_training_load_v5_unified_result_source.sql"],
   ["202609011200_training_load_v6_external_schedule_event_type.sql"],
+  ["202609020900_training_load_v7_external_schedule_notification_rules.sql"],
 ].map(([name]) => ({ name, path: path.resolve(__dirname, `../../migrations_v2/${name}`) }));
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -1259,4 +1260,144 @@ test("J6. schedule-again with a malformed startDate/endDate is a controlled 400,
   const scheduleId = created.body.schedules[0].id;
   const res = await api(`/api/training-load/external-schedules/${scheduleId}/schedule-again`, { method: "POST", cookie: coachCookie, body: { startDate: "not-a-date" } });
   assert.equal(res.status, 400, `expected 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+});
+
+// ------------------------------------------------------------
+// K. Per-schedule notification configuration - the form's own "notify
+// when open / remind incomplete / reminder offset / final summary" must
+// actually be backed by real, per-schedule config the worker reads, not
+// a hardcoded always-on constant.
+// ------------------------------------------------------------
+
+test("K1. a schedule created with no notificationRules gets the current always-on defaults (invitation+reminder@60min+final digest all enabled) - never silently 'off'", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k1", 1);
+  const created = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }] }) });
+  const scheduleId = created.body.schedules[0].id;
+  const detail = await api(`/api/training-load/external-schedules/${scheduleId}`, { cookie: coachCookie });
+  const rules = detail.body.notificationRules;
+  assert.equal(rules.length, 3);
+  for (const kind of ["athlete_invitation", "athlete_reminder", "final_digest"]) {
+    const rule = rules.find((r) => r.kind === kind);
+    assert.ok(rule, `expected a default ${kind} rule`);
+    assert.equal(rule.enabled, true);
+  }
+  assert.equal(rules.find((r) => r.kind === "athlete_reminder").reminderOffsetMinutes, 60);
+});
+
+test("K2. creating with explicit notificationRules persists exactly what was sent, and PATCH replaces them wholesale", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k2", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({
+      targets: [{ kind: "athlete", id: athletes[0].athleteId }],
+      notificationRules: [
+        { kind: "athlete_invitation", enabled: false },
+        { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 15 },
+        { kind: "final_digest", enabled: false },
+      ],
+    }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  const detail = await api(`/api/training-load/external-schedules/${scheduleId}`, { cookie: coachCookie });
+  assert.equal(detail.body.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, false);
+  assert.equal(detail.body.notificationRules.find((r) => r.kind === "athlete_reminder").reminderOffsetMinutes, 15);
+  assert.equal(detail.body.notificationRules.find((r) => r.kind === "final_digest").enabled, false);
+
+  const patched = await api(`/api/training-load/external-schedules/${scheduleId}`, {
+    method: "PATCH", cookie: coachCookie,
+    body: { notificationRules: [{ kind: "athlete_invitation", enabled: true }, { kind: "athlete_reminder", enabled: false }, { kind: "final_digest", enabled: true }] },
+  });
+  assert.equal(patched.status, 200);
+  const afterPatch = await api(`/api/training-load/external-schedules/${scheduleId}`, { cookie: coachCookie });
+  assert.equal(afterPatch.body.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, true);
+  assert.equal(afterPatch.body.notificationRules.find((r) => r.kind === "athlete_reminder").enabled, false);
+});
+
+test("K3. PATCH with no notificationRules field leaves the existing configuration completely untouched", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k3", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }], notificationRules: [{ kind: "athlete_invitation", enabled: false }, { kind: "athlete_reminder", enabled: false }, { kind: "final_digest", enabled: false }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  await api(`/api/training-load/external-schedules/${scheduleId}`, { method: "PATCH", cookie: coachCookie, body: { eventName: "Renamed only" } });
+  const detail = await api(`/api/training-load/external-schedules/${scheduleId}`, { cookie: coachCookie });
+  assert.ok(detail.body.notificationRules.every((r) => r.enabled === false), "a PATCH that never mentions notificationRules must never reset them");
+});
+
+test("K4. an invalid notificationRules entry (bad kind, non-boolean enabled, or a non-positive offset) is a controlled 400, and creates nothing", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k4", 1);
+  const targets = [{ kind: "athlete", id: athletes[0].athleteId }];
+  const badKind = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ targets, notificationRules: [{ kind: "not_a_real_kind", enabled: true }] }) });
+  assert.equal(badKind.status, 400);
+  const badEnabled = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ targets, notificationRules: [{ kind: "athlete_invitation", enabled: "yes" }] }) });
+  assert.equal(badEnabled.status, 400);
+  const badOffset = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ targets, notificationRules: [{ kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 0 }] }) });
+  assert.equal(badOffset.status, 400);
+});
+
+test("K5. the worker never invites when athlete_invitation is disabled, never reminds when athlete_reminder is disabled, and honors a custom reminder offset", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k5", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({
+      opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athletes[0].athleteId }],
+      notificationRules: [{ kind: "athlete_invitation", enabled: false }, { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 5 }, { kind: "final_digest", enabled: true }],
+    }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  const assignmentResult = await query(`select id, closes_at from training_load.external_assignments where occurrence_id = (select occurrence_id from training_load.external_assignments a join training_load.external_schedule_occurrences o on o.id = a.occurrence_id where o.schedule_id = $1 limit 1)`, [scheduleId]);
+  const assignment = assignmentResult.rows[0];
+
+  // Scoped to THIS test's own assignment via app_notifications rows, not
+  // the cycle's raw global counts - the shared temp DB can hold other
+  // tests' own active schedules too, so a bare summary.invitations.sent
+  // count is not test-isolated.
+  await processTrainingLoadNotificationCycle({ now: new Date(), pool });
+  const invitationCount = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1 and type = 'training_load_external_invitation'`, [assignment.id])).rows[0].n;
+  assert.equal(invitationCount, 0, "invitation is disabled for this schedule - never sent");
+
+  // The custom 5-minute offset means a reminder is due 5 minutes before
+  // closes_at, not the default 60 - proves the per-schedule value is
+  // actually read, not just the disabled flag.
+  await processTrainingLoadNotificationCycle({ now: new Date(new Date(assignment.closes_at).getTime() - 10 * 60 * 1000), pool });
+  const tooEarlyCount = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1 and type = 'training_load_external_reminder'`, [assignment.id])).rows[0].n;
+  assert.equal(tooEarlyCount, 0, "10 minutes out is still before the custom 5-minute offset window");
+  await processTrainingLoadNotificationCycle({ now: new Date(new Date(assignment.closes_at).getTime() - 2 * 60 * 1000), pool });
+  const dueNowCount = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1 and type = 'training_load_external_reminder'`, [assignment.id])).rows[0].n;
+  assert.equal(dueNowCount, 1, "expected the reminder to fire within the custom 5-minute offset");
+});
+
+test("K6. the worker never sends a final digest when final_digest is disabled for that schedule", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k6", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({
+      opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athletes[0].athleteId }],
+      notificationRules: [{ kind: "athlete_invitation", enabled: true }, { kind: "athlete_reminder", enabled: true }, { kind: "final_digest", enabled: false }],
+    }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  const occurrenceId = (await query(`select occurrence_id from training_load.external_assignments a join training_load.external_schedule_occurrences o on o.id = a.occurrence_id where o.schedule_id = $1 limit 1`, [scheduleId])).rows[0].occurrence_id;
+  const occurrenceClosesAt = (await query(`select closes_at from training_load.external_schedule_occurrences where id = $1`, [occurrenceId])).rows[0].closes_at;
+
+  await processTrainingLoadNotificationCycle({ now: new Date(new Date(occurrenceClosesAt).getTime() + 60 * 1000), pool });
+  const digestCount = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_occurrence' and entity_id = $1`, [occurrenceId])).rows[0].n;
+  assert.equal(digestCount, 0, "final_digest is disabled for this schedule - never sent");
+});
+
+test("K7. Schedule again copies the source's own notification configuration onto the new schedule", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("k7", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }], notificationRules: [{ kind: "athlete_invitation", enabled: false }, { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 30 }, { kind: "final_digest", enabled: false }] }),
+  });
+  const originalId = created.body.schedules[0].id;
+  const again = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, { method: "POST", cookie: coachCookie, body: { startDate: addDaysIso(TODAY, 30) } });
+  assert.equal(again.status, 201);
+  const newDetail = await api(`/api/training-load/external-schedules/${again.body.schedule.id}`, { cookie: coachCookie });
+  assert.equal(newDetail.body.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, false);
+  assert.equal(newDetail.body.notificationRules.find((r) => r.kind === "athlete_reminder").reminderOffsetMinutes, 30);
 });

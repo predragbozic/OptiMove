@@ -1021,6 +1021,68 @@ async function insertExternalTargets(client, scheduleId, targets) {
 // logic (see migrations_v2/202609011200_training_load_v6...).
 const EXTERNAL_EVENT_TYPES = ["team_training", "individual", "gym", "rehabilitation", "match", "other"];
 
+// ------------------------------------------------------------
+// Per-schedule notification configuration (migrations_v2/
+// 202609020900_training_load_v7...) - notify-when-open / remind-
+// incomplete (+ offset) / final-summary. No "kind" for a coach live
+// digest - training_load's own GET /weekly already covers that live, by
+// design (see this feature's original architecture note).
+// ------------------------------------------------------------
+
+const NOTIFICATION_RULE_KINDS = ["athlete_invitation", "athlete_reminder", "final_digest"];
+const DEFAULT_NOTIFICATION_RULES = [
+  { kind: "athlete_invitation", enabled: true, reminderOffsetMinutes: null },
+  { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 60 },
+  { kind: "final_digest", enabled: true, reminderOffsetMinutes: null },
+];
+
+// Validates the client's own notificationRules array (if provided at all -
+// omitting the field entirely means "use the defaults", never "disable
+// everything"). Each kind may appear at most once; an unrecognized kind,
+// a non-boolean enabled, or an out-of-range offset is a controlled 400 -
+// never silently dropped or coerced.
+function resolveValidNotificationRules(rawRules) {
+  if (rawRules === undefined) return { ok: true, rules: DEFAULT_NOTIFICATION_RULES };
+  if (!Array.isArray(rawRules)) return { ok: false, error: "notificationRules must be an array." };
+  const seen = new Set();
+  const rules = [];
+  for (const raw of rawRules) {
+    const kind = text(raw?.kind);
+    if (!NOTIFICATION_RULE_KINDS.includes(kind)) return { ok: false, error: `Unrecognized notification kind: ${kind || "(none)"}.` };
+    if (seen.has(kind)) return { ok: false, error: `Duplicate notification kind: ${kind}.` };
+    seen.add(kind);
+    if (typeof raw.enabled !== "boolean") return { ok: false, error: `notificationRules.${kind}.enabled must be a boolean.` };
+    let reminderOffsetMinutes = null;
+    if (kind === "athlete_reminder") {
+      const offsetRaw = raw.reminderOffsetMinutes;
+      reminderOffsetMinutes = offsetRaw === undefined || offsetRaw === null ? 60 : offsetRaw;
+      if (!Number.isInteger(reminderOffsetMinutes) || reminderOffsetMinutes <= 0) {
+        return { ok: false, error: "notificationRules.athlete_reminder.reminderOffsetMinutes must be a positive whole number of minutes." };
+      }
+    }
+    rules.push({ kind, enabled: raw.enabled, reminderOffsetMinutes });
+  }
+  // Any kind the client didn't mention keeps the same "not configured yet"
+  // semantics the worker itself already understands - no need to fill in
+  // a default row for it here (a genuinely omitted kind is a real,
+  // distinct client intent, not an oversight - matches WELLNESS's own
+  // "row absent = never touched" convention this form is styled after).
+  return { ok: true, rules };
+}
+
+async function insertNotificationRules(client, scheduleId, rules) {
+  for (const rule of rules) {
+    await client.query(
+      `insert into training_load.external_schedule_notification_rules (schedule_id, kind, enabled, reminder_offset_minutes) values ($1,$2,$3,$4)`,
+      [scheduleId, rule.kind, rule.enabled, rule.reminderOffsetMinutes],
+    );
+  }
+}
+
+function formatNotificationRuleRow(row) {
+  return { kind: row.kind, enabled: row.enabled, reminderOffsetMinutes: row.reminder_offset_minutes };
+}
+
 function formatExternalScheduleRow(row) {
   return {
     id: row.id,
@@ -1120,6 +1182,9 @@ router.post("/external-schedules", async (req, res, next) => {
     const resolved = await resolveValidExternalTargets(scope, body.targets);
     if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
 
+    const resolvedRules = resolveValidNotificationRules(body.notificationRules);
+    if (!resolvedRules.ok) return res.status(400).json({ error: resolvedRules.error });
+
     const owner = await resolveExternalScheduleOwnerContext(req);
     await client.query("begin");
     const schedules = [];
@@ -1130,6 +1195,7 @@ router.post("/external-schedules", async (req, res, next) => {
         opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId: req.user.id, owner,
       });
       await insertExternalTargets(client, schedule.id, resolved.targets);
+      await insertNotificationRules(client, schedule.id, resolvedRules.rules);
       schedules.push(schedule);
     }
     await client.query("commit");
@@ -1196,10 +1262,15 @@ router.get("/external-schedules/:scheduleId", async (req, res, next) => {
        limit 30`,
       [schedule.id],
     );
+    const notificationRulesResult = await query(
+      `select kind, enabled, reminder_offset_minutes from training_load.external_schedule_notification_rules where schedule_id = $1`,
+      [schedule.id],
+    );
     res.json({
       schedule: formatExternalScheduleRow(schedule),
       targets: targetsResult.rows.map(formatExternalTargetRow),
       occurrences: occurrencesResult.rows.map((row) => ({ id: row.id, scheduledDate: row.scheduled_date, status: row.status, assignmentCount: row.assignment_count, ratedCount: row.rated_count })),
+      notificationRules: notificationRulesResult.rows.map(formatNotificationRuleRow),
     });
   } catch (error) {
     next(error);
@@ -1270,6 +1341,20 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
       await client.query(`delete from training_load.external_schedule_targets where schedule_id = $1`, [schedule.id]);
       await insertExternalTargets(client, schedule.id, resolved.targets);
     }
+    if (body.notificationRules !== undefined) {
+      // Unlike create (where an omitted field means "use the defaults"),
+      // PATCH omitting the field entirely means "leave rules untouched" -
+      // only entering this branch at all means the coach actually sent a
+      // new array, replaced wholesale (same "touched if present" rule as
+      // targets above).
+      const resolvedRules = resolveValidNotificationRules(body.notificationRules);
+      if (!resolvedRules.ok) {
+        await client.query("rollback");
+        return res.status(400).json({ error: resolvedRules.error });
+      }
+      await client.query(`delete from training_load.external_schedule_notification_rules where schedule_id = $1`, [schedule.id]);
+      await insertNotificationRules(client, schedule.id, resolvedRules.rules);
+    }
     await client.query("commit");
     const freshResult = await query(`select * from training_load.external_schedules where id = $1`, [schedule.id]);
     res.json({ schedule: formatExternalScheduleRow(freshResult.rows[0]) });
@@ -1328,6 +1413,10 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
       `select target_kind, target_athlete_id, target_team_id, target_club_id from training_load.external_schedule_targets where schedule_id = $1`,
       [source.id],
     );
+    const sourceRulesResult = await query(
+      `select kind, enabled, reminder_offset_minutes from training_load.external_schedule_notification_rules where schedule_id = $1`,
+      [source.id],
+    );
 
     await client.query("begin");
     const schedule = await insertExternalSchedule(client, {
@@ -1351,6 +1440,12 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
         [schedule.id, t.target_kind, t.target_athlete_id, t.target_team_id, t.target_club_id],
       );
     }
+    // "Copies all settings" (per spec) includes the source's own
+    // notification configuration - if the source has no rows (never
+    // configured), the new schedule also starts with none, read by the
+    // worker as enabled=true, matching the source's own current effective
+    // behavior exactly.
+    await insertNotificationRules(client, schedule.id, sourceRulesResult.rows.map((r) => ({ kind: r.kind, enabled: r.enabled, reminderOffsetMinutes: r.reminder_offset_minutes })));
     await client.query("commit");
     res.status(201).json({ schedule: formatExternalScheduleRow(schedule) });
   } catch (error) {

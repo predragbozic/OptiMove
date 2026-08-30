@@ -344,6 +344,36 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  if (type === "training-load-toggle-notifications-section") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    form.notificationsSectionOpen = !form.notificationsSectionOpen;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-notification-rule-toggle") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    const kind = action.dataset.kind;
+    let rule = form.notificationRules.find((r) => r.kind === kind);
+    if (!rule) {
+      rule = { kind, enabled: false, reminderOffsetMinutes: kind === "athlete_reminder" ? 60 : null };
+      form.notificationRules.push(rule);
+    }
+    rule.enabled = !rule.enabled;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-notification-offset-input") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    const raw = Number(action.value ?? action.target?.value);
+    const rule = form.notificationRules.find((r) => r.kind === "athlete_reminder");
+    if (rule && Number.isFinite(raw) && raw > 0) rule.reminderOffsetMinutes = Math.trunc(raw);
+    // No re-render - a live-typed number input, same "never fight the
+    // user's own cursor/keystrokes" rule the note/name fields follow.
+    return true;
+  }
 
   // -------------------- New RPE session: calendar (click-only, no drag) --------------------
 
@@ -613,6 +643,7 @@ function buildExternalScheduleBody(form) {
     opensTime: form.opensTime,
     closesTime: form.closesTime,
     targets: buildExternalTargetsPayload(form),
+    notificationRules: form.notificationRules.map((r) => ({ kind: r.kind, enabled: r.enabled, reminderOffsetMinutes: r.kind === "athlete_reminder" ? r.reminderOffsetMinutes : undefined })),
   };
   if (form.scheduleKind === "specific_dates") return { ...base, dates: form.selectedDates.slice() };
   if (form.scheduleKind === "daily") return { ...base, scheduleKind: "recurring", startDate: form.startDate, endDate: form.endDate };
@@ -668,6 +699,15 @@ async function openExternalScheduleDetail(scheduleId, renderTrainingLoad) {
   renderTrainingLoad();
 }
 
+// Falls back to the same 3-rule defaults a brand-new form starts with -
+// only reachable for a schedule that predates the real create route ever
+// inserting rows (a raw fixture/older schedule), matching the worker's
+// own "absent row = enabled" reading exactly.
+function notificationRulesFromApi(rules) {
+  if (Array.isArray(rules) && rules.length) return rules.map((r) => ({ kind: r.kind, enabled: r.enabled, reminderOffsetMinutes: r.reminderOffsetMinutes }));
+  return emptyExternalScheduleForm().notificationRules;
+}
+
 async function openEditExternalSchedule(scheduleId, renderTrainingLoad) {
   const data = await loadExternalScheduleDetail(scheduleId).catch(() => null);
   if (!data) return;
@@ -686,6 +726,7 @@ async function openEditExternalSchedule(scheduleId, renderTrainingLoad) {
     timezone,
     calendarOpen: false,
     calendarMonth: localMonthIsoInTimeZone(timezone),
+    notificationRules: notificationRulesFromApi(data.notificationRules),
   });
   applyTargetsToForm(form, targets);
   state.trainingLoad.scheduleForm = form;
@@ -710,6 +751,7 @@ async function openExternalScheduleAgain(scheduleId, renderTrainingLoad) {
     timezone,
     calendarOpen: true,
     calendarMonth: localMonthIsoInTimeZone(timezone),
+    notificationRules: notificationRulesFromApi(data.notificationRules),
   });
   state.trainingLoad.scheduleForm = form;
   state.trainingLoad.scheduleDetail = null;

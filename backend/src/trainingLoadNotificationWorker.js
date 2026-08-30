@@ -72,6 +72,8 @@ async function runAthleteInvitationPhase(pool, now, summary) {
      join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
      join training_load.external_schedules sch on sch.id = o.schedule_id
      join public.athletes a on a.id = asg.athlete_id
+     left join training_load.external_schedule_notification_rules nr
+       on nr.schedule_id = sch.id and nr.kind = 'athlete_invitation'
      where sch.status = 'active'
        and o.status <> 'cancelled'
        -- Only a genuinely actionable assignment gets invited -
@@ -80,7 +82,12 @@ async function runAthleteInvitationPhase(pool, now, summary) {
        -- for RPE" invitation either (hardening correction).
        and asg.status in ('pending', 'open', 'in_progress')
        and asg.opens_at <= $1
-       and asg.closes_at >= $1`,
+       and asg.closes_at >= $1
+       -- No row for this schedule+kind = "never configured" = the
+       -- CURRENT (pre-config) always-on behavior, never a silent
+       -- behavior change for a schedule created before this migration or
+       -- outside the real create route.
+       and coalesce(nr.enabled, true)`,
     [now],
   );
   for (const row of result.rows) {
@@ -111,7 +118,12 @@ async function runAthleteInvitationPhase(pool, now, summary) {
   }
 }
 
-const REMINDER_OFFSET_MINUTES = 60;
+// Fallback only, when a schedule has no athlete_reminder row at all (never
+// configured - see this migration's own "absent row = current always-on
+// behavior" note). A schedule created through the real form always has an
+// explicit row (defaulting to this exact same value), so this constant is
+// only ever reached by a fixture/schedule that bypassed the create route.
+const DEFAULT_REMINDER_OFFSET_MINUTES = 60;
 
 async function runAthleteReminderPhase(pool, now, summary) {
   const result = await pool.query(
@@ -122,6 +134,8 @@ async function runAthleteReminderPhase(pool, now, summary) {
      join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
      join training_load.external_schedules sch on sch.id = o.schedule_id
      join public.athletes a on a.id = asg.athlete_id
+     left join training_load.external_schedule_notification_rules nr
+       on nr.schedule_id = sch.id and nr.kind = 'athlete_reminder'
      where sch.status = 'active'
        and o.status <> 'cancelled'
        -- Same actionable-only rule as the invitation phase above -
@@ -133,8 +147,9 @@ async function runAthleteReminderPhase(pool, now, summary) {
        and asg.status in ('pending', 'open', 'in_progress')
        and asg.opens_at <= $1
        and asg.closes_at >= $1
-       and coalesce(asg.due_at, asg.closes_at) - ($2 || ' minutes')::interval <= $1`,
-    [now, REMINDER_OFFSET_MINUTES],
+       and coalesce(nr.enabled, true)
+       and coalesce(asg.due_at, asg.closes_at) - (coalesce(nr.reminder_offset_minutes, $2) || ' minutes')::interval <= $1`,
+    [now, DEFAULT_REMINDER_OFFSET_MINUTES],
   );
   for (const row of result.rows) {
     summary.reminders.attempted += 1;
@@ -190,8 +205,11 @@ async function runFinalDigestPhase(pool, now, summary) {
      from training_load.external_schedule_occurrences o
      join training_load.external_schedules sch on sch.id = o.schedule_id
      join training_load.external_assignments asg on asg.occurrence_id = o.id
+     left join training_load.external_schedule_notification_rules nr
+       on nr.schedule_id = sch.id and nr.kind = 'final_digest'
      where sch.status <> 'cancelled'
        and o.status <> 'cancelled'
+       and coalesce(nr.enabled, true)
      group by o.id, sch.id, sch.event_name, sch.created_by_user_id
      having max(asg.closes_at) <= $1`,
     [now],

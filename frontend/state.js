@@ -527,6 +527,19 @@ export const emptyExternalScheduleForm = (overrides = {}) => ({
   teamIds: [],
   athleteIds: [],
   athleteSearch: "",
+  // "Notify when open" / "Remind incomplete" (+ its own offset) / "Final
+  // summary" - the real, per-schedule config the worker itself now reads
+  // (see migrations_v2/202609020900_training_load_v7...). Visible MVP
+  // defaults for a NEW schedule: all three on, reminder at 60 minutes -
+  // the coach sees these checked and can change any of them before
+  // saving, never a hidden backend default they never see. Collapsed by
+  // default, same compaction convention as Advanced settings.
+  notificationsSectionOpen: false,
+  notificationRules: [
+    { kind: "athlete_invitation", enabled: true, reminderOffsetMinutes: null },
+    { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 60 },
+    { kind: "final_digest", enabled: true, reminderOffsetMinutes: null },
+  ],
   submitting: false,
   error: "",
   ...overrides,

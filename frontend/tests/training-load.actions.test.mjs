@@ -52,9 +52,10 @@ const {
   renderTrainingLoadSessionListHtml,
   renderTrainingLoadFilterPickerHtml,
   renderRpeFormHtml,
+  renderExternalScheduleFormHtml,
   isRpeFormValid,
 } = await import("../training-load-view.js");
-const { emptyTrainingLoadState, emptyRpeForm, state } = await import("../state.js");
+const { emptyTrainingLoadState, emptyRpeForm, emptyExternalScheduleForm, state } = await import("../state.js");
 
 function fakeAction(dataset, value) {
   return { dataset, value };
@@ -926,4 +927,68 @@ test("Q7. the 'Outside plan' tag renders in the Home card's single-session copy,
 test("Q8. the Home card click target uses the external assignment id, not a blank sessionId, when the single unrated session is outside-plan", () => {
   const html = renderTrainingLoadHomeCardHtml({ date: "2026-08-24", sessions: [externalSession({ externalAssignmentId: "asg-9" })] });
   assert.ok(html.includes('data-session-id="asg-9"'));
+});
+
+// ------------------------------------------------------------
+// R. "New RPE session" form: real, per-schedule Notifications config -
+// no longer a static, unconditional "athletes are notified" claim.
+// ------------------------------------------------------------
+
+test("R1. the Notifications section summary reflects the current on/off count, and expands to show all three switches plus the reminder offset", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({ notificationsSectionOpen: true });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes("All on"), "all three defaults are enabled");
+  assert.ok(html.includes("Notify when open") && html.includes("Remind incomplete") && html.includes("Final summary when it closes"));
+  assert.ok(html.includes('data-action="training-load-notification-offset-input"'), "the reminder offset input must show while the reminder switch is on");
+});
+
+test("R2. collapsed by default, the summary still reflects a partial on/off mix", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    notificationsSectionOpen: false,
+    notificationRules: [
+      { kind: "athlete_invitation", enabled: false, reminderOffsetMinutes: null },
+      { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 60 },
+      { kind: "final_digest", enabled: true, reminderOffsetMinutes: null },
+    ],
+  });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes("2/3 on"));
+  assert.ok(!html.includes('data-action="training-load-notification-offset-input"'), "collapsed - the individual switches/offset input must not render at all");
+});
+
+test("R3. toggling a notification switch flips only that kind's own enabled flag", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-notification-rule-toggle", kind: "athlete_invitation" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.equal(form.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, false);
+  assert.equal(form.notificationRules.find((r) => r.kind === "athlete_reminder").enabled, true, "toggling one kind must never affect the others");
+});
+
+test("R4. changing the reminder offset input updates only the athlete_reminder rule's own offset, with no full re-render", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-notification-offset-input" }, "15"), { renderTrainingLoad });
+  const rule = state.trainingLoad.scheduleForm.notificationRules.find((r) => r.kind === "athlete_reminder");
+  assert.equal(rule.reminderOffsetMinutes, 15);
+  assert.equal(renderCount, 0);
+});
+
+test("R5. a schedule submit body includes the current notificationRules array, keyed by kind", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    eventName: "Camp", opensTime: "06:00", closesTime: "20:00", scheduleKind: "specific_dates", selectedDates: ["2026-08-24"],
+    athleteIds: ["ath-1"],
+  });
+  state.trainingLoad.scheduleForm.notificationRules.find((r) => r.kind === "athlete_invitation").enabled = false;
+  installFetchMock((call) => (call.method === "POST" && call.url === "/api/training-load/external-schedules" ? { status: 201, body: { schedules: [{ id: "sched-9" }] } } : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const createCall = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules");
+  assert.ok(createCall, "expected the create request to have been sent");
+  const rules = createCall.body.notificationRules;
+  assert.equal(rules.find((r) => r.kind === "athlete_invitation").enabled, false);
+  assert.equal(rules.find((r) => r.kind === "athlete_reminder").reminderOffsetMinutes, 60);
 });

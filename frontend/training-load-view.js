@@ -928,6 +928,60 @@ function renderExternalRecipientPickerHtml(form) {
 }
 
 // ------------------------------------------------------------
+// Notifications (per-schedule config the worker itself reads - see
+// migrations_v2/202609020900_training_load_v7...). No coach "live digest"
+// kind here - unlike WELLNESS, training_load's own GET /weekly already
+// shows an occurrence's current state live, so a redundant live-digest
+// notification was never part of this feature's design.
+// ------------------------------------------------------------
+
+function notificationRuleFor(form, kind) {
+  return form.notificationRules.find((r) => r.kind === kind) || { kind, enabled: false, reminderOffsetMinutes: null };
+}
+
+function notificationsSummary(form) {
+  const on = ["athlete_invitation", "athlete_reminder", "final_digest"].filter((k) => notificationRuleFor(form, k).enabled).length;
+  return on === 3 ? "All on" : on === 0 ? "All off" : `${on}/3 on`;
+}
+
+function renderNotificationSwitchRowHtml({ kind, label, checked }) {
+  return `
+    <div class="tests-notification-row">
+      <button type="button" class="tests-notification-switch ${checked ? "is-on" : ""}" role="switch" aria-checked="${checked ? "true" : "false"}" aria-label="${escapeAttr(label)}" data-action="training-load-notification-rule-toggle" data-kind="${kind}">
+        <span class="tests-notification-switch-knob" aria-hidden="true"></span>
+      </button>
+      <span class="tests-notification-row-label">${escapeHtml(label)}</span>
+    </div>
+  `;
+}
+
+function renderExternalNotificationsSectionHtml(form) {
+  const invitation = notificationRuleFor(form, "athlete_invitation");
+  const reminder = notificationRuleFor(form, "athlete_reminder");
+  const finalDigest = notificationRuleFor(form, "final_digest");
+  return `
+    <div class="tests-collapsible-section">
+      <button type="button" class="tests-calendar-open-toggle tests-collapsible-toggle" data-action="training-load-toggle-notifications-section" aria-expanded="${form.notificationsSectionOpen ? "true" : "false"}">
+        <span class="tests-collapsible-label">Notifications <span class="tests-collapsible-summary">&middot; ${escapeHtml(notificationsSummary(form))}</span></span>
+        <span class="tests-calendar-toggle-caret">${form.notificationsSectionOpen ? "&#9650;" : "&#9660;"}</span>
+      </button>
+      ${form.notificationsSectionOpen ? `
+        ${renderNotificationSwitchRowHtml({ kind: "athlete_invitation", label: "Notify when open", checked: invitation.enabled })}
+        ${renderNotificationSwitchRowHtml({ kind: "athlete_reminder", label: "Remind incomplete", checked: reminder.enabled })}
+        ${reminder.enabled ? `
+        <div class="tests-notification-inline-control">
+          <span>Remind</span>
+          <input type="number" min="1" step="1" class="tests-notification-offset-input" value="${escapeAttr(reminder.reminderOffsetMinutes || 60)}" data-action="training-load-notification-offset-input" aria-label="Minutes before closes_at">
+          <span>min before close</span>
+        </div>
+        ` : ""}
+        ${renderNotificationSwitchRowHtml({ kind: "final_digest", label: "Final summary when it closes", checked: finalDigest.enabled })}
+      ` : ""}
+    </div>
+  `;
+}
+
+// ------------------------------------------------------------
 // The create/edit/schedule-again form itself.
 // ------------------------------------------------------------
 
@@ -989,7 +1043,7 @@ export function renderExternalScheduleFormHtml() {
           <span>Note (optional)</span>
           <textarea name="eventNote" data-action="training-load-schedule-form-field" placeholder="Anything athletes should know">${escapeHtml(form.eventNote)}</textarea>
         </label>
-        <p class="muted">Athletes are notified when it opens, and reminded automatically if they haven't answered yet.</p>
+        ${renderExternalNotificationsSectionHtml(form)}
         <div class="tests-collapsible-section">
           <button type="button" class="tests-calendar-open-toggle tests-collapsible-toggle" data-action="training-load-toggle-advanced-settings" aria-expanded="${form.advancedSettingsOpen ? "true" : "false"}">
             <span class="tests-collapsible-label">Advanced settings</span>
