@@ -1545,10 +1545,7 @@ test("L3. Schedule again on a 'dates' schedule requires a genuinely NEW set of d
   const originalId = created.body.schedules[0].id;
 
   const missingDates = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, { method: "POST", cookie: coachCookie, body: {} });
-  assert.equal(missingDates.status, 400, "Schedule again on a 'dates' source with no new dates supplied must be a controlled 400, never silently reuse the original's own dates");
-
-  const staleStartDateOnly = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, { method: "POST", cookie: coachCookie, body: { startDate: addDaysIso(TODAY, 30) } });
-  assert.equal(staleStartDateOnly.status, 400, "a bare startDate (the one_time/recurring shape) must never be accepted as a substitute for a real dates[] array on a 'dates' source");
+  assert.equal(missingDates.status, 400, "Schedule again with no new dates AND no startDate supplied must be a controlled 400, never silently reuse the original's own dates");
 
   const newDates = [addDaysIso(TODAY, 30), addDaysIso(TODAY, 31), addDaysIso(TODAY, 45)];
   const again = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, { method: "POST", cookie: coachCookie, body: { dates: newDates } });
@@ -1572,4 +1569,343 @@ test("L4. PATCH rejects an attempt to change endDate on a 'dates' schedule with 
   assert.equal(res.status, 400, `expected a controlled 400, got ${res.status}: ${JSON.stringify(res.body)}`);
   const unchanged = (await query(`select end_date::text as d from training_load.external_schedules where id = $1`, [scheduleId])).rows[0].d;
   assert.equal(unchanged, addDaysIso(TODAY, 2), "end_date (the max of this schedule's own dates) must be completely unaffected by the rejected PATCH");
+});
+
+// ------------------------------------------------------------
+// M. Limited final hardening pass, after a real read of the code found:
+// (1) Schedule again silently discarded every displayed-editable field
+//     except the date; (2) Edit's fallback timezone was a fake control,
+//     same for startDate/dates/scheduleKind; (3) several DB CHECK-
+//     constraint relationships (opens/due/closes, endDate/startDate,
+//     reminderOffsetMinutes overflow) could still reach Postgres as a
+//     raw 500, and the manual reminder route had two lingering
+//     unvalidated-input gaps of its own; (4) pause/resume/cancel raced
+//     unlocked; (5) workspace scope was resolved more than once per
+//     request in two places, and a platform-created schedule collided
+//     with a private-coach one; (6) a partially-configured
+//     notificationRules array read as "off" in the UI but "on" in the
+//     worker.
+// ------------------------------------------------------------
+
+test("M1. Schedule again actually applies EVERY displayed-editable field to the new schedule - name, type, times, note, timezone, targets, notification rules - never just the date, and the original is completely untouched", async () => {
+  const groupA = await makeClubWithAthletes("m1a", 1);
+  const groupB = await makeClubWithAthletes("m1b", 1);
+  // Same coach manages both clubs, acting from Club A's workspace for
+  // this whole test - so a Club-A-only target is what "the source's own
+  // targets" means here; the NEW schedule below deliberately re-targets
+  // within that same reachable set (a genuinely different athlete
+  // requires a genuinely different workspace, covered separately by M2).
+  await grantClubAdmin(groupA.coachId, groupB.clubId);
+  await setActiveWorkspace(groupA.coachId, "club", groupA.clubId);
+  const secondAthleteInA = await makeAthlete({ name: "M1 Second Athlete" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [secondAthleteInA, groupA.clubId]);
+
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: groupA.coachCookie,
+    body: scheduleBody({
+      eventName: "Original camp", eventType: "individual", opensTime: "06:00", closesTime: "20:00", eventNote: "orig note", timezone: "UTC",
+      targets: [{ kind: "athlete", id: groupA.athletes[0].athleteId }],
+      notificationRules: [{ kind: "athlete_invitation", enabled: false }, { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 30 }, { kind: "final_digest", enabled: false }],
+    }),
+  });
+  const originalId = created.body.schedules[0].id;
+
+  const again = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, {
+    method: "POST", cookie: groupA.coachCookie,
+    body: {
+      eventName: "Renamed camp", eventType: "match", opensTime: "08:00", closesTime: "18:00", eventNote: "a genuinely new note", timezone: "Europe/Belgrade",
+      startDate: addDaysIso(TODAY, 30),
+      targets: [{ kind: "athlete", id: secondAthleteInA }],
+      notificationRules: [{ kind: "athlete_invitation", enabled: true }, { kind: "athlete_reminder", enabled: false, reminderOffsetMinutes: 60 }, { kind: "final_digest", enabled: true }],
+    },
+  });
+  assert.equal(again.status, 201, `expected 201, got ${again.status}: ${JSON.stringify(again.body)}`);
+  const newId = again.body.schedule.id;
+
+  const newDetail = await api(`/api/training-load/external-schedules/${newId}`, { cookie: groupA.coachCookie });
+  assert.equal(newDetail.body.schedule.eventName, "Renamed camp");
+  assert.equal(newDetail.body.schedule.eventType, "match");
+  assert.equal(newDetail.body.schedule.opensTime.slice(0, 5), "08:00");
+  assert.equal(newDetail.body.schedule.closesTime.slice(0, 5), "18:00");
+  assert.equal(newDetail.body.schedule.eventNote, "a genuinely new note");
+  assert.equal(newDetail.body.schedule.timezone, "Europe/Belgrade");
+  assert.equal(newDetail.body.targets.length, 1);
+  assert.equal(newDetail.body.targets[0].athleteId, secondAthleteInA, "the NEW target must actually be used, not the original's");
+  assert.equal(newDetail.body.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, true);
+  assert.equal(newDetail.body.notificationRules.find((r) => r.kind === "athlete_reminder").enabled, false);
+
+  const originalDetail = await api(`/api/training-load/external-schedules/${originalId}`, { cookie: groupA.coachCookie });
+  assert.equal(originalDetail.body.schedule.eventName, "Original camp", "the original must be completely untouched by Schedule again");
+  assert.equal(originalDetail.body.schedule.eventNote, "orig note");
+  assert.equal(originalDetail.body.schedule.timezone, "UTC");
+  assert.equal(originalDetail.body.targets[0].athleteId, groupA.athletes[0].athleteId);
+});
+
+test("M2. Schedule again omitting targets falls back to the source's own - but they are ALWAYS re-validated against the current active workspace, never silently copied unchecked; a target that has since left it is a controlled 403 with nothing created", async () => {
+  const { coachCookie, coachId, clubId, athletes } = await makeClubWithAthletes("m2", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const originalId = created.body.schedules[0].id;
+
+  // The target's own membership is removed AFTER the schedule was
+  // created - it's no longer inside the coach's own active workspace.
+  await query(`update public.athlete_memberships set status = 'inactive' where athlete_id = $1 and club_id = $2`, [athletes[0].athleteId, clubId]);
+
+  const before = (await query(`select count(*)::int as n from training_load.external_schedules`)).rows[0].n;
+  const again = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, {
+    method: "POST", cookie: coachCookie, body: { startDate: addDaysIso(TODAY, 10) },
+  });
+  assert.equal(again.status, 403, `a target that left the active workspace must never be silently copied over - expected 403, got ${again.status}: ${JSON.stringify(again.body)}`);
+  const after = (await query(`select count(*)::int as n from training_load.external_schedules`)).rows[0].n;
+  assert.equal(after, before, "nothing must be created when the fallback-copied target fails re-validation");
+});
+
+test("M3. Schedule again is free to pick a DIFFERENT kind than the source in both directions - a 'dates' source can become Daily, and a one_time/recurring source can become Dates - never stuck re-requiring the ORIGINAL kind's own payload shape", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m3", 1);
+  const datesSource = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ dates: [TODAY, addDaysIso(TODAY, 3)], targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const datesSourceId = datesSource.body.schedules[0].id;
+  const toDaily = await api(`/api/training-load/external-schedules/${datesSourceId}/schedule-again`, {
+    method: "POST", cookie: coachCookie, body: { scheduleKind: "recurring", startDate: addDaysIso(TODAY, 30), endDate: addDaysIso(TODAY, 44) },
+  });
+  assert.equal(toDaily.status, 201, `expected 201, got ${toDaily.status}: ${JSON.stringify(toDaily.body)}`);
+  assert.equal(toDaily.body.schedule.scheduleKind, "recurring", "a 'dates' source must be free to become Daily, not stuck re-requiring a dates[] array");
+
+  const oneTimeSource = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const oneTimeSourceId = oneTimeSource.body.schedules[0].id;
+  const toDates = await api(`/api/training-load/external-schedules/${oneTimeSourceId}/schedule-again`, {
+    method: "POST", cookie: coachCookie, body: { dates: [addDaysIso(TODAY, 60), addDaysIso(TODAY, 61)] },
+  });
+  assert.equal(toDates.status, 201, `expected 201, got ${toDates.status}: ${JSON.stringify(toDates.body)}`);
+  assert.equal(toDates.body.schedule.scheduleKind, "dates", "a one_time source must be free to become Dates, not stuck re-requiring the original's own single-date shape");
+});
+
+test("M4. PATCH timezone genuinely applies (a real, working control, not a fake one) - it only ever affects a future, not-yet-materialized assignment; an assignment already materialized keeps its own frozen snapshot untouched", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m4", 1, { deviceTimezone: null });
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ timezone: "UTC", opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  // Materializes TODAY's assignment for real, via the athlete's own
+  // device_timezone (null) falling back to the schedule's own 'UTC'.
+  const today = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  assert.ok(today.body.sessions.some((s) => s.source === "scheduled_external"), "expected a real materialized assignment for today");
+  const beforeTimezone = (await query(`select timezone from training_load.external_assignments where athlete_id = $1`, [athletes[0].athleteId])).rows[0].timezone;
+  assert.equal(beforeTimezone, "UTC");
+
+  const patched = await api(`/api/training-load/external-schedules/${scheduleId}`, { method: "PATCH", cookie: coachCookie, body: { timezone: "Pacific/Kiritimati" } });
+  assert.equal(patched.status, 200, `expected 200, got ${patched.status}: ${JSON.stringify(patched.body)}`);
+  assert.equal(patched.body.schedule.timezone, "Pacific/Kiritimati", "the schedule's own fallback timezone must actually change - a real, working control");
+
+  const afterTimezone = (await query(`select timezone from training_load.external_assignments where athlete_id = $1`, [athletes[0].athleteId])).rows[0].timezone;
+  assert.equal(afterTimezone, "UTC", "an ALREADY-materialized assignment's own frozen timezone snapshot must be completely unaffected by a later schedule-level PATCH");
+});
+
+test("M5. PATCH with an invalid (non-IANA) timezone is a controlled 400, never a raw 500", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m5", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}`, { method: "PATCH", cookie: coachCookie, body: { timezone: "Not/A_Real_Zone" } });
+  assert.equal(res.status, 400, `expected a controlled 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+});
+
+test("M6. PATCH rejects any attempt to change startDate/dates/scheduleKind with a controlled 400, regardless of the schedule's own kind - these are identity, fixed at creation, never silently ignored", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m6", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  for (const body of [{ startDate: addDaysIso(TODAY, 5) }, { dates: [addDaysIso(TODAY, 5)] }, { scheduleKind: "recurring" }]) {
+    const res = await api(`/api/training-load/external-schedules/${scheduleId}`, { method: "PATCH", cookie: coachCookie, body });
+    assert.equal(res.status, 400, `expected a controlled 400 for ${JSON.stringify(body)}, got ${res.status}`);
+  }
+  const unchanged = (await query(`select schedule_kind, start_date::text as sd from training_load.external_schedules where id = $1`, [scheduleId])).rows[0];
+  assert.equal(unchanged.schedule_kind, "one_time");
+  assert.equal(unchanged.sd, TODAY);
+});
+
+test("M7. CREATE validates the DB's own CHECK-constraint RELATIONSHIPS before the transaction starts - opens>closes, due outside opens/closes, and a recurring endDate before startDate are all controlled 400s, never a raw 500", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m7", 1);
+  const targets = [{ kind: "athlete", id: athletes[0].athleteId }];
+
+  const opensAfterCloses = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ opensTime: "20:00", closesTime: "08:00", targets }) });
+  assert.equal(opensAfterCloses.status, 400, `expected 400, got ${opensAfterCloses.status}: ${JSON.stringify(opensAfterCloses.body)}`);
+
+  const dueBeforeOpens = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: { ...scheduleBody({ opensTime: "08:00", closesTime: "20:00", targets }), dueTime: "05:00" } });
+  assert.equal(dueBeforeOpens.status, 400, `expected 400, got ${dueBeforeOpens.status}: ${JSON.stringify(dueBeforeOpens.body)}`);
+
+  const dueAfterCloses = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: { ...scheduleBody({ closesTime: "10:00", targets }), dueTime: "11:00" } });
+  assert.equal(dueAfterCloses.status, 400, `expected 400, got ${dueAfterCloses.status}: ${JSON.stringify(dueAfterCloses.body)}`);
+
+  const endBeforeStart = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ scheduleKind: "recurring", startDate: TODAY, endDate: addDaysIso(TODAY, -5), targets }),
+  });
+  assert.equal(endBeforeStart.status, 400, `expected 400, got ${endBeforeStart.status}: ${JSON.stringify(endBeforeStart.body)}`);
+
+  const count = (await query(`select count(*)::int as n from training_load.external_schedules where created_by_user_id = (select id from public.users where email like 'm7-coach-%')`)).rows[0].n;
+  assert.equal(count, 0, "none of the four rejected requests may have created anything");
+});
+
+test("M8. PATCH validates the SAME relationships on the final, merged values - a lone opensTime edit that lands after the schedule's own EXISTING closesTime is rejected too, not just a request that supplies both fields at once", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m8", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ opensTime: "06:00", closesTime: "10:00", targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}`, { method: "PATCH", cookie: coachCookie, body: { opensTime: "12:00" } });
+  assert.equal(res.status, 400, `expected 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const unchanged = (await query(`select opens_time::text as t from training_load.external_schedules where id = $1`, [scheduleId])).rows[0].t;
+  assert.equal(unchanged.slice(0, 5), "06:00", "the rejected PATCH must never partially apply");
+});
+
+test("M9. a reminderOffsetMinutes value too large to fit a Postgres int column is a controlled 400, never a raw 500", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m9", 1);
+  const res = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }], notificationRules: [{ kind: "athlete_invitation", enabled: true }, { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 99999999999 }, { kind: "final_digest", enabled: true }] }),
+  });
+  assert.equal(res.status, 400, `expected a controlled 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+});
+
+test("M10. the manual reminder route validates scheduleId's own format before any query, and rejects a batch containing a non-string/empty element atomically - never silently filtered out and the rest sent", async () => {
+  const { coachCookie, assignmentId } = await makeReadyAssignment("m10");
+  const malformedScheduleId = await api(`/api/training-load/external-schedules/not-a-uuid/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [assignmentId] } });
+  assert.equal(malformedScheduleId.status, 404, `expected a controlled 404, got ${malformedScheduleId.status}: ${JSON.stringify(malformedScheduleId.body)}`);
+
+  const { scheduleId, assignmentId: assignmentId2 } = await makeReadyAssignment("m10b");
+  for (const badBatch of [[assignmentId2, 123], [assignmentId2, ""], [assignmentId2, null]]) {
+    const res = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: badBatch } });
+    assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(badBatch)}, got ${res.status}: ${JSON.stringify(res.body)}`);
+  }
+  const notificationCount = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1`, [assignmentId2])).rows[0].n;
+  assert.equal(notificationCount, 0, "a non-string/empty element must reject the WHOLE batch, never be silently dropped while the valid id still gets a reminder");
+});
+
+test("M11. a cancel racing a concurrent resume never revives an already-cancelled schedule - cancelled is atomically terminal regardless of which request the server happens to process last", async () => {
+  const { coachCookie, scheduleId } = await makeReadyAssignment("m11");
+  await api(`/api/training-load/external-schedules/${scheduleId}/pause`, { method: "POST", cookie: coachCookie });
+  const [cancelResult, resumeResult] = await Promise.all([
+    api(`/api/training-load/external-schedules/${scheduleId}/cancel`, { method: "POST", cookie: coachCookie }),
+    api(`/api/training-load/external-schedules/${scheduleId}/resume`, { method: "POST", cookie: coachCookie }),
+  ]);
+  const outcomes = [cancelResult.status, resumeResult.status].sort();
+  assert.ok(
+    (outcomes[0] === 200 && outcomes[1] === 200) || (outcomes[0] === 200 && outcomes[1] === 400),
+    `expected two clean outcomes (both succeed serialized, or one succeeds and the loser gets a controlled 400), got ${JSON.stringify(outcomes)}`,
+  );
+  const finalStatus = (await query(`select status from training_load.external_schedules where id = $1`, [scheduleId])).rows[0].status;
+  assert.ok(finalStatus === "cancelled" || finalStatus === "active", `final status must be a real, valid outcome of ONE of the two requests, got ${finalStatus}`);
+  if (cancelResult.status === 200) {
+    assert.equal(finalStatus, "cancelled", "if cancel actually committed, the schedule must be cancelled, never silently revived by a resume that raced it - cancelled is terminal even under a race");
+  }
+});
+
+test("M12. a platform-admin-created schedule is never visible or manageable from the SAME account's own private_coach workspace, even though switching workspace never touches any real role", async () => {
+  const dualRoleUserId = await makeUser({ email: `m12-dual-${Date.now()}@test.local` });
+  await query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [dualRoleUserId]);
+  await query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'independent_coach',true)`, [dualRoleUserId]);
+  const dualRoleCookie = await loginCookie(dualRoleUserId);
+  const targetAthleteId = await makeAthlete({ name: "M12 Target Athlete" });
+
+  await setActiveWorkspace(dualRoleUserId, "platform", null);
+  const created = await api("/api/training-load/external-schedules", { method: "POST", cookie: dualRoleCookie, body: scheduleBody({ targets: [{ kind: "athlete", id: targetAthleteId }] }) });
+  assert.equal(created.status, 201, `expected 201, got ${created.status}: ${JSON.stringify(created.body)}`);
+  const scheduleId = created.body.schedules[0].id;
+  const ownerRow = (await query(`select owner_scope, owner_user_id from training_load.external_schedules where id = $1`, [scheduleId])).rows[0];
+  assert.equal(ownerRow.owner_scope, "system", "a platform-created schedule must be owned by 'system', never 'user' (which is what a private_coach schedule for this SAME account would also look like)");
+  assert.equal(ownerRow.owner_user_id, null);
+
+  await setActiveWorkspace(dualRoleUserId, "private_coach", null);
+  const listAsPrivateCoach = await api("/api/training-load/external-schedules", { cookie: dualRoleCookie });
+  assert.ok(!listAsPrivateCoach.body.schedules.some((s) => s.id === scheduleId), "the platform-created schedule must never leak into this account's own private_coach workspace list");
+  const detailAsPrivateCoach = await api(`/api/training-load/external-schedules/${scheduleId}`, { cookie: dualRoleCookie });
+  assert.equal(detailAsPrivateCoach.status, 404, "detail must 404 too - never manageable from the wrong workspace, even for the SAME account that created it");
+});
+
+test("M13. notificationRules read with identical effective values everywhere - the detail response, a partially-configured schedule's own missing kinds, and Schedule again's own copy - never 'off' in one place and 'on' in another for the exact same underlying state", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("m13", 1);
+  // Only ONE kind explicitly configured - the other two have ZERO rows,
+  // which the worker itself already reads as enabled=true (coalesce(nr.
+  // enabled, true)). The detail response must show the SAME true/60/null
+  // defaults for those two, never a bare/absent entry a naive UI
+  // fallback could misread as "off".
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }], notificationRules: [{ kind: "athlete_reminder", enabled: false, reminderOffsetMinutes: 15 }] }),
+  });
+  assert.equal(created.status, 400, "resolveValidNotificationRules must now reject a PARTIAL array outright, requiring all three kinds whenever the field is sent at all");
+
+  // The only way to genuinely reach a partially-configured schedule now
+  // is a pre-v7 fixture with zero rows for some kind - simulate that
+  // directly, matching how a schedule created before v7 ever shipped
+  // would look today.
+  const fullyValid = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const scheduleId = fullyValid.body.schedules[0].id;
+  await query(`delete from training_load.external_schedule_notification_rules where schedule_id = $1 and kind in ('athlete_invitation', 'final_digest')`, [scheduleId]);
+
+  const detail = await api(`/api/training-load/external-schedules/${scheduleId}`, { cookie: coachCookie });
+  assert.equal(detail.body.notificationRules.length, 3, "the detail response must always normalize to exactly three kinds, never fewer");
+  assert.equal(detail.body.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, true, "a kind with zero DB rows must read back enabled=true - the SAME default the worker itself already applies, never displayed as off");
+  assert.equal(detail.body.notificationRules.find((r) => r.kind === "final_digest").enabled, true);
+
+  const again = await api(`/api/training-load/external-schedules/${scheduleId}/schedule-again`, { method: "POST", cookie: coachCookie, body: { startDate: addDaysIso(TODAY, 20) } });
+  assert.equal(again.status, 201);
+  const newDetail = await api(`/api/training-load/external-schedules/${again.body.schedule.id}`, { cookie: coachCookie });
+  assert.equal(newDetail.body.notificationRules.length, 3, "Schedule again's own copy must also normalize to all three kinds");
+  assert.equal(newDetail.body.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, true, "Schedule again must copy the SAME effective true default, not a bare absent row that could later read as off somewhere else");
+});
+
+test("M14. a real create racing a concurrent workspace switch never ends up with target scope from ONE workspace and owner scope from ANOTHER - the invariant holds under a genuine race, not just by construction", async () => {
+  const groupA = await makeClubWithAthletes("m14a", 1);
+  const groupB = await makeClubWithAthletes("m14b", 1);
+  await grantClubAdmin(groupA.coachId, groupB.clubId);
+  await setActiveWorkspace(groupA.coachId, "club", groupA.clubId);
+
+  // Fired together, genuinely concurrent - a create targeting Club A's
+  // own athlete, racing a real PUT /workspace switch to Club B. Before
+  // this hardening pass, target validation and ownership were resolved
+  // by two INDEPENDENT resolveActiveWorkspace reads, so a switch landing
+  // between them could validate the Club A target against the Club A
+  // workspace but stamp the new row as owned by Club B (or vice versa) -
+  // a self-inconsistent row neither workspace's own scope predicate would
+  // ever produce on its own. The single-read fix makes that structurally
+  // impossible now: whichever workspace the create request actually
+  // observes, its OWN target-scope check and owner-stamp always come
+  // from that exact same read.
+  const [createResult] = await Promise.all([
+    api("/api/training-load/external-schedules", {
+      method: "POST", cookie: groupA.coachCookie,
+      body: scheduleBody({ targets: [{ kind: "athlete", id: groupA.athletes[0].athleteId }] }),
+    }),
+    api("/api/auth/workspace", { method: "PUT", cookie: groupA.coachCookie, body: { type: "club", scopeId: groupB.clubId } }),
+  ]);
+
+  if (createResult.status === 201) {
+    const scheduleId = createResult.body.schedules[0].id;
+    const row = (await query(`select owner_scope, owner_club_id from training_load.external_schedules where id = $1`, [scheduleId])).rows[0];
+    assert.equal(row.owner_scope, "club");
+    assert.equal(row.owner_club_id, groupA.clubId, "the created schedule targeted Club A's own athlete, so it must ALSO be owned by Club A - never Club B's ownership stamped onto a Club-A-validated target");
+  } else {
+    // A 403 (the switch won the race, so target validation itself saw
+    // Club B and rejected the Club A target) is an equally clean,
+    // self-consistent outcome - just not the one asserted above.
+    assert.equal(createResult.status, 403, `expected either a self-consistent 201 or a controlled 403, got ${createResult.status}: ${JSON.stringify(createResult.body)}`);
+  }
 });

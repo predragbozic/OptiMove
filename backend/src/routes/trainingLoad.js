@@ -4,8 +4,8 @@ import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import {
   canManageExternalScheduleInScope,
+  externalScheduleScopeForWorkspace,
   externalScheduleScopeSqlForWorkspace,
-  resolveExternalScheduleOwnerContext,
   resolveExternalScheduleWorkspaceScope,
 } from "../trainingLoadAccess.js";
 import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAthlete, ensureCurrentExternalOccurrencesForCoach } from "../trainingLoadOccurrenceService.js";
@@ -557,6 +557,17 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
 // ------------------------------------------------------------
 async function coachWorkspaceScopeSql(req, alias, startIndex) {
   const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+  return coachWorkspaceScopeSqlForWorkspace(workspace, req, alias, startIndex);
+}
+
+// Same predicate as coachWorkspaceScopeSql, for a caller that has ALREADY
+// resolved the active workspace itself this request - see GET /weekly
+// below, which reuses ONE resolveActiveWorkspace read for both this
+// predicate and its own external-schedule scoping (hardening correction,
+// item 5: two independent reads in the same request could observe a
+// workspace switch landing between them and scope different parts of the
+// SAME response to two different workspaces).
+function coachWorkspaceScopeSqlForWorkspace(workspace, req, alias, startIndex) {
   if (!workspace) return { sql: "and false", params: [] };
   if (workspace.type === "platform") return { sql: "", params: [] };
   if (workspace.type === "club") {
@@ -676,7 +687,16 @@ router.get("/weekly", async (req, res, next) => {
       await ensureCurrentExternalOccurrencesForAthlete(req.authz.athleteId);
     } else {
       if (!requireCoachWorkspace(req, res)) return;
-      const scope = await coachWorkspaceScopeSql(req, "a", 3);
+      // Resolved ONCE and reused for BOTH the athlete-visibility scope
+      // below AND the external-schedule scope/occurrence generation
+      // further down - hardening correction, item 5: this used to call
+      // resolveActiveWorkspace a second, independent time (inside
+      // resolveExternalScheduleWorkspaceScope) later in the same
+      // request, so a workspace switch landing between the two reads
+      // could scope planned/session_feedback rows to workspace A while
+      // generating/scoping external-schedule occurrences for workspace B
+      // in the very same response.
+      const scope = coachWorkspaceScopeSqlForWorkspace(workspace, req, "a", 3);
       scopeSqlLive = scope.sql;
       scopeSqlSf = scope.sql;
       scopeSqlExternal = scope.sql;
@@ -691,7 +711,7 @@ router.get("/weekly", async (req, res, next) => {
       // never every schedule the account could manage across every
       // club/team it happens to hold a role in (see
       // resolveExternalScheduleWorkspaceScope's own header comment).
-      await ensureCurrentExternalOccurrencesForCoach(await resolveExternalScheduleWorkspaceScope(req));
+      await ensureCurrentExternalOccurrencesForCoach(externalScheduleScopeForWorkspace(workspace, req));
     }
 
     const liveResult = await query(
@@ -1035,12 +1055,27 @@ const DEFAULT_NOTIFICATION_RULES = [
   { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 60 },
   { kind: "final_digest", enabled: true, reminderOffsetMinutes: null },
 ];
+// training_load.external_schedule_notification_rules.reminder_offset_minutes
+// is a Postgres `int` column - an offset bigger than this overflows it
+// (22003) as a raw 500, not a controlled 400.
+const POSTGRES_INT_MAX = 2147483647;
 
 // Validates the client's own notificationRules array (if provided at all -
 // omitting the field entirely means "use the defaults", never "disable
 // everything"). Each kind may appear at most once; an unrecognized kind,
 // a non-boolean enabled, or an out-of-range offset is a controlled 400 -
 // never silently dropped or coerced.
+//
+// Hardening correction: a PARTIAL array (some kinds present, the rest
+// omitted) used to leave the omitted kinds with zero DB rows - read by
+// the worker as enabled=true (coalesce(nr.enabled, true)), but by the
+// edit form's own display fallback (notificationRuleFor) as enabled=
+// false once at least one real row existed. Requiring the full set of
+// three kinds whenever the field is sent at all (never a partial one)
+// closes that gap at the API boundary - normalizeNotificationRuleRows
+// below closes the matching read-side gap, so a kind that genuinely has
+// no row (e.g. a schedule created before v7) still reads back with the
+// SAME true/60/null defaults on every path: UI, detail response, worker.
 function resolveValidNotificationRules(rawRules) {
   if (rawRules === undefined) return { ok: true, rules: DEFAULT_NOTIFICATION_RULES };
   if (!Array.isArray(rawRules)) return { ok: false, error: "notificationRules must be an array." };
@@ -1056,17 +1091,15 @@ function resolveValidNotificationRules(rawRules) {
     if (kind === "athlete_reminder") {
       const offsetRaw = raw.reminderOffsetMinutes;
       reminderOffsetMinutes = offsetRaw === undefined || offsetRaw === null ? 60 : offsetRaw;
-      if (!Number.isInteger(reminderOffsetMinutes) || reminderOffsetMinutes <= 0) {
+      if (!Number.isInteger(reminderOffsetMinutes) || reminderOffsetMinutes <= 0 || reminderOffsetMinutes > POSTGRES_INT_MAX) {
         return { ok: false, error: "notificationRules.athlete_reminder.reminderOffsetMinutes must be a positive whole number of minutes." };
       }
     }
     rules.push({ kind, enabled: raw.enabled, reminderOffsetMinutes });
   }
-  // Any kind the client didn't mention keeps the same "not configured yet"
-  // semantics the worker itself already understands - no need to fill in
-  // a default row for it here (a genuinely omitted kind is a real,
-  // distinct client intent, not an oversight - matches WELLNESS's own
-  // "row absent = never touched" convention this form is styled after).
+  if (seen.size !== NOTIFICATION_RULE_KINDS.length) {
+    return { ok: false, error: `notificationRules must include all of: ${NOTIFICATION_RULE_KINDS.join(", ")}.` };
+  }
   return { ok: true, rules };
 }
 
@@ -1081,6 +1114,19 @@ async function insertNotificationRules(client, scheduleId, rules) {
 
 function formatNotificationRuleRow(row) {
   return { kind: row.kind, enabled: row.enabled, reminderOffsetMinutes: row.reminder_offset_minutes };
+}
+
+// Normalizes a possibly-partial (or empty) set of DB rows into all three
+// kinds, filling any missing kind with the exact same true/60/null
+// default resolveValidNotificationRules itself falls back to when the
+// field is omitted entirely on create - the one, single effective
+// semantics every reader (UI, this detail response, the worker) shares.
+function normalizeNotificationRuleRows(rows) {
+  const byKind = new Map(rows.map((row) => [row.kind, row]));
+  return DEFAULT_NOTIFICATION_RULES.map((def) => {
+    const row = byKind.get(def.kind);
+    return row ? formatNotificationRuleRow(row) : { ...def };
+  });
 }
 
 // `datesList` is only ever populated for a schedule_kind='dates' row -
@@ -1176,35 +1222,69 @@ async function insertExternalScheduleDates(client, scheduleId, dates) {
   }
 }
 
+// Shared field validator/resolver for POST create AND POST schedule-again -
+// eliminates the split where schedule-again used to accept only
+// startDate/endDate and blindly copy every other field from the source,
+// silently discarding anything the coach actually changed on a form that
+// showed it as editable (hardening correction, item 1). `fallback` is
+// null for a real create (every field below is required, exactly as
+// before); the SOURCE schedule row for schedule-again (an omitted field
+// falls back to the source's own current value - but scheduleKind/dates
+// are NEVER read from `fallback` at all, only from `body`, via
+// resolveExternalScheduleKindAndDates below - a fresh pick is always
+// required, and the new schedule is free to pick a DIFFERENT kind than
+// the source, closing the "source dates, coach picks Daily" mismatch).
+//
+// Also where the DB's own CHECK-constraint RELATIONSHIPS (opens<=closes,
+// due between opens/closes, end>=start) are validated before the
+// transaction even starts (item 3) - previously only each individual
+// field's own FORMAT was checked, never how they relate to each other,
+// so e.g. opensTime later than closesTime reached the DB as a raw 23514.
+function resolveAndValidateExternalScheduleBody(body, fallback) {
+  const eventName = body.eventName !== undefined ? text(body.eventName) : (fallback ? fallback.event_name : "");
+  if (!eventName || eventName.length > 120) return { ok: false, status: 400, error: "Event name is required (120 characters max)." };
+  const eventNote = body.eventNote !== undefined ? nullableText(body.eventNote) : (fallback ? fallback.event_note : null);
+  if (eventNote && eventNote.length > 500) return { ok: false, status: 400, error: "Note is too long (500 characters max)." };
+  let eventType = fallback ? fallback.event_type : null;
+  if (body.eventType !== undefined) {
+    const eventTypeInput = nullableText(body.eventType);
+    if (eventTypeInput && !EXTERNAL_EVENT_TYPES.includes(eventTypeInput)) return { ok: false, status: 400, error: "Invalid event type." };
+    eventType = eventTypeInput || null;
+  }
+  const timezone = body.timezone !== undefined ? text(body.timezone) : (fallback ? fallback.timezone : "");
+  const opensTime = body.opensTime !== undefined ? text(body.opensTime) : (fallback ? fallback.opens_time : "");
+  const dueTime = body.dueTime !== undefined ? (text(body.dueTime) || null) : (fallback ? fallback.due_time : null);
+  const closesTime = body.closesTime !== undefined ? text(body.closesTime) : (fallback ? fallback.closes_time : "");
+  if (!timezone || !opensTime || !closesTime) return { ok: false, status: 400, error: "Timezone, opens time and closes time are required." };
+  if (!isValidTimeString(opensTime) || !isValidTimeString(closesTime) || (dueTime !== null && !isValidTimeString(dueTime))) {
+    return { ok: false, status: 400, error: "Opens/due/closes time must be a valid HH:MM time." };
+  }
+  if (opensTime > closesTime) return { ok: false, status: 400, error: "Opens time must not be after closes time." };
+  if (dueTime !== null && (dueTime < opensTime || dueTime > closesTime)) {
+    return { ok: false, status: 400, error: "Due time must be between opens time and closes time." };
+  }
+
+  const { scheduleKind, recurrenceRule, startDate, endDate, dates } = resolveExternalScheduleKindAndDates(body);
+  const datesToValidate = scheduleKind === "dates" ? dates : [startDate, ...(endDate ? [endDate] : [])];
+  if (!datesToValidate.length || !startDate) return { ok: false, status: 400, error: "At least one date is required." };
+  if (datesToValidate.some((d) => !isValidGregorianDateString(d))) {
+    return { ok: false, status: 400, error: "Every date must be a valid YYYY-MM-DD date." };
+  }
+  if (scheduleKind === "recurring" && endDate !== null && endDate < startDate) {
+    return { ok: false, status: 400, error: "endDate must not be before startDate." };
+  }
+
+  return { ok: true, eventName, eventType, eventNote, timezone, opensTime, dueTime, closesTime, scheduleKind, recurrenceRule, startDate, endDate, dates };
+}
+
 router.post("/external-schedules", async (req, res, next) => {
   const client = await pool.connect();
   try {
     const scope = await requireExternalScheduleWorkspace(req, res);
     if (!scope) return;
     const body = req.body || {};
-    const eventName = text(body.eventName);
-    if (!eventName || eventName.length > 120) return res.status(400).json({ error: "Event name is required (120 characters max)." });
-    const eventNote = nullableText(body.eventNote);
-    if (eventNote && eventNote.length > 500) return res.status(400).json({ error: "Note is too long (500 characters max)." });
-    const eventTypeInput = nullableText(body.eventType);
-    if (eventTypeInput && !EXTERNAL_EVENT_TYPES.includes(eventTypeInput)) return res.status(400).json({ error: "Invalid event type." });
-    const eventType = eventTypeInput || null;
-    const timezone = text(body.timezone);
-    const opensTime = text(body.opensTime);
-    const dueTime = text(body.dueTime) || null;
-    const closesTime = text(body.closesTime);
-    if (!timezone || !opensTime || !closesTime) {
-      return res.status(400).json({ error: "Timezone, opens time and closes time are required." });
-    }
-    if (!isValidTimeString(opensTime) || !isValidTimeString(closesTime) || (dueTime !== null && !isValidTimeString(dueTime))) {
-      return res.status(400).json({ error: "Opens/due/closes time must be a valid HH:MM time." });
-    }
-    const { scheduleKind, recurrenceRule, startDate, endDate, dates } = resolveExternalScheduleKindAndDates(body);
-    const datesToValidate = scheduleKind === "dates" ? dates : [startDate, ...(endDate ? [endDate] : [])];
-    if (!datesToValidate.length || !startDate) return res.status(400).json({ error: "At least one date is required." });
-    if (datesToValidate.some((d) => !isValidGregorianDateString(d))) {
-      return res.status(400).json({ error: "Every date must be a valid YYYY-MM-DD date." });
-    }
+    const validated = resolveAndValidateExternalScheduleBody(body, null);
+    if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
 
     const resolved = await resolveValidExternalTargets(scope, body.targets);
     if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
@@ -1212,22 +1292,29 @@ router.post("/external-schedules", async (req, res, next) => {
     const resolvedRules = resolveValidNotificationRules(body.notificationRules);
     if (!resolvedRules.ok) return res.status(400).json({ error: resolvedRules.error });
 
-    const owner = await resolveExternalScheduleOwnerContext(req);
+    // Resolved ONCE, inside requireExternalScheduleWorkspace above - never
+    // re-derived from a second resolveActiveWorkspace call later in this
+    // same request (hardening correction, item 5: a workspace switch
+    // landing between two independent reads could validate targets
+    // against workspace A but stamp ownership from workspace B).
+    const owner = scope.ownerContext;
     await client.query("begin");
     // One schedule row regardless of kind - a "Dates" pick of N dates is
     // ONE logical schedule (item 10's own fix), never N independent rows.
     const schedule = await insertExternalSchedule(client, {
-      scheduleKind, timezone, startDate, endDate,
-      recurrenceRule: recurrenceRule ? JSON.stringify(recurrenceRule) : null,
-      opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId: req.user.id, owner,
+      scheduleKind: validated.scheduleKind, timezone: validated.timezone, startDate: validated.startDate, endDate: validated.endDate,
+      recurrenceRule: validated.recurrenceRule ? JSON.stringify(validated.recurrenceRule) : null,
+      opensTime: validated.opensTime, dueTime: validated.dueTime, closesTime: validated.closesTime,
+      eventName: validated.eventName, eventType: validated.eventType, eventNote: validated.eventNote,
+      userId: req.user.id, owner,
     });
-    if (scheduleKind === "dates") await insertExternalScheduleDates(client, schedule.id, dates);
+    if (validated.scheduleKind === "dates") await insertExternalScheduleDates(client, schedule.id, validated.dates);
     await insertExternalTargets(client, schedule.id, resolved.targets);
     await insertNotificationRules(client, schedule.id, resolvedRules.rules);
     await client.query("commit");
     // Still an array in the response - existing/older callers reading
     // schedules[0] keep working unchanged; it's simply always length 1 now.
-    res.status(201).json({ schedules: [formatExternalScheduleRow(schedule, scheduleKind === "dates" ? dates : undefined)] });
+    res.status(201).json({ schedules: [formatExternalScheduleRow(schedule, validated.scheduleKind === "dates" ? validated.dates : undefined)] });
   } catch (error) {
     await client.query("rollback").catch(() => {});
     respondToWriteError(res, next, error);
@@ -1302,7 +1389,7 @@ router.get("/external-schedules/:scheduleId", async (req, res, next) => {
       schedule: formatExternalScheduleRow(schedule, datesResult?.rows.map((r) => r.scheduled_date)),
       targets: targetsResult.rows.map(formatExternalTargetRow),
       occurrences: occurrencesResult.rows.map((row) => ({ id: row.id, scheduledDate: row.scheduled_date, status: row.status, assignmentCount: row.assignment_count, ratedCount: row.rated_count })),
-      notificationRules: notificationRulesResult.rows.map(formatNotificationRuleRow),
+      notificationRules: normalizeNotificationRuleRows(notificationRulesResult.rows),
     });
   } catch (error) {
     next(error);
@@ -1323,12 +1410,30 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
       return res.status(404).json({ error: "Schedule not found." });
     }
     const body = req.body || {};
+    // Hardening correction (item 2): startDate/dates/scheduleKind are
+    // identity, fixed at creation - Schedule again is the only way to
+    // pick a new one. These three used to be silently ignored (PATCH
+    // never read them at all) rather than rejected, the same "control
+    // that looks functional while the backend ignores it" problem the
+    // Edit calendar itself had (item 10) - now a controlled 400, exactly
+    // like the existing endDate-on-a-non-recurring-schedule guard below.
+    if (body.startDate !== undefined || body.dates !== undefined || body.scheduleKind !== undefined) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "startDate/dates/scheduleKind cannot be changed after creation - use Schedule again to pick a new date/kind." });
+    }
     const eventName = body.eventName !== undefined ? text(body.eventName) : schedule.event_name;
     if (!eventName || eventName.length > 120) {
       await client.query("rollback");
       return res.status(400).json({ error: "Event name is required (120 characters max)." });
     }
     const eventNote = body.eventNote !== undefined ? nullableText(body.eventNote) : schedule.event_note;
+    // Hardening correction (item 3): this length check was missing on
+    // PATCH entirely (POST create always had it) - a note over 500
+    // characters reached the DB's own event_note CHECK as a raw 23514.
+    if (eventNote && eventNote.length > 500) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "Note is too long (500 characters max)." });
+    }
     let eventType = schedule.event_type;
     if (body.eventType !== undefined) {
       const eventTypeInput = nullableText(body.eventType);
@@ -1341,6 +1446,27 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
     const opensTime = body.opensTime !== undefined ? text(body.opensTime) : schedule.opens_time;
     const dueTime = body.dueTime !== undefined ? (text(body.dueTime) || null) : schedule.due_time;
     const closesTime = body.closesTime !== undefined ? text(body.closesTime) : schedule.closes_time;
+    // Hardening correction (item 2): the fallback timezone shown on Edit
+    // was fully editable and sent in the PATCH body, but this route never
+    // read it at all - a silently-ignored control, same class of bug as
+    // the old Edit calendar (item 10). A schedule's own timezone column
+    // is only ever a FALLBACK read at MATERIALIZATION time for an athlete
+    // with no device_timezone of their own (see migrations_v2's own
+    // resolve_current_external_target_dates/materialize_external_
+    // assignments_for_occurrence) - changing it here can only ever affect
+    // a future, not-yet-materialized assignment; every already-
+    // materialized external_assignments row already has its OWN frozen
+    // timezone/window snapshot, immutable via its own DB trigger, so
+    // existing assignments are structurally unaffected by this change,
+    // never re-read. An invalid IANA name is rejected by the schedule's
+    // own existing insert/update trigger (validate_external_schedule_
+    // timezone_and_recurrence), mapped to a controlled 400 by
+    // respondToWriteError's P0001 branch below - never a raw 500.
+    const timezone = body.timezone !== undefined ? text(body.timezone) : schedule.timezone;
+    if (body.timezone !== undefined && !timezone) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "timezone must not be empty." });
+    }
     // endDate is only ever a real, meaningful edit for a 'recurring'
     // schedule (extending/shortening its own open-ended window) - for
     // 'one_time'/'dates', start_date/end_date are fixed identity (a
@@ -1350,14 +1476,22 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
     // look like it worked), it's a controlled 400 - same "never leave a
     // control that looks functional while the backend ignores it" rule
     // this whole correction is about, applied at the API boundary too.
+    // scheduleKind/startDate/dates are never accepted here at all (never
+    // read from body anywhere in this route) - the same rule, for the
+    // fields that are already read-only, not just editable-but-ignored.
     if (body.endDate !== undefined && schedule.schedule_kind !== "recurring") {
       await client.query("rollback");
       return res.status(400).json({ error: "endDate can only be changed on a recurring (Daily) schedule." });
     }
     const endDate = body.endDate !== undefined ? (text(body.endDate) || null) : schedule.end_date;
-    // Only a client-SUPPLIED value is validated here - the existing
-    // stored value (read straight from the DB row above when the field
-    // was omitted) was already validated on the request that wrote it.
+    // Only a client-SUPPLIED value's own FORMAT is validated here - the
+    // existing stored value (read straight from the DB row above when a
+    // field was omitted) was already validated on the request that wrote
+    // it. The RELATIONSHIPS between the final, merged values (item 3)
+    // are checked separately right after, regardless of which individual
+    // field actually changed - a lone opensTime edit that now lands
+    // after the UNCHANGED closesTime must be caught here too, not just
+    // when both are supplied in the same request.
     if (
       (body.opensTime !== undefined && !isValidTimeString(opensTime))
       || (body.closesTime !== undefined && !isValidTimeString(closesTime))
@@ -1370,12 +1504,24 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
       await client.query("rollback");
       return res.status(400).json({ error: "endDate must be a valid YYYY-MM-DD date." });
     }
+    if (opensTime > closesTime) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "Opens time must not be after closes time." });
+    }
+    if (dueTime !== null && (dueTime < opensTime || dueTime > closesTime)) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "Due time must be between opens time and closes time." });
+    }
+    if (endDate !== null && endDate < schedule.start_date) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "endDate must not be before startDate." });
+    }
 
     await client.query(
       `update training_load.external_schedules
-       set event_name = $2, event_type = $3, event_note = $4, opens_time = $5, due_time = $6, closes_time = $7, end_date = $8, updated_at = now()
+       set event_name = $2, event_type = $3, event_note = $4, opens_time = $5, due_time = $6, closes_time = $7, end_date = $8, timezone = $9, updated_at = now()
        where id = $1`,
-      [schedule.id, eventName, eventType, eventNote, opensTime, dueTime, closesTime, endDate],
+      [schedule.id, eventName, eventType, eventNote, opensTime, dueTime, closesTime, endDate, timezone],
     );
     if (body.targets !== undefined) {
       const resolved = await resolveValidExternalTargets(scope, body.targets);
@@ -1415,31 +1561,81 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
   }
 });
 
+// Hardening correction (item 4): this used to run an UNLOCKED SELECT,
+// check `status` in JS, then an unconditional UPDATE - no protection
+// against a concurrent request racing between those two steps. A cancel
+// and a resume issued back-to-back could both read the same pre-
+// transition status, and whichever UPDATE happened to commit LAST would
+// win regardless of which the coach actually intended - including
+// reviving an already-cancelled schedule via a late-landing resume. A
+// real row lock (FOR UPDATE) here is the "schedule" step of this
+// feature's own existing lock-order convention (schedule -> occurrence
+// -> assignment, e.g. ensureCurrentExternalOccurrence/the submit route)
+// - this function only ever touches the schedule row itself, so
+// acquiring just that lock fully serializes concurrent status changes.
+// The UPDATE's own `and status <> 'cancelled'` guard then re-asserts the
+// same invariant at the SQL level, not just in JS before it - belt and
+// suspenders, not redundant: the JS check covers the normal case with a
+// clear error message, the WHERE guard covers it even if that check were
+// ever bypassed or reordered by a future edit.
 async function setExternalScheduleStatus(req, res, next, newStatus) {
+  const client = await pool.connect();
   try {
     const scope = await requireExternalScheduleWorkspace(req, res);
     if (!scope) return;
     if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
-    const scheduleResult = await query(`select * from training_load.external_schedules where id = $1`, [req.params.scheduleId]);
+    await client.query("begin");
+    const scheduleResult = await client.query(`select * from training_load.external_schedules where id = $1 for update`, [req.params.scheduleId]);
     const schedule = scheduleResult.rows[0];
-    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) return res.status(404).json({ error: "Schedule not found." });
-    if (schedule.status === "cancelled") return res.status(400).json({ error: "This schedule was already cancelled." });
-    await query(`update training_load.external_schedules set status = $2, updated_at = now() where id = $1`, [schedule.id, newStatus]);
-    const freshResult = await query(`select * from training_load.external_schedules where id = $1`, [schedule.id]);
-    res.json({ schedule: formatExternalScheduleRow(freshResult.rows[0]) });
+    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Schedule not found." });
+    }
+    if (schedule.status === "cancelled") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule was already cancelled." });
+    }
+    const updateResult = await client.query(
+      `update training_load.external_schedules set status = $2, updated_at = now() where id = $1 and status <> 'cancelled' returning *`,
+      [schedule.id, newStatus],
+    );
+    if (!updateResult.rowCount) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule was already cancelled." });
+    }
+    await client.query("commit");
+    res.json({ schedule: formatExternalScheduleRow(updateResult.rows[0]) });
   } catch (error) {
+    await client.query("rollback").catch(() => {});
     next(error);
+  } finally {
+    client.release();
   }
 }
 router.post("/external-schedules/:scheduleId/pause", (req, res, next) => setExternalScheduleStatus(req, res, next, "paused"));
 router.post("/external-schedules/:scheduleId/resume", (req, res, next) => setExternalScheduleStatus(req, res, next, "active"));
 router.post("/external-schedules/:scheduleId/cancel", (req, res, next) => setExternalScheduleStatus(req, res, next, "cancelled"));
 
-// Creates a genuinely NEW schedule seeded from this one's fields/targets -
-// never mutates or reactivates the original (cancelled or not). Copies
-// everything except dates/occurrences/assignments/responses/history, which
-// is exactly why a new startDate (and optional endDate) is required in the
-// request body rather than reused from the source.
+// Creates a genuinely NEW schedule - never mutates or reactivates the
+// original (cancelled or not), and never copies dates/occurrences/
+// assignments/responses/history.
+//
+// Hardening correction (item 1): this used to accept ONLY startDate/
+// endDate and blindly copy every other field straight from the source
+// row - the coach's own Edit form showed name/type/times/note/targets/
+// timezone/notifications as fully editable on THIS same screen, but any
+// change to them was silently discarded, and the source's own targets
+// were re-inserted without re-checking whether they're still inside the
+// coach's currently active workspace. This route now runs the exact same
+// validator as a real create (resolveAndValidateExternalScheduleBody),
+// with the SOURCE row as the fallback for any field the client omits -
+// so every displayed field genuinely applies when changed, an omitted
+// field still round-trips through the same validation the source itself
+// once passed, and scheduleKind/dates are ALWAYS taken fresh from the
+// request (never the source) - a genuinely new pick is required, and the
+// new schedule is free to pick a different kind entirely (closes the old
+// "source is Dates, coach picks Daily" mismatch, where the backend kept
+// silently requiring a dates[] array regardless of what the form showed).
 router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, next) => {
   const client = await pool.connect();
   try {
@@ -1451,68 +1647,54 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
     if (!source || !canManageExternalScheduleInScope(scope, source)) return res.status(404).json({ error: "Schedule not found." });
 
     const body = req.body || {};
-    // A 'dates' source needs a genuinely NEW set of picked dates (never
-    // the original's own dates, and never just a single new startDate) -
-    // everything else keeps the existing startDate/endDate contract.
-    let startDate, endDate, newDates = null;
-    if (source.schedule_kind === "dates") {
-      const datesInput = Array.isArray(body.dates) ? body.dates.map((d) => text(d)).filter(Boolean) : [];
-      if (!datesInput.length) return res.status(400).json({ error: "At least one new date is required." });
-      if (datesInput.some((d) => !isValidGregorianDateString(d))) {
-        return res.status(400).json({ error: "Every date must be a valid YYYY-MM-DD date." });
-      }
-      newDates = Array.from(new Set(datesInput)).sort();
-      startDate = newDates[0];
-      endDate = newDates[newDates.length - 1];
-    } else {
-      startDate = text(body.startDate);
-      if (!startDate) return res.status(400).json({ error: "A new start date is required." });
-      endDate = text(body.endDate) || null;
-      if (!isValidGregorianDateString(startDate) || (endDate !== null && !isValidGregorianDateString(endDate))) {
-        return res.status(400).json({ error: "startDate/endDate must be valid YYYY-MM-DD dates." });
-      }
+    const validated = resolveAndValidateExternalScheduleBody(body, source);
+    if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+
+    // Targets: from the request body if supplied; otherwise fall back to
+    // the source's own current targets - but EITHER WAY, always
+    // re-validated against the request's own active workspace scope, the
+    // exact same check a real create runs. A target that has since left
+    // the active workspace can never be silently copied over unchecked.
+    let targetsInput = body.targets;
+    if (targetsInput === undefined) {
+      const sourceTargetsResult = await query(
+        `select target_kind, target_athlete_id, target_team_id, target_club_id from training_load.external_schedule_targets where schedule_id = $1`,
+        [source.id],
+      );
+      targetsInput = sourceTargetsResult.rows.map((t) => ({ kind: t.target_kind, id: t.target_athlete_id || t.target_team_id || t.target_club_id }));
     }
+    const resolvedTargets = await resolveValidExternalTargets(scope, targetsInput);
+    if (!resolvedTargets.ok) return res.status(resolvedTargets.status).json({ error: resolvedTargets.error });
 
-    const targetsResult = await query(
-      `select target_kind, target_athlete_id, target_team_id, target_club_id from training_load.external_schedule_targets where schedule_id = $1`,
-      [source.id],
-    );
-    const sourceRulesResult = await query(
-      `select kind, enabled, reminder_offset_minutes from training_load.external_schedule_notification_rules where schedule_id = $1`,
-      [source.id],
-    );
+    // Notification rules: same "from body if present, else copy source"
+    // fallback, still fully re-validated either way.
+    let rulesInput = body.notificationRules;
+    if (rulesInput === undefined) {
+      const sourceRulesResult = await query(
+        `select kind, enabled, reminder_offset_minutes from training_load.external_schedule_notification_rules where schedule_id = $1`,
+        [source.id],
+      );
+      rulesInput = normalizeNotificationRuleRows(sourceRulesResult.rows);
+    }
+    const resolvedRules = resolveValidNotificationRules(rulesInput);
+    if (!resolvedRules.ok) return res.status(400).json({ error: resolvedRules.error });
 
+    // Resolved once, inside requireExternalScheduleWorkspace above - see
+    // the matching comment on POST /external-schedules (item 5).
+    const owner = scope.ownerContext;
     await client.query("begin");
     const schedule = await insertExternalSchedule(client, {
-      scheduleKind: source.schedule_kind,
-      timezone: source.timezone,
-      startDate,
-      endDate: source.schedule_kind === "recurring" || source.schedule_kind === "dates" ? endDate : null,
-      recurrenceRule: source.recurrence_rule,
-      opensTime: source.opens_time,
-      dueTime: source.due_time,
-      closesTime: source.closes_time,
-      eventName: source.event_name,
-      eventType: source.event_type,
-      eventNote: source.event_note,
-      userId: req.user.id,
-      owner: { ownerScope: source.owner_scope, ownerUserId: source.owner_user_id, ownerClubId: source.owner_club_id, ownerTeamId: source.owner_team_id },
+      scheduleKind: validated.scheduleKind, timezone: validated.timezone, startDate: validated.startDate, endDate: validated.endDate,
+      recurrenceRule: validated.recurrenceRule ? JSON.stringify(validated.recurrenceRule) : null,
+      opensTime: validated.opensTime, dueTime: validated.dueTime, closesTime: validated.closesTime,
+      eventName: validated.eventName, eventType: validated.eventType, eventNote: validated.eventNote,
+      userId: req.user.id, owner,
     });
-    if (source.schedule_kind === "dates") await insertExternalScheduleDates(client, schedule.id, newDates);
-    for (const t of targetsResult.rows) {
-      await client.query(
-        `insert into training_load.external_schedule_targets (schedule_id, target_kind, target_athlete_id, target_team_id, target_club_id) values ($1,$2,$3,$4,$5)`,
-        [schedule.id, t.target_kind, t.target_athlete_id, t.target_team_id, t.target_club_id],
-      );
-    }
-    // "Copies all settings" (per spec) includes the source's own
-    // notification configuration - if the source has no rows (never
-    // configured), the new schedule also starts with none, read by the
-    // worker as enabled=true, matching the source's own current effective
-    // behavior exactly.
-    await insertNotificationRules(client, schedule.id, sourceRulesResult.rows.map((r) => ({ kind: r.kind, enabled: r.enabled, reminderOffsetMinutes: r.reminder_offset_minutes })));
+    if (validated.scheduleKind === "dates") await insertExternalScheduleDates(client, schedule.id, validated.dates);
+    await insertExternalTargets(client, schedule.id, resolvedTargets.targets);
+    await insertNotificationRules(client, schedule.id, resolvedRules.rules);
     await client.query("commit");
-    res.status(201).json({ schedule: formatExternalScheduleRow(schedule, newDates || undefined) });
+    res.status(201).json({ schedule: formatExternalScheduleRow(schedule, validated.scheduleKind === "dates" ? validated.dates : undefined) });
   } catch (error) {
     await client.query("rollback").catch(() => {});
     respondToWriteError(res, next, error);
@@ -1670,20 +1852,33 @@ const athleteDisplayNameSql = `coalesce(a.display_name, a.full_name, nullif(conc
 // and the same shared public.app_notifications.dedupe_key convention
 // builder.js's own one-shot notifications already use.
 router.post("/external-schedules/:scheduleId/remind", async (req, res, next) => {
-  const rawAssignmentIds = Array.isArray(req.body?.assignmentIds) ? [...new Set(req.body.assignmentIds.filter((id) => typeof id === "string" && id))] : [];
-  const scope = await requireExternalScheduleWorkspace(req, res);
-  if (!scope) return;
-  if (!rawAssignmentIds.length) return res.status(400).json({ error: "assignmentIds is required." });
-  // Hardening correction: every id is validated as a real UUID BEFORE any
-  // transaction/write starts - a single malformed id used to reach an
-  // any($::uuid[]) cast deep inside the locked section below and surface
-  // as a raw Postgres 22P02, after some notifications may already have
-  // been claimed. Reject the WHOLE batch up front instead - zero writes,
-  // never a partial send.
+  // Hardening correction: scheduleId itself used to reach the very first
+  // DB query with no UUID format check at all - a malformed path param
+  // was a raw Postgres 22P02, not the controlled 404 every other route
+  // in this file already gives a malformed id.
+  if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
+
+  // Hardening correction: assignmentIds used to be silently FILTERED
+  // (non-string/empty elements just dropped) before ever being checked
+  // for length or UUID shape - [validUuid, 123] or [validUuid, ""]
+  // quietly became a single-element batch that then succeeded, instead
+  // of the whole malformed request being rejected. Every element's own
+  // TYPE is now checked first (never silently dropped), then every
+  // surviving id's FORMAT, both before any transaction/write starts -
+  // one malformed element rejects the whole batch with zero writes.
+  const rawInput = req.body?.assignmentIds;
+  if (!Array.isArray(rawInput) || !rawInput.length) return res.status(400).json({ error: "assignmentIds is required." });
+  if (rawInput.some((id) => typeof id !== "string" || !id)) {
+    return res.status(400).json({ error: "assignmentIds must all be non-empty strings." });
+  }
+  const rawAssignmentIds = [...new Set(rawInput)];
   if (rawAssignmentIds.some((id) => !UUID_PATTERN.test(id))) {
     return res.status(400).json({ error: "assignmentIds must all be valid UUIDs." });
   }
   const assignmentIds = rawAssignmentIds;
+
+  const scope = await requireExternalScheduleWorkspace(req, res);
+  if (!scope) return;
 
   const client = await pool.connect();
   let results;

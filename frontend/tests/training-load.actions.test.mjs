@@ -1127,3 +1127,93 @@ test("S9. submitting a PATCH while editing a 'dates'-kind schedule never sends d
   assert.equal(call.body.scheduleKind, undefined);
   assert.equal(call.body.eventName, "Renamed camp");
 });
+
+// ------------------------------------------------------------
+// T. A real code read (not just the earlier item-by-item pass) found
+// Schedule again's OWN remaining bug: the form showed name/type/times/
+// note/timezone/targets/notifications as fully editable, but only ever
+// SENT the new date(s) - every other change was silently discarded, and
+// the recipient picker opened with nothing pre-checked even though the
+// backend was about to copy the source's own targets underneath it.
+// ------------------------------------------------------------
+
+test("T1. opening Schedule again pre-loads the ORIGINAL schedule's own targets into the form - the recipient picker must show what's actually about to be copied, never a blank slate", async () => {
+  resetState();
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-1"
+    ? {
+      status: 200,
+      body: {
+        schedule: { id: "sched-1", eventName: "Camp", scheduleKind: "one_time", startDate: "2026-09-01", opensTime: "06:00:00", closesTime: "20:00:00", timezone: "UTC" },
+        targets: [{ kind: "athlete", athleteId: "ath-1", name: "Ana Anić" }, { kind: "club", clubId: "club-1", name: "First Club" }],
+        notificationRules: [],
+      },
+    }
+    : { status: 200, body: { clubs: [], teams: [], athletes: [] } }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-external-schedule-again", scheduleId: "sched-1" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.deepEqual(form.athleteIds, ["ath-1"]);
+  assert.deepEqual(form.clubIds, ["club-1"]);
+});
+
+test("T2. submitting Schedule again sends the FULL current form body - a changed name/type/times/note/timezone/notifications all actually reach the new schedule, never just the new date", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    scheduleAgainFromId: "sched-1",
+    scheduleKind: "one_time",
+    startDate: "2026-10-01",
+    eventName: "Renamed on schedule-again",
+    eventType: "match",
+    opensTime: "07:00",
+    closesTime: "19:00",
+    eventNote: "a brand new note",
+    timezone: "Europe/Belgrade",
+    athleteIds: ["ath-9"],
+  });
+  state.trainingLoad.scheduleForm.notificationRules.find((r) => r.kind === "athlete_invitation").enabled = false;
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-1/schedule-again"
+    ? { status: 201, body: { schedule: { id: "sched-2" } } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const call = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules/sched-1/schedule-again");
+  assert.ok(call, "expected the schedule-again request to have been sent");
+  assert.equal(call.body.eventName, "Renamed on schedule-again", "the changed name must actually be sent, not silently discarded");
+  assert.equal(call.body.eventType, "match");
+  assert.equal(call.body.opensTime, "07:00");
+  assert.equal(call.body.closesTime, "19:00");
+  assert.equal(call.body.eventNote, "a brand new note");
+  assert.equal(call.body.timezone, "Europe/Belgrade");
+  assert.deepEqual(call.body.targets, [{ kind: "athlete", id: "ath-9" }]);
+  assert.equal(call.body.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, false);
+  assert.equal(call.body.startDate, "2026-10-01");
+});
+
+test("T3. editing an existing schedule and changing its fallback timezone actually sends the new value in the PATCH body - the Advanced settings timezone field is a real control", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-1",
+    scheduleKind: "one_time",
+    eventName: "Camp",
+    timezone: "Asia/Tokyo",
+  });
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-1" && call.method === "PATCH"
+    ? { status: 200, body: { schedule: { id: "sched-1" } } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const call = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules/sched-1" && c.method === "PATCH");
+  assert.ok(call, "expected the PATCH request to have been sent");
+  assert.equal(call.body.timezone, "Asia/Tokyo", "a changed fallback timezone must actually be sent to the backend, not silently dropped");
+});
+
+test("T4. the Dates/Daily toggle genuinely works while Schedule again is open (not just while creating) - clicking Daily switches the kind and keeps the real interactive calendar, never the read-only Edit summary", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    scheduleAgainFromId: "sched-1",
+    scheduleKind: "specific_dates",
+    selectedDates: ["2026-09-01"],
+  });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-set-recurrence", daily: "true" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.equal(form.scheduleKind, "daily", "Schedule again must be free to switch kind, exactly like a real create");
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes('data-action="training-load-calendar-day-click"'), "still the real interactive calendar - Schedule again is never treated as Edit's read-only mode");
+});

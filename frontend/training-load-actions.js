@@ -658,13 +658,15 @@ async function submitExternalScheduleForm(renderTrainingLoad) {
   renderTrainingLoad();
   try {
     if (form.scheduleAgainFromId) {
-      // Schedule again only ever needs new date(s) (+ end date if daily) -
-      // the backend copies every other setting/target from the original
-      // itself, never accepts them from this request body. A 'dates'-kind
-      // source needs a genuinely new SET of dates, never a single startDate.
-      await scheduleExternalAgain(form.scheduleAgainFromId, form.scheduleKind === "specific_dates"
-        ? { dates: form.selectedDates.slice() }
-        : { startDate: form.startDate, ...(form.scheduleKind === "daily" ? { endDate: form.endDate } : {}) });
+      // Hardening correction (item 1): this form shows name/type/times/
+      // note/timezone/targets/notifications as fully editable, exactly
+      // like a real create - so it now SENDS the same full body a real
+      // create would (buildExternalScheduleBody), never just the new
+      // date(s). The backend runs the identical validator a real create
+      // does, with the original schedule as the fallback for anything
+      // this form happens to omit - every displayed field the coach
+      // actually changes here now genuinely applies to the new schedule.
+      await scheduleExternalAgain(form.scheduleAgainFromId, buildExternalScheduleBody(form));
     } else if (form.editingScheduleId) {
       const body = buildExternalScheduleBody(form);
       // PATCH never changes an existing schedule's own start date/kind -
@@ -740,7 +742,7 @@ async function openEditExternalSchedule(scheduleId, renderTrainingLoad) {
 async function openExternalScheduleAgain(scheduleId, renderTrainingLoad) {
   const data = await loadExternalScheduleDetail(scheduleId).catch(() => null);
   if (!data) return;
-  const { schedule } = data;
+  const { schedule, targets } = data;
   const timezone = schedule.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const form = emptyExternalScheduleForm({
     scheduleAgainFromId: schedule.id,
@@ -758,9 +760,17 @@ async function openExternalScheduleAgain(scheduleId, renderTrainingLoad) {
     calendarMonth: localMonthIsoInTimeZone(timezone),
     notificationRules: notificationRulesFromApi(data.notificationRules),
   });
+  // Hardening correction (item 1): this used to be missing entirely - the
+  // form opened with every recipient checkbox blank, so it never actually
+  // showed what was about to be copied, and the coach had to re-pick
+  // recipients from scratch even to keep the SAME ones. The source's own
+  // targets still go through the same re-validation as any other change
+  // once submitted (see the backend route) - this only pre-fills the form.
+  applyTargetsToForm(form, targets);
   state.trainingLoad.scheduleForm = form;
   state.trainingLoad.scheduleDetail = null;
   renderTrainingLoad();
+  void loadTrainingLoadOrgPickerData().then(renderTrainingLoad).catch(() => {});
 }
 
 // ------------------------------------------------------------
