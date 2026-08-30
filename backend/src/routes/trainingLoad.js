@@ -2,9 +2,12 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
-import { canAccessAthlete } from "../access.js";
-import { canManageClub, canManageTeamById, isPlatformAdministrator } from "../authz.js";
-import { canManageExternalSchedule, manageableClubIds, manageableTeamIds, resolveExternalScheduleOwnerContext } from "../trainingLoadAccess.js";
+import {
+  canManageExternalScheduleInScope,
+  externalScheduleScopeSqlForWorkspace,
+  resolveExternalScheduleOwnerContext,
+  resolveExternalScheduleWorkspaceScope,
+} from "../trainingLoadAccess.js";
 import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAthlete, ensureCurrentExternalOccurrencesForCoach } from "../trainingLoadOccurrenceService.js";
 import { emitRealtimeEvent } from "../realtime.js";
 
@@ -59,6 +62,24 @@ function requireCoachWorkspace(req, res) {
     return false;
   }
   return true;
+}
+
+// The external-schedule-specific gate: resolves the account's CURRENTLY
+// ACTIVE workspace into the discriminated scope object every schedule
+// CRUD/lifecycle/target-validation function below is threaded through.
+// Unlike requireCoachWorkspace above (a global "does this account hold
+// ANY coach role" check), this returns { type: null } for an athlete
+// workspace even when the same account also holds a real coach role
+// elsewhere - a coach schedule route must be unreachable while presenting
+// as an athlete, full stop. Writes the 403 itself and returns null on
+// failure, matching this file's existing requireX(req,res) convention.
+async function requireExternalScheduleWorkspace(req, res) {
+  const scope = await resolveExternalScheduleWorkspaceScope(req);
+  if (scope.type === null) {
+    res.status(403).json({ error: "Forbidden" });
+    return null;
+  }
+  return scope;
 }
 
 const DATE_STRING_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -634,12 +655,11 @@ router.get("/weekly", async (req, res, next) => {
       scopeSqlSf += extraFragment;
       scopeSqlExternal += extraFragment;
 
-      await ensureCurrentExternalOccurrencesForCoach({
-        userId: req.user.id,
-        clubIds: manageableClubIds(req.authz),
-        teamIds: manageableTeamIds(req.authz),
-        isPlatformAdmin: isPlatformAdministrator(req.authz),
-      });
+      // Only the ACTIVE workspace's own schedules get materialized here -
+      // never every schedule the account could manage across every
+      // club/team it happens to hold a role in (see
+      // resolveExternalScheduleWorkspaceScope's own header comment).
+      await ensureCurrentExternalOccurrencesForCoach(await resolveExternalScheduleWorkspaceScope(req));
     }
 
     const liveResult = await query(
@@ -834,29 +854,6 @@ function respondToWriteError(res, next, error) {
   return next(error);
 }
 
-// Scopes a list/detail query to schedules THIS coach may manage - the
-// list-query equivalent of canManageExternalSchedule's own per-row check.
-// Deliberately never reused for VISIBILITY of an athlete's aggregated
-// training load (GET /weekly's own scopeSqlExternal, which scopes by the
-// assigned athlete's workspace membership instead - see that route's own
-// comment).
-function externalScheduleScopeSql(req) {
-  if (isPlatformAdministrator(req.authz)) return { sql: "true", params: [] };
-  const params = [req.user.id];
-  const parts = [`(s.owner_scope = 'user' and s.owner_user_id = $1)`];
-  const clubIds = manageableClubIds(req.authz) || [];
-  if (clubIds.length) {
-    params.push(clubIds);
-    parts.push(`(s.owner_scope = 'club' and s.owner_club_id = any($${params.length}::uuid[]))`);
-  }
-  const teamIds = manageableTeamIds(req.authz) || [];
-  if (teamIds.length) {
-    params.push(teamIds);
-    parts.push(`(s.owner_scope = 'team' and s.owner_team_id = any($${params.length}::uuid[]))`);
-  }
-  return { sql: `(${parts.join(" or ")})`, params };
-}
-
 // Dedupe by (kind, id) - the same athlete targeted both directly AND via a
 // team/club they belong to is deliberately NOT deduped away here (two
 // genuinely different target rows) - resolve_external_schedule_target_
@@ -877,20 +874,68 @@ function dedupeExternalTargets(rawTargets) {
   return result;
 }
 
-async function validateExternalTarget(req, target) {
-  if (target.kind === "athlete") return canAccessAthlete(query, req, target.id);
-  if (target.kind === "team") return canManageTeamById(req.authz, target.id);
-  if (target.kind === "club") return canManageClub(req.authz, target.id);
+// Workspace-scoped target validation - a target must be reachable from
+// the CURRENTLY ACTIVE workspace, never from the account's full global
+// role set (see trainingLoadAccess.js's own header comment for the exact
+// dual-role bug this closes). Athlete ids here are always the real
+// public.athletes.id UUID the org picker already sends (never the human-
+// readable athlete_id code canAccessAthlete's own fuzzy match supported -
+// insertExternalTargets has only ever stored the raw UUID), so a direct
+// membership-table comparison is both correct and simpler than reusing
+// that fuzzier global helper.
+async function isAthleteInWorkspaceScope(scope, athleteId) {
+  if (scope.type === "platform") {
+    const r = await query(`select 1 from public.athletes where id = $1`, [athleteId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "club") {
+    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'club' and status = 'active' and club_id = $2`, [athleteId, scope.clubId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "team") {
+    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'team' and status = 'active' and team_id = $2`, [athleteId, scope.teamId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "private_coach") {
+    const r = await query(`select 1 from public.user_athletes where athlete_id = $1 and user_id = $2 and is_active = true`, [athleteId, scope.userId]);
+    return r.rowCount > 0;
+  }
+  return false;
+}
+async function isTeamInWorkspaceScope(scope, teamId) {
+  if (scope.type === "platform") {
+    const r = await query(`select 1 from public.teams where id = $1 and coalesce(is_active, true)`, [teamId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "club") {
+    const r = await query(`select 1 from public.teams where id = $1 and club_id = $2 and coalesce(is_active, true)`, [teamId, scope.clubId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "team") return String(teamId) === String(scope.teamId);
+  return false; // private_coach has no team concept to target
+}
+async function isClubInWorkspaceScope(scope, clubId) {
+  if (scope.type === "platform") {
+    const r = await query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)`, [clubId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "club") return String(clubId) === String(scope.clubId);
+  return false; // a team/private_coach workspace can never target a club
+}
+async function validateExternalTargetInScope(scope, target) {
+  if (target.kind === "athlete") return isAthleteInWorkspaceScope(scope, target.id);
+  if (target.kind === "team") return isTeamInWorkspaceScope(scope, target.id);
+  if (target.kind === "club") return isClubInWorkspaceScope(scope, target.id);
   return false;
 }
 
 // The WHOLE request is rejected on the FIRST invalid target - never a
 // partial accepted set (matches tests.js's own resolveValidTargets).
-async function resolveValidExternalTargets(req, rawTargets) {
+async function resolveValidExternalTargets(scope, rawTargets) {
   const targets = dedupeExternalTargets(rawTargets);
   if (!targets.length) return { ok: false, status: 400, error: "Choose at least one athlete, team or club." };
   for (const target of targets) {
-    const allowed = await validateExternalTarget(req, target);
+    const allowed = await validateExternalTargetInScope(scope, target);
     if (!allowed) return { ok: false, status: 403, error: "One of the chosen targets is outside your access." };
   }
   return { ok: true, targets };
@@ -986,7 +1031,8 @@ async function insertExternalSchedule(client, { scheduleKind, timezone, startDat
 router.post("/external-schedules", async (req, res, next) => {
   const client = await pool.connect();
   try {
-    if (!requireCoachWorkspace(req, res)) return;
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
     const body = req.body || {};
     const eventName = text(body.eventName);
     if (!eventName || eventName.length > 120) return res.status(400).json({ error: "Event name is required (120 characters max)." });
@@ -1005,7 +1051,7 @@ router.post("/external-schedules", async (req, res, next) => {
     const { scheduleKind, recurrenceRule, dateSets } = resolveExternalScheduleKindAndDates(body);
     if (dateSets.some((d) => !d.startDate)) return res.status(400).json({ error: "At least one date is required." });
 
-    const resolved = await resolveValidExternalTargets(req, body.targets);
+    const resolved = await resolveValidExternalTargets(scope, body.targets);
     if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
 
     const owner = await resolveExternalScheduleOwnerContext(req);
@@ -1032,10 +1078,11 @@ router.post("/external-schedules", async (req, res, next) => {
 
 router.get("/external-schedules", async (req, res, next) => {
   try {
-    if (!requireCoachWorkspace(req, res)) return;
-    const scope = externalScheduleScopeSql(req);
+    const workspaceScope = await requireExternalScheduleWorkspace(req, res);
+    if (!workspaceScope) return;
+    const params = [];
+    const scopeSql = externalScheduleScopeSqlForWorkspace(workspaceScope, params);
     const statusFilter = text(req.query?.status);
-    const params = [...scope.params];
     let statusSql = "";
     if (["active", "paused", "cancelled"].includes(statusFilter)) {
       params.push(statusFilter);
@@ -1044,7 +1091,7 @@ router.get("/external-schedules", async (req, res, next) => {
     const result = await query(
       `select s.*, (select count(*)::int from training_load.external_schedule_targets t where t.schedule_id = s.id) as target_count
        from training_load.external_schedules s
-       where ${scope.sql} ${statusSql}
+       where ${scopeSql} ${statusSql}
        order by s.start_date desc, s.created_at desc`,
       params,
     );
@@ -1056,11 +1103,12 @@ router.get("/external-schedules", async (req, res, next) => {
 
 router.get("/external-schedules/:scheduleId", async (req, res, next) => {
   try {
-    if (!requireCoachWorkspace(req, res)) return;
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
     if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
     const scheduleResult = await query(`select * from training_load.external_schedules where id = $1`, [req.params.scheduleId]);
     const schedule = scheduleResult.rows[0];
-    if (!schedule || !canManageExternalSchedule(req, schedule)) return res.status(404).json({ error: "Schedule not found." });
+    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) return res.status(404).json({ error: "Schedule not found." });
     const targetsResult = await query(
       `select t.target_kind, t.target_athlete_id, t.target_team_id, t.target_club_id,
               coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
@@ -1095,12 +1143,13 @@ router.get("/external-schedules/:scheduleId", async (req, res, next) => {
 router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
   const client = await pool.connect();
   try {
-    if (!requireCoachWorkspace(req, res)) return;
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
     if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
     await client.query("begin");
     const scheduleResult = await client.query(`select * from training_load.external_schedules where id = $1 for update`, [req.params.scheduleId]);
     const schedule = scheduleResult.rows[0];
-    if (!schedule || !canManageExternalSchedule(req, schedule)) {
+    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
@@ -1132,7 +1181,7 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
       [schedule.id, eventName, eventType, eventNote, opensTime, dueTime, closesTime, endDate],
     );
     if (body.targets !== undefined) {
-      const resolved = await resolveValidExternalTargets(req, body.targets);
+      const resolved = await resolveValidExternalTargets(scope, body.targets);
       if (!resolved.ok) {
         await client.query("rollback");
         return res.status(resolved.status).json({ error: resolved.error });
@@ -1153,11 +1202,12 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
 
 async function setExternalScheduleStatus(req, res, next, newStatus) {
   try {
-    if (!requireCoachWorkspace(req, res)) return;
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
     if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
     const scheduleResult = await query(`select * from training_load.external_schedules where id = $1`, [req.params.scheduleId]);
     const schedule = scheduleResult.rows[0];
-    if (!schedule || !canManageExternalSchedule(req, schedule)) return res.status(404).json({ error: "Schedule not found." });
+    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) return res.status(404).json({ error: "Schedule not found." });
     if (schedule.status === "cancelled") return res.status(400).json({ error: "This schedule was already cancelled." });
     await query(`update training_load.external_schedules set status = $2, updated_at = now() where id = $1`, [schedule.id, newStatus]);
     const freshResult = await query(`select * from training_load.external_schedules where id = $1`, [schedule.id]);
@@ -1178,11 +1228,12 @@ router.post("/external-schedules/:scheduleId/cancel", (req, res, next) => setExt
 router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, next) => {
   const client = await pool.connect();
   try {
-    if (!requireCoachWorkspace(req, res)) return;
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
     if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
     const sourceResult = await query(`select * from training_load.external_schedules where id = $1`, [req.params.scheduleId]);
     const source = sourceResult.rows[0];
-    if (!source || !canManageExternalSchedule(req, source)) return res.status(404).json({ error: "Schedule not found." });
+    if (!source || !canManageExternalScheduleInScope(scope, source)) return res.status(404).json({ error: "Schedule not found." });
 
     const body = req.body || {};
     const startDate = text(body.startDate);
@@ -1349,9 +1400,20 @@ const athleteDisplayNameSql = `coalesce(a.display_name, a.full_name, nullif(conc
 // and the same shared public.app_notifications.dedupe_key convention
 // builder.js's own one-shot notifications already use.
 router.post("/external-schedules/:scheduleId/remind", async (req, res, next) => {
-  const assignmentIds = Array.isArray(req.body?.assignmentIds) ? [...new Set(req.body.assignmentIds.filter((id) => typeof id === "string" && id))] : [];
-  if (!requireCoachWorkspace(req, res)) return;
-  if (!assignmentIds.length) return res.status(400).json({ error: "assignmentIds is required." });
+  const rawAssignmentIds = Array.isArray(req.body?.assignmentIds) ? [...new Set(req.body.assignmentIds.filter((id) => typeof id === "string" && id))] : [];
+  const scope = await requireExternalScheduleWorkspace(req, res);
+  if (!scope) return;
+  if (!rawAssignmentIds.length) return res.status(400).json({ error: "assignmentIds is required." });
+  // Hardening correction: every id is validated as a real UUID BEFORE any
+  // transaction/write starts - a single malformed id used to reach an
+  // any($::uuid[]) cast deep inside the locked section below and surface
+  // as a raw Postgres 22P02, after some notifications may already have
+  // been claimed. Reject the WHOLE batch up front instead - zero writes,
+  // never a partial send.
+  if (rawAssignmentIds.some((id) => !UUID_PATTERN.test(id))) {
+    return res.status(400).json({ error: "assignmentIds must all be valid UUIDs." });
+  }
+  const assignmentIds = rawAssignmentIds;
 
   const client = await pool.connect();
   let results;
@@ -1365,7 +1427,7 @@ router.post("/external-schedules/:scheduleId/remind", async (req, res, next) => 
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
-    if (!canManageExternalSchedule(req, schedule)) {
+    if (!canManageExternalScheduleInScope(scope, schedule)) {
       await client.query("rollback");
       return res.status(403).json({ error: "Forbidden" });
     }

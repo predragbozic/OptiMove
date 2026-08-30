@@ -433,6 +433,86 @@ test("A7. eventType is optional, round-trips through create/detail, and rejects 
   assert.equal(invalid.status, 400, "an unrecognized event type must be a controlled 400, never silently stored or a 500");
 });
 
+test("A8. a dual-role coach (club_admin of BOTH Club A and Club B) is scoped to only whichever club is the CURRENTLY ACTIVE workspace - list/detail/update/target-selection/reminder all change immediately on a workspace switch, with zero cross-workspace access", async () => {
+  const clubA = await makeClub("A8 Club A");
+  const clubB = await makeClub("A8 Club B");
+  const coachId = await makeUser({ email: `a8-coach-${Date.now()}@test.local` });
+  await grantClubAdmin(coachId, clubA);
+  await grantClubAdmin(coachId, clubB);
+  const coachCookie = await loginCookie(coachId);
+
+  const athleteAUserId = await makeUser({ email: `a8-athleteA-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteAId = await makeAthlete({ name: "A8 Athlete A", userId: athleteAUserId });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteAId, clubA]);
+  const athleteBUserId = await makeUser({ email: `a8-athleteB-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteBId = await makeAthlete({ name: "A8 Athlete B", userId: athleteBUserId });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteBId, clubB]);
+
+  // --- Active workspace = Club A ---
+  await setActiveWorkspace(coachId, "club", clubA);
+
+  const createInA = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ eventName: "A8 Club A schedule", targets: [{ kind: "athlete", id: athleteAId }] }) });
+  assert.equal(createInA.status, 201, "creating with a Club A target while Club A is active must succeed");
+  const scheduleAId = createInA.body.schedules[0].id;
+
+  const createTargetingBWhileA = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ eventName: "should fail", targets: [{ kind: "athlete", id: athleteBId }] }) });
+  assert.equal(createTargetingBWhileA.status, 403, "targeting Club B's athlete while Club A is the active workspace must be rejected, even though this account also administers Club B");
+
+  const listWhileA = await api("/api/training-load/external-schedules", { cookie: coachCookie });
+  assert.ok(listWhileA.body.schedules.some((s) => s.id === scheduleAId), "the Club A schedule must be listed while Club A is active");
+
+  const detailAWhileA = await api(`/api/training-load/external-schedules/${scheduleAId}`, { cookie: coachCookie });
+  assert.equal(detailAWhileA.status, 200);
+
+  const remindAWhileA = await api(`/api/training-load/external-schedules/${scheduleAId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [crypto.randomUUID()] } });
+  assert.notEqual(remindAWhileA.status, 403, "managing the Club A schedule while Club A is active must not be blocked by workspace scoping (a 404/400 for the fake assignment id is fine, 403 is not)");
+
+  // --- Switch active workspace to Club B - the SAME account, no new login ---
+  await setActiveWorkspace(coachId, "club", clubB);
+
+  const listWhileB = await api("/api/training-load/external-schedules", { cookie: coachCookie });
+  assert.ok(!listWhileB.body.schedules.some((s) => s.id === scheduleAId), "the Club A schedule must disappear from the list the instant the workspace switches to Club B - the SAME account, no re-login");
+
+  const detailAWhileB = await api(`/api/training-load/external-schedules/${scheduleAId}`, { cookie: coachCookie });
+  assert.equal(detailAWhileB.status, 404, "detail on the Club A schedule while Club B is active must 404, never leak via a stale global permission");
+
+  const updateAWhileB = await api(`/api/training-load/external-schedules/${scheduleAId}`, { method: "PATCH", cookie: coachCookie, body: { eventName: "hijacked from Club B" } });
+  assert.equal(updateAWhileB.status, 404, "PATCH on the Club A schedule while Club B is active must 404");
+
+  const remindAWhileB = await api(`/api/training-load/external-schedules/${scheduleAId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [crypto.randomUUID()] } });
+  assert.equal(remindAWhileB.status, 403, "a manual reminder against the Club A schedule while Club B is active must be a controlled 403, not silently processed");
+
+  const createTargetingAWhileB = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ eventName: "should also fail", targets: [{ kind: "athlete", id: athleteAId }] }) });
+  assert.equal(createTargetingAWhileB.status, 403, "targeting Club A's athlete while Club B is the active workspace must be rejected");
+
+  const createInB = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ eventName: "A8 Club B schedule", targets: [{ kind: "athlete", id: athleteBId }] }) });
+  assert.equal(createInB.status, 201, "creating with a Club B target while Club B is active must succeed");
+  const scheduleBId = createInB.body.schedules[0].id;
+
+  const listWhileB2 = await api("/api/training-load/external-schedules", { cookie: coachCookie });
+  assert.ok(listWhileB2.body.schedules.some((s) => s.id === scheduleBId), "the newly-created Club B schedule must be listed while Club B is active");
+  assert.ok(!listWhileB2.body.schedules.some((s) => s.id === scheduleAId), "the Club A schedule still must never appear");
+
+  // --- Switch back to Club A - the original schedule reappears, the Club B one disappears ---
+  await setActiveWorkspace(coachId, "club", clubA);
+  const listBackToA = await api("/api/training-load/external-schedules", { cookie: coachCookie });
+  assert.ok(listBackToA.body.schedules.some((s) => s.id === scheduleAId), "switching back to Club A must immediately restore visibility of the Club A schedule");
+  assert.ok(!listBackToA.body.schedules.some((s) => s.id === scheduleBId), "the Club B schedule must disappear again once back in Club A");
+
+  // --- Same account also holds a REAL athlete profile (a genuine dual-
+  // role account, e.g. a coach who also trains) - switching to that
+  // athlete workspace must make every coach schedule route unreachable,
+  // even though the account's club_admin roles are still fully intact. ---
+  await makeAthlete({ name: "A8 Coach's Own Athlete Profile", userId: coachId });
+  await setActiveWorkspace(coachId, "athlete", null);
+  const listAsAthleteWorkspace = await api("/api/training-load/external-schedules", { cookie: coachCookie });
+  assert.equal(listAsAthleteWorkspace.status, 403, "no coach schedule route is reachable while the active workspace is 'athlete', even though this account holds real club_admin roles");
+  const detailAsAthleteWorkspace = await api(`/api/training-load/external-schedules/${scheduleAId}`, { cookie: coachCookie });
+  assert.equal(detailAsAthleteWorkspace.status, 403);
+  const createAsAthleteWorkspace = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ targets: [{ kind: "athlete", id: athleteAId }] }) });
+  assert.equal(createAsAthleteWorkspace.status, 403);
+});
+
 // ------------------------------------------------------------
 // B. List/detail/update/pause/resume/cancel/schedule-again
 // ------------------------------------------------------------

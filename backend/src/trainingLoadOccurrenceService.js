@@ -91,29 +91,33 @@ export async function ensureCurrentExternalOccurrencesForAthlete(athleteId, pool
   }
 }
 
-// Runs ensureCurrentExternalOccurrence for every schedule a given coach
-// (identified by their manageable club/team ids, or null for "no scope
-// filter" - platform admin) may currently manage - called right before a
-// coach-facing route reads schedule/occurrence/assignment state, mirroring
-// the athlete-side helper above.
-export async function ensureCurrentExternalOccurrencesForCoach({ userId, clubIds, teamIds, isPlatformAdmin }, pool = defaultPool) {
-  let conditions = ["s.owner_scope = 'user' and s.created_by_user_id = $1"];
-  let params = [userId];
-  if (isPlatformAdmin) {
-    conditions = ["true"];
-    params = [];
-  } else {
-    if (clubIds?.length) {
-      params.push(clubIds);
-      conditions.push(`(s.owner_scope = 'club' and s.owner_club_id = any($${params.length}::uuid[]))`);
-    }
-    if (teamIds?.length) {
-      params.push(teamIds);
-      conditions.push(`(s.owner_scope = 'team' and s.owner_team_id = any($${params.length}::uuid[]))`);
-    }
+// Runs ensureCurrentExternalOccurrence for every schedule owned by the
+// coach's CURRENTLY ACTIVE workspace only - `scope` is the discriminated
+// object trainingLoadAccess.js's own resolveExternalScheduleWorkspaceScope
+// produces ({type: 'platform'|'club'|'team'|'private_coach'|null, ...}).
+// Hardening correction: this used to take the account's full manageable
+// club/team id sets regardless of which workspace was active, so a
+// dual-role coach's on-demand generation silently ran for BOTH clubs even
+// while presenting as just one of them. Called right before a coach-
+// facing route reads schedule/occurrence/assignment state, mirroring the
+// athlete-side helper above.
+export async function ensureCurrentExternalOccurrencesForCoach(scope, pool = defaultPool) {
+  let condition = "false";
+  let params = [];
+  if (scope.type === "platform") {
+    condition = "true";
+  } else if (scope.type === "club") {
+    condition = "s.owner_scope = 'club' and s.owner_club_id = $1";
+    params = [scope.clubId];
+  } else if (scope.type === "team") {
+    condition = "s.owner_scope = 'team' and s.owner_team_id = $1";
+    params = [scope.teamId];
+  } else if (scope.type === "private_coach") {
+    condition = "s.owner_scope = 'user' and s.owner_user_id = $1";
+    params = [scope.userId];
   }
   const schedulesResult = await pool.query(
-    `select * from training_load.external_schedules s where s.status = 'active' and (${conditions.join(" or ")})`,
+    `select * from training_load.external_schedules s where s.status = 'active' and (${condition})`,
     params,
   );
   for (const schedule of schedulesResult.rows) {
