@@ -7,6 +7,7 @@ import {
   loadTrainingLoadOrgPickerData,
   loadTrainingLoadWeekly,
   submitRpe,
+  submitExternalRpe,
   toggleSessionRpeEnabled,
 } from "./training-load-data.js";
 import { isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
@@ -321,12 +322,16 @@ function clearFilter(kind) {
 // athlete-facing list currently holds it - today's Home list, or (item 4
 // correction) the "This week" overlay, which can hold a past/today session
 // the Home card itself never shows once its own day has rolled forward.
-function findAthleteSessionById(sessionId) {
-  const todayMatch = state.trainingLoad.athleteToday.sessions.find((s) => s.sessionId === sessionId);
+// Matches by EITHER sessionId (planned) or externalAssignmentId (outside
+// plan) - the two are mutually exclusive per row (mirrors the XOR identity
+// on training_load.session_feedback), so a single `id` param unambiguously
+// identifies exactly one session/assignment either way.
+function findAthleteSessionById(id) {
+  const todayMatch = state.trainingLoad.athleteToday.sessions.find((s) => s.sessionId === id || s.externalAssignmentId === id);
   if (todayMatch) return { session: todayMatch, date: state.trainingLoad.athleteToday.date };
   const weeklyDays = state.trainingLoad.athleteWeekly.data?.days || [];
   for (const day of weeklyDays) {
-    const match = day.sessions.find((s) => s.sessionId === sessionId);
+    const match = day.sessions.find((s) => s.sessionId === id || s.externalAssignmentId === id);
     if (match) return { session: match, date: day.date };
   }
   return null;
@@ -338,13 +343,15 @@ function findAthleteSessionById(sessionId) {
 // training-load-view.js, is the same "double gate" pattern already used
 // elsewhere in this app (belt-and-suspenders, not redundant - one guard
 // covers a stale DOM, the other covers any direct action dispatch).
-function openRpeFormForSessionId(sessionId) {
-  const found = findAthleteSessionById(sessionId);
+function openRpeFormForSessionId(id) {
+  const found = findAthleteSessionById(id);
   if (!found || found.session.rated) return;
   const { session, date } = found;
   state.trainingLoad.showSessionList = false;
   state.trainingLoad.rpeForm = emptyRpeForm({
-    sessionId: session.sessionId,
+    sessionId: session.sessionId || "",
+    externalAssignmentId: session.externalAssignmentId || "",
+    source: session.source || "planned",
     sessionName: session.sessionName,
     amPm: session.amPm,
     bta: session.bta,
@@ -373,7 +380,9 @@ async function submitRpeForm(renderTrainingLoad) {
   form.error = "";
   renderTrainingLoad();
   try {
-    const result = await submitRpe(form.sessionId, { rpe: form.rpe, durationMinutes: Number(form.durationMinutes), note: form.note });
+    const result = form.source === "scheduled_external"
+      ? await submitExternalRpe(form.externalAssignmentId, { rpe: form.rpe, durationMinutes: Number(form.durationMinutes), note: form.note })
+      : await submitRpe(form.sessionId, { rpe: form.rpe, durationMinutes: Number(form.durationMinutes), note: form.note });
     form.saving = false;
     form.savedFeedback = result.feedback;
   } catch (error) {

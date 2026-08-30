@@ -41,6 +41,21 @@ function sessionLabel(session) {
   return parts.length ? parts.join(" · ") : "Training session";
 }
 
+// A session/assignment's own click-target id - the two sources are
+// mutually exclusive (see the XOR identity on training_load.
+// session_feedback), so exactly one of these is ever populated.
+function sessionRowId(session) {
+  return session.sessionId || session.externalAssignmentId || "";
+}
+
+// "OUTSIDE PLAN" - a small, neutral tag (no color-coding beyond the
+// existing status-pill convention) distinguishing a session scheduled
+// outside any Weekly plan from a planned one, wherever the two can appear
+// side by side.
+function renderOutsidePlanTagHtml(session) {
+  return session.source === "scheduled_external" ? `<span class="training-load-outside-plan-tag">Outside plan</span>` : "";
+}
+
 // ------------------------------------------------------------
 // Athlete Home card ("Session feedback", shown above/alongside Today's
 // training - mirrors the exact same "count === 0 renders nothing" /
@@ -66,7 +81,7 @@ export function renderTrainingLoadHomeCardHtml(athleteToday) {
   if (!unrated.length) return "";
   const multiple = unrated.length > 1;
   return `
-    <button type="button" class="panel training-load-home-card" data-action="training-load-home-card-open" data-count="${unrated.length}" data-session-id="${escapeAttr(unrated[0]?.sessionId || "")}">
+    <button type="button" class="panel training-load-home-card" data-action="training-load-home-card-open" data-count="${unrated.length}" data-session-id="${escapeAttr(unrated[0] ? sessionRowId(unrated[0]) : "")}">
       <div class="training-load-home-card-body">
         <p class="eyebrow">Session feedback</p>
         <p class="muted">${multiple ? `${unrated.length} sessions waiting for RPE` : `Rate today's session: ${escapeHtml(sessionLabel(unrated[0]))}`}</p>
@@ -116,14 +131,14 @@ function renderAthleteSessionRowHtml(session) {
   if (session.rated) {
     return `
       <div class="training-load-list-row is-rated">
-        <span class="training-load-list-row-name">${escapeHtml(sessionLabel(session))}</span>
+        <span class="training-load-list-row-name">${escapeHtml(sessionLabel(session))}${renderOutsidePlanTagHtml(session)}</span>
         <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>
       </div>
     `;
   }
   return `
-    <button type="button" class="training-load-list-row" data-action="training-load-open-rpe-form" data-session-id="${escapeAttr(session.sessionId)}">
-      <span class="training-load-list-row-name">${escapeHtml(sessionLabel(session))}</span>
+    <button type="button" class="training-load-list-row" data-action="training-load-open-rpe-form" data-session-id="${escapeAttr(sessionRowId(session))}">
+      <span class="training-load-list-row-name">${escapeHtml(sessionLabel(session))}${renderOutsidePlanTagHtml(session)}</span>
       <span class="training-load-status-pill training-load-status-unrated">Rate session &rsaquo;</span>
     </button>
   `;
@@ -205,7 +220,7 @@ function renderAthleteWeeklySessionRowHtml(session, date, todayIso) {
       <div class="training-load-session-row">
         <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
         <span class="training-load-session-main">
-          <span class="training-load-session-name">${escapeHtml(sessionLabel(session))}</span>
+          <span class="training-load-session-name">${escapeHtml(sessionLabel(session))}${renderOutsidePlanTagHtml(session)}</span>
         </span>
         <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>
       </div>
@@ -223,10 +238,10 @@ function renderAthleteWeeklySessionRowHtml(session, date, todayIso) {
     `;
   }
   return `
-    <button type="button" class="training-load-session-row is-clickable" data-action="training-load-open-rpe-form" data-session-id="${escapeAttr(session.sessionId)}">
+    <button type="button" class="training-load-session-row is-clickable" data-action="training-load-open-rpe-form" data-session-id="${escapeAttr(sessionRowId(session))}">
       <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
       <span class="training-load-session-main">
-        <span class="training-load-session-name">${escapeHtml(sessionLabel(session))}</span>
+        <span class="training-load-session-name">${escapeHtml(sessionLabel(session))}${renderOutsidePlanTagHtml(session)}</span>
       </span>
       <span class="training-load-status-pill training-load-status-unrated">Rate session &rsaquo;</span>
     </button>
@@ -266,7 +281,7 @@ export function renderRpeFormHtml(form) {
         <div class="training-load-rpe-head">
           <div>
             <p class="eyebrow">Rate session</p>
-            <h3>${escapeHtml(sessionLabel(form))}</h3>
+            <h3>${escapeHtml(sessionLabel(form))}${renderOutsidePlanTagHtml(form)}</h3>
             ${form.date ? `<p class="muted">${escapeHtml(formatDate(form.date))}</p>` : ""}
           </div>
           <button class="plain-button icon-button" type="button" data-action="training-load-close-rpe-form" aria-label="Cancel">&times;</button>

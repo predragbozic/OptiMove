@@ -119,6 +119,17 @@ export async function submitRpe(sessionId, { rpe, durationMinutes, note }) {
   });
 }
 
+// An RPE session scheduled OUTSIDE any Weekly plan. Same client body shape
+// as submitRpe (rpe/durationMinutes/note only - sRPE is always DB-
+// derived) and the same idempotent-retry/409-on-genuine-conflict contract,
+// keyed on the assignment instead of a logical session.
+export async function submitExternalRpe(assignmentId, { rpe, durationMinutes, note }) {
+  return api(`/api/training-load/external-assignments/${encodeURIComponent(assignmentId)}/rpe`, {
+    method: "POST",
+    body: JSON.stringify({ rpe, durationMinutes, note: note || "" }),
+  });
+}
+
 // Training Load Schedule tab's own quick RPE ON/OFF toggle. A 409 with
 // error: "hasExistingResults" is a real, expected outcome (not a failure) -
 // the caller shows a confirm dialog and retries with

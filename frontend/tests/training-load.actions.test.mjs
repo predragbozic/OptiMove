@@ -50,6 +50,7 @@ const {
   renderTrainingLoadScheduleHtml,
   renderTrainingLoadSessionListHtml,
   renderTrainingLoadFilterPickerHtml,
+  renderRpeFormHtml,
   isRpeFormValid,
 } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, emptyRpeForm, state } = await import("../state.js");
@@ -97,8 +98,28 @@ function session(overrides = {}) {
     feedback: null,
     historical: false,
     rpeEnabled: true,
+    source: "planned",
+    externalAssignmentId: null,
+    scheduleId: null,
     ...overrides,
   };
+}
+
+// An RPE session scheduled OUTSIDE any Weekly plan - the mirror-image
+// identity shape (externalAssignmentId set, sessionId/planId null).
+function externalSession(overrides = {}) {
+  return session({
+    sessionId: null,
+    planId: null,
+    planName: null,
+    sessionName: "National team camp",
+    amPm: "",
+    bta: "",
+    source: "scheduled_external",
+    externalAssignmentId: "asg-1",
+    scheduleId: "sched-1",
+    ...overrides,
+  });
 }
 
 // ------------------------------------------------------------
@@ -713,4 +734,128 @@ test("P5. a session with no sessionId in its dataset is a safe no-op - never a c
   const result = await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe" }), { renderTrainingLoad });
   assert.equal(result, true);
   assert.equal(fetchCalls.length, 0);
+});
+
+// ------------------------------------------------------------
+// Q. Athlete: an OUTSIDE-PLAN (external) RPE session - same click/open/
+// submit flow as a planned session, but keyed on externalAssignmentId
+// instead of sessionId, and posting to the external-assignment endpoint.
+// Mirrors sections C/D above, exercising the mutually-exclusive identity
+// shape rather than duplicating every existing planned-session case.
+// ------------------------------------------------------------
+
+test("Q1. a single-session card click for an OUTSIDE-PLAN session opens the RPE form keyed on externalAssignmentId, not sessionId", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.athleteToday = {
+    date: "2026-08-24",
+    sessions: [externalSession({ externalAssignmentId: "asg-9", sessionName: "National team camp" })],
+    loading: false,
+    error: "",
+  };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-home-card-open", count: "1", sessionId: "asg-9" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.showSessionList, false);
+  assert.equal(state.trainingLoad.rpeForm.externalAssignmentId, "asg-9");
+  assert.equal(state.trainingLoad.rpeForm.source, "scheduled_external");
+  assert.equal(state.trainingLoad.rpeForm.sessionId, "", "a planned sessionId must never be populated for an external row");
+  assert.equal(state.trainingLoad.rpeForm.sessionName, "National team camp");
+  assert.equal(renderCount, 1);
+});
+
+test("Q2. picking an OUTSIDE-PLAN session from the multi-session list opens its form the same way", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.athleteToday = {
+    date: "2026-08-24",
+    sessions: [externalSession({ externalAssignmentId: "asg-9" })],
+    loading: false,
+    error: "",
+  };
+  state.trainingLoad.showSessionList = true;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-rpe-form", sessionId: "asg-9" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.showSessionList, false);
+  assert.equal(state.trainingLoad.rpeForm.externalAssignmentId, "asg-9");
+  assert.equal(state.trainingLoad.rpeForm.source, "scheduled_external");
+});
+
+test("Q3. a not-yet-rated OUTSIDE-PLAN session from an earlier day opens correctly from the weekly overlay too", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.athleteToday = { date: "2026-08-24", sessions: [], loading: false, error: "" };
+  state.trainingLoad.athleteWeekly.data = weekPayload("2026-08-24", {
+    "2026-08-25": [externalSession({ externalAssignmentId: "asg-yesterday", sessionName: "Extra gym session" })],
+  });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-rpe-form", sessionId: "asg-yesterday" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.rpeForm.externalAssignmentId, "asg-yesterday");
+  assert.equal(state.trainingLoad.rpeForm.source, "scheduled_external");
+  assert.equal(state.trainingLoad.rpeForm.date, "2026-08-25");
+});
+
+test("Q4. a RATED outside-plan row is a no-op, same guard as a rated planned row", async () => {
+  resetState();
+  state.trainingLoad.athleteToday = {
+    date: "2026-08-24",
+    sessions: [externalSession({ externalAssignmentId: "asg-9", rated: true, feedback: { rpe: 6, durationMinutes: 40, srpe: 240 } })],
+    loading: false,
+    error: "",
+  };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-rpe-form", sessionId: "asg-9" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.rpeForm, null);
+});
+
+test("Q5. submitting an OUTSIDE-PLAN form posts to the external-assignment endpoint, never the planned one", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.rpeForm = emptyRpeForm({
+    externalAssignmentId: "asg-9",
+    source: "scheduled_external",
+    sessionName: "National team camp",
+    rpe: 6,
+    durationMinutes: 45,
+    note: "",
+  });
+  installFetchMock((call) => {
+    if (call.url === "/api/training-load/external-assignments/asg-9/rpe") {
+      return { status: 201, body: { feedback: { rpe: 6, durationMinutes: 45, srpe: 270, note: "", submittedAt: "2026-08-24T10:00:00Z" } } };
+    }
+    return { status: 404, body: {} };
+  });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-rpe-submit" }), { renderTrainingLoad });
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].url, "/api/training-load/external-assignments/asg-9/rpe");
+  assert.equal(fetchCalls[0].method, "POST");
+  assert.deepEqual(Object.keys(fetchCalls[0].body).sort(), ["durationMinutes", "note", "rpe"], "never a client-computed sRPE, and never sessionId/externalAssignmentId in the body - identity is in the URL");
+  assert.equal(state.trainingLoad.rpeForm.savedFeedback.srpe, 270);
+  assert.equal(state.trainingLoad.rpeForm.saving, false);
+});
+
+test("Q6. a planned-source form (the default) still posts to the planned sessions endpoint, unaffected by the new branch", async () => {
+  resetState();
+  state.trainingLoad.rpeForm = emptyRpeForm({ sessionId: "sess-1", rpe: 5, durationMinutes: 30 });
+  installFetchMock((call) => (call.url === "/api/training-load/sessions/sess-1/rpe" ? { status: 201, body: { feedback: { rpe: 5, durationMinutes: 30, srpe: 150, note: "", submittedAt: "" } } } : { status: 404, body: {} }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-rpe-submit" }), { renderTrainingLoad });
+  assert.equal(fetchCalls[0].url, "/api/training-load/sessions/sess-1/rpe");
+});
+
+test("Q7. the 'Outside plan' tag renders in the Home card's single-session copy, the session list, and the RPE form header - and never for a planned session", () => {
+  const plannedHtml = renderTrainingLoadHomeCardHtml({ date: "2026-08-24", sessions: [session({ sessionId: "sess-1" })] });
+  assert.ok(!plannedHtml.includes("training-load-outside-plan-tag"));
+
+  const listHtml = renderTrainingLoadSessionListHtml({
+    sessions: [externalSession({ externalAssignmentId: "asg-9" }), session({ sessionId: "sess-1", rated: true, feedback: { rpe: 5, durationMinutes: 30, srpe: 150 } })],
+  });
+  const outsidePlanCount = (listHtml.match(/training-load-outside-plan-tag/g) || []).length;
+  assert.equal(outsidePlanCount, 1, "only the external row gets the tag, whether rated or not");
+
+  const formHtml = renderRpeFormHtml(emptyRpeForm({ externalAssignmentId: "asg-9", source: "scheduled_external", sessionName: "National team camp", rpe: 5, durationMinutes: 30 }));
+  assert.ok(formHtml.includes("training-load-outside-plan-tag"));
+  assert.ok(formHtml.includes("National team camp"));
+
+  const plannedFormHtml = renderRpeFormHtml(emptyRpeForm({ sessionId: "sess-1", sessionName: "Tempo run", rpe: 5, durationMinutes: 30 }));
+  assert.ok(!plannedFormHtml.includes("training-load-outside-plan-tag"));
+});
+
+test("Q8. the Home card click target uses the external assignment id, not a blank sessionId, when the single unrated session is outside-plan", () => {
+  const html = renderTrainingLoadHomeCardHtml({ date: "2026-08-24", sessions: [externalSession({ externalAssignmentId: "asg-9" })] });
+  assert.ok(html.includes('data-session-id="asg-9"'));
 });

@@ -470,6 +470,12 @@ export const emptyTrainingLoadFilterPicker = (overrides = {}) => ({
 // rather than just vanishing.
 export const emptyRpeForm = (overrides = {}) => ({
   sessionId: "",
+  // A session/assignment scheduled outside any Weekly plan carries its
+  // identity here instead of sessionId (mutually exclusive, mirroring the
+  // XOR identity on training_load.session_feedback) - `source` decides
+  // which submit endpoint the form's own save action calls.
+  externalAssignmentId: "",
+  source: "planned",
   sessionName: "",
   amPm: "",
   bta: "",
