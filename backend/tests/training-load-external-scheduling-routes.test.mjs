@@ -1125,3 +1125,64 @@ test("I3. a submit racing a concurrent cancel serializes cleanly - whichever win
   const finalSchedule = await api(`/api/training-load/external-schedules/${scheduleId}`, { cookie: coachCookie });
   assert.equal(finalSchedule.body.schedule.status, "cancelled", "the schedule must always end up cancelled either way - the race is only ever about ORDER, never about losing the cancel itself");
 });
+
+// ------------------------------------------------------------
+// J. Every new date/time/UUID input rejects a malformed value with a
+// controlled 400/404 - never a raw Postgres cast error (22P02/22007/22008)
+// leaking as a 500.
+// ------------------------------------------------------------
+
+test("J1. a manual reminder batch mixing a valid and a malformed assignmentId is rejected atomically with a controlled 400 - zero notifications sent, not a partial send", async () => {
+  const { coachCookie, scheduleId, assignmentId } = await makeReadyAssignment("j1");
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, {
+    method: "POST", cookie: coachCookie, body: { assignmentIds: [assignmentId, "not-a-uuid"] },
+  });
+  assert.equal(res.status, 400, `expected a controlled 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const notificationCount = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1`, [assignmentId])).rows[0].n;
+  assert.equal(notificationCount, 0, "the whole batch must be rejected before any notification is sent - never a partial send for the valid id");
+});
+
+test("J2. creating a schedule with a malformed target id is a controlled 400, never a 500", async () => {
+  const { coachCookie } = await makeClubWithAthletes("j2", 0);
+  const res = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ targets: [{ kind: "athlete", id: "not-a-uuid" }] }) });
+  assert.equal(res.status, 400, `expected a controlled 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+});
+
+test("J3. creating a schedule with a malformed date (in `dates`, or as scheduleKind=recurring startDate/endDate) is a controlled 400, never a 500", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("j3", 1);
+  const targets = [{ kind: "athlete", id: athletes[0].athleteId }];
+  const badDates = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ dates: ["2026-13-40"], targets }) });
+  assert.equal(badDates.status, 400, `expected 400, got ${badDates.status}: ${JSON.stringify(badDates.body)}`);
+  const badRecurring = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ scheduleKind: "recurring", startDate: TODAY, endDate: "not-a-date", targets }),
+  });
+  assert.equal(badRecurring.status, 400, `expected 400, got ${badRecurring.status}: ${JSON.stringify(badRecurring.body)}`);
+});
+
+test("J4. creating a schedule with a malformed opens/closes/due time is a controlled 400, never a 500", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("j4", 1);
+  const targets = [{ kind: "athlete", id: athletes[0].athleteId }];
+  const res = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ opensTime: "25:99", targets }) });
+  assert.equal(res.status, 400, `expected 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+});
+
+test("J5. PATCH with a malformed closesTime or endDate is a controlled 400, never a 500, and the schedule is left untouched", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("j5", 1);
+  const created = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }] }) });
+  const scheduleId = created.body.schedules[0].id;
+  const badTime = await api(`/api/training-load/external-schedules/${scheduleId}`, { method: "PATCH", cookie: coachCookie, body: { closesTime: "not-a-time" } });
+  assert.equal(badTime.status, 400, `expected 400, got ${badTime.status}: ${JSON.stringify(badTime.body)}`);
+  const badEndDate = await api(`/api/training-load/external-schedules/${scheduleId}`, { method: "PATCH", cookie: coachCookie, body: { endDate: "not-a-date" } });
+  assert.equal(badEndDate.status, 400, `expected 400, got ${badEndDate.status}: ${JSON.stringify(badEndDate.body)}`);
+  const fresh = await api(`/api/training-load/external-schedules/${scheduleId}`, { cookie: coachCookie });
+  assert.equal(fresh.body.schedule.closesTime, created.body.schedules[0].closesTime, "a rejected PATCH must never partially apply");
+});
+
+test("J6. schedule-again with a malformed startDate/endDate is a controlled 400, never a 500", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("j6", 1);
+  const created = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }] }) });
+  const scheduleId = created.body.schedules[0].id;
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}/schedule-again`, { method: "POST", cookie: coachCookie, body: { startDate: "not-a-date" } });
+  assert.equal(res.status, 400, `expected 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+});

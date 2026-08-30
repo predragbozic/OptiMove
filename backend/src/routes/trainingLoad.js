@@ -106,6 +106,16 @@ function addDaysIso(iso, days) {
   return d.toISOString().slice(0, 10);
 }
 
+// HH:MM or HH:MM:SS, 24-hour - external_schedules.opens_time/due_time/
+// closes_time are all Postgres `time` columns; a malformed string bound
+// straight into one of those (create/PATCH/schedule-again all read these
+// from the request body with no format check today) is a raw Postgres
+// 22007 ("invalid input syntax for type time"), not a controlled 400.
+const TIME_STRING_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)(:([0-5]\d))?$/;
+function isValidTimeString(value) {
+  return typeof value === "string" && TIME_STRING_PATTERN.test(value);
+}
+
 // Correction: validates every id is a real UUID before it ever reaches a
 // ::uuid[] cast - a malformed id used to surface as a raw Postgres 500
 // ("invalid input syntax for type uuid"), never a controlled 400.
@@ -975,6 +985,15 @@ async function validateExternalTargetInScope(scope, target) {
 async function resolveValidExternalTargets(scope, rawTargets) {
   const targets = dedupeExternalTargets(rawTargets);
   if (!targets.length) return { ok: false, status: 400, error: "Choose at least one athlete, team or club." };
+  // Every target's own id is validated as a real UUID BEFORE it ever
+  // reaches a query against a uuid-typed column - isAthleteInWorkspaceScope
+  // /isTeamInWorkspaceScope/isClubInWorkspaceScope below bind it straight
+  // into a `= $N` comparison against an athletes/teams/clubs.id column,
+  // and a malformed string there is a raw Postgres 22P02, not a
+  // controlled response.
+  if (targets.some((t) => !UUID_PATTERN.test(t.id))) {
+    return { ok: false, status: 400, error: "One of the chosen targets has an invalid id." };
+  }
   for (const target of targets) {
     const allowed = await validateExternalTargetInScope(scope, target);
     if (!allowed) return { ok: false, status: 403, error: "One of the chosen targets is outside your access." };
@@ -1089,8 +1108,14 @@ router.post("/external-schedules", async (req, res, next) => {
     if (!timezone || !opensTime || !closesTime) {
       return res.status(400).json({ error: "Timezone, opens time and closes time are required." });
     }
+    if (!isValidTimeString(opensTime) || !isValidTimeString(closesTime) || (dueTime !== null && !isValidTimeString(dueTime))) {
+      return res.status(400).json({ error: "Opens/due/closes time must be a valid HH:MM time." });
+    }
     const { scheduleKind, recurrenceRule, dateSets } = resolveExternalScheduleKindAndDates(body);
     if (dateSets.some((d) => !d.startDate)) return res.status(400).json({ error: "At least one date is required." });
+    if (dateSets.some((d) => !isValidGregorianDateString(d.startDate) || (d.endDate !== null && !isValidGregorianDateString(d.endDate)))) {
+      return res.status(400).json({ error: "Every date must be a valid YYYY-MM-DD date." });
+    }
 
     const resolved = await resolveValidExternalTargets(scope, body.targets);
     if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
@@ -1214,6 +1239,21 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
     const dueTime = body.dueTime !== undefined ? (text(body.dueTime) || null) : schedule.due_time;
     const closesTime = body.closesTime !== undefined ? text(body.closesTime) : schedule.closes_time;
     const endDate = body.endDate !== undefined ? (text(body.endDate) || null) : schedule.end_date;
+    // Only a client-SUPPLIED value is validated here - the existing
+    // stored value (read straight from the DB row above when the field
+    // was omitted) was already validated on the request that wrote it.
+    if (
+      (body.opensTime !== undefined && !isValidTimeString(opensTime))
+      || (body.closesTime !== undefined && !isValidTimeString(closesTime))
+      || (body.dueTime !== undefined && dueTime !== null && !isValidTimeString(dueTime))
+    ) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "Opens/due/closes time must be a valid HH:MM time." });
+    }
+    if (body.endDate !== undefined && endDate !== null && !isValidGregorianDateString(endDate)) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "endDate must be a valid YYYY-MM-DD date." });
+    }
 
     await client.query(
       `update training_load.external_schedules
@@ -1280,6 +1320,9 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
     const startDate = text(body.startDate);
     if (!startDate) return res.status(400).json({ error: "A new start date is required." });
     const endDate = text(body.endDate) || null;
+    if (!isValidGregorianDateString(startDate) || (endDate !== null && !isValidGregorianDateString(endDate))) {
+      return res.status(400).json({ error: "startDate/endDate must be valid YYYY-MM-DD dates." });
+    }
 
     const targetsResult = await query(
       `select target_kind, target_athlete_id, target_team_id, target_club_id from training_load.external_schedule_targets where schedule_id = $1`,
