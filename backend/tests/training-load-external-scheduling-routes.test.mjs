@@ -997,3 +997,73 @@ test("G4. a cancelled schedule's still-PENDING (never-rated) assignment is never
   const submitRes = await api(`/api/training-load/external-assignments/${assignmentId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 30 } });
   assert.equal(submitRes.status, 409, "submit against a cancelled schedule's pending assignment must still be a controlled 409");
 });
+
+// ------------------------------------------------------------
+// H. Frozen membership in the athlete-facing on-demand flow -
+// ensureCurrentExternalOccurrencesForAthlete used to discover a schedule
+// only via the athlete's CURRENT club/team/direct targeting, so an athlete
+// already snapshotted into an occurrence but not yet materialized (their
+// own local date hadn't arrived when the snapshot was taken) could have
+// their membership removed before that date arrived, and their assignment
+// would then never materialize at all - no scheduled worker run was
+// guaranteed to happen in between. Proven here through the REAL HTTP
+// endpoint only (GET /api/training-load/athlete/today) - never a direct
+// call to the SQL materializer function or the background worker. The
+// "already snapshotted, not yet materialized" precondition itself is set
+// up via a single direct INSERT (the exact row shape the materializer
+// would itself have produced mid-cycle) - the only deterministic way to
+// construct this inherently timing-sensitive state, matching training-
+// load-external-scheduling.test.mjs's own E2 test at the schema level.
+// ------------------------------------------------------------
+
+test("H1. an athlete removed from a schedule's target AFTER being snapshotted (but before materializing) still gets a real assignment via a plain GET /athlete/today once eligible - a genuine late joiner (never snapshotted) still never does, through that SAME call", async () => {
+  const { coachCookie, clubId, athletes } = await makeClubWithAthletes("h1", 1);
+  const frozenAthleteUserId = await makeUser({ email: `h1-frozen-${Date.now()}@test.local`, roleHint: "athlete" });
+  const frozenAthleteId = await makeAthlete({ name: "H1 Frozen Athlete", userId: frozenAthleteUserId, deviceTimezone: "UTC" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [frozenAthleteId, clubId]);
+  const frozenCookie = await loginCookie(frozenAthleteUserId);
+
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ eventName: "H1 club camp", opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "club", id: clubId }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+
+  // Manufacture "snapshotted but not yet materialized" for the frozen
+  // athlete directly - the occurrence for TODAY, with this athlete already
+  // in its membership snapshot, but no assignment row yet (exactly what
+  // materialize_external_assignments_for_occurrence() would have left
+  // behind had it run before this athlete's own local date arrived).
+  const occurrenceResult = await query(`select training_load.generate_external_schedule_occurrence($1, $2) as id`, [scheduleId, TODAY]);
+  const occurrenceId = occurrenceResult.rows[0].id;
+  await query(`insert into training_load.external_occurrence_target_snapshot (occurrence_id, athlete_id) values ($1,$2)`, [occurrenceId, frozenAthleteId]);
+  await query(`update training_load.external_schedule_occurrences set assignments_materialized_at = now() where id = $1`, [occurrenceId]);
+  const preCheck = (await query(`select count(*)::int as n from training_load.external_assignments where occurrence_id = $1 and athlete_id = $2`, [occurrenceId, frozenAthleteId])).rows[0].n;
+  assert.equal(preCheck, 0, "setup check: snapshotted but not yet actually materialized");
+
+  // Membership removed AFTER the snapshot - resolve_external_schedule_
+  // target_athletes would no longer resolve this athlete as a current
+  // target at all.
+  await query(`update public.athlete_memberships set status = 'archived' where athlete_id = $1 and club_id = $2`, [frozenAthleteId, clubId]);
+
+  // A genuine late joiner: added to the club AFTER the snapshot was taken,
+  // never present in external_occurrence_target_snapshot for this
+  // occurrence at all.
+  const lateJoinerUserId = await makeUser({ email: `h1-latejoiner-${Date.now()}@test.local`, roleHint: "athlete" });
+  const lateJoinerAthleteId = await makeAthlete({ name: "H1 Late Joiner", userId: lateJoinerUserId, deviceTimezone: "UTC" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [lateJoinerAthleteId, clubId]);
+  const lateJoinerCookie = await loginCookie(lateJoinerUserId);
+
+  // THE fix, proven only through the real endpoint - no direct call to
+  // materialize_external_assignments_for_occurrence() or the worker.
+  const frozenToday = await api("/api/training-load/athlete/today", { cookie: frozenCookie });
+  const frozenRow = frozenToday.body.sessions.find((s) => s.source === "scheduled_external" && s.scheduleId === scheduleId);
+  assert.ok(frozenRow, `the removed-but-already-snapshotted athlete must get a real assignment via GET /athlete/today, got: ${JSON.stringify(frozenToday.body)}`);
+  assert.equal(frozenRow.rated, false);
+
+  const postCheck = (await query(`select count(*)::int as n from training_load.external_assignments where occurrence_id = $1 and athlete_id = $2`, [occurrenceId, frozenAthleteId])).rows[0].n;
+  assert.equal(postCheck, 1, "a real assignment row must now exist for the frozen athlete");
+
+  const lateJoinerToday = await api("/api/training-load/athlete/today", { cookie: lateJoinerCookie });
+  assert.ok(!lateJoinerToday.body.sessions.some((s) => s.scheduleId === scheduleId), "a genuine late joiner (never snapshotted) must still never get this occurrence's assignment, even through the exact same on-demand call");
+});

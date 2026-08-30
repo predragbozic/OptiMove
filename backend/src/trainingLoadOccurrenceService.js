@@ -71,10 +71,26 @@ export async function ensureCurrentExternalOccurrence(schedule, pool = defaultPo
 // pending assignments, so a freshly-eligible occurrence/assignment always
 // exists by the time it's read, without waiting for the background worker's
 // own cycle.
+//
+// Hardening correction: current targeting alone misses a real "frozen
+// membership" scenario - resolve_current_external_target_dates() already
+// keeps an OUTSTANDING snapshot date live once an athlete has been
+// snapshotted into an occurrence but not yet materialized (their own
+// local date hadn't arrived yet when someone else's on-demand call/the
+// worker took that snapshot), but this function only ever discovered a
+// schedule via CURRENT membership - if that membership is removed before
+// the athlete's own local date arrives, their schedule silently drops out
+// of this query entirely, and with no scheduled worker run in between,
+// the assignment this athlete is already snapshotted for would never
+// materialize at all. The second branch below closes that gap: any
+// active schedule where this athlete already has a snapshot row for some
+// occurrence but no assignment yet, regardless of their CURRENT
+// targeting. A genuine late joiner (no snapshot row at all for that
+// occurrence) is still correctly excluded - this only ever re-discovers
+// an athlete who was already snapshotted.
 export async function ensureCurrentExternalOccurrencesForAthlete(athleteId, pool = defaultPool) {
   const schedulesResult = await pool.query(
-    `select distinct s.*
-     from training_load.external_schedules s
+    `select s.* from training_load.external_schedules s
      join training_load.external_schedule_targets t on t.schedule_id = s.id
      left join public.athlete_memberships m
        on (t.target_kind = 'team' and m.team_id = t.target_team_id and m.athlete_id = $1 and m.membership_type = 'team' and m.status = 'active')
@@ -83,6 +99,15 @@ export async function ensureCurrentExternalOccurrencesForAthlete(athleteId, pool
        and (
          (t.target_kind = 'athlete' and t.target_athlete_id = $1)
          or (t.target_kind in ('team','club') and m.id is not null)
+       )
+     union
+     select s.* from training_load.external_schedules s
+     join training_load.external_schedule_occurrences o on o.schedule_id = s.id
+     join training_load.external_occurrence_target_snapshot snap on snap.occurrence_id = o.id and snap.athlete_id = $1
+     where s.status = 'active'
+       and not exists (
+         select 1 from training_load.external_assignments a
+         where a.occurrence_id = o.id and a.athlete_id = $1
        )`,
     [athleteId],
   );
