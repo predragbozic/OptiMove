@@ -525,22 +525,33 @@ test("E1 (Round-1 regression). a schedule in Pacific/Kiritimati (UTC+14) targeti
   assert.equal(assignment.timezone, "America/Adak");
 });
 
-test("E2. an athlete already snapshotted into an occurrence but not yet timezone-eligible, whose team membership is later removed, STILL gets materialized once their local date arrives (outstanding-snapshot candidate)", async () => {
+test("E2. an athlete already snapshotted into an occurrence but not yet materialized, whose team membership is later removed, STILL gets materialized once eligible (outstanding-snapshot candidate)", async () => {
   const coach = await makeUser("e2coach");
   const club = await makeClub("E2 Club");
   const team = await makeTeam(club, "E2 Team");
-  // An athlete whose local date is one day AHEAD of UTC, so a UTC-timezone
-  // schedule's occurrence for "today" (UTC) is not yet their own local
-  // "today" at snapshot time.
-  const athleteId = await makeAthlete("E2 Athlete", "Pacific/Auckland");
+  const athleteId = await makeAthlete("E2 Athlete", "UTC");
   await addTeamMembership(athleteId, team, "active");
   const scheduleId = await makeSchedule(coach, { timezone: "UTC" });
   await addTeamTarget(scheduleId, team);
 
   const occurrenceId = await generateOccurrence(scheduleId, TODAY);
-  const firstInsert = await materialize(occurrenceId);
+  // Manufactures "snapshotted but not yet actually materialized" directly,
+  // rather than depending on a real device_timezone offset that happens to
+  // diverge from UTC's own calendar date at THIS exact moment - no fixed
+  // IANA offset (max +/-14h) can ever guarantee a date divergence across
+  // the FULL UTC day, so relying on real wall-clock timing here would be
+  // exactly the kind of fragile timezone assumption this whole feature
+  // exists to avoid (see this migration's own header comment on the
+  // Round-1 bug). Direct INSERT is a real, schema-honest state - it is
+  // exactly the row shape materialize_external_assignments_for_occurrence()
+  // itself would have produced had it been called between the schedule's
+  // snapshot-taking and the athlete's own eligibility window.
+  await query(`insert into training_load.external_occurrence_target_snapshot (occurrence_id, athlete_id) values ($1,$2)`, [occurrenceId, athleteId]);
+  await query(`update training_load.external_schedule_occurrences set assignments_materialized_at = now() where id = $1`, [occurrenceId]);
   const snapshotRows = (await query(`select 1 from training_load.external_occurrence_target_snapshot where occurrence_id = $1 and athlete_id = $2`, [occurrenceId, athleteId])).rowCount;
-  assert.equal(snapshotRows, 1, "the athlete must be in the snapshot regardless of current timezone eligibility");
+  assert.equal(snapshotRows, 1);
+  const assignmentRowsBefore = (await query(`select count(*)::int as n from training_load.external_assignments where occurrence_id = $1`, [occurrenceId])).rows[0].n;
+  assert.equal(assignmentRowsBefore, 0, "setup check: snapshotted but not yet actually materialized into an assignment");
 
   // Membership is removed AFTER the snapshot - resolve_external_schedule_
   // target_athletes would no longer resolve this athlete as a current
@@ -550,6 +561,16 @@ test("E2. an athlete already snapshotted into an occurrence but not yet timezone
   const datesResult = await query(`select local_date from training_load.resolve_current_external_target_dates($1)`, [scheduleId]);
   const dates = datesResult.rows.map((r) => String(r.local_date));
   assert.ok(dates.includes(TODAY), "TODAY must remain a candidate date via the outstanding-snapshot branch, even though membership was removed");
+
+  // Once eligible (UTC athlete, occurrence dated TODAY in UTC - eligible
+  // immediately), a later materialize() call for this SAME occurrence must
+  // still insert the snapshotted athlete's assignment, even though their
+  // membership is now gone - eligibility reads the snapshot, not current
+  // membership.
+  const inserted = await materialize(occurrenceId);
+  assert.equal(inserted, 1);
+  const assignmentAthleteIds = (await query(`select athlete_id from training_load.external_assignments where occurrence_id = $1`, [occurrenceId])).rows.map((r) => r.athlete_id);
+  assert.deepEqual(assignmentAthleteIds, [athleteId]);
 });
 
 // ------------------------------------------------------------

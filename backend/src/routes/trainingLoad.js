@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
@@ -5,6 +6,7 @@ import { canAccessAthlete } from "../access.js";
 import { canManageClub, canManageTeamById, isPlatformAdministrator } from "../authz.js";
 import { canManageExternalSchedule, manageableClubIds, manageableTeamIds, resolveExternalScheduleOwnerContext } from "../trainingLoadAccess.js";
 import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAthlete, ensureCurrentExternalOccurrencesForCoach } from "../trainingLoadOccurrenceService.js";
+import { emitRealtimeEvent } from "../realtime.js";
 
 const router = Router();
 
@@ -1301,6 +1303,161 @@ router.post("/external-assignments/:assignmentId/rpe", async (req, res, next) =>
   } finally {
     if (client) client.release();
   }
+});
+
+// Real 5-minute SLIDING cooldown - never a fixed bucket
+// (Math.floor(now/5min) lets two requests seconds apart, straddling a
+// bucket boundary, both succeed - a real bug in the first version of
+// WELLNESS's own equivalent route). Safe/atomic specifically because it
+// runs while the assignment's own row is already locked (FOR UPDATE,
+// below) - the row lock IS the serialization point, no separate advisory
+// lock needed.
+const MANUAL_REMINDER_COOLDOWN_MS = 5 * 60 * 1000;
+const athleteDisplayNameSql = `coalesce(a.display_name, a.full_name, nullif(concat_ws(' ', a.first_name, a.last_name), ''), a.source_external_id, a.athlete_id::text)`;
+
+// Coach-triggered manual reminder for one or more external assignments -
+// line-for-line mirror of tests.js's own POST /schedules/:scheduleId/remind:
+// lock order schedule (FOR SHARE) -> occurrence(s) (FOR SHARE, resolved via
+// an unlocked lookup first) -> assignment rows (FOR UPDATE), schedule-level
+// gates checked once, per-assignment gates each producing a distinct
+// outcome (never a silent drop), the real sliding-window cooldown above,
+// and the same shared public.app_notifications.dedupe_key convention
+// builder.js's own one-shot notifications already use.
+router.post("/external-schedules/:scheduleId/remind", async (req, res, next) => {
+  const assignmentIds = Array.isArray(req.body?.assignmentIds) ? [...new Set(req.body.assignmentIds.filter((id) => typeof id === "string" && id))] : [];
+  if (!requireCoachWorkspace(req, res)) return;
+  if (!assignmentIds.length) return res.status(400).json({ error: "assignmentIds is required." });
+
+  const client = await pool.connect();
+  let results;
+  const toEmit = [];
+  try {
+    await client.query("begin");
+
+    const scheduleResult = await client.query(`select * from training_load.external_schedules where id = $1 for share`, [req.params.scheduleId]);
+    const schedule = scheduleResult.rows[0];
+    if (!schedule) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Schedule not found." });
+    }
+    if (!canManageExternalSchedule(req, schedule)) {
+      await client.query("rollback");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    if (schedule.status === "cancelled") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule is cancelled." });
+    }
+    if (schedule.status === "paused") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule is paused - athletes can't submit right now, so a reminder would be pointless." });
+    }
+
+    const occurrenceLookup = await client.query(
+      `select distinct o.id
+       from training_load.external_assignments asg
+       join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
+       where o.schedule_id = $1 and asg.id = any($2::uuid[])
+       order by o.id`,
+      [schedule.id, assignmentIds],
+    );
+    if (occurrenceLookup.rowCount) {
+      await client.query(
+        `select id from training_load.external_schedule_occurrences where id = any($1::uuid[]) order by id for share`,
+        [occurrenceLookup.rows.map((r) => r.id)],
+      );
+    }
+
+    const assignmentRows = await client.query(
+      `select asg.*, a.user_id, ${athleteDisplayNameSql} as athlete_name
+       from training_load.external_assignments asg
+       join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
+       join public.athletes a on a.id = asg.athlete_id
+       where o.schedule_id = $1 and asg.id = any($2::uuid[])
+       order by asg.id
+       for update of asg`,
+      [schedule.id, assignmentIds],
+    );
+    const rowsById = new Map(assignmentRows.rows.map((row) => [row.id, row]));
+
+    const now = new Date();
+    results = [];
+    for (const assignmentId of assignmentIds) {
+      const row = rowsById.get(assignmentId);
+      if (!row) {
+        results.push({ assignmentId, outcome: "skippedNotFound" });
+        continue;
+      }
+      const base = { assignmentId, athleteId: row.athlete_id, athleteName: row.athlete_name };
+      if (row.status === "completed") {
+        results.push({ ...base, outcome: "skippedCompleted" });
+        continue;
+      }
+      if (["missed", "excused", "cancelled"].includes(row.status)) {
+        results.push({ ...base, outcome: "skippedNotOpen" });
+        continue;
+      }
+      if (new Date(row.opens_at) > now) {
+        results.push({ ...base, outcome: "skippedNotOpen" });
+        continue;
+      }
+      if (new Date(row.closes_at) < now) {
+        results.push({ ...base, outcome: "skippedClosed" });
+        continue;
+      }
+      if (!row.user_id) {
+        results.push({ ...base, outcome: "skippedNoUser" });
+        continue;
+      }
+
+      const cooldownResult = await client.query(
+        `select exists (
+           select 1 from public.app_notifications
+           where entity_type = 'training_load_external_assignment' and entity_id = $1 and type = 'training_load_manual_reminder'
+             and created_at > now() - ($2 || ' milliseconds')::interval
+         ) as in_cooldown`,
+        [assignmentId, MANUAL_REMINDER_COOLDOWN_MS],
+      );
+      if (cooldownResult.rows[0].in_cooldown) {
+        results.push({ ...base, outcome: "skippedCooldown" });
+        continue;
+      }
+
+      const dedupeKey = `manual_reminder:v1:${assignmentId}:${crypto.randomUUID()}`;
+      const inserted = await client.query(
+        `insert into public.app_notifications (recipient_user_id, actor_user_id, type, title, body, entity_type, entity_id, metadata, dedupe_key)
+         values ($1, $2, 'training_load_manual_reminder', 'Training load reminder', $3, 'training_load_external_assignment', $4, $5::jsonb, $6)
+         returning id`,
+        [
+          row.user_id,
+          req.user.id,
+          `Your coach sent you a reminder to log RPE for "${schedule.event_name}".`,
+          assignmentId,
+          JSON.stringify({ scheduleId: schedule.id, assignmentId }),
+          dedupeKey,
+        ],
+      );
+      toEmit.push({ userId: row.user_id, notificationId: inserted.rows[0].id });
+      results.push({ ...base, outcome: "notified" });
+    }
+
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    return next(error);
+  } finally {
+    client.release();
+  }
+
+  for (const { userId, notificationId } of toEmit) {
+    emitRealtimeEvent(userId, "notifications_changed", { notificationId, type: "training_load_manual_reminder" });
+  }
+
+  res.json({
+    results,
+    notifiedCount: results.filter((r) => r.outcome === "notified").length,
+    noUserCount: results.filter((r) => r.outcome === "skippedNoUser").length,
+  });
 });
 
 export default router;

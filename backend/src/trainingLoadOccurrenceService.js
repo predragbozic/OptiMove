@@ -11,9 +11,15 @@
 // Date math is always done IN POSTGRES (training_load.resolve_current_
 // external_target_dates), never in JS with the server's own local clock -
 // same rule testsOccurrenceService.js itself documents.
-import { pool } from "./db.js";
+//
+// Every export here takes `pool` as an explicit parameter, defaulting to
+// the shared web-server pool (./db.js) so route call sites don't need to
+// pass it - but the standalone background worker (a separate process with
+// its OWN pg.Pool, matching testsNotificationWorkerCli.js's own
+// convention) passes its own pool explicitly instead.
+import { pool as defaultPool } from "./db.js";
 
-export async function ensureCurrentExternalOccurrence(schedule) {
+export async function ensureCurrentExternalOccurrence(schedule, pool = defaultPool) {
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -65,7 +71,7 @@ export async function ensureCurrentExternalOccurrence(schedule) {
 // pending assignments, so a freshly-eligible occurrence/assignment always
 // exists by the time it's read, without waiting for the background worker's
 // own cycle.
-export async function ensureCurrentExternalOccurrencesForAthlete(athleteId) {
+export async function ensureCurrentExternalOccurrencesForAthlete(athleteId, pool = defaultPool) {
   const schedulesResult = await pool.query(
     `select distinct s.*
      from training_load.external_schedules s
@@ -81,7 +87,7 @@ export async function ensureCurrentExternalOccurrencesForAthlete(athleteId) {
     [athleteId],
   );
   for (const schedule of schedulesResult.rows) {
-    await ensureCurrentExternalOccurrence(schedule);
+    await ensureCurrentExternalOccurrence(schedule, pool);
   }
 }
 
@@ -90,7 +96,7 @@ export async function ensureCurrentExternalOccurrencesForAthlete(athleteId) {
 // filter" - platform admin) may currently manage - called right before a
 // coach-facing route reads schedule/occurrence/assignment state, mirroring
 // the athlete-side helper above.
-export async function ensureCurrentExternalOccurrencesForCoach({ userId, clubIds, teamIds, isPlatformAdmin }) {
+export async function ensureCurrentExternalOccurrencesForCoach({ userId, clubIds, teamIds, isPlatformAdmin }, pool = defaultPool) {
   let conditions = ["s.owner_scope = 'user' and s.created_by_user_id = $1"];
   let params = [userId];
   if (isPlatformAdmin) {
@@ -111,6 +117,6 @@ export async function ensureCurrentExternalOccurrencesForCoach({ userId, clubIds
     params,
   );
   for (const schedule of schedulesResult.rows) {
-    await ensureCurrentExternalOccurrence(schedule);
+    await ensureCurrentExternalOccurrence(schedule, pool);
   }
 }

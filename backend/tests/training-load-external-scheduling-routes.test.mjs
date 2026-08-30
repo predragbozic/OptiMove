@@ -20,6 +20,7 @@ import * as runner from "../src/migrate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = [
+  ["202608280900_app_notifications_dedupe_key.sql"],
   ["202608310900_training_load_v1_session_feedback.sql"],
   ["202608320900_training_load_v2_logical_session_identity.sql"],
   ["202609010900_training_load_v3_rpe_enabled.sql"],
@@ -132,6 +133,21 @@ const LEGACY_FIXTURE_SQL = `
   create table public.athlete_invites (id uuid primary key default gen_random_uuid(), context_type text);
   create table public.account_email_change_tokens (id uuid primary key default gen_random_uuid());
 
+  create table public.app_notifications (
+    id uuid primary key default gen_random_uuid(),
+    recipient_user_id uuid not null references public.users(id) on delete cascade,
+    actor_user_id uuid references public.users(id) on delete set null,
+    type varchar(80) not null,
+    title text not null,
+    body text,
+    entity_type varchar(80),
+    entity_id uuid,
+    href text,
+    metadata jsonb not null default '{}'::jsonb,
+    read_at timestamptz,
+    created_at timestamptz not null default now()
+  );
+
   create schema library;
   create table library.exercises (id uuid primary key default gen_random_uuid());
 
@@ -204,6 +220,7 @@ async function writeMigrationsDir(runId, files) {
 let db, adminClient, migrationsDir;
 let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
+let processTrainingLoadNotificationCycle;
 
 before(async () => {
   const contents = await Promise.all(MIGRATIONS.map((m) => fsp.readFile(m.path, "utf8")));
@@ -228,6 +245,8 @@ before(async () => {
   createSession = authModule.createSession;
   hashPassword = authModule.hashPassword;
   const serverModule = await import("../src/server.js");
+  const workerModule = await import("../src/trainingLoadNotificationWorker.js");
+  processTrainingLoadNotificationCycle = workerModule.processTrainingLoadNotificationCycle;
 
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
@@ -596,4 +615,194 @@ test("D3. browsing the weekly view is a pure read - no occurrence/assignment/ses
   assert.equal(afterOccurrences, beforeOccurrences, "repeated GETs of the same/other weeks must not create new occurrences beyond on-demand generation's own idempotent behavior");
   assert.equal(afterAssignments, beforeAssignments);
   assert.equal(afterFeedback, beforeFeedback, "a pure read must never create a result row");
+});
+
+// ------------------------------------------------------------
+// E. Manual reminder
+// ------------------------------------------------------------
+
+test("E1. a manual reminder to a pending assignment succeeds, creating a real notification with the right deep-link metadata", async () => {
+  const { coachCookie, scheduleId, athlete, assignmentId } = await makeReadyAssignment("e1");
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [assignmentId] } });
+  assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
+  assert.equal(res.body.notifiedCount, 1);
+  assert.equal(res.body.results[0].outcome, "notified");
+  const notification = (await query(
+    `select entity_type, entity_id, metadata, recipient_user_id from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1`,
+    [assignmentId],
+  )).rows[0];
+  assert.ok(notification, "a real app_notifications row must be created");
+  assert.equal(notification.recipient_user_id, athlete.userId);
+  assert.equal(notification.metadata.assignmentId, assignmentId, "deep-link metadata must point at the exact assignment, not a generic tab");
+});
+
+test("E2. a manual reminder to an ALREADY-COMPLETED assignment is skipped, never re-notified", async () => {
+  const { coachCookie, scheduleId, athlete, assignmentId } = await makeReadyAssignment("e2");
+  await api(`/api/training-load/external-assignments/${assignmentId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 30 } });
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [assignmentId] } });
+  assert.equal(res.body.results[0].outcome, "skippedCompleted");
+  assert.equal(res.body.notifiedCount, 0);
+});
+
+test("E3. an assignment for an athlete with NO linked user account is reported skippedNoUser and never crashes the rest of the batch", async () => {
+  const { coachCookie, scheduleId, athlete: readyAthlete, assignmentId: readyAssignmentId } = await makeReadyAssignment("e3");
+  const occurrenceId = (await query(`select occurrence_id from training_load.external_assignments where id = $1`, [readyAssignmentId])).rows[0].occurrence_id;
+  const noUserAthleteId = await makeAthlete({ name: "E3 No User Athlete" });
+  const noUserAssignment = await query(
+    `insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at)
+     values ($1,$2,'UTC',$3, now() - interval '1 hour', null, now() + interval '1 hour') returning id`,
+    [occurrenceId, noUserAthleteId, TODAY],
+  );
+  const noUserAssignmentId = noUserAssignment.rows[0].id;
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [noUserAssignmentId, readyAssignmentId] } });
+  assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
+  assert.equal(res.body.noUserCount, 1);
+  assert.equal(res.body.notifiedCount, 1, "the OTHER assignment in the same batch must still be notified");
+  const noUserResult = res.body.results.find((r) => r.assignmentId === noUserAssignmentId);
+  const readyResult = res.body.results.find((r) => r.assignmentId === readyAssignmentId);
+  assert.equal(noUserResult.outcome, "skippedNoUser");
+  assert.equal(readyResult.outcome, "notified");
+});
+
+test("E4. a real sliding-window cooldown - two reminders for the same assignment straddling a fixed-bucket boundary would both incorrectly succeed with a naive implementation; here the second must be skippedCooldown", async () => {
+  const { coachCookie, scheduleId, assignmentId } = await makeReadyAssignment("e4");
+  const first = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [assignmentId] } });
+  assert.equal(first.body.results[0].outcome, "notified");
+  const second = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [assignmentId] } });
+  assert.equal(second.body.results[0].outcome, "skippedCooldown", "a reminder sent moments ago must not send a second one immediately");
+});
+
+test("E5. a manual reminder against a PAUSED or CANCELLED schedule is rejected outright with a controlled 400", async () => {
+  const { coachCookie, scheduleId, assignmentId } = await makeReadyAssignment("e5");
+  await api(`/api/training-load/external-schedules/${scheduleId}/pause`, { method: "POST", cookie: coachCookie });
+  const pausedRes = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [assignmentId] } });
+  assert.equal(pausedRes.status, 400);
+
+  await api(`/api/training-load/external-schedules/${scheduleId}/resume`, { method: "POST", cookie: coachCookie });
+  await api(`/api/training-load/external-schedules/${scheduleId}/cancel`, { method: "POST", cookie: coachCookie });
+  const cancelledRes = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [assignmentId] } });
+  assert.equal(cancelledRes.status, 400);
+});
+
+test("E6. only a currently pending/eligible assignment within its own window is notified - not-yet-open and already-closed assignments are skipped with distinct outcome codes", async () => {
+  const { coachCookie, scheduleId, assignmentId } = await makeReadyAssignment("e6");
+  const occurrenceId = (await query(`select occurrence_id from training_load.external_assignments where id = $1`, [assignmentId])).rows[0].occurrence_id;
+  const notYetOpenAthleteId = await makeAthlete({ name: "E6 Not Yet Open" });
+  const notYetOpenUserId = await makeUser({ email: `e6-notyet-${Date.now()}@test.local`, roleHint: "athlete" });
+  await query(`update public.athletes set user_id = $2 where id = $1`, [notYetOpenAthleteId, notYetOpenUserId]);
+  const notYetOpenAssignment = await query(
+    `insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at)
+     values ($1,$2,'UTC',$3, now() + interval '1 hour', null, now() + interval '2 hours') returning id`,
+    [occurrenceId, notYetOpenAthleteId, TODAY],
+  );
+  const closedAthleteId = await makeAthlete({ name: "E6 Closed" });
+  const closedUserId = await makeUser({ email: `e6-closed-${Date.now()}@test.local`, roleHint: "athlete" });
+  await query(`update public.athletes set user_id = $2 where id = $1`, [closedAthleteId, closedUserId]);
+  const closedAssignment = await query(
+    `insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at)
+     values ($1,$2,'UTC',$3, now() - interval '2 hours', null, now() - interval '1 hour') returning id`,
+    [occurrenceId, closedAthleteId, TODAY],
+  );
+
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, {
+    method: "POST", cookie: coachCookie,
+    body: { assignmentIds: [notYetOpenAssignment.rows[0].id, closedAssignment.rows[0].id] },
+  });
+  const notYetOpenResult = res.body.results.find((r) => r.assignmentId === notYetOpenAssignment.rows[0].id);
+  const closedResult = res.body.results.find((r) => r.assignmentId === closedAssignment.rows[0].id);
+  assert.equal(notYetOpenResult.outcome, "skippedNotOpen");
+  assert.equal(closedResult.outcome, "skippedClosed");
+});
+
+test("E7. a coach outside this schedule's workspace access gets an explicit 403, never able to trigger a reminder", async () => {
+  const { scheduleId, assignmentId } = await makeReadyAssignment("e7a");
+  const outside = await makeClubWithAthletes("e7b", 1);
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: outside.coachCookie, body: { assignmentIds: [assignmentId] } });
+  assert.equal(res.status, 403);
+});
+
+// ------------------------------------------------------------
+// F. Background notification worker cycle
+// ------------------------------------------------------------
+
+test("F1. the worker sends exactly one athlete-invitation notification for a currently-open assignment, and a second cycle never re-sends it", async () => {
+  const { athlete, assignmentId } = await makeReadyAssignment("f1");
+  const summary1 = await processTrainingLoadNotificationCycle({ now: new Date(), pool });
+  assert.ok(summary1.invitations.sent >= 1, `expected at least one invitation sent, got: ${JSON.stringify(summary1)}`);
+  const countAfterFirst = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1 and type = 'training_load_external_invitation'`, [assignmentId])).rows[0].n;
+  assert.equal(countAfterFirst, 1);
+
+  const summary2 = await processTrainingLoadNotificationCycle({ now: new Date(), pool });
+  assert.equal(summary2.invitations.sent, 0, "a second cycle must never re-send an invitation already sent");
+  const countAfterSecond = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1 and type = 'training_load_external_invitation'`, [assignmentId])).rows[0].n;
+  assert.equal(countAfterSecond, 1, "still exactly one notification, never duplicated");
+});
+
+test("F2. the worker sends a reminder once the reminder offset before closes_at has passed, and skips it before then - deterministic via a synthetic `now`, never dependent on real wall-clock proximity to closes_at", async () => {
+  // A real schedule/occurrence (via makeReadyAssignment for a first
+  // athlete), but the assignment actually tested here is a SEPARATE, fresh
+  // athlete under that SAME occurrence, inserted directly with an explicit
+  // closes_at 2 hours out - the window is immutable once created, so this
+  // is the only way to get a deterministic, real-schema-honest row to test
+  // the 60-minute reminder offset against, independent of what real wall-
+  // clock time this suite happens to run at (and isolated from any other
+  // test's own leftover pending assignments in this same shared temp DB).
+  const ready = await makeReadyAssignment("f2");
+  const occurrenceId = (await query(`select occurrence_id from training_load.external_assignments where id = $1`, [ready.assignmentId])).rows[0].occurrence_id;
+  const reminderAthleteId = await makeAthlete({ name: "F2 Reminder Athlete" });
+  const reminderUserId = await makeUser({ email: `f2-reminder-${Date.now()}@test.local`, roleHint: "athlete" });
+  await query(`update public.athletes set user_id = $2 where id = $1`, [reminderAthleteId, reminderUserId]);
+  const closesAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  const assignmentResult = await query(
+    `insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at)
+     values ($1,$2,'UTC',$3, now() - interval '1 hour', null, $4) returning id`,
+    [occurrenceId, reminderAthleteId, TODAY, closesAt.toISOString()],
+  );
+  const assignmentId = assignmentResult.rows[0].id;
+
+  // Too early: a synthetic `now` more than 60 minutes before closes_at.
+  const before = await processTrainingLoadNotificationCycle({ now: new Date(closesAt.getTime() - 90 * 60 * 1000), pool });
+  const countBefore = (await query(`select count(*)::int as n from public.app_notifications where entity_id = $1 and type = 'training_load_external_reminder'`, [assignmentId])).rows[0].n;
+  assert.equal(countBefore, 0, "too early for the reminder offset - must not send yet");
+
+  // Now within 60 minutes of closes_at.
+  const after = await processTrainingLoadNotificationCycle({ now: new Date(closesAt.getTime() - 30 * 60 * 1000), pool });
+  assert.equal(after.errors.length, 0, `expected no worker errors, got: ${JSON.stringify(after.errors)}`);
+  const countAfter = (await query(`select count(*)::int as n from public.app_notifications where entity_id = $1 and type = 'training_load_external_reminder'`, [assignmentId])).rows[0].n;
+  assert.equal(countAfter, 1, `expected exactly one reminder notification for this assignment once the offset has passed, got summary: ${JSON.stringify(after)}`);
+});
+
+test("F3. the worker sends a final digest to the schedule's own creator once the occurrence has closed, with an accurate completed/total count", async () => {
+  const { coachCookie, coachId, athletes } = await makeClubWithAthletes("f3", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  const occurrenceId = (await query(`select occurrence_id from training_load.external_assignments where athlete_id = $1`, [athletes[0].athleteId])).rows[0].occurrence_id;
+  const occurrenceClosesAt = (await query(`select closes_at from training_load.external_schedule_occurrences where id = $1`, [occurrenceId])).rows[0].closes_at;
+
+  // The occurrence's own window is immutable after creation (by design),
+  // so "closed" here is simulated by passing a `now` AFTER its real
+  // closes_at, rather than waiting for real wall-clock time to pass.
+  const summary = await processTrainingLoadNotificationCycle({ now: new Date(new Date(occurrenceClosesAt).getTime() + 60 * 1000), pool });
+  assert.ok(summary.finalDigests.sent >= 1, `expected a final digest to send, got: ${JSON.stringify(summary)}`);
+  const digest = (await query(`select recipient_user_id, body from public.app_notifications where entity_type = 'training_load_external_occurrence' and entity_id = $1`, [occurrenceId])).rows[0];
+  assert.equal(digest.recipient_user_id, coachId);
+  assert.match(digest.body, /0\/1/, "0 of 1 athletes completed at this point");
+});
+
+test("F4. the worker never crashes on an athlete with no linked user account - it's skipped and reported in the cycle summary", async () => {
+  const { coachCookie, clubId } = await makeClubWithAthletes("f4", 0);
+  const noUserAthleteId = await makeAthlete({ name: "F4 No User" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [noUserAthleteId, clubId]);
+  await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: noUserAthleteId }] }),
+  });
+
+  const summary = await processTrainingLoadNotificationCycle({ now: new Date(), pool });
+  assert.ok(summary.invitations.noRecipient >= 1, `expected at least one noRecipient, got: ${JSON.stringify(summary)}`);
+  assert.equal(summary.errors.length, 0, "a missing user_id must never produce a worker error");
 });
