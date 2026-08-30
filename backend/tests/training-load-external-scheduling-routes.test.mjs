@@ -26,6 +26,7 @@ const MIGRATIONS = [
   ["202609010900_training_load_v3_rpe_enabled.sql"],
   ["202609011000_training_load_v4_external_scheduling.sql"],
   ["202609011100_training_load_v5_unified_result_source.sql"],
+  ["202609011200_training_load_v6_external_schedule_event_type.sql"],
 ].map(([name]) => ({ name, path: path.resolve(__dirname, `../../migrations_v2/${name}`) }));
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -418,6 +419,20 @@ test("A6. a plain user (no coach workspace) cannot create an external schedule",
   assert.equal(res.status, 403);
 });
 
+test("A7. eventType is optional, round-trips through create/detail, and rejects an unrecognized value with a controlled 400", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("a7", 1);
+  const withType = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ eventType: "rehabilitation", targets: [{ kind: "athlete", id: athletes[0].athleteId }] }) });
+  assert.equal(withType.status, 201);
+  assert.equal(withType.body.schedules[0].eventType, "rehabilitation");
+
+  const withoutType = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ targets: [{ kind: "athlete", id: athletes[0].athleteId }] }) });
+  assert.equal(withoutType.status, 201);
+  assert.equal(withoutType.body.schedules[0].eventType, null, "no type chosen is a normal, valid state");
+
+  const invalid = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ eventType: "not-a-real-type", targets: [{ kind: "athlete", id: athletes[0].athleteId }] }) });
+  assert.equal(invalid.status, 400, "an unrecognized event type must be a controlled 400, never silently stored or a 500");
+});
+
 // ------------------------------------------------------------
 // B. List/detail/update/pause/resume/cancel/schedule-again
 // ------------------------------------------------------------
@@ -481,6 +496,15 @@ test("B4. Schedule again creates a genuinely NEW schedule (never mutates the ori
 
   const occurrenceCount = (await query(`select count(*)::int as n from training_load.external_schedule_occurrences where schedule_id = $1`, [newId])).rows[0].n;
   assert.equal(occurrenceCount, 0, "Schedule again must never copy occurrences/history onto the new schedule");
+});
+
+test("B5. Schedule again also copies eventType onto the new schedule", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("b5", 1);
+  const created = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ eventType: "gym", targets: [{ kind: "athlete", id: athletes[0].athleteId }] }) });
+  const originalId = created.body.schedules[0].id;
+  const again = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, { method: "POST", cookie: coachCookie, body: { startDate: addDaysIso(TODAY, 30) } });
+  assert.equal(again.status, 201);
+  assert.equal(again.body.schedule.eventType, "gym");
 });
 
 // ------------------------------------------------------------

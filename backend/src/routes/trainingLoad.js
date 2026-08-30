@@ -905,6 +905,10 @@ async function insertExternalTargets(client, scheduleId, targets) {
   }
 }
 
+// Optional label only - never referenced by scheduling/timezone/occurrence
+// logic (see migrations_v2/202609011200_training_load_v6...).
+const EXTERNAL_EVENT_TYPES = ["team_training", "individual", "gym", "rehabilitation", "match", "other"];
+
 function formatExternalScheduleRow(row) {
   return {
     id: row.id,
@@ -918,6 +922,7 @@ function formatExternalScheduleRow(row) {
     closesTime: row.closes_time,
     status: row.status,
     eventName: row.event_name,
+    eventType: row.event_type || null,
     eventNote: row.event_note || "",
     ownerScope: row.owner_scope,
     ownerUserId: row.owner_user_id,
@@ -960,13 +965,13 @@ function resolveExternalScheduleKindAndDates(body) {
   return { scheduleKind: "one_time", recurrenceRule: null, dateSets: [{ startDate, endDate: null }] };
 }
 
-async function insertExternalSchedule(client, { scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventNote, userId, owner }) {
+async function insertExternalSchedule(client, { scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId, owner }) {
   const result = await client.query(
     `insert into training_load.external_schedules
-       (schedule_kind, timezone, start_date, end_date, recurrence_rule, recurrence_rule_version, opens_time, due_time, closes_time, status, event_name, event_note, created_by_user_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
-     values ($1,$2,$3,$4,$5,1,$6,$7,$8,'active',$9,$10,$11,$12,$13,$14,$15)
+       (schedule_kind, timezone, start_date, end_date, recurrence_rule, recurrence_rule_version, opens_time, due_time, closes_time, status, event_name, event_type, event_note, created_by_user_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
+     values ($1,$2,$3,$4,$5,1,$6,$7,$8,'active',$9,$10,$11,$12,$13,$14,$15,$16)
      returning *`,
-    [scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventNote, userId, owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId],
+    [scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId, owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId],
   );
   return result.rows[0];
 }
@@ -980,6 +985,9 @@ router.post("/external-schedules", async (req, res, next) => {
     if (!eventName || eventName.length > 120) return res.status(400).json({ error: "Event name is required (120 characters max)." });
     const eventNote = nullableText(body.eventNote);
     if (eventNote && eventNote.length > 500) return res.status(400).json({ error: "Note is too long (500 characters max)." });
+    const eventTypeInput = nullableText(body.eventType);
+    if (eventTypeInput && !EXTERNAL_EVENT_TYPES.includes(eventTypeInput)) return res.status(400).json({ error: "Invalid event type." });
+    const eventType = eventTypeInput || null;
     const timezone = text(body.timezone);
     const opensTime = text(body.opensTime);
     const dueTime = text(body.dueTime) || null;
@@ -1000,7 +1008,7 @@ router.post("/external-schedules", async (req, res, next) => {
       const schedule = await insertExternalSchedule(client, {
         scheduleKind, timezone, startDate: dateSet.startDate, endDate: dateSet.endDate,
         recurrenceRule: recurrenceRule ? JSON.stringify(recurrenceRule) : null,
-        opensTime, dueTime, closesTime, eventName, eventNote, userId: req.user.id, owner,
+        opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId: req.user.id, owner,
       });
       await insertExternalTargets(client, schedule.id, resolved.targets);
       schedules.push(schedule);
@@ -1096,6 +1104,15 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
       return res.status(400).json({ error: "Event name is required (120 characters max)." });
     }
     const eventNote = body.eventNote !== undefined ? nullableText(body.eventNote) : schedule.event_note;
+    let eventType = schedule.event_type;
+    if (body.eventType !== undefined) {
+      const eventTypeInput = nullableText(body.eventType);
+      if (eventTypeInput && !EXTERNAL_EVENT_TYPES.includes(eventTypeInput)) {
+        await client.query("rollback");
+        return res.status(400).json({ error: "Invalid event type." });
+      }
+      eventType = eventTypeInput || null;
+    }
     const opensTime = body.opensTime !== undefined ? text(body.opensTime) : schedule.opens_time;
     const dueTime = body.dueTime !== undefined ? (text(body.dueTime) || null) : schedule.due_time;
     const closesTime = body.closesTime !== undefined ? text(body.closesTime) : schedule.closes_time;
@@ -1103,9 +1120,9 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
 
     await client.query(
       `update training_load.external_schedules
-       set event_name = $2, event_note = $3, opens_time = $4, due_time = $5, closes_time = $6, end_date = $7, updated_at = now()
+       set event_name = $2, event_type = $3, event_note = $4, opens_time = $5, due_time = $6, closes_time = $7, end_date = $8, updated_at = now()
        where id = $1`,
-      [schedule.id, eventName, eventNote, opensTime, dueTime, closesTime, endDate],
+      [schedule.id, eventName, eventType, eventNote, opensTime, dueTime, closesTime, endDate],
     );
     if (body.targets !== undefined) {
       const resolved = await resolveValidExternalTargets(req, body.targets);
@@ -1181,6 +1198,7 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
       dueTime: source.due_time,
       closesTime: source.closes_time,
       eventName: source.event_name,
+      eventType: source.event_type,
       eventNote: source.event_note,
       userId: req.user.id,
       owner: { ownerScope: source.owner_scope, ownerUserId: source.owner_user_id, ownerClubId: source.owner_club_id, ownerTeamId: source.owner_team_id },
