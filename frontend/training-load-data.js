@@ -140,3 +140,38 @@ export async function toggleSessionRpeEnabled(sessionId, rpeEnabled, confirmDisa
     body: JSON.stringify({ rpeEnabled, ...(confirmDisableWithResults ? { confirmDisableWithResults: true } : {}) }),
   });
 }
+
+// ------------------------------------------------------------
+// External (outside-plan) RPE scheduling - "New RPE session" on the
+// Schedule tab. Same CRUD/lifecycle contract as WELLNESS's own schedule
+// endpoints (tests-data.js), a fully independent set of routes/tables.
+// ------------------------------------------------------------
+
+export async function createExternalSchedule(body) {
+  return api("/api/training-load/external-schedules", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function loadExternalScheduleDetail(scheduleId) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}`);
+}
+
+export async function updateExternalSchedule(scheduleId, body) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export async function setExternalScheduleStatus(scheduleId, status) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}/${status}`, { method: "POST" });
+}
+
+export async function scheduleExternalAgain(scheduleId, body) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}/schedule-again`, { method: "POST", body: JSON.stringify(body) });
+}
+
+// Body: { assignmentIds: [] }. Same per-item outcome-code contract as
+// WELLNESS's own manual reminder (tests-data.js's sendManualReminder).
+export async function sendExternalScheduleReminder(scheduleId, assignmentIds) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}/remind`, {
+    method: "POST",
+    body: JSON.stringify({ assignmentIds }),
+  });
+}

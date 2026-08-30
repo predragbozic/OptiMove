@@ -1,16 +1,22 @@
-import { emptyRpeForm, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
-import { addDaysIso, localDateIsoInTimeZone, weekMondayIso } from "./utils.js";
+import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyRpeForm, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
+import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
 import {
+  createExternalSchedule,
   invalidateAllTrainingLoadWeeklyGenerations,
+  loadExternalScheduleDetail,
   loadTrainingLoadAthleteToday,
   loadTrainingLoadAthleteWeekly,
   loadTrainingLoadOrgPickerData,
   loadTrainingLoadWeekly,
+  scheduleExternalAgain,
+  sendExternalScheduleReminder,
+  setExternalScheduleStatus,
   submitRpe,
   submitExternalRpe,
   toggleSessionRpeEnabled,
+  updateExternalSchedule,
 } from "./training-load-data.js";
-import { isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
+import { externalCalendarMode, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 // Every data-action="training-load-*" click/input in the Athlete Home card/
 // RPE form/weekly overlay and the coach Training Load tab routes through
@@ -275,7 +281,471 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
 
+  // -------------------- Coach: "New RPE session" (external scheduling) --------------------
+
+  if (type === "training-load-open-schedule-form") {
+    const defaultTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+      timezone: defaultTimezone,
+      startDate: localDateIsoInTimeZone(defaultTimezone),
+      calendarMonth: localMonthIsoInTimeZone(defaultTimezone),
+    });
+    state.trainingLoad.scheduleDetail = null;
+    renderTrainingLoad();
+    void loadTrainingLoadOrgPickerData().then(renderTrainingLoad).catch(() => {});
+    return true;
+  }
+  if (type === "training-load-close-schedule-form") {
+    state.trainingLoad.scheduleForm = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-schedule-form-field") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    // For a real input/textarea, `action` IS the DOM element itself (see
+    // app.js's own handleContentInput - it dispatches training-load-*
+    // actions straight off the element, same convention as the RPE form's
+    // own slider/duration/note inputs above), so its `name` HTML attribute
+    // is read as a native property, never a dataset lookup.
+    const name = action.name || action.dataset?.name;
+    const value = action.value ?? action.target?.value ?? "";
+    if (name && name in form) form[name] = value;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-schedule-set-event-type") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    const value = action.dataset.eventType;
+    form.eventType = form.eventType === value ? "" : value;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-schedule-set-recurrence") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    const isEdit = Boolean(form.editingScheduleId);
+    const daily = action.dataset.daily === "true";
+    form.scheduleKind = daily ? "daily" : isEdit ? "one_time" : "specific_dates";
+    form.calendarOpen = true;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-toggle-advanced-settings") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    form.advancedSettingsOpen = !form.advancedSettingsOpen;
+    renderTrainingLoad();
+    return true;
+  }
+
+  // -------------------- New RPE session: calendar (click-only, no drag) --------------------
+
+  if (type === "training-load-calendar-day-click") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    const date = action.dataset.date;
+    const mode = externalCalendarMode(form);
+    if (mode === "multi") {
+      const index = form.selectedDates.indexOf(date);
+      if (index >= 0) form.selectedDates.splice(index, 1);
+      else form.selectedDates.push(date);
+    } else if (mode === "single") {
+      form.startDate = date;
+      form.endDate = date;
+    } else {
+      // range (Daily): a two-click anchor - the first click starts a fresh
+      // range, the second confirms start..end (sorted) and clears the
+      // anchor, so the click right after that starts a brand-new range.
+      if (!form.rangeAnchor) {
+        form.rangeAnchor = date;
+        form.startDate = date;
+        form.endDate = date;
+      } else {
+        const [from, to] = form.rangeAnchor <= date ? [form.rangeAnchor, date] : [date, form.rangeAnchor];
+        form.startDate = from;
+        form.endDate = to;
+        form.rangeAnchor = "";
+      }
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-prev-month" || type === "training-load-calendar-next-month") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    const timezone = form.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const [year, month] = (form.calendarMonth || localMonthIsoInTimeZone(timezone)).split("-").map(Number);
+    const delta = type === "training-load-calendar-prev-month" ? -1 : 1;
+    const next = new Date(Date.UTC(year, month - 1 + delta, 1));
+    form.calendarMonth = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-remove-date") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    form.selectedDates = form.selectedDates.filter((d) => d !== action.dataset.date);
+    renderTrainingLoad();
+    return true;
+  }
+
+  // -------------------- New RPE session: recipients picker --------------------
+
+  if (type === "training-load-open-recipient-picker") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    if (!state.trainingLoad.orgPickerData) await loadTrainingLoadOrgPickerData().catch(() => {});
+    form.recipientPickerOpen = true;
+    form.recipientPickerSnapshot = { athleteIds: form.athleteIds.slice(), teamIds: form.teamIds.slice(), clubIds: form.clubIds.slice() };
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-recipient-picker-cancel") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    if (form.recipientPickerSnapshot) {
+      form.athleteIds = form.recipientPickerSnapshot.athleteIds.slice();
+      form.teamIds = form.recipientPickerSnapshot.teamIds.slice();
+      form.clubIds = form.recipientPickerSnapshot.clubIds.slice();
+    }
+    form.recipientPickerSnapshot = null;
+    form.recipientPickerOpen = false;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-recipient-picker-confirm") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    form.recipientPickerSnapshot = null;
+    form.recipientPickerOpen = false;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-recipient-picker-set-tab") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    form.recipientPickerTab = action.dataset.recipientTab;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-recipient-athlete-search") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    form.athleteSearch = action.value ?? action.target?.value ?? "";
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-recipient-picker-toggle") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    const key = recipientListKey(action.dataset.kind);
+    const list = form[key];
+    const index = list.indexOf(action.dataset.id);
+    if (index >= 0) list.splice(index, 1);
+    else list.push(action.dataset.id);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-recipient-picker-select-all") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    const kind = action.dataset.kind;
+    const key = recipientListKey(kind);
+    const items = kind === "club" ? state.trainingLoad.orgPickerData?.clubs || []
+      : kind === "team" ? state.trainingLoad.orgPickerData?.teams || []
+      : externalRecipientVisibleAthletesForActions(form);
+    const selected = new Set(form[key]);
+    for (const item of items) selected.add(item.id);
+    form[key] = Array.from(selected);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-recipient-picker-clear") {
+    const form = state.trainingLoad.scheduleForm;
+    if (!form) return true;
+    form[recipientListKey(action.dataset.kind)] = [];
+    renderTrainingLoad();
+    return true;
+  }
+
+  // -------------------- New RPE session: submit (create/update) --------------------
+
+  if (type === "training-load-schedule-submit") {
+    await submitExternalScheduleForm(renderTrainingLoad);
+    return true;
+  }
+
+  // -------------------- Schedule tab: external schedule detail/lifecycle --------------------
+
+  if (type === "training-load-open-external-schedule") {
+    await openExternalScheduleDetail(action.dataset.scheduleId, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-close-external-schedule") {
+    state.trainingLoad.scheduleDetail = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-open-edit-external-schedule") {
+    await openEditExternalSchedule(action.dataset.scheduleId, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-external-schedule-again") {
+    await openExternalScheduleAgain(action.dataset.scheduleId, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-set-external-schedule-status") {
+    const scheduleId = action.dataset.scheduleId;
+    const statusAction = action.dataset.status; // "pause" | "resume" | "cancel"
+    if (statusAction === "cancel" && !window.confirm("Cancel this RPE session? It can no longer be edited or reactivated - existing results stay available in Results.")) {
+      return true;
+    }
+    await setExternalScheduleStatus(scheduleId, statusAction);
+    await openExternalScheduleDetail(scheduleId, renderTrainingLoad);
+    return true;
+  }
+
+  // -------------------- Today tab: OUTSIDE PLAN group detail + manual reminder --------------------
+
+  if (type === "training-load-open-external-group") {
+    const day = state.trainingLoad.weekly.today.data?.days.find((d) => d.date === action.dataset.date);
+    const session = day?.sessions.find((s) => s.source === "scheduled_external" && s.scheduleId === action.dataset.scheduleId);
+    state.trainingLoad.todayGroupDetail = { scheduleId: action.dataset.scheduleId, date: action.dataset.date, eventName: session?.sessionName || "" };
+    state.trainingLoad.reminderResult = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-close-external-group") {
+    state.trainingLoad.todayGroupDetail = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-external-reminder-toggle-athlete") {
+    const open = state.trainingLoad.todayGroupDetail;
+    if (!open) return true;
+    const { ids, fingerprint } = currentExternalReminderSelection(open.scheduleId);
+    const id = action.dataset.assignmentId;
+    const index = ids.indexOf(id);
+    if (index >= 0) ids.splice(index, 1);
+    else ids.push(id);
+    state.trainingLoad.reminderSelection[open.scheduleId] = { fingerprint, ids };
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-external-reminder-select-all") {
+    const open = state.trainingLoad.todayGroupDetail;
+    if (!open) return true;
+    const { fingerprint } = currentExternalReminderSelection(open.scheduleId);
+    state.trainingLoad.reminderSelection[open.scheduleId] = { fingerprint, ids: fingerprint ? fingerprint.split(",").filter(Boolean) : [] };
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-external-reminder-clear") {
+    const open = state.trainingLoad.todayGroupDetail;
+    if (!open) return true;
+    const { fingerprint } = currentExternalReminderSelection(open.scheduleId);
+    state.trainingLoad.reminderSelection[open.scheduleId] = { fingerprint, ids: [] };
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-send-external-reminder") {
+    await sendExternalReminder(action.dataset.scheduleId, renderTrainingLoad);
+    return true;
+  }
+
   return false;
+}
+
+function recipientListKey(kind) {
+  if (kind === "club") return "clubIds";
+  if (kind === "team") return "teamIds";
+  return "athleteIds";
+}
+
+// Mirrors training-load-view.js's own externalRecipientVisibleAthletes -
+// duplicated (not imported) because that one is not exported; kept in sync
+// deliberately since both read the exact same two state fields.
+function externalRecipientVisibleAthletesForActions(form) {
+  const roster = state.trainingLoad.orgPickerData?.athletes || [];
+  const search = form.athleteSearch.trim().toLowerCase();
+  return search ? roster.filter((a) => (a.name || "").toLowerCase().includes(search)) : roster;
+}
+
+// ------------------------------------------------------------
+// External (outside-plan) RPE scheduling - form submit + schedule detail/
+// lifecycle helpers.
+// ------------------------------------------------------------
+
+function buildExternalTargetsPayload(form) {
+  const targets = [];
+  for (const id of form.clubIds) targets.push({ kind: "club", id });
+  for (const id of form.teamIds) targets.push({ kind: "team", id });
+  for (const id of form.athleteIds) targets.push({ kind: "athlete", id });
+  return targets;
+}
+
+function applyTargetsToForm(form, targets) {
+  form.clubIds = targets.filter((t) => t.kind === "club").map((t) => t.clubId).filter(Boolean);
+  form.teamIds = targets.filter((t) => t.kind === "team").map((t) => t.teamId).filter(Boolean);
+  form.athleteIds = targets.filter((t) => t.kind === "athlete").map((t) => t.athleteId).filter(Boolean);
+}
+
+function buildExternalScheduleBody(form) {
+  const base = {
+    eventName: form.eventName.trim(),
+    eventType: form.eventType || null,
+    eventNote: form.eventNote.trim() || null,
+    timezone: form.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    opensTime: form.opensTime,
+    closesTime: form.closesTime,
+    targets: buildExternalTargetsPayload(form),
+  };
+  if (form.scheduleKind === "specific_dates") return { ...base, dates: form.selectedDates.slice() };
+  if (form.scheduleKind === "daily") return { ...base, scheduleKind: "recurring", startDate: form.startDate, endDate: form.endDate };
+  return { ...base, startDate: form.startDate };
+}
+
+async function submitExternalScheduleForm(renderTrainingLoad) {
+  const form = state.trainingLoad.scheduleForm;
+  if (!form || form.submitting) return;
+  form.submitting = true;
+  form.error = "";
+  renderTrainingLoad();
+  try {
+    if (form.scheduleAgainFromId) {
+      // Schedule again only ever needs a new date (+ end date if daily) -
+      // the backend copies every other setting/target from the original
+      // itself, never accepts them from this request body.
+      await scheduleExternalAgain(form.scheduleAgainFromId, {
+        startDate: form.startDate,
+        ...(form.scheduleKind === "daily" ? { endDate: form.endDate } : {}),
+      });
+    } else if (form.editingScheduleId) {
+      const body = buildExternalScheduleBody(form);
+      // PATCH never changes an existing schedule's own start date/kind -
+      // only Schedule again (above) creates a schedule under a new date.
+      delete body.dates;
+      delete body.scheduleKind;
+      delete body.startDate;
+      await updateExternalSchedule(form.editingScheduleId, body);
+    } else {
+      await createExternalSchedule(buildExternalScheduleBody(form));
+    }
+    state.trainingLoad.scheduleForm = null;
+    await loadTrainingLoadWeekly(state.trainingLoad.section);
+  } catch (error) {
+    form.submitting = false;
+    form.error = error.message || "Could not save this RPE session.";
+    renderTrainingLoad();
+    return;
+  }
+  renderTrainingLoad();
+}
+
+async function openExternalScheduleDetail(scheduleId, renderTrainingLoad) {
+  state.trainingLoad.scheduleDetail = emptyExternalScheduleDetail({ scheduleId, loading: true });
+  renderTrainingLoad();
+  try {
+    const data = await loadExternalScheduleDetail(scheduleId);
+    state.trainingLoad.scheduleDetail = { scheduleId, schedule: data.schedule, targets: data.targets, loading: false, error: "" };
+  } catch (error) {
+    state.trainingLoad.scheduleDetail = emptyExternalScheduleDetail({ scheduleId, loading: false, error: error.message || "Could not load this schedule." });
+  }
+  renderTrainingLoad();
+}
+
+async function openEditExternalSchedule(scheduleId, renderTrainingLoad) {
+  const data = await loadExternalScheduleDetail(scheduleId).catch(() => null);
+  if (!data) return;
+  const { schedule, targets } = data;
+  const timezone = schedule.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const form = emptyExternalScheduleForm({
+    editingScheduleId: schedule.id,
+    eventName: schedule.eventName,
+    eventType: schedule.eventType || "",
+    eventNote: schedule.eventNote || "",
+    scheduleKind: schedule.scheduleKind === "recurring" ? "daily" : "one_time",
+    startDate: schedule.startDate,
+    endDate: schedule.endDate || schedule.startDate,
+    opensTime: (schedule.opensTime || "").slice(0, 5),
+    closesTime: (schedule.closesTime || "").slice(0, 5),
+    timezone,
+    calendarOpen: false,
+    calendarMonth: localMonthIsoInTimeZone(timezone),
+  });
+  applyTargetsToForm(form, targets);
+  state.trainingLoad.scheduleForm = form;
+  state.trainingLoad.scheduleDetail = null;
+  renderTrainingLoad();
+  void loadTrainingLoadOrgPickerData().then(renderTrainingLoad).catch(() => {});
+}
+
+async function openExternalScheduleAgain(scheduleId, renderTrainingLoad) {
+  const data = await loadExternalScheduleDetail(scheduleId).catch(() => null);
+  if (!data) return;
+  const { schedule } = data;
+  const timezone = schedule.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const form = emptyExternalScheduleForm({
+    scheduleAgainFromId: schedule.id,
+    eventName: schedule.eventName,
+    eventType: schedule.eventType || "",
+    eventNote: schedule.eventNote || "",
+    scheduleKind: schedule.scheduleKind === "recurring" ? "daily" : "one_time",
+    opensTime: (schedule.opensTime || "").slice(0, 5),
+    closesTime: (schedule.closesTime || "").slice(0, 5),
+    timezone,
+    calendarOpen: true,
+    calendarMonth: localMonthIsoInTimeZone(timezone),
+  });
+  state.trainingLoad.scheduleForm = form;
+  state.trainingLoad.scheduleDetail = null;
+  renderTrainingLoad();
+}
+
+// ------------------------------------------------------------
+// Today tab: OUTSIDE PLAN group detail + manual reminder selection.
+// ------------------------------------------------------------
+
+function currentTodayGroupSessionsForActions(scheduleId) {
+  const open = state.trainingLoad.todayGroupDetail;
+  if (!open) return [];
+  const day = state.trainingLoad.weekly.today.data?.days.find((d) => d.date === open.date);
+  return (day?.sessions || []).filter((s) => s.source === "scheduled_external" && s.scheduleId === scheduleId);
+}
+
+// Same fingerprint-based self-correction as training-load-view.js's own
+// externalReminderSelectedSet - a stale selection (someone rated since, or
+// the group's own set moved on) resets to "everyone still pending" the
+// next time this is read, rather than silently keeping a dead assignment
+// id selected.
+function currentExternalReminderSelection(scheduleId) {
+  const sessions = currentTodayGroupSessionsForActions(scheduleId);
+  const pending = sessions.filter((s) => !s.rated);
+  const fingerprint = pending.map((s) => s.externalAssignmentId).sort().join(",");
+  const saved = state.trainingLoad.reminderSelection[scheduleId];
+  const ids = saved && saved.fingerprint === fingerprint ? saved.ids.slice() : pending.map((s) => s.externalAssignmentId);
+  return { ids, fingerprint };
+}
+
+async function sendExternalReminder(scheduleId, renderTrainingLoad) {
+  const { ids } = currentExternalReminderSelection(scheduleId);
+  if (!ids.length || state.trainingLoad.remindingScheduleId) return;
+  state.trainingLoad.remindingScheduleId = scheduleId;
+  renderTrainingLoad();
+  try {
+    const result = await sendExternalScheduleReminder(scheduleId, ids);
+    state.trainingLoad.reminderResult = {
+      scheduleId,
+      message: `${result.notifiedCount} notified${result.noUserCount ? `, ${result.noUserCount} skipped (no linked account)` : ""}.`,
+    };
+    delete state.trainingLoad.reminderSelection[scheduleId];
+  } catch (error) {
+    state.trainingLoad.reminderResult = { scheduleId, message: error.message || "Could not send the reminder." };
+  }
+  state.trainingLoad.remindingScheduleId = "";
+  renderTrainingLoad();
 }
 
 function filterListForKind(kind) {

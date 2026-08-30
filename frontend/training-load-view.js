@@ -1,5 +1,6 @@
 import { state } from "./state.js";
-import { escapeAttr, escapeHtml, formatDate, formatDayMonth, formatWeekday, initialsFor, localDateIso } from "./utils.js";
+import { escapeAttr, escapeHtml, formatDate, formatDayMonth, formatWeekday, initialsFor, localDateIso, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
+import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 
 // Training load (RPE/sRPE), first complete phase. Deliberately its own
 // visual language - white surfaces, neutral gray borders, dark text, muted
@@ -393,7 +394,51 @@ function renderTrainingLoadStripDayHtml(section, day, isSelected, todayIso) {
   `;
 }
 
-function renderCoachSessionRowHtml(session) {
+// Today groups every OUTSIDE PLAN row sharing the same scheduleId+date into
+// ONE clickable summary row (rated/total, total sRPE) - "clicking an active
+// external session opens per-athlete status + manual-reminder UI" only
+// makes sense read this way (a planned Weekly-plan session has no such
+// grouping concept - each row there is already its own one-athlete unit,
+// rendered unchanged). Grouping is computed fresh on every render straight
+// from the already-loaded weekly payload, never cached, so a reminder send
+// or a fresh rating is reflected the instant Today re-fetches.
+function groupSessionsForToday(sessions) {
+  const groups = new Map();
+  const result = [];
+  for (const s of sessions) {
+    if (s.source !== "scheduled_external") {
+      result.push(s);
+      continue;
+    }
+    let group = groups.get(s.scheduleId);
+    if (!group) {
+      group = { __externalGroup: true, scheduleId: s.scheduleId, eventName: s.sessionName, sessionTime: s.sessionTime, sessions: [] };
+      groups.set(s.scheduleId, group);
+      result.push(group);
+    }
+    group.sessions.push(s);
+  }
+  return result;
+}
+
+function renderExternalGroupRowHtml(group, date) {
+  const rated = group.sessions.filter((s) => s.rated);
+  const totalSrpe = rated.reduce((sum, s) => sum + s.feedback.srpe, 0);
+  const allRated = rated.length === group.sessions.length;
+  return `
+    <button type="button" class="training-load-session-row is-clickable" data-action="training-load-open-external-group" data-schedule-id="${escapeAttr(group.scheduleId)}" data-date="${escapeAttr(date)}">
+      <span class="training-load-session-time">${escapeHtml((group.sessionTime || "").slice(0, 5))}</span>
+      <span class="training-load-session-main">
+        <span class="training-load-session-name">${escapeHtml(group.eventName)}${renderOutsidePlanTagHtml({ source: "scheduled_external" })}</span>
+        <span class="training-load-session-subtitle">${rated.length}/${group.sessions.length} rated${totalSrpe ? ` · ${escapeHtml(formatSrpe(totalSrpe))}` : ""}</span>
+      </span>
+      <span class="training-load-status-pill training-load-status-${allRated ? "rated" : "unrated"}">${rated.length}/${group.sessions.length}</span>
+    </button>
+  `;
+}
+
+function renderCoachSessionRowHtml(session, date) {
+  if (session.__externalGroup) return renderExternalGroupRowHtml(session, date);
   // A disabled+unrated session was never actually a rating request in the
   // first place - "RPE off" is informational only (no reminder controls,
   // never counted as pending), distinct from a genuine "Not rated".
@@ -406,7 +451,7 @@ function renderCoachSessionRowHtml(session) {
     <div class="training-load-session-row">
       <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
       <span class="training-load-session-main">
-        <span class="training-load-session-name">${escapeHtml(session.athleteName)}</span>
+        <span class="training-load-session-name">${escapeHtml(session.athleteName)}${renderOutsidePlanTagHtml(session)}</span>
         <span class="training-load-session-subtitle">${escapeHtml(sessionLabel(session))}${session.historical ? " · from a since-changed plan" : ""}</span>
       </span>
       <span class="training-load-status-pill training-load-status-${status.cls}">${escapeHtml(status.label)}</span>
@@ -419,9 +464,10 @@ export function renderTrainingLoadTodayHtml() {
   if (nav.loading && !nav.data) return `<p class="muted training-load-empty">Loading training load...</p>`;
   if (nav.error) return `<p class="builder-error">${escapeHtml(nav.error)}</p>`;
   if (!nav.data) return "";
+  if (state.trainingLoad.todayGroupDetail) return renderTodayGroupDetailHtml();
   return renderTrainingLoadWeeklyShellHtml({
     section: "today",
-    days: nav.data.days,
+    days: nav.data.days.map((day) => ({ ...day, sessions: groupSessionsForToday(day.sessions) })),
     weekStart: nav.data.weekStart,
     weekEnd: nav.data.weekEnd,
     selectedDate: nav.selectedDate,
@@ -442,18 +488,28 @@ function renderScheduleRpeStateBadgeHtml(session) {
   return `<span class="training-load-rpe-state-badge ${on ? "is-on" : "is-off"}">PLANNED &middot; RPE ${on ? "ON" : "OFF"}</span>`;
 }
 
+function renderOutsidePlanBadgeHtml() {
+  return `<span class="training-load-rpe-state-badge is-outside">OUTSIDE PLAN</span>`;
+}
+
 function renderScheduleSessionRowHtml(session, date) {
+  const isExternal = session.source === "scheduled_external";
   const status = session.rated
     ? { label: formatFeedbackSummary(session.feedback), cls: "rated" }
     : session.rpeEnabled === false
       ? { label: "RPE off", cls: "off" }
       : { label: "Not rated", cls: "unrated" };
-  const clickable = !session.historical;
-  const attrs = clickable
-    ? `type="button" data-action="training-load-open-weekly-plan" data-athlete-id="${escapeAttr(session.athleteId)}" data-date="${escapeAttr(date)}"`
-    : "";
+  // A planned row opens the existing Weekly plan view; an OUTSIDE PLAN row
+  // opens this schedule's own detail (Edit/Pause/Resume/Cancel/Schedule
+  // again) instead - the two click targets are never interchangeable.
+  const clickable = isExternal || !session.historical;
+  const attrs = isExternal
+    ? `type="button" data-action="training-load-open-external-schedule" data-schedule-id="${escapeAttr(session.scheduleId)}"`
+    : clickable
+      ? `type="button" data-action="training-load-open-weekly-plan" data-athlete-id="${escapeAttr(session.athleteId)}" data-date="${escapeAttr(date)}"`
+      : "";
   const Tag = clickable ? "button" : "div";
-  const canToggle = clickable && session.sessionId;
+  const canToggle = !isExternal && clickable && session.sessionId;
   return `
     <div class="training-load-schedule-row">
       <${Tag} class="training-load-session-row ${clickable ? "is-clickable" : ""}" ${attrs}>
@@ -472,11 +528,12 @@ function renderScheduleSessionRowHtml(session, date) {
           </button>
         </div>
       ` : ""}
+      ${isExternal ? `<div class="training-load-schedule-row-toggle">${renderOutsidePlanBadgeHtml()}</div>` : ""}
     </div>
   `;
 }
 
-export function renderTrainingLoadScheduleHtml() {
+function renderScheduleWeeklyCalendarHtml() {
   const nav = state.trainingLoad.weekly.schedule;
   if (nav.loading && !nav.data) return `<p class="muted training-load-empty">Loading schedule...</p>`;
   if (nav.error) return `<p class="builder-error">${escapeHtml(nav.error)}</p>`;
@@ -490,6 +547,17 @@ export function renderTrainingLoadScheduleHtml() {
     emptyAgendaText: "No training sessions scheduled this day.",
     renderSessionRow: renderScheduleSessionRowHtml,
   });
+}
+
+export function renderTrainingLoadScheduleHtml() {
+  return `
+    <div class="training-load-schedule-toolbar">
+      <button type="button" class="plain-button" data-action="training-load-open-schedule-form">New RPE session</button>
+    </div>
+    ${state.trainingLoad.scheduleForm ? renderExternalScheduleFormHtml() : ""}
+    ${!state.trainingLoad.scheduleForm && state.trainingLoad.scheduleDetail ? renderExternalScheduleDetailHtml() : ""}
+    ${!state.trainingLoad.scheduleForm && !state.trainingLoad.scheduleDetail ? renderScheduleWeeklyCalendarHtml() : ""}
+  `;
 }
 
 // Results: only SUBMITTED entries - computed entirely client-side from the
@@ -538,11 +606,491 @@ function renderResultsSessionRowHtml(session) {
     <div class="training-load-session-row">
       <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
       <span class="training-load-session-main">
-        <span class="training-load-session-name">${escapeHtml(session.athleteName)}</span>
+        <span class="training-load-session-name">${escapeHtml(session.athleteName)}${renderOutsidePlanTagHtml(session)}</span>
         <span class="training-load-session-subtitle">${escapeHtml(sessionLabel(session))}${session.historical ? " · from a since-changed plan" : ""}</span>
       </span>
       <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>
     </div>
+  `;
+}
+
+// ------------------------------------------------------------
+// External (outside-plan) RPE scheduling - "New RPE session" on the
+// Schedule tab. Same visual language as the rest of this module (white/
+// grey surfaces, neutral borders, the accent color only for a small
+// indicator/active state - explicitly NEVER a large green surface), and
+// the same Dates/Daily calendar + Builder-style Clubs/Teams/Athletes
+// recipient picker shape WELLNESS's own schedule form already established
+// (tests-view.js), rebuilt here against this module's own state/actions -
+// never importing from tests-view.js/state.tests (see this file's own
+// header comment on why the two features stay fully independent).
+//
+// The calendar here is deliberately click-only (no drag-select) - a real,
+// working three-mode picker (multi/range/single, exactly WELLNESS's own
+// modes), just without replicating its lower-level mousedown/mouseover/
+// mouseup drag-tracking machinery, which the spec never actually required
+// ("same calendar picker" as a concept, not byte-for-byte the same
+// interaction). Range mode uses a two-click anchor: the first click starts
+// a fresh range (start=end=that day), the second confirms start..end
+// (sorted) and clears the anchor - the next click after that starts over.
+// ------------------------------------------------------------
+
+const EXTERNAL_EVENT_TYPES = [
+  { value: "team_training", label: "Team training" },
+  { value: "individual", label: "Individual" },
+  { value: "gym", label: "Gym" },
+  { value: "rehabilitation", label: "Rehabilitation" },
+  { value: "match", label: "Match" },
+  { value: "other", label: "Other" },
+];
+
+export function externalCalendarMode(form) {
+  if (form.scheduleKind === "specific_dates") return "multi";
+  if (form.scheduleKind === "daily") return "range";
+  return "single";
+}
+
+function externalRangeDateSet(start, end) {
+  if (!start || !end) return new Set();
+  const [from, to] = start <= end ? [start, end] : [end, start];
+  const result = new Set();
+  const cursor = new Date(`${from}T00:00:00Z`);
+  const last = new Date(`${to}T00:00:00Z`);
+  while (cursor <= last) {
+    result.add(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return result;
+}
+
+export function externalCalendarSelectedSet(form) {
+  const mode = externalCalendarMode(form);
+  if (mode === "multi") return new Set(form.selectedDates);
+  return externalRangeDateSet(form.startDate, form.endDate);
+}
+
+function formatShortDate(iso) {
+  if (!iso) return "";
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
+export function externalCalendarToggleLabel(form) {
+  const mode = externalCalendarMode(form);
+  if (mode === "multi") {
+    const count = form.selectedDates.length;
+    return count ? `${count} date${count === 1 ? "" : "s"} selected` : "Pick dates";
+  }
+  if (!form.startDate || !form.endDate) return mode === "range" ? "Pick start and end dates" : "Pick a date";
+  if (mode === "range") {
+    return form.startDate === form.endDate
+      ? `Daily · ${formatShortDate(form.startDate)}`
+      : `Daily · ${formatShortDate(form.startDate)} – ${formatShortDate(form.endDate)}`;
+  }
+  return formatShortDate(form.startDate);
+}
+
+const CALENDAR_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function externalMonthMatrix(monthIso) {
+  const [year, month] = monthIso.split("-").map(Number);
+  const firstOfMonth = new Date(Date.UTC(year, month - 1, 1));
+  const leadingBlanks = (firstOfMonth.getUTCDay() + 6) % 7;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const cells = [];
+  for (let i = 0; i < leadingBlanks; i++) cells.push(null);
+  for (let day = 1; day <= daysInMonth; day++) cells.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+function renderExternalCalendarSelectedHtml(form) {
+  const mode = externalCalendarMode(form);
+  if (mode !== "multi") {
+    if (!form.startDate || !form.endDate) {
+      return `<p class="muted">${mode === "range" ? "Click a day, then click again to set the end." : "Click a day to pick the date."}</p>`;
+    }
+    return `<p class="muted training-load-calendar-count">${escapeHtml(externalCalendarToggleLabel(form))}</p>`;
+  }
+  const dates = form.selectedDates.slice().sort();
+  if (!dates.length) return `<p class="muted">No dates selected yet - click a day to add it.</p>`;
+  return `
+    <p class="muted training-load-calendar-count">${dates.length} date${dates.length === 1 ? "" : "s"} selected</p>
+    <div class="training-load-calendar-chips">
+      ${dates.map((iso) => `
+        <button type="button" class="training-load-calendar-chip" data-action="training-load-calendar-remove-date" data-date="${escapeAttr(iso)}" title="Remove ${escapeAttr(iso)}">
+          ${escapeHtml(iso)} &times;
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderExternalCalendarHtml(form) {
+  const timezone = form.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const monthIso = form.calendarMonth || localMonthIsoInTimeZone(timezone);
+  const cells = externalMonthMatrix(monthIso);
+  const [year, month] = monthIso.split("-").map(Number);
+  const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+  const todayIso = localDateIsoInTimeZone(timezone);
+  const selected = externalCalendarSelectedSet(form);
+  return `
+    <div class="training-load-calendar" data-training-load-calendar>
+      <div class="training-load-calendar-head">
+        <div class="training-load-calendar-head-nav">
+          <button type="button" class="plain-button icon-button" data-action="training-load-calendar-prev-month" aria-label="Previous month">&larr;</button>
+          <strong>${escapeHtml(monthLabel)}</strong>
+          <button type="button" class="plain-button icon-button" data-action="training-load-calendar-next-month" aria-label="Next month">&rarr;</button>
+        </div>
+      </div>
+      <div class="training-load-calendar-weekdays">${CALENDAR_WEEKDAY_LABELS.map((label) => `<span>${label}</span>`).join("")}</div>
+      <div class="training-load-calendar-grid" data-training-load-calendar-grid>
+        ${cells.map((iso) => {
+          if (!iso) return `<span class="training-load-calendar-day training-load-calendar-day-blank" aria-hidden="true"></span>`;
+          const isPast = iso < todayIso;
+          const isSelected = selected.has(iso);
+          const dayNumber = Number(iso.slice(8, 10));
+          return `<button type="button" class="training-load-calendar-day ${isSelected ? "is-selected" : ""}" data-action="training-load-calendar-day-click" data-date="${escapeAttr(iso)}" ${isPast ? "disabled" : ""}>${dayNumber}</button>`;
+        }).join("")}
+      </div>
+      <div class="training-load-calendar-selected" data-training-load-calendar-selected>
+        ${renderExternalCalendarSelectedHtml(form)}
+      </div>
+    </div>
+  `;
+}
+
+function renderExternalCalendarSectionHtml(form) {
+  return `
+    <div class="training-load-calendar-section">
+      ${form.calendarOpen ? renderExternalCalendarHtml(form) : `<p class="training-load-calendar-closed-summary muted" data-training-load-calendar-toggle-label>${escapeHtml(externalCalendarToggleLabel(form))}</p>`}
+    </div>
+  `;
+}
+
+// ------------------------------------------------------------
+// Recipient picker - identical shape/CSS to the coach filter picker above
+// (Builder-style Clubs/Teams/Athletes tabs), just backed by the schedule
+// form's own clubIds/teamIds/athleteIds instead of state.trainingLoad.filter.
+// ------------------------------------------------------------
+
+function externalRecipientsTotalSelected(form) {
+  return form.clubIds.length + form.teamIds.length + form.athleteIds.length;
+}
+
+function renderExternalRecipientsTriggerHtml(form) {
+  const total = externalRecipientsTotalSelected(form);
+  return `
+    <div class="builder-assignment-row training-load-recipients-row">
+      <span class="builder-field-label">Recipients</span>
+      <button class="builder-athlete-trigger" type="button" data-action="training-load-open-recipient-picker" aria-haspopup="dialog">
+        <span><strong>${total ? `Recipients · ${total} selected` : "Choose recipients"}</strong></span>
+        <span class="button-icon">&gt;</span>
+      </button>
+    </div>
+  `;
+}
+
+function externalRecipientVisibleAthletes(form) {
+  const roster = state.trainingLoad.orgPickerData?.athletes || [];
+  const search = form.athleteSearch.trim().toLowerCase();
+  return search ? roster.filter((a) => (a.name || "").toLowerCase().includes(search)) : roster;
+}
+
+function renderExternalRecipientSelectAllHtml({ items, selectedIds, kind }) {
+  const selected = new Set(selectedIds);
+  const allSelected = items.length > 0 && items.every((item) => selected.has(item.id));
+  return `
+    <button type="button" class="checkbox-toggle-all ${allSelected ? "is-checked" : ""}" data-action="training-load-recipient-picker-select-all" data-kind="${kind}" aria-label="${allSelected ? "Uncheck all" : "Check all"}" ${items.length ? "" : "disabled"}>
+      <span aria-hidden="true">${allSelected ? "&#10003;" : ""}</span>
+    </button>
+    <span class="muted">Select all</span>
+    <button type="button" class="plain-button compact-button" data-action="training-load-recipient-picker-clear" data-kind="${kind}" ${selectedIds.length ? "" : "disabled"}>Clear all</button>
+  `;
+}
+
+function renderExternalRecipientOptionsHtml({ items, selectedIds, kind, emptyLabel }) {
+  if (!items.length) return `<p class="muted">${escapeHtml(emptyLabel)}</p>`;
+  const selected = new Set(selectedIds);
+  return items.map((item) => {
+    const isSelected = selected.has(item.id);
+    return `
+      <button type="button" class="builder-athlete-option ${isSelected ? "is-selected" : ""}" data-action="training-load-recipient-picker-toggle" data-kind="${kind}" data-id="${escapeAttr(item.id)}">
+        <span class="builder-athlete-trigger-icon">${escapeHtml(initialsFor(item.name))}</span>
+        <span><strong>${escapeHtml(item.name)}</strong>${item.subtitle ? `<small>${escapeHtml(item.subtitle)}</small>` : ""}</span>
+        <span class="builder-checkmark" aria-hidden="true">${isSelected ? "&#10003;" : ""}</span>
+      </button>
+    `;
+  }).join("");
+}
+
+const RECIPIENT_PICKER_TABS = [
+  { id: "clubs", label: "Clubs" },
+  { id: "teams", label: "Teams" },
+  { id: "athletes", label: "Athletes" },
+];
+
+function externalRecipientTabCount(form, tabId) {
+  if (tabId === "clubs") return form.clubIds.length;
+  if (tabId === "teams") return form.teamIds.length;
+  return form.athleteIds.length;
+}
+
+function renderExternalRecipientPickerTabsHtml(form) {
+  return `
+    <div class="tests-recipient-picker-tabs" role="tablist">
+      ${RECIPIENT_PICKER_TABS.map((tab) => {
+        const count = externalRecipientTabCount(form, tab.id);
+        return `
+          <button type="button" class="tests-recipient-picker-tab ${form.recipientPickerTab === tab.id ? "is-active" : ""}" role="tab" aria-selected="${form.recipientPickerTab === tab.id ? "true" : "false"}" data-action="training-load-recipient-picker-set-tab" data-recipient-tab="${tab.id}">
+            ${tab.label}${count ? ` <span class="tests-recipient-picker-tab-count">${count}</span>` : ""}
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderExternalRecipientPickerPanelHtml(form) {
+  const orgData = state.trainingLoad.orgPickerData;
+  if (form.recipientPickerTab === "clubs") {
+    const clubs = orgData?.clubs || [];
+    return `
+      <div class="builder-athlete-select-all">${renderExternalRecipientSelectAllHtml({ items: clubs, selectedIds: form.clubIds, kind: "club" })}</div>
+      <div class="builder-athlete-options tests-athlete-options">${renderExternalRecipientOptionsHtml({ items: clubs.map((c) => ({ id: c.id, name: c.name })), selectedIds: form.clubIds, kind: "club", emptyLabel: "No clubs available." })}</div>
+    `;
+  }
+  if (form.recipientPickerTab === "teams") {
+    const teams = orgData?.teams || [];
+    return `
+      <div class="builder-athlete-select-all">${renderExternalRecipientSelectAllHtml({ items: teams, selectedIds: form.teamIds, kind: "team" })}</div>
+      <div class="builder-athlete-options tests-athlete-options">${renderExternalRecipientOptionsHtml({ items: teams.map((t) => ({ id: t.id, name: t.name, subtitle: t.club_name || "" })), selectedIds: form.teamIds, kind: "team", emptyLabel: "No teams available." })}</div>
+    `;
+  }
+  const visible = externalRecipientVisibleAthletes(form);
+  return `
+    <label class="search-field">
+      <span>Search athletes</span>
+      <input type="search" placeholder="Search athletes by name" value="${escapeAttr(form.athleteSearch)}" data-action="training-load-recipient-athlete-search">
+    </label>
+    <div class="builder-athlete-select-all">${renderExternalRecipientSelectAllHtml({ items: visible.map((a) => ({ id: a.id })), selectedIds: form.athleteIds, kind: "athlete" })}</div>
+    <div class="builder-athlete-options tests-athlete-options">${renderExternalRecipientOptionsHtml({ items: visible.map((a) => ({ id: a.id, name: a.name, subtitle: a.athlete_id ? `ID ${a.athlete_id}` : "" })), selectedIds: form.athleteIds, kind: "athlete", emptyLabel: "No athletes match." })}</div>
+  `;
+}
+
+function renderExternalRecipientPickerHtml(form) {
+  return `
+    <div class="builder-athlete-overlay tests-recipient-picker-overlay">
+      <button class="builder-athlete-backdrop" type="button" data-action="training-load-recipient-picker-cancel" aria-label="Close recipients picker"></button>
+      <section class="panel builder-athlete-picker tests-recipient-picker" role="dialog" aria-modal="true" aria-label="Choose recipients">
+        <div class="builder-section-panel-head">
+          <div>
+            <strong>Recipients</strong>
+            <p class="muted">Any mix of clubs, teams and individual athletes.</p>
+          </div>
+          <div class="builder-athlete-picker-head-actions">
+            <button class="plain-button icon-button builder-athlete-picker-cancel" type="button" data-action="training-load-recipient-picker-cancel" aria-label="Cancel" title="Cancel">${ICON_X}</button>
+            <button class="plain-button icon-button builder-athlete-picker-continue" type="button" data-action="training-load-recipient-picker-confirm" aria-label="Confirm" title="Confirm">${ICON_CHECK}</button>
+          </div>
+        </div>
+        ${renderExternalRecipientPickerTabsHtml(form)}
+        ${renderExternalRecipientPickerPanelHtml(form)}
+        <div class="builder-copy-plan-footer">
+          <span class="muted">${externalRecipientsTotalSelected(form)} selected total</span>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+// ------------------------------------------------------------
+// The create/edit/schedule-again form itself.
+// ------------------------------------------------------------
+
+function externalScheduleSubmitDisabled(form) {
+  if (form.submitting || !form.eventName.trim()) return true;
+  if (form.scheduleKind === "specific_dates") return !form.selectedDates.length;
+  if (form.scheduleKind === "daily") return !form.startDate || !form.endDate;
+  return !form.startDate;
+}
+
+function externalScheduleSubmitLabel(form) {
+  if (form.submitting) return "Saving...";
+  if (form.scheduleKind === "specific_dates") return `Schedule ${form.selectedDates.length} date${form.selectedDates.length === 1 ? "" : "s"}`;
+  return form.editingScheduleId ? "Save changes" : "Create schedule";
+}
+
+export function renderExternalScheduleFormHtml() {
+  const form = state.trainingLoad.scheduleForm;
+  const isEdit = Boolean(form.editingScheduleId);
+  const isScheduleAgain = Boolean(form.scheduleAgainFromId);
+  const isSpecificDates = form.scheduleKind === "specific_dates";
+  return `
+    <section class="panel training-load-schedule-form">
+      <button type="button" class="plain-button icon-button wellness-back" data-action="training-load-close-schedule-form" aria-label="Close">&times;</button>
+      <h3>${isEdit ? "Edit RPE session" : isScheduleAgain ? "Schedule again" : "New RPE session"}${renderOutsidePlanBadgeHtml()}</h3>
+      ${isScheduleAgain ? `<p class="muted">Settings copied from the original - pick new dates below to create an independent new schedule. The original and its results are unaffected.</p>` : ""}
+      ${form.error ? `<p class="builder-error">${escapeHtml(form.error)}</p>` : ""}
+      <div class="training-load-schedule-form-scroll">
+        <label class="search-field">
+          <span>Name</span>
+          <input type="text" name="eventName" value="${escapeAttr(form.eventName)}" data-action="training-load-schedule-form-field" placeholder="e.g. National team camp" required>
+        </label>
+        <div class="training-load-event-type-field">
+          <span class="builder-field-label">Type (optional)</span>
+          <div class="training-load-event-type-pills" role="group" aria-label="Type">
+            ${EXTERNAL_EVENT_TYPES.map((t) => `
+              <button type="button" class="training-load-event-type-pill ${form.eventType === t.value ? "is-active" : ""}" data-action="training-load-schedule-set-event-type" data-event-type="${t.value}">${t.label}</button>
+            `).join("")}
+          </div>
+        </div>
+        <div class="training-load-recurrence-toggle" role="group" aria-label="Recurrence">
+          <button type="button" class="training-load-recurrence-pill ${isSpecificDates ? "is-active" : ""}" data-action="training-load-schedule-set-recurrence" data-daily="false">Dates</button>
+          <button type="button" class="training-load-recurrence-pill ${form.scheduleKind === "daily" ? "is-active" : ""}" data-action="training-load-schedule-set-recurrence" data-daily="true">Daily</button>
+        </div>
+        ${renderExternalCalendarSectionHtml(form)}
+        <div class="tests-time-row">
+          <label class="search-field">
+            <span>Opens</span>
+            <input type="time" name="opensTime" value="${escapeAttr(form.opensTime)}" data-action="training-load-schedule-form-field" required>
+          </label>
+          <label class="search-field">
+            <span>Closes</span>
+            <input type="time" name="closesTime" value="${escapeAttr(form.closesTime)}" data-action="training-load-schedule-form-field" required>
+          </label>
+        </div>
+        <p class="muted training-load-timezone-info">Times follow each athlete's own device timezone.</p>
+        ${renderExternalRecipientsTriggerHtml(form)}
+        <label class="search-field">
+          <span>Note (optional)</span>
+          <textarea name="eventNote" data-action="training-load-schedule-form-field" placeholder="Anything athletes should know">${escapeHtml(form.eventNote)}</textarea>
+        </label>
+        <p class="muted">Athletes are notified when it opens, and reminded automatically if they haven't answered yet.</p>
+        <div class="tests-collapsible-section">
+          <button type="button" class="tests-calendar-open-toggle tests-collapsible-toggle" data-action="training-load-toggle-advanced-settings" aria-expanded="${form.advancedSettingsOpen ? "true" : "false"}">
+            <span class="tests-collapsible-label">Advanced settings</span>
+            <span class="tests-calendar-toggle-caret">${form.advancedSettingsOpen ? "&#9650;" : "&#9660;"}</span>
+          </button>
+          ${form.advancedSettingsOpen ? `
+            <label class="search-field">
+              <span>Fallback timezone</span>
+              <input type="text" name="timezone" value="${escapeAttr(form.timezone)}" data-action="training-load-schedule-form-field" required>
+            </label>
+            <p class="muted">Used only for an athlete whose own device timezone isn't known yet.</p>
+          ` : ""}
+        </div>
+      </div>
+      <div class="tests-schedule-form-actions">
+        <button type="button" class="plain-button" data-action="training-load-schedule-submit" ${externalScheduleSubmitDisabled(form) ? "disabled" : ""}>${externalScheduleSubmitLabel(form)}</button>
+      </div>
+      ${form.recipientPickerOpen ? renderExternalRecipientPickerHtml(form) : ""}
+    </section>
+  `;
+}
+
+// ------------------------------------------------------------
+// Schedule detail (Edit/Pause/Resume/Cancel/Schedule again).
+// ------------------------------------------------------------
+
+function externalEventTypeLabel(value) {
+  return EXTERNAL_EVENT_TYPES.find((t) => t.value === value)?.label || "";
+}
+
+export function renderExternalScheduleDetailHtml() {
+  const detail = state.trainingLoad.scheduleDetail;
+  if (detail.loading) return `<p class="muted training-load-empty">Loading...</p>`;
+  if (detail.error) return `<p class="builder-error">${escapeHtml(detail.error)}</p>`;
+  const { schedule, targets } = detail;
+  if (!schedule) return "";
+  return `
+    <section class="panel training-load-schedule-detail">
+      <button type="button" class="plain-button compact-button" data-action="training-load-close-external-schedule">&larr; Back to schedule</button>
+      <h3>${escapeHtml(schedule.eventName)}${renderOutsidePlanBadgeHtml()}</h3>
+      <p class="muted">${schedule.eventType ? `${escapeHtml(externalEventTypeLabel(schedule.eventType))} · ` : ""}${schedule.scheduleKind === "recurring" ? "Daily" : "One-time"}</p>
+      <p class="muted">${escapeHtml((schedule.opensTime || "").slice(0, 5))}&ndash;${escapeHtml((schedule.closesTime || "").slice(0, 5))} (fallback timezone: ${escapeHtml(schedule.timezone)})</p>
+      ${schedule.eventNote ? `<p>${escapeHtml(schedule.eventNote)}</p>` : ""}
+      <p>Targets: ${targets.map((t) => escapeHtml(t.name || t.athleteId || t.teamId || t.clubId)).join(", ") || "none"}</p>
+      ${schedule.status === "cancelled"
+        ? `
+        <p class="muted">Cancelled - read-only. Historical results, if any, remain available in Results.</p>
+        <div class="tests-schedule-actions">
+          <button type="button" class="plain-button compact-button" data-action="training-load-external-schedule-again" data-schedule-id="${escapeAttr(schedule.id)}">Schedule again</button>
+        </div>
+      `
+        : `
+        <div class="tests-schedule-actions">
+          <button type="button" class="plain-button compact-button" data-action="training-load-open-edit-external-schedule" data-schedule-id="${escapeAttr(schedule.id)}">Edit</button>
+          ${schedule.status === "active"
+            ? `<button type="button" class="plain-button compact-button" data-action="training-load-set-external-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="pause">Pause</button>`
+            : `<button type="button" class="plain-button compact-button" data-action="training-load-set-external-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="resume">Resume</button>`}
+          <button type="button" class="plain-button compact-button" data-action="training-load-external-schedule-again" data-schedule-id="${escapeAttr(schedule.id)}">Schedule again</button>
+          <button type="button" class="plain-button compact-button training-load-cancel-button" data-action="training-load-set-external-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="cancel">Cancel</button>
+        </div>
+      `}
+    </section>
+  `;
+}
+
+// ------------------------------------------------------------
+// Today tab: an OUTSIDE PLAN group's per-athlete status + manual reminder.
+// Derives its rows live from the already-loaded weekly.today payload
+// (never a second fetch) - a reminder send or a fresh rating is reflected
+// the instant Today's own weekly data next re-fetches.
+// ------------------------------------------------------------
+
+function currentTodayGroupSessions() {
+  const open = state.trainingLoad.todayGroupDetail;
+  if (!open) return [];
+  const day = state.trainingLoad.weekly.today.data?.days.find((d) => d.date === open.date);
+  return (day?.sessions || []).filter((s) => s.source === "scheduled_external" && s.scheduleId === open.scheduleId);
+}
+
+// Mirrors tests-view.js's own reminderSelectedSet - falls back to "every
+// not-yet-completed athlete" whenever no explicit selection was made yet,
+// or the group's own current assignment-id set has moved on since (a
+// stale selection self-corrects on the very next render).
+function externalReminderSelectedSet(scheduleId, sessions) {
+  const pending = sessions.filter((s) => !s.rated);
+  const currentIds = pending.map((s) => s.externalAssignmentId).sort();
+  const saved = state.trainingLoad.reminderSelection[scheduleId];
+  if (saved && saved.fingerprint === currentIds.join(",")) return new Set(saved.ids);
+  return new Set(currentIds);
+}
+
+export function renderTodayGroupDetailHtml() {
+  const open = state.trainingLoad.todayGroupDetail;
+  const sessions = currentTodayGroupSessions();
+  const rated = sessions.filter((s) => s.rated);
+  const pending = sessions.filter((s) => !s.rated);
+  const selected = externalReminderSelectedSet(open.scheduleId, sessions);
+  const sending = state.trainingLoad.remindingScheduleId === open.scheduleId;
+  const result = state.trainingLoad.reminderResult && state.trainingLoad.reminderResult.scheduleId === open.scheduleId ? state.trainingLoad.reminderResult : null;
+  return `
+    <section class="panel training-load-schedule-detail">
+      <button type="button" class="plain-button compact-button" data-action="training-load-close-external-group">&larr; Back to Today</button>
+      <h3>${escapeHtml(open.eventName)}${renderOutsidePlanBadgeHtml()}</h3>
+      <p class="muted">${rated.length}/${sessions.length} rated</p>
+      ${result ? `<p class="muted">${escapeHtml(result.message)}</p>` : ""}
+      <div class="training-load-reminder-list">
+        ${sessions.map((s) => `
+          <div class="training-load-reminder-row">
+            ${!s.rated ? `
+              <label class="training-load-reminder-checkbox">
+                <input type="checkbox" data-action="training-load-external-reminder-toggle-athlete" data-assignment-id="${escapeAttr(s.externalAssignmentId)}" ${selected.has(s.externalAssignmentId) ? "checked" : ""}>
+              </label>
+            ` : `<span class="training-load-reminder-checkbox" aria-hidden="true"></span>`}
+            <span class="training-load-session-name">${escapeHtml(s.athleteName)}</span>
+            <span class="training-load-status-pill training-load-status-${s.rated ? "rated" : "unrated"}">${s.rated ? escapeHtml(formatFeedbackSummary(s.feedback)) : "Not rated"}</span>
+          </div>
+        `).join("")}
+      </div>
+      ${pending.length ? `
+        <div class="tests-schedule-actions">
+          <button type="button" class="plain-button compact-button" data-action="training-load-external-reminder-select-all">Select all</button>
+          <button type="button" class="plain-button compact-button" data-action="training-load-external-reminder-clear">Clear</button>
+          <button type="button" class="plain-button" data-action="training-load-send-external-reminder" data-schedule-id="${escapeAttr(open.scheduleId)}" ${sending || !selected.size ? "disabled" : ""}>${sending ? "Sending..." : "Send reminder"}</button>
+        </div>
+      ` : `<p class="muted">Everyone has answered.</p>`}
+    </section>
   `;
 }
 

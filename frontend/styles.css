@@ -10592,7 +10592,7 @@ button.tests-assignment-card {
 }
 
 .tests-calendar-open-toggle:hover {
-  border-color: #287e77;
+  border-color: var(--accent, #287e77);
 }
 
 .tests-calendar-toggle-icon {
@@ -11974,4 +11974,228 @@ button.tests-assignment-card {
 
 .training-load-session-row[aria-disabled="true"] {
   opacity: 0.5;
+}
+
+/* -------------------- External (outside-plan) RPE scheduling --------------------
+   Own neutral visual language throughout - white/grey surfaces, neutral
+   borders/text, the accent color reserved for a small indicator or an
+   active/selected state only, per this feature's own explicit styling
+   constraint. Several structural (non-color) classes are intentionally
+   reused from the WELLNESS scheduling form's own CSS (.builder-athlete-*,
+   .tests-recipient-picker-tab*, .tests-recurrence-toggle's layout shape
+   renamed below, .tests-time-row, .tests-schedule-actions, .tests-
+   collapsible-*, .tests-calendar-*) - those rules are pure layout/neutral
+   already; every rule that carried WELLNESS's own accent color has its own
+   .training-load-* class defined here instead. */
+
+.training-load-outside-plan-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  vertical-align: middle;
+}
+
+.training-load-rpe-state-badge.is-outside {
+  color: var(--muted);
+}
+
+.training-load-schedule-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.training-load-cancel-button {
+  color: #b3261e;
+  border-color: #e8b4af;
+}
+
+.training-load-recurrence-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.training-load-recurrence-pill {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+
+.training-load-recurrence-pill.is-active {
+  border-color: var(--accent);
+  background: var(--surface-soft);
+  color: var(--accent);
+}
+
+.training-load-calendar-section {
+  display: grid;
+  gap: 8px;
+}
+
+.training-load-calendar-closed-summary {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.training-load-calendar {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.training-load-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.training-load-calendar-head-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.training-load-calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.training-load-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.training-load-calendar-day {
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.training-load-calendar-day:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.5;
+}
+
+.training-load-calendar-day.is-selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.training-load-calendar-day-blank {
+  visibility: hidden;
+}
+
+.training-load-calendar-count {
+  font-size: 12px;
+}
+
+.training-load-calendar-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.training-load-calendar-chip {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.training-load-event-type-field {
+  display: grid;
+  gap: 6px;
+}
+
+.training-load-event-type-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.training-load-event-type-pill {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.training-load-event-type-pill.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.training-load-timezone-info {
+  margin: -4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.training-load-schedule-form {
+  display: grid;
+  gap: 10px;
+  position: relative;
+}
+
+.training-load-schedule-form-scroll {
+  display: grid;
+  gap: 12px;
+}
+
+.training-load-schedule-detail {
+  display: grid;
+  gap: 8px;
+}
+
+.training-load-reminder-list {
+  display: grid;
+  gap: 4px;
+}
+
+.training-load-reminder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.training-load-reminder-checkbox {
+  display: inline-flex;
+  width: 20px;
+  flex-shrink: 0;
 }
