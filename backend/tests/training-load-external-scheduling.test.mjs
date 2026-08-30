@@ -22,6 +22,8 @@ const MIGRATION_V3_PATH = path.resolve(__dirname, "../../migrations_v2/202609010
 const MIGRATION_V3_NAME = "202609010900_training_load_v3_rpe_enabled.sql";
 const MIGRATION_V4_PATH = path.resolve(__dirname, "../../migrations_v2/202609011000_training_load_v4_external_scheduling.sql");
 const MIGRATION_V4_NAME = "202609011000_training_load_v4_external_scheduling.sql";
+const MIGRATION_V5_PATH = path.resolve(__dirname, "../../migrations_v2/202609011100_training_load_v5_unified_result_source.sql");
+const MIGRATION_V5_NAME = "202609011100_training_load_v5_unified_result_source.sql";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -202,11 +204,12 @@ let db, adminClient, migrationsDir;
 let query, pool;
 
 before(async () => {
-  const [v1, v2, v3, v4] = await Promise.all([
+  const [v1, v2, v3, v4, v5] = await Promise.all([
     fsp.readFile(MIGRATION_V1_PATH, "utf8"),
     fsp.readFile(MIGRATION_V2_PATH, "utf8"),
     fsp.readFile(MIGRATION_V3_PATH, "utf8"),
     fsp.readFile(MIGRATION_V4_PATH, "utf8"),
+    fsp.readFile(MIGRATION_V5_PATH, "utf8"),
   ]);
 
   db = await makeTempDb("primary");
@@ -221,6 +224,7 @@ before(async () => {
     [MIGRATION_V2_NAME]: v2,
     [MIGRATION_V3_NAME]: v3,
     [MIGRATION_V4_NAME]: v4,
+    [MIGRATION_V5_NAME]: v5,
   });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
 
@@ -616,4 +620,95 @@ test("F3. the occurrence-level idempotency key: two athletes both targeted (dire
   await materialize(occurrenceId);
   const count = (await query(`select count(*)::int as n from training_load.external_assignments where occurrence_id = $1 and athlete_id = $2`, [occurrenceId, athleteId])).rows[0].n;
   assert.equal(count, 1, "an athlete targeted both directly and via a team must still get exactly one assignment");
+});
+
+// ------------------------------------------------------------
+// G. session_feedback_source_identity_xor - the full identity, including
+// plan_session_id and event_name, not just logical_session_id/
+// external_assignment_id (a hardening correction: the original constraint
+// let a scheduled_external row carry a non-null plan_session_id, which was
+// never the promised XOR identity).
+// ------------------------------------------------------------
+
+async function makePlanSession(athleteId) {
+  const plan = await query(
+    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft) values ('weekly',$1,'G-test plan','live',true,false) returning id`,
+    [athleteId],
+  );
+  const day = await query(`insert into plans.plan_days (plan_id, date, day_order) values ($1,$2,0) returning id`, [plan.rows[0].id, TODAY]);
+  const session = await query(`insert into plans.plan_sessions (plan_day_id, name) values ($1,'G-test session') returning id, logical_session_id`, [day.rows[0].id]);
+  return session.rows[0];
+}
+
+async function makeExternalAssignmentFor(athleteId) {
+  const coach = await makeUser("g-coach");
+  const scheduleId = await makeSchedule(coach, { eventName: "G-test external" });
+  await addAthleteTarget(scheduleId, athleteId);
+  const occurrenceId = await generateOccurrence(scheduleId, TODAY);
+  await materialize(occurrenceId);
+  const assignment = await query(`select id from training_load.external_assignments where occurrence_id = $1 and athlete_id = $2`, [occurrenceId, athleteId]);
+  return assignment.rows[0].id;
+}
+
+test("G1. a normal planned row (real plan_session_id + logical_session_id, no external identity) is allowed", async () => {
+  const athleteId = await makeAthlete("G1 Athlete");
+  const planSession = await makePlanSession(athleteId);
+  await assert.doesNotReject(() => query(
+    `insert into training_load.session_feedback (athlete_id, plan_session_id, logical_session_id, session_date, rpe, duration_minutes) values ($1,$2,$3,$4,5,30)`,
+    [athleteId, planSession.id, planSession.logical_session_id, TODAY],
+  ));
+});
+
+test("G2. a planned-orphan row (plan_session_id already nulled by the session's own deletion, logical_session_id still set) is allowed - the exact shape ON DELETE SET NULL produces", async () => {
+  const athleteId = await makeAthlete("G2 Athlete");
+  const planSession = await makePlanSession(athleteId);
+  await assert.doesNotReject(() => query(
+    `insert into training_load.session_feedback (athlete_id, plan_session_id, logical_session_id, session_date, rpe, duration_minutes) values ($1,null,$2,$3,5,30)`,
+    [athleteId, planSession.logical_session_id, TODAY],
+  ));
+});
+
+test("G3. a scheduled_external row with a non-null logical_session_id is rejected", async () => {
+  const athleteId = await makeAthlete("G3 Athlete");
+  const assignmentId = await makeExternalAssignmentFor(athleteId);
+  await assert.rejects(() => query(
+    `insert into training_load.session_feedback (athlete_id, source, external_assignment_id, logical_session_id, event_name, session_date, rpe, duration_minutes) values ($1,'scheduled_external',$2,gen_random_uuid(),'x',$3,5,30)`,
+    [athleteId, assignmentId, TODAY],
+  ), /session_feedback_source_identity_xor/);
+});
+
+test("G4. a scheduled_external row with a null external_assignment_id is rejected", async () => {
+  const athleteId = await makeAthlete("G4 Athlete");
+  await assert.rejects(() => query(
+    `insert into training_load.session_feedback (athlete_id, source, external_assignment_id, event_name, session_date, rpe, duration_minutes) values ($1,'scheduled_external',null,'x',$2,5,30)`,
+    [athleteId, TODAY],
+  ), /session_feedback_source_identity_xor/);
+});
+
+test("G5. a scheduled_external row with a non-null plan_session_id is rejected (the hardening correction itself)", async () => {
+  const athleteId = await makeAthlete("G5 Athlete");
+  const assignmentId = await makeExternalAssignmentFor(athleteId);
+  const planSession = await makePlanSession(athleteId);
+  await assert.rejects(() => query(
+    `insert into training_load.session_feedback (athlete_id, source, external_assignment_id, plan_session_id, event_name, session_date, rpe, duration_minutes) values ($1,'scheduled_external',$2,$3,'x',$4,5,30)`,
+    [athleteId, assignmentId, planSession.id, TODAY],
+  ), /session_feedback_source_identity_xor/);
+});
+
+test("G6. a scheduled_external row with a null event_name is rejected", async () => {
+  const athleteId = await makeAthlete("G6 Athlete");
+  const assignmentId = await makeExternalAssignmentFor(athleteId);
+  await assert.rejects(() => query(
+    `insert into training_load.session_feedback (athlete_id, source, external_assignment_id, event_name, session_date, rpe, duration_minutes) values ($1,'scheduled_external',$2,null,$3,5,30)`,
+    [athleteId, assignmentId, TODAY],
+  ), /session_feedback_source_identity_xor/);
+});
+
+test("G7. a correctly-shaped scheduled_external row (external_assignment_id + event_name set, plan_session_id and logical_session_id both null) is allowed", async () => {
+  const athleteId = await makeAthlete("G7 Athlete");
+  const assignmentId = await makeExternalAssignmentFor(athleteId);
+  await assert.doesNotReject(() => query(
+    `insert into training_load.session_feedback (athlete_id, source, external_assignment_id, event_name, session_date, rpe, duration_minutes) values ($1,'scheduled_external',$2,'x',$3,5,30)`,
+    [athleteId, assignmentId, TODAY],
+  ));
 });

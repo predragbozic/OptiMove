@@ -61,10 +61,18 @@ alter table training_load.session_feedback
 alter table training_load.session_feedback
   add column event_name text;
 
--- 4. THE XOR constraint.
+-- 4. THE XOR constraint. Also checks plan_session_id (existing column) -
+--    without it, a scheduled_external row could carry a non-null
+--    plan_session_id alongside its external_assignment_id, which is not
+--    the promised XOR identity even though the two "primary" identity
+--    columns still looked mutually exclusive. event_name is required for
+--    a scheduled_external row (it has no plan/session name to fall back
+--    to display-wise) - never required for planned, which already has
+--    session_name/plan_name for that.
 alter table training_load.session_feedback add constraint session_feedback_source_identity_xor check (
   (source = 'planned' and logical_session_id is not null and external_assignment_id is null) or
-  (source = 'scheduled_external' and external_assignment_id is not null and logical_session_id is null)
+  (source = 'scheduled_external' and external_assignment_id is not null and logical_session_id is null
+     and plan_session_id is null and event_name is not null)
 );
 
 -- 5. "One assignment -> at most one result." A plain UNIQUE never treats
