@@ -709,6 +709,13 @@ router.get("/weekly", async (req, res, next) => {
        join public.athletes a on a.id = sf.athlete_id
        where sf.session_date between $1::date and $2::date
          ${scopeSqlSf}
+         -- "Orphaned" is inherently a PLANNED concept (a since-changed
+         -- plan's own logical_session_id no longer matches a live session);
+         -- a scheduled_external result has NO logical_session_id at all
+         -- (NULL, per the XOR identity), which trivially satisfies the
+         -- NOT EXISTS below for every external row unless excluded here -
+         -- found live as a real duplicate row in this exact QA pass.
+         and sf.source = 'planned'
          and not exists (
            select 1
            from plans.plan_sessions ps2

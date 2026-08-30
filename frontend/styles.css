@@ -12187,11 +12187,16 @@ button.tests-assignment-card {
 }
 
 .training-load-reminder-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 6px 0;
   border-bottom: 1px solid var(--line);
+}
+
+.training-load-reminder-row .training-load-session-name {
+  min-width: 0;
 }
 
 .training-load-reminder-checkbox {

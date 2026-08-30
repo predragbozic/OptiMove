@@ -16,7 +16,7 @@ import {
   toggleSessionRpeEnabled,
   updateExternalSchedule,
 } from "./training-load-data.js";
-import { externalCalendarMode, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
+import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 // Every data-action="training-load-*" click/input in the Athlete Home card/
 // RPE form/weekly overlay and the coach Training Load tab routes through
@@ -311,7 +311,12 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const name = action.name || action.dataset?.name;
     const value = action.value ?? action.target?.value ?? "";
     if (name && name in form) form[name] = value;
-    renderTrainingLoad();
+    // Never a full re-render on every keystroke - that would rebuild this
+    // very input's own DOM node mid-typing and drop focus/subsequent
+    // keystrokes (found live: typing "National team camp" landed as "").
+    // Only the submit button's disabled/label state can depend on these
+    // fields, so that's the only thing patched.
+    patchScheduleSubmitButtonDom(form);
     return true;
   }
   if (type === "training-load-schedule-set-event-type") {
@@ -577,6 +582,13 @@ function externalRecipientVisibleAthletesForActions(form) {
 // External (outside-plan) RPE scheduling - form submit + schedule detail/
 // lifecycle helpers.
 // ------------------------------------------------------------
+
+function patchScheduleSubmitButtonDom(form) {
+  const button = document.querySelector("[data-training-load-schedule-submit]");
+  if (!button) return;
+  button.disabled = externalScheduleSubmitDisabled(form);
+  button.textContent = externalScheduleSubmitLabel(form);
+}
 
 function buildExternalTargetsPayload(form) {
   const targets = [];

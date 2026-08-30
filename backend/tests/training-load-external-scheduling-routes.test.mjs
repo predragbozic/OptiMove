@@ -611,6 +611,14 @@ test("D1. planned and external results appear together in the SAME days[].sessio
   assert.equal(externalRows.length, 1, "the external result must appear exactly once, never duplicated");
   assert.equal(externalRows[0].rated, true);
   assert.equal(externalRows[0].feedback.srpe, 240);
+  // Regression: an external result's logical_session_id is NULL (the XOR
+  // identity), which used to satisfy the "orphaned/historical planned
+  // result" query's own NOT EXISTS unconditionally - producing a SECOND,
+  // mislabeled source:"planned" row for the exact same result. Assert the
+  // athlete's own row count for this result, not just the external-tagged
+  // filter above (which the mislabeled duplicate would silently evade).
+  const forThisAthlete = allSessions.filter((s) => s.athleteId === athlete.athleteId);
+  assert.equal(forThisAthlete.length, 1, "no duplicate orphaned/historical row for the same external result");
 });
 
 test("D2. a coach's weekly view is workspace-scoped for external assignments too - an athlete outside the coach's access never appears", async () => {

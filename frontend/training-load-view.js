@@ -906,14 +906,14 @@ function renderExternalRecipientPickerHtml(form) {
 // The create/edit/schedule-again form itself.
 // ------------------------------------------------------------
 
-function externalScheduleSubmitDisabled(form) {
+export function externalScheduleSubmitDisabled(form) {
   if (form.submitting || !form.eventName.trim()) return true;
   if (form.scheduleKind === "specific_dates") return !form.selectedDates.length;
   if (form.scheduleKind === "daily") return !form.startDate || !form.endDate;
   return !form.startDate;
 }
 
-function externalScheduleSubmitLabel(form) {
+export function externalScheduleSubmitLabel(form) {
   if (form.submitting) return "Saving...";
   if (form.scheduleKind === "specific_dates") return `Schedule ${form.selectedDates.length} date${form.selectedDates.length === 1 ? "" : "s"}`;
   return form.editingScheduleId ? "Save changes" : "Create schedule";
@@ -980,7 +980,7 @@ export function renderExternalScheduleFormHtml() {
         </div>
       </div>
       <div class="tests-schedule-form-actions">
-        <button type="button" class="plain-button" data-action="training-load-schedule-submit" ${externalScheduleSubmitDisabled(form) ? "disabled" : ""}>${externalScheduleSubmitLabel(form)}</button>
+        <button type="button" class="plain-button" data-action="training-load-schedule-submit" data-training-load-schedule-submit ${externalScheduleSubmitDisabled(form) ? "disabled" : ""}>${externalScheduleSubmitLabel(form)}</button>
       </div>
       ${form.recipientPickerOpen ? renderExternalRecipientPickerHtml(form) : ""}
     </section>
