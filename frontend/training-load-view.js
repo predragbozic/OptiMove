@@ -792,6 +792,42 @@ function renderExternalCalendarSectionHtml(form) {
   `;
 }
 
+// Hardening correction (item 10): editing an existing schedule used to
+// still render the full click-to-pick calendar, but submit silently
+// stripped dates/startDate/scheduleKind before sending the PATCH - a
+// control that looked fully functional while the backend quietly
+// ignored whatever it was clicked to. None of these three kinds accept
+// a genuinely new date/date-set through Edit (only Schedule again
+// does, via the real interactive calendar above) - a recurring
+// schedule's own END date is the one exception, since PATCH really
+// does apply it, so that's a real editable input, not a display value.
+function renderExternalScheduleReadOnlyDatesHtml(form) {
+  if (form.scheduleKind === "daily") {
+    return `
+      <div class="training-load-dates-readonly">
+        <p class="muted">Starts <strong>${escapeHtml(formatShortDate(form.startDate))}</strong> (fixed - use Schedule again for a different start date)</p>
+        <label class="search-field">
+          <span>Ends</span>
+          <input type="date" name="endDate" value="${escapeAttr(form.endDate)}" min="${escapeAttr(form.startDate)}" data-action="training-load-schedule-form-field" required>
+        </label>
+      </div>
+    `;
+  }
+  if (form.scheduleKind === "specific_dates") {
+    const dates = (form.datesList.length ? form.datesList : [form.startDate].filter(Boolean)).slice().sort();
+    return `
+      <div class="training-load-dates-readonly">
+        <p class="muted training-load-calendar-count">${dates.length} date${dates.length === 1 ? "" : "s"} - fixed after creation</p>
+        <div class="training-load-calendar-chips">
+          ${dates.map((iso) => `<span class="training-load-calendar-chip training-load-calendar-chip-static">${escapeHtml(iso)}</span>`).join("")}
+        </div>
+        <p class="muted">Use Schedule again to run this on different dates.</p>
+      </div>
+    `;
+  }
+  return `<p class="muted">Date: <strong>${escapeHtml(formatShortDate(form.startDate))}</strong> (fixed - use Schedule again for a different date)</p>`;
+}
+
 // ------------------------------------------------------------
 // Recipient picker - identical shape/CSS to the coach filter picker above
 // (Builder-style Clubs/Teams/Athletes tabs), just backed by the schedule
@@ -987,6 +1023,14 @@ function renderExternalNotificationsSectionHtml(form) {
 
 export function externalScheduleSubmitDisabled(form) {
   if (form.submitting || !form.eventName.trim()) return true;
+  if (form.editingScheduleId) {
+    // Dates are fixed once created (see the read-only summary this form
+    // renders instead of a calendar) - only Daily's real end-date input
+    // can still block submit here, exactly like the calendar itself
+    // could before this correction.
+    if (form.scheduleKind === "daily") return !form.endDate;
+    return false;
+  }
   if (form.scheduleKind === "specific_dates") return !form.selectedDates.length;
   if (form.scheduleKind === "daily") return !form.startDate || !form.endDate;
   return !form.startDate;
@@ -994,7 +1038,7 @@ export function externalScheduleSubmitDisabled(form) {
 
 export function externalScheduleSubmitLabel(form) {
   if (form.submitting) return "Saving...";
-  if (form.scheduleKind === "specific_dates") return `Schedule ${form.selectedDates.length} date${form.selectedDates.length === 1 ? "" : "s"}`;
+  if (form.scheduleKind === "specific_dates" && !form.editingScheduleId) return `Schedule ${form.selectedDates.length} date${form.selectedDates.length === 1 ? "" : "s"}`;
   return form.editingScheduleId ? "Save changes" : "Create schedule";
 }
 
@@ -1022,11 +1066,13 @@ export function renderExternalScheduleFormHtml() {
             `).join("")}
           </div>
         </div>
+        ${isEdit ? "" : `
         <div class="training-load-recurrence-toggle" role="group" aria-label="Recurrence">
           <button type="button" class="training-load-recurrence-pill ${isSpecificDates ? "is-active" : ""}" data-action="training-load-schedule-set-recurrence" data-daily="false">Dates</button>
           <button type="button" class="training-load-recurrence-pill ${form.scheduleKind === "daily" ? "is-active" : ""}" data-action="training-load-schedule-set-recurrence" data-daily="true">Daily</button>
         </div>
-        ${renderExternalCalendarSectionHtml(form)}
+        `}
+        ${isEdit ? renderExternalScheduleReadOnlyDatesHtml(form) : renderExternalCalendarSectionHtml(form)}
         <div class="tests-time-row">
           <label class="search-field">
             <span>Opens</span>
@@ -1084,8 +1130,9 @@ export function renderExternalScheduleDetailHtml() {
     <section class="panel training-load-schedule-detail">
       <button type="button" class="plain-button compact-button" data-action="training-load-close-external-schedule">&larr; Back to schedule</button>
       <h3>${escapeHtml(schedule.eventName)}${renderOutsidePlanBadgeHtml()}</h3>
-      <p class="muted">${schedule.eventType ? `${escapeHtml(externalEventTypeLabel(schedule.eventType))} · ` : ""}${schedule.scheduleKind === "recurring" ? "Daily" : "One-time"}</p>
+      <p class="muted">${schedule.eventType ? `${escapeHtml(externalEventTypeLabel(schedule.eventType))} · ` : ""}${schedule.scheduleKind === "recurring" ? "Daily" : schedule.scheduleKind === "dates" ? `Dates (${(schedule.dates || []).length})` : "One-time"}</p>
       <p class="muted">${escapeHtml((schedule.opensTime || "").slice(0, 5))}&ndash;${escapeHtml((schedule.closesTime || "").slice(0, 5))} (fallback timezone: ${escapeHtml(schedule.timezone)})</p>
+      ${schedule.scheduleKind === "dates" && (schedule.dates || []).length ? `<p class="muted">Dates: ${schedule.dates.map((d) => escapeHtml(d)).join(", ")}</p>` : ""}
       ${schedule.eventNote ? `<p>${escapeHtml(schedule.eventNote)}</p>` : ""}
       <p>Targets: ${targets.map((t) => escapeHtml(t.name || t.athleteId || t.teamId || t.clubId)).join(", ") || "none"}</p>
       ${schedule.status === "cancelled"

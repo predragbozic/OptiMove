@@ -1083,13 +1083,19 @@ function formatNotificationRuleRow(row) {
   return { kind: row.kind, enabled: row.enabled, reminderOffsetMinutes: row.reminder_offset_minutes };
 }
 
-function formatExternalScheduleRow(row) {
+// `datesList` is only ever populated for a schedule_kind='dates' row -
+// the caller is expected to have queried external_schedule_dates itself
+// (or joined a dates_list array via SQL) and passed it through; every
+// other kind's start_date/end_date pair remains the single source of
+// truth, unchanged.
+function formatExternalScheduleRow(row, datesList) {
   return {
     id: row.id,
     scheduleKind: row.schedule_kind,
     timezone: row.timezone,
     startDate: row.start_date,
     endDate: row.end_date,
+    dates: row.schedule_kind === "dates" ? (datesList || row.dates_list || []) : undefined,
     recurrenceRule: row.recurrence_rule || null,
     opensTime: row.opens_time,
     dueTime: row.due_time,
@@ -1118,25 +1124,36 @@ function formatExternalTargetRow(row) {
   };
 }
 
-// Builds the schedule_kind/recurrence_rule pair from the create/schedule-
-// again request body. "Dates" (multiple specific dates) has no dedicated
-// schema-level kind of its own - it's expressed as N independent
-// one_time schedules sharing everything else, created together in one
-// request via a `dates` array; "Daily" is a single recurring schedule
-// with a start/end range.
+// Builds the schedule_kind/recurrence_rule/date-range/explicit-dates
+// shape from the create/schedule-again request body.
+//
+// Hardening correction (item 10): "Dates" (multiple specific dates)
+// used to have no dedicated schema-level kind of its own - it was
+// expressed as N independent one_time schedules, created together in
+// one request via a `dates` array, but with no shared identity
+// afterward (N separate Edit/Pause/Cancel, no single "Schedule again").
+// Now it resolves to exactly ONE schedule of kind 'dates', with its
+// own explicit date rows in training_load.external_schedule_dates
+// (see migrations_v2/202609030900). start_date/end_date on that one row
+// are only ever the min/max of its own dates, for sorting/display -
+// never authoritative (see generate_external_schedule_occurrence). A
+// single-element `dates` array is still `dates`, not `one_time` -
+// "5 disconnected cards" was the actual bug, not whether N happened to
+// be 1 on a given request.
 function resolveExternalScheduleKindAndDates(body) {
   const datesInput = Array.isArray(body?.dates) ? body.dates.map((d) => text(d)).filter(Boolean) : [];
   if (datesInput.length) {
-    return { scheduleKind: "one_time", recurrenceRule: null, dateSets: datesInput.map((d) => ({ startDate: d, endDate: null })) };
+    const dates = Array.from(new Set(datesInput)).sort();
+    return { scheduleKind: "dates", recurrenceRule: null, startDate: dates[0], endDate: dates[dates.length - 1], dates };
   }
   const scheduleKindInput = text(body?.scheduleKind) === "recurring" ? "recurring" : "one_time";
   if (scheduleKindInput === "recurring") {
     const startDate = text(body?.startDate);
     const endDate = text(body?.endDate) || null;
-    return { scheduleKind: "recurring", recurrenceRule: { version: 1, freq: "daily" }, dateSets: [{ startDate, endDate }] };
+    return { scheduleKind: "recurring", recurrenceRule: { version: 1, freq: "daily" }, startDate, endDate, dates: null };
   }
   const startDate = text(body?.startDate);
-  return { scheduleKind: "one_time", recurrenceRule: null, dateSets: [{ startDate, endDate: null }] };
+  return { scheduleKind: "one_time", recurrenceRule: null, startDate, endDate: null, dates: null };
 }
 
 async function insertExternalSchedule(client, { scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId, owner }) {
@@ -1148,6 +1165,15 @@ async function insertExternalSchedule(client, { scheduleKind, timezone, startDat
     [scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId, owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId],
   );
   return result.rows[0];
+}
+
+async function insertExternalScheduleDates(client, scheduleId, dates) {
+  for (const scheduledDate of dates) {
+    await client.query(
+      `insert into training_load.external_schedule_dates (schedule_id, scheduled_date) values ($1,$2)`,
+      [scheduleId, scheduledDate],
+    );
+  }
 }
 
 router.post("/external-schedules", async (req, res, next) => {
@@ -1173,9 +1199,10 @@ router.post("/external-schedules", async (req, res, next) => {
     if (!isValidTimeString(opensTime) || !isValidTimeString(closesTime) || (dueTime !== null && !isValidTimeString(dueTime))) {
       return res.status(400).json({ error: "Opens/due/closes time must be a valid HH:MM time." });
     }
-    const { scheduleKind, recurrenceRule, dateSets } = resolveExternalScheduleKindAndDates(body);
-    if (dateSets.some((d) => !d.startDate)) return res.status(400).json({ error: "At least one date is required." });
-    if (dateSets.some((d) => !isValidGregorianDateString(d.startDate) || (d.endDate !== null && !isValidGregorianDateString(d.endDate)))) {
+    const { scheduleKind, recurrenceRule, startDate, endDate, dates } = resolveExternalScheduleKindAndDates(body);
+    const datesToValidate = scheduleKind === "dates" ? dates : [startDate, ...(endDate ? [endDate] : [])];
+    if (!datesToValidate.length || !startDate) return res.status(400).json({ error: "At least one date is required." });
+    if (datesToValidate.some((d) => !isValidGregorianDateString(d))) {
       return res.status(400).json({ error: "Every date must be a valid YYYY-MM-DD date." });
     }
 
@@ -1187,19 +1214,20 @@ router.post("/external-schedules", async (req, res, next) => {
 
     const owner = await resolveExternalScheduleOwnerContext(req);
     await client.query("begin");
-    const schedules = [];
-    for (const dateSet of dateSets) {
-      const schedule = await insertExternalSchedule(client, {
-        scheduleKind, timezone, startDate: dateSet.startDate, endDate: dateSet.endDate,
-        recurrenceRule: recurrenceRule ? JSON.stringify(recurrenceRule) : null,
-        opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId: req.user.id, owner,
-      });
-      await insertExternalTargets(client, schedule.id, resolved.targets);
-      await insertNotificationRules(client, schedule.id, resolvedRules.rules);
-      schedules.push(schedule);
-    }
+    // One schedule row regardless of kind - a "Dates" pick of N dates is
+    // ONE logical schedule (item 10's own fix), never N independent rows.
+    const schedule = await insertExternalSchedule(client, {
+      scheduleKind, timezone, startDate, endDate,
+      recurrenceRule: recurrenceRule ? JSON.stringify(recurrenceRule) : null,
+      opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId: req.user.id, owner,
+    });
+    if (scheduleKind === "dates") await insertExternalScheduleDates(client, schedule.id, dates);
+    await insertExternalTargets(client, schedule.id, resolved.targets);
+    await insertNotificationRules(client, schedule.id, resolvedRules.rules);
     await client.query("commit");
-    res.status(201).json({ schedules: schedules.map(formatExternalScheduleRow) });
+    // Still an array in the response - existing/older callers reading
+    // schedules[0] keep working unchanged; it's simply always length 1 now.
+    res.status(201).json({ schedules: [formatExternalScheduleRow(schedule, scheduleKind === "dates" ? dates : undefined)] });
   } catch (error) {
     await client.query("rollback").catch(() => {});
     respondToWriteError(res, next, error);
@@ -1221,13 +1249,14 @@ router.get("/external-schedules", async (req, res, next) => {
       statusSql = `and s.status = $${params.length}`;
     }
     const result = await query(
-      `select s.*, (select count(*)::int from training_load.external_schedule_targets t where t.schedule_id = s.id) as target_count
+      `select s.*, (select count(*)::int from training_load.external_schedule_targets t where t.schedule_id = s.id) as target_count,
+              (select array_agg(d.scheduled_date::text order by d.scheduled_date) from training_load.external_schedule_dates d where d.schedule_id = s.id) as dates_list
        from training_load.external_schedules s
        where ${scopeSql} ${statusSql}
        order by s.start_date desc, s.created_at desc`,
       params,
     );
-    res.json({ schedules: result.rows.map(formatExternalScheduleRow) });
+    res.json({ schedules: result.rows.map((row) => formatExternalScheduleRow(row, row.dates_list)) });
   } catch (error) {
     next(error);
   }
@@ -1266,8 +1295,11 @@ router.get("/external-schedules/:scheduleId", async (req, res, next) => {
       `select kind, enabled, reminder_offset_minutes from training_load.external_schedule_notification_rules where schedule_id = $1`,
       [schedule.id],
     );
+    const datesResult = schedule.schedule_kind === "dates"
+      ? await query(`select scheduled_date::text as scheduled_date from training_load.external_schedule_dates where schedule_id = $1 order by scheduled_date`, [schedule.id])
+      : null;
     res.json({
-      schedule: formatExternalScheduleRow(schedule),
+      schedule: formatExternalScheduleRow(schedule, datesResult?.rows.map((r) => r.scheduled_date)),
       targets: targetsResult.rows.map(formatExternalTargetRow),
       occurrences: occurrencesResult.rows.map((row) => ({ id: row.id, scheduledDate: row.scheduled_date, status: row.status, assignmentCount: row.assignment_count, ratedCount: row.rated_count })),
       notificationRules: notificationRulesResult.rows.map(formatNotificationRuleRow),
@@ -1309,6 +1341,19 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
     const opensTime = body.opensTime !== undefined ? text(body.opensTime) : schedule.opens_time;
     const dueTime = body.dueTime !== undefined ? (text(body.dueTime) || null) : schedule.due_time;
     const closesTime = body.closesTime !== undefined ? text(body.closesTime) : schedule.closes_time;
+    // endDate is only ever a real, meaningful edit for a 'recurring'
+    // schedule (extending/shortening its own open-ended window) - for
+    // 'one_time'/'dates', start_date/end_date are fixed identity (a
+    // 'dates' schedule's own end_date is just the max of its
+    // external_schedule_dates rows, informational only). Rather than
+    // silently ignoring a client-supplied endDate there (which would
+    // look like it worked), it's a controlled 400 - same "never leave a
+    // control that looks functional while the backend ignores it" rule
+    // this whole correction is about, applied at the API boundary too.
+    if (body.endDate !== undefined && schedule.schedule_kind !== "recurring") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "endDate can only be changed on a recurring (Daily) schedule." });
+    }
     const endDate = body.endDate !== undefined ? (text(body.endDate) || null) : schedule.end_date;
     // Only a client-SUPPLIED value is validated here - the existing
     // stored value (read straight from the DB row above when the field
@@ -1356,8 +1401,12 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
       await insertNotificationRules(client, schedule.id, resolvedRules.rules);
     }
     await client.query("commit");
-    const freshResult = await query(`select * from training_load.external_schedules where id = $1`, [schedule.id]);
-    res.json({ schedule: formatExternalScheduleRow(freshResult.rows[0]) });
+    const freshResult = await query(
+      `select s.*, (select array_agg(d.scheduled_date::text order by d.scheduled_date) from training_load.external_schedule_dates d where d.schedule_id = s.id) as dates_list
+       from training_load.external_schedules s where s.id = $1`,
+      [schedule.id],
+    );
+    res.json({ schedule: formatExternalScheduleRow(freshResult.rows[0], freshResult.rows[0].dates_list) });
   } catch (error) {
     await client.query("rollback").catch(() => {});
     respondToWriteError(res, next, error);
@@ -1402,11 +1451,26 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
     if (!source || !canManageExternalScheduleInScope(scope, source)) return res.status(404).json({ error: "Schedule not found." });
 
     const body = req.body || {};
-    const startDate = text(body.startDate);
-    if (!startDate) return res.status(400).json({ error: "A new start date is required." });
-    const endDate = text(body.endDate) || null;
-    if (!isValidGregorianDateString(startDate) || (endDate !== null && !isValidGregorianDateString(endDate))) {
-      return res.status(400).json({ error: "startDate/endDate must be valid YYYY-MM-DD dates." });
+    // A 'dates' source needs a genuinely NEW set of picked dates (never
+    // the original's own dates, and never just a single new startDate) -
+    // everything else keeps the existing startDate/endDate contract.
+    let startDate, endDate, newDates = null;
+    if (source.schedule_kind === "dates") {
+      const datesInput = Array.isArray(body.dates) ? body.dates.map((d) => text(d)).filter(Boolean) : [];
+      if (!datesInput.length) return res.status(400).json({ error: "At least one new date is required." });
+      if (datesInput.some((d) => !isValidGregorianDateString(d))) {
+        return res.status(400).json({ error: "Every date must be a valid YYYY-MM-DD date." });
+      }
+      newDates = Array.from(new Set(datesInput)).sort();
+      startDate = newDates[0];
+      endDate = newDates[newDates.length - 1];
+    } else {
+      startDate = text(body.startDate);
+      if (!startDate) return res.status(400).json({ error: "A new start date is required." });
+      endDate = text(body.endDate) || null;
+      if (!isValidGregorianDateString(startDate) || (endDate !== null && !isValidGregorianDateString(endDate))) {
+        return res.status(400).json({ error: "startDate/endDate must be valid YYYY-MM-DD dates." });
+      }
     }
 
     const targetsResult = await query(
@@ -1423,7 +1487,7 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
       scheduleKind: source.schedule_kind,
       timezone: source.timezone,
       startDate,
-      endDate: source.schedule_kind === "recurring" ? endDate : null,
+      endDate: source.schedule_kind === "recurring" || source.schedule_kind === "dates" ? endDate : null,
       recurrenceRule: source.recurrence_rule,
       opensTime: source.opens_time,
       dueTime: source.due_time,
@@ -1434,6 +1498,7 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
       userId: req.user.id,
       owner: { ownerScope: source.owner_scope, ownerUserId: source.owner_user_id, ownerClubId: source.owner_club_id, ownerTeamId: source.owner_team_id },
     });
+    if (source.schedule_kind === "dates") await insertExternalScheduleDates(client, schedule.id, newDates);
     for (const t of targetsResult.rows) {
       await client.query(
         `insert into training_load.external_schedule_targets (schedule_id, target_kind, target_athlete_id, target_team_id, target_club_id) values ($1,$2,$3,$4,$5)`,
@@ -1447,7 +1512,7 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
     // behavior exactly.
     await insertNotificationRules(client, schedule.id, sourceRulesResult.rows.map((r) => ({ kind: r.kind, enabled: r.enabled, reminderOffsetMinutes: r.reminder_offset_minutes })));
     await client.query("commit");
-    res.status(201).json({ schedule: formatExternalScheduleRow(schedule) });
+    res.status(201).json({ schedule: formatExternalScheduleRow(schedule, newDates || undefined) });
   } catch (error) {
     await client.query("rollback").catch(() => {});
     respondToWriteError(res, next, error);

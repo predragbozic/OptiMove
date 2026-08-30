@@ -54,6 +54,8 @@ const {
   renderRpeFormHtml,
   renderExternalScheduleFormHtml,
   isRpeFormValid,
+  externalScheduleSubmitDisabled,
+  externalScheduleSubmitLabel,
 } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, emptyRpeForm, emptyExternalScheduleForm, state } = await import("../state.js");
 
@@ -991,4 +993,137 @@ test("R5. a schedule submit body includes the current notificationRules array, k
   const rules = createCall.body.notificationRules;
   assert.equal(rules.find((r) => r.kind === "athlete_invitation").enabled, false);
   assert.equal(rules.find((r) => r.kind === "athlete_reminder").reminderOffsetMinutes, 60);
+});
+
+// ------------------------------------------------------------
+// S. "Dates" mode is ONE logical schedule, and Edit no longer renders a
+// calendar that LOOKS editable while the backend silently discards
+// whatever it's clicked to (item 10 correction). Edit shows a read-only
+// summary instead - a real, working end-date input for Daily is the one
+// exception, since that's the one field PATCH genuinely applies.
+// ------------------------------------------------------------
+
+test("S1. creating a new schedule (not editing) is unaffected - the interactive Dates/Daily pills and click calendar still render", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({ scheduleKind: "specific_dates", calendarOpen: true });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes('data-action="training-load-schedule-set-recurrence"'), "the Dates/Daily toggle must still render for a brand-new schedule");
+  assert.ok(html.includes('data-action="training-load-calendar-day-click"'), "the real click calendar must still render for a brand-new schedule");
+});
+
+test("S2. editing an existing 'dates'-kind schedule shows a READ-ONLY list of its own fixed dates - no Dates/Daily toggle, no clickable calendar day, no remove-date chip", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-dates-1",
+    scheduleKind: "specific_dates",
+    datesList: ["2026-09-01", "2026-09-05", "2026-09-10"],
+  });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(!html.includes('data-action="training-load-schedule-set-recurrence"'), "no Dates/Daily toggle while editing - the kind is fixed");
+  assert.ok(!html.includes('data-action="training-load-calendar-day-click"'), "no clickable calendar day while editing - dates can never be silently discarded again");
+  assert.ok(!html.includes('data-action="training-load-calendar-remove-date"'), "no remove-date control either - fully read-only");
+  assert.ok(html.includes("2026-09-01") && html.includes("2026-09-05") && html.includes("2026-09-10"), "every one of the schedule's own real dates must be shown");
+  assert.ok(html.includes("Schedule again"), "must point the coach at the real path to pick new dates");
+});
+
+test("S3. editing an existing 'one_time' schedule shows its fixed single date as read-only text, not a clickable calendar", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-onetime-1",
+    scheduleKind: "one_time",
+    startDate: "2026-09-03",
+  });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(!html.includes('data-action="training-load-calendar-day-click"'));
+  assert.ok(html.includes("2026-09-03") || /3 Sep/.test(html), "the fixed date must still be visible, just not editable");
+});
+
+test("S4. editing an existing 'recurring' (Daily) schedule shows a read-only start date PLUS a REAL, working end-date input - the one field PATCH genuinely applies", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-daily-1",
+    scheduleKind: "daily",
+    startDate: "2026-09-01",
+    endDate: "2026-09-14",
+  });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(!html.includes('data-action="training-load-calendar-day-click"'), "no click calendar - the start date is fixed");
+  assert.ok(html.includes('name="endDate"') && html.includes('type="date"'), "a real end-date input must render - this one genuinely saves");
+  assert.ok(html.includes('value="2026-09-14"'));
+});
+
+test("S5. the submit button is never permanently disabled while editing a 'dates'-kind schedule, even though selectedDates stays empty in edit mode - and its label reads 'Save changes', never 'Schedule 0 dates'", () => {
+  resetState();
+  const form = emptyExternalScheduleForm({
+    editingScheduleId: "sched-dates-1",
+    scheduleKind: "specific_dates",
+    eventName: "Camp",
+    datesList: ["2026-09-01"],
+  });
+  assert.equal(form.selectedDates.length, 0, "sanity: edit mode never populates selectedDates");
+  assert.equal(externalScheduleSubmitDisabled(form), false);
+  assert.equal(externalScheduleSubmitLabel(form), "Save changes");
+});
+
+test("S6. opening Edit on a real 'dates'-kind schedule maps the API response into specific_dates UI mode with its own dates listed for read-only display", async () => {
+  resetState();
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-dates-1"
+    ? { status: 200, body: { schedule: { id: "sched-dates-1", eventName: "Camp", scheduleKind: "dates", dates: ["2026-09-01", "2026-09-05"], startDate: "2026-09-01", endDate: "2026-09-05", opensTime: "00:00:00", closesTime: "23:59:00", timezone: "UTC" }, targets: [], notificationRules: [] } }
+    : { status: 200, body: { clubs: [], teams: [], athletes: [] } }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-edit-external-schedule", scheduleId: "sched-dates-1" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.equal(form.editingScheduleId, "sched-dates-1");
+  assert.equal(form.scheduleKind, "specific_dates");
+  assert.deepEqual(form.datesList, ["2026-09-01", "2026-09-05"]);
+});
+
+test("S7. opening Schedule again on a 'dates'-kind source starts with a BLANK date selection (a fresh pick is required), using the real interactive calendar - never pre-filled with the source's own dates", async () => {
+  resetState();
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-dates-1"
+    ? { status: 200, body: { schedule: { id: "sched-dates-1", eventName: "Camp", scheduleKind: "dates", dates: ["2026-09-01", "2026-09-05"], startDate: "2026-09-01", endDate: "2026-09-05", opensTime: "00:00:00", closesTime: "23:59:00", timezone: "UTC" }, targets: [], notificationRules: [] } }
+    : { status: 200, body: { clubs: [], teams: [], athletes: [] } }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-external-schedule-again", scheduleId: "sched-dates-1" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.equal(form.scheduleAgainFromId, "sched-dates-1");
+  assert.equal(form.scheduleKind, "specific_dates");
+  assert.deepEqual(form.selectedDates, [], "never pre-filled with the original's own dates - a genuinely new pick is required");
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes('data-action="training-load-calendar-day-click"'), "Schedule again is NOT edit mode - the real interactive calendar must render so new dates can actually be picked");
+});
+
+test("S8. submitting Schedule again for a 'dates'-kind source sends a `dates` array, never a bare startDate", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    scheduleAgainFromId: "sched-dates-1",
+    scheduleKind: "specific_dates",
+    selectedDates: ["2026-10-01", "2026-10-08"],
+  });
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-dates-1/schedule-again"
+    ? { status: 201, body: { schedule: { id: "sched-dates-2" } } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const call = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules/sched-dates-1/schedule-again");
+  assert.ok(call, "expected the schedule-again request to have been sent");
+  assert.deepEqual(call.body.dates.slice().sort(), ["2026-10-01", "2026-10-08"]);
+  assert.equal(call.body.startDate, undefined, "must never send a bare startDate for a dates-kind schedule-again");
+});
+
+test("S9. submitting a PATCH while editing a 'dates'-kind schedule never sends dates/startDate/scheduleKind - only genuinely-editable fields", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-dates-1",
+    scheduleKind: "specific_dates",
+    eventName: "Renamed camp",
+    datesList: ["2026-09-01", "2026-09-05"],
+  });
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-dates-1" && call.method === "PATCH"
+    ? { status: 200, body: { schedule: { id: "sched-dates-1" } } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const call = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules/sched-dates-1" && c.method === "PATCH");
+  assert.ok(call, "expected the PATCH request to have been sent");
+  assert.equal(call.body.dates, undefined);
+  assert.equal(call.body.startDate, undefined);
+  assert.equal(call.body.scheduleKind, undefined);
+  assert.equal(call.body.eventName, "Renamed camp");
 });

@@ -658,13 +658,13 @@ async function submitExternalScheduleForm(renderTrainingLoad) {
   renderTrainingLoad();
   try {
     if (form.scheduleAgainFromId) {
-      // Schedule again only ever needs a new date (+ end date if daily) -
+      // Schedule again only ever needs new date(s) (+ end date if daily) -
       // the backend copies every other setting/target from the original
-      // itself, never accepts them from this request body.
-      await scheduleExternalAgain(form.scheduleAgainFromId, {
-        startDate: form.startDate,
-        ...(form.scheduleKind === "daily" ? { endDate: form.endDate } : {}),
-      });
+      // itself, never accepts them from this request body. A 'dates'-kind
+      // source needs a genuinely new SET of dates, never a single startDate.
+      await scheduleExternalAgain(form.scheduleAgainFromId, form.scheduleKind === "specific_dates"
+        ? { dates: form.selectedDates.slice() }
+        : { startDate: form.startDate, ...(form.scheduleKind === "daily" ? { endDate: form.endDate } : {}) });
     } else if (form.editingScheduleId) {
       const body = buildExternalScheduleBody(form);
       // PATCH never changes an existing schedule's own start date/kind -
@@ -718,9 +718,11 @@ async function openEditExternalSchedule(scheduleId, renderTrainingLoad) {
     eventName: schedule.eventName,
     eventType: schedule.eventType || "",
     eventNote: schedule.eventNote || "",
-    scheduleKind: schedule.scheduleKind === "recurring" ? "daily" : "one_time",
+    scheduleKind: schedule.scheduleKind === "recurring" ? "daily" : schedule.scheduleKind === "dates" ? "specific_dates" : "one_time",
     startDate: schedule.startDate,
     endDate: schedule.endDate || schedule.startDate,
+    // Fixed, read-only in edit mode - see renderExternalScheduleReadOnlyDatesHtml.
+    datesList: schedule.scheduleKind === "dates" ? (schedule.dates || []) : [],
     opensTime: (schedule.opensTime || "").slice(0, 5),
     closesTime: (schedule.closesTime || "").slice(0, 5),
     timezone,
@@ -745,7 +747,10 @@ async function openExternalScheduleAgain(scheduleId, renderTrainingLoad) {
     eventName: schedule.eventName,
     eventType: schedule.eventType || "",
     eventNote: schedule.eventNote || "",
-    scheduleKind: schedule.scheduleKind === "recurring" ? "daily" : "one_time",
+    // A fresh pick, deliberately never pre-filled from schedule.dates -
+    // "Schedule again... requires new dates" (never reuses the source's
+    // own dates), matching how startDate is left blank below too.
+    scheduleKind: schedule.scheduleKind === "recurring" ? "daily" : schedule.scheduleKind === "dates" ? "specific_dates" : "one_time",
     opensTime: (schedule.opensTime || "").slice(0, 5),
     closesTime: (schedule.closesTime || "").slice(0, 5),
     timezone,

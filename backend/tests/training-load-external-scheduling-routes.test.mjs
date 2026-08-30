@@ -28,6 +28,7 @@ const MIGRATIONS = [
   ["202609011100_training_load_v5_unified_result_source.sql"],
   ["202609011200_training_load_v6_external_schedule_event_type.sql"],
   ["202609020900_training_load_v7_external_schedule_notification_rules.sql"],
+  ["202609030900_training_load_v8_specific_dates_group.sql"],
 ].map(([name]) => ({ name, path: path.resolve(__dirname, `../../migrations_v2/${name}`) }));
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -367,14 +368,19 @@ test("A1. creating a one_time schedule for a single date, targeting one athlete 
   assert.equal(res.body.schedules[0].startDate, TODAY);
 });
 
-test("A2. creating with a `dates` array (Dates/multi mode) creates one one_time schedule PER date, sharing the same targets/settings", async () => {
+test("A2. creating with a `dates` array (Dates/multi mode) creates exactly ONE schedule of kind 'dates', carrying every picked date (hardening correction, item 10 - this used to create N fully independent one_time schedules with no shared identity)", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("a2", 1);
   const dates = [TODAY, addDaysIso(TODAY, 3), addDaysIso(TODAY, 7)];
   const res = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ dates, targets: [{ kind: "athlete", id: athletes[0].athleteId }] }) });
   assert.equal(res.status, 201, `expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
-  assert.equal(res.body.schedules.length, 3);
-  assert.deepEqual(res.body.schedules.map((s) => s.startDate).sort(), dates.sort());
-  for (const schedule of res.body.schedules) assert.equal(schedule.scheduleKind, "one_time");
+  assert.equal(res.body.schedules.length, 1, "N picked dates must be ONE schedule entity, never N disconnected ones");
+  const schedule = res.body.schedules[0];
+  assert.equal(schedule.scheduleKind, "dates");
+  assert.deepEqual(schedule.dates.slice().sort(), dates.slice().sort());
+  const rowCount = (await query(`select count(*)::int as n from training_load.external_schedules where created_by_user_id = (select created_by_user_id from training_load.external_schedules where id = $1)`, [schedule.id])).rows[0].n;
+  assert.equal(rowCount, 1, "exactly one row in external_schedules, not one per date");
+  const dateRows = (await query(`select scheduled_date::text as d from training_load.external_schedule_dates where schedule_id = $1 order by d`, [schedule.id])).rows.map((r) => r.d);
+  assert.deepEqual(dateRows, dates.slice().sort());
 });
 
 test("A3. creating a recurring (Daily) schedule with a start/end range", async () => {
@@ -1422,4 +1428,148 @@ test("K7. Schedule again copies the source's own notification configuration onto
   const newDetail = await api(`/api/training-load/external-schedules/${again.body.schedule.id}`, { cookie: coachCookie });
   assert.equal(newDetail.body.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, false);
   assert.equal(newDetail.body.notificationRules.find((r) => r.kind === "athlete_reminder").reminderOffsetMinutes, 30);
+});
+
+// ------------------------------------------------------------
+// L. "Dates" mode is ONE logical schedule (item 10) - N picked dates
+// share exactly one schedule row/id. Edit/Pause/Cancel/Schedule-again
+// all operate on that ONE entity - never on N disconnected schedules
+// the coach would otherwise have to maintain separately. (A2 above
+// already covers "one create action -> one entity"; this section
+// covers the rest of the mandatory list: Edit/Pause/Cancel affecting
+// every date at once, occurrence uniqueness per schedule+date, and
+// Schedule again requiring a genuinely new date set.)
+// ------------------------------------------------------------
+
+test("L1. a single PATCH and a single pause on a 'dates' schedule are both visible across EVERY one of its dates' own materialized occurrences, not just one - proving Edit/Pause act on the whole entity, not a per-date row", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("l1", 1);
+  const laterDate = addDaysIso(TODAY, 10);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ dates: [TODAY, laterDate], targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  assert.equal(created.status, 201);
+  const scheduleId = created.body.schedules[0].id;
+
+  // TODAY's own occurrence materializes through the real on-demand path
+  // (a genuine athlete Home visit); the LATER date's own occurrence is
+  // manufactured via the same direct-SQL technique F5/H1 already use for
+  // an inherently timing-sensitive precondition (its own real local date
+  // hasn't arrived yet, so the on-demand path would never generate it
+  // today) - never a second, independent code path, just an earlier
+  // point on the SAME generation function's own timeline.
+  const today = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  assert.ok(today.body.sessions.some((s) => s.source === "scheduled_external"), "TODAY's own occurrence must have materialized via the real on-demand path");
+  const laterOccurrenceResult = await query(`select training_load.generate_external_schedule_occurrence($1, $2) as id`, [scheduleId, laterDate]);
+  const laterOccurrenceId = laterOccurrenceResult.rows[0].id;
+  // materialize_external_assignments_for_occurrence() only ever inserts
+  // when the occurrence's own scheduled_date matches the athlete's REAL
+  // current local date - correct for the on-demand path, but it means it
+  // can never populate a date 10 days out today. Direct-insert the
+  // assignment row it would eventually produce once that day arrives
+  // (same "manufacture an inherently timing-sensitive precondition"
+  // technique F5/H1 already use), rather than waiting for real time to
+  // pass - this test is about Edit/Pause governing the SCHEDULE, not
+  // about re-proving materialization timing (already covered elsewhere).
+  await query(
+    `insert into training_load.external_occurrence_target_snapshot (occurrence_id, athlete_id) values ($1,$2)`,
+    [laterOccurrenceId, athletes[0].athleteId],
+  );
+  await query(`update training_load.external_schedule_occurrences set assignments_materialized_at = now() where id = $1`, [laterOccurrenceId]);
+  await query(
+    `insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at)
+     values ($1,$2,'UTC',$3,$4,null,$5)`,
+    [laterOccurrenceId, athletes[0].athleteId, laterDate, new Date(`${laterDate}T00:00:00.000Z`), new Date(`${laterDate}T23:59:00.000Z`)],
+  );
+  const laterAssignment = (await query(`select id from training_load.external_assignments where occurrence_id = $1 and athlete_id = $2`, [laterOccurrenceId, athletes[0].athleteId])).rows[0];
+  assert.ok(laterAssignment, "the later date's own occurrence must also have a real assignment for the same target athlete");
+
+  // Edit: one PATCH, both dates' own rows reflect the new name.
+  const patched = await api(`/api/training-load/external-schedules/${scheduleId}`, { method: "PATCH", cookie: coachCookie, body: { eventName: "Renamed camp" } });
+  assert.equal(patched.status, 200);
+  const todayOccurrenceId = (await query(`select occurrence_id from training_load.external_assignments where athlete_id = $1 and local_scheduled_date = $2`, [athletes[0].athleteId, TODAY])).rows[0].occurrence_id;
+  const bothEventNames = (await query(
+    `select distinct s.event_name from training_load.external_schedule_occurrences o join training_load.external_schedules s on s.id = o.schedule_id where o.id in ($1,$2)`,
+    [todayOccurrenceId, laterOccurrenceId],
+  )).rows;
+  assert.equal(bothEventNames.length, 1, "both dates' occurrences must resolve back to the SAME single event_name - one shared schedule row, not two");
+  assert.equal(bothEventNames[0].event_name, "Renamed camp");
+
+  // Pause: one call, TODAY's own real HTTP read immediately reflects it,
+  // and the later date's assignment's own governing schedule row (the
+  // SAME row) is paused too - there is no second schedule left active.
+  const paused = await api(`/api/training-load/external-schedules/${scheduleId}/pause`, { method: "POST", cookie: coachCookie });
+  assert.equal(paused.status, 200);
+  const pausedToday = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  assert.ok(!pausedToday.body.sessions.some((s) => s.source === "scheduled_external"), "TODAY's own row must disappear from Home once the shared schedule is paused");
+  const laterScheduleStatus = (await query(`select s.status from training_load.external_schedule_occurrences o join training_load.external_schedules s on s.id = o.schedule_id where o.id = $1`, [laterOccurrenceId])).rows[0].status;
+  assert.equal(laterScheduleStatus, "paused", "the later date's own occurrence is governed by the exact same schedule row, so it is paused too - by construction, not a second update");
+
+  // Cancel: same one-entity guarantee, now terminal.
+  const cancelled = await api(`/api/training-load/external-schedules/${scheduleId}/cancel`, { method: "POST", cookie: coachCookie });
+  assert.equal(cancelled.status, 200);
+  const scheduleCount = (await query(`select count(*)::int as n from training_load.external_schedules where id = $1 and status = 'cancelled'`, [scheduleId])).rows[0].n;
+  assert.equal(scheduleCount, 1, "still exactly one schedule row, now cancelled - never a second surviving row for the later date");
+});
+
+test("L2. occurrence uniqueness holds per schedule+date even for a 'dates' schedule - regenerating the same date twice is idempotent, and each of its own dates gets its own distinct occurrence row", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("l2", 1);
+  const dateB = addDaysIso(TODAY, 5);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ dates: [TODAY, dateB], targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+
+  const first = await query(`select training_load.generate_external_schedule_occurrence($1, $2) as id`, [scheduleId, TODAY]);
+  const again = await query(`select training_load.generate_external_schedule_occurrence($1, $2) as id`, [scheduleId, TODAY]);
+  assert.equal(first.rows[0].id, again.rows[0].id, "regenerating the SAME date on the SAME schedule must be idempotent - never a duplicate occurrence row");
+
+  const secondDate = await query(`select training_load.generate_external_schedule_occurrence($1, $2) as id`, [scheduleId, dateB]);
+  assert.notEqual(first.rows[0].id, secondDate.rows[0].id, "a DIFFERENT date on the same schedule must be its own distinct occurrence");
+
+  const rowCount = (await query(`select count(*)::int as n from training_load.external_schedule_occurrences where schedule_id = $1`, [scheduleId])).rows[0].n;
+  assert.equal(rowCount, 2, "exactly one occurrence per distinct date, no more");
+
+  const rejected = await query(`select training_load.generate_external_schedule_occurrence($1, $2) as id`, [scheduleId, addDaysIso(TODAY, 99)]).catch((e) => e);
+  assert.ok(rejected instanceof Error, "a date that was never actually picked for this 'dates' schedule must be rejected, never silently accepted");
+});
+
+test("L3. Schedule again on a 'dates' schedule requires a genuinely NEW set of dates - omitting `dates` is a controlled 400, and a real new set creates an independent schedule with its own dates, never reusing or mutating the original's", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("l3", 1);
+  const originalDates = [TODAY, addDaysIso(TODAY, 4)];
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ dates: originalDates, targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const originalId = created.body.schedules[0].id;
+
+  const missingDates = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, { method: "POST", cookie: coachCookie, body: {} });
+  assert.equal(missingDates.status, 400, "Schedule again on a 'dates' source with no new dates supplied must be a controlled 400, never silently reuse the original's own dates");
+
+  const staleStartDateOnly = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, { method: "POST", cookie: coachCookie, body: { startDate: addDaysIso(TODAY, 30) } });
+  assert.equal(staleStartDateOnly.status, 400, "a bare startDate (the one_time/recurring shape) must never be accepted as a substitute for a real dates[] array on a 'dates' source");
+
+  const newDates = [addDaysIso(TODAY, 30), addDaysIso(TODAY, 31), addDaysIso(TODAY, 45)];
+  const again = await api(`/api/training-load/external-schedules/${originalId}/schedule-again`, { method: "POST", cookie: coachCookie, body: { dates: newDates } });
+  assert.equal(again.status, 201, `expected 201, got ${again.status}: ${JSON.stringify(again.body)}`);
+  assert.notEqual(again.body.schedule.id, originalId, "a genuinely new schedule, distinct from the original");
+  assert.equal(again.body.schedule.scheduleKind, "dates");
+  assert.deepEqual(again.body.schedule.dates.slice().sort(), newDates.slice().sort());
+
+  const originalStillHasOwnDates = (await query(`select scheduled_date::text as d from training_load.external_schedule_dates where schedule_id = $1 order by d`, [originalId])).rows.map((r) => r.d);
+  assert.deepEqual(originalStillHasOwnDates, originalDates.slice().sort(), "the original's own dates must be completely untouched by Schedule again");
+});
+
+test("L4. PATCH rejects an attempt to change endDate on a 'dates' schedule with a controlled 400, rather than silently ignoring it - dates are fixed identity after creation, never a control that looks functional while the backend discards it", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("l4", 1);
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ dates: [TODAY, addDaysIso(TODAY, 2)], targets: [{ kind: "athlete", id: athletes[0].athleteId }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+  const res = await api(`/api/training-load/external-schedules/${scheduleId}`, { method: "PATCH", cookie: coachCookie, body: { endDate: addDaysIso(TODAY, 99) } });
+  assert.equal(res.status, 400, `expected a controlled 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+  const unchanged = (await query(`select end_date::text as d from training_load.external_schedules where id = $1`, [scheduleId])).rows[0].d;
+  assert.equal(unchanged, addDaysIso(TODAY, 2), "end_date (the max of this schedule's own dates) must be completely unaffected by the rejected PATCH");
 });

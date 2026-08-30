@@ -513,6 +513,13 @@ export const emptyExternalScheduleForm = (overrides = {}) => ({
   selectedDates: [],
   startDate: "",
   endDate: "",
+  // Editing an existing 'dates'-kind schedule: its own already-picked
+  // dates, for READ-ONLY display only (item 10 correction - dates are
+  // fixed once created; Schedule again is the only way to pick new
+  // ones). Never written to by the calendar - that's what
+  // `selectedDates` is for, and the calendar itself isn't even rendered
+  // while editingScheduleId is set.
+  datesList: [],
   opensTime: "00:00",
   closesTime: "23:59",
   // Fallback only (tucked into Advanced settings, same reasoning as
