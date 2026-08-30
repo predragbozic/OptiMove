@@ -410,6 +410,12 @@ function groupSessionsForToday(sessions) {
       result.push(s);
       continue;
     }
+    // GET /weekly (coach branch) returns every external row regardless of
+    // schedule/assignment status, unfiltered - Schedule needs that for
+    // management. Today must not present a paused/cancelled row that was
+    // never rated as if it were a real pending request - explicit
+    // `actionable`/`rated` fields decide this, never row presence alone.
+    if (!s.rated && !s.actionable) continue;
     let group = groups.get(s.scheduleId);
     if (!group) {
       group = { __externalGroup: true, scheduleId: s.scheduleId, eventName: s.sessionName, sessionTime: s.sessionTime, sessions: [] };
@@ -492,13 +498,28 @@ function renderOutsidePlanBadgeHtml() {
   return `<span class="training-load-rpe-state-badge is-outside">OUTSIDE PLAN</span>`;
 }
 
+// An external row's own status label - explicit, never re-derived from
+// row presence (GET /weekly returns a paused/cancelled row to the coach
+// unfiltered now, for management visibility - see that route's own
+// comment). A completed result always wins, regardless of what later
+// happened to its schedule.
+function externalStatusLabel(session) {
+  if (session.rated) return { label: formatFeedbackSummary(session.feedback), cls: "rated" };
+  if (session.scheduleStatus === "paused") return { label: "Paused", cls: "off" };
+  if (session.scheduleStatus === "cancelled") return { label: "Cancelled", cls: "off" };
+  if (!session.actionable) return { label: "Not rated", cls: "off" };
+  return { label: "Not rated", cls: "unrated" };
+}
+
 function renderScheduleSessionRowHtml(session, date) {
   const isExternal = session.source === "scheduled_external";
-  const status = session.rated
-    ? { label: formatFeedbackSummary(session.feedback), cls: "rated" }
-    : session.rpeEnabled === false
-      ? { label: "RPE off", cls: "off" }
-      : { label: "Not rated", cls: "unrated" };
+  const status = isExternal
+    ? externalStatusLabel(session)
+    : session.rated
+      ? { label: formatFeedbackSummary(session.feedback), cls: "rated" }
+      : session.rpeEnabled === false
+        ? { label: "RPE off", cls: "off" }
+        : { label: "Not rated", cls: "unrated" };
   // A planned row opens the existing Weekly plan view; an OUTSIDE PLAN row
   // opens this schedule's own detail (Edit/Pause/Resume/Cancel/Schedule
   // again) instead - the two click targets are never interchangeable.
@@ -580,7 +601,11 @@ function computeWeeklyAggregates(data) {
   // for external/historical rows, so this only ever excludes a genuinely
   // disabled, still-unrated planned session). One that already has a
   // result still counts - it's already in `rated` above either way.
-  const countedTowardPlanned = allSessions.filter((s) => s.rpeEnabled !== false || s.rated);
+  // Same rule for a paused/cancelled external row that was never rated -
+  // GET /weekly returns it to the coach unfiltered (Schedule needs it for
+  // management), but it was never a real pending request, so the explicit
+  // `actionable` field (not row presence) decides whether it counts here.
+  const countedTowardPlanned = allSessions.filter((s) => s.rated || (s.source === "scheduled_external" ? s.actionable : s.rpeEnabled !== false));
   return { totalSrpe, totalDuration, avgRpe, ratedCount: rated.length, plannedCount: countedTowardPlanned.length, dailySrpe };
 }
 

@@ -48,6 +48,7 @@ const {
   renderTrainingLoadHomeCardHtml,
   renderTrainingLoadResultsHtml,
   renderTrainingLoadScheduleHtml,
+  renderTrainingLoadTodayHtml,
   renderTrainingLoadSessionListHtml,
   renderTrainingLoadFilterPickerHtml,
   renderRpeFormHtml,
@@ -118,6 +119,12 @@ function externalSession(overrides = {}) {
     source: "scheduled_external",
     externalAssignmentId: "asg-1",
     scheduleId: "sched-1",
+    // Explicit lifecycle fields GET /weekly now always sends for an
+    // external row - an unrated default row is a normal, currently-open
+    // request (active schedule, pending assignment).
+    scheduleStatus: "active",
+    assignmentStatus: "pending",
+    actionable: true,
     ...overrides,
   });
 }
@@ -445,6 +452,67 @@ test("G3. a disabled+unrated session never counts toward the rated/planned denom
   const html = renderTrainingLoadResultsHtml();
   assert.ok(html.includes("2/2"), "s2 (disabled, unrated) must be excluded from the denominator entirely - 2 rated out of 2 counted, not out of 3");
   assert.ok(html.includes("380 AU"), "s3's already-recorded result (disabled or not) must still contribute to the weekly sRPE total: 300 + 80 = 380");
+});
+
+test("G4. a paused/cancelled, never-rated OUTSIDE-PLAN row never counts toward the rated/planned denominator, mirroring the disabled-planned-session rule exactly", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.trainingLoad.weekly.results.data = weekPayload(date, {
+    [date]: [
+      session({ sessionId: "s1", rated: true, feedback: { rpe: 6, durationMinutes: 50, srpe: 300 } }),
+      externalSession({ externalAssignmentId: "asg-paused", rated: false, actionable: false, scheduleStatus: "paused" }),
+      externalSession({ externalAssignmentId: "asg-cancelled", rated: false, actionable: false, scheduleStatus: "cancelled" }),
+    ],
+  });
+  state.trainingLoad.weekly.results.selectedDate = date;
+  const html = renderTrainingLoadResultsHtml();
+  assert.ok(html.includes("1/1"), "neither never-rated external row (paused or cancelled) may count toward the denominator - 1 rated out of 1, not out of 3");
+});
+
+test("G5. a completed OUTSIDE-PLAN result still counts toward sRPE/the denominator even after its schedule was later cancelled - a completed result is never actionable again, but it always stays counted", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.trainingLoad.weekly.results.data = weekPayload(date, {
+    [date]: [
+      externalSession({ externalAssignmentId: "asg-done", rated: true, actionable: false, scheduleStatus: "cancelled", feedback: { rpe: 6, durationMinutes: 40, srpe: 240 } }),
+    ],
+  });
+  state.trainingLoad.weekly.results.selectedDate = date;
+  const html = renderTrainingLoadResultsHtml();
+  assert.ok(html.includes("1/1"), "a completed result must always count, regardless of its schedule's current status");
+  assert.ok(html.includes("240 AU"));
+});
+
+test("G6. Today's grouping omits a paused/cancelled, never-rated OUTSIDE-PLAN row entirely - it never renders as a pending group at all", () => {
+  resetState();
+  state.trainingLoad.weekly.today.data = weekPayload("2026-08-24", {
+    "2026-08-24": [externalSession({ externalAssignmentId: "asg-paused", rated: false, actionable: false, scheduleStatus: "paused", sessionName: "Paused camp" })],
+  });
+  const html = renderTrainingLoadTodayHtml();
+  assert.ok(!html.includes("Paused camp"), "a paused, never-rated external row must not appear on Today at all - not even as a non-clickable/informational row");
+});
+
+test("G7. Today's grouping still shows a completed OUTSIDE-PLAN result even after its schedule is cancelled", () => {
+  resetState();
+  state.trainingLoad.weekly.today.data = weekPayload("2026-08-24", {
+    "2026-08-24": [externalSession({ externalAssignmentId: "asg-done", rated: true, actionable: false, scheduleStatus: "cancelled", sessionName: "Now-cancelled camp", feedback: { rpe: 5, durationMinutes: 30, srpe: 150 } })],
+  });
+  const html = renderTrainingLoadTodayHtml();
+  assert.ok(html.includes("Now-cancelled camp"), "a completed result must keep showing on Today even after its schedule is cancelled");
+  assert.ok(html.includes("1/1"));
+});
+
+test("G8. the Schedule tab (management view) still shows a paused/cancelled row, unlike Today - explicitly labeled, never omitted", () => {
+  resetState();
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
+    "2026-08-24": [
+      externalSession({ externalAssignmentId: "asg-paused", rated: false, actionable: false, scheduleStatus: "paused", athleteName: "Paused Athlete" }),
+      externalSession({ externalAssignmentId: "asg-cancelled", rated: false, actionable: false, scheduleStatus: "cancelled", athleteName: "Cancelled Athlete" }),
+    ],
+  });
+  const html = renderTrainingLoadScheduleHtml();
+  assert.ok(html.includes("Paused Athlete") && html.includes("Paused"), "a paused row must still be visible on Schedule (for management), explicitly labeled Paused");
+  assert.ok(html.includes("Cancelled Athlete") && html.includes("Cancelled"), "a cancelled row must still be visible on Schedule, explicitly labeled Cancelled");
 });
 
 // ------------------------------------------------------------

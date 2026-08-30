@@ -918,3 +918,82 @@ test("F4. the worker never crashes on an athlete with no linked user account - i
   assert.ok(summary.invitations.noRecipient >= 1, `expected at least one noRecipient, got: ${JSON.stringify(summary)}`);
   assert.equal(summary.errors.length, 0, "a missing user_id must never produce a worker error");
 });
+
+// ------------------------------------------------------------
+// G. Paused/cancelled lifecycle correctness - a paused schedule must never
+// be actionable (Home card, RPE form, reminder), but a completed result
+// must survive its schedule being cancelled, everywhere it's read.
+// ------------------------------------------------------------
+
+test("G1. active -> Home card shows; pause -> the Home card disappears (and the row is entirely absent from /athlete/today); resume -> it comes back, unchanged", async () => {
+  const { coachCookie, athlete, scheduleId } = await makeReadyAssignment("g1");
+
+  const activeToday = await api("/api/training-load/athlete/today", { cookie: athlete.cookie });
+  assert.ok(activeToday.body.sessions.some((s) => s.source === "scheduled_external"), "active schedule: the external row must be on Home");
+
+  const paused = await api(`/api/training-load/external-schedules/${scheduleId}/pause`, { method: "POST", cookie: coachCookie });
+  assert.equal(paused.status, 200);
+  const pausedToday = await api("/api/training-load/athlete/today", { cookie: athlete.cookie });
+  assert.ok(!pausedToday.body.sessions.some((s) => s.source === "scheduled_external"), "paused schedule: the row must disappear from Home entirely - not just show as non-actionable");
+
+  const resumed = await api(`/api/training-load/external-schedules/${scheduleId}/resume`, { method: "POST", cookie: coachCookie });
+  assert.equal(resumed.status, 200);
+  const resumedToday = await api("/api/training-load/athlete/today", { cookie: athlete.cookie });
+  const row = resumedToday.body.sessions.find((s) => s.source === "scheduled_external");
+  assert.ok(row, "resumed schedule: the row must come back on Home");
+  assert.equal(row.rated, false);
+});
+
+test("G2. a paused schedule's assignment rejects submit with a controlled 409, exactly like a cancelled one", async () => {
+  const { coachCookie, athlete, scheduleId, assignmentId } = await makeReadyAssignment("g2");
+  await api(`/api/training-load/external-schedules/${scheduleId}/pause`, { method: "POST", cookie: coachCookie });
+  const res = await api(`/api/training-load/external-assignments/${assignmentId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 30 } });
+  assert.equal(res.status, 409);
+});
+
+test("G3. submit -> cancel the schedule -> the result STAYS in Coach Results/weekly and the athlete's own weekly history, never erased by the cancel", async () => {
+  const { coachCookie, athlete, scheduleId, assignmentId } = await makeReadyAssignment("g3");
+  const submitRes = await api(`/api/training-load/external-assignments/${assignmentId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 6, durationMinutes: 40 } });
+  assert.equal(submitRes.status, 201);
+
+  const cancelled = await api(`/api/training-load/external-schedules/${scheduleId}/cancel`, { method: "POST", cookie: coachCookie });
+  assert.equal(cancelled.status, 200);
+
+  const coachWeekly = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const coachRow = coachWeekly.body.days.flatMap((d) => d.sessions).find((s) => s.externalAssignmentId === assignmentId);
+  assert.ok(coachRow, "the completed result must still appear in the coach's own weekly/Results view after the schedule is cancelled");
+  assert.equal(coachRow.rated, true);
+  assert.equal(coachRow.feedback.srpe, 240);
+  assert.equal(coachRow.scheduleStatus, "cancelled");
+  assert.equal(coachRow.actionable, false, "a completed result is never actionable again, regardless of schedule status");
+
+  const athleteWeekly = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: athlete.cookie });
+  const athleteRow = athleteWeekly.body.days.flatMap((d) => d.sessions).find((s) => s.externalAssignmentId === assignmentId);
+  assert.ok(athleteRow, "the athlete's own weekly history must still show the completed result after the schedule is cancelled");
+  assert.equal(athleteRow.rated, true);
+
+  const athleteToday = await api("/api/training-load/athlete/today", { cookie: athlete.cookie });
+  const todayRow = athleteToday.body.sessions.find((s) => s.externalAssignmentId === assignmentId);
+  assert.ok(todayRow, "athlete/today must also keep showing an already-rated row even after its schedule is cancelled");
+  assert.equal(todayRow.rated, true);
+});
+
+test("G4. a cancelled schedule's still-PENDING (never-rated) assignment is never actionable and never appears as a request anywhere", async () => {
+  const { coachCookie, athlete, scheduleId, assignmentId } = await makeReadyAssignment("g4");
+  await api(`/api/training-load/external-schedules/${scheduleId}/cancel`, { method: "POST", cookie: coachCookie });
+
+  const athleteToday = await api("/api/training-load/athlete/today", { cookie: athlete.cookie });
+  assert.ok(!athleteToday.body.sessions.some((s) => s.externalAssignmentId === assignmentId), "a cancelled, never-rated assignment must never appear on Home");
+
+  const athleteWeekly = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: athlete.cookie });
+  assert.ok(!athleteWeekly.body.days.flatMap((d) => d.sessions).some((s) => s.externalAssignmentId === assignmentId), "a cancelled, never-rated assignment must never appear in the athlete's own weekly view either");
+
+  const coachWeekly = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  const coachRow = coachWeekly.body.days.flatMap((d) => d.sessions).find((s) => s.externalAssignmentId === assignmentId);
+  assert.ok(coachRow, "the coach's own Schedule tab must still see the row (any status) for management purposes");
+  assert.equal(coachRow.actionable, false, "but it must be explicitly marked non-actionable, never implicitly inferred");
+  assert.equal(coachRow.rated, false);
+
+  const submitRes = await api(`/api/training-load/external-assignments/${assignmentId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 30 } });
+  assert.equal(submitRes.status, 409, "submit against a cancelled schedule's pending assignment must still be a controlled 409");
+});

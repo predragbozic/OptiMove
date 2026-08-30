@@ -186,15 +186,21 @@ router.get("/athlete/today", async (req, res, next) => {
     );
 
     // External assignments (outside any Weekly plan) due on this same
-    // local date - a cancelled schedule/assignment is never shown, even if
-    // it already has a result (matches the planned side: a coach cancelling
-    // an external schedule is a different action from disabling RPE on a
-    // planned session, and never needs the same "keep showing the result"
-    // carve-out since that's an explicit separate concern, not addressed by
-    // this phase).
+    // local date. Hardening correction: this used to hide a row only once
+    // its OWN status (or its schedule's) was 'cancelled' - a PAUSED
+    // schedule's still-pending assignment kept showing as an actionable
+    // Home card even though submit already 409s for it, and a CANCELLED
+    // schedule's already-submitted result vanished from history along
+    // with it. The rule now mirrors the planned side's own rpe_enabled
+    // carve-out exactly: an already-rated row (sf.id is not null) always
+    // stays visible, read-only, regardless of what happened to the
+    // schedule/assignment afterward; an UNRATED row is only ever shown at
+    // all when it's genuinely actionable right now (schedule active,
+    // assignment still pending/open/in_progress) - paused/cancelled never
+    // renders as "a request" in the first place.
     const externalResult = await query(
       `select asg.id as assignment_id, asg.opens_at, asg.closes_at, asg.status as assignment_status,
-              s.id as schedule_id, s.event_name,
+              s.id as schedule_id, s.event_name, s.status as schedule_status,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
        from training_load.external_assignments asg
        join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
@@ -202,8 +208,10 @@ router.get("/athlete/today", async (req, res, next) => {
        left join training_load.session_feedback sf on sf.external_assignment_id = asg.id
        where asg.athlete_id = $1
          and asg.local_scheduled_date = $2::date
-         and asg.status <> 'cancelled'
-         and s.status <> 'cancelled'
+         and (
+           sf.id is not null
+           or (s.status = 'active' and asg.status in ('pending','open','in_progress'))
+         )
        order by asg.opens_at`,
       [athleteId, localToday],
     );
@@ -236,6 +244,13 @@ router.get("/athlete/today", async (req, res, next) => {
           scheduleId: row.schedule_id,
           opensAt: row.opens_at,
           closesAt: row.closes_at,
+          scheduleStatus: row.schedule_status,
+          assignmentStatus: row.assignment_status,
+          // Explicit, never re-derived by the frontend from row presence
+          // alone - the SQL above already excludes a non-actionable,
+          // unrated row entirely, so any row reaching this branch is
+          // actionable unless it's already rated.
+          actionable: row.feedback_id == null,
         })),
       ],
     });
@@ -640,7 +655,14 @@ router.get("/weekly", async (req, res, next) => {
       // one. A disabled session that already has a result stays visible.
       scopeSqlLive = `and p.athlete_id = $${params.length} and (coalesce(ps.rpe_enabled, true) or sf.id is not null)`;
       scopeSqlSf = `and sf.athlete_id = $${params.length}`;
-      scopeSqlExternal = `and a.id = $${params.length}`;
+      // Same rule as GET /athlete/today's own external-assignment fix: an
+      // unrated row only shows here if it's genuinely actionable right
+      // now (schedule active, assignment still pending/open/in_progress);
+      // an already-rated row always stays visible regardless of what
+      // later happened to the schedule/assignment. Only the coach's own
+      // Schedule tab (the `else` branch below) needs every row, any
+      // status, unfiltered.
+      scopeSqlExternal = `and a.id = $${params.length} and (sf.id is not null or (s.status = 'active' and asg.status in ('pending','open','in_progress')))`;
       await ensureCurrentExternalOccurrencesForAthlete(req.authz.athleteId);
     } else {
       if (!requireCoachWorkspace(req, res)) return;
@@ -684,9 +706,20 @@ router.get("/weekly", async (req, res, next) => {
     // 'scheduled_external'`, `sessionId: null`, `planId: null`, so any
     // existing frontend code that only reads the already-known fields
     // (.rated/.feedback/.sessionName) is unaffected.
+    // Hardening correction: this used to drop the row entirely once
+    // asg.status or s.status was 'cancelled' - which also silently erased
+    // an already-COMPLETED result the instant its schedule was cancelled,
+    // contradicting the schedule detail view's own promise that
+    // historical results stay available. No status-based WHERE filter
+    // here at all now - every external assignment in range/scope comes
+    // back, tagged with explicit scheduleStatus/assignmentStatus/
+    // actionable fields (see the row-building loop below) so each reader
+    // (Coach Today/Schedule/Results, the athlete's own weekly overlay)
+    // decides what to DO with a paused/cancelled row from those explicit
+    // fields, never implicitly from whether the row exists at all.
     const externalResult = await query(
-      `select asg.id as assignment_id, asg.local_scheduled_date, asg.opens_at, asg.closes_at,
-              s.id as schedule_id, s.event_name,
+      `select asg.id as assignment_id, asg.local_scheduled_date, asg.opens_at, asg.closes_at, asg.status as assignment_status,
+              s.id as schedule_id, s.event_name, s.status as schedule_status,
               a.id as athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
        from training_load.external_assignments asg
@@ -695,8 +728,6 @@ router.get("/weekly", async (req, res, next) => {
        join public.athletes a on a.id = asg.athlete_id
        left join training_load.session_feedback sf on sf.external_assignment_id = asg.id
        where asg.local_scheduled_date between $1::date and $2::date
-         and asg.status <> 'cancelled'
-         and s.status <> 'cancelled'
          ${scopeSqlExternal}
        order by asg.local_scheduled_date, athlete_name, a.id, asg.opens_at`,
       params,
@@ -823,6 +854,16 @@ router.get("/weekly", async (req, res, next) => {
         scheduleId: row.schedule_id,
         opensAt: row.opens_at,
         closesAt: row.closes_at,
+        // Explicit fields so every reader (Coach Today/Schedule/Results,
+        // the athlete's own weekly overlay) decides what a paused/
+        // cancelled row means for itself, never implicitly from whether
+        // the row is present at all - see this query's own header
+        // comment. actionable never overrides `rated`: a completed
+        // result is never "actionable" again, no matter the current
+        // schedule/assignment status.
+        scheduleStatus: row.schedule_status,
+        assignmentStatus: row.assignment_status,
+        actionable: row.feedback_id == null && row.schedule_status === "active" && ["pending", "open", "in_progress"].includes(row.assignment_status),
       });
     }
 
