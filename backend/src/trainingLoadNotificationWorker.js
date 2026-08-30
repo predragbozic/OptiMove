@@ -200,7 +200,7 @@ async function runAthleteReminderPhase(pool, now, summary) {
 // separate status condition to also satisfy here.
 async function runFinalDigestPhase(pool, now, summary) {
   const result = await pool.query(
-    `select o.id as occurrence_id, sch.id as schedule_id, sch.event_name, sch.created_by_user_id as recipient_user_id,
+    `select o.id as occurrence_id, o.scheduled_date::text as scheduled_date, sch.id as schedule_id, sch.event_name, sch.created_by_user_id as recipient_user_id,
             count(asg.id)::int as total, count(asg.id) filter (where asg.status = 'completed')::int as completed
      from training_load.external_schedule_occurrences o
      join training_load.external_schedules sch on sch.id = o.schedule_id
@@ -225,7 +225,9 @@ async function runFinalDigestPhase(pool, now, summary) {
         body: `${row.completed}/${row.total} athletes logged RPE.`,
         entityType: "training_load_external_occurrence",
         entityId: row.occurrence_id,
-        metadata: { scheduleId: row.schedule_id, occurrenceId: row.occurrence_id },
+        // scheduledDate lets the coach-side deep-link open Training Load
+        // -> Results on the actual right week, not just the tab itself.
+        metadata: { scheduleId: row.schedule_id, occurrenceId: row.occurrence_id, scheduledDate: row.scheduled_date },
         dedupeKey,
       });
       if (sent) summary.finalDigests.sent += 1;

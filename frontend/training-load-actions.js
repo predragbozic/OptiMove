@@ -884,6 +884,22 @@ function openRpeFormForSessionId(id) {
   });
 }
 
+// External invitation/reminder/manual-reminder notification click (athlete
+// side) - deep-links straight to the athlete's own RPE form for that exact
+// assignment, same as tapping it from Home would (mirrors tests-actions.js's
+// own openAssignment for the WELLNESS equivalent). Notification clicks can
+// happen before Home's own data has ever been fetched this session (e.g.
+// straight after login), so this always fetches fresh first - today, then
+// (only if not found there) the athlete's own weekly overlay, for a
+// slightly stale notification pointing at an earlier day.
+export async function openExternalAssignmentFromNotification(assignmentId) {
+  await loadTrainingLoadAthleteToday();
+  if (!findAthleteSessionById(assignmentId)) {
+    await loadTrainingLoadAthleteWeekly();
+  }
+  openRpeFormForSessionId(assignmentId);
+}
+
 function patchSrpePreview(form) {
   const el = document.querySelector("[data-training-load-srpe-preview]");
   if (!el) return;

@@ -994,6 +994,28 @@ test("F6. the worker never invites or reminds a 'missed' or 'excused' assignment
   }
 });
 
+test("F7. the final digest's own metadata carries the occurrence's real scheduled_date, so the coach notification can deep-link straight to that date in Results", async () => {
+  const { coachCookie, athlete, scheduleId } = await makeReadyAssignment("f7");
+  const occurrenceRow = (await query(
+    `select o.id, o.scheduled_date::text as scheduled_date, o.closes_at
+     from training_load.external_schedule_occurrences o
+     join training_load.external_assignments a on a.occurrence_id = o.id
+     where a.athlete_id = $1`,
+    [athlete.athleteId],
+  )).rows[0];
+
+  const summary = await processTrainingLoadNotificationCycle({ now: new Date(new Date(occurrenceRow.closes_at).getTime() + 60 * 1000), pool });
+  assert.ok(summary.finalDigests.sent >= 1, `expected a final digest to send, got: ${JSON.stringify(summary)}`);
+
+  const digest = (await query(
+    `select metadata from public.app_notifications where entity_type = 'training_load_external_occurrence' and entity_id = $1`,
+    [occurrenceRow.id],
+  )).rows[0];
+  assert.equal(digest.metadata.scheduledDate, occurrenceRow.scheduled_date, "the digest's own metadata must carry the occurrence's real scheduled date, not the schedule's or a re-derived one");
+  assert.equal(digest.metadata.scheduleId, scheduleId);
+  assert.equal(digest.metadata.occurrenceId, occurrenceRow.id);
+});
+
 // ------------------------------------------------------------
 // G. Paused/cancelled lifecycle correctness - a paused schedule must never
 // be actionable (Home card, RPE form, reminder), but a completed result

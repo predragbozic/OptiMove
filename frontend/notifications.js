@@ -86,6 +86,32 @@ export async function handleNotificationAction(action, handlers = {}) {
     if (assignmentId) await handlers.openTestAssignment?.(assignmentId);
     return true;
   }
+  // training_load external invitation/reminder (automatic worker) and
+  // manual reminder (coach-triggered, POST /external-schedules/:id/remind)
+  // - same deep-link, all three: straight to the athlete's own external
+  // RPE form (see trainingLoadNotificationWorker.js and trainingLoad.js's
+  // own remind route, both write entity_type: 'training_load_external_
+  // assignment').
+  if (type === "notification-open-training-load-assignment") {
+    const id = action.dataset.notificationId;
+    const assignmentId = action.dataset.assignmentId;
+    if (id) await markNotificationRead(id);
+    state.notifications.open = false;
+    renderNotifications();
+    if (assignmentId) await handlers.openTrainingLoadAssignment?.(assignmentId);
+    return true;
+  }
+  // Final digest (training_load_external_final_digest, coach side) - opens
+  // Training load -> Results, on the occurrence's own scheduled date.
+  if (type === "notification-open-training-load-results") {
+    const id = action.dataset.notificationId;
+    const scheduledDate = action.dataset.scheduledDate;
+    if (id) await markNotificationRead(id);
+    state.notifications.open = false;
+    renderNotifications();
+    await handlers.openTrainingLoadResults?.(scheduledDate);
+    return true;
+  }
   // Coach live digest - opens Tests -> Today (coach side).
   if (type === "notification-open-tests-today") {
     const id = action.dataset.notificationId;
@@ -198,6 +224,12 @@ function renderNotificationRow(row) {
   const isTestAssignmentNotification = (row.type === "test_athlete_invitation" || row.type === "test_athlete_reminder" || row.type === "test_manual_reminder") && row.entity_type === "test_assignment" && row.entity_id;
   const isCoachDigestNotification = row.type === "test_coach_digest" && row.entity_type === "test_occurrence";
   const isFinalDigestNotification = row.type === "test_final_digest" && row.entity_type === "test_occurrence";
+  // training_load external scheduling (trainingLoadNotificationWorker.js +
+  // trainingLoad.js's own manual /remind route) - same three-kind shape as
+  // WELLNESS's own assignment notifications above, a fully independent
+  // entity type/deep-link (never reuses test_assignment's own route).
+  const isTrainingLoadAssignmentNotification = (row.type === "training_load_external_invitation" || row.type === "training_load_external_reminder" || row.type === "training_load_manual_reminder") && row.entity_type === "training_load_external_assignment" && row.entity_id;
+  const isTrainingLoadFinalDigestNotification = row.type === "training_load_external_final_digest" && row.entity_type === "training_load_external_occurrence";
   // Builder plan-assignment notifications (backend/src/routes/builder.js's
   // notifyPlanAssignments) - athlete side, one of the two plan_type kinds.
   const isWeeklyPlanAssigned = row.type === "weekly_plan_assigned" && row.entity_type === "plan" && row.entity_id;
@@ -212,14 +244,18 @@ function renderNotificationRow(row) {
           ? "notification-open-tests-today"
           : isFinalDigestNotification
             ? "notification-open-tests-results"
-            : isWeeklyPlanAssigned
-              ? "notification-open-weekly-plan"
-              : isSpecificProgramAssigned
-                ? "notification-open-specific-program"
-                : "notification-read";
+            : isTrainingLoadAssignmentNotification
+              ? "notification-open-training-load-assignment"
+              : isTrainingLoadFinalDigestNotification
+                ? "notification-open-training-load-results"
+                : isWeeklyPlanAssigned
+                  ? "notification-open-weekly-plan"
+                  : isSpecificProgramAssigned
+                    ? "notification-open-specific-program"
+                    : "notification-read";
   return `
     <article class="notification-row${unreadClass}">
-      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" data-conversation-id="${escapeAttr(isConversationNotification ? row.entity_id : "")}" data-assignment-id="${escapeAttr(isTestAssignmentNotification ? row.entity_id : "")}" data-schedule-id="${escapeAttr(isFinalDigestNotification ? row.metadata?.scheduleId || "" : "")}" data-week-start="${escapeAttr(isWeeklyPlanAssigned ? row.metadata?.weekStart || "" : "")}" data-plan-id="${escapeAttr(isSpecificProgramAssigned ? row.entity_id : "")}" type="button">
+      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" data-conversation-id="${escapeAttr(isConversationNotification ? row.entity_id : "")}" data-assignment-id="${escapeAttr(isTestAssignmentNotification ? row.entity_id : isTrainingLoadAssignmentNotification ? row.entity_id : "")}" data-schedule-id="${escapeAttr(isFinalDigestNotification ? row.metadata?.scheduleId || "" : "")}" data-scheduled-date="${escapeAttr(isTrainingLoadFinalDigestNotification ? row.metadata?.scheduledDate || "" : "")}" data-week-start="${escapeAttr(isWeeklyPlanAssigned ? row.metadata?.weekStart || "" : "")}" data-plan-id="${escapeAttr(isSpecificProgramAssigned ? row.entity_id : "")}" type="button">
         <span>
           <strong>${escapeHtml(row.title || "Notification")}</strong>
           ${row.body ? `<small>${escapeHtml(row.body)}</small>` : ""}
@@ -228,6 +264,8 @@ function renderNotificationRow(row) {
           ${isTestAssignmentNotification ? `<small class="notification-hint">Open check-in</small>` : ""}
           ${isCoachDigestNotification ? `<small class="notification-hint">Open Today</small>` : ""}
           ${isFinalDigestNotification ? `<small class="notification-hint">Open Results</small>` : ""}
+          ${isTrainingLoadAssignmentNotification ? `<small class="notification-hint">Open RPE</small>` : ""}
+          ${isTrainingLoadFinalDigestNotification ? `<small class="notification-hint">Open Results</small>` : ""}
           ${isWeeklyPlanAssigned ? `<small class="notification-hint">Open weekly plan</small>` : ""}
           ${isSpecificProgramAssigned ? `<small class="notification-hint">Open program</small>` : ""}
         </span>

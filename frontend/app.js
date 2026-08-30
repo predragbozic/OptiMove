@@ -61,7 +61,7 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { handleTrainingLoadAction, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
+import { handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
 import { loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import { els } from "./dom.js";
@@ -1401,7 +1401,7 @@ async function handleGlobalClick(event) {
   if (await handleWorkspaceAction(action, { onWorkspaceChanged })) {
     return;
   }
-  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification })) {
+  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification })) {
     renderMessages();
     return;
   }
@@ -1984,6 +1984,42 @@ async function openTestsResults(scheduleId) {
   renderTabs();
   renderLibraryNav();
   await loadTests({ setLoading, renderTests });
+}
+
+// training_load external invitation/reminder/manual-reminder click
+// (athlete side) - switches to the athlete's own Home and opens the RPE
+// form for this exact assignment directly, same as tapping the Home card
+// would. openExternalAssignmentFromNotification (training-load-actions.js)
+// re-fetches Today (and, if not found there, the athlete's own weekly
+// overlay) before opening the form, since a notification click can happen
+// before Home's own data has ever been loaded this session.
+async function openTrainingLoadAssignment(assignmentId) {
+  state.activeTab = "athlete-home";
+  state.navStack = [];
+  await loadAthleteHome();
+  await openExternalAssignmentFromNotification(assignmentId);
+  renderTabs();
+  renderLibraryNav();
+  renderActiveTrainingLoadSurface();
+}
+
+// Final digest click (coach side) - switches to Training load -> Results,
+// on the week containing the occurrence's own scheduled date (from the
+// notification's own metadata.scheduledDate - see
+// trainingLoadNotificationWorker.js's own runFinalDigestPhase).
+async function openTrainingLoadResults(scheduledDate) {
+  state.activeTab = "training-load";
+  state.trainingLoad.section = "results";
+  state.navStack = [];
+  if (scheduledDate) {
+    const nav = state.trainingLoad.weekly.results;
+    nav.weekStart = weekMondayIso(scheduledDate);
+    nav.selectedDate = scheduledDate;
+  }
+  renderTabs();
+  renderLibraryNav();
+  await loadTrainingLoadWeekly("results");
+  renderTrainingLoad();
 }
 
 async function loadTemplateOptionsInBackground() {
