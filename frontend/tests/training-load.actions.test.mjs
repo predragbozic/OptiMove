@@ -47,11 +47,17 @@ const {
   formatSrpe,
   renderTrainingLoadHomeCardHtml,
   renderTrainingLoadResultsHtml,
+  renderTrainingLoadScheduleHtml,
+  renderTrainingLoadTodayHtml,
   renderTrainingLoadSessionListHtml,
   renderTrainingLoadFilterPickerHtml,
+  renderRpeFormHtml,
+  renderExternalScheduleFormHtml,
   isRpeFormValid,
+  externalScheduleSubmitDisabled,
+  externalScheduleSubmitLabel,
 } = await import("../training-load-view.js");
-const { emptyTrainingLoadState, emptyRpeForm, state } = await import("../state.js");
+const { emptyTrainingLoadState, emptyRpeForm, emptyExternalScheduleForm, state } = await import("../state.js");
 
 function fakeAction(dataset, value) {
   return { dataset, value };
@@ -95,8 +101,35 @@ function session(overrides = {}) {
     rated: false,
     feedback: null,
     historical: false,
+    rpeEnabled: true,
+    source: "planned",
+    externalAssignmentId: null,
+    scheduleId: null,
     ...overrides,
   };
+}
+
+// An RPE session scheduled OUTSIDE any Weekly plan - the mirror-image
+// identity shape (externalAssignmentId set, sessionId/planId null).
+function externalSession(overrides = {}) {
+  return session({
+    sessionId: null,
+    planId: null,
+    planName: null,
+    sessionName: "National team camp",
+    amPm: "",
+    bta: "",
+    source: "scheduled_external",
+    externalAssignmentId: "asg-1",
+    scheduleId: "sched-1",
+    // Explicit lifecycle fields GET /weekly now always sends for an
+    // external row - an unrated default row is a normal, currently-open
+    // request (active schedule, pending assignment).
+    scheduleStatus: "active",
+    assignmentStatus: "pending",
+    actionable: true,
+    ...overrides,
+  });
 }
 
 // ------------------------------------------------------------
@@ -408,6 +441,83 @@ test("G2. Results only ever lists RATED sessions in the agenda - an unrated plan
   assert.ok(!html.includes("Not rated"), "Results never shows an unrated row at all");
 });
 
+test("G3. a disabled+unrated session never counts toward the rated/planned denominator, but a disabled session that already has a result still counts (and contributes to sRPE)", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.trainingLoad.weekly.results.data = weekPayload(date, {
+    [date]: [
+      session({ sessionId: "s1", rated: true, feedback: { rpe: 6, durationMinutes: 50, srpe: 300 } }),
+      session({ sessionId: "s2", rated: false, rpeEnabled: false }),
+      session({ sessionId: "s3", rated: true, rpeEnabled: false, feedback: { rpe: 4, durationMinutes: 20, srpe: 80 } }),
+    ],
+  });
+  state.trainingLoad.weekly.results.selectedDate = date;
+  const html = renderTrainingLoadResultsHtml();
+  assert.ok(html.includes("2/2"), "s2 (disabled, unrated) must be excluded from the denominator entirely - 2 rated out of 2 counted, not out of 3");
+  assert.ok(html.includes("380 AU"), "s3's already-recorded result (disabled or not) must still contribute to the weekly sRPE total: 300 + 80 = 380");
+});
+
+test("G4. a paused/cancelled, never-rated OUTSIDE-PLAN row never counts toward the rated/planned denominator, mirroring the disabled-planned-session rule exactly", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.trainingLoad.weekly.results.data = weekPayload(date, {
+    [date]: [
+      session({ sessionId: "s1", rated: true, feedback: { rpe: 6, durationMinutes: 50, srpe: 300 } }),
+      externalSession({ externalAssignmentId: "asg-paused", rated: false, actionable: false, scheduleStatus: "paused" }),
+      externalSession({ externalAssignmentId: "asg-cancelled", rated: false, actionable: false, scheduleStatus: "cancelled" }),
+    ],
+  });
+  state.trainingLoad.weekly.results.selectedDate = date;
+  const html = renderTrainingLoadResultsHtml();
+  assert.ok(html.includes("1/1"), "neither never-rated external row (paused or cancelled) may count toward the denominator - 1 rated out of 1, not out of 3");
+});
+
+test("G5. a completed OUTSIDE-PLAN result still counts toward sRPE/the denominator even after its schedule was later cancelled - a completed result is never actionable again, but it always stays counted", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.trainingLoad.weekly.results.data = weekPayload(date, {
+    [date]: [
+      externalSession({ externalAssignmentId: "asg-done", rated: true, actionable: false, scheduleStatus: "cancelled", feedback: { rpe: 6, durationMinutes: 40, srpe: 240 } }),
+    ],
+  });
+  state.trainingLoad.weekly.results.selectedDate = date;
+  const html = renderTrainingLoadResultsHtml();
+  assert.ok(html.includes("1/1"), "a completed result must always count, regardless of its schedule's current status");
+  assert.ok(html.includes("240 AU"));
+});
+
+test("G6. Today's grouping omits a paused/cancelled, never-rated OUTSIDE-PLAN row entirely - it never renders as a pending group at all", () => {
+  resetState();
+  state.trainingLoad.weekly.today.data = weekPayload("2026-08-24", {
+    "2026-08-24": [externalSession({ externalAssignmentId: "asg-paused", rated: false, actionable: false, scheduleStatus: "paused", sessionName: "Paused camp" })],
+  });
+  const html = renderTrainingLoadTodayHtml();
+  assert.ok(!html.includes("Paused camp"), "a paused, never-rated external row must not appear on Today at all - not even as a non-clickable/informational row");
+});
+
+test("G7. Today's grouping still shows a completed OUTSIDE-PLAN result even after its schedule is cancelled", () => {
+  resetState();
+  state.trainingLoad.weekly.today.data = weekPayload("2026-08-24", {
+    "2026-08-24": [externalSession({ externalAssignmentId: "asg-done", rated: true, actionable: false, scheduleStatus: "cancelled", sessionName: "Now-cancelled camp", feedback: { rpe: 5, durationMinutes: 30, srpe: 150 } })],
+  });
+  const html = renderTrainingLoadTodayHtml();
+  assert.ok(html.includes("Now-cancelled camp"), "a completed result must keep showing on Today even after its schedule is cancelled");
+  assert.ok(html.includes("1/1"));
+});
+
+test("G8. the Schedule tab (management view) still shows a paused/cancelled row, unlike Today - explicitly labeled, never omitted", () => {
+  resetState();
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
+    "2026-08-24": [
+      externalSession({ externalAssignmentId: "asg-paused", rated: false, actionable: false, scheduleStatus: "paused", athleteName: "Paused Athlete" }),
+      externalSession({ externalAssignmentId: "asg-cancelled", rated: false, actionable: false, scheduleStatus: "cancelled", athleteName: "Cancelled Athlete" }),
+    ],
+  });
+  const html = renderTrainingLoadScheduleHtml();
+  assert.ok(html.includes("Paused Athlete") && html.includes("Paused"), "a paused row must still be visible on Schedule (for management), explicitly labeled Paused");
+  assert.ok(html.includes("Cancelled Athlete") && html.includes("Cancelled"), "a cancelled row must still be visible on Schedule, explicitly labeled Cancelled");
+});
+
 // ------------------------------------------------------------
 // H. Correction: filter Confirm invalidates ALL THREE sections, and a
 // combined Club + Athlete filter is sent as a genuine union on the wire.
@@ -623,4 +733,487 @@ test("L1. switching workspaces swaps the picker's Athletes tab roster entirely -
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-filter-select-all", kind: "athlete" }), { renderTrainingLoad });
   assert.deepEqual(state.trainingLoad.filter.athleteIds, ["b1"], "Select all after a switch only takes the currently-shown workspace's athletes");
+});
+
+// ------------------------------------------------------------
+// P. Training Load Schedule tab: the quick RPE ON/OFF toggle.
+// ------------------------------------------------------------
+
+test("P1. turning RPE off (no existing results) sends rpeEnabled: false with no confirmation dialog, then refetches the current section", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  installFetchMock(() => ({ status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "true" }), { renderTrainingLoad });
+  assert.equal(fetchCalls.length, 2, "one PATCH toggle call, then one GET refetch of the current section");
+  assert.equal(fetchCalls[0].method, "PATCH");
+  assert.match(fetchCalls[0].url, /\/sessions\/sess-1\/rpe-enabled$/);
+  assert.equal(fetchCalls[0].body.rpeEnabled, false);
+  assert.equal(fetchCalls[0].body.confirmDisableWithResults, undefined, "no confirmation flag on the first attempt");
+});
+
+test("P2. turning RPE on never needs confirmation, regardless of existing results", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  installFetchMock(() => ({ status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "false" }), { renderTrainingLoad });
+  assert.equal(fetchCalls[0].body.rpeEnabled, true);
+});
+
+test("P3. a 409 hasExistingResults shows a confirm dialog - Cancel leaves rpe_enabled untouched and never retries", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  const originalConfirm = globalThis.window.confirm;
+  globalThis.window.confirm = () => false;
+  try {
+    installFetchMock((call) => (call.method === "PATCH" ? { status: 409, body: { error: "hasExistingResults", resultCount: 2 } } : { status: 200, body: weekPayload("2026-08-24") }));
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "true" }), { renderTrainingLoad });
+    assert.equal(fetchCalls.length, 1, "Cancel must never retry the request or refetch anything");
+    assert.equal(fetchCalls[0].method, "PATCH");
+  } finally {
+    globalThis.window.confirm = originalConfirm;
+  }
+});
+
+test("P4. a 409 hasExistingResults, then Confirm, retries with confirmDisableWithResults: true and refetches on success", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  const originalConfirm = globalThis.window.confirm;
+  globalThis.window.confirm = () => true;
+  try {
+    let patchCount = 0;
+    installFetchMock((call) => {
+      if (call.method === "PATCH") {
+        patchCount += 1;
+        if (patchCount === 1) return { status: 409, body: { error: "hasExistingResults", resultCount: 2 } };
+        return { status: 200, body: { sessionId: "sess-1", rpeEnabled: false, draftSessionUpdated: false } };
+      }
+      return { status: 200, body: weekPayload("2026-08-24") };
+    });
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "true" }), { renderTrainingLoad });
+    assert.equal(fetchCalls.length, 3, "first PATCH (409), confirmed retry PATCH (200), then the refetch");
+    assert.equal(fetchCalls[1].method, "PATCH");
+    assert.equal(fetchCalls[1].body.rpeEnabled, false);
+    assert.equal(fetchCalls[1].body.confirmDisableWithResults, true, "the retry must carry the confirmation flag");
+  } finally {
+    globalThis.window.confirm = originalConfirm;
+  }
+});
+
+test("P5. a session with no sessionId in its dataset is a safe no-op - never a crash", async () => {
+  resetState();
+  installFetchMock(() => ({ status: 200, body: weekPayload("2026-08-24") }));
+  const result = await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe" }), { renderTrainingLoad });
+  assert.equal(result, true);
+  assert.equal(fetchCalls.length, 0);
+});
+
+// ------------------------------------------------------------
+// Q. Athlete: an OUTSIDE-PLAN (external) RPE session - same click/open/
+// submit flow as a planned session, but keyed on externalAssignmentId
+// instead of sessionId, and posting to the external-assignment endpoint.
+// Mirrors sections C/D above, exercising the mutually-exclusive identity
+// shape rather than duplicating every existing planned-session case.
+// ------------------------------------------------------------
+
+test("Q1. a single-session card click for an OUTSIDE-PLAN session opens the RPE form keyed on externalAssignmentId, not sessionId", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.athleteToday = {
+    date: "2026-08-24",
+    sessions: [externalSession({ externalAssignmentId: "asg-9", sessionName: "National team camp" })],
+    loading: false,
+    error: "",
+  };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-home-card-open", count: "1", sessionId: "asg-9" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.showSessionList, false);
+  assert.equal(state.trainingLoad.rpeForm.externalAssignmentId, "asg-9");
+  assert.equal(state.trainingLoad.rpeForm.source, "scheduled_external");
+  assert.equal(state.trainingLoad.rpeForm.sessionId, "", "a planned sessionId must never be populated for an external row");
+  assert.equal(state.trainingLoad.rpeForm.sessionName, "National team camp");
+  assert.equal(renderCount, 1);
+});
+
+test("Q2. picking an OUTSIDE-PLAN session from the multi-session list opens its form the same way", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.athleteToday = {
+    date: "2026-08-24",
+    sessions: [externalSession({ externalAssignmentId: "asg-9" })],
+    loading: false,
+    error: "",
+  };
+  state.trainingLoad.showSessionList = true;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-rpe-form", sessionId: "asg-9" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.showSessionList, false);
+  assert.equal(state.trainingLoad.rpeForm.externalAssignmentId, "asg-9");
+  assert.equal(state.trainingLoad.rpeForm.source, "scheduled_external");
+});
+
+test("Q3. a not-yet-rated OUTSIDE-PLAN session from an earlier day opens correctly from the weekly overlay too", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.athleteToday = { date: "2026-08-24", sessions: [], loading: false, error: "" };
+  state.trainingLoad.athleteWeekly.data = weekPayload("2026-08-24", {
+    "2026-08-25": [externalSession({ externalAssignmentId: "asg-yesterday", sessionName: "Extra gym session" })],
+  });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-rpe-form", sessionId: "asg-yesterday" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.rpeForm.externalAssignmentId, "asg-yesterday");
+  assert.equal(state.trainingLoad.rpeForm.source, "scheduled_external");
+  assert.equal(state.trainingLoad.rpeForm.date, "2026-08-25");
+});
+
+test("Q4. a RATED outside-plan row is a no-op, same guard as a rated planned row", async () => {
+  resetState();
+  state.trainingLoad.athleteToday = {
+    date: "2026-08-24",
+    sessions: [externalSession({ externalAssignmentId: "asg-9", rated: true, feedback: { rpe: 6, durationMinutes: 40, srpe: 240 } })],
+    loading: false,
+    error: "",
+  };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-rpe-form", sessionId: "asg-9" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.rpeForm, null);
+});
+
+test("Q5. submitting an OUTSIDE-PLAN form posts to the external-assignment endpoint, never the planned one", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.rpeForm = emptyRpeForm({
+    externalAssignmentId: "asg-9",
+    source: "scheduled_external",
+    sessionName: "National team camp",
+    rpe: 6,
+    durationMinutes: 45,
+    note: "",
+  });
+  installFetchMock((call) => {
+    if (call.url === "/api/training-load/external-assignments/asg-9/rpe") {
+      return { status: 201, body: { feedback: { rpe: 6, durationMinutes: 45, srpe: 270, note: "", submittedAt: "2026-08-24T10:00:00Z" } } };
+    }
+    return { status: 404, body: {} };
+  });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-rpe-submit" }), { renderTrainingLoad });
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].url, "/api/training-load/external-assignments/asg-9/rpe");
+  assert.equal(fetchCalls[0].method, "POST");
+  assert.deepEqual(Object.keys(fetchCalls[0].body).sort(), ["durationMinutes", "note", "rpe"], "never a client-computed sRPE, and never sessionId/externalAssignmentId in the body - identity is in the URL");
+  assert.equal(state.trainingLoad.rpeForm.savedFeedback.srpe, 270);
+  assert.equal(state.trainingLoad.rpeForm.saving, false);
+});
+
+test("Q6. a planned-source form (the default) still posts to the planned sessions endpoint, unaffected by the new branch", async () => {
+  resetState();
+  state.trainingLoad.rpeForm = emptyRpeForm({ sessionId: "sess-1", rpe: 5, durationMinutes: 30 });
+  installFetchMock((call) => (call.url === "/api/training-load/sessions/sess-1/rpe" ? { status: 201, body: { feedback: { rpe: 5, durationMinutes: 30, srpe: 150, note: "", submittedAt: "" } } } : { status: 404, body: {} }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-rpe-submit" }), { renderTrainingLoad });
+  assert.equal(fetchCalls[0].url, "/api/training-load/sessions/sess-1/rpe");
+});
+
+test("Q7. the 'Outside plan' tag renders in the Home card's single-session copy, the session list, and the RPE form header - and never for a planned session", () => {
+  const plannedHtml = renderTrainingLoadHomeCardHtml({ date: "2026-08-24", sessions: [session({ sessionId: "sess-1" })] });
+  assert.ok(!plannedHtml.includes("training-load-outside-plan-tag"));
+
+  const listHtml = renderTrainingLoadSessionListHtml({
+    sessions: [externalSession({ externalAssignmentId: "asg-9" }), session({ sessionId: "sess-1", rated: true, feedback: { rpe: 5, durationMinutes: 30, srpe: 150 } })],
+  });
+  const outsidePlanCount = (listHtml.match(/training-load-outside-plan-tag/g) || []).length;
+  assert.equal(outsidePlanCount, 1, "only the external row gets the tag, whether rated or not");
+
+  const formHtml = renderRpeFormHtml(emptyRpeForm({ externalAssignmentId: "asg-9", source: "scheduled_external", sessionName: "National team camp", rpe: 5, durationMinutes: 30 }));
+  assert.ok(formHtml.includes("training-load-outside-plan-tag"));
+  assert.ok(formHtml.includes("National team camp"));
+
+  const plannedFormHtml = renderRpeFormHtml(emptyRpeForm({ sessionId: "sess-1", sessionName: "Tempo run", rpe: 5, durationMinutes: 30 }));
+  assert.ok(!plannedFormHtml.includes("training-load-outside-plan-tag"));
+});
+
+test("Q8. the Home card click target uses the external assignment id, not a blank sessionId, when the single unrated session is outside-plan", () => {
+  const html = renderTrainingLoadHomeCardHtml({ date: "2026-08-24", sessions: [externalSession({ externalAssignmentId: "asg-9" })] });
+  assert.ok(html.includes('data-session-id="asg-9"'));
+});
+
+// ------------------------------------------------------------
+// R. "New RPE session" form: real, per-schedule Notifications config -
+// no longer a static, unconditional "athletes are notified" claim.
+// ------------------------------------------------------------
+
+test("R1. the Notifications section summary reflects the current on/off count, and expands to show all three switches plus the reminder offset", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({ notificationsSectionOpen: true });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes("All on"), "all three defaults are enabled");
+  assert.ok(html.includes("Notify when open") && html.includes("Remind incomplete") && html.includes("Final summary when it closes"));
+  assert.ok(html.includes('data-action="training-load-notification-offset-input"'), "the reminder offset input must show while the reminder switch is on");
+});
+
+test("R2. collapsed by default, the summary still reflects a partial on/off mix", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    notificationsSectionOpen: false,
+    notificationRules: [
+      { kind: "athlete_invitation", enabled: false, reminderOffsetMinutes: null },
+      { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 60 },
+      { kind: "final_digest", enabled: true, reminderOffsetMinutes: null },
+    ],
+  });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes("2/3 on"));
+  assert.ok(!html.includes('data-action="training-load-notification-offset-input"'), "collapsed - the individual switches/offset input must not render at all");
+});
+
+test("R3. toggling a notification switch flips only that kind's own enabled flag", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-notification-rule-toggle", kind: "athlete_invitation" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.equal(form.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, false);
+  assert.equal(form.notificationRules.find((r) => r.kind === "athlete_reminder").enabled, true, "toggling one kind must never affect the others");
+});
+
+test("R4. changing the reminder offset input updates only the athlete_reminder rule's own offset, with no full re-render", async () => {
+  resetState();
+  renderCount = 0;
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-notification-offset-input" }, "15"), { renderTrainingLoad });
+  const rule = state.trainingLoad.scheduleForm.notificationRules.find((r) => r.kind === "athlete_reminder");
+  assert.equal(rule.reminderOffsetMinutes, 15);
+  assert.equal(renderCount, 0);
+});
+
+test("R5. a schedule submit body includes the current notificationRules array, keyed by kind", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    eventName: "Camp", opensTime: "06:00", closesTime: "20:00", scheduleKind: "specific_dates", selectedDates: ["2026-08-24"],
+    athleteIds: ["ath-1"],
+  });
+  state.trainingLoad.scheduleForm.notificationRules.find((r) => r.kind === "athlete_invitation").enabled = false;
+  installFetchMock((call) => (call.method === "POST" && call.url === "/api/training-load/external-schedules" ? { status: 201, body: { schedules: [{ id: "sched-9" }] } } : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const createCall = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules");
+  assert.ok(createCall, "expected the create request to have been sent");
+  const rules = createCall.body.notificationRules;
+  assert.equal(rules.find((r) => r.kind === "athlete_invitation").enabled, false);
+  assert.equal(rules.find((r) => r.kind === "athlete_reminder").reminderOffsetMinutes, 60);
+});
+
+// ------------------------------------------------------------
+// S. "Dates" mode is ONE logical schedule, and Edit no longer renders a
+// calendar that LOOKS editable while the backend silently discards
+// whatever it's clicked to (item 10 correction). Edit shows a read-only
+// summary instead - a real, working end-date input for Daily is the one
+// exception, since that's the one field PATCH genuinely applies.
+// ------------------------------------------------------------
+
+test("S1. creating a new schedule (not editing) is unaffected - the interactive Dates/Daily pills and click calendar still render", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({ scheduleKind: "specific_dates", calendarOpen: true });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes('data-action="training-load-schedule-set-recurrence"'), "the Dates/Daily toggle must still render for a brand-new schedule");
+  assert.ok(html.includes('data-action="training-load-calendar-day-click"'), "the real click calendar must still render for a brand-new schedule");
+});
+
+test("S2. editing an existing 'dates'-kind schedule shows a READ-ONLY list of its own fixed dates - no Dates/Daily toggle, no clickable calendar day, no remove-date chip", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-dates-1",
+    scheduleKind: "specific_dates",
+    datesList: ["2026-09-01", "2026-09-05", "2026-09-10"],
+  });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(!html.includes('data-action="training-load-schedule-set-recurrence"'), "no Dates/Daily toggle while editing - the kind is fixed");
+  assert.ok(!html.includes('data-action="training-load-calendar-day-click"'), "no clickable calendar day while editing - dates can never be silently discarded again");
+  assert.ok(!html.includes('data-action="training-load-calendar-remove-date"'), "no remove-date control either - fully read-only");
+  assert.ok(html.includes("2026-09-01") && html.includes("2026-09-05") && html.includes("2026-09-10"), "every one of the schedule's own real dates must be shown");
+  assert.ok(html.includes("Schedule again"), "must point the coach at the real path to pick new dates");
+});
+
+test("S3. editing an existing 'one_time' schedule shows its fixed single date as read-only text, not a clickable calendar", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-onetime-1",
+    scheduleKind: "one_time",
+    startDate: "2026-09-03",
+  });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(!html.includes('data-action="training-load-calendar-day-click"'));
+  assert.ok(html.includes("2026-09-03") || /3 Sep/.test(html), "the fixed date must still be visible, just not editable");
+});
+
+test("S4. editing an existing 'recurring' (Daily) schedule shows a read-only start date PLUS a REAL, working end-date input - the one field PATCH genuinely applies", () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-daily-1",
+    scheduleKind: "daily",
+    startDate: "2026-09-01",
+    endDate: "2026-09-14",
+  });
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(!html.includes('data-action="training-load-calendar-day-click"'), "no click calendar - the start date is fixed");
+  assert.ok(html.includes('name="endDate"') && html.includes('type="date"'), "a real end-date input must render - this one genuinely saves");
+  assert.ok(html.includes('value="2026-09-14"'));
+});
+
+test("S5. the submit button is never permanently disabled while editing a 'dates'-kind schedule, even though selectedDates stays empty in edit mode - and its label reads 'Save changes', never 'Schedule 0 dates'", () => {
+  resetState();
+  const form = emptyExternalScheduleForm({
+    editingScheduleId: "sched-dates-1",
+    scheduleKind: "specific_dates",
+    eventName: "Camp",
+    datesList: ["2026-09-01"],
+  });
+  assert.equal(form.selectedDates.length, 0, "sanity: edit mode never populates selectedDates");
+  assert.equal(externalScheduleSubmitDisabled(form), false);
+  assert.equal(externalScheduleSubmitLabel(form), "Save changes");
+});
+
+test("S6. opening Edit on a real 'dates'-kind schedule maps the API response into specific_dates UI mode with its own dates listed for read-only display", async () => {
+  resetState();
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-dates-1"
+    ? { status: 200, body: { schedule: { id: "sched-dates-1", eventName: "Camp", scheduleKind: "dates", dates: ["2026-09-01", "2026-09-05"], startDate: "2026-09-01", endDate: "2026-09-05", opensTime: "00:00:00", closesTime: "23:59:00", timezone: "UTC" }, targets: [], notificationRules: [] } }
+    : { status: 200, body: { clubs: [], teams: [], athletes: [] } }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-open-edit-external-schedule", scheduleId: "sched-dates-1" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.equal(form.editingScheduleId, "sched-dates-1");
+  assert.equal(form.scheduleKind, "specific_dates");
+  assert.deepEqual(form.datesList, ["2026-09-01", "2026-09-05"]);
+});
+
+test("S7. opening Schedule again on a 'dates'-kind source starts with a BLANK date selection (a fresh pick is required), using the real interactive calendar - never pre-filled with the source's own dates", async () => {
+  resetState();
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-dates-1"
+    ? { status: 200, body: { schedule: { id: "sched-dates-1", eventName: "Camp", scheduleKind: "dates", dates: ["2026-09-01", "2026-09-05"], startDate: "2026-09-01", endDate: "2026-09-05", opensTime: "00:00:00", closesTime: "23:59:00", timezone: "UTC" }, targets: [], notificationRules: [] } }
+    : { status: 200, body: { clubs: [], teams: [], athletes: [] } }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-external-schedule-again", scheduleId: "sched-dates-1" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.equal(form.scheduleAgainFromId, "sched-dates-1");
+  assert.equal(form.scheduleKind, "specific_dates");
+  assert.deepEqual(form.selectedDates, [], "never pre-filled with the original's own dates - a genuinely new pick is required");
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes('data-action="training-load-calendar-day-click"'), "Schedule again is NOT edit mode - the real interactive calendar must render so new dates can actually be picked");
+});
+
+test("S8. submitting Schedule again for a 'dates'-kind source sends a `dates` array, never a bare startDate", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    scheduleAgainFromId: "sched-dates-1",
+    scheduleKind: "specific_dates",
+    selectedDates: ["2026-10-01", "2026-10-08"],
+  });
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-dates-1/schedule-again"
+    ? { status: 201, body: { schedule: { id: "sched-dates-2" } } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const call = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules/sched-dates-1/schedule-again");
+  assert.ok(call, "expected the schedule-again request to have been sent");
+  assert.deepEqual(call.body.dates.slice().sort(), ["2026-10-01", "2026-10-08"]);
+  assert.equal(call.body.startDate, undefined, "must never send a bare startDate for a dates-kind schedule-again");
+});
+
+test("S9. submitting a PATCH while editing a 'dates'-kind schedule never sends dates/startDate/scheduleKind - only genuinely-editable fields", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-dates-1",
+    scheduleKind: "specific_dates",
+    eventName: "Renamed camp",
+    datesList: ["2026-09-01", "2026-09-05"],
+  });
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-dates-1" && call.method === "PATCH"
+    ? { status: 200, body: { schedule: { id: "sched-dates-1" } } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const call = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules/sched-dates-1" && c.method === "PATCH");
+  assert.ok(call, "expected the PATCH request to have been sent");
+  assert.equal(call.body.dates, undefined);
+  assert.equal(call.body.startDate, undefined);
+  assert.equal(call.body.scheduleKind, undefined);
+  assert.equal(call.body.eventName, "Renamed camp");
+});
+
+// ------------------------------------------------------------
+// T. A real code read (not just the earlier item-by-item pass) found
+// Schedule again's OWN remaining bug: the form showed name/type/times/
+// note/timezone/targets/notifications as fully editable, but only ever
+// SENT the new date(s) - every other change was silently discarded, and
+// the recipient picker opened with nothing pre-checked even though the
+// backend was about to copy the source's own targets underneath it.
+// ------------------------------------------------------------
+
+test("T1. opening Schedule again pre-loads the ORIGINAL schedule's own targets into the form - the recipient picker must show what's actually about to be copied, never a blank slate", async () => {
+  resetState();
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-1"
+    ? {
+      status: 200,
+      body: {
+        schedule: { id: "sched-1", eventName: "Camp", scheduleKind: "one_time", startDate: "2026-09-01", opensTime: "06:00:00", closesTime: "20:00:00", timezone: "UTC" },
+        targets: [{ kind: "athlete", athleteId: "ath-1", name: "Ana Anić" }, { kind: "club", clubId: "club-1", name: "First Club" }],
+        notificationRules: [],
+      },
+    }
+    : { status: 200, body: { clubs: [], teams: [], athletes: [] } }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-external-schedule-again", scheduleId: "sched-1" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.deepEqual(form.athleteIds, ["ath-1"]);
+  assert.deepEqual(form.clubIds, ["club-1"]);
+});
+
+test("T2. submitting Schedule again sends the FULL current form body - a changed name/type/times/note/timezone/notifications all actually reach the new schedule, never just the new date", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    scheduleAgainFromId: "sched-1",
+    scheduleKind: "one_time",
+    startDate: "2026-10-01",
+    eventName: "Renamed on schedule-again",
+    eventType: "match",
+    opensTime: "07:00",
+    closesTime: "19:00",
+    eventNote: "a brand new note",
+    timezone: "Europe/Belgrade",
+    athleteIds: ["ath-9"],
+  });
+  state.trainingLoad.scheduleForm.notificationRules.find((r) => r.kind === "athlete_invitation").enabled = false;
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-1/schedule-again"
+    ? { status: 201, body: { schedule: { id: "sched-2" } } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const call = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules/sched-1/schedule-again");
+  assert.ok(call, "expected the schedule-again request to have been sent");
+  assert.equal(call.body.eventName, "Renamed on schedule-again", "the changed name must actually be sent, not silently discarded");
+  assert.equal(call.body.eventType, "match");
+  assert.equal(call.body.opensTime, "07:00");
+  assert.equal(call.body.closesTime, "19:00");
+  assert.equal(call.body.eventNote, "a brand new note");
+  assert.equal(call.body.timezone, "Europe/Belgrade");
+  assert.deepEqual(call.body.targets, [{ kind: "athlete", id: "ath-9" }]);
+  assert.equal(call.body.notificationRules.find((r) => r.kind === "athlete_invitation").enabled, false);
+  assert.equal(call.body.startDate, "2026-10-01");
+});
+
+test("T3. editing an existing schedule and changing its fallback timezone actually sends the new value in the PATCH body - the Advanced settings timezone field is a real control", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    editingScheduleId: "sched-1",
+    scheduleKind: "one_time",
+    eventName: "Camp",
+    timezone: "Asia/Tokyo",
+  });
+  installFetchMock((call) => (call.url === "/api/training-load/external-schedules/sched-1" && call.method === "PATCH"
+    ? { status: 200, body: { schedule: { id: "sched-1" } } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-submit" }), { renderTrainingLoad });
+  const call = fetchCalls.find((c) => c.url === "/api/training-load/external-schedules/sched-1" && c.method === "PATCH");
+  assert.ok(call, "expected the PATCH request to have been sent");
+  assert.equal(call.body.timezone, "Asia/Tokyo", "a changed fallback timezone must actually be sent to the backend, not silently dropped");
+});
+
+test("T4. the Dates/Daily toggle genuinely works while Schedule again is open (not just while creating) - clicking Daily switches the kind and keeps the real interactive calendar, never the read-only Edit summary", async () => {
+  resetState();
+  state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
+    scheduleAgainFromId: "sched-1",
+    scheduleKind: "specific_dates",
+    selectedDates: ["2026-09-01"],
+  });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-schedule-set-recurrence", daily: "true" }), { renderTrainingLoad });
+  const form = state.trainingLoad.scheduleForm;
+  assert.equal(form.scheduleKind, "daily", "Schedule again must be free to switch kind, exactly like a real create");
+  const html = renderExternalScheduleFormHtml();
+  assert.ok(html.includes('data-action="training-load-calendar-day-click"'), "still the real interactive calendar - Schedule again is never treated as Edit's read-only mode");
 });

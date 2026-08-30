@@ -7768,6 +7768,10 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-session-time-input { width: 84px; min-height: 24px; padding: 2px 4px; font-size: 12px; color: var(--muted, #667085); }
 .builder-session-time-input:focus { color: var(--text, #20242a); }
 .builder-session-name-input { width: 130px; min-height: 24px; padding: 2px 4px; font-size: 12px; }
+.builder-session-rpe-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted, #667085); background: #fff; border: 1px solid var(--line); }
+.builder-session-rpe-toggle.is-on { color: var(--text, #20242a); }
+.builder-session-rpe-toggle-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex: none; }
+.builder-session-rpe-toggle.is-on .builder-session-rpe-toggle-dot { background: var(--accent); }
 .builder-session-select { width: 96px; min-height: 24px; padding: 2px 4px; font-size: 12px; color: var(--muted, #667085); }
 .builder-session-select:has(option:checked:not([value=""])) { color: var(--text, #20242a); }
 .builder-session span:last-child, .builder-node-button small { color: var(--muted, #667085); font-size: 12px; font-weight: 600; }
@@ -10588,7 +10592,7 @@ button.tests-assignment-card {
 }
 
 .tests-calendar-open-toggle:hover {
-  border-color: #287e77;
+  border-color: var(--accent, #287e77);
 }
 
 .tests-calendar-toggle-icon {
@@ -11511,6 +11515,36 @@ button.tests-assignment-card {
   color: var(--muted);
 }
 
+.training-load-status-off {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.training-load-schedule-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.training-load-schedule-row-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px 6px;
+}
+
+.training-load-rpe-state-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.training-load-rpe-state-badge.is-on {
+  color: var(--accent);
+}
+
 /* -------------------- Athlete: RPE form -------------------- */
 
 .training-load-rpe-head {
@@ -11940,4 +11974,233 @@ button.tests-assignment-card {
 
 .training-load-session-row[aria-disabled="true"] {
   opacity: 0.5;
+}
+
+/* -------------------- External (outside-plan) RPE scheduling --------------------
+   Own neutral visual language throughout - white/grey surfaces, neutral
+   borders/text, the accent color reserved for a small indicator or an
+   active/selected state only, per this feature's own explicit styling
+   constraint. Several structural (non-color) classes are intentionally
+   reused from the WELLNESS scheduling form's own CSS (.builder-athlete-*,
+   .tests-recipient-picker-tab*, .tests-recurrence-toggle's layout shape
+   renamed below, .tests-time-row, .tests-schedule-actions, .tests-
+   collapsible-*, .tests-calendar-*) - those rules are pure layout/neutral
+   already; every rule that carried WELLNESS's own accent color has its own
+   .training-load-* class defined here instead. */
+
+.training-load-outside-plan-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  vertical-align: middle;
+}
+
+.training-load-rpe-state-badge.is-outside {
+  color: var(--muted);
+}
+
+.training-load-schedule-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.training-load-cancel-button {
+  color: #b3261e;
+  border-color: #e8b4af;
+}
+
+.training-load-recurrence-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.training-load-recurrence-pill {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+
+.training-load-recurrence-pill.is-active {
+  border-color: var(--accent);
+  background: var(--surface-soft);
+  color: var(--accent);
+}
+
+.training-load-calendar-section {
+  display: grid;
+  gap: 8px;
+}
+
+.training-load-calendar-closed-summary {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.training-load-calendar {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.training-load-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.training-load-calendar-head-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.training-load-calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.training-load-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.training-load-calendar-day {
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.training-load-calendar-day:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.5;
+}
+
+.training-load-calendar-day.is-selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.training-load-calendar-day-blank {
+  visibility: hidden;
+}
+
+.training-load-calendar-count {
+  font-size: 12px;
+}
+
+.training-load-calendar-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.training-load-calendar-chip {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.training-load-event-type-field {
+  display: grid;
+  gap: 6px;
+}
+
+.training-load-event-type-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.training-load-event-type-pill {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.training-load-event-type-pill.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.training-load-timezone-info {
+  margin: -4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.training-load-schedule-form {
+  display: grid;
+  gap: 10px;
+  position: relative;
+}
+
+.training-load-schedule-form-scroll {
+  display: grid;
+  gap: 12px;
+}
+
+.training-load-schedule-detail {
+  display: grid;
+  gap: 8px;
+}
+
+.training-load-reminder-list {
+  display: grid;
+  gap: 4px;
+}
+
+.training-load-reminder-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.training-load-reminder-row .training-load-session-name {
+  min-width: 0;
+}
+
+.training-load-reminder-checkbox {
+  display: inline-flex;
+  width: 20px;
+  flex-shrink: 0;
 }

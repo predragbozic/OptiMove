@@ -1,6 +1,15 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
+import {
+  canManageExternalScheduleInScope,
+  externalScheduleScopeForWorkspace,
+  externalScheduleScopeSqlForWorkspace,
+  resolveExternalScheduleWorkspaceScope,
+} from "../trainingLoadAccess.js";
+import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAthlete, ensureCurrentExternalOccurrencesForCoach } from "../trainingLoadOccurrenceService.js";
+import { emitRealtimeEvent } from "../realtime.js";
 
 const router = Router();
 
@@ -55,6 +64,24 @@ function requireCoachWorkspace(req, res) {
   return true;
 }
 
+// The external-schedule-specific gate: resolves the account's CURRENTLY
+// ACTIVE workspace into the discriminated scope object every schedule
+// CRUD/lifecycle/target-validation function below is threaded through.
+// Unlike requireCoachWorkspace above (a global "does this account hold
+// ANY coach role" check), this returns { type: null } for an athlete
+// workspace even when the same account also holds a real coach role
+// elsewhere - a coach schedule route must be unreachable while presenting
+// as an athlete, full stop. Writes the 403 itself and returns null on
+// failure, matching this file's existing requireX(req,res) convention.
+async function requireExternalScheduleWorkspace(req, res) {
+  const scope = await resolveExternalScheduleWorkspaceScope(req);
+  if (scope.type === null) {
+    res.status(403).json({ error: "Forbidden" });
+    return null;
+  }
+  return scope;
+}
+
 const DATE_STRING_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -77,6 +104,16 @@ function addDaysIso(iso, days) {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+// HH:MM or HH:MM:SS, 24-hour - external_schedules.opens_time/due_time/
+// closes_time are all Postgres `time` columns; a malformed string bound
+// straight into one of those (create/PATCH/schedule-again all read these
+// from the request body with no format check today) is a raw Postgres
+// 22007 ("invalid input syntax for type time"), not a controlled 400.
+const TIME_STRING_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)(:([0-5]\d))?$/;
+function isValidTimeString(value) {
+  return typeof value === "string" && TIME_STRING_PATTERN.test(value);
 }
 
 // Correction: validates every id is a real UUID before it ever reaches a
@@ -133,6 +170,11 @@ router.get("/athlete/today", async (req, res, next) => {
     const localToday = await athleteLocalDate(athleteId);
     if (!localToday) return res.status(404).json({ error: "Athlete profile not found." });
 
+    // On-demand generation right before reading - mirrors WELLNESS's own
+    // "ensureCurrentOccurrence, called from the view that needs it" trigger
+    // (see trainingLoadOccurrenceService.js's own header comment).
+    await ensureCurrentExternalOccurrencesForAthlete(athleteId);
+
     const sessionsResult = await query(
       `select ps.id as session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
@@ -143,21 +185,84 @@ router.get("/athlete/today", async (req, res, next) => {
        where ${WEEKLY_PLAN_SESSION_FILTER_SQL}
          and p.athlete_id = $1
          and pd.date = $2::date
+         -- Per-session RPE opt-out: a disabled session with NO existing
+         -- result is never shown to the athlete as a request at all (not
+         -- pending, not "Not rated"). One that already has a result from
+         -- before it was disabled keeps showing as its already-rated
+         -- summary - existing history is never hidden.
+         and (coalesce(ps.rpe_enabled, true) or sf.id is not null)
        order by ps.session_order`,
+      [athleteId, localToday],
+    );
+
+    // External assignments (outside any Weekly plan) due on this same
+    // local date. Hardening correction: this used to hide a row only once
+    // its OWN status (or its schedule's) was 'cancelled' - a PAUSED
+    // schedule's still-pending assignment kept showing as an actionable
+    // Home card even though submit already 409s for it, and a CANCELLED
+    // schedule's already-submitted result vanished from history along
+    // with it. The rule now mirrors the planned side's own rpe_enabled
+    // carve-out exactly: an already-rated row (sf.id is not null) always
+    // stays visible, read-only, regardless of what happened to the
+    // schedule/assignment afterward; an UNRATED row is only ever shown at
+    // all when it's genuinely actionable right now (schedule active,
+    // assignment still pending/open/in_progress) - paused/cancelled never
+    // renders as "a request" in the first place.
+    const externalResult = await query(
+      `select asg.id as assignment_id, asg.opens_at, asg.closes_at, asg.status as assignment_status,
+              s.id as schedule_id, s.event_name, s.status as schedule_status,
+              sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
+       from training_load.external_assignments asg
+       join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
+       join training_load.external_schedules s on s.id = o.schedule_id
+       left join training_load.session_feedback sf on sf.external_assignment_id = asg.id
+       where asg.athlete_id = $1
+         and asg.local_scheduled_date = $2::date
+         and (
+           sf.id is not null
+           or (s.status = 'active' and asg.status in ('pending','open','in_progress'))
+         )
+       order by asg.opens_at`,
       [athleteId, localToday],
     );
 
     res.json({
       date: localToday,
-      sessions: sessionsResult.rows.map((row) => ({
-        sessionId: row.session_id,
-        sessionName: row.session_name || "",
-        amPm: row.am_pm || "",
-        bta: row.bta || "",
-        sessionTime: row.session_time || "",
-        rated: row.feedback_id != null,
-        feedback: formatFeedback(row),
-      })),
+      sessions: [
+        ...sessionsResult.rows.map((row) => ({
+          sessionId: row.session_id,
+          sessionName: row.session_name || "",
+          amPm: row.am_pm || "",
+          bta: row.bta || "",
+          sessionTime: row.session_time || "",
+          rated: row.feedback_id != null,
+          feedback: formatFeedback(row),
+          source: "planned",
+          externalAssignmentId: null,
+          scheduleId: null,
+        })),
+        ...externalResult.rows.map((row) => ({
+          sessionId: null,
+          sessionName: row.event_name || "",
+          amPm: "",
+          bta: "",
+          sessionTime: "",
+          rated: row.feedback_id != null,
+          feedback: formatFeedback(row),
+          source: "scheduled_external",
+          externalAssignmentId: row.assignment_id,
+          scheduleId: row.schedule_id,
+          opensAt: row.opens_at,
+          closesAt: row.closes_at,
+          scheduleStatus: row.schedule_status,
+          assignmentStatus: row.assignment_status,
+          // Explicit, never re-derived by the frontend from row presence
+          // alone - the SQL above already excludes a non-actionable,
+          // unrated row entirely, so any row reaching this branch is
+          // actionable unless it's already rated.
+          actionable: row.feedback_id == null,
+        })),
+      ],
     });
   } catch (error) {
     next(error);
@@ -219,7 +324,7 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
     await client.query("begin");
 
     const sessionResult = await client.query(
-      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time,
+      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled,
               pd.date as session_date, p.id as plan_id, p.name as plan_name, p.week_start, p.athlete_id,
               p.plan_type, p.status, p.is_active, p.is_edit_draft,
               exists (
@@ -261,6 +366,15 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
     if (session.has_pending_legacy_draft) {
       await client.query("rollback");
       return res.status(409).json({ error: "This plan has a pending update from before a recent system upgrade. Ask your coach to finish or discard it, then try again." });
+    }
+
+    // Per-session RPE opt-out: unlike the not-found/not-yours/not-actionable
+    // cases above, a coach explicitly turning RPE off for a real, visible
+    // session is not something worth hiding from the athlete behind a bare
+    // 404 - a distinguishable, controlled 409 is the correct response here.
+    if (session.rpe_enabled === false) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "RPE isn't being collected for this session." });
     }
 
     const localToday = await athleteLocalDate(athleteId, (sql, params) => client.query(sql, params));
@@ -314,6 +428,109 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
   }
 });
 
+// Coach quick toggle (Training Load -> Schedule tab). Locks the live
+// session row FIRST (same `for update of ps` pattern as the athlete's own
+// submit route above), so a concurrent submit-vs-disable race serializes
+// cleanly on that one row: whichever transaction's lock is granted first
+// wins outright - if submit wins, the result commits and stays untouched;
+// if disable wins, the submit that was waiting re-reads rpe_enabled=false
+// and gets the controlled 409 the submit route already implements. Never
+// a partial write, never a 500.
+router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
+  let client;
+  try {
+    if (!requireCoachWorkspace(req, res)) return;
+    const sessionId = req.params.sessionId;
+    if (!UUID_PATTERN.test(sessionId)) return res.status(404).json({ error: "Training session not found." });
+    if (typeof req.body?.rpeEnabled !== "boolean") {
+      return res.status(400).json({ error: "rpeEnabled must be a boolean." });
+    }
+    const rpeEnabled = req.body.rpeEnabled;
+    const confirmDisableWithResults = req.body?.confirmDisableWithResults === true;
+
+    client = await pool.connect();
+    await client.query("begin");
+
+    const sessionResult = await client.query(
+      `select ps.id as session_id, ps.logical_session_id, p.id as plan_id, p.athlete_id
+       from plans.plan_sessions ps
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       join plans.plans p on p.id = pd.plan_id
+       where ps.id = $1
+         and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
+       for update of ps`,
+      [sessionId],
+    );
+    const session = sessionResult.rows[0];
+    if (!session) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
+
+    // Real workspace-authorization gate, not just a UI-level restriction -
+    // the same EXISTS-against-athlete_memberships/user_athletes shape every
+    // other coach-facing query in this file already uses.
+    const scope = await coachWorkspaceScopeSql(req, "a", 2);
+    const accessResult = await client.query(
+      `select 1 from public.athletes a where a.id = $1 ${scope.sql}`,
+      [session.athlete_id, ...scope.params],
+    );
+    if (!accessResult.rowCount) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
+
+    // Disabling a session that already has at least one submitted result
+    // needs an explicit, informed confirmation - a real server-side gate
+    // (confirmDisableWithResults must be sent back on the SAME request the
+    // frontend re-submits after the coach confirms), not just a UI dialog
+    // a different/careless client could bypass. Matching by
+    // logical_session_id alone already scopes this to real, submitted
+    // planned results for this exact logical session - nothing else could
+    // ever share that id.
+    if (rpeEnabled === false && !confirmDisableWithResults) {
+      const existingCountResult = await client.query(
+        `select count(*)::int as n from training_load.session_feedback where logical_session_id = $1`,
+        [session.logical_session_id],
+      );
+      if (existingCountResult.rows[0].n > 0) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "hasExistingResults", resultCount: existingCountResult.rows[0].n });
+      }
+    }
+
+    // If this live plan currently has an open edit-draft, its own copy of
+    // this same session (same logical_session_id, carried over by
+    // preserveLogicalId - see builder.js) must be updated in the SAME
+    // transaction, or a later Builder "Save and finish" would silently
+    // revert this quick toggle back to whatever the draft still has.
+    const draftSessionResult = await client.query(
+      `select ps2.id
+       from plans.plans d
+       join plans.plan_days pd2 on pd2.plan_id = d.id
+       join plans.plan_sessions ps2 on ps2.plan_day_id = pd2.id
+       where d.edit_source_plan_id = $1 and d.is_edit_draft
+         and ps2.logical_session_id = $2
+       for update of ps2`,
+      [session.plan_id, session.logical_session_id],
+    );
+    const idsToUpdate = [session.session_id, ...draftSessionResult.rows.map((row) => row.id)];
+    await client.query(
+      `update plans.plan_sessions set rpe_enabled = $1, updated_at = now() where id = any($2::uuid[])`,
+      [rpeEnabled, idsToUpdate],
+    );
+    await client.query("commit");
+    return res.json({ sessionId: session.session_id, rpeEnabled, draftSessionUpdated: draftSessionResult.rowCount > 0 });
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+    }
+    next(error);
+  } finally {
+    if (client) client.release();
+  }
+});
+
 // ------------------------------------------------------------
 // Coach workspace scoping - correction: the previous version branched
 // purely on req.authz.isAthlete (a permission fact: "does this account
@@ -340,6 +557,17 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
 // ------------------------------------------------------------
 async function coachWorkspaceScopeSql(req, alias, startIndex) {
   const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+  return coachWorkspaceScopeSqlForWorkspace(workspace, req, alias, startIndex);
+}
+
+// Same predicate as coachWorkspaceScopeSql, for a caller that has ALREADY
+// resolved the active workspace itself this request - see GET /weekly
+// below, which reuses ONE resolveActiveWorkspace read for both this
+// predicate and its own external-schedule scoping (hardening correction,
+// item 5: two independent reads in the same request could observe a
+// workspace switch landing between them and scope different parts of the
+// SAME response to two different workspaces).
+function coachWorkspaceScopeSqlForWorkspace(workspace, req, alias, startIndex) {
   if (!workspace) return { sql: "and false", params: [] };
   if (workspace.type === "platform") return { sql: "", params: [] };
   if (workspace.type === "club") {
@@ -427,28 +655,67 @@ router.get("/weekly", async (req, res, next) => {
     // fragment is appended identically to both.
     let scopeSqlLive = "";
     let scopeSqlSf = "";
+    // External assignments are scoped by the ASSIGNED ATHLETE's own
+    // workspace membership - the exact same rule planned sessions/results
+    // already use - never by which coach/schedule owns them. Schedule
+    // ownership only gates who may MANAGE a schedule (see
+    // canManageExternalSchedule); seeing an athlete's aggregated training
+    // load in a weekly view is a separate, broader concern.
+    let scopeSqlExternal = "";
     let params = [weekStart, weekEnd];
 
     const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
     if (workspace?.type === "athlete") {
       if (!req.authz.athleteId) return res.status(403).json({ error: "This account has no athlete profile." });
       params.push(req.authz.athleteId);
-      scopeSqlLive = `and p.athlete_id = $${params.length}`;
+      // Same rule as GET /athlete/today: the athlete's own weekly view
+      // (this endpoint doubles as the athlete's weekly overlay) must never
+      // show a disabled session that has no result yet - only the coach's
+      // own Schedule tab (the `else` branch below) needs every session
+      // visible, disabled or not, so its quick-toggle control can re-enable
+      // one. A disabled session that already has a result stays visible.
+      scopeSqlLive = `and p.athlete_id = $${params.length} and (coalesce(ps.rpe_enabled, true) or sf.id is not null)`;
       scopeSqlSf = `and sf.athlete_id = $${params.length}`;
+      // Same rule as GET /athlete/today's own external-assignment fix: an
+      // unrated row only shows here if it's genuinely actionable right
+      // now (schedule active, assignment still pending/open/in_progress);
+      // an already-rated row always stays visible regardless of what
+      // later happened to the schedule/assignment. Only the coach's own
+      // Schedule tab (the `else` branch below) needs every row, any
+      // status, unfiltered.
+      scopeSqlExternal = `and a.id = $${params.length} and (sf.id is not null or (s.status = 'active' and asg.status in ('pending','open','in_progress')))`;
+      await ensureCurrentExternalOccurrencesForAthlete(req.authz.athleteId);
     } else {
       if (!requireCoachWorkspace(req, res)) return;
-      const scope = await coachWorkspaceScopeSql(req, "a", 3);
+      // Resolved ONCE and reused for BOTH the athlete-visibility scope
+      // below AND the external-schedule scope/occurrence generation
+      // further down - hardening correction, item 5: this used to call
+      // resolveActiveWorkspace a second, independent time (inside
+      // resolveExternalScheduleWorkspaceScope) later in the same
+      // request, so a workspace switch landing between the two reads
+      // could scope planned/session_feedback rows to workspace A while
+      // generating/scoping external-schedule occurrences for workspace B
+      // in the very same response.
+      const scope = coachWorkspaceScopeSqlForWorkspace(workspace, req, "a", 3);
       scopeSqlLive = scope.sql;
       scopeSqlSf = scope.sql;
+      scopeSqlExternal = scope.sql;
       params = params.concat(scope.params);
 
       const extraFragment = athleteExtraFilterSql("a", clubFilter.ids, teamFilter.ids, athleteFilter.ids, params);
       scopeSqlLive += extraFragment;
       scopeSqlSf += extraFragment;
+      scopeSqlExternal += extraFragment;
+
+      // Only the ACTIVE workspace's own schedules get materialized here -
+      // never every schedule the account could manage across every
+      // club/team it happens to hold a role in (see
+      // resolveExternalScheduleWorkspaceScope's own header comment).
+      await ensureCurrentExternalOccurrencesForCoach(externalScheduleScopeForWorkspace(workspace, req));
     }
 
     const liveResult = await query(
-      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time,
+      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled,
               pd.date as session_date, p.id as plan_id, p.name as plan_name,
               a.id as athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
@@ -461,6 +728,38 @@ router.get("/weekly", async (req, res, next) => {
          and pd.date between $1::date and $2::date
          ${scopeSqlLive}
        order by pd.date, athlete_name, a.id, ps.session_order`,
+      params,
+    );
+
+    // External assignments (outside any Weekly plan) due this week -
+    // pushed into the SAME days[].sessions[] array below with `source:
+    // 'scheduled_external'`, `sessionId: null`, `planId: null`, so any
+    // existing frontend code that only reads the already-known fields
+    // (.rated/.feedback/.sessionName) is unaffected.
+    // Hardening correction: this used to drop the row entirely once
+    // asg.status or s.status was 'cancelled' - which also silently erased
+    // an already-COMPLETED result the instant its schedule was cancelled,
+    // contradicting the schedule detail view's own promise that
+    // historical results stay available. No status-based WHERE filter
+    // here at all now - every external assignment in range/scope comes
+    // back, tagged with explicit scheduleStatus/assignmentStatus/
+    // actionable fields (see the row-building loop below) so each reader
+    // (Coach Today/Schedule/Results, the athlete's own weekly overlay)
+    // decides what to DO with a paused/cancelled row from those explicit
+    // fields, never implicitly from whether the row exists at all.
+    const externalResult = await query(
+      `select asg.id as assignment_id, asg.local_scheduled_date, asg.opens_at, asg.closes_at, asg.status as assignment_status,
+              s.id as schedule_id, s.event_name, s.status as schedule_status,
+              a.id as athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
+              sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
+       from training_load.external_assignments asg
+       join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
+       join training_load.external_schedules s on s.id = o.schedule_id
+       join public.athletes a on a.id = asg.athlete_id
+       left join training_load.session_feedback sf on sf.external_assignment_id = asg.id
+       where asg.local_scheduled_date between $1::date and $2::date
+         ${scopeSqlExternal}
+       order by asg.local_scheduled_date, athlete_name, a.id, asg.opens_at`,
       params,
     );
 
@@ -491,6 +790,13 @@ router.get("/weekly", async (req, res, next) => {
        join public.athletes a on a.id = sf.athlete_id
        where sf.session_date between $1::date and $2::date
          ${scopeSqlSf}
+         -- "Orphaned" is inherently a PLANNED concept (a since-changed
+         -- plan's own logical_session_id no longer matches a live session);
+         -- a scheduled_external result has NO logical_session_id at all
+         -- (NULL, per the XOR identity), which trivially satisfies the
+         -- NOT EXISTS below for every external row unless excluded here -
+         -- found live as a real duplicate row in this exact QA pass.
+         and sf.source = 'planned'
          and not exists (
            select 1
            from plans.plan_sessions ps2
@@ -521,6 +827,14 @@ router.get("/weekly", async (req, res, next) => {
         rated: row.feedback_id != null,
         feedback: formatFeedback(row),
         historical: false,
+        // rpe_enabled defaults to true for any pre-v3 row read through a
+        // driver/pool that hasn't picked up the column yet - never really
+        // reachable in practice (the column is NOT NULL DEFAULT true), but
+        // coalesced defensively the same way the SQL-side reads already are.
+        rpeEnabled: row.rpe_enabled !== false,
+        source: "planned",
+        externalAssignmentId: null,
+        scheduleId: null,
       });
     }
     for (const row of orphanedResult.rows) {
@@ -539,6 +853,47 @@ router.get("/weekly", async (req, res, next) => {
         rated: true,
         feedback: formatFeedback(row),
         historical: true,
+        // A historical/orphaned row has no live plan_sessions row to read
+        // rpe_enabled from at all - it's always already-rated, so this
+        // is never read as an actionable "off" state either way.
+        rpeEnabled: true,
+        source: "planned",
+        externalAssignmentId: null,
+        scheduleId: null,
+      });
+    }
+    for (const row of externalResult.rows) {
+      const bucket = byDate.get(row.local_scheduled_date);
+      if (!bucket) continue;
+      bucket.sessions.push({
+        sessionId: null,
+        sessionName: row.event_name || "",
+        amPm: "",
+        bta: "",
+        sessionTime: "",
+        planId: null,
+        planName: null,
+        athleteId: row.athlete_id,
+        athleteName: row.athlete_name,
+        rated: row.feedback_id != null,
+        feedback: formatFeedback(row),
+        historical: false,
+        rpeEnabled: true,
+        source: "scheduled_external",
+        externalAssignmentId: row.assignment_id,
+        scheduleId: row.schedule_id,
+        opensAt: row.opens_at,
+        closesAt: row.closes_at,
+        // Explicit fields so every reader (Coach Today/Schedule/Results,
+        // the athlete's own weekly overlay) decides what a paused/
+        // cancelled row means for itself, never implicitly from whether
+        // the row is present at all - see this query's own header
+        // comment. actionable never overrides `rated`: a completed
+        // result is never "actionable" again, no matter the current
+        // schedule/assignment status.
+        scheduleStatus: row.schedule_status,
+        assignmentStatus: row.assignment_status,
+        actionable: row.feedback_id == null && row.schedule_status === "active" && ["pending", "open", "in_progress"].includes(row.assignment_status),
       });
     }
 
@@ -546,6 +901,1115 @@ router.get("/weekly", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// ------------------------------------------------------------
+// External scheduling (RPE sessions outside any Weekly plan). See
+// migrations_v2/202609011000_training_load_v4_external_scheduling.sql for
+// the schema and trainingLoadOccurrenceService.js for occurrence/
+// assignment generation. Every route below is additive - nothing here
+// changes the planned-session routes above.
+// ------------------------------------------------------------
+
+function text(value) { return String(value || "").trim(); }
+function nullableText(value) { return text(value) || null; }
+
+// P0001 = a plpgsql RAISE EXCEPTION (every CHECK/trigger violation this
+// migration's own functions raise) -> a controlled 400 with the DB's own
+// message, never an opaque 500. 23505 = unique_violation (a genuine
+// double-submit race that slipped past an app-level check) -> 409. Same
+// pattern as tests.js's own respondToWriteError.
+function respondToWriteError(res, next, error) {
+  if (error?.code === "P0001") return res.status(400).json({ error: error.message });
+  if (error?.code === "23505") return res.status(409).json({ error: "This was already submitted." });
+  return next(error);
+}
+
+// Dedupe by (kind, id) - the same athlete targeted both directly AND via a
+// team/club they belong to is deliberately NOT deduped away here (two
+// genuinely different target rows) - resolve_external_schedule_target_
+// athletes' own UNION already collapses that to one materialized
+// assignment regardless (see migrations_v2's own comment, and test F3).
+function dedupeExternalTargets(rawTargets) {
+  const seen = new Set();
+  const result = [];
+  for (const raw of Array.isArray(rawTargets) ? rawTargets : []) {
+    const kind = text(raw?.kind);
+    const id = text(raw?.id);
+    if (!["athlete", "team", "club"].includes(kind) || !id) continue;
+    const key = `${kind}:${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ kind, id });
+  }
+  return result;
+}
+
+// Workspace-scoped target validation - a target must be reachable from
+// the CURRENTLY ACTIVE workspace, never from the account's full global
+// role set (see trainingLoadAccess.js's own header comment for the exact
+// dual-role bug this closes). Athlete ids here are always the real
+// public.athletes.id UUID the org picker already sends (never the human-
+// readable athlete_id code canAccessAthlete's own fuzzy match supported -
+// insertExternalTargets has only ever stored the raw UUID), so a direct
+// membership-table comparison is both correct and simpler than reusing
+// that fuzzier global helper.
+async function isAthleteInWorkspaceScope(scope, athleteId) {
+  if (scope.type === "platform") {
+    const r = await query(`select 1 from public.athletes where id = $1`, [athleteId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "club") {
+    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'club' and status = 'active' and club_id = $2`, [athleteId, scope.clubId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "team") {
+    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'team' and status = 'active' and team_id = $2`, [athleteId, scope.teamId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "private_coach") {
+    const r = await query(`select 1 from public.user_athletes where athlete_id = $1 and user_id = $2 and is_active = true`, [athleteId, scope.userId]);
+    return r.rowCount > 0;
+  }
+  return false;
+}
+async function isTeamInWorkspaceScope(scope, teamId) {
+  if (scope.type === "platform") {
+    const r = await query(`select 1 from public.teams where id = $1 and coalesce(is_active, true)`, [teamId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "club") {
+    const r = await query(`select 1 from public.teams where id = $1 and club_id = $2 and coalesce(is_active, true)`, [teamId, scope.clubId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "team") return String(teamId) === String(scope.teamId);
+  return false; // private_coach has no team concept to target
+}
+async function isClubInWorkspaceScope(scope, clubId) {
+  if (scope.type === "platform") {
+    const r = await query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)`, [clubId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "club") return String(clubId) === String(scope.clubId);
+  return false; // a team/private_coach workspace can never target a club
+}
+async function validateExternalTargetInScope(scope, target) {
+  if (target.kind === "athlete") return isAthleteInWorkspaceScope(scope, target.id);
+  if (target.kind === "team") return isTeamInWorkspaceScope(scope, target.id);
+  if (target.kind === "club") return isClubInWorkspaceScope(scope, target.id);
+  return false;
+}
+
+// The WHOLE request is rejected on the FIRST invalid target - never a
+// partial accepted set (matches tests.js's own resolveValidTargets).
+async function resolveValidExternalTargets(scope, rawTargets) {
+  const targets = dedupeExternalTargets(rawTargets);
+  if (!targets.length) return { ok: false, status: 400, error: "Choose at least one athlete, team or club." };
+  // Every target's own id is validated as a real UUID BEFORE it ever
+  // reaches a query against a uuid-typed column - isAthleteInWorkspaceScope
+  // /isTeamInWorkspaceScope/isClubInWorkspaceScope below bind it straight
+  // into a `= $N` comparison against an athletes/teams/clubs.id column,
+  // and a malformed string there is a raw Postgres 22P02, not a
+  // controlled response.
+  if (targets.some((t) => !UUID_PATTERN.test(t.id))) {
+    return { ok: false, status: 400, error: "One of the chosen targets has an invalid id." };
+  }
+  for (const target of targets) {
+    const allowed = await validateExternalTargetInScope(scope, target);
+    if (!allowed) return { ok: false, status: 403, error: "One of the chosen targets is outside your access." };
+  }
+  return { ok: true, targets };
+}
+
+async function insertExternalTargets(client, scheduleId, targets) {
+  for (const target of targets) {
+    await client.query(
+      `insert into training_load.external_schedule_targets (schedule_id, target_kind, target_athlete_id, target_team_id, target_club_id)
+       values ($1, $2, $3, $4, $5)`,
+      [
+        scheduleId,
+        target.kind,
+        target.kind === "athlete" ? target.id : null,
+        target.kind === "team" ? target.id : null,
+        target.kind === "club" ? target.id : null,
+      ],
+    );
+  }
+}
+
+// Optional label only - never referenced by scheduling/timezone/occurrence
+// logic (see migrations_v2/202609011200_training_load_v6...).
+const EXTERNAL_EVENT_TYPES = ["team_training", "individual", "gym", "rehabilitation", "match", "other"];
+
+// ------------------------------------------------------------
+// Per-schedule notification configuration (migrations_v2/
+// 202609020900_training_load_v7...) - notify-when-open / remind-
+// incomplete (+ offset) / final-summary. No "kind" for a coach live
+// digest - training_load's own GET /weekly already covers that live, by
+// design (see this feature's original architecture note).
+// ------------------------------------------------------------
+
+const NOTIFICATION_RULE_KINDS = ["athlete_invitation", "athlete_reminder", "final_digest"];
+const DEFAULT_NOTIFICATION_RULES = [
+  { kind: "athlete_invitation", enabled: true, reminderOffsetMinutes: null },
+  { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 60 },
+  { kind: "final_digest", enabled: true, reminderOffsetMinutes: null },
+];
+// training_load.external_schedule_notification_rules.reminder_offset_minutes
+// is a Postgres `int` column - an offset bigger than this overflows it
+// (22003) as a raw 500, not a controlled 400.
+const POSTGRES_INT_MAX = 2147483647;
+
+// Validates the client's own notificationRules array (if provided at all -
+// omitting the field entirely means "use the defaults", never "disable
+// everything"). Each kind may appear at most once; an unrecognized kind,
+// a non-boolean enabled, or an out-of-range offset is a controlled 400 -
+// never silently dropped or coerced.
+//
+// Hardening correction: a PARTIAL array (some kinds present, the rest
+// omitted) used to leave the omitted kinds with zero DB rows - read by
+// the worker as enabled=true (coalesce(nr.enabled, true)), but by the
+// edit form's own display fallback (notificationRuleFor) as enabled=
+// false once at least one real row existed. Requiring the full set of
+// three kinds whenever the field is sent at all (never a partial one)
+// closes that gap at the API boundary - normalizeNotificationRuleRows
+// below closes the matching read-side gap, so a kind that genuinely has
+// no row (e.g. a schedule created before v7) still reads back with the
+// SAME true/60/null defaults on every path: UI, detail response, worker.
+function resolveValidNotificationRules(rawRules) {
+  if (rawRules === undefined) return { ok: true, rules: DEFAULT_NOTIFICATION_RULES };
+  if (!Array.isArray(rawRules)) return { ok: false, error: "notificationRules must be an array." };
+  const seen = new Set();
+  const rules = [];
+  for (const raw of rawRules) {
+    const kind = text(raw?.kind);
+    if (!NOTIFICATION_RULE_KINDS.includes(kind)) return { ok: false, error: `Unrecognized notification kind: ${kind || "(none)"}.` };
+    if (seen.has(kind)) return { ok: false, error: `Duplicate notification kind: ${kind}.` };
+    seen.add(kind);
+    if (typeof raw.enabled !== "boolean") return { ok: false, error: `notificationRules.${kind}.enabled must be a boolean.` };
+    let reminderOffsetMinutes = null;
+    if (kind === "athlete_reminder") {
+      const offsetRaw = raw.reminderOffsetMinutes;
+      reminderOffsetMinutes = offsetRaw === undefined || offsetRaw === null ? 60 : offsetRaw;
+      if (!Number.isInteger(reminderOffsetMinutes) || reminderOffsetMinutes <= 0 || reminderOffsetMinutes > POSTGRES_INT_MAX) {
+        return { ok: false, error: "notificationRules.athlete_reminder.reminderOffsetMinutes must be a positive whole number of minutes." };
+      }
+    }
+    rules.push({ kind, enabled: raw.enabled, reminderOffsetMinutes });
+  }
+  if (seen.size !== NOTIFICATION_RULE_KINDS.length) {
+    return { ok: false, error: `notificationRules must include all of: ${NOTIFICATION_RULE_KINDS.join(", ")}.` };
+  }
+  return { ok: true, rules };
+}
+
+async function insertNotificationRules(client, scheduleId, rules) {
+  for (const rule of rules) {
+    await client.query(
+      `insert into training_load.external_schedule_notification_rules (schedule_id, kind, enabled, reminder_offset_minutes) values ($1,$2,$3,$4)`,
+      [scheduleId, rule.kind, rule.enabled, rule.reminderOffsetMinutes],
+    );
+  }
+}
+
+function formatNotificationRuleRow(row) {
+  return { kind: row.kind, enabled: row.enabled, reminderOffsetMinutes: row.reminder_offset_minutes };
+}
+
+// Normalizes a possibly-partial (or empty) set of DB rows into all three
+// kinds, filling any missing kind with the exact same true/60/null
+// default resolveValidNotificationRules itself falls back to when the
+// field is omitted entirely on create - the one, single effective
+// semantics every reader (UI, this detail response, the worker) shares.
+function normalizeNotificationRuleRows(rows) {
+  const byKind = new Map(rows.map((row) => [row.kind, row]));
+  return DEFAULT_NOTIFICATION_RULES.map((def) => {
+    const row = byKind.get(def.kind);
+    return row ? formatNotificationRuleRow(row) : { ...def };
+  });
+}
+
+// `datesList` is only ever populated for a schedule_kind='dates' row -
+// the caller is expected to have queried external_schedule_dates itself
+// (or joined a dates_list array via SQL) and passed it through; every
+// other kind's start_date/end_date pair remains the single source of
+// truth, unchanged.
+function formatExternalScheduleRow(row, datesList) {
+  return {
+    id: row.id,
+    scheduleKind: row.schedule_kind,
+    timezone: row.timezone,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    dates: row.schedule_kind === "dates" ? (datesList || row.dates_list || []) : undefined,
+    recurrenceRule: row.recurrence_rule || null,
+    opensTime: row.opens_time,
+    dueTime: row.due_time,
+    closesTime: row.closes_time,
+    status: row.status,
+    eventName: row.event_name,
+    eventType: row.event_type || null,
+    eventNote: row.event_note || "",
+    ownerScope: row.owner_scope,
+    ownerUserId: row.owner_user_id,
+    ownerClubId: row.owner_club_id,
+    ownerTeamId: row.owner_team_id,
+    targetCount: row.target_count != null ? Number(row.target_count) : undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function formatExternalTargetRow(row) {
+  return {
+    kind: row.target_kind,
+    athleteId: row.target_athlete_id,
+    teamId: row.target_team_id,
+    clubId: row.target_club_id,
+    name: row.athlete_name || row.team_name || row.club_name || "",
+  };
+}
+
+// Builds the schedule_kind/recurrence_rule/date-range/explicit-dates
+// shape from the create/schedule-again request body.
+//
+// Hardening correction (item 10): "Dates" (multiple specific dates)
+// used to have no dedicated schema-level kind of its own - it was
+// expressed as N independent one_time schedules, created together in
+// one request via a `dates` array, but with no shared identity
+// afterward (N separate Edit/Pause/Cancel, no single "Schedule again").
+// Now it resolves to exactly ONE schedule of kind 'dates', with its
+// own explicit date rows in training_load.external_schedule_dates
+// (see migrations_v2/202609030900). start_date/end_date on that one row
+// are only ever the min/max of its own dates, for sorting/display -
+// never authoritative (see generate_external_schedule_occurrence). A
+// single-element `dates` array is still `dates`, not `one_time` -
+// "5 disconnected cards" was the actual bug, not whether N happened to
+// be 1 on a given request.
+function resolveExternalScheduleKindAndDates(body) {
+  const datesInput = Array.isArray(body?.dates) ? body.dates.map((d) => text(d)).filter(Boolean) : [];
+  if (datesInput.length) {
+    const dates = Array.from(new Set(datesInput)).sort();
+    return { scheduleKind: "dates", recurrenceRule: null, startDate: dates[0], endDate: dates[dates.length - 1], dates };
+  }
+  const scheduleKindInput = text(body?.scheduleKind) === "recurring" ? "recurring" : "one_time";
+  if (scheduleKindInput === "recurring") {
+    const startDate = text(body?.startDate);
+    const endDate = text(body?.endDate) || null;
+    return { scheduleKind: "recurring", recurrenceRule: { version: 1, freq: "daily" }, startDate, endDate, dates: null };
+  }
+  const startDate = text(body?.startDate);
+  return { scheduleKind: "one_time", recurrenceRule: null, startDate, endDate: null, dates: null };
+}
+
+async function insertExternalSchedule(client, { scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId, owner }) {
+  const result = await client.query(
+    `insert into training_load.external_schedules
+       (schedule_kind, timezone, start_date, end_date, recurrence_rule, recurrence_rule_version, opens_time, due_time, closes_time, status, event_name, event_type, event_note, created_by_user_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
+     values ($1,$2,$3,$4,$5,1,$6,$7,$8,'active',$9,$10,$11,$12,$13,$14,$15,$16)
+     returning *`,
+    [scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId, owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId],
+  );
+  return result.rows[0];
+}
+
+async function insertExternalScheduleDates(client, scheduleId, dates) {
+  for (const scheduledDate of dates) {
+    await client.query(
+      `insert into training_load.external_schedule_dates (schedule_id, scheduled_date) values ($1,$2)`,
+      [scheduleId, scheduledDate],
+    );
+  }
+}
+
+// Shared field validator/resolver for POST create AND POST schedule-again -
+// eliminates the split where schedule-again used to accept only
+// startDate/endDate and blindly copy every other field from the source,
+// silently discarding anything the coach actually changed on a form that
+// showed it as editable (hardening correction, item 1). `fallback` is
+// null for a real create (every field below is required, exactly as
+// before); the SOURCE schedule row for schedule-again (an omitted field
+// falls back to the source's own current value - but scheduleKind/dates
+// are NEVER read from `fallback` at all, only from `body`, via
+// resolveExternalScheduleKindAndDates below - a fresh pick is always
+// required, and the new schedule is free to pick a DIFFERENT kind than
+// the source, closing the "source dates, coach picks Daily" mismatch).
+//
+// Also where the DB's own CHECK-constraint RELATIONSHIPS (opens<=closes,
+// due between opens/closes, end>=start) are validated before the
+// transaction even starts (item 3) - previously only each individual
+// field's own FORMAT was checked, never how they relate to each other,
+// so e.g. opensTime later than closesTime reached the DB as a raw 23514.
+function resolveAndValidateExternalScheduleBody(body, fallback) {
+  const eventName = body.eventName !== undefined ? text(body.eventName) : (fallback ? fallback.event_name : "");
+  if (!eventName || eventName.length > 120) return { ok: false, status: 400, error: "Event name is required (120 characters max)." };
+  const eventNote = body.eventNote !== undefined ? nullableText(body.eventNote) : (fallback ? fallback.event_note : null);
+  if (eventNote && eventNote.length > 500) return { ok: false, status: 400, error: "Note is too long (500 characters max)." };
+  let eventType = fallback ? fallback.event_type : null;
+  if (body.eventType !== undefined) {
+    const eventTypeInput = nullableText(body.eventType);
+    if (eventTypeInput && !EXTERNAL_EVENT_TYPES.includes(eventTypeInput)) return { ok: false, status: 400, error: "Invalid event type." };
+    eventType = eventTypeInput || null;
+  }
+  const timezone = body.timezone !== undefined ? text(body.timezone) : (fallback ? fallback.timezone : "");
+  const opensTime = body.opensTime !== undefined ? text(body.opensTime) : (fallback ? fallback.opens_time : "");
+  const dueTime = body.dueTime !== undefined ? (text(body.dueTime) || null) : (fallback ? fallback.due_time : null);
+  const closesTime = body.closesTime !== undefined ? text(body.closesTime) : (fallback ? fallback.closes_time : "");
+  if (!timezone || !opensTime || !closesTime) return { ok: false, status: 400, error: "Timezone, opens time and closes time are required." };
+  if (!isValidTimeString(opensTime) || !isValidTimeString(closesTime) || (dueTime !== null && !isValidTimeString(dueTime))) {
+    return { ok: false, status: 400, error: "Opens/due/closes time must be a valid HH:MM time." };
+  }
+  if (opensTime > closesTime) return { ok: false, status: 400, error: "Opens time must not be after closes time." };
+  if (dueTime !== null && (dueTime < opensTime || dueTime > closesTime)) {
+    return { ok: false, status: 400, error: "Due time must be between opens time and closes time." };
+  }
+
+  const { scheduleKind, recurrenceRule, startDate, endDate, dates } = resolveExternalScheduleKindAndDates(body);
+  const datesToValidate = scheduleKind === "dates" ? dates : [startDate, ...(endDate ? [endDate] : [])];
+  if (!datesToValidate.length || !startDate) return { ok: false, status: 400, error: "At least one date is required." };
+  if (datesToValidate.some((d) => !isValidGregorianDateString(d))) {
+    return { ok: false, status: 400, error: "Every date must be a valid YYYY-MM-DD date." };
+  }
+  if (scheduleKind === "recurring" && endDate !== null && endDate < startDate) {
+    return { ok: false, status: 400, error: "endDate must not be before startDate." };
+  }
+
+  return { ok: true, eventName, eventType, eventNote, timezone, opensTime, dueTime, closesTime, scheduleKind, recurrenceRule, startDate, endDate, dates };
+}
+
+router.post("/external-schedules", async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
+    const body = req.body || {};
+    const validated = resolveAndValidateExternalScheduleBody(body, null);
+    if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+
+    const resolved = await resolveValidExternalTargets(scope, body.targets);
+    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+
+    const resolvedRules = resolveValidNotificationRules(body.notificationRules);
+    if (!resolvedRules.ok) return res.status(400).json({ error: resolvedRules.error });
+
+    // Resolved ONCE, inside requireExternalScheduleWorkspace above - never
+    // re-derived from a second resolveActiveWorkspace call later in this
+    // same request (hardening correction, item 5: a workspace switch
+    // landing between two independent reads could validate targets
+    // against workspace A but stamp ownership from workspace B).
+    const owner = scope.ownerContext;
+    await client.query("begin");
+    // One schedule row regardless of kind - a "Dates" pick of N dates is
+    // ONE logical schedule (item 10's own fix), never N independent rows.
+    const schedule = await insertExternalSchedule(client, {
+      scheduleKind: validated.scheduleKind, timezone: validated.timezone, startDate: validated.startDate, endDate: validated.endDate,
+      recurrenceRule: validated.recurrenceRule ? JSON.stringify(validated.recurrenceRule) : null,
+      opensTime: validated.opensTime, dueTime: validated.dueTime, closesTime: validated.closesTime,
+      eventName: validated.eventName, eventType: validated.eventType, eventNote: validated.eventNote,
+      userId: req.user.id, owner,
+    });
+    if (validated.scheduleKind === "dates") await insertExternalScheduleDates(client, schedule.id, validated.dates);
+    await insertExternalTargets(client, schedule.id, resolved.targets);
+    await insertNotificationRules(client, schedule.id, resolvedRules.rules);
+    await client.query("commit");
+    // Still an array in the response - existing/older callers reading
+    // schedules[0] keep working unchanged; it's simply always length 1 now.
+    res.status(201).json({ schedules: [formatExternalScheduleRow(schedule, validated.scheduleKind === "dates" ? validated.dates : undefined)] });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    respondToWriteError(res, next, error);
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/external-schedules", async (req, res, next) => {
+  try {
+    const workspaceScope = await requireExternalScheduleWorkspace(req, res);
+    if (!workspaceScope) return;
+    const params = [];
+    const scopeSql = externalScheduleScopeSqlForWorkspace(workspaceScope, params);
+    const statusFilter = text(req.query?.status);
+    let statusSql = "";
+    if (["active", "paused", "cancelled"].includes(statusFilter)) {
+      params.push(statusFilter);
+      statusSql = `and s.status = $${params.length}`;
+    }
+    const result = await query(
+      `select s.*, (select count(*)::int from training_load.external_schedule_targets t where t.schedule_id = s.id) as target_count,
+              (select array_agg(d.scheduled_date::text order by d.scheduled_date) from training_load.external_schedule_dates d where d.schedule_id = s.id) as dates_list
+       from training_load.external_schedules s
+       where ${scopeSql} ${statusSql}
+       order by s.start_date desc, s.created_at desc`,
+      params,
+    );
+    res.json({ schedules: result.rows.map((row) => formatExternalScheduleRow(row, row.dates_list)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/external-schedules/:scheduleId", async (req, res, next) => {
+  try {
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
+    if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
+    const scheduleResult = await query(`select * from training_load.external_schedules where id = $1`, [req.params.scheduleId]);
+    const schedule = scheduleResult.rows[0];
+    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) return res.status(404).json({ error: "Schedule not found." });
+    const targetsResult = await query(
+      `select t.target_kind, t.target_athlete_id, t.target_team_id, t.target_club_id,
+              coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
+              tm.name as team_name, cl.name as club_name
+       from training_load.external_schedule_targets t
+       left join public.athletes a on a.id = t.target_athlete_id
+       left join public.teams tm on tm.id = t.target_team_id
+       left join public.clubs cl on cl.id = t.target_club_id
+       where t.schedule_id = $1`,
+      [schedule.id],
+    );
+    const occurrencesResult = await query(
+      `select o.id, o.scheduled_date, o.status,
+              (select count(*)::int from training_load.external_assignments asg where asg.occurrence_id = o.id) as assignment_count,
+              (select count(*)::int from training_load.external_assignments asg join training_load.session_feedback sf on sf.external_assignment_id = asg.id where asg.occurrence_id = o.id) as rated_count
+       from training_load.external_schedule_occurrences o
+       where o.schedule_id = $1
+       order by o.scheduled_date desc
+       limit 30`,
+      [schedule.id],
+    );
+    const notificationRulesResult = await query(
+      `select kind, enabled, reminder_offset_minutes from training_load.external_schedule_notification_rules where schedule_id = $1`,
+      [schedule.id],
+    );
+    const datesResult = schedule.schedule_kind === "dates"
+      ? await query(`select scheduled_date::text as scheduled_date from training_load.external_schedule_dates where schedule_id = $1 order by scheduled_date`, [schedule.id])
+      : null;
+    res.json({
+      schedule: formatExternalScheduleRow(schedule, datesResult?.rows.map((r) => r.scheduled_date)),
+      targets: targetsResult.rows.map(formatExternalTargetRow),
+      occurrences: occurrencesResult.rows.map((row) => ({ id: row.id, scheduledDate: row.scheduled_date, status: row.status, assignmentCount: row.assignment_count, ratedCount: row.rated_count })),
+      notificationRules: normalizeNotificationRuleRows(notificationRulesResult.rows),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
+    if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
+    await client.query("begin");
+    const scheduleResult = await client.query(`select * from training_load.external_schedules where id = $1 for update`, [req.params.scheduleId]);
+    const schedule = scheduleResult.rows[0];
+    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Schedule not found." });
+    }
+    const body = req.body || {};
+    // Hardening correction (item 2): startDate/dates/scheduleKind are
+    // identity, fixed at creation - Schedule again is the only way to
+    // pick a new one. These three used to be silently ignored (PATCH
+    // never read them at all) rather than rejected, the same "control
+    // that looks functional while the backend ignores it" problem the
+    // Edit calendar itself had (item 10) - now a controlled 400, exactly
+    // like the existing endDate-on-a-non-recurring-schedule guard below.
+    if (body.startDate !== undefined || body.dates !== undefined || body.scheduleKind !== undefined) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "startDate/dates/scheduleKind cannot be changed after creation - use Schedule again to pick a new date/kind." });
+    }
+    const eventName = body.eventName !== undefined ? text(body.eventName) : schedule.event_name;
+    if (!eventName || eventName.length > 120) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "Event name is required (120 characters max)." });
+    }
+    const eventNote = body.eventNote !== undefined ? nullableText(body.eventNote) : schedule.event_note;
+    // Hardening correction (item 3): this length check was missing on
+    // PATCH entirely (POST create always had it) - a note over 500
+    // characters reached the DB's own event_note CHECK as a raw 23514.
+    if (eventNote && eventNote.length > 500) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "Note is too long (500 characters max)." });
+    }
+    let eventType = schedule.event_type;
+    if (body.eventType !== undefined) {
+      const eventTypeInput = nullableText(body.eventType);
+      if (eventTypeInput && !EXTERNAL_EVENT_TYPES.includes(eventTypeInput)) {
+        await client.query("rollback");
+        return res.status(400).json({ error: "Invalid event type." });
+      }
+      eventType = eventTypeInput || null;
+    }
+    const opensTime = body.opensTime !== undefined ? text(body.opensTime) : schedule.opens_time;
+    const dueTime = body.dueTime !== undefined ? (text(body.dueTime) || null) : schedule.due_time;
+    const closesTime = body.closesTime !== undefined ? text(body.closesTime) : schedule.closes_time;
+    // Hardening correction (item 2): the fallback timezone shown on Edit
+    // was fully editable and sent in the PATCH body, but this route never
+    // read it at all - a silently-ignored control, same class of bug as
+    // the old Edit calendar (item 10). A schedule's own timezone column
+    // is only ever a FALLBACK read at MATERIALIZATION time for an athlete
+    // with no device_timezone of their own (see migrations_v2's own
+    // resolve_current_external_target_dates/materialize_external_
+    // assignments_for_occurrence) - changing it here can only ever affect
+    // a future, not-yet-materialized assignment; every already-
+    // materialized external_assignments row already has its OWN frozen
+    // timezone/window snapshot, immutable via its own DB trigger, so
+    // existing assignments are structurally unaffected by this change,
+    // never re-read. An invalid IANA name is rejected by the schedule's
+    // own existing insert/update trigger (validate_external_schedule_
+    // timezone_and_recurrence), mapped to a controlled 400 by
+    // respondToWriteError's P0001 branch below - never a raw 500.
+    const timezone = body.timezone !== undefined ? text(body.timezone) : schedule.timezone;
+    if (body.timezone !== undefined && !timezone) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "timezone must not be empty." });
+    }
+    // endDate is only ever a real, meaningful edit for a 'recurring'
+    // schedule (extending/shortening its own open-ended window) - for
+    // 'one_time'/'dates', start_date/end_date are fixed identity (a
+    // 'dates' schedule's own end_date is just the max of its
+    // external_schedule_dates rows, informational only). Rather than
+    // silently ignoring a client-supplied endDate there (which would
+    // look like it worked), it's a controlled 400 - same "never leave a
+    // control that looks functional while the backend ignores it" rule
+    // this whole correction is about, applied at the API boundary too.
+    // scheduleKind/startDate/dates are never accepted here at all (never
+    // read from body anywhere in this route) - the same rule, for the
+    // fields that are already read-only, not just editable-but-ignored.
+    if (body.endDate !== undefined && schedule.schedule_kind !== "recurring") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "endDate can only be changed on a recurring (Daily) schedule." });
+    }
+    const endDate = body.endDate !== undefined ? (text(body.endDate) || null) : schedule.end_date;
+    // Only a client-SUPPLIED value's own FORMAT is validated here - the
+    // existing stored value (read straight from the DB row above when a
+    // field was omitted) was already validated on the request that wrote
+    // it. The RELATIONSHIPS between the final, merged values (item 3)
+    // are checked separately right after, regardless of which individual
+    // field actually changed - a lone opensTime edit that now lands
+    // after the UNCHANGED closesTime must be caught here too, not just
+    // when both are supplied in the same request.
+    if (
+      (body.opensTime !== undefined && !isValidTimeString(opensTime))
+      || (body.closesTime !== undefined && !isValidTimeString(closesTime))
+      || (body.dueTime !== undefined && dueTime !== null && !isValidTimeString(dueTime))
+    ) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "Opens/due/closes time must be a valid HH:MM time." });
+    }
+    if (body.endDate !== undefined && endDate !== null && !isValidGregorianDateString(endDate)) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "endDate must be a valid YYYY-MM-DD date." });
+    }
+    if (opensTime > closesTime) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "Opens time must not be after closes time." });
+    }
+    if (dueTime !== null && (dueTime < opensTime || dueTime > closesTime)) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "Due time must be between opens time and closes time." });
+    }
+    if (endDate !== null && endDate < schedule.start_date) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "endDate must not be before startDate." });
+    }
+
+    await client.query(
+      `update training_load.external_schedules
+       set event_name = $2, event_type = $3, event_note = $4, opens_time = $5, due_time = $6, closes_time = $7, end_date = $8, timezone = $9, updated_at = now()
+       where id = $1`,
+      [schedule.id, eventName, eventType, eventNote, opensTime, dueTime, closesTime, endDate, timezone],
+    );
+    if (body.targets !== undefined) {
+      const resolved = await resolveValidExternalTargets(scope, body.targets);
+      if (!resolved.ok) {
+        await client.query("rollback");
+        return res.status(resolved.status).json({ error: resolved.error });
+      }
+      await client.query(`delete from training_load.external_schedule_targets where schedule_id = $1`, [schedule.id]);
+      await insertExternalTargets(client, schedule.id, resolved.targets);
+    }
+    if (body.notificationRules !== undefined) {
+      // Unlike create (where an omitted field means "use the defaults"),
+      // PATCH omitting the field entirely means "leave rules untouched" -
+      // only entering this branch at all means the coach actually sent a
+      // new array, replaced wholesale (same "touched if present" rule as
+      // targets above).
+      const resolvedRules = resolveValidNotificationRules(body.notificationRules);
+      if (!resolvedRules.ok) {
+        await client.query("rollback");
+        return res.status(400).json({ error: resolvedRules.error });
+      }
+      await client.query(`delete from training_load.external_schedule_notification_rules where schedule_id = $1`, [schedule.id]);
+      await insertNotificationRules(client, schedule.id, resolvedRules.rules);
+    }
+    await client.query("commit");
+    const freshResult = await query(
+      `select s.*, (select array_agg(d.scheduled_date::text order by d.scheduled_date) from training_load.external_schedule_dates d where d.schedule_id = s.id) as dates_list
+       from training_load.external_schedules s where s.id = $1`,
+      [schedule.id],
+    );
+    res.json({ schedule: formatExternalScheduleRow(freshResult.rows[0], freshResult.rows[0].dates_list) });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    respondToWriteError(res, next, error);
+  } finally {
+    client.release();
+  }
+});
+
+// Hardening correction (item 4): this used to run an UNLOCKED SELECT,
+// check `status` in JS, then an unconditional UPDATE - no protection
+// against a concurrent request racing between those two steps. A cancel
+// and a resume issued back-to-back could both read the same pre-
+// transition status, and whichever UPDATE happened to commit LAST would
+// win regardless of which the coach actually intended - including
+// reviving an already-cancelled schedule via a late-landing resume. A
+// real row lock (FOR UPDATE) here is the "schedule" step of this
+// feature's own existing lock-order convention (schedule -> occurrence
+// -> assignment, e.g. ensureCurrentExternalOccurrence/the submit route)
+// - this function only ever touches the schedule row itself, so
+// acquiring just that lock fully serializes concurrent status changes.
+// The UPDATE's own `and status <> 'cancelled'` guard then re-asserts the
+// same invariant at the SQL level, not just in JS before it - belt and
+// suspenders, not redundant: the JS check covers the normal case with a
+// clear error message, the WHERE guard covers it even if that check were
+// ever bypassed or reordered by a future edit.
+async function setExternalScheduleStatus(req, res, next, newStatus) {
+  const client = await pool.connect();
+  try {
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
+    if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
+    await client.query("begin");
+    const scheduleResult = await client.query(`select * from training_load.external_schedules where id = $1 for update`, [req.params.scheduleId]);
+    const schedule = scheduleResult.rows[0];
+    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Schedule not found." });
+    }
+    if (schedule.status === "cancelled") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule was already cancelled." });
+    }
+    const updateResult = await client.query(
+      `update training_load.external_schedules set status = $2, updated_at = now() where id = $1 and status <> 'cancelled' returning *`,
+      [schedule.id, newStatus],
+    );
+    if (!updateResult.rowCount) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule was already cancelled." });
+    }
+    await client.query("commit");
+    res.json({ schedule: formatExternalScheduleRow(updateResult.rows[0]) });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
+  }
+}
+router.post("/external-schedules/:scheduleId/pause", (req, res, next) => setExternalScheduleStatus(req, res, next, "paused"));
+router.post("/external-schedules/:scheduleId/resume", (req, res, next) => setExternalScheduleStatus(req, res, next, "active"));
+router.post("/external-schedules/:scheduleId/cancel", (req, res, next) => setExternalScheduleStatus(req, res, next, "cancelled"));
+
+// Creates a genuinely NEW schedule - never mutates or reactivates the
+// original (cancelled or not), and never copies dates/occurrences/
+// assignments/responses/history.
+//
+// Hardening correction (item 1): this used to accept ONLY startDate/
+// endDate and blindly copy every other field straight from the source
+// row - the coach's own Edit form showed name/type/times/note/targets/
+// timezone/notifications as fully editable on THIS same screen, but any
+// change to them was silently discarded, and the source's own targets
+// were re-inserted without re-checking whether they're still inside the
+// coach's currently active workspace. This route now runs the exact same
+// validator as a real create (resolveAndValidateExternalScheduleBody),
+// with the SOURCE row as the fallback for any field the client omits -
+// so every displayed field genuinely applies when changed, an omitted
+// field still round-trips through the same validation the source itself
+// once passed, and scheduleKind/dates are ALWAYS taken fresh from the
+// request (never the source) - a genuinely new pick is required, and the
+// new schedule is free to pick a different kind entirely (closes the old
+// "source is Dates, coach picks Daily" mismatch, where the backend kept
+// silently requiring a dates[] array regardless of what the form showed).
+router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
+    if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
+    const sourceResult = await query(`select * from training_load.external_schedules where id = $1`, [req.params.scheduleId]);
+    const source = sourceResult.rows[0];
+    if (!source || !canManageExternalScheduleInScope(scope, source)) return res.status(404).json({ error: "Schedule not found." });
+
+    const body = req.body || {};
+    const validated = resolveAndValidateExternalScheduleBody(body, source);
+    if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+
+    // Targets: from the request body if supplied; otherwise fall back to
+    // the source's own current targets - but EITHER WAY, always
+    // re-validated against the request's own active workspace scope, the
+    // exact same check a real create runs. A target that has since left
+    // the active workspace can never be silently copied over unchecked.
+    let targetsInput = body.targets;
+    if (targetsInput === undefined) {
+      const sourceTargetsResult = await query(
+        `select target_kind, target_athlete_id, target_team_id, target_club_id from training_load.external_schedule_targets where schedule_id = $1`,
+        [source.id],
+      );
+      targetsInput = sourceTargetsResult.rows.map((t) => ({ kind: t.target_kind, id: t.target_athlete_id || t.target_team_id || t.target_club_id }));
+    }
+    const resolvedTargets = await resolveValidExternalTargets(scope, targetsInput);
+    if (!resolvedTargets.ok) return res.status(resolvedTargets.status).json({ error: resolvedTargets.error });
+
+    // Notification rules: same "from body if present, else copy source"
+    // fallback, still fully re-validated either way.
+    let rulesInput = body.notificationRules;
+    if (rulesInput === undefined) {
+      const sourceRulesResult = await query(
+        `select kind, enabled, reminder_offset_minutes from training_load.external_schedule_notification_rules where schedule_id = $1`,
+        [source.id],
+      );
+      rulesInput = normalizeNotificationRuleRows(sourceRulesResult.rows);
+    }
+    const resolvedRules = resolveValidNotificationRules(rulesInput);
+    if (!resolvedRules.ok) return res.status(400).json({ error: resolvedRules.error });
+
+    // Resolved once, inside requireExternalScheduleWorkspace above - see
+    // the matching comment on POST /external-schedules (item 5).
+    const owner = scope.ownerContext;
+    await client.query("begin");
+    const schedule = await insertExternalSchedule(client, {
+      scheduleKind: validated.scheduleKind, timezone: validated.timezone, startDate: validated.startDate, endDate: validated.endDate,
+      recurrenceRule: validated.recurrenceRule ? JSON.stringify(validated.recurrenceRule) : null,
+      opensTime: validated.opensTime, dueTime: validated.dueTime, closesTime: validated.closesTime,
+      eventName: validated.eventName, eventType: validated.eventType, eventNote: validated.eventNote,
+      userId: req.user.id, owner,
+    });
+    if (validated.scheduleKind === "dates") await insertExternalScheduleDates(client, schedule.id, validated.dates);
+    await insertExternalTargets(client, schedule.id, resolvedTargets.targets);
+    await insertNotificationRules(client, schedule.id, resolvedRules.rules);
+    await client.query("commit");
+    res.status(201).json({ schedule: formatExternalScheduleRow(schedule, validated.scheduleKind === "dates" ? validated.dates : undefined) });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    respondToWriteError(res, next, error);
+  } finally {
+    client.release();
+  }
+});
+
+// Athlete submits RPE for an external (outside-plan) assignment. Unlocked
+// lookup -> locks in the fixed schedule -> occurrence -> assignment order
+// (same lock-order discipline as WELLNESS's own submit route) -> re-
+// confirms the assignment still belongs to this athlete -> gates on the
+// schedule's own status and the ASSIGNMENT's own opens_at/closes_at window
+// (never a shared occurrence-level window) -> the same ON CONFLICT DO
+// NOTHING / idempotent-200 / genuine-409 shape the planned route already
+// uses, keyed on unique(external_assignment_id) instead of
+// (athlete_id, logical_session_id).
+router.post("/external-assignments/:assignmentId/rpe", async (req, res, next) => {
+  let client;
+  try {
+    const athleteId = requireAthlete(req, res);
+    if (!athleteId) return;
+    const assignmentId = req.params.assignmentId;
+    if (!UUID_PATTERN.test(assignmentId)) return res.status(404).json({ error: "Training session not found." });
+
+    const rpeRaw = req.body?.rpe;
+    const durationRaw = req.body?.durationMinutes;
+    if (typeof rpeRaw !== "number" || !Number.isInteger(rpeRaw) || rpeRaw < 0 || rpeRaw > 10) {
+      return res.status(400).json({ error: "RPE must be a whole number from 0 to 10." });
+    }
+    if (typeof durationRaw !== "number" || !Number.isInteger(durationRaw) || durationRaw < 1 || durationRaw > 600) {
+      return res.status(400).json({ error: "Duration must be a whole number of minutes, from 1 to 600." });
+    }
+    const rpe = rpeRaw;
+    const durationMinutes = durationRaw;
+    const note = typeof req.body?.note === "string" ? req.body.note.trim() : "";
+    if (note.length > 500) return res.status(400).json({ error: "Note is too long (500 characters max)." });
+
+    client = await pool.connect();
+    await client.query("begin");
+
+    const lookupResult = await client.query(
+      `select asg.id as assignment_id, asg.athlete_id, o.id as occurrence_id, s.id as schedule_id
+       from training_load.external_assignments asg
+       join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
+       join training_load.external_schedules s on s.id = o.schedule_id
+       where asg.id = $1`,
+      [assignmentId],
+    );
+    const lookup = lookupResult.rows[0];
+    if (!lookup || lookup.athlete_id !== athleteId) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
+
+    await client.query(`select status from training_load.external_schedules where id = $1 for update`, [lookup.schedule_id]);
+    const occurrenceResult = await client.query(`select status from training_load.external_schedule_occurrences where id = $1 for update`, [lookup.occurrence_id]);
+    const occurrence = occurrenceResult.rows[0];
+    const assignmentResult = await client.query(`select * from training_load.external_assignments where id = $1 for update`, [lookup.assignment_id]);
+    const assignment = assignmentResult.rows[0];
+    if (!assignment || assignment.athlete_id !== athleteId) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
+
+    const scheduleResult = await client.query(`select status, event_name from training_load.external_schedules where id = $1`, [lookup.schedule_id]);
+    const schedule = scheduleResult.rows[0];
+    if (schedule.status !== "active") {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This isn't currently accepting submissions." });
+    }
+    // Defensive: no route currently transitions an occurrence to
+    // 'cancelled' (only a schedule itself is cancelled, already gated
+    // above), but the notification worker's own guard treats a cancelled
+    // occurrence as terminal too (see runInvitationPhase/runReminderPhase)
+    // - submit must agree, never rely on it being unreachable today.
+    if (occurrence.status === "cancelled") {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This isn't currently accepting submissions." });
+    }
+
+    // Every terminal assignment state EXCEPT 'completed' is closed here,
+    // up front, before any INSERT is attempted. 'completed' is
+    // deliberately NOT included - an identical retry against an already-
+    // completed assignment is a valid, tested idempotent 200 (see the
+    // ON CONFLICT DO NOTHING + existing-row comparison below), and must
+    // stay reachable. 'missed'/'excused'/'cancelled' are genuinely
+    // terminal-non-submittable: without this check, the INSERT below
+    // would succeed and only THEN hit the DB's own forward-only lifecycle
+    // trigger on the follow-up `status = 'completed'` UPDATE, surfacing
+    // as an uncontrolled 500 (via this route's own catch -> next(error),
+    // not respondToWriteError) instead of a clean 409 - found in review.
+    if (["missed", "excused", "cancelled"].includes(assignment.status)) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This check-in window is closed." });
+    }
+
+    const nowResult = await client.query(`select now() as now`);
+    const now = nowResult.rows[0].now;
+    if (now < assignment.opens_at || now > assignment.closes_at) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This check-in window is closed." });
+    }
+
+    const insertResult = await client.query(
+      `insert into training_load.session_feedback
+         (athlete_id, external_assignment_id, source, event_name, session_date, rpe, duration_minutes, athlete_note)
+       values ($1,$2,'scheduled_external',$3,$4,$5,$6,$7)
+       on conflict (external_assignment_id) do nothing
+       returning id, rpe, duration_minutes, srpe, athlete_note, submitted_at`,
+      [athleteId, assignment.id, schedule.event_name, assignment.local_scheduled_date, rpe, durationMinutes, note || null],
+    );
+
+    if (insertResult.rows.length) {
+      await client.query(`update training_load.external_assignments set status = 'completed', completed_at = now() where id = $1 and status <> 'completed'`, [assignment.id]);
+      await client.query("commit");
+      return res.status(201).json({ feedback: formatFeedback({ feedback_id: insertResult.rows[0].id, ...insertResult.rows[0] }) });
+    }
+
+    const existingResult = await client.query(
+      `select id, rpe, duration_minutes, srpe, athlete_note, submitted_at from training_load.session_feedback where external_assignment_id = $1`,
+      [assignment.id],
+    );
+    const existing = existingResult.rows[0];
+    const identical = existing && existing.rpe === rpe && existing.duration_minutes === durationMinutes && (existing.athlete_note || "") === (note || "");
+    await client.query("commit");
+    if (identical) return res.status(200).json({ feedback: formatFeedback({ feedback_id: existing.id, ...existing }) });
+    return res.status(409).json({ error: "This session already has a submitted result." });
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+    }
+    next(error);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// Real 5-minute SLIDING cooldown - never a fixed bucket
+// (Math.floor(now/5min) lets two requests seconds apart, straddling a
+// bucket boundary, both succeed - a real bug in the first version of
+// WELLNESS's own equivalent route). Safe/atomic specifically because it
+// runs while the assignment's own row is already locked (FOR UPDATE,
+// below) - the row lock IS the serialization point, no separate advisory
+// lock needed.
+const MANUAL_REMINDER_COOLDOWN_MS = 5 * 60 * 1000;
+const athleteDisplayNameSql = `coalesce(a.display_name, a.full_name, nullif(concat_ws(' ', a.first_name, a.last_name), ''), a.source_external_id, a.athlete_id::text)`;
+
+// Coach-triggered manual reminder for one or more external assignments -
+// line-for-line mirror of tests.js's own POST /schedules/:scheduleId/remind:
+// lock order schedule (FOR SHARE) -> occurrence(s) (FOR SHARE, resolved via
+// an unlocked lookup first) -> assignment rows (FOR UPDATE), schedule-level
+// gates checked once, per-assignment gates each producing a distinct
+// outcome (never a silent drop), the real sliding-window cooldown above,
+// and the same shared public.app_notifications.dedupe_key convention
+// builder.js's own one-shot notifications already use.
+router.post("/external-schedules/:scheduleId/remind", async (req, res, next) => {
+  // Hardening correction: scheduleId itself used to reach the very first
+  // DB query with no UUID format check at all - a malformed path param
+  // was a raw Postgres 22P02, not the controlled 404 every other route
+  // in this file already gives a malformed id.
+  if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
+
+  // Hardening correction: assignmentIds used to be silently FILTERED
+  // (non-string/empty elements just dropped) before ever being checked
+  // for length or UUID shape - [validUuid, 123] or [validUuid, ""]
+  // quietly became a single-element batch that then succeeded, instead
+  // of the whole malformed request being rejected. Every element's own
+  // TYPE is now checked first (never silently dropped), then every
+  // surviving id's FORMAT, both before any transaction/write starts -
+  // one malformed element rejects the whole batch with zero writes.
+  const rawInput = req.body?.assignmentIds;
+  if (!Array.isArray(rawInput) || !rawInput.length) return res.status(400).json({ error: "assignmentIds is required." });
+  if (rawInput.some((id) => typeof id !== "string" || !id)) {
+    return res.status(400).json({ error: "assignmentIds must all be non-empty strings." });
+  }
+  const rawAssignmentIds = [...new Set(rawInput)];
+  if (rawAssignmentIds.some((id) => !UUID_PATTERN.test(id))) {
+    return res.status(400).json({ error: "assignmentIds must all be valid UUIDs." });
+  }
+  const assignmentIds = rawAssignmentIds;
+
+  const scope = await requireExternalScheduleWorkspace(req, res);
+  if (!scope) return;
+
+  const client = await pool.connect();
+  let results;
+  const toEmit = [];
+  try {
+    await client.query("begin");
+
+    const scheduleResult = await client.query(`select * from training_load.external_schedules where id = $1 for share`, [req.params.scheduleId]);
+    const schedule = scheduleResult.rows[0];
+    if (!schedule) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Schedule not found." });
+    }
+    if (!canManageExternalScheduleInScope(scope, schedule)) {
+      await client.query("rollback");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    if (schedule.status === "cancelled") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule is cancelled." });
+    }
+    if (schedule.status === "paused") {
+      await client.query("rollback");
+      return res.status(400).json({ error: "This schedule is paused - athletes can't submit right now, so a reminder would be pointless." });
+    }
+
+    const occurrenceLookup = await client.query(
+      `select distinct o.id
+       from training_load.external_assignments asg
+       join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
+       where o.schedule_id = $1 and asg.id = any($2::uuid[])
+       order by o.id`,
+      [schedule.id, assignmentIds],
+    );
+    if (occurrenceLookup.rowCount) {
+      await client.query(
+        `select id from training_load.external_schedule_occurrences where id = any($1::uuid[]) order by id for share`,
+        [occurrenceLookup.rows.map((r) => r.id)],
+      );
+    }
+
+    const assignmentRows = await client.query(
+      `select asg.*, a.user_id, ${athleteDisplayNameSql} as athlete_name
+       from training_load.external_assignments asg
+       join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
+       join public.athletes a on a.id = asg.athlete_id
+       where o.schedule_id = $1 and asg.id = any($2::uuid[])
+       order by asg.id
+       for update of asg`,
+      [schedule.id, assignmentIds],
+    );
+    const rowsById = new Map(assignmentRows.rows.map((row) => [row.id, row]));
+
+    const now = new Date();
+    results = [];
+    for (const assignmentId of assignmentIds) {
+      const row = rowsById.get(assignmentId);
+      if (!row) {
+        results.push({ assignmentId, outcome: "skippedNotFound" });
+        continue;
+      }
+      const base = { assignmentId, athleteId: row.athlete_id, athleteName: row.athlete_name };
+      if (row.status === "completed") {
+        results.push({ ...base, outcome: "skippedCompleted" });
+        continue;
+      }
+      if (["missed", "excused", "cancelled"].includes(row.status)) {
+        results.push({ ...base, outcome: "skippedNotOpen" });
+        continue;
+      }
+      if (new Date(row.opens_at) > now) {
+        results.push({ ...base, outcome: "skippedNotOpen" });
+        continue;
+      }
+      if (new Date(row.closes_at) < now) {
+        results.push({ ...base, outcome: "skippedClosed" });
+        continue;
+      }
+      if (!row.user_id) {
+        results.push({ ...base, outcome: "skippedNoUser" });
+        continue;
+      }
+
+      const cooldownResult = await client.query(
+        `select exists (
+           select 1 from public.app_notifications
+           where entity_type = 'training_load_external_assignment' and entity_id = $1 and type = 'training_load_manual_reminder'
+             and created_at > now() - ($2 || ' milliseconds')::interval
+         ) as in_cooldown`,
+        [assignmentId, MANUAL_REMINDER_COOLDOWN_MS],
+      );
+      if (cooldownResult.rows[0].in_cooldown) {
+        results.push({ ...base, outcome: "skippedCooldown" });
+        continue;
+      }
+
+      const dedupeKey = `manual_reminder:v1:${assignmentId}:${crypto.randomUUID()}`;
+      const inserted = await client.query(
+        `insert into public.app_notifications (recipient_user_id, actor_user_id, type, title, body, entity_type, entity_id, metadata, dedupe_key)
+         values ($1, $2, 'training_load_manual_reminder', 'Training load reminder', $3, 'training_load_external_assignment', $4, $5::jsonb, $6)
+         returning id`,
+        [
+          row.user_id,
+          req.user.id,
+          `Your coach sent you a reminder to log RPE for "${schedule.event_name}".`,
+          assignmentId,
+          JSON.stringify({ scheduleId: schedule.id, assignmentId }),
+          dedupeKey,
+        ],
+      );
+      toEmit.push({ userId: row.user_id, notificationId: inserted.rows[0].id });
+      results.push({ ...base, outcome: "notified" });
+    }
+
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    return next(error);
+  } finally {
+    client.release();
+  }
+
+  for (const { userId, notificationId } of toEmit) {
+    emitRealtimeEvent(userId, "notifications_changed", { notificationId, type: "training_load_manual_reminder" });
+  }
+
+  res.json({
+    results,
+    notifiedCount: results.filter((r) => r.outcome === "notified").length,
+    noUserCount: results.filter((r) => r.outcome === "skippedNoUser").length,
+  });
 });
 
 export default router;

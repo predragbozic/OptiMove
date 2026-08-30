@@ -1,0 +1,36 @@
+-- ============================================================
+-- OPTIMOVE — Training load (RPE/sRPE) v3: per-session RPE opt-out.
+-- Purely additive, on top of 202608310900_training_load_v1_session_
+-- feedback.sql and 202608320900_training_load_v2_logical_session_
+-- identity.sql (already applied to local OPTIMOVE - neither file's own
+-- checksum is touched by this one).
+--
+-- ------------------------------------------------------------
+-- Why this is needed
+-- ------------------------------------------------------------
+-- Today EVERY Weekly-plan session implicitly requires RPE. Mobility,
+-- activation, recovery, short-prevention and similar sessions often
+-- shouldn't - a coach needs to be able to turn RPE collection off for a
+-- specific session without removing it from the plan.
+--
+-- rpe_enabled is a plain CONTENT property of a session (like am_pm/bta/
+-- name), never an identity mechanism - unlike logical_session_id it is
+-- always copied unconditionally by every copy path in builder.js (see
+-- that file's own comments at each copyDaySessions/copyProgramTree/
+-- session-copy call site), because a coach who explicitly turned RPE off
+-- for a recovery session expects that choice to survive a duplicate/
+-- batch-sync/edit round trip exactly the same way the session's AM/PM
+-- classification does.
+-- ============================================================
+
+-- A NOT NULL column with a CONSTANT default is a metadata-only change in
+-- Postgres 11+ (unlike logical_session_id's volatile `gen_random_uuid()`
+-- default, which forced a per-row rewrite) - every existing session reads
+-- true without an UPDATE loop or table rewrite, so existing behavior is
+-- fully preserved for every session that already exists.
+alter table plans.plan_sessions add column if not exists rpe_enabled boolean not null default true;
+
+-- No index: rpe_enabled is always used as a secondary AND predicate
+-- alongside an already-selective leading filter (a specific plan_day_id/
+-- plan_id/session id) - nothing scans "every disabled session across
+-- every plan," so a dedicated index would carry cost with no real payoff.

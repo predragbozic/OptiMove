@@ -118,3 +118,60 @@ export async function submitRpe(sessionId, { rpe, durationMinutes, note }) {
     body: JSON.stringify({ rpe, durationMinutes, note: note || "" }),
   });
 }
+
+// An RPE session scheduled OUTSIDE any Weekly plan. Same client body shape
+// as submitRpe (rpe/durationMinutes/note only - sRPE is always DB-
+// derived) and the same idempotent-retry/409-on-genuine-conflict contract,
+// keyed on the assignment instead of a logical session.
+export async function submitExternalRpe(assignmentId, { rpe, durationMinutes, note }) {
+  return api(`/api/training-load/external-assignments/${encodeURIComponent(assignmentId)}/rpe`, {
+    method: "POST",
+    body: JSON.stringify({ rpe, durationMinutes, note: note || "" }),
+  });
+}
+
+// Training Load Schedule tab's own quick RPE ON/OFF toggle. A 409 with
+// error: "hasExistingResults" is a real, expected outcome (not a failure) -
+// the caller shows a confirm dialog and retries with
+// confirmDisableWithResults: true if the coach confirms.
+export async function toggleSessionRpeEnabled(sessionId, rpeEnabled, confirmDisableWithResults = false) {
+  return api(`/api/training-load/sessions/${encodeURIComponent(sessionId)}/rpe-enabled`, {
+    method: "PATCH",
+    body: JSON.stringify({ rpeEnabled, ...(confirmDisableWithResults ? { confirmDisableWithResults: true } : {}) }),
+  });
+}
+
+// ------------------------------------------------------------
+// External (outside-plan) RPE scheduling - "New RPE session" on the
+// Schedule tab. Same CRUD/lifecycle contract as WELLNESS's own schedule
+// endpoints (tests-data.js), a fully independent set of routes/tables.
+// ------------------------------------------------------------
+
+export async function createExternalSchedule(body) {
+  return api("/api/training-load/external-schedules", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function loadExternalScheduleDetail(scheduleId) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}`);
+}
+
+export async function updateExternalSchedule(scheduleId, body) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export async function setExternalScheduleStatus(scheduleId, status) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}/${status}`, { method: "POST" });
+}
+
+export async function scheduleExternalAgain(scheduleId, body) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}/schedule-again`, { method: "POST", body: JSON.stringify(body) });
+}
+
+// Body: { assignmentIds: [] }. Same per-item outcome-code contract as
+// WELLNESS's own manual reminder (tests-data.js's sendManualReminder).
+export async function sendExternalScheduleReminder(scheduleId, assignmentIds) {
+  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}/remind`, {
+    method: "POST",
+    body: JSON.stringify({ assignmentIds }),
+  });
+}

@@ -470,6 +470,12 @@ export const emptyTrainingLoadFilterPicker = (overrides = {}) => ({
 // rather than just vanishing.
 export const emptyRpeForm = (overrides = {}) => ({
   sessionId: "",
+  // A session/assignment scheduled outside any Weekly plan carries its
+  // identity here instead of sessionId (mutually exclusive, mirroring the
+  // XOR identity on training_load.session_feedback) - `source` decides
+  // which submit endpoint the form's own save action calls.
+  externalAssignmentId: "",
+  source: "planned",
   sessionName: "",
   amPm: "",
   bta: "",
@@ -481,6 +487,80 @@ export const emptyRpeForm = (overrides = {}) => ({
   saving: false,
   error: "",
   savedFeedback: null,
+  ...overrides,
+});
+
+// External (outside-plan) RPE schedule create/edit/schedule-again form -
+// Training Load's own mirror of tests.scheduleForm's Dates/Daily calendar +
+// Builder-style recipient picker shape, deliberately simpler: there is no
+// per-schedule notification-rules config on this side (training_load's own
+// background worker runs a fixed invitation + 60-min reminder + final-
+// digest cycle unconditionally - see trainingLoadNotificationWorker.js), so
+// there's no Notifications collapsible to render, just a static note.
+export const emptyExternalScheduleForm = (overrides = {}) => ({
+  editingScheduleId: "",
+  scheduleAgainFromId: "",
+  eventName: "",
+  eventType: "",
+  eventNote: "",
+  // "specific_dates" (Dates, multi-select, N one_time schedules created
+  // together) | "daily" (recurring, a start/end range) | "one_time"
+  // (editing a single already-existing non-recurring schedule - the
+  // calendar's own date column can only ever hold one value then).
+  scheduleKind: "specific_dates",
+  calendarOpen: true,
+  calendarMonth: "",
+  selectedDates: [],
+  startDate: "",
+  endDate: "",
+  // Editing an existing 'dates'-kind schedule: its own already-picked
+  // dates, for READ-ONLY display only (item 10 correction - dates are
+  // fixed once created; Schedule again is the only way to pick new
+  // ones). Never written to by the calendar - that's what
+  // `selectedDates` is for, and the calendar itself isn't even rendered
+  // while editingScheduleId is set.
+  datesList: [],
+  opensTime: "00:00",
+  closesTime: "23:59",
+  // Fallback only (tucked into Advanced settings, same reasoning as
+  // tests.scheduleForm.timezone) - the real semantics are athlete-local via
+  // each athlete's own device_timezone, this only matters before that's
+  // known for a given athlete.
+  timezone: "",
+  advancedSettingsOpen: false,
+  recipientPickerOpen: false,
+  recipientPickerTab: "athletes",
+  clubIds: [],
+  teamIds: [],
+  athleteIds: [],
+  athleteSearch: "",
+  // "Notify when open" / "Remind incomplete" (+ its own offset) / "Final
+  // summary" - the real, per-schedule config the worker itself now reads
+  // (see migrations_v2/202609020900_training_load_v7...). Visible MVP
+  // defaults for a NEW schedule: all three on, reminder at 60 minutes -
+  // the coach sees these checked and can change any of them before
+  // saving, never a hidden backend default they never see. Collapsed by
+  // default, same compaction convention as Advanced settings.
+  notificationsSectionOpen: false,
+  notificationRules: [
+    { kind: "athlete_invitation", enabled: true, reminderOffsetMinutes: null },
+    { kind: "athlete_reminder", enabled: true, reminderOffsetMinutes: 60 },
+    { kind: "final_digest", enabled: true, reminderOffsetMinutes: null },
+  ],
+  submitting: false,
+  error: "",
+  ...overrides,
+});
+
+// Schedule tab: a clicked external row opens this (GET /external-schedules/
+// :id) for Edit/Pause/Resume/Cancel/Schedule-again - null when nothing is
+// open.
+export const emptyExternalScheduleDetail = (overrides = {}) => ({
+  scheduleId: "",
+  schedule: null,
+  targets: [],
+  loading: false,
+  error: "",
   ...overrides,
 });
 
@@ -502,6 +582,25 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // needs no extra copy step), Cancel needs something to revert to.
   filterSnapshotAtOpen: null,
   orgPickerData: null,
+  // "New RPE session" (Schedule tab) - null when closed, a form object
+  // while creating/editing/schedule-again is open.
+  scheduleForm: null,
+  scheduleDetail: null,
+  // Today tab: clicking an active OUTSIDE PLAN row opens this - grouped
+  // client-side from the already-loaded weekly payload (every athlete's own
+  // assignment for that schedule+date is already present in
+  // weekly.today.data, so this needs no extra fetch). null when closed;
+  // { scheduleId, date, eventName } while open (the per-athlete rows
+  // themselves are re-derived live from weekly.today.data on every render,
+  // never duplicated into their own copy here, so a reminder send's updated
+  // rated/pending status is reflected the instant Today re-fetches).
+  todayGroupDetail: null,
+  // Reminder send (mirrors tests.reminderSelection's own shape) - keyed by
+  // scheduleId, { fingerprint, ids }; remindingScheduleId guards one send in
+  // flight at a time; reminderResult is a one-time confirmation banner.
+  reminderSelection: {},
+  remindingScheduleId: "",
+  reminderResult: null,
   // Athlete: today's own weekly-plan sessions + rated/not-rated status -
   // fetched on demand (never cached - see loadTrainingLoadAthleteToday's
   // own header comment for why), independent of the coach-side `weekly`

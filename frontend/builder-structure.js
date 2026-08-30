@@ -267,6 +267,23 @@ function isInlineAddHere(session, parentId, context) {
   return context.inlineAddOpen && context.inlineAddSessionId === session.id && context.inlineAddParentId === parentId;
 }
 
+// Per-session RPE opt-out - Weekly plans only (Program/Template sessions
+// never collect RPE at all, so the control is meaningless there). A
+// discrete toggle button, not a checkbox in the autosave form - see
+// builder-actions.js's own comment on why a checkbox can't express
+// "explicitly turned off" through FormData's own omit-when-unchecked
+// behavior. Neutral styling (no large colored surface) - the accent color
+// is used only as a small dot/indicator for the ON state, matching the
+// rest of the app's own restrained use of it.
+function renderSessionRpeToggle(session) {
+  const on = session.rpeEnabled !== false;
+  return `
+    <button type="button" class="plain-button compact-button builder-session-rpe-toggle ${on ? "is-on" : "is-off"}" data-action="builder-toggle-session-rpe" data-session-id="${escapeAttr(session.id)}" aria-pressed="${on ? "true" : "false"}" title="${on ? "RPE is being collected for this session - click to turn it off" : "RPE is turned off for this session - click to turn it back on"}">
+      <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Collect RPE
+    </button>
+  `;
+}
+
 export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly = false, context) {
   const defaultDayName = isWeekly ? weekDayName(block.date) : "";
   const kicker = isWeekly ? defaultDayName : `Block ${block.index}`;
@@ -290,7 +307,7 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             ${session.name ? `<strong class="builder-session-name">${escapeHtml(session.name)}</strong>` : ""}
             <span class="builder-session-badge-row"><span>${escapeHtml(context.sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span></span>
-          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them">${renderSessionEditPhaseSelects(session)}<input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div></div>
+          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them">${renderSessionEditPhaseSelects(session)}<input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${isWeekly ? renderSessionRpeToggle(session) : ""}${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div></div>
           ${isInlineAddHere(session, "", context) ? renderBuilderInlineAddForm(session, "", context) : ""}
           ${renderBuilderNodeTree(session, "", selectedNodeId, context)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}
