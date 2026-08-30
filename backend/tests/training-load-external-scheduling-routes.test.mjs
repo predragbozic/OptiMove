@@ -919,6 +919,80 @@ test("F4. the worker never crashes on an athlete with no linked user account - i
   assert.equal(summary.errors.length, 0, "a missing user_id must never produce a worker error");
 });
 
+test("F5. two athletes in extreme, opposite-offset timezones under the SAME occurrence have very different absolute closes_at - the final digest must not fire after the FIRST one closes, only after the LAST (hardening correction: the digest used to gate on the occurrence's own reference window, not each athlete's authoritative one)", async () => {
+  const { coachCookie, coachId, clubId } = await makeClubWithAthletes("f5", 0);
+  const eastUserId = await makeUser({ email: `f5-east-${Date.now()}@test.local`, roleHint: "athlete" });
+  const eastAthleteId = await makeAthlete({ name: "F5 East Athlete", userId: eastUserId, deviceTimezone: "Pacific/Kiritimati" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [eastAthleteId, clubId]);
+  const westUserId = await makeUser({ email: `f5-west-${Date.now()}@test.local`, roleHint: "athlete" });
+  const westAthleteId = await makeAthlete({ name: "F5 West Athlete", userId: westUserId, deviceTimezone: "Etc/GMT+12" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [westAthleteId, clubId]);
+
+  // The schedule's own REFERENCE window (opens/closes in its fallback
+  // timezone) is deliberately set to close EARLY (09:00 UTC) - well
+  // before either athlete's own real closes_at below. This is exactly
+  // what would make the old, buggy o.closes_at-based gate fire the digest
+  // prematurely, while the fix (each athlete's own authoritative
+  // closes_at) correctly waits for the LAST one.
+  const created = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coachCookie,
+    body: scheduleBody({ timezone: "UTC", opensTime: "00:00", closesTime: "09:00", targets: [{ kind: "club", id: clubId }] }),
+  });
+  const scheduleId = created.body.schedules[0].id;
+
+  // Direct SQL setup (not the real materializer) - two assignments for the
+  // SAME occurrence with deliberately far-apart closes_at, the exact row
+  // shape two real athletes at opposite extreme offsets would produce,
+  // without depending on real wall-clock alignment across both zones at
+  // once (exactly the fragile-real-clock class of bug this feature exists
+  // to avoid - see the schema suite's own E1/Round-1 regression test).
+  const occurrenceResult = await query(`select training_load.generate_external_schedule_occurrence($1, $2) as id`, [scheduleId, TODAY]);
+  const occurrenceId = occurrenceResult.rows[0].id;
+  await query(
+    `insert into training_load.external_occurrence_target_snapshot (occurrence_id, athlete_id) values ($1,$2), ($1,$3)`,
+    [occurrenceId, eastAthleteId, westAthleteId],
+  );
+  await query(`update training_load.external_schedule_occurrences set assignments_materialized_at = now() where id = $1`, [occurrenceId]);
+
+  const earlyClosesAt = new Date(`${TODAY}T10:00:00.000Z`);
+  const lateClosesAt = new Date(`${TODAY}T22:00:00.000Z`);
+  const openedAt = new Date(`${TODAY}T00:00:00.000Z`);
+  await query(
+    `insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at) values ($1,$2,'Pacific/Kiritimati',$3,$4,null,$5)`,
+    [occurrenceId, eastAthleteId, TODAY, openedAt, earlyClosesAt],
+  );
+  await query(
+    `insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at) values ($1,$2,'Etc/GMT+12',$3,$4,null,$5)`,
+    [occurrenceId, westAthleteId, TODAY, openedAt, lateClosesAt],
+  );
+
+  // Just after the FIRST (earlier) athlete's own closes_at, but the SECOND
+  // athlete's own window is still genuinely open - must NOT fire yet.
+  const afterFirst = await processTrainingLoadNotificationCycle({ now: new Date(earlyClosesAt.getTime() + 60 * 1000), pool });
+  assert.equal(afterFirst.finalDigests.sent, 0, "must not send while the SECOND athlete's own window is still genuinely open");
+  const noDigestYet = (await query(`select 1 from public.app_notifications where entity_type = 'training_load_external_occurrence' and entity_id = $1`, [occurrenceId])).rowCount;
+  assert.equal(noDigestYet, 0, "no digest row may exist yet at all - not even an unsent attempt artifact");
+
+  // Just after the LAST (later) athlete's own closes_at - now it must fire.
+  const afterLast = await processTrainingLoadNotificationCycle({ now: new Date(lateClosesAt.getTime() + 60 * 1000), pool });
+  assert.ok(afterLast.finalDigests.sent >= 1, `expected the digest to send once the LAST athlete's window has closed, got: ${JSON.stringify(afterLast)}`);
+  const digest = (await query(`select recipient_user_id, body from public.app_notifications where entity_type = 'training_load_external_occurrence' and entity_id = $1`, [occurrenceId])).rows[0];
+  assert.equal(digest.recipient_user_id, coachId);
+  assert.match(digest.body, /0\/2/, "0 of 2 athletes completed - neither ever submitted");
+});
+
+test("F6. the worker never invites or reminds a 'missed' or 'excused' assignment, even though it still sits inside its own opens_at/closes_at window", async () => {
+  for (const status of ["missed", "excused"]) {
+    const { athlete, assignmentId } = await makeReadyAssignment(`f6-${status}`);
+    await query(`update training_load.external_assignments set status = $2 where id = $1`, [assignmentId, status]);
+    const summary = await processTrainingLoadNotificationCycle({ now: new Date(), pool });
+    assert.equal(summary.invitations.sent, 0, `a '${status}' assignment must never be invited`);
+    assert.equal(summary.reminders.sent, 0, `a '${status}' assignment must never be reminded`);
+    const notified = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1`, [assignmentId])).rows[0].n;
+    assert.equal(notified, 0);
+  }
+});
+
 // ------------------------------------------------------------
 // G. Paused/cancelled lifecycle correctness - a paused schedule must never
 // be actionable (Home card, RPE form, reminder), but a completed result

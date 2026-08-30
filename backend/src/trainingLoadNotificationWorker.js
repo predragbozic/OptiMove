@@ -74,7 +74,11 @@ async function runAthleteInvitationPhase(pool, now, summary) {
      join public.athletes a on a.id = asg.athlete_id
      where sch.status = 'active'
        and o.status <> 'cancelled'
-       and asg.status not in ('completed', 'cancelled')
+       -- Only a genuinely actionable assignment gets invited -
+       -- 'completed'/'cancelled' were already excluded; 'missed'/
+       -- 'excused' are equally terminal and must never receive a "ready
+       -- for RPE" invitation either (hardening correction).
+       and asg.status in ('pending', 'open', 'in_progress')
        and asg.opens_at <= $1
        and asg.closes_at >= $1`,
     [now],
@@ -120,7 +124,14 @@ async function runAthleteReminderPhase(pool, now, summary) {
      join public.athletes a on a.id = asg.athlete_id
      where sch.status = 'active'
        and o.status <> 'cancelled'
-       and asg.status not in ('completed', 'cancelled')
+       -- Same actionable-only rule as the invitation phase above -
+       -- 'missed'/'excused' must never be reminded either (hardening
+       -- correction). asg.opens_at <= $1 is also new: without it, a very
+       -- short window (closes_at - opens_at under the reminder offset)
+       -- could satisfy the offset check below before the window has even
+       -- opened yet - a reminder must never arrive before opens_at.
+       and asg.status in ('pending', 'open', 'in_progress')
+       and asg.opens_at <= $1
        and asg.closes_at >= $1
        and coalesce(asg.due_at, asg.closes_at) - ($2 || ' minutes')::interval <= $1`,
     [now, REMINDER_OFFSET_MINUTES],
@@ -153,9 +164,25 @@ async function runAthleteReminderPhase(pool, now, summary) {
   }
 }
 
-// One-shot per (occurrence, coach), after closes_at, gated on status !=
-// 'cancelled' (broader than 'active' - a closing summary is read-only
-// reporting, matching WELLNESS's own final_digest reasoning).
+// One-shot per (occurrence, coach), gated on status <> 'cancelled' for
+// both the schedule AND the occurrence (broader than 'active' - a closing
+// summary is read-only reporting, matching WELLNESS's own final_digest
+// reasoning; a cancelled occurrence is always skipped outright, matching
+// submit's own guard). Hardening correction: this used to gate on
+// o.closes_at, which is only ever the SCHEDULE's own reference-timezone
+// window - each athlete's REAL closes_at is the frozen, per-assignment
+// external_assignments.closes_at (their own device timezone snapshotted
+// at materialization). Athletes spread across timezones can have closes_
+// at values hours apart for the exact same occurrence; sending the digest
+// as soon as the reference window closed could fire while some athlete's
+// own RPE window is still genuinely open. The digest now waits for BOTH
+// the LAST athlete's own authoritative closes_at to have passed - once
+// that holds, no assignment's window can still be open BY DEFINITION
+// (closes_at is each assignment's own hard deadline, and nothing in this
+// codebase ever flips a still-unrated assignment out of 'pending' on a
+// timer - it stays 'pending' forever once its window lapses unrated,
+// exactly like the schema's own "0/1 completed" case), so there is no
+// separate status condition to also satisfy here.
 async function runFinalDigestPhase(pool, now, summary) {
   const result = await pool.query(
     `select o.id as occurrence_id, sch.id as schedule_id, sch.event_name, sch.created_by_user_id as recipient_user_id,
@@ -164,8 +191,9 @@ async function runFinalDigestPhase(pool, now, summary) {
      join training_load.external_schedules sch on sch.id = o.schedule_id
      join training_load.external_assignments asg on asg.occurrence_id = o.id
      where sch.status <> 'cancelled'
-       and o.closes_at <= $1
-     group by o.id, sch.id, sch.event_name, sch.created_by_user_id`,
+       and o.status <> 'cancelled'
+     group by o.id, sch.id, sch.event_name, sch.created_by_user_id
+     having max(asg.closes_at) <= $1`,
     [now],
   );
   for (const row of result.rows) {
