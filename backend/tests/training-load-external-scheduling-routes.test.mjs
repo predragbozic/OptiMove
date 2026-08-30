@@ -1067,3 +1067,61 @@ test("H1. an athlete removed from a schedule's target AFTER being snapshotted (b
   const lateJoinerToday = await api("/api/training-load/athlete/today", { cookie: lateJoinerCookie });
   assert.ok(!lateJoinerToday.body.sessions.some((s) => s.scheduleId === scheduleId), "a genuine late joiner (never snapshotted) must still never get this occurrence's assignment, even through the exact same on-demand call");
 });
+
+// ------------------------------------------------------------
+// I. Submit closes every terminal state, not just 'cancelled' - before
+// this fix, a missed/excused assignment let the INSERT succeed and only
+// THEN hit the DB's own forward-only lifecycle trigger on the follow-up
+// status update, surfacing as an uncontrolled 500 instead of a 409.
+// ------------------------------------------------------------
+
+for (const terminalStatus of ["missed", "excused", "cancelled"]) {
+  test(`I1 (${terminalStatus}). submit against an assignment already in a terminal '${terminalStatus}' state is a controlled 409, never a 500, and creates no session_feedback row`, async () => {
+    const { athlete, assignmentId } = await makeReadyAssignment(`i1-${terminalStatus}`);
+    await query(`update training_load.external_assignments set status = $2 where id = $1`, [assignmentId, terminalStatus]);
+    const res = await api(`/api/training-load/external-assignments/${assignmentId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 30 } });
+    assert.equal(res.status, 409, `expected a controlled 409, got ${res.status}: ${JSON.stringify(res.body)}`);
+    const rowCount = (await query(`select count(*)::int as n from training_load.session_feedback where external_assignment_id = $1`, [assignmentId])).rows[0].n;
+    assert.equal(rowCount, 0, "no session_feedback row must ever be created for a terminal-state submit attempt");
+  });
+}
+
+test("I2. submit against a CANCELLED occurrence is a controlled 409, even though no route currently produces one directly - defensive, matching the worker's own guard", async () => {
+  const { athlete, assignmentId } = await makeReadyAssignment("i2");
+  const occurrenceId = (await query(`select occurrence_id from training_load.external_assignments where id = $1`, [assignmentId])).rows[0].occurrence_id;
+  await query(`update training_load.external_schedule_occurrences set status = 'cancelled' where id = $1`, [occurrenceId]);
+  const res = await api(`/api/training-load/external-assignments/${assignmentId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 30 } });
+  assert.equal(res.status, 409, `expected a controlled 409, got ${res.status}: ${JSON.stringify(res.body)}`);
+});
+
+test("I3. a submit racing a concurrent cancel serializes cleanly - whichever wins the schedule row's own lock first decides the outcome, never a partial write or a 500", async () => {
+  const { coachCookie, athlete, scheduleId, assignmentId } = await makeReadyAssignment("i3");
+
+  const cancelPromise = api(`/api/training-load/external-schedules/${scheduleId}/cancel`, { method: "POST", cookie: coachCookie });
+  const submitPromise = api(`/api/training-load/external-assignments/${assignmentId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 30 } });
+  const [cancelRes, submitRes] = await Promise.all([cancelPromise, submitPromise]);
+
+  // If submit wins the race, it commits a real result BEFORE cancel's own
+  // lock is granted - cancel then runs against a schedule still 'active'
+  // and succeeds normally (200), leaving submit's already-committed
+  // result untouched (matches G3's own already-tested "cancel never
+  // erases a completed result" behavior). If cancel wins instead, submit
+  // sees the schedule is no longer 'active' once it gets the lock and is
+  // correctly rejected 409. Either way: never a 500, never two outcomes,
+  // never a partial write.
+  assert.ok([200, 400].includes(cancelRes.status), `cancel must never 500, got ${cancelRes.status}: ${JSON.stringify(cancelRes.body)}`);
+  assert.ok([201, 409].includes(submitRes.status), `submit must be either a clean success (won the race) or a controlled 409 (lost it), got ${submitRes.status}: ${JSON.stringify(submitRes.body)}`);
+
+  const rowCount = (await query(`select count(*)::int as n from training_load.session_feedback where external_assignment_id = $1`, [assignmentId])).rows[0].n;
+  if (submitRes.status === 201) {
+    assert.equal(rowCount, 1, "if submit won the race, its result must be committed and never rolled back by the cancel");
+    assert.equal(cancelRes.status, 200, "cancel must still succeed normally afterward - it never needed the schedule to be un-submitted-to");
+  } else {
+    assert.equal(rowCount, 0, "if cancel won the race, no partial/orphaned result row may exist");
+    assert.equal(cancelRes.status, 200);
+    assert.equal(submitRes.status, 409);
+  }
+
+  const finalSchedule = await api(`/api/training-load/external-schedules/${scheduleId}`, { cookie: coachCookie });
+  assert.equal(finalSchedule.body.schedule.status, "cancelled", "the schedule must always end up cancelled either way - the race is only ever about ORDER, never about losing the cancel itself");
+});

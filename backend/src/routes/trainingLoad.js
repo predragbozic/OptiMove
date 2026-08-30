@@ -1366,7 +1366,8 @@ router.post("/external-assignments/:assignmentId/rpe", async (req, res, next) =>
     }
 
     await client.query(`select status from training_load.external_schedules where id = $1 for update`, [lookup.schedule_id]);
-    await client.query(`select id from training_load.external_schedule_occurrences where id = $1 for update`, [lookup.occurrence_id]);
+    const occurrenceResult = await client.query(`select status from training_load.external_schedule_occurrences where id = $1 for update`, [lookup.occurrence_id]);
+    const occurrence = occurrenceResult.rows[0];
     const assignmentResult = await client.query(`select * from training_load.external_assignments where id = $1 for update`, [lookup.assignment_id]);
     const assignment = assignmentResult.rows[0];
     if (!assignment || assignment.athlete_id !== athleteId) {
@@ -1380,10 +1381,35 @@ router.post("/external-assignments/:assignmentId/rpe", async (req, res, next) =>
       await client.query("rollback");
       return res.status(409).json({ error: "This isn't currently accepting submissions." });
     }
+    // Defensive: no route currently transitions an occurrence to
+    // 'cancelled' (only a schedule itself is cancelled, already gated
+    // above), but the notification worker's own guard treats a cancelled
+    // occurrence as terminal too (see runInvitationPhase/runReminderPhase)
+    // - submit must agree, never rely on it being unreachable today.
+    if (occurrence.status === "cancelled") {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This isn't currently accepting submissions." });
+    }
+
+    // Every terminal assignment state EXCEPT 'completed' is closed here,
+    // up front, before any INSERT is attempted. 'completed' is
+    // deliberately NOT included - an identical retry against an already-
+    // completed assignment is a valid, tested idempotent 200 (see the
+    // ON CONFLICT DO NOTHING + existing-row comparison below), and must
+    // stay reachable. 'missed'/'excused'/'cancelled' are genuinely
+    // terminal-non-submittable: without this check, the INSERT below
+    // would succeed and only THEN hit the DB's own forward-only lifecycle
+    // trigger on the follow-up `status = 'completed'` UPDATE, surfacing
+    // as an uncontrolled 500 (via this route's own catch -> next(error),
+    // not respondToWriteError) instead of a clean 409 - found in review.
+    if (["missed", "excused", "cancelled"].includes(assignment.status)) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This check-in window is closed." });
+    }
 
     const nowResult = await client.query(`select now() as now`);
     const now = nowResult.rows[0].now;
-    if (assignment.status === "cancelled" || now < assignment.opens_at || now > assignment.closes_at) {
+    if (now < assignment.opens_at || now > assignment.closes_at) {
       await client.query("rollback");
       return res.status(409).json({ error: "This check-in window is closed." });
     }
