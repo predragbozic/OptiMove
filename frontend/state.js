@@ -625,6 +625,19 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // against a not-yet-known value. `saving` guards one PATCH in flight at
   // a time.
   plannedRpeSetting: { enabled: false, enabledAt: null, loaded: false, loading: false, saving: false, error: "" },
+  // (correction round 2) A legacy plan the backfill couldn't
+  // deterministically attribute stays owner_scope='unresolved' - never
+  // actionable for automatic RPE until a coach explicitly assigns it a
+  // real workspace (POST /plans/resolve-rpe-ownership, "Use current
+  // workspace for RPE" / a confirmed bulk action, both in Training Load
+  // -> Schedule). `resolvingOwnership` guards one such request in flight
+  // at a time (single-row or bulk both use it - there's only ever one
+  // resolve action visible/clickable at once); `error` surfaces a
+  // rejected attempt (e.g. a genuine 409 from a plan someone else just
+  // resolved to a different scope) without disturbing the rest of the
+  // Schedule view.
+  resolvingOwnership: false,
+  resolveOwnershipError: "",
   ...overrides,
 });
 

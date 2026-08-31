@@ -116,6 +116,17 @@ export async function savePlannedRpeSetting(enabled) {
   return api("/api/training-load/planned-rpe-setting", { method: "PATCH", body: JSON.stringify({ enabled }) });
 }
 
+// (correction round 2) Explicitly assigns the caller's own CURRENT
+// workspace to one or more plans still stamped owner_scope='unresolved'
+// - "Use current workspace for RPE" (one id) or a confirmed bulk action
+// (every currently-visible unresolved id) both call this same endpoint,
+// never a client-side "resolve everything" shortcut. The backend re-
+// authorizes every id itself and is fully atomic - see routes/
+// trainingLoad.js's own POST /plans/resolve-rpe-ownership.
+export async function resolvePlanOwnership(planIds) {
+  return api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", body: JSON.stringify({ planIds }) });
+}
+
 // Athlete's own today - deliberately NOT cached (same reasoning tests-
 // data.js's own header gives for its whole module: rated/not-rated status
 // changes on nearly every visit, most of all right after the athlete

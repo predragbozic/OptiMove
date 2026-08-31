@@ -9,6 +9,7 @@ import {
   loadTrainingLoadAthleteWeekly,
   loadTrainingLoadOrgPickerData,
   loadTrainingLoadWeekly,
+  resolvePlanOwnership,
   savePlannedRpeSetting,
   scheduleExternalAgain,
   sendExternalScheduleReminder,
@@ -234,6 +235,48 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     } catch (error) {
       setting.saving = false;
       setting.error = error.message || "Could not save this setting.";
+    }
+    renderTrainingLoad();
+    return true;
+  }
+
+  // -------------------- Coach: unresolved-plan RPE ownership resolution (correction round 2) --------------------
+  //
+  // A legacy plan the backfill couldn't deterministically attribute
+  // (owner_scope='unresolved') never becomes actionable just because the
+  // master switch is ON - a coach must explicitly assign it a real
+  // workspace first. Both the single-row "Use current workspace for RPE"
+  // button and the bulk banner action call the SAME resolvePlanOwnership,
+  // sharing one `resolvingOwnership` in-flight guard (there's only ever
+  // one resolve control visible/clickable at a time in this view) and
+  // reloading the weekly payload immediately on success so every
+  // affected row's own status pill/badge updates right away.
+  if (type === "training-load-resolve-plan-ownership" || type === "training-load-resolve-all-unresolved") {
+    if (state.trainingLoad.resolvingOwnership) return true;
+    const planIds = type === "training-load-resolve-plan-ownership"
+      ? [action.dataset.planId].filter(Boolean)
+      : (action.dataset.planIds || "").split(",").map((id) => id.trim()).filter(Boolean);
+    if (!planIds.length) return true;
+    if (type === "training-load-resolve-all-unresolved") {
+      const label = planIds.length === 1 ? "this 1 plan" : `all ${planIds.length} plans`;
+      if (!window.confirm(`Assign your current workspace as the RPE owner of ${label}? This only affects plans with no workspace assigned yet - it never changes a plan that's already assigned.`)) {
+        return true;
+      }
+    }
+    state.trainingLoad.resolvingOwnership = true;
+    state.trainingLoad.resolveOwnershipError = "";
+    renderTrainingLoad();
+    try {
+      await resolvePlanOwnership(planIds);
+      state.trainingLoad.resolvingOwnership = false;
+      // Refreshes every row so a just-resolved plan's own session(s)
+      // immediately drop the "workspace not assigned" badge and become
+      // actionable (subject to the master switch and enabled_at cutoff,
+      // exactly as if it had always had a real owner).
+      await loadTrainingLoadWeekly(state.trainingLoad.section);
+    } catch (error) {
+      state.trainingLoad.resolvingOwnership = false;
+      state.trainingLoad.resolveOwnershipError = error.message || "Could not assign this workspace.";
     }
     renderTrainingLoad();
     return true;

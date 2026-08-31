@@ -12033,6 +12033,23 @@ button.tests-assignment-card {
   font-size: 12px;
 }
 
+/* (correction round 2) Unresolved-plan bulk-resolve banner - same
+   deliberately compact, no-card-surface treatment as the master toggle
+   itself above (a muted note line + a plain compact button), never a
+   colored alert box. */
+.training-load-unresolved-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.training-load-unresolved-banner .training-load-master-toggle-off-note {
+  margin: 0;
+}
+
 .training-load-cancel-button {
   color: #b3261e;
   border-color: #e8b4af;

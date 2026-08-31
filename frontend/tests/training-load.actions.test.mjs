@@ -1378,3 +1378,117 @@ test("U10. the rated/planned denominator (Results) excludes an unrated session w
   const onHtml = renderTrainingLoadResultsHtml();
   assert.ok(onHtml.includes("0/1"), "the same still-unrated session must count once the master switch is effectively on");
 });
+
+// ------------------------------------------------------------
+// V. Unresolved-plan RPE ownership resolution (correction round 2) -
+// Training Load -> Schedule shows a distinct "RPE workspace not
+// assigned" status for a plan the backfill couldn't attribute, a per-
+// plan "Use current workspace for RPE" action, and a confirmed bulk
+// action for every currently-visible unresolved plan - see routes/
+// trainingLoad.js's own POST /plans/resolve-rpe-ownership.
+// ------------------------------------------------------------
+
+test("V1. an unresolved plan's session shows a distinct 'RPE workspace not assigned' status and a resolve button - never conflated with a plain workspace-switch-off row", () => {
+  resetState();
+  state.trainingLoad.plannedRpeSetting = { enabled: true, enabledAt: "2026-08-20T00:00:00Z", loaded: true, loading: false, saving: false, error: "" };
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
+    "2026-08-24": [session({ planId: "plan-unresolved-1", workspacePlannedRpeEnabled: false, actionable: false, ownershipUnresolved: true })],
+  });
+  const html = renderTrainingLoadScheduleHtml();
+  assert.ok(html.includes("RPE workspace not assigned"));
+  assert.ok(!html.includes("Automatic RPE off"), "the unresolved reason must never be shown as a plain workspace-off row");
+  assert.ok(html.includes("Use current workspace for RPE"));
+  assert.ok(html.includes('data-action="training-load-resolve-plan-ownership"'));
+  assert.ok(html.includes('data-plan-id="plan-unresolved-1"'));
+});
+
+test("V2. clicking 'Use current workspace for RPE' resolves exactly that one plan and reloads the weekly view", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  installFetchMock((call) => (call.url === "/api/training-load/plans/resolve-rpe-ownership" && call.method === "POST"
+    ? { status: 200, body: { resolvedPlanIds: ["plan-unresolved-1"], alreadyMatchingPlanIds: [] } }
+    : { status: 200, body: weekPayload("2026-08-24") }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-resolve-plan-ownership", planId: "plan-unresolved-1" }), { renderTrainingLoad });
+  const resolveCall = fetchCalls.find((c) => c.url === "/api/training-load/plans/resolve-rpe-ownership");
+  assert.ok(resolveCall, "must call the resolve endpoint");
+  assert.deepEqual(resolveCall.body.planIds, ["plan-unresolved-1"]);
+  assert.equal(state.trainingLoad.resolvingOwnership, false);
+  const weeklyRefetch = fetchCalls.find((c) => c.url.startsWith("/api/training-load/weekly"));
+  assert.ok(weeklyRefetch, "the weekly view must reload immediately after a successful resolution");
+});
+
+test("V3. the master toggle shows a bulk-resolve banner only while ON and only when the currently-loaded week has visible unresolved plans, deduplicated across sessions sharing one plan", () => {
+  resetState();
+  state.trainingLoad.plannedRpeSetting = { enabled: true, enabledAt: "2026-08-20T00:00:00Z", loaded: true, loading: false, saving: false, error: "" };
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
+    "2026-08-24": [
+      session({ sessionId: "sess-a", planId: "plan-unresolved-1", ownershipUnresolved: true }),
+      session({ sessionId: "sess-b", planId: "plan-unresolved-1", ownershipUnresolved: true }),
+    ],
+    "2026-08-25": [session({ sessionId: "sess-c", planId: "plan-unresolved-2", ownershipUnresolved: true })],
+  });
+  const onHtml = renderPlannedRpeMasterToggleHtml();
+  assert.ok(onHtml.includes("2 plans"), "two DISTINCT plan ids across three sessions must be counted once each, never once per session");
+  assert.ok(onHtml.includes('data-action="training-load-resolve-all-unresolved"'));
+
+  // OFF: never shows the banner - a switch that's already off has nothing
+  // for the bulk action to usefully do, and would be a confusing, un-
+  // actionable distraction alongside the "Automatic planned RPE is off" note.
+  state.trainingLoad.plannedRpeSetting = { enabled: false, enabledAt: null, loaded: true, loading: false, saving: false, error: "" };
+  const offHtml = renderPlannedRpeMasterToggleHtml();
+  assert.ok(!offHtml.includes("training-load-resolve-all-unresolved"));
+
+  // ON but nothing unresolved in view - no banner either.
+  state.trainingLoad.plannedRpeSetting = { enabled: true, enabledAt: "2026-08-20T00:00:00Z", loaded: true, loading: false, saving: false, error: "" };
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
+    "2026-08-24": [session({ sessionId: "sess-d" })],
+  });
+  const cleanHtml = renderPlannedRpeMasterToggleHtml();
+  assert.ok(!cleanHtml.includes("training-load-resolve-all-unresolved"));
+});
+
+test("V4. the bulk resolve action shows a confirm dialog first - Cancel sends nothing", async () => {
+  resetState();
+  const originalConfirm = globalThis.window.confirm;
+  globalThis.window.confirm = () => false;
+  try {
+    installFetchMock(() => { throw new Error("must never fetch anything when the coach cancels"); });
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-resolve-all-unresolved", planIds: "plan-1,plan-2" }), { renderTrainingLoad });
+    assert.equal(state.trainingLoad.resolvingOwnership, false);
+  } finally {
+    globalThis.window.confirm = originalConfirm;
+  }
+});
+
+test("V5. the bulk resolve action, once confirmed, sends every distinct visible unresolved planId and reloads the weekly view on success", async () => {
+  resetState();
+  state.trainingLoad.section = "schedule";
+  const originalConfirm = globalThis.window.confirm;
+  globalThis.window.confirm = () => true;
+  try {
+    installFetchMock((call) => (call.url === "/api/training-load/plans/resolve-rpe-ownership" && call.method === "POST"
+      ? { status: 200, body: { resolvedPlanIds: ["plan-1", "plan-2"], alreadyMatchingPlanIds: [] } }
+      : { status: 200, body: weekPayload("2026-08-24") }));
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-resolve-all-unresolved", planIds: "plan-1,plan-2" }), { renderTrainingLoad });
+    const resolveCall = fetchCalls.find((c) => c.url === "/api/training-load/plans/resolve-rpe-ownership");
+    assert.deepEqual(resolveCall.body.planIds, ["plan-1", "plan-2"]);
+    const weeklyRefetch = fetchCalls.find((c) => c.url.startsWith("/api/training-load/weekly"));
+    assert.ok(weeklyRefetch, "the weekly view must reload immediately so every resolved row updates");
+  } finally {
+    globalThis.window.confirm = originalConfirm;
+  }
+});
+
+test("V6. a resolve request already in flight makes a second click a safe no-op, and a rejected request surfaces an error without disturbing the rest of the view", async () => {
+  resetState();
+  state.trainingLoad.resolvingOwnership = true;
+  installFetchMock(() => { throw new Error("must never fetch while a resolve is already in flight"); });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-resolve-plan-ownership", planId: "plan-1" }), { renderTrainingLoad });
+  assert.equal(fetchCalls.length, 0);
+
+  state.trainingLoad.resolvingOwnership = false;
+  installFetchMock(() => ({ status: 409, body: { error: "Plan plan-1 is already assigned to a different workspace." } }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-resolve-plan-ownership", planId: "plan-1" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.resolvingOwnership, false);
+  assert.ok(state.trainingLoad.resolveOwnershipError.includes("already assigned"));
+});

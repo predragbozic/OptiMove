@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
-import { resolveCurrentWorkspaceOwnerContext } from "../trainingLoadAccess.js";
+import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 
 const router = Router();
 
@@ -41,6 +41,44 @@ async function copyPlanOwnershipSnapshot(client, sourcePlanId, newPlanId) {
      on conflict (plan_id) do nothing`,
     [sourcePlanId, newPlanId],
   );
+}
+
+// Correction: a genuinely LIVE weekly-plan create/copy/assign must never
+// silently mint an owner_scope='unresolved' snapshot the way a legacy
+// backfill row can - 'unresolved' exists ONLY as a conservative fallback
+// for a pre-existing plan whose real origin can no longer be determined,
+// never as something a fresh create should ever intentionally produce.
+// Resolves the FULL scope (never just the owner-context shape
+// resolveCurrentWorkspaceOwnerContext used to return) so the SAME
+// resolved workspace is used for both the target-athlete authorization
+// check below and the ownership snapshot itself - one resolveActiveWorkspace
+// read per request, exactly like every other hardened workspace resolver
+// in this codebase. Returns a controlled 403 (never creates anything) when
+// the account has no real manageable workspace active right now.
+async function resolveWeeklyPlanOwnerScope(req, res) {
+  const scope = await resolveExternalScheduleWorkspaceScope(req);
+  if (scope.type === null) {
+    res.status(403).json({ error: "You need an active coach workspace to create a weekly plan." });
+    return null;
+  }
+  return scope;
+}
+
+// Every requested target athlete must actually belong to the SAME
+// resolved workspace scope the new plan(s) are about to be stamped with -
+// otherwise a coach sitting in Club A could hand-craft a request naming
+// an athlete who only belongs to Club B, and that athlete's plan would
+// end up owned by Club A's own RPE settings despite never having been a
+// Club A athlete at all. The WHOLE request is rejected on the FIRST
+// athlete outside scope - never a partial batch (matches this file's own
+// existing conflict-collection style just below each call site).
+async function findAthleteOutsideScope(scope, athletes) {
+  for (const athlete of athletes) {
+    if (!athlete?.id) continue; // a null target (program/template-only slot) has no athlete to check
+    const allowed = await isAthleteInWorkspaceScope(scope, athlete.id);
+    if (!allowed) return athlete;
+  }
+  return null;
 }
 const NODE_TYPES = new Set(["domain", "category", "section"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -193,10 +231,25 @@ router.post("/plans", async (req, res, next) => {
     const createdIds = [];
     // Resolved ONCE, from the CREATING coach's own currently active
     // workspace - every plan this single request creates (a multi-
-    // athlete batch shares one request) gets the SAME real snapshot,
-    // never re-resolved per target (see this file's own header comment
-    // on training_load.plan_workspace_ownership).
-    const planOwner = planType === "weekly" ? await resolveCurrentWorkspaceOwnerContext(req) : null;
+    // athlete batch shares one target) gets the SAME real snapshot, never
+    // re-resolved per target (see this file's own header comment on
+    // training_load.plan_workspace_ownership). A weekly plan with no real
+    // coach workspace active is a controlled 403 - it must never be
+    // created as owner_scope='unresolved' (see resolveWeeklyPlanOwnerScope's
+    // own comment). Every requested target athlete must ALSO actually
+    // belong to this same resolved scope - the whole request is rejected,
+    // atomically, before anything is created, on the first athlete who
+    // doesn't (see findAthleteOutsideScope's own comment) - otherwise a
+    // coach in Club A could target an athlete who only belongs to Club B
+    // and have that athlete's plan silently stamped owner_club_id=Club A.
+    let planOwner = null;
+    if (planType === "weekly") {
+      const scope = await resolveWeeklyPlanOwnerScope(req, res);
+      if (!scope) return;
+      const outsider = await findAthleteOutsideScope(scope, targets);
+      if (outsider) return res.status(403).json({ error: `Athlete ${outsider.externalId || outsider.id} is outside your current workspace.` });
+      planOwner = scope.ownerContext;
+    }
     client = await pool.connect();
     await client.query("begin");
     if (planType === "weekly") {
@@ -341,6 +394,23 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     if (source.plan_type === "weekly" && !targetAthletes.length) return res.status(400).json({ error: "Choose at least one athlete for a weekly plan copy." });
     if (source.plan_type === "weekly" && !targetWeekStart) return res.status(400).json({ error: "Choose the target week for this copy." });
 
+    // A genuine copy/assign of a WEEKLY plan needs the same real,
+    // active-workspace authorization as a brand-new create (see
+    // resolveWeeklyPlanOwnerScope/findAthleteOutsideScope's own comments
+    // on POST /plans above) - every target athlete must belong to the
+    // CURRENT active workspace, and a coach with no real workspace active
+    // gets a controlled 403 rather than a copy silently landing
+    // owner_scope='unresolved'. Checked before any transactional work
+    // (including the Assign idempotency claim below) so a rejected
+    // request never partially claims that slot.
+    let weeklyPlanOwnerScope = null;
+    if (source.plan_type === "weekly") {
+      weeklyPlanOwnerScope = await resolveWeeklyPlanOwnerScope(req, res);
+      if (!weeklyPlanOwnerScope) return;
+      const outsider = await findAthleteOutsideScope(weeklyPlanOwnerScope, targetAthletes);
+      if (outsider) return res.status(403).json({ error: `Athlete ${outsider.externalId || outsider.id} is outside your current workspace.` });
+    }
+
     // "Assign to athlete" is business-final and must be safe against
     // retries/double-clicks/genuine parallel requests. app_notifications'
     // dedupe_key alone (keyed on a plan id) cannot stop a duplicate
@@ -379,11 +449,15 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     const createdIds = [];
     const assignedPlans = [];
     // A genuine copy/assign always gets a FRESH ownership snapshot from
-    // the CURRENT active workspace, resolved once for this whole request
-    // - never inherited from the source plan (see this file's own
-    // header comment). A plain program/template duplicate (plan_type !==
+    // the CURRENT active workspace - never inherited from the source
+    // plan (see this file's own header comment). Reuses the SAME scope
+    // already resolved (and validated against every target athlete)
+    // above, rather than a second, independent resolveActiveWorkspace
+    // read - a workspace switch landing between the two could otherwise
+    // validate targets against workspace A but stamp ownership from
+    // workspace B. A plain program/template duplicate (plan_type !==
     // "weekly") never needs one at all.
-    const planOwner = source.plan_type === "weekly" ? await resolveCurrentWorkspaceOwnerContext(req) : null;
+    const planOwner = source.plan_type === "weekly" ? weeklyPlanOwnerScope.ownerContext : null;
     client = await pool.connect();
     await client.query("begin");
 

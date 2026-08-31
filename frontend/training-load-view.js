@@ -453,6 +453,15 @@ function renderExternalGroupRowHtml(group, date) {
 function plannedStatusLabel(session) {
   if (session.rated) return { label: formatFeedbackSummary(session.feedback), cls: "rated" };
   if (session.rpeEnabled === false) return { label: "RPE off", cls: "off" };
+  // (correction round 2) A plan whose ownership was never resolved is a
+  // DIFFERENT situation from "the workspace switch is off" - the coach
+  // needs to explicitly assign a workspace, not just flip the switch (see
+  // renderScheduleSessionRowHtml's own "Use current workspace for RPE"
+  // control below). Checked before workspacePlannedRpeEnabled so it's
+  // never mislabeled as a plain switch-off - an unresolved plan reads
+  // workspacePlannedRpeEnabled=false too (it can never match any real
+  // settings row), but that's not the actionable reason here.
+  if (session.ownershipUnresolved) return { label: "RPE workspace not assigned", cls: "off" };
   if (session.workspacePlannedRpeEnabled === false) return { label: "Automatic RPE off", cls: "off" };
   return { label: "Not rated", cls: "unrated" };
 }
@@ -532,6 +541,15 @@ function renderScheduleSessionRowHtml(session, date) {
       : "";
   const Tag = clickable ? "button" : "div";
   const canToggle = !isExternal && clickable && session.sessionId;
+  // (correction round 2) An unresolved plan's own resolution control
+  // takes priority over the ordinary per-session RPE on/off toggle - the
+  // per-session flag is moot until the plan has a real workspace at all
+  // (see plannedStatusLabel's own comment on why this is a different
+  // situation from the workspace switch being off). planId, never
+  // sessionId - resolution is a PLAN-level action; every session under
+  // the same unresolved plan resolves together, in one request.
+  const needsOwnershipResolution = !isExternal && !session.historical && session.ownershipUnresolved && session.planId;
+  const resolving = state.trainingLoad.resolvingOwnership;
   return `
     <div class="training-load-schedule-row">
       <${Tag} class="training-load-session-row ${clickable ? "is-clickable" : ""}" ${attrs}>
@@ -542,7 +560,14 @@ function renderScheduleSessionRowHtml(session, date) {
         </span>
         <span class="training-load-status-pill training-load-status-${status.cls}">${escapeHtml(status.label)}</span>
       </${Tag}>
-      ${canToggle ? `
+      ${needsOwnershipResolution ? `
+        <div class="training-load-schedule-row-toggle">
+          <span class="training-load-rpe-state-badge is-off">RPE WORKSPACE NOT ASSIGNED</span>
+          <button type="button" class="plain-button compact-button" data-action="training-load-resolve-plan-ownership" data-plan-id="${escapeAttr(session.planId)}" ${resolving ? "disabled" : ""}>
+            Use current workspace for RPE
+          </button>
+        </div>
+      ` : canToggle ? `
         <div class="training-load-schedule-row-toggle">
           ${renderScheduleRpeStateBadgeHtml(session)}
           <button type="button" class="plain-button compact-button" data-action="training-load-toggle-session-rpe" data-session-id="${escapeAttr(session.sessionId)}" data-currently-enabled="${session.rpeEnabled !== false ? "true" : "false"}">
@@ -578,10 +603,35 @@ function renderScheduleWeeklyCalendarHtml() {
 // convention). Renders disabled (never clickable) until the real current
 // value has actually loaded, so a coach can never flip it against an
 // unknown starting state - see this control's own action handler.
+// (correction round 2) Every plan currently visible in the Schedule
+// tab's own loaded week whose ownership is unresolved - deduplicated by
+// planId (several sessions can share one plan). Drives both the master
+// toggle's own "still N unassigned" note below (so ON never looks like a
+// silently broken switch while real sessions stay inactive) and the
+// bulk-resolve action - always an explicit, currently-VISIBLE set, never
+// "every unresolved plan this coach could ever reach".
+function collectVisibleUnresolvedPlanIds() {
+  const data = state.trainingLoad.weekly.schedule.data;
+  if (!data) return [];
+  const ids = [];
+  const seen = new Set();
+  for (const day of data.days) {
+    for (const session of day.sessions) {
+      if (session.ownershipUnresolved && session.planId && !seen.has(session.planId)) {
+        seen.add(session.planId);
+        ids.push(session.planId);
+      }
+    }
+  }
+  return ids;
+}
+
 export function renderPlannedRpeMasterToggleHtml() {
   const setting = state.trainingLoad.plannedRpeSetting;
   const checked = setting.enabled === true;
   const disabled = setting.saving || !setting.loaded;
+  const unresolvedPlanIds = checked ? collectVisibleUnresolvedPlanIds() : [];
+  const resolving = state.trainingLoad.resolvingOwnership;
   return `
     <div class="training-load-master-toggle">
       <div class="tests-notification-row">
@@ -594,7 +644,16 @@ export function renderPlannedRpeMasterToggleHtml() {
         </span>
       </div>
       ${setting.error ? `<p class="builder-error">${escapeHtml(setting.error)}</p>` : ""}
+      ${state.trainingLoad.resolveOwnershipError ? `<p class="builder-error">${escapeHtml(state.trainingLoad.resolveOwnershipError)}</p>` : ""}
       ${setting.loaded && !checked ? `<p class="muted training-load-master-toggle-off-note">Automatic planned RPE is off</p>` : ""}
+      ${setting.loaded && checked && unresolvedPlanIds.length ? `
+        <div class="training-load-unresolved-banner">
+          <p class="muted training-load-master-toggle-off-note">${unresolvedPlanIds.length === 1 ? "1 plan" : `${unresolvedPlanIds.length} plans`} in this view ${unresolvedPlanIds.length === 1 ? "has" : "have"} no RPE workspace assigned yet, so automatic RPE stays off for ${unresolvedPlanIds.length === 1 ? "it" : "them"}.</p>
+          <button type="button" class="plain-button compact-button" data-action="training-load-resolve-all-unresolved" data-plan-ids="${escapeAttr(unresolvedPlanIds.join(","))}" ${resolving ? "disabled" : ""}>
+            Assign current workspace to ${unresolvedPlanIds.length === 1 ? "this plan" : `all ${unresolvedPlanIds.length} plans`}
+          </button>
+        </div>
+      ` : ""}
     </div>
   `;
 }

@@ -20,6 +20,7 @@
 // already built to avoid for athlete visibility - this file now applies
 // the identical discipline to schedule ownership/management/targeting.
 import { resolveActiveWorkspace } from "./workspace.js";
+import { query } from "./db.js";
 
 function externalScheduleScopeFromWorkspace(workspace, req) {
   if (!workspace) return { type: null };
@@ -84,25 +85,48 @@ export function externalScheduleScopeForWorkspace(workspace, req) {
   return scope;
 }
 
-// Resolves the account's CURRENTLY ACTIVE workspace into the SAME owner_
-// scope/owner_*_id shape used everywhere in training_load (external
-// schedules, the planned-RPE workspace setting, and - see migrations_v2/
-// 202609040900 - a Weekly plan's own STORED ownership snapshot), for a
-// caller that only needs ownership, never scope-based target validation.
-// Used by routes/builder.js to snapshot a NEW weekly plan's owner at
-// creation time - see training_load.plan_workspace_ownership's own
-// migration header for why that snapshot must be taken once and stored,
-// never re-derived from an athlete's current memberships. Returns
-// owner_scope: 'unresolved' for an athlete workspace or no workspace at
-// all (a coach account somehow creating a plan with no real manageable
-// workspace active) - the same conservative "never guess" rule the
-// legacy backfill in that migration already applies, extended here to
-// the live-creation path too.
-export async function resolveCurrentWorkspaceOwnerContext(req) {
-  const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-  const scope = externalScheduleScopeFromWorkspace(workspace, req);
-  if (scope.type === null) return { ownerScope: "unresolved", ownerUserId: null, ownerClubId: null, ownerTeamId: null };
-  return externalScheduleOwnerContextFromWorkspace(workspace, req);
+// Correction: routes/builder.js used to snapshot a NEW weekly plan's
+// owner via a resolveCurrentWorkspaceOwnerContext() that quietly fell
+// back to owner_scope='unresolved' whenever the creating account had no
+// real manageable workspace active - which meant a genuinely new,
+// LIVE-created plan could be born 'unresolved' too, exactly the state
+// the legacy backfill's own "never guess" rule was meant to be a
+// fallback for PRE-EXISTING plans only, not something a live create
+// should ever intentionally produce. routes/builder.js now resolves the
+// full scope via resolveExternalScheduleWorkspaceScope (below) itself,
+// rejects with a controlled 403 when scope.type === null BEFORE creating
+// anything, and only ever stamps scope.ownerContext (always a real,
+// non-'unresolved' owner by construction once that check passes) - see
+// that route's own comment for the full reasoning. isAthleteInWorkspaceScope
+// (below) is what it uses to validate each requested target athlete
+// against that SAME resolved scope before ever creating a plan for them.
+
+// Workspace-scoped "does this athlete belong here" check - the single
+// source of truth for both external-schedule target validation
+// (routes/trainingLoad.js's own resolveValidExternalTargets) and
+// routes/builder.js's own weekly-plan target validation. Athlete ids
+// here are always the real public.athletes.id UUID (never the human-
+// readable athlete_id code the org picker's fuzzier global helper
+// supports), so a direct membership-table comparison is both correct
+// and simpler than reusing that helper.
+export async function isAthleteInWorkspaceScope(scope, athleteId) {
+  if (scope.type === "platform") {
+    const r = await query(`select 1 from public.athletes where id = $1`, [athleteId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "club") {
+    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'club' and status = 'active' and club_id = $2`, [athleteId, scope.clubId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "team") {
+    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'team' and status = 'active' and team_id = $2`, [athleteId, scope.teamId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "private_coach") {
+    const r = await query(`select 1 from public.user_athletes where athlete_id = $1 and user_id = $2 and is_active = true`, [athleteId, scope.userId]);
+    return r.rowCount > 0;
+  }
+  return false;
 }
 
 export function canManageExternalScheduleInScope(scope, schedule) {

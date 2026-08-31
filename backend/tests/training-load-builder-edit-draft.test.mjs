@@ -131,9 +131,6 @@ function isoDate(d) { return d.toISOString().slice(0, 10); }
 const TODAY_DATE = new Date();
 TODAY_DATE.setUTCHours(0, 0, 0, 0);
 const TODAY = isoDate(TODAY_DATE);
-const YESTERDAY_DATE = new Date(TODAY_DATE);
-YESTERDAY_DATE.setUTCDate(YESTERDAY_DATE.getUTCDate() - 1);
-const YESTERDAY = isoDate(YESTERDAY_DATE);
 function mondayOf(dateIso) {
   const d = new Date(`${dateIso}T00:00:00Z`);
   const day = d.getUTCDay();
@@ -142,6 +139,30 @@ function mondayOf(dateIso) {
   return isoDate(d);
 }
 const WEEK_START = mondayOf(TODAY);
+// A SECOND day, distinct from TODAY where possible, that is guaranteed
+// to satisfy BOTH constraints a plain "yesterday" cannot always meet at
+// once: (a) inside the SAME Mon-Sun week as TODAY (createWeeklyDays only
+// ever (re)builds the 7 days of the plan's own week_start..+6 range - a
+// day outside it is silently dropped by the real edit-draft round trip,
+// nothing to do with RPE ownership) and (b) not in the future (a session
+// dated after the athlete's own local today can never be rated - see
+// POST /sessions/:id/rpe's own "hasn't happened yet" check). Whenever
+// TODAY isn't the week's first day (the overwhelming majority of the
+// time), this is exactly "yesterday", same as before. On the one day it
+// wasn't safe - TODAY being a Monday, whose "yesterday" is the LAST day
+// of the PREVIOUS week - there is no other real candidate day at all
+// (every other day in TODAY's own week is still in the future), so this
+// correctly falls back to TODAY itself: the test's own two sessions then
+// share one day bucket instead of two, which still fully exercises the
+// same regression (multiple pre-rated sessions surviving the edit
+// round trip) without ever asserting something that can't be true.
+const TODAY_WEEKDAY_OFFSET = Math.round((new Date(`${TODAY}T00:00:00Z`) - new Date(`${WEEK_START}T00:00:00Z`)) / 86400000);
+function addDaysToIso(iso, days) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return isoDate(d);
+}
+const OTHER_DAY_IN_WEEK = TODAY_WEEKDAY_OFFSET > 0 ? addDaysToIso(WEEK_START, TODAY_WEEKDAY_OFFSET - 1) : TODAY;
 
 // A real, minimal weekly plan a coach could have built by hand in the
 // Builder - only the columns POST /plans/:id/edit + applyEditDraft's own
@@ -211,15 +232,19 @@ test("a real Builder Edit -> Save and finish round trip preserves an already-sub
   await setPlanOwnershipDirect(livePlanId, coach.clubId);
   await enablePlannedRpeForClub(coach.clubId);
   const todayDayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
-  const yesterdayDayId = await makeRealDay(livePlanId, YESTERDAY, dayOrderForDate(YESTERDAY));
-  const todaySessionId = await makeRealSession(todayDayId, "Today session", "AM");
-  const yesterdaySessionId = await makeRealSession(yesterdayDayId, "Yesterday session");
+  // See OTHER_DAY_IN_WEEK's own comment: on the rare day this equals
+  // TODAY (TODAY is a Monday), reuse the SAME day row - plans.plan_days
+  // has a real unique(plan_id, date) constraint, so inserting a second
+  // row for the same date would fail outright.
+  const otherDayId = OTHER_DAY_IN_WEEK === TODAY ? todayDayId : await makeRealDay(livePlanId, OTHER_DAY_IN_WEEK, dayOrderForDate(OTHER_DAY_IN_WEEK));
+  const todaySessionId = await makeRealSession(todayDayId, "Today session", "AM", 0);
+  const otherDaySessionId = await makeRealSession(otherDayId, "Other day session", null, 1);
 
   // 1) The athlete rates BOTH real sessions before any edit happens.
   const submitToday = await api(`/api/training-load/sessions/${todaySessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 7, durationMinutes: 60 } });
   assert.equal(submitToday.status, 201, `expected 201, got ${submitToday.status}: ${JSON.stringify(submitToday.body)}`);
-  const submitYesterday = await api(`/api/training-load/sessions/${yesterdaySessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 45 } });
-  assert.equal(submitYesterday.status, 201);
+  const submitOtherDay = await api(`/api/training-load/sessions/${otherDaySessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 5, durationMinutes: 45 } });
+  assert.equal(submitOtherDay.status, 201);
 
   // 2) The coach opens this SAME weekly plan through the real Builder
   // "Edit" flow.
@@ -237,16 +262,19 @@ test("a real Builder Edit -> Save and finish round trip preserves an already-sub
   assert.equal(submitDraftRes.body.plan.id, livePlanId, "applyEditDraft() re-activates the ORIGINAL live plan id, not a new one");
 
   // The live plan's sessions now have BRAND NEW row ids (applyEditDraft
-  // deleted and recreated them) - re-resolve them by date.
+  // deleted and recreated them) - re-resolve them by name (never just by
+  // date: when OTHER_DAY_IN_WEEK falls back to TODAY itself - see its
+  // own comment - both sessions share the same date, so date alone can
+  // no longer tell them apart).
   const newSessionsResult = await query(
-    `select ps.id, pd.date from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1 order by pd.date`,
+    `select ps.id, pd.date, ps.name from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1 order by pd.date`,
     [livePlanId],
   );
-  const newTodaySessionId = newSessionsResult.rows.find((r) => r.date === TODAY)?.id;
-  const newYesterdaySessionId = newSessionsResult.rows.find((r) => r.date === YESTERDAY)?.id;
-  assert.ok(newTodaySessionId && newYesterdaySessionId, "the recreated sessions exist under the live plan");
+  const newTodaySessionId = newSessionsResult.rows.find((r) => r.name === "Today session")?.id;
+  const newOtherDaySessionId = newSessionsResult.rows.find((r) => r.name === "Other day session")?.id;
+  assert.ok(newTodaySessionId && newOtherDaySessionId, "the recreated sessions exist under the live plan");
   assert.notEqual(newTodaySessionId, todaySessionId, "row ids really did change - this is the exact scenario logical_session_id exists for");
-  assert.notEqual(newYesterdaySessionId, yesterdaySessionId, "row ids really did change - this is the exact scenario logical_session_id exists for");
+  assert.notEqual(newOtherDaySessionId, otherDaySessionId, "row ids really did change - this is the exact scenario logical_session_id exists for");
 
   // 4) The already-submitted results must both still exist, exactly once
   // each, and be recognized as rated against the NEW row ids.
@@ -279,11 +307,14 @@ test("a real Builder Edit -> Save and finish round trip preserves an already-sub
   // round trip (simulating the coach adding one more session while
   // editing), gets its own fresh logical_session_id automatically and
   // remains independently, normally ratable. applyEditDraft() recreates
-  // the DAY rows too, not just the sessions - yesterdayDayId is now a
-  // stale, deleted id, so the new day must be re-resolved by date first.
-  const newYesterdayDayResult = await query(`select id from plans.plan_days where plan_id = $1 and date = $2`, [livePlanId, YESTERDAY]);
-  const newYesterdayDayId = newYesterdayDayResult.rows[0].id;
-  const addedSessionId = await makeRealSession(newYesterdayDayId, "Newly added session", null, 1);
+  // the DAY rows too, not just the sessions - otherDayId is now a stale,
+  // deleted id, so the new day must be re-resolved by date first.
+  const newOtherDayResult = await query(`select id from plans.plan_days where plan_id = $1 and date = $2`, [livePlanId, OTHER_DAY_IN_WEEK]);
+  const newOtherDayId = newOtherDayResult.rows[0].id;
+  // session_order 2 - never 1 - because when OTHER_DAY_IN_WEEK falls back
+  // to TODAY itself (see its own comment), this bucket already has BOTH
+  // order 0 ("Today session") and order 1 ("Other day session") taken.
+  const addedSessionId = await makeRealSession(newOtherDayId, "Newly added session", null, 2);
   const addedSubmit = await api(`/api/training-load/sessions/${addedSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 3, durationMinutes: 15 } });
   assert.equal(addedSubmit.status, 201, "a genuinely new session must never be blocked or pre-rated because of an unrelated logical_session_id");
 });
