@@ -179,6 +179,7 @@ const LEGACY_FIXTURE_SQL = `
     add column is_edit_draft boolean not null default false,
     add column edit_source_plan_id uuid references plans.plans(id),
     add column week_start date,
+    add column created_by_user_id uuid references public.users(id),
     add column created_at timestamptz not null default now(),
     add column updated_at timestamptz not null default now();
   alter table plans.plan_days

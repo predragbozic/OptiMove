@@ -563,9 +563,13 @@ function renderScheduleSessionRowHtml(session, date) {
       ${needsOwnershipResolution ? `
         <div class="training-load-schedule-row-toggle">
           <span class="training-load-rpe-state-badge is-off">RPE WORKSPACE NOT ASSIGNED</span>
-          <button type="button" class="plain-button compact-button" data-action="training-load-resolve-plan-ownership" data-plan-id="${escapeAttr(session.planId)}" ${resolving ? "disabled" : ""}>
-            Use current workspace for RPE
-          </button>
+          ${session.canResolveOwnership ? `
+            <button type="button" class="plain-button compact-button" data-action="training-load-resolve-plan-ownership" data-plan-id="${escapeAttr(session.planId)}" ${resolving ? "disabled" : ""}>
+              Use current workspace for RPE
+            </button>
+          ` : `
+            <span class="muted training-load-master-toggle-off-note">Ask the plan creator or administrator to assign its RPE workspace</span>
+          `}
         </div>
       ` : canToggle ? `
         <div class="training-load-schedule-row-toggle">
@@ -603,13 +607,20 @@ function renderScheduleWeeklyCalendarHtml() {
 // convention). Renders disabled (never clickable) until the real current
 // value has actually loaded, so a coach can never flip it against an
 // unknown starting state - see this control's own action handler.
-// (correction round 2) Every plan currently visible in the Schedule
-// tab's own loaded week whose ownership is unresolved - deduplicated by
-// planId (several sessions can share one plan). Drives both the master
-// toggle's own "still N unassigned" note below (so ON never looks like a
-// silently broken switch while real sessions stay inactive) and the
-// bulk-resolve action - always an explicit, currently-VISIBLE set, never
-// "every unresolved plan this coach could ever reach".
+// (correction round 2/4) Every plan currently visible in the Schedule
+// tab's own loaded week whose ownership is unresolved AND that THIS
+// account could actually resolve (canResolveOwnership - the plan's own
+// original creator, or a platform override; see routes/trainingLoad.js's
+// own canResolvePlanOwnership) - deduplicated by planId (several
+// sessions can share one plan). Drives both the master toggle's own
+// "still N unassigned" note below (so ON never looks like a silently
+// broken switch while real sessions stay inactive) and the bulk-resolve
+// action - always an explicit, currently-VISIBLE, ACTUALLY-RESOLVABLE
+// set, never "every unresolved plan this coach could ever reach" and
+// never one this account isn't the creator of. This is a display/
+// convenience filter only - the backend re-authorizes every plan id
+// itself regardless of what the frontend sends (see resolvePlanOwnership's
+// own comment in training-load-data.js).
 function collectVisibleUnresolvedPlanIds() {
   const data = state.trainingLoad.weekly.schedule.data;
   if (!data) return [];
@@ -617,7 +628,7 @@ function collectVisibleUnresolvedPlanIds() {
   const seen = new Set();
   for (const day of data.days) {
     for (const session of day.sessions) {
-      if (session.ownershipUnresolved && session.planId && !seen.has(session.planId)) {
+      if (session.ownershipUnresolved && session.canResolveOwnership && session.planId && !seen.has(session.planId)) {
         seen.add(session.planId);
         ids.push(session.planId);
       }

@@ -4,6 +4,7 @@ import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import {
   canManageExternalScheduleInScope,
+  canResolvePlanOwnership,
   externalScheduleScopeForWorkspace,
   externalScheduleScopeSqlForWorkspace,
   isAthleteInWorkspaceScope,
@@ -676,12 +677,24 @@ router.patch("/planned-rpe-setting", async (req, res, next) => {
 //
 // Body: { planIds: [uuid, ...] } - always explicit, client-supplied ids
 // (a single "Use current workspace for RPE" button sends one id, a bulk
-// action sends every currently-VISIBLE unresolved id for the shown week/
-// future - never "every unresolved plan this coach could ever reach").
-// The whole batch is atomic: the first plan that fails authorization (or
-// doesn't exist as a real weekly plan) rolls back the entire request -
-// same "reject the whole thing on the first bad item" discipline as
+// action sends every currently-VISIBLE unresolved id this account can
+// actually resolve for the shown week/future - never "every unresolved
+// plan this coach could ever reach", and the frontend's own filtering is
+// never trusted as authorization - see below). The whole batch is
+// atomic: the first plan that fails authorization (or doesn't exist as a
+// real weekly plan) rolls back the entire request - same "reject the
+// whole thing on the first bad item" discipline as
 // resolveValidExternalTargets above.
+//
+// Correction round 4: a genuinely UNRESOLVED plan may only be resolved
+// by its own ORIGINAL creator (canResolvePlanOwnership, trainingLoadAccess.js)
+// - workspace-scope coverage of the athlete ALONE is not proof of
+// ownership (see that function's own header for the exact cross-
+// workspace leak this closes). An already-resolved plan keeps the
+// original, simpler isAthleteInWorkspaceScope gate below it - that
+// branch only ever produces an idempotent no-op or a 409, never an
+// actual scope change, so the stricter creator check has nothing to
+// protect there.
 //
 // Per-plan outcome once authorized:
 //   - currently 'unresolved' -> resolved to the caller's own scope.
@@ -732,7 +745,7 @@ router.post("/plans/resolve-rpe-ownership", async (req, res, next) => {
     const alreadyMatchingPlanIds = [];
     for (const planId of planIds) {
       const planResult = await client.query(
-        `select p.id, p.athlete_id, o.owner_scope, o.owner_user_id, o.owner_club_id, o.owner_team_id
+        `select p.id, p.athlete_id, p.created_by_user_id, o.owner_scope, o.owner_user_id, o.owner_club_id, o.owner_team_id
          from plans.plans p
          join training_load.plan_workspace_ownership o on o.plan_id = p.id
          where p.id = $1 and p.plan_type = 'weekly'
@@ -744,19 +757,32 @@ router.post("/plans/resolve-rpe-ownership", async (req, res, next) => {
         await client.query("rollback");
         return res.status(404).json({ error: `Weekly plan ${planId} not found.` });
       }
-      const allowed = await isAthleteInWorkspaceScope(scope, plan.athlete_id);
-      if (!allowed) {
-        await client.query("rollback");
-        return res.status(403).json({ error: "One of the chosen plans is outside your access." });
-      }
-      const existingOwner = { ownerScope: plan.owner_scope, ownerUserId: plan.owner_user_id, ownerClubId: plan.owner_club_id, ownerTeamId: plan.owner_team_id };
       if (plan.owner_scope !== "unresolved") {
+        // An already-resolved plan can only ever end up idempotent-200
+        // or 409 below - never a real scope change - so this keeps the
+        // original, simpler "does my current workspace cover this
+        // athlete" gate rather than the stricter creator check below.
+        const allowed = await isAthleteInWorkspaceScope(scope, plan.athlete_id);
+        if (!allowed) {
+          await client.query("rollback");
+          return res.status(403).json({ error: "One of the chosen plans is outside your access." });
+        }
+        const existingOwner = { ownerScope: plan.owner_scope, ownerUserId: plan.owner_user_id, ownerClubId: plan.owner_club_id, ownerTeamId: plan.owner_team_id };
         if (sameOwnerContext(existingOwner, owner)) {
           alreadyMatchingPlanIds.push(planId);
           continue;
         }
         await client.query("rollback");
         return res.status(409).json({ error: `Plan ${planId} is already assigned to a different workspace.` });
+      }
+      // Genuinely unresolved: only the plan's own original creator (or a
+      // real platform administrator) may assign it a scope - see
+      // canResolvePlanOwnership's own header for why workspace coverage
+      // of the athlete alone is not enough here.
+      const allowed = await canResolvePlanOwnership(scope, plan, req.user.id);
+      if (!allowed) {
+        await client.query("rollback");
+        return res.status(403).json({ error: "One of the chosen plans is outside your access." });
       }
       await client.query(
         `update training_load.plan_workspace_ownership
@@ -908,6 +934,10 @@ router.get("/weekly", async (req, res, next) => {
     // load in a weekly view is a separate, broader concern.
     let scopeSqlExternal = "";
     let params = [weekStart, weekEnd];
+    // (correction round 4) Only ever set on the coach branch below - an
+    // athlete account never resolves plan ownership, so every row it
+    // sees simply gets canResolveOwnership: false.
+    let resolutionScope = null;
 
     const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
     if (workspace?.type === "athlete") {
@@ -960,11 +990,21 @@ router.get("/weekly", async (req, res, next) => {
       // club/team it happens to hold a role in (see
       // resolveExternalScheduleWorkspaceScope's own header comment).
       await ensureCurrentExternalOccurrencesForCoach(externalScheduleScopeForWorkspace(workspace, req));
+      // (correction round 4) Reuses the SAME workspace read (never a
+      // second, independent resolveActiveWorkspace call) to compute the
+      // discriminated scope object canResolvePlanOwnership needs below,
+      // for each unresolved row's own canResolveOwnership field -
+      // whether THIS account, in its currently active workspace, could
+      // actually resolve that specific plan if it clicked "Use current
+      // workspace for RPE". Purely informational for the frontend (which
+      // button/state to render) - the resolve endpoint itself re-checks
+      // this from scratch and is the only real authorization boundary.
+      resolutionScope = externalScheduleScopeForWorkspace(workspace, req);
     }
 
     const liveResult = await query(
       `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled,
-              pd.date as session_date, p.id as plan_id, p.name as plan_name,
+              pd.date as session_date, p.id as plan_id, p.name as plan_name, p.created_by_user_id as plan_created_by_user_id,
               a.id as athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at,
               -- (v9) Never used to FILTER this coach-facing query (the
@@ -1084,6 +1124,14 @@ router.get("/weekly", async (req, res, next) => {
     for (const row of liveResult.rows) {
       const bucket = byDate.get(row.session_date);
       if (!bucket) continue;
+      const ownershipUnresolved = row.plan_owner_scope === "unresolved";
+      // Only ever computed for a row that actually needs it - every
+      // resolved/actionable row (the overwhelming majority) skips the
+      // extra DB round trip canResolvePlanOwnership's own
+      // isAthleteInWorkspaceScope check can require.
+      const canResolveOwnership = ownershipUnresolved && resolutionScope
+        ? await canResolvePlanOwnership(resolutionScope, { athlete_id: row.athlete_id, created_by_user_id: row.plan_created_by_user_id }, req.user.id)
+        : false;
       bucket.sessions.push({
         sessionId: row.session_id,
         sessionName: row.session_name || "",
@@ -1117,7 +1165,14 @@ router.get("/weekly", async (req, res, next) => {
         // workspacePlannedRpeEnabled so the UI can distinguish "the
         // switch is off" from "this plan was never assigned" - the two
         // require different actions from the coach.
-        ownershipUnresolved: row.plan_owner_scope === "unresolved",
+        ownershipUnresolved,
+        // (correction round 4) Purely informational - see resolutionScope's
+        // own comment above. The frontend uses this ONLY to decide which
+        // control to render (an active "Use current workspace for RPE"
+        // button vs. a plain "ask the creator/administrator" note); the
+        // resolve endpoint itself is the real, re-checked authorization
+        // boundary.
+        canResolveOwnership,
         source: "planned",
         externalAssignmentId: null,
         scheduleId: null,
@@ -1146,6 +1201,7 @@ router.get("/weekly", async (req, res, next) => {
         workspacePlannedRpeEnabled: true,
         actionable: false,
         ownershipUnresolved: false,
+        canResolveOwnership: false,
         source: "planned",
         externalAssignmentId: null,
         scheduleId: null,
@@ -1184,6 +1240,7 @@ router.get("/weekly", async (req, res, next) => {
         assignmentStatus: row.assignment_status,
         actionable: row.feedback_id == null && row.schedule_status === "active" && ["pending", "open", "in_progress"].includes(row.assignment_status),
         ownershipUnresolved: false,
+        canResolveOwnership: false,
       });
     }
 

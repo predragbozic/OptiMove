@@ -129,6 +129,36 @@ export async function isAthleteInWorkspaceScope(scope, athleteId) {
   return false;
 }
 
+// Correction round 4: workspace-scope coverage of a plan's athlete is
+// NOT proof that a given workspace actually OWNS an 'unresolved' plan -
+// isAthleteInWorkspaceScope alone let ANY workspace that happens to
+// currently manage the same athlete (a private coach, a different club
+// via a second membership, etc.) claim a legacy plan regardless of who
+// actually made it, turning "resolve the ownership" into "whoever clicks
+// first wins" - exactly the kind of cross-workspace leak this branch's
+// own ownership model exists to prevent, just moved into the resolution
+// action itself instead of the read path.
+//
+// Conservative rule for a genuinely UNRESOLVED plan: only its own
+// ORIGINAL creator (plans.plans.created_by_user_id) may resolve it, and
+// only while their own currently active workspace still genuinely covers
+// the plan's athlete (never a bare identity check alone - a creator who
+// no longer has any real relationship to this athlete can't resolve it
+// either). A plan with no creator on record (created_by_user_id is
+// null - never guessed at) is never resolvable through this identity
+// check by anyone. A real platform administrator is the one deliberate,
+// explicit override for exactly that "creator is gone/unknown" case -
+// never a plain club/team/private-coach workspace, no matter how
+// legitimately it manages the same athlete today.
+//
+// `plan` here only ever needs `athlete_id` and `created_by_user_id` -
+// callers pass whatever subset of a fuller row they already have.
+export async function canResolvePlanOwnership(scope, plan, userId) {
+  if (scope.type === "platform") return true;
+  if (plan.created_by_user_id == null || String(plan.created_by_user_id) !== String(userId)) return false;
+  return isAthleteInWorkspaceScope(scope, plan.athlete_id);
+}
+
 export function canManageExternalScheduleInScope(scope, schedule) {
   if (scope.type === "platform") return true;
   if (scope.type === "club") return schedule.owner_scope === "club" && String(schedule.owner_club_id) === String(scope.clubId);

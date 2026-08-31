@@ -176,6 +176,7 @@ const LEGACY_FIXTURE_SQL = `
     add column is_edit_draft boolean not null default false,
     add column edit_source_plan_id uuid references plans.plans(id),
     add column week_start date,
+    add column created_by_user_id uuid references public.users(id),
     add column created_at timestamptz not null default now(),
     add column updated_at timestamptz not null default now();
   alter table plans.plan_days
@@ -380,11 +381,11 @@ async function setPlanOwnershipDirect(planId, scope) {
 }
 
 async function makeWeeklyPlan(athleteId, overrides = {}) {
-  const { name = "Weekly plan", weekStart = THIS_WEEK_START, status = "active", isActive = true, isEditDraft = false, owner = null } = overrides;
+  const { name = "Weekly plan", weekStart = THIS_WEEK_START, status = "active", isActive = true, isEditDraft = false, owner = null, createdByUserId = null } = overrides;
   const result = await query(
-    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, week_start)
-     values ('weekly', $1, $2, $3, $4, $5, $6) returning id`,
-    [athleteId, name, status, isActive, isEditDraft, weekStart],
+    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, week_start, created_by_user_id)
+     values ('weekly', $1, $2, $3, $4, $5, $6, $7) returning id`,
+    [athleteId, name, status, isActive, isEditDraft, weekStart, createdByUserId],
   );
   const planId = result.rows[0].id;
   if (owner) await setPlanOwnershipDirect(planId, owner);
@@ -1027,10 +1028,10 @@ test("J1. an unresolved existing plan stays inactive and clearly marked even whi
   assert.equal(row.actionable, false);
 });
 
-test("J2. explicitly resolving an unresolved plan to the current workspace makes its current/future session actionable", async () => {
+test("J2. the plan's own original creator explicitly resolving it to the current workspace makes its current/future session actionable", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("j2", 1);
-  const { sessionId, planId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Legacy session" }, plan: { owner: { type: "unresolved" } } });
   const coachUserId = (await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id;
+  const { sessionId, planId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Legacy session" }, plan: { owner: { type: "unresolved" }, createdByUserId: coachUserId } });
   await setActiveWorkspace(coachUserId, "club", clubId);
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
 
@@ -1049,9 +1050,9 @@ test("J2. explicitly resolving an unresolved plan to the current workspace makes
 
 test("J3. a plan resolved to the current workspace still respects the enabled_at cutoff - a session from before the switch was enabled stays inactive", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("j3", 1);
-  const pastDate = addDaysIso(TODAY, -10);
-  const { sessionId, planId } = await makeActiveSessionOn(athletes[0].athleteId, pastDate, { session: { name: "Old legacy session" }, plan: { weekStart: mondayOfIso(pastDate), owner: { type: "unresolved" } } });
   const coachUserId = (await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id;
+  const pastDate = addDaysIso(TODAY, -10);
+  const { sessionId, planId } = await makeActiveSessionOn(athletes[0].athleteId, pastDate, { session: { name: "Old legacy session" }, plan: { weekStart: mondayOfIso(pastDate), owner: { type: "unresolved" }, createdByUserId: coachUserId } });
   await setActiveWorkspace(coachUserId, "club", clubId);
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
 
@@ -1093,33 +1094,118 @@ test("J5. Club A cannot resolve a plan belonging to an athlete who only belongs 
   assert.equal(ownershipRow.owner_scope, "unresolved");
 });
 
-test("J6. two concurrent resolution requests for the SAME plan from two different authorized workspaces give exactly one winner, the other a 409", async () => {
+// ------------------------------------------------------------
+// Correction round 4: workspace-scope coverage of a plan's athlete is
+// NOT proof of ownership - only the plan's own ORIGINAL creator (or a
+// real platform administrator) may resolve a genuinely unresolved plan.
+// J6-J11 below replace the OLD J6 (which wrongly treated "two different
+// workspaces that both happen to manage the same athlete" as a
+// legitimate race between equally-authorized parties - exactly the bug
+// this correction closes) with the real semantics: only the creator's
+// OWN identity (in a workspace that still covers the athlete), or a
+// platform override, may ever resolve one.
+// ------------------------------------------------------------
+
+test("J6. a private coach who genuinely manages the same athlete (a real user_athletes relation) but did NOT create the plan still gets 403 - workspace coverage alone is never proof of ownership", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("j6", 1);
   const athleteId = athletes[0].athleteId;
+  const coachUserId = (await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id;
   const privateCoachId = await makeUser({ email: `j6-private-${Date.now()}@test.local` });
   await grantGlobalRole(privateCoachId, "independent_coach");
+  // A REAL, active relation - this private coach genuinely, legitimately
+  // manages this athlete today. That must still never be enough on its
+  // own: the plan was created by the CLUB coach, not this private coach.
   await grantPrivateCoachRelation(privateCoachId, athleteId);
   const privateCoachCookie = await loginCookie(privateCoachId);
-
-  const { planId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Contested plan" }, plan: { owner: { type: "unresolved" } } });
-
-  await setActiveWorkspace((await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id, "club", clubId);
   await setActiveWorkspace(privateCoachId, "private_coach", null);
 
-  const [clubResult, privateResult] = await Promise.all([
-    api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", cookie: coachCookie, body: { planIds: [planId] } }),
-    api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", cookie: privateCoachCookie, body: { planIds: [planId] } }),
-  ]);
-  const statuses = [clubResult.status, privateResult.status].sort();
-  assert.deepEqual(statuses, [200, 409], `expected one 200 and one 409, got club=${clubResult.status} private=${privateResult.status}`);
+  const { planId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Club-created plan" }, plan: { owner: { type: "unresolved" }, createdByUserId: coachUserId } });
+
+  const resolveRes = await api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", cookie: privateCoachCookie, body: { planIds: [planId] } });
+  assert.equal(resolveRes.status, 403, `expected 403, got ${resolveRes.status}: ${JSON.stringify(resolveRes.body)}`);
   const ownershipRow = (await query(`select owner_scope from training_load.plan_workspace_ownership where plan_id = $1`, [planId])).rows[0];
-  assert.ok(ownershipRow.owner_scope === "club" || ownershipRow.owner_scope === "user", "the winner's own scope must be the one actually stored, never left unresolved or overwritten twice");
+  assert.equal(ownershipRow.owner_scope, "unresolved", "must remain unresolved - a real relationship to the athlete is not the same as having created this plan");
 });
 
-test("J7. a plan already resolved to a real scope can never have its workspace changed through this endpoint - a genuine conflict is 409, a same-scope retry is idempotent", async () => {
+test("J7. a coach from a DIFFERENT club who also has this athlete (a second, real membership) but did NOT create the plan still gets 403", async () => {
   const clubA = await makeClubWithAthletes("j7a", 1);
   const clubB = await makeClub("J7 Club B");
   const clubBCoachId = await makeUser({ email: `j7-clubb-${Date.now()}@test.local` });
+  await grantClubAdmin(clubBCoachId, clubB);
+  const clubBCoachCookie = await loginCookie(clubBCoachId);
+  // The athlete genuinely, actively belongs to Club B too - Club B's own
+  // coach is otherwise authorized against this athlete. Still not enough:
+  // Club A's own coach created this specific plan.
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [clubA.athletes[0].athleteId, clubB]);
+
+  const { planId } = await makeActiveSessionOn(clubA.athletes[0].athleteId, TODAY, { session: { name: "Club A-created plan" }, plan: { owner: { type: "unresolved" }, createdByUserId: clubA.coachId } });
+
+  await setActiveWorkspace(clubBCoachId, "club", clubB);
+  const resolveRes = await api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", cookie: clubBCoachCookie, body: { planIds: [planId] } });
+  assert.equal(resolveRes.status, 403, `expected 403, got ${resolveRes.status}: ${JSON.stringify(resolveRes.body)}`);
+  const ownershipRow = (await query(`select owner_scope from training_load.plan_workspace_ownership where plan_id = $1`, [planId])).rows[0];
+  assert.equal(ownershipRow.owner_scope, "unresolved");
+});
+
+test("J8. the plan's own original creator, who also holds a second, unrelated workspace role, can explicitly resolve it through whichever workspace they're currently in", async () => {
+  const { clubId, athletes, coachCookie, coachId } = await makeClubWithAthletes("j8", 1);
+  const athleteId = athletes[0].athleteId;
+  // The SAME creator ALSO becomes this athlete's private coach - a real,
+  // second, valid workspace of their own.
+  await grantGlobalRole(coachId, "independent_coach");
+  await grantPrivateCoachRelation(coachId, athleteId);
+
+  const { planId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Own plan" }, plan: { owner: { type: "unresolved" }, createdByUserId: coachId } });
+
+  // Resolves it through the PRIVATE COACH workspace, not the club one it
+  // was implicitly created under - their own explicit, current-workspace
+  // click is the decision, exactly as the spec allows.
+  await setActiveWorkspace(coachId, "private_coach", null);
+  const resolveRes = await api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", cookie: coachCookie, body: { planIds: [planId] } });
+  assert.equal(resolveRes.status, 200, `expected 200, got ${resolveRes.status}: ${JSON.stringify(resolveRes.body)}`);
+  const ownershipRow = (await query(`select owner_scope, owner_user_id from training_load.plan_workspace_ownership where plan_id = $1`, [planId])).rows[0];
+  assert.equal(ownershipRow.owner_scope, "user");
+  assert.equal(ownershipRow.owner_user_id, coachId);
+});
+
+test("J9. two truly parallel resolution requests from the SAME original creator (two real sessions/tabs, same currently-active workspace) racing for the SAME plan are idempotent and conflict-safe - exactly one real update, one clean idempotent match, never a lost update or a spurious rejection", async () => {
+  // Note: the account's active workspace (public.user_workspace_
+  // preferences) is a single server-side value per account, never per-
+  // session/tab - there is no way for the SAME account to genuinely be
+  // "in" two different workspaces at the same instant, so a real race
+  // between this one creator's own two DIFFERENT workspaces can't be
+  // constructed (switching one tab's workspace immediately changes it
+  // for every other tab/session of that same account too). What IS a
+  // real, physically possible race for a single account: two tabs both
+  // sitting in the SAME active workspace, both clicking "resolve" on the
+  // same plan at once - exactly what this test drives, through the
+  // exact same FOR UPDATE lock this endpoint already serializes on.
+  const { clubId, athletes, coachCookie, coachId } = await makeClubWithAthletes("j9", 1);
+  const secondSessionCookie = await loginCookie(coachId); // a second real login/session for the same account, e.g. a second tab
+
+  const { planId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Contested-by-self plan" }, plan: { owner: { type: "unresolved" }, createdByUserId: coachId } });
+  await setActiveWorkspace(coachId, "club", clubId);
+
+  const [firstResult, secondResult] = await Promise.all([
+    api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", cookie: coachCookie, body: { planIds: [planId] } }),
+    api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", cookie: secondSessionCookie, body: { planIds: [planId] } }),
+  ]);
+  assert.equal(firstResult.status, 200, `expected 200, got ${firstResult.status}: ${JSON.stringify(firstResult.body)}`);
+  assert.equal(secondResult.status, 200, `expected 200 (idempotent), got ${secondResult.status}: ${JSON.stringify(secondResult.body)}`);
+  const outcomes = [firstResult.body, secondResult.body];
+  const realResolves = outcomes.filter((b) => b.resolvedPlanIds.includes(planId)).length;
+  const idempotentMatches = outcomes.filter((b) => b.alreadyMatchingPlanIds.includes(planId)).length;
+  assert.equal(realResolves, 1, "exactly ONE of the two racing requests must perform the real unresolved -> resolved transition");
+  assert.equal(idempotentMatches, 1, "the OTHER must see it as already matching its own scope - a clean idempotent no-op, never a lost update or a duplicate resolve");
+  const ownershipRow = (await query(`select owner_scope, owner_club_id from training_load.plan_workspace_ownership where plan_id = $1`, [planId])).rows[0];
+  assert.equal(ownershipRow.owner_scope, "club");
+  assert.equal(ownershipRow.owner_club_id, clubId);
+});
+
+test("J10. a plan already resolved to a real scope can never have its workspace changed through this endpoint - a genuine conflict is 409, a same-scope retry is idempotent", async () => {
+  const clubA = await makeClubWithAthletes("j10a", 1);
+  const clubB = await makeClub("J10 Club B");
+  const clubBCoachId = await makeUser({ email: `j10-clubb-${Date.now()}@test.local` });
   await grantClubAdmin(clubBCoachId, clubB);
   const clubBCoachCookie = await loginCookie(clubBCoachId);
   // The SAME athlete also gets a real membership in Club B, so Club B's
@@ -1143,4 +1229,40 @@ test("J7. a plan already resolved to a real scope can never have its workspace c
   assert.equal(idempotentRes.status, 200, "Club A resolving its OWN already-matching plan must be a clean idempotent no-op, never an error");
   assert.deepEqual(idempotentRes.body.alreadyMatchingPlanIds, [planId]);
   assert.deepEqual(idempotentRes.body.resolvedPlanIds, []);
+});
+
+test("J11. a mixed bulk batch - one plan the caller genuinely created, one that belongs to someone else - rejects the WHOLE request atomically, and changes neither", async () => {
+  const { clubId, athletes, coachCookie, coachId } = await makeClubWithAthletes("j11", 2);
+  const ownPlan = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Own plan" }, plan: { owner: { type: "unresolved" }, createdByUserId: coachId } });
+  // A second plan, same club/workspace scope (so the OLD, wrong rule
+  // would have allowed it), but created by a DIFFERENT coach.
+  const otherCoachId = await makeUser({ email: `j11-other-${Date.now()}@test.local` });
+  await grantClubAdmin(otherCoachId, clubId);
+  const foreignPlan = await makeActiveSessionOn(athletes[1].athleteId, TODAY, { session: { name: "Someone else's plan" }, plan: { owner: { type: "unresolved" }, createdByUserId: otherCoachId } });
+
+  await setActiveWorkspace(coachId, "club", clubId);
+  const resolveRes = await api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", cookie: coachCookie, body: { planIds: [ownPlan.planId, foreignPlan.planId] } });
+  assert.equal(resolveRes.status, 403, `expected the whole batch to be rejected with 403, got ${resolveRes.status}: ${JSON.stringify(resolveRes.body)}`);
+
+  const rows = (await query(`select plan_id, owner_scope from training_load.plan_workspace_ownership where plan_id = any($1::uuid[])`, [[ownPlan.planId, foreignPlan.planId]])).rows;
+  for (const row of rows) {
+    assert.equal(row.owner_scope, "unresolved", `plan ${row.plan_id} must stay unresolved - a mixed batch must never partially apply, not even for the one plan the caller genuinely owns`);
+  }
+});
+
+test("J12. a real platform administrator's explicit override CAN resolve an unresolved plan regardless of who created it - the one deliberate exception, never a plain club/team/private-coach workspace", async () => {
+  const { athletes } = await makeClubWithAthletes("j12", 1);
+  const athleteId = athletes[0].athleteId;
+  const someOtherCoachId = await makeUser({ email: `j12-creator-${Date.now()}@test.local` });
+  const platformAdminId = await makeUser({ email: `j12-platform-${Date.now()}@test.local` });
+  await grantGlobalRole(platformAdminId, "platform_admin");
+  const platformCookie = await loginCookie(platformAdminId);
+  await setActiveWorkspace(platformAdminId, "platform", null);
+
+  const { planId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Orphaned-creator plan" }, plan: { owner: { type: "unresolved" }, createdByUserId: someOtherCoachId } });
+
+  const resolveRes = await api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", cookie: platformCookie, body: { planIds: [planId] } });
+  assert.equal(resolveRes.status, 200, `expected the platform override to succeed, got ${resolveRes.status}: ${JSON.stringify(resolveRes.body)}`);
+  const ownershipRow = (await query(`select owner_scope from training_load.plan_workspace_ownership where plan_id = $1`, [planId])).rows[0];
+  assert.equal(ownershipRow.owner_scope, "system", "the platform override stamps the real system scope, not a borrowed club/team/user one");
 });

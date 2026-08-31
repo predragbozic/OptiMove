@@ -1388,11 +1388,11 @@ test("U10. the rated/planned denominator (Results) excludes an unrated session w
 // trainingLoad.js's own POST /plans/resolve-rpe-ownership.
 // ------------------------------------------------------------
 
-test("V1. an unresolved plan's session shows a distinct 'RPE workspace not assigned' status and a resolve button - never conflated with a plain workspace-switch-off row", () => {
+test("V1. an unresolved plan's session THIS ACCOUNT CAN resolve shows a distinct 'RPE workspace not assigned' status and an active resolve button - never conflated with a plain workspace-switch-off row", () => {
   resetState();
   state.trainingLoad.plannedRpeSetting = { enabled: true, enabledAt: "2026-08-20T00:00:00Z", loaded: true, loading: false, saving: false, error: "" };
   state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
-    "2026-08-24": [session({ planId: "plan-unresolved-1", workspacePlannedRpeEnabled: false, actionable: false, ownershipUnresolved: true })],
+    "2026-08-24": [session({ planId: "plan-unresolved-1", workspacePlannedRpeEnabled: false, actionable: false, ownershipUnresolved: true, canResolveOwnership: true })],
   });
   const html = renderTrainingLoadScheduleHtml();
   assert.ok(html.includes("RPE workspace not assigned"));
@@ -1400,6 +1400,20 @@ test("V1. an unresolved plan's session shows a distinct 'RPE workspace not assig
   assert.ok(html.includes("Use current workspace for RPE"));
   assert.ok(html.includes('data-action="training-load-resolve-plan-ownership"'));
   assert.ok(html.includes('data-plan-id="plan-unresolved-1"'));
+  assert.ok(!html.includes("Ask the plan creator or administrator"));
+});
+
+test("V1b. an unresolved plan's session this account CANNOT resolve (canResolveOwnership: false) stays clearly marked but shows no active button - never lets a non-creator/non-admin account attempt to claim it", () => {
+  resetState();
+  state.trainingLoad.plannedRpeSetting = { enabled: true, enabledAt: "2026-08-20T00:00:00Z", loaded: true, loading: false, saving: false, error: "" };
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
+    "2026-08-24": [session({ planId: "plan-unresolved-2", workspacePlannedRpeEnabled: false, actionable: false, ownershipUnresolved: true, canResolveOwnership: false })],
+  });
+  const html = renderTrainingLoadScheduleHtml();
+  assert.ok(html.includes("RPE workspace not assigned"), "still clearly marked as unresolved");
+  assert.ok(html.includes("Ask the plan creator or administrator to assign its RPE workspace"));
+  assert.ok(!html.includes("Use current workspace for RPE"), "no active resolve control when this account isn't authorized to use it");
+  assert.ok(!html.includes('data-action="training-load-resolve-plan-ownership"'));
 });
 
 test("V2. clicking 'Use current workspace for RPE' resolves exactly that one plan and reloads the weekly view", async () => {
@@ -1422,10 +1436,10 @@ test("V3. the master toggle shows a bulk-resolve banner only while ON and only w
   state.trainingLoad.plannedRpeSetting = { enabled: true, enabledAt: "2026-08-20T00:00:00Z", loaded: true, loading: false, saving: false, error: "" };
   state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
     "2026-08-24": [
-      session({ sessionId: "sess-a", planId: "plan-unresolved-1", ownershipUnresolved: true }),
-      session({ sessionId: "sess-b", planId: "plan-unresolved-1", ownershipUnresolved: true }),
+      session({ sessionId: "sess-a", planId: "plan-unresolved-1", ownershipUnresolved: true, canResolveOwnership: true }),
+      session({ sessionId: "sess-b", planId: "plan-unresolved-1", ownershipUnresolved: true, canResolveOwnership: true }),
     ],
-    "2026-08-25": [session({ sessionId: "sess-c", planId: "plan-unresolved-2", ownershipUnresolved: true })],
+    "2026-08-25": [session({ sessionId: "sess-c", planId: "plan-unresolved-2", ownershipUnresolved: true, canResolveOwnership: true })],
   });
   const onHtml = renderPlannedRpeMasterToggleHtml();
   assert.ok(onHtml.includes("2 plans"), "two DISTINCT plan ids across three sessions must be counted once each, never once per session");
@@ -1445,6 +1459,22 @@ test("V3. the master toggle shows a bulk-resolve banner only while ON and only w
   });
   const cleanHtml = renderPlannedRpeMasterToggleHtml();
   assert.ok(!cleanHtml.includes("training-load-resolve-all-unresolved"));
+});
+
+test("V3b. the bulk-resolve list and count include ONLY plans this account can actually resolve - a visible unresolved plan with canResolveOwnership: false is never silently swept into the bulk action", () => {
+  resetState();
+  state.trainingLoad.plannedRpeSetting = { enabled: true, enabledAt: "2026-08-20T00:00:00Z", loaded: true, loading: false, saving: false, error: "" };
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
+    "2026-08-24": [
+      session({ sessionId: "sess-mine", planId: "plan-mine", ownershipUnresolved: true, canResolveOwnership: true }),
+      session({ sessionId: "sess-someone-elses", planId: "plan-someone-elses", ownershipUnresolved: true, canResolveOwnership: false }),
+    ],
+  });
+  const html = renderPlannedRpeMasterToggleHtml();
+  assert.ok(html.includes("1 plan"), "only the ONE resolvable plan is counted, never both visible unresolved plans");
+  const button = /data-plan-ids="([^"]*)"/.exec(html);
+  assert.ok(button, "the bulk button must still render for the one resolvable plan");
+  assert.deepEqual(button[1].split(",").filter(Boolean), ["plan-mine"], "the bulk action's own planIds list must never include a plan this account can't resolve");
 });
 
 test("V4. the bulk resolve action shows a confirm dialog first - Cancel sends nothing", async () => {
