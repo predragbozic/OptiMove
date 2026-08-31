@@ -84,6 +84,27 @@ export function externalScheduleScopeForWorkspace(workspace, req) {
   return scope;
 }
 
+// Resolves the account's CURRENTLY ACTIVE workspace into the SAME owner_
+// scope/owner_*_id shape used everywhere in training_load (external
+// schedules, the planned-RPE workspace setting, and - see migrations_v2/
+// 202609040900 - a Weekly plan's own STORED ownership snapshot), for a
+// caller that only needs ownership, never scope-based target validation.
+// Used by routes/builder.js to snapshot a NEW weekly plan's owner at
+// creation time - see training_load.plan_workspace_ownership's own
+// migration header for why that snapshot must be taken once and stored,
+// never re-derived from an athlete's current memberships. Returns
+// owner_scope: 'unresolved' for an athlete workspace or no workspace at
+// all (a coach account somehow creating a plan with no real manageable
+// workspace active) - the same conservative "never guess" rule the
+// legacy backfill in that migration already applies, extended here to
+// the live-creation path too.
+export async function resolveCurrentWorkspaceOwnerContext(req) {
+  const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+  const scope = externalScheduleScopeFromWorkspace(workspace, req);
+  if (scope.type === null) return { ownerScope: "unresolved", ownerUserId: null, ownerClubId: null, ownerTeamId: null };
+  return externalScheduleOwnerContextFromWorkspace(workspace, req);
+}
+
 export function canManageExternalScheduleInScope(scope, schedule) {
   if (scope.type === "platform") return true;
   if (scope.type === "club") return schedule.owner_scope === "club" && String(schedule.owner_club_id) === String(scope.clubId);

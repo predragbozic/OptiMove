@@ -3,8 +3,45 @@ import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
+import { resolveCurrentWorkspaceOwnerContext } from "../trainingLoadAccess.js";
 
 const router = Router();
+
+// ------------------------------------------------------------
+// training_load.plan_workspace_ownership (migrations_v2/202609040900) -
+// a Weekly plan's own STABLE, STORED workspace-ownership snapshot, used
+// exclusively by training_load's own planned-RPE master toggle (never
+// read anywhere else in Builder itself). Written exactly once, here, at
+// the moment a real weekly plan is actually created:
+//   - a genuinely NEW plan (POST /plans) or a genuine copy/assign
+//     (POST /plans/:planId/duplicate) snapshots the CREATING coach's own
+//     currently active workspace, fresh - never inherited from a source
+//     plan, even when duplicating one.
+//   - an edit-draft (POST /plans/:planId/edit) copies the SOURCE plan's
+//     own already-stored snapshot verbatim - it represents the exact
+//     same real plan mid-edit, not a new one, and must never silently
+//     move to whatever workspace the editing coach happens to be in
+//     right now if that ever differs.
+// Never re-derived from the athlete's current memberships at read time -
+// see that migration's own header for the full reasoning.
+async function insertPlanOwnershipSnapshot(client, planId, owner) {
+  await client.query(
+    `insert into training_load.plan_workspace_ownership (plan_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
+     values ($1,$2,$3,$4,$5)
+     on conflict (plan_id) do nothing`,
+    [planId, owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId],
+  );
+}
+
+async function copyPlanOwnershipSnapshot(client, sourcePlanId, newPlanId) {
+  await client.query(
+    `insert into training_load.plan_workspace_ownership (plan_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
+     select $2, owner_scope, owner_user_id, owner_club_id, owner_team_id
+     from training_load.plan_workspace_ownership where plan_id = $1
+     on conflict (plan_id) do nothing`,
+    [sourcePlanId, newPlanId],
+  );
+}
 const NODE_TYPES = new Set(["domain", "category", "section"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -154,6 +191,12 @@ router.post("/plans", async (req, res, next) => {
     const targets = athletes.length ? athletes : [null];
     const batchId = targets.length > 1 ? randomUUID() : null;
     const createdIds = [];
+    // Resolved ONCE, from the CREATING coach's own currently active
+    // workspace - every plan this single request creates (a multi-
+    // athlete batch shares one request) gets the SAME real snapshot,
+    // never re-resolved per target (see this file's own header comment
+    // on training_load.plan_workspace_ownership).
+    const planOwner = planType === "weekly" ? await resolveCurrentWorkspaceOwnerContext(req) : null;
     client = await pool.connect();
     await client.query("begin");
     if (planType === "weekly") {
@@ -177,7 +220,10 @@ router.post("/plans", async (req, res, next) => {
         [planType, req.user.id, target?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), nullableText(req.body?.coverImageUrl), isTemplate, weekStart, batchId],
       );
       createdIds.push(created.rows[0].id);
-      if (planType === "weekly") await createWeeklyDays(client, created.rows[0].id, weekStart);
+      if (planType === "weekly") {
+        await createWeeklyDays(client, created.rows[0].id, weekStart);
+        await insertPlanOwnershipSnapshot(client, created.rows[0].id, planOwner);
+      }
     }
     await client.query("commit");
     client.release();
@@ -332,6 +378,12 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
     const status = intent === "assign" ? "active" : "draft";
     const createdIds = [];
     const assignedPlans = [];
+    // A genuine copy/assign always gets a FRESH ownership snapshot from
+    // the CURRENT active workspace, resolved once for this whole request
+    // - never inherited from the source plan (see this file's own
+    // header comment). A plain program/template duplicate (plan_type !==
+    // "weekly") never needs one at all.
+    const planOwner = source.plan_type === "weekly" ? await resolveCurrentWorkspaceOwnerContext(req) : null;
     client = await pool.connect();
     await client.query("begin");
 
@@ -409,8 +461,12 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
         [source.plan_type, req.user.id, target?.id || null, planName, source.note, source.icon_url, source.color, isTemplate, status, source.start_date, source.duration_days, targetWeekStart, batchId],
       );
       createdIds.push(created.rows[0].id);
-      if (source.plan_type === "weekly") await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
-      else await copyProgramTree(client, source.id, created.rows[0].id);
+      if (source.plan_type === "weekly") {
+        await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart);
+        await insertPlanOwnershipSnapshot(client, created.rows[0].id, planOwner);
+      } else {
+        await copyProgramTree(client, source.id, created.rows[0].id);
+      }
       // target is never null here - intent === "assign" already required at
       // least one real athlete target above, so this loop only ever
       // produces real, athlete-owned rows when it's populating this list.
@@ -506,8 +562,17 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
     // session the coach is about to edit, not a new one - see
     // copyDaySessions' own comment on why that distinction matters for
     // training_load.session_feedback's stable identity.
-    if (plan.plan_type === "weekly") await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start, { preserveLogicalId: true });
-    else await copyProgramTree(client, plan.id, created.rows[0].id);
+    if (plan.plan_type === "weekly") {
+      await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start, { preserveLogicalId: true });
+      // The edit-draft represents the EXACT same real plan mid-edit, not
+      // a new one - its own ownership snapshot is copied verbatim from
+      // the source (see this file's own header comment on
+      // training_load.plan_workspace_ownership), never re-resolved from
+      // whatever workspace the editing coach happens to be in right now.
+      await copyPlanOwnershipSnapshot(client, plan.id, created.rows[0].id);
+    } else {
+      await copyProgramTree(client, plan.id, created.rows[0].id);
+    }
     await client.query("commit");
     client.release();
     client = null;

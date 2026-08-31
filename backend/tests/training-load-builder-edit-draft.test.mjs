@@ -55,6 +55,15 @@ after(async () => {
     ["training_load.session_feedback", () => cleanupAthleteIds.size && query(
       `delete from training_load.session_feedback where athlete_id = any($1::uuid[])`, [[...cleanupAthleteIds]],
     )],
+    // Each test's own club-scoped planned-RPE setting (see
+    // enablePlannedRpeForClub below) - must be removed BEFORE the club
+    // itself (owner_club_id is an ON DELETE RESTRICT foreign key), and
+    // in any case per this branch's own explicit rule: a real-DB test
+    // must create, use, and tear down its OWN scope-specific setting,
+    // never leave a permanent row behind.
+    ["training_load.planned_rpe_workspace_settings", () => cleanupClubIds.size && query(
+      `delete from training_load.planned_rpe_workspace_settings where owner_club_id = any($1::uuid[])`, [[...cleanupClubIds]],
+    )],
     ["plan trees (draft + live)", () => cleanupPlanIds.size && query(
       `delete from plans.plan_days where plan_id = any($1::uuid[])`, [[...cleanupPlanIds]],
     )],
@@ -168,11 +177,39 @@ function dayOrderForDate(date) {
   return raw === 0 ? 7 : raw;
 }
 
+// This file's plans are created via raw SQL (not through a real Builder
+// POST /plans call - see makeRealWeeklyPlan's own header), so they never
+// go through routes/builder.js's own automatic ownership-snapshot
+// insertion (insertPlanOwnershipSnapshot). Every test that submits real
+// RPE must therefore stamp its own plan's stored ownership directly, and
+// enable a matching, real, club-scoped setting of its own - never a
+// permanent/global row (removed in after() above, per this branch's own
+// explicit "no global test fixture" rule).
+async function setPlanOwnershipDirect(planId, clubId) {
+  await query(
+    `insert into training_load.plan_workspace_ownership (plan_id, owner_scope, owner_club_id)
+     values ($1,'club',$2)
+     on conflict (plan_id) do update set owner_scope = 'club', owner_club_id = excluded.owner_club_id, owner_user_id = null, owner_team_id = null`,
+    [planId, clubId],
+  );
+}
+async function enablePlannedRpeForClub(clubId) {
+  await query(
+    `insert into training_load.planned_rpe_workspace_settings (owner_scope, owner_club_id, enabled, enabled_at)
+     values ('club',$1,true,'2000-01-01T00:00:00Z')
+     on conflict (owner_scope, owner_user_id, owner_club_id, owner_team_id)
+     do update set enabled = true, enabled_at = excluded.enabled_at`,
+    [clubId],
+  );
+}
+
 test("a real Builder Edit -> Save and finish round trip preserves an already-submitted RPE result: one result, recognized as rated, never duplicated - and a genuinely new session added afterward is still independently ratable", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
 
   const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  await setPlanOwnershipDirect(livePlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
   const todayDayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
   const yesterdayDayId = await makeRealDay(livePlanId, YESTERDAY, dayOrderForDate(YESTERDAY));
   const todaySessionId = await makeRealSession(todayDayId, "Today session", "AM");
@@ -272,6 +309,8 @@ test("a real legacy pre-migration draft (its own session slot changed before sav
   const athlete = await makeAthleteInClub(coach.clubId);
 
   const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  await setPlanOwnershipDirect(livePlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
   const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
   const liveSessionId = await makeRealSession(dayId, "Pre-existing draft scenario session", "AM");
 
@@ -337,6 +376,8 @@ test("a real legacy pre-migration draft blocks new RPE on its live plan, and DIS
   const athlete = await makeAthleteInClub(coach.clubId);
 
   const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  await setPlanOwnershipDirect(livePlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
   const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
   const liveSessionId = await makeRealSession(dayId, "Pre-existing draft, discard scenario", "AM");
 
@@ -381,6 +422,9 @@ test("a batch-sync against an ALREADY-PUBLISHED sibling plan must never touch it
   // individually published.
   const sourcePlanId = await makeRealWeeklyPlan(coach.coachId, athleteA.athleteId);
   const siblingPlanId = await makeRealWeeklyPlan(coach.coachId, athleteB.athleteId);
+  await setPlanOwnershipDirect(sourcePlanId, coach.clubId);
+  await setPlanOwnershipDirect(siblingPlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
   const batchIdResult = await query(`select gen_random_uuid() as id`);
   const batchId = batchIdResult.rows[0].id;
   await query(`update plans.plans set builder_batch_id = $1 where id = any($2::uuid[])`, [batchId, [sourcePlanId, siblingPlanId]]);

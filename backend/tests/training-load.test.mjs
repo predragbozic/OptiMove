@@ -264,12 +264,43 @@ before(async () => {
   // for every workspace that has never configured it - this whole file
   // predates that switch and tests the ORIGINAL per-session rpe_enabled
   // behavior exclusively (the master toggle itself has its own dedicated
-  // test file, training-load-planned-rpe-master-toggle.test.mjs). A
-  // single platform-wide 'system' row, enabled from year 2000, makes
-  // every session/athlete this file's own tests create actionable by
-  // default - the SAME effective behavior every one of these tests
+  // test file, training-load-planned-rpe-master-toggle.test.mjs, which is
+  // where the actual workspace-isolation/ownership-scoping coverage
+  // lives). A single platform-wide 'system' row, enabled from year 2000,
+  // reproduces the SAME effective behavior every one of these tests
   // already assumed before v9 existed - without touching any individual
   // test's own assertions.
+  //
+  // Hardening correction: under the plan-scoped ownership model
+  // (training_load.plan_workspace_ownership - see migrations_v2/
+  // 202609040900's own header), a 'system' settings row only ever
+  // matches a plan whose OWN stored snapshot is owner_scope='system' - a
+  // bare settings row is no longer enough on its own, and this file's
+  // ~60 pre-existing tests create every plan via raw SQL across several
+  // call sites, none of which stamp an ownership snapshot. Rather than
+  // touch every one of those call sites individually, this disposable
+  // temp DB (created fresh above, dropped in after() - never the shared
+  // local OPTIMOVE database) gets a TEST-ONLY trigger that stamps
+  // owner_scope='system' on every weekly plan the instant it's inserted,
+  // regardless of which of this file's several fixture helpers created
+  // it. This is an honest, coherent scope choice for this file (which
+  // deliberately tests pre-workspace-toggle behavior, where every plan
+  // implicitly belongs to a single global switch) - not a shortcut that
+  // lets these tests avoid giving their plans a real, matching owner.
+  await query(`
+    create or replace function training_load.test_auto_system_ownership() returns trigger language plpgsql as $$
+    begin
+      if new.plan_type = 'weekly' then
+        insert into training_load.plan_workspace_ownership (plan_id, owner_scope)
+        values (new.id, 'system')
+        on conflict (plan_id) do nothing;
+      end if;
+      return new;
+    end;
+    $$;
+    create trigger test_auto_system_ownership after insert on plans.plans
+    for each row execute function training_load.test_auto_system_ownership();
+  `);
   await query(
     `insert into training_load.planned_rpe_workspace_settings (owner_scope, enabled, enabled_at) values ('system', true, '2000-01-01T00:00:00Z')`,
   );

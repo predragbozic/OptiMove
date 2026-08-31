@@ -186,14 +186,17 @@ router.get("/athlete/today", async (req, res, next) => {
          and p.athlete_id = $1
          and pd.date = $2::date
          -- Per-session RPE opt-out, AND (v9) the workspace-level master
-         -- toggle - a disabled session, OR one whose governing
-         -- workspace(s) currently have automatic planned RPE off, is
-         -- never shown to the athlete as a request at all (not pending,
-         -- not "Not rated") unless it already has a result. An existing
-         -- result from before either was turned off keeps showing as its
-         -- already-rated summary - existing history is never hidden.
+         -- toggle - a disabled session, OR one whose OWN plan is not
+         -- currently governed by an enabled workspace (see
+         -- planned_rpe_effective_for_plan - this is the plan's own
+         -- STORED ownership snapshot, never the athlete's current,
+         -- possibly-unrelated memberships), is never shown to the
+         -- athlete as a request at all (not pending, not "Not rated")
+         -- unless it already has a result. An existing result from
+         -- before either was turned off keeps showing as its already-
+         -- rated summary - existing history is never hidden.
          and (
-           (coalesce(ps.rpe_enabled, true) and training_load.planned_rpe_effective_for_athlete(p.athlete_id, pd.date))
+           (coalesce(ps.rpe_enabled, true) and training_load.planned_rpe_effective_for_plan(p.id, pd.date))
            or sf.id is not null
          )
        order by ps.session_order`,
@@ -384,40 +387,34 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
 
     // Workspace-level master toggle (v9) - the effective rule is
     // "workspace automatic planned RPE enabled AND session.rpe_enabled",
-    // the per-session gate just above. Every row that currently COULD
-    // affect this athlete (any qualifying scope with enabled=true - see
-    // planned_rpe_effective_for_athlete's own header for "any wins") is
-    // locked FOR UPDATE before reading the effective value, so a
-    // concurrent PATCH /planned-rpe-setting turning one of them off must
+    // the per-session gate just above. This SESSION's own PLAN carries a
+    // stable, stored ownership snapshot (training_load.
+    // plan_workspace_ownership, written once at plan-creation time - see
+    // routes/builder.js) - never the athlete's current, possibly-
+    // unrelated memberships. The ONE settings row that snapshot maps to
+    // (if any) is locked FOR UPDATE before reading the effective value,
+    // so a concurrent PATCH /planned-rpe-setting turning it off must
     // wait behind this lock - a submit can never succeed after a
     // disable has already committed, and a disable can never commit
-    // while a submit against it is still mid-flight.
+    // while a submit against it is still mid-flight. A plan with no
+    // ownership row, or owner_scope='unresolved', matches nothing here -
+    // there is no settings row to lock, and the effective check below
+    // correctly reads false.
     await client.query(
       `select s.id
-       from training_load.planned_rpe_workspace_settings s
-       where s.enabled = true
-         and (
-           s.owner_scope = 'system'
-           or (s.owner_scope = 'club' and exists (
-                 select 1 from public.athlete_memberships m
-                 where m.athlete_id = $1 and m.membership_type = 'club' and m.status = 'active' and m.club_id = s.owner_club_id
-               ))
-           or (s.owner_scope = 'team' and exists (
-                 select 1 from public.athlete_memberships m
-                 where m.athlete_id = $1 and m.membership_type = 'team' and m.status = 'active' and m.team_id = s.owner_team_id
-               ))
-           or (s.owner_scope = 'user' and exists (
-                 select 1 from public.user_athletes ua
-                 where ua.athlete_id = $1 and ua.user_id = s.owner_user_id and ua.is_active = true
-               ))
-         )
-       order by s.id
-       for update`,
-      [athleteId],
+       from training_load.plan_workspace_ownership o
+       join training_load.planned_rpe_workspace_settings s
+         on s.owner_scope = o.owner_scope
+        and s.owner_user_id is not distinct from o.owner_user_id
+        and s.owner_club_id is not distinct from o.owner_club_id
+        and s.owner_team_id is not distinct from o.owner_team_id
+       where o.plan_id = $1
+       for update of s`,
+      [session.plan_id],
     );
     const workspaceEnabledResult = await client.query(
-      `select training_load.planned_rpe_effective_for_athlete($1, $2) as enabled`,
-      [athleteId, session.session_date],
+      `select training_load.planned_rpe_effective_for_plan($1, $2) as enabled`,
+      [session.plan_id, session.session_date],
     );
     if (!workspaceEnabledResult.rows[0].enabled) {
       await client.query("rollback");
@@ -806,8 +803,10 @@ router.get("/weekly", async (req, res, next) => {
       // own Schedule tab (the `else` branch below) needs every session
       // visible, disabled or not, so its quick-toggle control can re-enable
       // one. A disabled session that already has a result stays visible.
-      // (v9) Same workspace-level master-toggle gate as GET /athlete/today.
-      scopeSqlLive = `and p.athlete_id = $${params.length} and ((coalesce(ps.rpe_enabled, true) and training_load.planned_rpe_effective_for_athlete(p.athlete_id, pd.date)) or sf.id is not null)`;
+      // (v9) Same workspace-level master-toggle gate as GET /athlete/today -
+      // the session's own PLAN's stored ownership snapshot, never the
+      // athlete's current memberships.
+      scopeSqlLive = `and p.athlete_id = $${params.length} and ((coalesce(ps.rpe_enabled, true) and training_load.planned_rpe_effective_for_plan(p.id, pd.date)) or sf.id is not null)`;
       scopeSqlSf = `and sf.athlete_id = $${params.length}`;
       // Same rule as GET /athlete/today's own external-assignment fix: an
       // unrated row only shows here if it's genuinely actionable right
@@ -857,10 +856,10 @@ router.get("/weekly", async (req, res, next) => {
               -- quick-toggle can re-enable one) - only returned so the
               -- frontend can render an individual row correctly instead
               -- of looking actionable while the workspace master switch
-              -- is off (see this file's own header comment on
-              -- planned_rpe_effective_for_athlete for the athlete-facing
-              -- filtering use of the same function).
-              training_load.planned_rpe_effective_for_athlete(p.athlete_id, pd.date) as workspace_planned_rpe_enabled
+              -- is off. The session's own PLAN's stored ownership
+              -- snapshot decides this, never the athlete's current
+              -- memberships (see planned_rpe_effective_for_plan).
+              training_load.planned_rpe_effective_for_plan(p.id, pd.date) as workspace_planned_rpe_enabled
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id

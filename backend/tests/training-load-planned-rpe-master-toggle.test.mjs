@@ -350,14 +350,45 @@ function mondayOfIso(dateIso) {
 }
 const THIS_WEEK_START = mondayOfIso(TODAY);
 
+// Shared scope -> owner-column mapping, reused by both the settings
+// fixture helper (below) and the plan-ownership snapshot fixture helper -
+// same shape trainingLoadAccess.js's own externalScheduleOwnerContextFromWorkspace
+// produces for the real code paths.
+function resolveOwnerColumns(scope) {
+  return scope.type === "club" ? { ownerScope: "club", ownerUserId: null, ownerClubId: scope.clubId, ownerTeamId: null } :
+    scope.type === "team" ? { ownerScope: "team", ownerUserId: null, ownerClubId: null, ownerTeamId: scope.teamId } :
+    scope.type === "user" ? { ownerScope: "user", ownerUserId: scope.userId, ownerClubId: null, ownerTeamId: null } :
+    scope.type === "unresolved" ? { ownerScope: "unresolved", ownerUserId: null, ownerClubId: null, ownerTeamId: null } :
+    { ownerScope: "system", ownerUserId: null, ownerClubId: null, ownerTeamId: null };
+}
+
+// Directly stamps a plan's STORED ownership snapshot in the DB - mirrors
+// what routes/builder.js now does once, for real, at plan-creation time
+// (see migrations_v2/202609040900's own header). Tests below that create
+// plans via raw SQL (not through Builder) must call this explicitly to
+// give a plan a real governing workspace - a plan with no row here is
+// correctly, permanently inactive for automatic planned RPE, exactly like
+// a genuine legacy 'unresolved' row.
+async function setPlanOwnershipDirect(planId, scope) {
+  const owner = resolveOwnerColumns(scope);
+  await query(
+    `insert into training_load.plan_workspace_ownership (plan_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
+     values ($1,$2,$3,$4,$5)
+     on conflict (plan_id) do update set owner_scope = excluded.owner_scope, owner_user_id = excluded.owner_user_id, owner_club_id = excluded.owner_club_id, owner_team_id = excluded.owner_team_id`,
+    [planId, owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId],
+  );
+}
+
 async function makeWeeklyPlan(athleteId, overrides = {}) {
-  const { name = "Weekly plan", weekStart = THIS_WEEK_START, status = "active", isActive = true, isEditDraft = false } = overrides;
+  const { name = "Weekly plan", weekStart = THIS_WEEK_START, status = "active", isActive = true, isEditDraft = false, owner = null } = overrides;
   const result = await query(
     `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, week_start)
      values ('weekly', $1, $2, $3, $4, $5, $6) returning id`,
     [athleteId, name, status, isActive, isEditDraft, weekStart],
   );
-  return result.rows[0].id;
+  const planId = result.rows[0].id;
+  if (owner) await setPlanOwnershipDirect(planId, owner);
+  return planId;
 }
 async function makePlanDay(planId, date) {
   const result = await query(`insert into plans.plan_days (plan_id, date) values ($1,$2) returning id`, [planId, date]);
@@ -384,11 +415,7 @@ async function makeActiveSessionOn(athleteId, date, overrides = {}) {
 // route's own transitions (most tests DO go through the real route - see
 // the "real HTTP flow" tests below for that path's own coverage).
 async function setPlannedRpeSettingDirect(scope, enabled, enabledAt = enabled ? new Date() : null) {
-  const owner =
-    scope.type === "club" ? { ownerScope: "club", ownerUserId: null, ownerClubId: scope.clubId, ownerTeamId: null } :
-    scope.type === "team" ? { ownerScope: "team", ownerUserId: null, ownerClubId: null, ownerTeamId: scope.teamId } :
-    scope.type === "user" ? { ownerScope: "user", ownerUserId: scope.userId, ownerClubId: null, ownerTeamId: null } :
-    { ownerScope: "system", ownerUserId: null, ownerClubId: null, ownerTeamId: null };
+  const owner = resolveOwnerColumns(scope);
   await query(
     `insert into training_load.planned_rpe_workspace_settings (owner_scope, owner_user_id, owner_club_id, owner_team_id, enabled, enabled_at)
      values ($1,$2,$3,$4,$5,$6)
@@ -483,13 +510,14 @@ test("A4. platform/system scope and private-coach scope both work, and are mutua
   const privateSetting = await api("/api/training-load/planned-rpe-setting", { cookie: privateCookie });
   assert.equal(privateSetting.body.enabled, false, "the platform admin's own ON state must never leak into an unrelated private_coach workspace");
 
-  // Cleanup: 'system' scope is "any wins" for EVERY athlete in this same
-  // shared temp DB (see planned_rpe_effective_for_athlete's own "system"
-  // branch, which matches unconditionally) - leaving it ON here would
-  // silently make every athlete fixture created by a LATER test in this
-  // file effectively enabled, regardless of that test's own real club/
-  // team setup. Turned back off so this test's own side effect never
-  // leaks into the rest of the file.
+  // Cleanup: under the plan-scoped ownership model a 'system' setting row
+  // only ever matches a plan whose OWN stored snapshot says
+  // owner_scope='system' - it can no longer leak into any other test's
+  // club/team-owned plans (see H4 below for the test that actually proves
+  // this). Still turned back off here as ordinary test hygiene, matching
+  // this file's own "every test cleans up its own setting" convention -
+  // never left as a permanent row (per this branch's own explicit "no
+  // global test fixture" rule).
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: platformCookie, body: { enabled: false } });
 });
 
@@ -551,7 +579,7 @@ test("C1. while OFF, a planned session disappears from BOTH Athlete Home and the
 
 test("C2. turning ON makes the SAME session appear on both Home and the weekly overlay, without ever having been recreated", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("c2", 1);
-  await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Bench day" } });
+  await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Bench day" }, plan: { owner: { type: "club", clubId } } });
   await setActiveWorkspace((await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id, "club", clubId);
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
 
@@ -574,7 +602,7 @@ test("D1. a direct planned-session submit gets a controlled 409 while the worksp
 
 test("D2. when ON, a session with rpe_enabled=true accepts a real submit", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("d2", 1);
-  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { rpeEnabled: true } });
+  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { rpeEnabled: true }, plan: { owner: { type: "club", clubId } } });
   await setActiveWorkspace((await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id, "club", clubId);
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
   const res = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: { rpe: 7, durationMinutes: 45 } });
@@ -584,7 +612,7 @@ test("D2. when ON, a session with rpe_enabled=true accepts a real submit", async
 
 test("D3. when ON, a session with rpe_enabled=false STAYS disabled - the individual per-session flag is never overridden by the master switch", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("d3", 1);
-  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { rpeEnabled: false } });
+  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { rpeEnabled: false }, plan: { owner: { type: "club", clubId } } });
   await setActiveWorkspace((await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id, "club", clubId);
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
   const res = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: { rpe: 5, durationMinutes: 30 } });
@@ -620,7 +648,7 @@ test("D5. OFF -> ON never changes or loses individual session-level rpe_enabled 
 
 test("E1. a result already submitted while ON stays permanently visible in Today/Schedule/Results and its aggregates, even after the master switch is turned back OFF", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("e1", 1);
-  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Deadlift day" } });
+  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Deadlift day" }, plan: { owner: { type: "club", clubId } } });
   const coachUserId = (await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id;
   await setActiveWorkspace(coachUserId, "club", clubId);
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
@@ -680,8 +708,8 @@ test("E3. external/outside-plan RPE scheduling is completely unaffected by this 
 test("F1. re-enabling after a long OFF stretch applies only from today onward - a session from BEFORE the re-enable date never becomes actionable, even though it was never rated", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("f1", 1);
   const pastDate = addDaysIso(TODAY, -10);
-  const { sessionId: pastSessionId } = await makeActiveSessionOn(athletes[0].athleteId, pastDate, { session: { name: "Old missed session" }, plan: { weekStart: mondayOfIso(pastDate) } });
-  const { sessionId: todaySessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Today session" } });
+  const { sessionId: pastSessionId } = await makeActiveSessionOn(athletes[0].athleteId, pastDate, { session: { name: "Old missed session" }, plan: { weekStart: mondayOfIso(pastDate), owner: { type: "club", clubId } } });
+  const { sessionId: todaySessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Today session" }, plan: { owner: { type: "club", clubId } } });
 
   const coachUserId = (await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id;
   await setActiveWorkspace(coachUserId, "club", clubId);
@@ -697,7 +725,7 @@ test("F1. re-enabling after a long OFF stretch applies only from today onward - 
 
 test("F2. a session dated exactly on the re-enable date itself IS actionable (the cutoff is inclusive, 'currently relevant' - never exclusive)", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("f2", 1);
-  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Cutoff day session" } });
+  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { session: { name: "Cutoff day session" }, plan: { owner: { type: "club", clubId } } });
   const coachUserId = (await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id;
   await setActiveWorkspace(coachUserId, "club", clubId);
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
@@ -722,7 +750,7 @@ test("F3. re-toggling an already-ON switch back to true (a no-op re-save) must N
 
 test("G1. a Turn off racing a concurrent athlete submit never lets the submit succeed after the disable has already committed - a real Promise.all race, not simulated locking", async () => {
   const { clubId, athletes, coachCookie } = await makeClubWithAthletes("g1", 1);
-  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  const { sessionId } = await makeActiveSessionOn(athletes[0].athleteId, TODAY, { plan: { owner: { type: "club", clubId } } });
   const coachUserId = (await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id;
   await setActiveWorkspace(coachUserId, "club", clubId);
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
@@ -753,7 +781,7 @@ test("G2. many concurrent submits racing one disable never produce more committe
   await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
   const sessionIds = [];
   for (const athlete of athletes) {
-    const { sessionId } = await makeActiveSessionOn(athlete.athleteId, TODAY);
+    const { sessionId } = await makeActiveSessionOn(athlete.athleteId, TODAY, { plan: { owner: { type: "club", clubId } } });
     sessionIds.push({ athlete, sessionId });
   }
 
@@ -766,4 +794,206 @@ test("G2. many concurrent submits racing one disable never produce more committe
   const successCount = submitResults.filter((r) => r.status === 201).length;
   const feedbackCount = (await query(`select count(*)::int as n from training_load.session_feedback where athlete_id = any($1::uuid[])`, [athletes.map((a) => a.athleteId)])).rows[0].n;
   assert.equal(feedbackCount, successCount, "the committed row count must exactly match the number of submits that actually got a 201");
+});
+
+// ------------------------------------------------------------
+// H. Plan-scoped ownership - the workspace setting governs only the
+// plan's OWN stored scope, never any other workspace the athlete simply
+// happens to also belong to. This is the direct regression coverage for
+// this branch's own correction: the original "any qualifying scope wins"
+// design resolved a session's governing workspace from the athlete's
+// CURRENT memberships at read time, so turning on ONE of an athlete's
+// several workspaces made ALL of that athlete's plans actionable,
+// including ones owned by a workspace that was left deliberately off.
+// ------------------------------------------------------------
+
+test("H1. same athlete, Club A ON and Private Coaching OFF: only the Club A plan is actionable, never the private plan", async () => {
+  const { clubId, athletes, coachCookie } = await makeClubWithAthletes("h1", 1);
+  const athleteId = athletes[0].athleteId;
+  const privateCoachId = await makeUser({ email: `h1-private-${Date.now()}@test.local` });
+  await grantGlobalRole(privateCoachId, "independent_coach");
+  await grantPrivateCoachRelation(privateCoachId, athleteId);
+
+  const { sessionId: clubSessionId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Club A session" }, plan: { owner: { type: "club", clubId } } });
+  const { sessionId: privateSessionId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Private session" }, plan: { owner: { type: "user", userId: privateCoachId } } });
+
+  await setActiveWorkspace((await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id, "club", clubId);
+  await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
+  // Private Coaching stays OFF - never toggled.
+
+  const home = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  assert.ok(home.body.sessions.some((s) => s.sessionId === clubSessionId), "the Club A plan must be actionable");
+  assert.ok(!home.body.sessions.some((s) => s.sessionId === privateSessionId), "the private plan must NOT become actionable just because Club A is on - the exact leak this branch's correction closes");
+});
+
+test("H2. same athlete, Private Coaching ON and Club A OFF: only the private plan is actionable, never the Club A plan", async () => {
+  const { clubId, athletes } = await makeClubWithAthletes("h2", 1);
+  const athleteId = athletes[0].athleteId;
+  const privateCoachId = await makeUser({ email: `h2-private-${Date.now()}@test.local` });
+  await grantGlobalRole(privateCoachId, "independent_coach");
+  await grantPrivateCoachRelation(privateCoachId, athleteId);
+  const privateCoachCookie = await loginCookie(privateCoachId);
+
+  const { sessionId: clubSessionId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Club A session" }, plan: { owner: { type: "club", clubId } } });
+  const { sessionId: privateSessionId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Private session" }, plan: { owner: { type: "user", userId: privateCoachId } } });
+
+  await setActiveWorkspace(privateCoachId, "private_coach", null);
+  await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: privateCoachCookie, body: { enabled: true } });
+  // Club A stays OFF - never toggled.
+
+  const home = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  assert.ok(home.body.sessions.some((s) => s.sessionId === privateSessionId), "the private plan must be actionable");
+  assert.ok(!home.body.sessions.some((s) => s.sessionId === clubSessionId), "the Club A plan must NOT become actionable just because Private Coaching is on");
+});
+
+test("H3. same athlete belongs to two clubs with different plans and different switch values: only the ON club's own plan is actionable", async () => {
+  const clubA = await makeClubWithAthletes("h3a", 1);
+  const athleteId = clubA.athletes[0].athleteId;
+  const clubB = await makeClub("H3 Club B");
+  const clubBCoachId = await makeUser({ email: `h3-clubb-${Date.now()}@test.local` });
+  await grantClubAdmin(clubBCoachId, clubB);
+  // Athlete also belongs to Club B - a real second membership, the exact
+  // shape that made the OLD "any qualifying scope wins" design leak.
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubB]);
+
+  const { sessionId: clubASessionId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Club A session" }, plan: { owner: { type: "club", clubId: clubA.clubId } } });
+  const { sessionId: clubBSessionId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Club B session" }, plan: { owner: { type: "club", clubId: clubB } } });
+
+  await setActiveWorkspace((await query(`select user_id from public.user_club_roles where club_id = $1`, [clubA.clubId])).rows[0].user_id, "club", clubA.clubId);
+  await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: clubA.coachCookie, body: { enabled: true } });
+  // Club B's own switch stays OFF.
+
+  const home = await api("/api/training-load/athlete/today", { cookie: clubA.athletes[0].cookie });
+  assert.ok(home.body.sessions.some((s) => s.sessionId === clubASessionId), "Club A's own plan must be actionable");
+  assert.ok(!home.body.sessions.some((s) => s.sessionId === clubBSessionId), "Club B's own plan must stay inactive - membership in Club A must never activate a plan Club B actually owns");
+});
+
+test("H4. a platform-wide (system) setting turned ON never activates a club, team, or private plan - it only ever governs a plan whose OWN stored scope is 'system'", async () => {
+  const { clubId, athletes } = await makeClubWithAthletes("h4", 1);
+  const athleteId = athletes[0].athleteId;
+  const platformAdminId = await makeUser({ email: `h4-platform-${Date.now()}@test.local` });
+  await grantGlobalRole(platformAdminId, "platform_admin");
+  const platformCookie = await loginCookie(platformAdminId);
+
+  const { sessionId: clubSessionId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Club plan session" }, plan: { owner: { type: "club", clubId } } });
+
+  await setActiveWorkspace(platformAdminId, "platform", null);
+  await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: platformCookie, body: { enabled: true } });
+  // The club's own switch stays OFF.
+
+  const home = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  assert.ok(!home.body.sessions.some((s) => s.sessionId === clubSessionId), "system=true must never activate a club-owned plan - only a plan whose own snapshot is owner_scope='system' may ever match it");
+
+  await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: platformCookie, body: { enabled: false } });
+});
+
+test("H5. an athlete membership change or removal after plan creation never moves an already-created plan's own stored scope", async () => {
+  const { clubId, athletes, coachCookie } = await makeClubWithAthletes("h5", 1);
+  const athleteId = athletes[0].athleteId;
+  const { sessionId } = await makeActiveSessionOn(athleteId, TODAY, { session: { name: "Club A session" }, plan: { owner: { type: "club", clubId } } });
+
+  await setActiveWorkspace((await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id, "club", clubId);
+  await api("/api/training-load/planned-rpe-setting", { method: "PATCH", cookie: coachCookie, body: { enabled: true } });
+
+  const before = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  assert.ok(before.body.sessions.some((s) => s.sessionId === sessionId), "must be actionable while the owning scope's own setting is on");
+
+  // Remove the athlete's OWN membership in Club A entirely - the plan's
+  // own stored snapshot must be completely unaffected.
+  await query(`delete from public.athlete_memberships where athlete_id = $1 and club_id = $2`, [athleteId, clubId]);
+
+  const after = await api("/api/training-load/athlete/today", { cookie: athletes[0].cookie });
+  assert.ok(after.body.sessions.some((s) => s.sessionId === sessionId), "removing the athlete's membership must never retroactively move or invalidate an already-created plan's own stored ownership scope");
+});
+
+// ------------------------------------------------------------
+// I. Athlete-local timezone-aware re-enable cutoff (planned_rpe_effective_
+// for_plan evaluates enabled_at in coalesce(athlete.device_timezone,
+// 'UTC'), never a plain UTC date - see this branch's own correction).
+//
+// The athlete's own "local today" is computed for real, via Postgres
+// itself (never assumed to equal this file's own UTC-based TODAY
+// constant) - for a zone far enough from UTC, the athlete's own local
+// calendar date can genuinely differ from TODAY depending on the exact
+// moment the test happens to run, which would make a hard-coded
+// assumption flaky rather than a real regression check.
+// ------------------------------------------------------------
+
+async function localTodayAndMidnight(timezone) {
+  const result = await query(
+    `select (now() at time zone $1)::date as local_today,
+            (date_trunc('day', now() at time zone $1) at time zone $1) as local_midnight
+     from (select 1) t`,
+    [timezone],
+  );
+  const rawLocalToday = result.rows[0].local_today;
+  const localToday = rawLocalToday instanceof Date ? rawLocalToday.toISOString().slice(0, 10) : String(rawLocalToday).slice(0, 10);
+  return { localToday, localMidnight: result.rows[0].local_midnight };
+}
+
+test("I1. re-enabling just after local midnight in Pacific/Kiritimati (UTC+14) must use the athlete's own local date for the cutoff, never the still-previous UTC date", async () => {
+  const { clubId } = await makeClubWithAthletes("i1", 0);
+  const athleteUserId = await makeUser({ email: `i1-athlete-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Kiritimati athlete", userId: athleteUserId, deviceTimezone: "Pacific/Kiritimati" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubId]);
+  const athleteCookie = await loginCookie(athleteUserId);
+
+  const { localToday, localMidnight } = await localTodayAndMidnight("Pacific/Kiritimati");
+  const localYesterday = addDaysIso(localToday, -1);
+  const { sessionId: yesterdaySessionId } = await makeActiveSessionOn(athleteId, localYesterday, { session: { name: "Local yesterday" }, plan: { weekStart: mondayOfIso(localYesterday), owner: { type: "club", clubId } } });
+  const { sessionId: todaySessionId } = await makeActiveSessionOn(athleteId, localToday, { session: { name: "Local today" }, plan: { weekStart: mondayOfIso(localToday), owner: { type: "club", clubId } } });
+
+  // enabled_at = the exact UTC instant of this athlete's own local
+  // midnight today at Pacific/Kiritimati (a fixed UTC+14 offset, no DST).
+  await setPlannedRpeSettingDirect({ type: "club", clubId }, true, localMidnight);
+
+  const home = await api("/api/training-load/athlete/today", { cookie: athleteCookie });
+  assert.ok(home.body.sessions.some((s) => s.sessionId === todaySessionId), "today's own local-date session must be actionable");
+  assert.ok(!home.body.sessions.some((s) => s.sessionId === yesterdaySessionId), "the athlete's own PREVIOUS local day must stay inactive - a plain UTC cutoff would have wrongly reactivated it here");
+});
+
+test("I2. re-enabling just after local midnight in Pacific/Auckland must use the athlete's own local date, not the still-previous UTC date", async () => {
+  const { clubId } = await makeClubWithAthletes("i2", 0);
+  const athleteUserId = await makeUser({ email: `i2-athlete-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "Auckland athlete", userId: athleteUserId, deviceTimezone: "Pacific/Auckland" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubId]);
+  const athleteCookie = await loginCookie(athleteUserId);
+
+  // Auckland is UTC+12 (or +13 under NZDT) - localTodayAndMidnight reads
+  // the REAL current offset from Postgres itself rather than hard-coding
+  // one, so this test stays correct year-round across the DST transition.
+  const { localToday, localMidnight } = await localTodayAndMidnight("Pacific/Auckland");
+  const localYesterday = addDaysIso(localToday, -1);
+  const { sessionId: yesterdaySessionId } = await makeActiveSessionOn(athleteId, localYesterday, { session: { name: "Local yesterday" }, plan: { weekStart: mondayOfIso(localYesterday), owner: { type: "club", clubId } } });
+  const { sessionId: todaySessionId } = await makeActiveSessionOn(athleteId, localToday, { session: { name: "Local today" }, plan: { weekStart: mondayOfIso(localToday), owner: { type: "club", clubId } } });
+
+  await setPlannedRpeSettingDirect({ type: "club", clubId }, true, localMidnight);
+
+  const home = await api("/api/training-load/athlete/today", { cookie: athleteCookie });
+  assert.ok(home.body.sessions.some((s) => s.sessionId === todaySessionId), "today's own local-date session must be actionable");
+  assert.ok(!home.body.sessions.some((s) => s.sessionId === yesterdaySessionId), "the athlete's own previous local day must stay inactive");
+});
+
+test("I3. an athlete BEHIND UTC (e.g. America/Los_Angeles): enabling right after UTC midnight, while it is still today in the athlete's own local time, must not exclude today's own session", async () => {
+  const { clubId } = await makeClubWithAthletes("i3", 0);
+  const athleteUserId = await makeUser({ email: `i3-athlete-${Date.now()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ name: "LA athlete", userId: athleteUserId, deviceTimezone: "America/Los_Angeles" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubId]);
+  const athleteCookie = await loginCookie(athleteUserId);
+
+  const { localToday } = await localTodayAndMidnight("America/Los_Angeles");
+  const { sessionId: todaySessionId } = await makeActiveSessionOn(athleteId, localToday, { session: { name: "LA today" }, plan: { weekStart: mondayOfIso(localToday), owner: { type: "club", clubId } } });
+
+  // enabled_at = shortly after UTC midnight on TOMORROW's UTC date - a
+  // plain UTC-date cutoff would already read as tomorrow here, even
+  // though it is still TODAY, evening, in the athlete's own Los Angeles
+  // time (UTC-7/-8). This is the opposite-direction version of the
+  // Kiritimati/Auckland bug above: an athlete BEHIND UTC could have
+  // TODAY's own brand-new session wrongly EXCLUDED the instant the
+  // switch is turned on, if that happens soon after UTC midnight.
+  const enabledAt = new Date(`${addDaysIso(localToday, 1)}T02:00:00Z`);
+  await setPlannedRpeSettingDirect({ type: "club", clubId }, true, enabledAt);
+
+  const home = await api("/api/training-load/athlete/today", { cookie: athleteCookie });
+  assert.ok(home.body.sessions.some((s) => s.sessionId === todaySessionId), "today's own session must stay actionable - the cutoff must be evaluated in the athlete's own Los Angeles local date, never the already-rolled-over UTC date");
 });
