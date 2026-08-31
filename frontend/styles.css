@@ -12011,6 +12011,28 @@ button.tests-assignment-card {
   margin-bottom: 8px;
 }
 
+/* (v9) Workspace-level master toggle - reuses .tests-notification-row's
+   own compact pill switch (no new switch styling at all); this only adds
+   the small amount of spacing/typography the wrapper and its hint/off
+   note need. Deliberately no background/border/card surface of its own -
+   "compact, no large colored surface" per this control's own spec. */
+.training-load-master-toggle {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line, #dfe4e8);
+}
+
+.training-load-master-toggle-hint {
+  display: block;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.training-load-master-toggle-off-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
 .training-load-cancel-button {
   color: #b3261e;
   border-color: #e8b4af;

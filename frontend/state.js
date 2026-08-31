@@ -618,6 +618,13 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // link on Home regardless of today's own unrated count.
   athleteWeeklyOpen: false,
   athleteWeekly: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
+  // (v9) Workspace-level master toggle for automatic planned-session RPE
+  // (Training Load -> Schedule, top of the tab). `loaded` distinguishes
+  // "not fetched yet" from a real, confirmed OFF - the toggle control
+  // renders disabled until this is true, so a coach can never click it
+  // against a not-yet-known value. `saving` guards one PATCH in flight at
+  // a time.
+  plannedRpeSetting: { enabled: false, enabledAt: null, loaded: false, loading: false, saving: false, error: "" },
   ...overrides,
 });
 

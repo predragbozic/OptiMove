@@ -185,12 +185,17 @@ router.get("/athlete/today", async (req, res, next) => {
        where ${WEEKLY_PLAN_SESSION_FILTER_SQL}
          and p.athlete_id = $1
          and pd.date = $2::date
-         -- Per-session RPE opt-out: a disabled session with NO existing
-         -- result is never shown to the athlete as a request at all (not
-         -- pending, not "Not rated"). One that already has a result from
-         -- before it was disabled keeps showing as its already-rated
-         -- summary - existing history is never hidden.
-         and (coalesce(ps.rpe_enabled, true) or sf.id is not null)
+         -- Per-session RPE opt-out, AND (v9) the workspace-level master
+         -- toggle - a disabled session, OR one whose governing
+         -- workspace(s) currently have automatic planned RPE off, is
+         -- never shown to the athlete as a request at all (not pending,
+         -- not "Not rated") unless it already has a result. An existing
+         -- result from before either was turned off keeps showing as its
+         -- already-rated summary - existing history is never hidden.
+         and (
+           (coalesce(ps.rpe_enabled, true) and training_load.planned_rpe_effective_for_athlete(p.athlete_id, pd.date))
+           or sf.id is not null
+         )
        order by ps.session_order`,
       [athleteId, localToday],
     );
@@ -377,6 +382,48 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
       return res.status(409).json({ error: "RPE isn't being collected for this session." });
     }
 
+    // Workspace-level master toggle (v9) - the effective rule is
+    // "workspace automatic planned RPE enabled AND session.rpe_enabled",
+    // the per-session gate just above. Every row that currently COULD
+    // affect this athlete (any qualifying scope with enabled=true - see
+    // planned_rpe_effective_for_athlete's own header for "any wins") is
+    // locked FOR UPDATE before reading the effective value, so a
+    // concurrent PATCH /planned-rpe-setting turning one of them off must
+    // wait behind this lock - a submit can never succeed after a
+    // disable has already committed, and a disable can never commit
+    // while a submit against it is still mid-flight.
+    await client.query(
+      `select s.id
+       from training_load.planned_rpe_workspace_settings s
+       where s.enabled = true
+         and (
+           s.owner_scope = 'system'
+           or (s.owner_scope = 'club' and exists (
+                 select 1 from public.athlete_memberships m
+                 where m.athlete_id = $1 and m.membership_type = 'club' and m.status = 'active' and m.club_id = s.owner_club_id
+               ))
+           or (s.owner_scope = 'team' and exists (
+                 select 1 from public.athlete_memberships m
+                 where m.athlete_id = $1 and m.membership_type = 'team' and m.status = 'active' and m.team_id = s.owner_team_id
+               ))
+           or (s.owner_scope = 'user' and exists (
+                 select 1 from public.user_athletes ua
+                 where ua.athlete_id = $1 and ua.user_id = s.owner_user_id and ua.is_active = true
+               ))
+         )
+       order by s.id
+       for update`,
+      [athleteId],
+    );
+    const workspaceEnabledResult = await client.query(
+      `select training_load.planned_rpe_effective_for_athlete($1, $2) as enabled`,
+      [athleteId, session.session_date],
+    );
+    if (!workspaceEnabledResult.rows[0].enabled) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "Automatic planned RPE is currently turned off for this workspace." });
+    }
+
     const localToday = await athleteLocalDate(athleteId, (sql, params) => client.query(sql, params));
     if (localToday && session.session_date > localToday) {
       await client.query("rollback");
@@ -532,6 +579,91 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
 });
 
 // ------------------------------------------------------------
+// Workspace-level MASTER toggle for automatic planned-session RPE (v9,
+// migrations_v2/202609040900). Reuses trainingLoadAccess.js's own
+// requireExternalScheduleWorkspace/resolveExternalScheduleWorkspaceScope
+// - the exact same owner_scope/owner_user_id/owner_club_id/owner_team_id
+// shape external_schedules already established, resolved from the
+// account's CURRENTLY ACTIVE workspace, ONCE per request (never a second
+// independent resolveActiveWorkspace call - same discipline as the
+// external-scheduling hardening pass). An athlete workspace (or no
+// workspace at all) is rejected with 403 by that same shared helper - an
+// athlete can never read or change this setting, only a coach managing
+// the scope it belongs to.
+// ------------------------------------------------------------
+
+router.get("/planned-rpe-setting", async (req, res, next) => {
+  try {
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
+    const owner = scope.ownerContext;
+    const result = await query(
+      `select enabled, enabled_at from training_load.planned_rpe_workspace_settings
+       where owner_scope = $1 and owner_user_id is not distinct from $2 and owner_club_id is not distinct from $3 and owner_team_id is not distinct from $4`,
+      [owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId],
+    );
+    const row = result.rows[0];
+    // Absent row = OFF - a workspace that has never touched this switch
+    // gets the safe default, never inferred as "on" from anything else.
+    res.json({ enabled: row?.enabled === true, enabledAt: row?.enabled_at || null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/planned-rpe-setting", async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const scope = await requireExternalScheduleWorkspace(req, res);
+    if (!scope) return;
+    if (typeof req.body?.enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be a boolean." });
+    }
+    const enabled = req.body.enabled;
+    const owner = scope.ownerContext;
+
+    await client.query("begin");
+    // Locks the existing row (if any) FIRST - the same row a concurrent
+    // planned-RPE submit locks FOR SHARE (see POST /sessions/:id/rpe's
+    // own comment) - so a Turn off racing an in-flight submit is
+    // genuinely serialized: whichever transaction's lock is granted
+    // first decides the outcome, never a submit succeeding after the
+    // disable has already committed.
+    const existingResult = await client.query(
+      `select enabled, enabled_at from training_load.planned_rpe_workspace_settings
+       where owner_scope = $1 and owner_user_id is not distinct from $2 and owner_club_id is not distinct from $3 and owner_team_id is not distinct from $4
+       for update`,
+      [owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId],
+    );
+    const current = existingResult.rows[0];
+    const wasEnabled = current?.enabled === true;
+    // enabled_at only ever moves on a genuine false -> true transition -
+    // re-saving an already-true value must NEVER push the retroactivity
+    // cutoff forward (see this table's own migration comment), and
+    // turning it off leaves the last real enabled_at untouched (it's
+    // simply not read while enabled=false).
+    const enabledAt = enabled && !wasEnabled ? new Date() : (current?.enabled_at || null);
+
+    const upserted = await client.query(
+      `insert into training_load.planned_rpe_workspace_settings
+         (owner_scope, owner_user_id, owner_club_id, owner_team_id, enabled, enabled_at, updated_by_user_id)
+       values ($1,$2,$3,$4,$5,$6,$7)
+       on conflict (owner_scope, owner_user_id, owner_club_id, owner_team_id)
+       do update set enabled = excluded.enabled, enabled_at = excluded.enabled_at, updated_by_user_id = excluded.updated_by_user_id, updated_at = now()
+       returning enabled, enabled_at`,
+      [owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId, enabled, enabledAt, req.user.id],
+    );
+    await client.query("commit");
+    res.json({ enabled: upserted.rows[0].enabled, enabledAt: upserted.rows[0].enabled_at });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+// ------------------------------------------------------------
 // Coach workspace scoping - correction: the previous version branched
 // purely on req.authz.isAthlete (a permission fact: "does this account
 // have an athlete profile at all"), which is wrong for a multi-role
@@ -674,7 +806,8 @@ router.get("/weekly", async (req, res, next) => {
       // own Schedule tab (the `else` branch below) needs every session
       // visible, disabled or not, so its quick-toggle control can re-enable
       // one. A disabled session that already has a result stays visible.
-      scopeSqlLive = `and p.athlete_id = $${params.length} and (coalesce(ps.rpe_enabled, true) or sf.id is not null)`;
+      // (v9) Same workspace-level master-toggle gate as GET /athlete/today.
+      scopeSqlLive = `and p.athlete_id = $${params.length} and ((coalesce(ps.rpe_enabled, true) and training_load.planned_rpe_effective_for_athlete(p.athlete_id, pd.date)) or sf.id is not null)`;
       scopeSqlSf = `and sf.athlete_id = $${params.length}`;
       // Same rule as GET /athlete/today's own external-assignment fix: an
       // unrated row only shows here if it's genuinely actionable right
@@ -718,7 +851,16 @@ router.get("/weekly", async (req, res, next) => {
       `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled,
               pd.date as session_date, p.id as plan_id, p.name as plan_name,
               a.id as athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
-              sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
+              sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at,
+              -- (v9) Never used to FILTER this coach-facing query (the
+              -- Schedule tab must keep showing every session so its own
+              -- quick-toggle can re-enable one) - only returned so the
+              -- frontend can render an individual row correctly instead
+              -- of looking actionable while the workspace master switch
+              -- is off (see this file's own header comment on
+              -- planned_rpe_effective_for_athlete for the athlete-facing
+              -- filtering use of the same function).
+              training_load.planned_rpe_effective_for_athlete(p.athlete_id, pd.date) as workspace_planned_rpe_enabled
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id
@@ -832,6 +974,13 @@ router.get("/weekly", async (req, res, next) => {
         // reachable in practice (the column is NOT NULL DEFAULT true), but
         // coalesced defensively the same way the SQL-side reads already are.
         rpeEnabled: row.rpe_enabled !== false,
+        // (v9) The workspace master toggle's own current effective value
+        // for THIS session's date - kept separate from rpeEnabled (the
+        // per-session flag) so the frontend can tell the two OFF reasons
+        // apart ("this session" vs. "this whole workspace") rather than
+        // collapsing them into one ambiguous boolean.
+        workspacePlannedRpeEnabled: row.workspace_planned_rpe_enabled === true,
+        actionable: row.rpe_enabled !== false && row.workspace_planned_rpe_enabled === true,
         source: "planned",
         externalAssignmentId: null,
         scheduleId: null,
@@ -857,6 +1006,8 @@ router.get("/weekly", async (req, res, next) => {
         // rpe_enabled from at all - it's always already-rated, so this
         // is never read as an actionable "off" state either way.
         rpeEnabled: true,
+        workspacePlannedRpeEnabled: true,
+        actionable: false,
         source: "planned",
         externalAssignmentId: null,
         scheduleId: null,

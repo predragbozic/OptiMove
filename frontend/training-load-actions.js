@@ -4,10 +4,12 @@ import {
   createExternalSchedule,
   invalidateAllTrainingLoadWeeklyGenerations,
   loadExternalScheduleDetail,
+  loadPlannedRpeSetting,
   loadTrainingLoadAthleteToday,
   loadTrainingLoadAthleteWeekly,
   loadTrainingLoadOrgPickerData,
   loadTrainingLoadWeekly,
+  savePlannedRpeSetting,
   scheduleExternalAgain,
   sendExternalScheduleReminder,
   setExternalScheduleStatus,
@@ -189,10 +191,54 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // Correction: "always-refresh" (menu-cache-policy.js) means every
     // section switch is a real fetch, never skipped just because that
     // section already has SOME data from an earlier visit this session.
-    await loadTrainingLoadWeekly(state.trainingLoad.section);
+    // (v9) The master toggle only ever renders on Schedule, but its own
+    // value is fetched fresh on every entry into that tab too - same
+    // "always-refresh, never trust a stale value" rule.
+    await Promise.all([
+      loadTrainingLoadWeekly(state.trainingLoad.section),
+      state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
+    ]);
     renderTrainingLoad();
     return true;
   }
+
+  // -------------------- Coach: Schedule tab's own master toggle (v9) --------------------
+
+  if (type === "training-load-toggle-planned-rpe-master") {
+    const setting = state.trainingLoad.plannedRpeSetting;
+    // Guards one save in flight at a time, and never allows a click
+    // before the real current value has even loaded (see this control's
+    // own `disabled` attribute in training-load-view.js) - never toggles
+    // off of a stale/unknown starting value.
+    if (setting.saving || !setting.loaded) return true;
+    const nextEnabled = !setting.enabled;
+    // Turning OFF pauses every pending planned-RPE request at once - a
+    // real, consequential action (not just a display preference), so it
+    // gets the same explicit confirm dialog Schedule's own external-
+    // schedule Cancel action already uses, never a silent one-click flip.
+    if (!nextEnabled && !window.confirm("Turn off automatic planned RPE? Any pending RPE requests from the Weekly Plan will be paused, right where they are - existing results stay saved and visible.")) {
+      return true;
+    }
+    setting.saving = true;
+    setting.error = "";
+    renderTrainingLoad();
+    try {
+      const result = await savePlannedRpeSetting(nextEnabled);
+      setting.enabled = result.enabled;
+      setting.enabledAt = result.enabledAt;
+      setting.saving = false;
+      // Refreshes the currently-visible rows so an individual session's
+      // own status pill (see plannedStatusLabel) reflects the new
+      // effective state immediately, not just the toggle control itself.
+      await loadTrainingLoadWeekly(state.trainingLoad.section);
+    } catch (error) {
+      setting.saving = false;
+      setting.error = error.message || "Could not save this setting.";
+    }
+    renderTrainingLoad();
+    return true;
+  }
+
   if (type === "training-load-weekly-prev-week" || type === "training-load-weekly-next-week") {
     const section = action.dataset.section;
     const nav = state.trainingLoad.weekly[section];
@@ -977,4 +1023,9 @@ export function resetTrainingLoadForWorkspaceChange() {
   state.trainingLoad.filterPicker = emptyTrainingLoadFilterPicker();
   state.trainingLoad.filterSnapshotAtOpen = null;
   state.trainingLoad.orgPickerData = null;
+  // (v9) The OLD workspace's own enabled/enabledAt must never keep
+  // showing (even briefly) once a switch has started - `loaded: false`
+  // puts the toggle control back into its disabled "not yet known" state
+  // until the new workspace's own fresh GET lands.
+  state.trainingLoad.plannedRpeSetting = { enabled: false, enabledAt: null, loaded: false, loading: false, saving: false, error: "" };
 }
