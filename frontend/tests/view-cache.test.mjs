@@ -5,6 +5,7 @@ import {
   clearAllViewCache,
   dedupeRequest,
   getCacheEntry,
+  getCacheRevision,
   hasCachedData,
   invalidateCacheEntry,
   invalidateCacheNamespace,
@@ -15,6 +16,12 @@ import {
   VIEW_CACHE_FRESHNESS_MS,
   __debugCacheSize,
 } from "../view-cache.js";
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
 
 // perf/main-navigation-cache: view-cache.js is the single generic primitive
 // every navigation-cached view (Coaches, Settings/Organization, Program
@@ -263,4 +270,190 @@ test("16. loadCachedView also dedupes through dedupeRequest - two concurrent cal
     loadCachedView({ namespace: "coaches", contextKey: "ctx-1", fetcher, applyData: () => {}, showLoading: () => {} }),
   ]);
   assert.equal(fetchCount, 1);
+});
+
+// ------------------------------------------------------------
+// 17-22. Correction round 2: a mutation invalidates an in-flight key's
+// cache entry and starts a fresh refetch (B) - the OLDER, still-in-flight
+// response (A, fetched before the mutation) must never win the race and
+// clobber B's genuinely fresh write once it finally resolves. Reproduces
+// the exact sequence reported: A starts -> invalidate + start B -> B
+// resolves and writes -> A resolves last.
+// ------------------------------------------------------------
+
+test("17. a late-resolving response (A) from BEFORE a mid-flight invalidation must never overwrite a fresher response (B) that already landed", async () => {
+  clearAllViewCache();
+  const a = deferred();
+  const b = deferred();
+  let call = 0;
+  const fetcher = () => (++call === 1 ? a.promise : b.promise);
+
+  const dataCallsA = [];
+  const pendingA = loadCachedView({
+    namespace: "coaches",
+    contextKey: "ctx-1",
+    fetcher,
+    applyData: (data, meta) => dataCallsA.push({ data, meta }),
+    showLoading: () => {},
+  });
+  // Wait a real microtask so A's own dedupeRequest call has actually
+  // registered its pendingPromise before the mutation below invalidates it.
+  await Promise.resolve();
+
+  // The mutation: invalidate, then start a fresh request B for the SAME key.
+  invalidateCacheEntry("coaches", "ctx-1");
+  const dataCallsB = [];
+  const pendingB = loadCachedView({
+    namespace: "coaches",
+    contextKey: "ctx-1",
+    fetcher,
+    applyData: (data, meta) => dataCallsB.push({ data, meta }),
+    showLoading: () => {},
+  });
+  await Promise.resolve();
+
+  assert.equal(call, 2, "B must be a genuinely SEPARATE fetch, never reusing A's now-orphaned in-flight promise");
+
+  // B resolves first (the fresh, mutation-triggered data)...
+  b.resolve({ rows: ["fresh-from-B"] });
+  const resultB = await pendingB;
+  assert.equal(resultB.outcome, "loaded");
+  assert.deepEqual(getCacheEntry("coaches", "ctx-1").data, { rows: ["fresh-from-B"] });
+
+  // ...then A (started before the mutation) finally resolves, last, with
+  // stale pre-mutation data.
+  a.resolve({ rows: ["stale-from-A"] });
+  const resultA = await pendingA;
+
+  assert.equal(resultA.outcome, "stale-ignored", "A's own response must be recognized as void once it resolves after the invalidation");
+  assert.equal(dataCallsA.length, 0, "A's stale data must never reach its own caller's applyData either");
+  assert.deepEqual(getCacheEntry("coaches", "ctx-1").data, { rows: ["fresh-from-B"] }, "B's fresh write must survive A's later, stale write attempt - the shared cache must never be clobbered");
+});
+
+test("18. the same late-response race also applies when A ends in an ERROR after the invalidation - it must never inject a phantom error over B's fresh good data", async () => {
+  clearAllViewCache();
+  const a = deferred();
+  const b = deferred();
+  let call = 0;
+  const fetcher = () => (++call === 1 ? a.promise : b.promise);
+
+  const errorCallsA = [];
+  const pendingA = loadCachedView({
+    namespace: "coaches",
+    contextKey: "ctx-1",
+    fetcher,
+    applyData: () => {},
+    applyError: (error) => errorCallsA.push(error),
+    showLoading: () => {},
+  });
+  await Promise.resolve();
+
+  invalidateCacheEntry("coaches", "ctx-1");
+  const pendingB = loadCachedView({
+    namespace: "coaches",
+    contextKey: "ctx-1",
+    fetcher,
+    applyData: () => {},
+    showLoading: () => {},
+  });
+  await Promise.resolve();
+
+  b.resolve({ rows: ["fresh-from-B"] });
+  await pendingB;
+  assert.deepEqual(getCacheEntry("coaches", "ctx-1").data, { rows: ["fresh-from-B"] });
+
+  a.reject(new Error("stale network failure"));
+  const resultA = await pendingA;
+
+  assert.equal(resultA.outcome, "stale-ignored");
+  assert.equal(errorCallsA.length, 0, "A's now-void error must never reach applyError");
+  const entry = getCacheEntry("coaches", "ctx-1");
+  assert.deepEqual(entry.data, { rows: ["fresh-from-B"] }, "B's good data must survive untouched");
+  assert.equal(entry.error, null, "no phantom error may be attached to an otherwise-fresh, successfully-loaded entry");
+});
+
+test("19. dedupeRequest's own cleanup never clears a NEWER request's pendingPromise - a second caller while B is still in flight must reuse B, not fire a THIRD fetch", async () => {
+  clearAllViewCache();
+  const a = deferred();
+  const b = deferred();
+  let call = 0;
+  const fetcher = () => (++call === 1 ? a.promise : b.promise);
+
+  const firstA = dedupeRequest("coaches", "ctx-1", fetcher);
+  invalidateCacheEntry("coaches", "ctx-1"); // orphans A's own pendingPromise tracking
+  const firstB = dedupeRequest("coaches", "ctx-1", fetcher); // a genuinely new fetch
+  assert.equal(call, 2);
+
+  // A finally settles (after B started, while B is STILL pending) - its own
+  // cleanup must not touch B's pendingPromise tracking.
+  a.resolve({ rows: ["stale-A"] });
+  await firstA;
+
+  // A third caller, while B is still genuinely in flight, must reuse B -
+  // never start a third fetch just because A's cleanup wiped B's tracking.
+  const thirdCall = dedupeRequest("coaches", "ctx-1", fetcher);
+  assert.equal(call, 2, "B is still pending - a third caller must join it, not trigger a new fetch");
+
+  b.resolve({ rows: ["fresh-B"] });
+  const [bResult, thirdResult] = await Promise.all([firstB, thirdCall]);
+  assert.deepEqual(bResult, { rows: ["fresh-B"] });
+  assert.deepEqual(thirdResult, { rows: ["fresh-B"] }, "the third caller must have joined B's own promise and gotten B's result");
+});
+
+test("20. getCacheRevision starts at 0 for a never-touched key and is bumped by invalidateCacheEntry/invalidateCacheNamespace/clearAllViewCache, never by a plain cache write - and is monotonic, never reset, so a stale in-flight request from before a clear can never be mistaken for current again", () => {
+  // Dedicated, never-touched-elsewhere-in-this-file keys - getCacheRevision
+  // is a MODULE-LEVEL, ever-increasing counter by design (see the
+  // `revisions` Map's own header in view-cache.js: it must survive
+  // clearAllViewCache/invalidateCacheEntry deleting the entry itself, so a
+  // response from before the clear can still be told apart from one after
+  // it) - it is never expected to read back to a shared absolute baseline
+  // across unrelated tests reusing "coaches"/"ctx-1" elsewhere in this file.
+  clearAllViewCache();
+  assert.equal(getCacheRevision("coaches", "ctx-rev-1"), 0);
+  setCacheData("coaches", "ctx-rev-1", { rows: [] });
+  assert.equal(getCacheRevision("coaches", "ctx-rev-1"), 0, "a plain successful cache write is not itself an invalidation");
+  invalidateCacheEntry("coaches", "ctx-rev-1");
+  assert.equal(getCacheRevision("coaches", "ctx-rev-1"), 1);
+  // A key already invalidated (and with nothing newly cached/pending for
+  // it since) has nothing left to protect - a namespace-wide invalidation
+  // is a no-op for it specifically, only bumping keys it actually still
+  // holds a live entry for (see invalidateCacheNamespace's own comment).
+  setCacheData("coaches", "ctx-rev-1", { rows: ["refetched"] });
+  setCacheData("coaches", "ctx-rev-2", { rows: [] });
+  invalidateCacheNamespace("coaches");
+  assert.equal(getCacheRevision("coaches", "ctx-rev-1"), 2, "a live entry re-created after the first invalidation is bumped again by the namespace-wide clear");
+  assert.equal(getCacheRevision("coaches", "ctx-rev-2"), 1, "a namespace-wide invalidation bumps every OTHER key it actually held too, including one never explicitly invalidated before");
+  setCacheData("organization", "ctx-rev-1", { clubs: [] });
+  clearAllViewCache();
+  assert.equal(getCacheRevision("organization", "ctx-rev-1"), 1, "clearAllViewCache bumps revisions across every namespace, not just the one most recently touched");
+});
+
+test("21. dedupeRequest coalescing for genuinely-concurrent, non-invalidated calls is completely unaffected by the revision guard - the normal payload-sharing case still works", async () => {
+  clearAllViewCache();
+  let fetchCount = 0;
+  const fetcher = () => { fetchCount += 1; return new Promise((resolve) => setTimeout(() => resolve({ rows: ["shared"] }), 5)); };
+  const dataCalls1 = [];
+  const dataCalls2 = [];
+  await Promise.all([
+    loadCachedView({ namespace: "coaches", contextKey: "ctx-1", fetcher, applyData: (d, m) => dataCalls1.push({ d, m }), showLoading: () => {} }),
+    loadCachedView({ namespace: "coaches", contextKey: "ctx-1", fetcher, applyData: (d, m) => dataCalls2.push({ d, m }), showLoading: () => {} }),
+  ]);
+  assert.equal(fetchCount, 1, "no invalidation happened - two concurrent callers must still share exactly one real fetch");
+  assert.deepEqual(dataCalls1[0].d, { rows: ["shared"] });
+  assert.deepEqual(dataCalls2[0].d, { rows: ["shared"] });
+});
+
+test("22. an invalidation that happens BEFORE loadCachedView is even called (not mid-flight) is captured correctly too - the resulting fetch still writes normally", async () => {
+  clearAllViewCache();
+  setCacheData("coaches", "ctx-1", { rows: ["old"] });
+  invalidateCacheEntry("coaches", "ctx-1");
+  const result = await loadCachedView({
+    namespace: "coaches",
+    contextKey: "ctx-1",
+    fetcher: () => Promise.resolve({ rows: ["new"] }),
+    applyData: () => {},
+    showLoading: () => {},
+  });
+  assert.equal(result.outcome, "loaded");
+  assert.deepEqual(getCacheEntry("coaches", "ctx-1").data, { rows: ["new"] }, "a request starting AFTER an invalidation (nothing changes further during its own flight) must write normally, never be treated as stale against itself");
 });

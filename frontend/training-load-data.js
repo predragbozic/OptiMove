@@ -36,11 +36,19 @@ import { buildContextKey, invalidateCacheEntry, invalidateCacheNamespace, loadCa
 // permanently: past the TTL, a re-entry paints the cached view instantly
 // AND still triggers a real background refresh (loadCachedView's own
 // stale-then-refresh path), and every mutation that changes what this
-// view shows (an RPE submit/toggle, an ownership resolution, an external
-// schedule create/edit) explicitly drops its own cache entry BEFORE
-// reloading (invalidateTrainingLoadWeeklyForSection/
-// invalidateTrainingLoadAthleteWeeklyCache below) - never relies on the
-// TTL alone for its own next paint to be genuinely fresh.
+// view shows explicitly invalidates BEFORE reloading - never relies on
+// the TTL alone for its own next paint to be genuinely fresh. Two shapes,
+// depending on the mutation's own blast radius (see training-load-
+// actions.js's own comment at each call site for which one applies):
+// captureTrainingLoadWeeklyMutationContext/-AthleteWeeklyMutationContext +
+// invalidateTrainingLoadWeeklyContext/-AthleteWeeklyContext (below) for a
+// mutation confined to ONE week/filter (a single session's RPE submit or
+// RPE-enabled toggle - context captured BEFORE the request is sent, never
+// re-derived from current state after), or invalidateAllTrainingLoadWeekly-
+// Generations for one that can affect several cached weeks/filters at
+// once (the workspace master toggle, ownership resolution, an external
+// schedule's status change, or a recurring/multi-date create/edit/
+// schedule-again).
 const TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE = "training-load-weekly";
 
 // Item 2 correction's own request-race guard, mirrored exactly: a rapid
@@ -78,23 +86,45 @@ function trainingLoadWeeklyContextKey(weekStart, extraQuery) {
   return buildContextKey([...currentUserWorkspaceContextParts(), weekStart, extraQuery]);
 }
 
-// Exported so a mutation (RPE submit, RPE-enabled toggle, ownership
-// resolution, an external schedule create/edit/schedule-again) can drop
-// the CURRENTLY-VIEWED week/filter's own cache entry right before its
-// post-mutation reload - never a stale flash of the pre-mutation state
-// painted from cache before the fresh data lands. A plain nav-only
-// reload (prev/next week, Today, a section switch) deliberately does NOT
-// call this - that's exactly the instant-paint-from-cache path this
-// whole module exists to speed up.
-export function invalidateTrainingLoadWeeklyForSection(section) {
+// Correction round 2: a mutation's own affected (weekStart, filterQuery)
+// must be recorded BEFORE its request is sent, never re-derived from
+// CURRENT state after the request resolves - a week-nav click, a filter
+// confirm, or a section switch happening while the mutation's own request
+// is still in flight must never change WHICH cached entry gets dropped
+// once it lands. Call this synchronously right before the mutation's own
+// `await api(...)` call; pass the returned snapshot to
+// invalidateTrainingLoadWeeklyContext/invalidateTrainingLoadAthleteWeeklyContext
+// (below) AFTER the mutation succeeds - never invalidateTrainingLoadWeekly-
+// ForSection/-AthleteWeeklyCache with a freshly re-read `section`/nav
+// object post-await, which is exactly the bug this replaces.
+export function captureTrainingLoadWeeklyMutationContext(section) {
   const nav = state.trainingLoad.weekly[section];
-  if (!nav.weekStart) return; // never fetched yet this session - nothing to drop
-  invalidateCacheEntry(TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE, trainingLoadWeeklyContextKey(nav.weekStart, trainingLoadFilterQuery()));
+  return nav.weekStart ? { weekStart: nav.weekStart, filterQuery: trainingLoadFilterQuery() } : null;
 }
-export function invalidateTrainingLoadAthleteWeeklyCache() {
+export function captureTrainingLoadAthleteWeeklyMutationContext() {
   const nav = state.trainingLoad.athleteWeekly;
-  if (!nav.weekStart) return;
-  invalidateCacheEntry(TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE, trainingLoadWeeklyContextKey(nav.weekStart, ""));
+  return nav.weekStart ? { weekStart: nav.weekStart } : null;
+}
+
+// Invalidates a SPECIFIC, already-captured (weekStart, filterQuery)
+// context - see captureTrainingLoadWeeklyMutationContext's own header for
+// why this must never re-derive the context from current state. `context`
+// is `null` when nothing had been fetched yet at capture time - a safe
+// no-op (nothing to drop). Scoped to ONE week/filter - only correct for a
+// mutation whose own effect is genuinely confined to that single context
+// (a single session's RPE submit or RPE-enabled toggle). A mutation that
+// can affect MULTIPLE cached weeks/filters at once (the workspace master
+// toggle, ownership resolution, an external schedule's status change or a
+// recurring/multi-date create/edit) must use
+// invalidateAllTrainingLoadWeeklyGenerations instead - see each of those
+// action handlers' own comments in training-load-actions.js.
+export function invalidateTrainingLoadWeeklyContext(context) {
+  if (!context) return;
+  invalidateCacheEntry(TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE, trainingLoadWeeklyContextKey(context.weekStart, context.filterQuery));
+}
+export function invalidateTrainingLoadAthleteWeeklyContext(context) {
+  if (!context) return;
+  invalidateCacheEntry(TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE, trainingLoadWeeklyContextKey(context.weekStart, ""));
 }
 
 // `onPainted` (optional) fires synchronously at every point this nav

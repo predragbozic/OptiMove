@@ -1,10 +1,12 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyRpeForm, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
 import {
+  captureTrainingLoadAthleteWeeklyMutationContext,
+  captureTrainingLoadWeeklyMutationContext,
   createExternalSchedule,
   invalidateAllTrainingLoadWeeklyGenerations,
-  invalidateTrainingLoadAthleteWeeklyCache,
-  invalidateTrainingLoadWeeklyForSection,
+  invalidateTrainingLoadAthleteWeeklyContext,
+  invalidateTrainingLoadWeeklyContext,
   loadExternalScheduleDetail,
   loadPlannedRpeSetting,
   loadTrainingLoadAthleteToday,
@@ -64,14 +66,16 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // the confirmation is dismissed, so the Home card/list (and the
     // weekly overlay, if that's where this was opened from) reflect the
     // new rated status immediately, not on the next unrelated visit.
+    // Correction round 2: the athlete weekly CACHE entry is already
+    // dropped unconditionally at submit time (submitRpeForm below) -
+    // regardless of whether the overlay happens to be open right now, so
+    // a LATER open (this session, within the TTL) can never read a stale
+    // pre-submit payload. This handler only needs to actually re-fetch and
+    // repaint the overlay if it's visible right now - there's nothing to
+    // show a reload for otherwise.
     if (hadSaved) {
       await loadTrainingLoadAthleteToday();
-      // A just-submitted result must show up immediately, never a stale
-      // pre-submit flash from cache - drop this week's own cache entry
-      // before the reload (see invalidateTrainingLoadAthleteWeeklyCache's
-      // own header comment).
       if (state.trainingLoad.athleteWeeklyOpen) {
-        invalidateTrainingLoadAthleteWeeklyCache();
         await loadTrainingLoadAthleteWeekly();
       }
     }
@@ -184,6 +188,13 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if (!sessionId) return true;
     const currentlyEnabled = action.dataset.currentlyEnabled === "true";
     const nextEnabled = !currentlyEnabled;
+    const section = state.trainingLoad.section;
+    // Correction round 2 (gap 1): captured BEFORE the request - a week-nav
+    // click, filter confirm, or section switch while this toggle (and its
+    // possible confirm-and-retry round trip below) is in flight must never
+    // change WHICH cached entry gets dropped once the response lands (see
+    // captureTrainingLoadWeeklyMutationContext's own header).
+    const mutationContext = captureTrainingLoadWeeklyMutationContext(section);
     try {
       await toggleSessionRpeEnabled(sessionId, nextEnabled);
     } catch (error) {
@@ -197,9 +208,12 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       }
     }
     // A just-toggled session must reflect the new state immediately,
-    // never a stale pre-toggle flash from cache.
-    invalidateTrainingLoadWeeklyForSection(state.trainingLoad.section);
-    await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
+    // never a stale pre-toggle flash from cache. Scoped to just this one
+    // session's own week/filter (a per-session toggle can't affect any
+    // OTHER cached week) - see invalidateTrainingLoadWeeklyContext's own
+    // header for when a WIDE invalidation is required instead.
+    invalidateTrainingLoadWeeklyContext(mutationContext);
+    await loadTrainingLoadWeekly(section, renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
@@ -253,12 +267,17 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       setting.enabled = result.enabled;
       setting.enabledAt = result.enabledAt;
       setting.saving = false;
-      // Refreshes the currently-visible rows so an individual session's
-      // own status pill (see plannedStatusLabel) reflects the new
-      // effective state immediately, not just the toggle control itself -
-      // invalidated first so that refresh is a real fetch, never a stale
-      // pre-toggle paint from cache.
-      invalidateTrainingLoadWeeklyForSection(state.trainingLoad.section);
+      // Correction round 2 (gap 1): the workspace master toggle governs
+      // EVERY plan/session's own effective actionability across every
+      // week, not just whatever week/filter happens to be on screen right
+      // now - a narrow, single-key invalidation would leave every OTHER
+      // already-cached week (a coach who browsed several weeks this
+      // session) showing a stale pre-toggle state until its own TTL
+      // happens to expire. Wide invalidation (bump every generation +
+      // clear the whole weekly cache namespace) so any later visit to any
+      // week/filter is guaranteed a real, fresh fetch - then refreshes the
+      // currently-visible rows immediately for instant feedback.
+      invalidateAllTrainingLoadWeeklyGenerations();
       await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
     } catch (error) {
       setting.saving = false;
@@ -297,12 +316,14 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     try {
       await resolvePlanOwnership(planIds);
       state.trainingLoad.resolvingOwnership = false;
-      // Refreshes every row so a just-resolved plan's own session(s)
-      // immediately drop the "workspace not assigned" badge and become
-      // actionable (subject to the master switch and enabled_at cutoff,
-      // exactly as if it had always had a real owner) - invalidated first
-      // so this is a real fetch, never a stale pre-resolution paint.
-      invalidateTrainingLoadWeeklyForSection(state.trainingLoad.section);
+      // Correction round 2 (gap 1): a resolved plan's own sessions can
+      // appear in MULTIPLE weeks (a plan spans exactly one week, but the
+      // bulk action can resolve several plans at once, each its own week) -
+      // wide invalidation, same reasoning as the master toggle above.
+      // Refreshes the currently-visible rows immediately so a just-
+      // resolved plan's own session(s) drop the "workspace not assigned"
+      // badge right away.
+      invalidateAllTrainingLoadWeeklyGenerations();
       await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
     } catch (error) {
       state.trainingLoad.resolvingOwnership = false;
@@ -672,7 +693,19 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       return true;
     }
     await setExternalScheduleStatus(scheduleId, statusAction);
-    await openExternalScheduleDetail(scheduleId, renderTrainingLoad);
+    // Correction round 2 (gap 1): this used to refresh only the detail
+    // overlay, never the weekly cache at all - a paused/resumed/cancelled
+    // schedule changes future occurrence generation and actionability
+    // across every week it could still appear in, not just whichever week
+    // happens to be on screen. Wide invalidation, then refresh both the
+    // detail overlay and the currently-visible weekly view so its own rows
+    // (Schedule's own management view, and Today's grouped rows) reflect
+    // the new status immediately.
+    invalidateAllTrainingLoadWeeklyGenerations();
+    await Promise.all([
+      openExternalScheduleDetail(scheduleId, renderTrainingLoad),
+      loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+    ]);
     return true;
   }
 
@@ -829,9 +862,14 @@ async function submitExternalScheduleForm(renderTrainingLoad) {
       await createExternalSchedule(buildExternalScheduleBody(form));
     }
     state.trainingLoad.scheduleForm = null;
-    // A just-created/edited/re-scheduled external session must show up
-    // immediately, never a stale pre-save flash from cache.
-    invalidateTrainingLoadWeeklyForSection(state.trainingLoad.section);
+    // Correction round 2 (gap 1): a create/edit/schedule-again can be a
+    // recurring or multi-date (specific_dates) schedule spanning several
+    // weeks, not just the one currently on screen - a narrow, single-week
+    // invalidation would leave every OTHER already-cached week showing
+    // stale pre-save rows. Wide invalidation unconditionally (simpler and
+    // safer than branching on scheduleKind), then refresh the current
+    // section immediately for instant feedback.
+    invalidateAllTrainingLoadWeeklyGenerations();
     await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
   } catch (error) {
     form.submitting = false;
@@ -1087,12 +1125,26 @@ async function submitRpeForm(renderTrainingLoad) {
   form.saving = true;
   form.error = "";
   renderTrainingLoad();
+  // Correction round 2 (gap 3): captured BEFORE the request, per this
+  // module's own "record the mutation's context before sending it" rule -
+  // the athlete weekly overlay's own week-nav is unreachable while this
+  // form is open (see renderTrainingLoadAthleteOverlaysHtml's own mutual-
+  // exclusivity), so this can't actually drift mid-flight today, but
+  // capturing here keeps every mutation in this file following the same
+  // pattern rather than one being a silent exception.
+  const athleteWeeklyContext = captureTrainingLoadAthleteWeeklyMutationContext();
   try {
     const result = form.source === "scheduled_external"
       ? await submitExternalRpe(form.externalAssignmentId, { rpe: form.rpe, durationMinutes: Number(form.durationMinutes), note: form.note })
       : await submitRpe(form.sessionId, { rpe: form.rpe, durationMinutes: Number(form.durationMinutes), note: form.note });
     form.saving = false;
     form.savedFeedback = result.feedback;
+    // Correction round 2 (gap 3): drop the athlete weekly cache entry
+    // UNCONDITIONALLY on a successful submit, never only when the overlay
+    // happens to be open - a submit from Home (the overlay closed) must
+    // never leave an earlier-loaded weekly cache entry stale for a LATER
+    // open this session (within the cache's own TTL) to read back.
+    invalidateTrainingLoadAthleteWeeklyContext(athleteWeeklyContext);
   } catch (error) {
     form.saving = false;
     form.error = error.message || "Could not save this session's feedback.";
