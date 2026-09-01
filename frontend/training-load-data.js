@@ -76,6 +76,55 @@ export async function loadTrainingLoadAthleteWeekly() {
 // state after the switch, even if nothing re-fetches immediately.
 export function invalidateAllTrainingLoadWeeklyGenerations() {
   for (const key of Object.keys(weeklyRequestGeneration)) weeklyRequestGeneration[key] += 1;
+  invalidatePlannedRpeSettingGeneration();
+}
+
+// ------------------------------------------------------------
+// (v9) Workspace-level master toggle for automatic planned-session RPE -
+// its own generation counter, the exact same stale-response-drop pattern
+// weeklyRequestGeneration above already establishes: a workspace switch
+// must invalidate an in-flight GET for the OLD workspace so it can never
+// land and overwrite the NEW workspace's own value once that's applied.
+// ------------------------------------------------------------
+
+let plannedRpeSettingGeneration = 0;
+
+export function invalidatePlannedRpeSettingGeneration() {
+  plannedRpeSettingGeneration += 1;
+}
+
+export async function loadPlannedRpeSetting() {
+  const nav = state.trainingLoad.plannedRpeSetting;
+  const generation = ++plannedRpeSettingGeneration;
+  nav.loading = true;
+  nav.error = "";
+  try {
+    const data = await api("/api/training-load/planned-rpe-setting");
+    if (generation !== plannedRpeSettingGeneration) return; // stale - a workspace switch (or a newer load) already started
+    nav.enabled = data.enabled;
+    nav.enabledAt = data.enabledAt;
+    nav.loaded = true;
+    nav.loading = false;
+  } catch (error) {
+    if (generation !== plannedRpeSettingGeneration) return;
+    nav.error = error.message || "Could not load the automatic RPE setting.";
+    nav.loading = false;
+  }
+}
+
+export async function savePlannedRpeSetting(enabled) {
+  return api("/api/training-load/planned-rpe-setting", { method: "PATCH", body: JSON.stringify({ enabled }) });
+}
+
+// (correction round 2) Explicitly assigns the caller's own CURRENT
+// workspace to one or more plans still stamped owner_scope='unresolved'
+// - "Use current workspace for RPE" (one id) or a confirmed bulk action
+// (every currently-visible unresolved id) both call this same endpoint,
+// never a client-side "resolve everything" shortcut. The backend re-
+// authorizes every id itself and is fully atomic - see routes/
+// trainingLoad.js's own POST /plans/resolve-rpe-ownership.
+export async function resolvePlanOwnership(planIds) {
+  return api("/api/training-load/plans/resolve-rpe-ownership", { method: "POST", body: JSON.stringify({ planIds }) });
 }
 
 // Athlete's own today - deliberately NOT cached (same reasoning tests-

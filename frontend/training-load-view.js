@@ -443,16 +443,32 @@ function renderExternalGroupRowHtml(group, date) {
   `;
 }
 
+// A disabled+unrated session, OR one whose governing workspace(s)
+// currently have automatic planned RPE off (v9), was never actually a
+// rating request in the first place - each of the two OFF reasons gets
+// its own distinct, informational (never pending) label, so a row is
+// never left looking actionable while the master switch is off but
+// LOOKING like a normal "session-level off" the coach could just
+// individually flip back on.
+function plannedStatusLabel(session) {
+  if (session.rated) return { label: formatFeedbackSummary(session.feedback), cls: "rated" };
+  if (session.rpeEnabled === false) return { label: "RPE off", cls: "off" };
+  // (correction round 2) A plan whose ownership was never resolved is a
+  // DIFFERENT situation from "the workspace switch is off" - the coach
+  // needs to explicitly assign a workspace, not just flip the switch (see
+  // renderScheduleSessionRowHtml's own "Use current workspace for RPE"
+  // control below). Checked before workspacePlannedRpeEnabled so it's
+  // never mislabeled as a plain switch-off - an unresolved plan reads
+  // workspacePlannedRpeEnabled=false too (it can never match any real
+  // settings row), but that's not the actionable reason here.
+  if (session.ownershipUnresolved) return { label: "RPE workspace not assigned", cls: "off" };
+  if (session.workspacePlannedRpeEnabled === false) return { label: "Automatic RPE off", cls: "off" };
+  return { label: "Not rated", cls: "unrated" };
+}
+
 function renderCoachSessionRowHtml(session, date) {
   if (session.__externalGroup) return renderExternalGroupRowHtml(session, date);
-  // A disabled+unrated session was never actually a rating request in the
-  // first place - "RPE off" is informational only (no reminder controls,
-  // never counted as pending), distinct from a genuine "Not rated".
-  const status = session.rated
-    ? { label: formatFeedbackSummary(session.feedback), cls: "rated" }
-    : session.rpeEnabled === false
-      ? { label: "RPE off", cls: "off" }
-      : { label: "Not rated", cls: "unrated" };
+  const status = plannedStatusLabel(session);
   return `
     <div class="training-load-session-row">
       <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
@@ -513,13 +529,7 @@ function externalStatusLabel(session) {
 
 function renderScheduleSessionRowHtml(session, date) {
   const isExternal = session.source === "scheduled_external";
-  const status = isExternal
-    ? externalStatusLabel(session)
-    : session.rated
-      ? { label: formatFeedbackSummary(session.feedback), cls: "rated" }
-      : session.rpeEnabled === false
-        ? { label: "RPE off", cls: "off" }
-        : { label: "Not rated", cls: "unrated" };
+  const status = isExternal ? externalStatusLabel(session) : plannedStatusLabel(session);
   // A planned row opens the existing Weekly plan view; an OUTSIDE PLAN row
   // opens this schedule's own detail (Edit/Pause/Resume/Cancel/Schedule
   // again) instead - the two click targets are never interchangeable.
@@ -531,6 +541,15 @@ function renderScheduleSessionRowHtml(session, date) {
       : "";
   const Tag = clickable ? "button" : "div";
   const canToggle = !isExternal && clickable && session.sessionId;
+  // (correction round 2) An unresolved plan's own resolution control
+  // takes priority over the ordinary per-session RPE on/off toggle - the
+  // per-session flag is moot until the plan has a real workspace at all
+  // (see plannedStatusLabel's own comment on why this is a different
+  // situation from the workspace switch being off). planId, never
+  // sessionId - resolution is a PLAN-level action; every session under
+  // the same unresolved plan resolves together, in one request.
+  const needsOwnershipResolution = !isExternal && !session.historical && session.ownershipUnresolved && session.planId;
+  const resolving = state.trainingLoad.resolvingOwnership;
   return `
     <div class="training-load-schedule-row">
       <${Tag} class="training-load-session-row ${clickable ? "is-clickable" : ""}" ${attrs}>
@@ -541,7 +560,18 @@ function renderScheduleSessionRowHtml(session, date) {
         </span>
         <span class="training-load-status-pill training-load-status-${status.cls}">${escapeHtml(status.label)}</span>
       </${Tag}>
-      ${canToggle ? `
+      ${needsOwnershipResolution ? `
+        <div class="training-load-schedule-row-toggle">
+          <span class="training-load-rpe-state-badge is-off">RPE WORKSPACE NOT ASSIGNED</span>
+          ${session.canResolveOwnership ? `
+            <button type="button" class="plain-button compact-button" data-action="training-load-resolve-plan-ownership" data-plan-id="${escapeAttr(session.planId)}" ${resolving ? "disabled" : ""}>
+              Use current workspace for RPE
+            </button>
+          ` : `
+            <span class="muted training-load-master-toggle-off-note">Ask the plan creator or administrator to assign its RPE workspace</span>
+          `}
+        </div>
+      ` : canToggle ? `
         <div class="training-load-schedule-row-toggle">
           ${renderScheduleRpeStateBadgeHtml(session)}
           <button type="button" class="plain-button compact-button" data-action="training-load-toggle-session-rpe" data-session-id="${escapeAttr(session.sessionId)}" data-currently-enabled="${session.rpeEnabled !== false ? "true" : "false"}">
@@ -570,8 +600,79 @@ function renderScheduleWeeklyCalendarHtml() {
   });
 }
 
-export function renderTrainingLoadScheduleHtml() {
+// (v9) Workspace-level master toggle - compact, no large colored surface
+// (matches the existing Notifications switch row this reuses the exact
+// CSS classes of - tests-notification-row/-switch/-switch-knob/-row-
+// label, already this module's own "compact Training Load control"
+// convention). Renders disabled (never clickable) until the real current
+// value has actually loaded, so a coach can never flip it against an
+// unknown starting state - see this control's own action handler.
+// (correction round 2/4) Every plan currently visible in the Schedule
+// tab's own loaded week whose ownership is unresolved AND that THIS
+// account could actually resolve (canResolveOwnership - the plan's own
+// original creator, or a platform override; see routes/trainingLoad.js's
+// own canResolvePlanOwnership) - deduplicated by planId (several
+// sessions can share one plan). Drives both the master toggle's own
+// "still N unassigned" note below (so ON never looks like a silently
+// broken switch while real sessions stay inactive) and the bulk-resolve
+// action - always an explicit, currently-VISIBLE, ACTUALLY-RESOLVABLE
+// set, never "every unresolved plan this coach could ever reach" and
+// never one this account isn't the creator of. This is a display/
+// convenience filter only - the backend re-authorizes every plan id
+// itself regardless of what the frontend sends (see resolvePlanOwnership's
+// own comment in training-load-data.js).
+function collectVisibleUnresolvedPlanIds() {
+  const data = state.trainingLoad.weekly.schedule.data;
+  if (!data) return [];
+  const ids = [];
+  const seen = new Set();
+  for (const day of data.days) {
+    for (const session of day.sessions) {
+      if (session.ownershipUnresolved && session.canResolveOwnership && session.planId && !seen.has(session.planId)) {
+        seen.add(session.planId);
+        ids.push(session.planId);
+      }
+    }
+  }
+  return ids;
+}
+
+export function renderPlannedRpeMasterToggleHtml() {
+  const setting = state.trainingLoad.plannedRpeSetting;
+  const checked = setting.enabled === true;
+  const disabled = setting.saving || !setting.loaded;
+  const unresolvedPlanIds = checked ? collectVisibleUnresolvedPlanIds() : [];
+  const resolving = state.trainingLoad.resolvingOwnership;
   return `
+    <div class="training-load-master-toggle">
+      <div class="tests-notification-row">
+        <button type="button" class="tests-notification-switch ${checked ? "is-on" : ""}" role="switch" aria-checked="${checked ? "true" : "false"}" aria-label="Automatically collect RPE for planned sessions" data-action="training-load-toggle-planned-rpe-master" ${disabled ? "disabled" : ""}>
+          <span class="tests-notification-switch-knob" aria-hidden="true"></span>
+        </button>
+        <span class="tests-notification-row-label">
+          Automatically collect RPE for planned sessions
+          <span class="muted training-load-master-toggle-hint">Request RPE after sessions created in the Weekly Plan. Individual sessions can still be turned off.</span>
+        </span>
+      </div>
+      ${setting.error ? `<p class="builder-error">${escapeHtml(setting.error)}</p>` : ""}
+      ${state.trainingLoad.resolveOwnershipError ? `<p class="builder-error">${escapeHtml(state.trainingLoad.resolveOwnershipError)}</p>` : ""}
+      ${setting.loaded && !checked ? `<p class="muted training-load-master-toggle-off-note">Automatic planned RPE is off</p>` : ""}
+      ${setting.loaded && checked && unresolvedPlanIds.length ? `
+        <div class="training-load-unresolved-banner">
+          <p class="muted training-load-master-toggle-off-note">${unresolvedPlanIds.length === 1 ? "1 plan" : `${unresolvedPlanIds.length} plans`} in this view ${unresolvedPlanIds.length === 1 ? "has" : "have"} no RPE workspace assigned yet, so automatic RPE stays off for ${unresolvedPlanIds.length === 1 ? "it" : "them"}.</p>
+          <button type="button" class="plain-button compact-button" data-action="training-load-resolve-all-unresolved" data-plan-ids="${escapeAttr(unresolvedPlanIds.join(","))}" ${resolving ? "disabled" : ""}>
+            Assign current workspace to ${unresolvedPlanIds.length === 1 ? "this plan" : `all ${unresolvedPlanIds.length} plans`}
+          </button>
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+export function renderTrainingLoadScheduleHtml() {
+  const overlayOpen = Boolean(state.trainingLoad.scheduleForm || state.trainingLoad.scheduleDetail);
+  return `
+    ${!overlayOpen ? renderPlannedRpeMasterToggleHtml() : ""}
     <div class="training-load-schedule-toolbar">
       <button type="button" class="plain-button" data-action="training-load-open-schedule-form">New RPE session</button>
     </div>
@@ -595,17 +696,18 @@ function computeWeeklyAggregates(data) {
     date: day.date,
     srpe: day.sessions.filter((s) => s.rated).reduce((sum, s) => sum + s.feedback.srpe, 0),
   }));
-  // Per-session RPE opt-out: a disabled session with no result yet was
-  // never actually asking to be rated, so it must never count toward the
-  // "rated/planned" completion denominator (rpeEnabled defaults to true
-  // for external/historical rows, so this only ever excludes a genuinely
-  // disabled, still-unrated planned session). One that already has a
-  // result still counts - it's already in `rated` above either way.
-  // Same rule for a paused/cancelled external row that was never rated -
-  // GET /weekly returns it to the coach unfiltered (Schedule needs it for
-  // management), but it was never a real pending request, so the explicit
-  // `actionable` field (not row presence) decides whether it counts here.
-  const countedTowardPlanned = allSessions.filter((s) => s.rated || (s.source === "scheduled_external" ? s.actionable : s.rpeEnabled !== false));
+  // Per-session RPE opt-out, AND (v9) the workspace-level master toggle -
+  // a disabled session, or one whose governing workspace(s) currently
+  // have automatic planned RPE off, was never actually asking to be
+  // rated, so it must never count toward the "rated/planned" completion
+  // denominator. One that already has a result still counts - it's
+  // already in `rated` above either way. Same rule for a paused/
+  // cancelled external row that was never rated - GET /weekly returns it
+  // to the coach unfiltered (Schedule needs it for management), but it
+  // was never a real pending request. Both sources now carry their own
+  // real, backend-computed `actionable` field (never re-derived here),
+  // so this is a single uniform check across planned and external rows.
+  const countedTowardPlanned = allSessions.filter((s) => s.rated || s.actionable);
   return { totalSrpe, totalDuration, avgRpe, ratedCount: rated.length, plannedCount: countedTowardPlanned.length, dailySrpe };
 }
 

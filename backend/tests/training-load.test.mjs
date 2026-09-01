@@ -24,6 +24,13 @@ const MIGRATION_V4_PATH = path.resolve(__dirname, "../../migrations_v2/202609011
 const MIGRATION_V4_NAME = "202609011000_training_load_v4_external_scheduling.sql";
 const MIGRATION_V5_PATH = path.resolve(__dirname, "../../migrations_v2/202609011100_training_load_v5_unified_result_source.sql");
 const MIGRATION_V5_NAME = "202609011100_training_load_v5_unified_result_source.sql";
+// v9's own planned_rpe_effective_for_athlete() is called unconditionally
+// by both POST /sessions/:id/rpe and GET /athlete/today|weekly now (see
+// trainingLoad.js) - every test in this file that exercises those routes
+// needs it present, even though it has no functional dependency on v6-v8
+// (the external-scheduling migrations) at all.
+const MIGRATION_V9_PATH = path.resolve(__dirname, "../../migrations_v2/202609040900_training_load_v9_planned_rpe_workspace_toggle.sql");
+const MIGRATION_V9_NAME = "202609040900_training_load_v9_planned_rpe_workspace_toggle.sql";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -168,6 +175,7 @@ const LEGACY_FIXTURE_SQL = `
     add column is_edit_draft boolean not null default false,
     add column edit_source_plan_id uuid references plans.plans(id),
     add column week_start date,
+    add column created_by_user_id uuid references public.users(id),
     add column created_at timestamptz not null default now(),
     add column updated_at timestamptz not null default now();
   alter table plans.plan_days
@@ -218,12 +226,13 @@ let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
 
 before(async () => {
-  const [migrationV1Sql, migrationV2Sql, migrationV3Sql, migrationV4Sql, migrationV5Sql] = await Promise.all([
+  const [migrationV1Sql, migrationV2Sql, migrationV3Sql, migrationV4Sql, migrationV5Sql, migrationV9Sql] = await Promise.all([
     fsp.readFile(MIGRATION_V1_PATH, "utf8"),
     fsp.readFile(MIGRATION_V2_PATH, "utf8"),
     fsp.readFile(MIGRATION_V3_PATH, "utf8"),
     fsp.readFile(MIGRATION_V4_PATH, "utf8"),
     fsp.readFile(MIGRATION_V5_PATH, "utf8"),
+    fsp.readFile(MIGRATION_V9_PATH, "utf8"),
   ]);
 
   db = await makeTempDb("primary");
@@ -239,6 +248,7 @@ before(async () => {
     [MIGRATION_V3_NAME]: migrationV3Sql,
     [MIGRATION_V4_NAME]: migrationV4Sql,
     [MIGRATION_V5_NAME]: migrationV5Sql,
+    [MIGRATION_V9_NAME]: migrationV9Sql,
   });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
 
@@ -250,6 +260,51 @@ before(async () => {
   createSession = authModule.createSession;
   hashPassword = authModule.hashPassword;
   const serverModule = await import("../src/server.js");
+
+  // v9's workspace-level master toggle for planned RPE defaults to OFF
+  // for every workspace that has never configured it - this whole file
+  // predates that switch and tests the ORIGINAL per-session rpe_enabled
+  // behavior exclusively (the master toggle itself has its own dedicated
+  // test file, training-load-planned-rpe-master-toggle.test.mjs, which is
+  // where the actual workspace-isolation/ownership-scoping coverage
+  // lives). A single platform-wide 'system' row, enabled from year 2000,
+  // reproduces the SAME effective behavior every one of these tests
+  // already assumed before v9 existed - without touching any individual
+  // test's own assertions.
+  //
+  // Hardening correction: under the plan-scoped ownership model
+  // (training_load.plan_workspace_ownership - see migrations_v2/
+  // 202609040900's own header), a 'system' settings row only ever
+  // matches a plan whose OWN stored snapshot is owner_scope='system' - a
+  // bare settings row is no longer enough on its own, and this file's
+  // ~60 pre-existing tests create every plan via raw SQL across several
+  // call sites, none of which stamp an ownership snapshot. Rather than
+  // touch every one of those call sites individually, this disposable
+  // temp DB (created fresh above, dropped in after() - never the shared
+  // local OPTIMOVE database) gets a TEST-ONLY trigger that stamps
+  // owner_scope='system' on every weekly plan the instant it's inserted,
+  // regardless of which of this file's several fixture helpers created
+  // it. This is an honest, coherent scope choice for this file (which
+  // deliberately tests pre-workspace-toggle behavior, where every plan
+  // implicitly belongs to a single global switch) - not a shortcut that
+  // lets these tests avoid giving their plans a real, matching owner.
+  await query(`
+    create or replace function training_load.test_auto_system_ownership() returns trigger language plpgsql as $$
+    begin
+      if new.plan_type = 'weekly' then
+        insert into training_load.plan_workspace_ownership (plan_id, owner_scope)
+        values (new.id, 'system')
+        on conflict (plan_id) do nothing;
+      end if;
+      return new;
+    end;
+    $$;
+    create trigger test_auto_system_ownership after insert on plans.plans
+    for each row execute function training_load.test_auto_system_ownership();
+  `);
+  await query(
+    `insert into training_load.planned_rpe_workspace_settings (owner_scope, enabled, enabled_at) values ('system', true, '2000-01-01T00:00:00Z')`,
+  );
 
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));

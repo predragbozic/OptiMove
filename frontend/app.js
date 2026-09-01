@@ -62,7 +62,7 @@ import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
-import { loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
+import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import { els } from "./dom.js";
 import {
@@ -1821,7 +1821,16 @@ async function loadTrainingLoad() {
   els.context.textContent = "Training load";
   els.title.textContent = "Training load";
   els.toolbar.innerHTML = "";
-  await loadTrainingLoadWeekly(state.trainingLoad.section);
+  // (v9) Same "workspace switch must immediately load the new
+  // workspace's own value, never carry over the old one" rule as every
+  // other workspace-scoped Training Load fetch - this function runs both
+  // on a fresh tab entry AND right after a workspace switch (see
+  // onWorkspaceChanged above), so gating on the currently-active section
+  // here covers both triggers with one check.
+  await Promise.all([
+    loadTrainingLoadWeekly(state.trainingLoad.section),
+    state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
+  ]);
   renderTrainingLoad();
 }
 

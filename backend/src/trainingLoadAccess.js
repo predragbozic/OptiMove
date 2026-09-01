@@ -20,6 +20,7 @@
 // already built to avoid for athlete visibility - this file now applies
 // the identical discipline to schedule ownership/management/targeting.
 import { resolveActiveWorkspace } from "./workspace.js";
+import { query } from "./db.js";
 
 function externalScheduleScopeFromWorkspace(workspace, req) {
   if (!workspace) return { type: null };
@@ -82,6 +83,80 @@ export function externalScheduleScopeForWorkspace(workspace, req) {
   const scope = externalScheduleScopeFromWorkspace(workspace, req);
   if (scope.type !== null) scope.ownerContext = externalScheduleOwnerContextFromWorkspace(workspace, req);
   return scope;
+}
+
+// Correction: routes/builder.js used to snapshot a NEW weekly plan's
+// owner via a resolveCurrentWorkspaceOwnerContext() that quietly fell
+// back to owner_scope='unresolved' whenever the creating account had no
+// real manageable workspace active - which meant a genuinely new,
+// LIVE-created plan could be born 'unresolved' too, exactly the state
+// the legacy backfill's own "never guess" rule was meant to be a
+// fallback for PRE-EXISTING plans only, not something a live create
+// should ever intentionally produce. routes/builder.js now resolves the
+// full scope via resolveExternalScheduleWorkspaceScope (below) itself,
+// rejects with a controlled 403 when scope.type === null BEFORE creating
+// anything, and only ever stamps scope.ownerContext (always a real,
+// non-'unresolved' owner by construction once that check passes) - see
+// that route's own comment for the full reasoning. isAthleteInWorkspaceScope
+// (below) is what it uses to validate each requested target athlete
+// against that SAME resolved scope before ever creating a plan for them.
+
+// Workspace-scoped "does this athlete belong here" check - the single
+// source of truth for both external-schedule target validation
+// (routes/trainingLoad.js's own resolveValidExternalTargets) and
+// routes/builder.js's own weekly-plan target validation. Athlete ids
+// here are always the real public.athletes.id UUID (never the human-
+// readable athlete_id code the org picker's fuzzier global helper
+// supports), so a direct membership-table comparison is both correct
+// and simpler than reusing that helper.
+export async function isAthleteInWorkspaceScope(scope, athleteId) {
+  if (scope.type === "platform") {
+    const r = await query(`select 1 from public.athletes where id = $1`, [athleteId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "club") {
+    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'club' and status = 'active' and club_id = $2`, [athleteId, scope.clubId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "team") {
+    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'team' and status = 'active' and team_id = $2`, [athleteId, scope.teamId]);
+    return r.rowCount > 0;
+  }
+  if (scope.type === "private_coach") {
+    const r = await query(`select 1 from public.user_athletes where athlete_id = $1 and user_id = $2 and is_active = true`, [athleteId, scope.userId]);
+    return r.rowCount > 0;
+  }
+  return false;
+}
+
+// Correction round 4: workspace-scope coverage of a plan's athlete is
+// NOT proof that a given workspace actually OWNS an 'unresolved' plan -
+// isAthleteInWorkspaceScope alone let ANY workspace that happens to
+// currently manage the same athlete (a private coach, a different club
+// via a second membership, etc.) claim a legacy plan regardless of who
+// actually made it, turning "resolve the ownership" into "whoever clicks
+// first wins" - exactly the kind of cross-workspace leak this branch's
+// own ownership model exists to prevent, just moved into the resolution
+// action itself instead of the read path.
+//
+// Conservative rule for a genuinely UNRESOLVED plan: only its own
+// ORIGINAL creator (plans.plans.created_by_user_id) may resolve it, and
+// only while their own currently active workspace still genuinely covers
+// the plan's athlete (never a bare identity check alone - a creator who
+// no longer has any real relationship to this athlete can't resolve it
+// either). A plan with no creator on record (created_by_user_id is
+// null - never guessed at) is never resolvable through this identity
+// check by anyone. A real platform administrator is the one deliberate,
+// explicit override for exactly that "creator is gone/unknown" case -
+// never a plain club/team/private-coach workspace, no matter how
+// legitimately it manages the same athlete today.
+//
+// `plan` here only ever needs `athlete_id` and `created_by_user_id` -
+// callers pass whatever subset of a fuller row they already have.
+export async function canResolvePlanOwnership(scope, plan, userId) {
+  if (scope.type === "platform") return true;
+  if (plan.created_by_user_id == null || String(plan.created_by_user_id) !== String(userId)) return false;
+  return isAthleteInWorkspaceScope(scope, plan.athlete_id);
 }
 
 export function canManageExternalScheduleInScope(scope, schedule) {

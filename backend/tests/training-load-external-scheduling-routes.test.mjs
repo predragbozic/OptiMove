@@ -29,6 +29,11 @@ const MIGRATIONS = [
   ["202609011200_training_load_v6_external_schedule_event_type.sql"],
   ["202609020900_training_load_v7_external_schedule_notification_rules.sql"],
   ["202609030900_training_load_v8_specific_dates_group.sql"],
+  // v9's own planned_rpe_effective_for_athlete() is now called
+  // unconditionally by GET /athlete/today|weekly's planned-session
+  // query, even for a request/fixture that only ever touches EXTERNAL
+  // assignments - the query itself still runs.
+  ["202609040900_training_load_v9_planned_rpe_workspace_toggle.sql"],
 ].map(([name]) => ({ name, path: path.resolve(__dirname, `../../migrations_v2/${name}`) }));
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -174,6 +179,7 @@ const LEGACY_FIXTURE_SQL = `
     add column is_edit_draft boolean not null default false,
     add column edit_source_plan_id uuid references plans.plans(id),
     add column week_start date,
+    add column created_by_user_id uuid references public.users(id),
     add column created_at timestamptz not null default now(),
     add column updated_at timestamptz not null default now();
   alter table plans.plan_days
@@ -992,11 +998,18 @@ test("F6. the worker never invites or reminds a 'missed' or 'excused' assignment
   for (const status of ["missed", "excused"]) {
     const { athlete, assignmentId } = await makeReadyAssignment(`f6-${status}`);
     await query(`update training_load.external_assignments set status = $2 where id = $1`, [assignmentId, status]);
-    const summary = await processTrainingLoadNotificationCycle({ now: new Date(), pool });
-    assert.equal(summary.invitations.sent, 0, `a '${status}' assignment must never be invited`);
-    assert.equal(summary.reminders.sent, 0, `a '${status}' assignment must never be reminded`);
+    // Test-isolation correction (same class of bug already fixed for K5/
+    // K6): the shared temp DB this whole file runs against can have OTHER
+    // tests' own still-pending assignments genuinely due for a real
+    // invitation/reminder at the exact moment this cycle runs - a raw
+    // GLOBAL summary.invitations.sent/reminders.sent count is not scoped
+    // to THIS test's own assignment and was flaky once enough other tests
+    // ran before it in the same file. Scoped to this assignment's own
+    // notification rows instead, exactly like every other test in this
+    // file already does.
+    await processTrainingLoadNotificationCycle({ now: new Date(), pool });
     const notified = (await query(`select count(*)::int as n from public.app_notifications where entity_type = 'training_load_external_assignment' and entity_id = $1`, [assignmentId])).rows[0].n;
-    assert.equal(notified, 0);
+    assert.equal(notified, 0, `a '${status}' assignment must never be invited or reminded`);
   }
 });
 
