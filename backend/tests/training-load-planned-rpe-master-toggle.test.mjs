@@ -1266,3 +1266,59 @@ test("J12. a real platform administrator's explicit override CAN resolve an unre
   const ownershipRow = (await query(`select owner_scope from training_load.plan_workspace_ownership where plan_id = $1`, [planId])).rows[0];
   assert.equal(ownershipRow.owner_scope, "system", "the platform override stamps the real system scope, not a borrowed club/team/user one");
 });
+
+// perf/training-load-perf-nav-results: GET /weekly computes canResolveOwnership
+// per unresolved ROW - an athlete with several unresolved sessions this week
+// (all sharing the same plan, same creator, same scope) used to repeat the
+// exact same isAthleteInWorkspaceScope membership check once per row. Since
+// trainingLoadAccess.js's own canResolvePlanOwnership now accepts an
+// optional per-request membershipCache Map (see that function's own header
+// comment) and trainingLoad.js's GET /weekly passes ONE shared Map across
+// every row in the response, the SAME athlete's membership must only ever
+// be queried once per request, regardless of how many of their unresolved
+// sessions appear in it.
+test("J13. GET /weekly only ever queries an unresolved athlete's own club membership ONCE per request, even with several unresolved sessions sharing the same plan/creator/scope", async () => {
+  const { clubId, athletes, coachCookie } = await makeClubWithAthletes("j13", 1);
+  const coachUserId = (await query(`select user_id from public.user_club_roles where club_id = $1`, [clubId])).rows[0].user_id;
+  const athleteId = athletes[0].athleteId;
+
+  // ONE unresolved plan, THREE sessions on three different days this week -
+  // canResolvePlanOwnership is called once per unresolved row, so this
+  // exercises the SAME (scope, athleteId) membership check three times
+  // unless the shared per-request cache is actually working.
+  const planId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START, owner: { type: "unresolved" }, createdByUserId: coachUserId });
+  const day1 = await makePlanDay(planId, THIS_WEEK_START);
+  const day2 = await makePlanDay(planId, addDaysIso(THIS_WEEK_START, 1));
+  const day3 = await makePlanDay(planId, addDaysIso(THIS_WEEK_START, 2));
+  await makeSession(day1, { name: "Session 1" });
+  await makeSession(day2, { name: "Session 2" });
+  await makeSession(day3, { name: "Session 3" });
+
+  await setActiveWorkspace(coachUserId, "club", clubId);
+
+  // Matches ONLY isAthleteInWorkspaceScope's own standalone query
+  // (trainingLoadAccess.js) - the main weekly response also touches
+  // athlete_memberships/membership_type='club' as part of its own,
+  // unrelated, always-necessary workspace-scoping SQL (once per live/
+  // historical/external sub-query, regardless of this optimization), which
+  // a looser substring match would wrongly conflate with the per-row
+  // ownership check this test targets.
+  const originalQuery = pool.query.bind(pool);
+  let membershipQueryCount = 0;
+  pool.query = (text, params) => {
+    const sql = (typeof text === "string" ? text : text?.text || "").replace(/\s+/g, " ").trim();
+    if (sql.startsWith("select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'club'")) membershipQueryCount += 1;
+    return originalQuery(text, params);
+  };
+  let weekly;
+  try {
+    weekly = await api(`/api/training-load/weekly?weekStart=${THIS_WEEK_START}`, { cookie: coachCookie });
+  } finally {
+    pool.query = originalQuery;
+  }
+
+  assert.equal(weekly.status, 200, `expected 200, got ${weekly.status}: ${JSON.stringify(weekly.body)}`);
+  const unresolvedRows = weekly.body.days.flatMap((d) => d.sessions).filter((s) => s.ownershipUnresolved);
+  assert.equal(unresolvedRows.length, 3, "all three sessions must actually be unresolved rows exercising canResolvePlanOwnership");
+  assert.equal(membershipQueryCount, 1, "the same athlete's own club membership must be queried exactly once per request, not once per unresolved row");
+});

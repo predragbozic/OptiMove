@@ -153,10 +153,23 @@ export async function isAthleteInWorkspaceScope(scope, athleteId) {
 //
 // `plan` here only ever needs `athlete_id` and `created_by_user_id` -
 // callers pass whatever subset of a fuller row they already have.
-export async function canResolvePlanOwnership(scope, plan, userId) {
+//
+// perf: `membershipCache` is an OPTIONAL Map<athleteId, Promise<boolean>>
+// a caller looping over many plans in one request (GET /weekly's own
+// per-row canResolveOwnership computation) may pass in, so the SAME
+// athlete's membership is only ever queried once per request even if
+// several of their unresolved sessions appear in the same response -
+// same scope, same athlete, same answer, every time. Omit it (as every
+// single-plan caller, e.g. POST /plans/resolve-rpe-ownership, already
+// does) and this behaves exactly as before - no behavior change, only
+// fewer redundant round trips for a caller that opts in.
+export async function canResolvePlanOwnership(scope, plan, userId, membershipCache) {
   if (scope.type === "platform") return true;
   if (plan.created_by_user_id == null || String(plan.created_by_user_id) !== String(userId)) return false;
-  return isAthleteInWorkspaceScope(scope, plan.athlete_id);
+  if (!membershipCache) return isAthleteInWorkspaceScope(scope, plan.athlete_id);
+  const athleteId = String(plan.athlete_id);
+  if (!membershipCache.has(athleteId)) membershipCache.set(athleteId, isAthleteInWorkspaceScope(scope, plan.athlete_id));
+  return membershipCache.get(athleteId);
 }
 
 export function canManageExternalScheduleInScope(scope, schedule) {

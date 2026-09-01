@@ -938,6 +938,11 @@ router.get("/weekly", async (req, res, next) => {
     // athlete account never resolves plan ownership, so every row it
     // sees simply gets canResolveOwnership: false.
     let resolutionScope = null;
+    // perf: one Map for this whole request, shared across every row's own
+    // canResolvePlanOwnership call below (see that function's own
+    // membershipCache parameter) - never persisted beyond this request,
+    // never shared across requests/accounts.
+    const ownershipMembershipCache = new Map();
 
     const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
     if (workspace?.type === "athlete") {
@@ -1128,9 +1133,13 @@ router.get("/weekly", async (req, res, next) => {
       // Only ever computed for a row that actually needs it - every
       // resolved/actionable row (the overwhelming majority) skips the
       // extra DB round trip canResolvePlanOwnership's own
-      // isAthleteInWorkspaceScope check can require.
+      // isAthleteInWorkspaceScope check can require. perf: shares
+      // ownershipMembershipCache across every row in this same response,
+      // so an athlete with several unresolved sessions this week (or a
+      // creator whose own several plans all reuse the same scope) is
+      // only ever membership-checked once per request, not once per row.
       const canResolveOwnership = ownershipUnresolved && resolutionScope
-        ? await canResolvePlanOwnership(resolutionScope, { athlete_id: row.athlete_id, created_by_user_id: row.plan_created_by_user_id }, req.user.id)
+        ? await canResolvePlanOwnership(resolutionScope, { athlete_id: row.athlete_id, created_by_user_id: row.plan_created_by_user_id }, req.user.id, ownershipMembershipCache)
         : false;
       bucket.sessions.push({
         sessionId: row.session_id,

@@ -11678,14 +11678,40 @@ button.tests-assignment-card {
   padding: 3px;
 }
 
+/* item 2 correction: icon-above-label, same dimensions/typography as
+   Tests' own coach tab strip (.tests-section-tabs-icon .tab/.tests-tab-icon,
+   tests-view.js) - min-height/padding/font-size/icon size copied exactly so
+   the two modules' tab strips read as the same visual system, scoped
+   entirely to .training-load-tab/-tab-icon so Tests' own CSS is untouched.
+   flex:1 (not Tests' own grid) keeps this row's existing layout, sharing
+   its toolbar with the Filter button beside it - just with three evenly
+   sized tabs instead of content-width ones. */
 .training-load-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 64px;
   border: none;
   background: transparent;
-  padding: 6px 14px;
+  padding: 8px 6px;
   border-radius: calc(var(--radius) - 3px);
   font-weight: 600;
+  font-size: 12px;
   color: var(--muted);
   cursor: pointer;
+}
+
+.training-load-tab-icon {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .training-load-tab.is-active {
@@ -11905,6 +11931,67 @@ button.tests-assignment-card {
 .training-load-bar-label {
   font-size: 10px;
   color: var(--muted);
+}
+
+/* -------------------- Coach: Results, grouped by athlete (item 3) -------------------- */
+
+.training-load-results-overview {
+  display: grid;
+  gap: 12px;
+}
+
+.training-load-results-athlete-list {
+  display: grid;
+  gap: 8px;
+}
+
+.training-load-results-athlete-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.training-load-results-athlete-name {
+  font-weight: 700;
+}
+
+.training-load-results-athlete-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.training-load-results-athlete-stats span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.training-load-results-athlete-stats strong {
+  font-size: 14px;
+}
+
+.training-load-results-athlete-stats em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.training-load-results-athlete-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.training-load-results-athlete-detail-heading {
+  margin: 4px 0 0;
+  font-size: 16px;
 }
 
 /* -------------------- Coach: Club/Team/Athletes filter picker -------------------- */

@@ -1,6 +1,8 @@
 import { api } from "./api.js";
+import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
 import { localDateIsoInTimeZone, weekMondayIso } from "./utils.js";
+import { buildContextKey, invalidateCacheEntry, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
 
 // Training load (RPE/sRPE), first complete phase. Deliberately its own
 // data module, never importing from tests-data.js/tests-actions.js - this
@@ -8,12 +10,50 @@ import { localDateIsoInTimeZone, weekMondayIso } from "./utils.js";
 // established (request-generation-token race guard, "seed weekStart/
 // selectedDate to today only on first visit"), not its state or code.
 
+// perf: GET /weekly's own response for a given (account, workspace,
+// weekStart, filter) is IDENTICAL no matter which of Today/Schedule/
+// Results is asking for it - before this, each of the three coach tabs
+// (plus the athlete's own weekly overlay) fetched it completely
+// independently, so switching Today -> Schedule -> Results while looking
+// at the exact same week refetched the exact same payload three times in
+// a row, every time. Routed through view-cache.js's own loadCachedView
+// (the same primitive weekly-data.js's Calendar already uses) so the SAME
+// payload is shared across every section/nav slot asking for the same
+// (weekStart, filter) this week - a switch within VIEW_CACHE_FRESHNESS_MS
+// (the same 30s default every other cached view in this app already
+// uses - menu-cache-policy.js's own guidance is to reuse it unless there's
+// a specific reason not to, and there isn't one strong enough here to
+// justify a bespoke number) shows the shared payload with NO extra
+// request at all, and two callers racing for the exact same key while
+// it's still in flight collapse into one real HTTP request instead of two
+// (dedupeRequest, inside loadCachedView).
+//
+// This intentionally trades a little of the OLD "always-refresh" tab's
+// own guaranteed freshness (menu-cache-policy.js's prior rationale: rated/
+// not-rated status changes on nearly every visit) for real request
+// reduction on the common case (browsing Today/Schedule/Results, or
+// re-entering the tab, within the same short visit) - but never
+// permanently: past the TTL, a re-entry paints the cached view instantly
+// AND still triggers a real background refresh (loadCachedView's own
+// stale-then-refresh path), and every mutation that changes what this
+// view shows (an RPE submit/toggle, an ownership resolution, an external
+// schedule create/edit) explicitly drops its own cache entry BEFORE
+// reloading (invalidateTrainingLoadWeeklyForSection/
+// invalidateTrainingLoadAthleteWeeklyCache below) - never relies on the
+// TTL alone for its own next paint to be genuinely fresh.
+const TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE = "training-load-weekly";
+
 // Item 2 correction's own request-race guard, mirrored exactly: a rapid
 // double Next-week click, a rapid filter change, or a workspace switch,
 // must never let an OLDER/slower response overwrite a NEWER one already
 // applied. "athlete" is a fourth, independent key for the athlete's own
 // single weekly nav (see loadTrainingLoadAthleteWeekly below) - entirely
 // separate from the coach's three tabs, never sharing a counter with them.
+// Kept alongside the view-cache.js race guard (getCurrentContextKey) as
+// belt-and-suspenders - the cache guard catches "the context changed",
+// this one also catches "this exact nav slot moved on to a different
+// request entirely" even when dedupeRequest itself would have collapsed
+// two truly-identical concurrent calls into one anyway.
 const weeklyRequestGeneration = { today: 0, schedule: 0, results: 0, athlete: 0 };
 
 function clampSelectedDateToWeek(selectedDate, data) {
@@ -30,7 +70,42 @@ function trainingLoadFilterQuery() {
   return parts.length ? `&${parts.join("&")}` : "";
 }
 
-async function loadTrainingLoadWeeklyInto(nav, generationKey, extraQuery) {
+// [...workspace parts, weekStart, filter-query-string] - the filter query
+// string already IS the exact server-relevant signature (clubIds/teamIds/
+// athleteIds, in the same normalized order trainingLoadFilterQuery always
+// produces), so it's folded in as-is rather than re-decomposed.
+function trainingLoadWeeklyContextKey(weekStart, extraQuery) {
+  return buildContextKey([...currentUserWorkspaceContextParts(), weekStart, extraQuery]);
+}
+
+// Exported so a mutation (RPE submit, RPE-enabled toggle, ownership
+// resolution, an external schedule create/edit/schedule-again) can drop
+// the CURRENTLY-VIEWED week/filter's own cache entry right before its
+// post-mutation reload - never a stale flash of the pre-mutation state
+// painted from cache before the fresh data lands. A plain nav-only
+// reload (prev/next week, Today, a section switch) deliberately does NOT
+// call this - that's exactly the instant-paint-from-cache path this
+// whole module exists to speed up.
+export function invalidateTrainingLoadWeeklyForSection(section) {
+  const nav = state.trainingLoad.weekly[section];
+  if (!nav.weekStart) return; // never fetched yet this session - nothing to drop
+  invalidateCacheEntry(TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE, trainingLoadWeeklyContextKey(nav.weekStart, trainingLoadFilterQuery()));
+}
+export function invalidateTrainingLoadAthleteWeeklyCache() {
+  const nav = state.trainingLoad.athleteWeekly;
+  if (!nav.weekStart) return;
+  invalidateCacheEntry(TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE, trainingLoadWeeklyContextKey(nav.weekStart, ""));
+}
+
+// `onPainted` (optional) fires synchronously at every point this nav
+// slot's own visible state actually changed - immediately if a cache hit
+// painted instantly, immediately on a genuine first-ever fetch's own
+// loading state, and again once the (background or first) fetch settles.
+// Callers pass their own renderTrainingLoad so nav/loading state shows up
+// on screen the INSTANT it changes, never only after this whole async
+// function finally resolves (see app.js's loadTrainingLoad/training-
+// load-actions.js's own section-switch handler for why that mattered).
+async function loadTrainingLoadWeeklyInto(nav, generationKey, extraQuery, onPainted) {
   if (!nav.weekStart) {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const today = localDateIsoInTimeZone(timezone);
@@ -38,44 +113,66 @@ async function loadTrainingLoadWeeklyInto(nav, generationKey, extraQuery) {
     nav.selectedDate = today;
   }
   const generation = ++weeklyRequestGeneration[generationKey];
-  nav.loading = true;
+  const contextKey = trainingLoadWeeklyContextKey(nav.weekStart, extraQuery);
   nav.error = "";
-  try {
-    const query = `?weekStart=${encodeURIComponent(nav.weekStart)}${extraQuery}`;
-    const data = await api(`/api/training-load/weekly${query}`);
-    if (generation !== weeklyRequestGeneration[generationKey]) return; // stale - a newer request (a nav change, a filter confirm, or a workspace switch) already started, drop this response entirely
-    nav.data = data;
-    nav.selectedDate = clampSelectedDateToWeek(nav.selectedDate, data);
-    nav.loading = false;
-  } catch (error) {
-    if (generation !== weeklyRequestGeneration[generationKey]) return;
-    nav.error = error.message || "Could not load the training load calendar.";
-    nav.loading = false;
-  }
+
+  await loadCachedView({
+    namespace: TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE,
+    contextKey,
+    fetcher: () => api(`/api/training-load/weekly?weekStart=${encodeURIComponent(nav.weekStart)}${extraQuery}`),
+    showLoading: () => {
+      nav.loading = true;
+      onPainted?.();
+    },
+    applyData: (data) => {
+      if (generation !== weeklyRequestGeneration[generationKey]) return; // stale - a newer request (a nav change, a filter confirm, or a workspace switch) already started, drop this response entirely
+      nav.data = data;
+      nav.selectedDate = clampSelectedDateToWeek(nav.selectedDate, data);
+      nav.loading = false;
+      onPainted?.();
+    },
+    // A background refresh failing while a cached view is already showing
+    // must never blank the screen or show an error over good data -
+    // loadCachedView's own contract already only ever calls this for a
+    // genuine first-load failure (nothing cached at all yet).
+    applyError: (error) => {
+      if (generation !== weeklyRequestGeneration[generationKey]) return;
+      nav.loading = false;
+      nav.error = error.message || "Could not load the training load calendar.";
+      onPainted?.();
+    },
+    getCurrentContextKey: () => trainingLoadWeeklyContextKey(nav.weekStart, extraQuery),
+  });
 }
 
 // Coach Today/Schedule/Results tabs - each keeps its own independent week/
 // date, same as tests.weekly, scoped/filtered by state.trainingLoad.filter
 // + the caller's current workspace (see trainingLoad.js's own coach-side
-// scoping).
-export async function loadTrainingLoadWeekly(section) {
-  return loadTrainingLoadWeeklyInto(state.trainingLoad.weekly[section], section, trainingLoadFilterQuery());
+// scoping). `onPainted` - see loadTrainingLoadWeeklyInto's own header.
+export async function loadTrainingLoadWeekly(section, onPainted) {
+  return loadTrainingLoadWeeklyInto(state.trainingLoad.weekly[section], section, trainingLoadFilterQuery(), onPainted);
 }
 
 // The athlete's own weekly training-load overlay (item 4 correction) -
 // GET /api/training-load/weekly self-scopes automatically for an athlete
 // caller (see trainingLoad.js), so no filter query is ever sent here.
-export async function loadTrainingLoadAthleteWeekly() {
-  return loadTrainingLoadWeeklyInto(state.trainingLoad.athleteWeekly, "athlete", "");
+export async function loadTrainingLoadAthleteWeekly(onPainted) {
+  return loadTrainingLoadWeeklyInto(state.trainingLoad.athleteWeekly, "athlete", "", onPainted);
 }
 
 // Correction: called on a workspace switch, BEFORE any new fetch is
 // necessarily issued (Training load might not even be the active tab
 // right now) - bumping every generation counter guarantees an already-
 // in-flight request for the OLD workspace can never land and overwrite
-// state after the switch, even if nothing re-fetches immediately.
+// state after the switch, even if nothing re-fetches immediately. Also
+// drops every cached entry for the whole namespace - technically
+// redundant (the cache key already includes the workspace, so an old
+// entry would simply go unused, never misread), but keeps the cache from
+// quietly accumulating orphaned entries across a long session of
+// repeated workspace switching.
 export function invalidateAllTrainingLoadWeeklyGenerations() {
   for (const key of Object.keys(weeklyRequestGeneration)) weeklyRequestGeneration[key] += 1;
+  invalidateCacheNamespace(TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE);
   invalidatePlannedRpeSettingGeneration();
 }
 

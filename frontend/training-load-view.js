@@ -8,6 +8,28 @@ import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 // status only. Never the Tests module's green-heavy calendar CSS, and
 // never state.tests - see training-load-data.js's own header comment.
 
+// item 2 correction: same SVG line-icon markup as Tests' own coach tabs
+// (TESTS_TAB_ICONS, tests-view.js) - reused verbatim (same path data, same
+// 24x24 viewBox, same stroke-based fill:none convention) so Today/Schedule/
+// Results read as the same icon language across both modules, above each
+// tab's own short label. A local copy, not an import, matching this file's
+// own "deliberately its own visual language, never state.tests" boundary
+// above and this codebase's established mirror-the-pattern-don't-share-the-
+// module convention (e.g. trainingLoadAccess.js vs testsAccess.js) - Tests
+// can evolve its own icon set independently without silently changing this
+// tab strip too.
+const TRAINING_LOAD_TAB_ICONS = {
+  today: `<rect x="3" y="5" width="18" height="16" rx="3"></rect><path d="M8 3v3"></path><path d="M16 3v3"></path><path d="M3 10h18"></path><rect x="7" y="13" width="4" height="4" rx="1"></rect>`,
+  schedule: `<path d="M12 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4"></path><path d="M16 3v4"></path><path d="M8 3v4"></path><path d="M3 11h11"></path><circle cx="18" cy="18" r="4"></circle><path d="M18 16.5V18l1 1"></path>`,
+  results: `<circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="9" cy="7" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="14" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="19" cy="6" r="1.3" fill="currentColor" stroke="none"></circle><path d="M4 12l5-5 5 3 5-4"></path><path d="M4 21v-6"></path><path d="M9 21v-9"></path><path d="M14 21v-7"></path><path d="M19 21v-11"></path>`,
+};
+
+function renderTrainingLoadTabIcon(section) {
+  const paths = TRAINING_LOAD_TAB_ICONS[section];
+  if (!paths) return "";
+  return `<svg class="training-load-tab-icon" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+}
+
 const RPE_ANCHORS = [
   { at: 0, label: "Rest" },
   { at: 2, label: "Light" },
@@ -355,19 +377,29 @@ function formatWeekRangeLabel(weekStart, weekEnd) {
   return `${formatDate(weekStart)} - ${formatDate(weekEnd)}`;
 }
 
+// Shared by the weekly day-strip shell below AND the Results overview's
+// own per-athlete list (item 3 correction) - both need the exact same
+// Prev/Today/Next week navigation, but the overview has no day-strip/
+// agenda of its own (it lists athletes, not a single day's sessions).
+function renderTrainingLoadWeekNavHeaderHtml(section, weekStart, weekEnd) {
+  return `
+    <div class="training-load-weekly-nav">
+      <button type="button" class="plain-button icon-button training-load-weekly-arrow" data-action="training-load-weekly-prev-week" data-section="${section}" aria-label="Previous week">&larr;</button>
+      <div class="training-load-weekly-range">
+        <strong>${escapeHtml(formatWeekRangeLabel(weekStart, weekEnd))}</strong>
+        <button type="button" class="plain-button compact-button training-load-weekly-today-button" data-action="training-load-weekly-today" data-section="${section}">Today</button>
+      </div>
+      <button type="button" class="plain-button icon-button training-load-weekly-arrow" data-action="training-load-weekly-next-week" data-section="${section}" aria-label="Next week">&rarr;</button>
+    </div>
+  `;
+}
+
 function renderTrainingLoadWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate, renderSessionRow, emptyAgendaText, agendaHeaderExtra = "" }) {
   const todayIso = trainingLoadTodayIso();
   const selectedDay = days.find((d) => d.date === selectedDate) || days[0];
   return `
     <div class="training-load-weekly">
-      <div class="training-load-weekly-nav">
-        <button type="button" class="plain-button icon-button training-load-weekly-arrow" data-action="training-load-weekly-prev-week" data-section="${section}" aria-label="Previous week">&larr;</button>
-        <div class="training-load-weekly-range">
-          <strong>${escapeHtml(formatWeekRangeLabel(weekStart, weekEnd))}</strong>
-          <button type="button" class="plain-button compact-button training-load-weekly-today-button" data-action="training-load-weekly-today" data-section="${section}">Today</button>
-        </div>
-        <button type="button" class="plain-button icon-button training-load-weekly-arrow" data-action="training-load-weekly-next-week" data-section="${section}" aria-label="Next week">&rarr;</button>
-      </div>
+      ${renderTrainingLoadWeekNavHeaderHtml(section, weekStart, weekEnd)}
       <div class="training-load-weekly-strip" role="tablist" aria-label="Select a day">
         ${days.map((day) => renderTrainingLoadStripDayHtml(section, day, day.date === selectedDay?.date, todayIso)).join("")}
       </div>
@@ -1322,36 +1354,130 @@ export function renderTodayGroupDetailHtml() {
   `;
 }
 
+// item 3 correction: `data`, narrowed to ONE athlete's own sessions (both
+// rated and not-yet-rated, so computeWeeklyAggregates' own rated/expected
+// denominator still works correctly - see that function's own comment on
+// why a disabled/opted-out/non-actionable row must never count). A plain
+// client-side filter of the ALREADY-LOADED weekly payload, never a second
+// fetch and never a change to state.trainingLoad.filter.athleteIds - the
+// server-side filter stays exactly what the coach chose (a whole club/
+// team, or several explicit athletes), so drilling into one athlete here
+// can only ever narrow what's already on screen, never silently widen it
+// back out the way appending to that filter's own OR clause would (see
+// K4g's own coverage of that union behavior in the backend suite).
+function filterWeeklyDataToAthlete(data, athleteId) {
+  return { ...data, days: data.days.map((day) => ({ ...day, sessions: day.sessions.filter((s) => s.athleteId === athleteId) })) };
+}
+
+function findAthleteNameInWeeklyData(data, athleteId) {
+  for (const day of data.days) {
+    const match = day.sessions.find((s) => s.athleteId === athleteId);
+    if (match) return match.athleteName;
+  }
+  return "";
+}
+
+// Primary Results view groups by athleteId (never by name - two athletes
+// can share a display name), one summary per athlete who has at least one
+// session (rated or expected) in the currently-loaded week/filter. Reuses
+// computeWeeklyAggregates unchanged, just pre-scoped per athlete via
+// filterWeeklyDataToAthlete - the exact same rated/expected rules, missing-
+// rating-is-never-0 behavior, and non-actionable exclusion apply per
+// athlete as they did for the old combined total, never re-implemented.
+function computeAthleteWeeklySummaries(data) {
+  const seen = new Map();
+  for (const day of data.days) {
+    for (const s of day.sessions) {
+      if (!seen.has(s.athleteId)) seen.set(s.athleteId, s.athleteName);
+    }
+  }
+  return [...seen.entries()]
+    .map(([athleteId, athleteName]) => ({ athleteId, athleteName, ...computeWeeklyAggregates(filterWeeklyDataToAthlete(data, athleteId)) }))
+    .sort((a, b) => a.athleteName.localeCompare(b.athleteName) || a.athleteId.localeCompare(b.athleteId));
+}
+
+function renderResultsAthleteCardHtml(summary) {
+  return `
+    <button type="button" class="training-load-results-athlete-card" data-action="training-load-results-open-athlete" data-athlete-id="${escapeAttr(summary.athleteId)}">
+      <span class="training-load-results-athlete-name">${escapeHtml(summary.athleteName)}</span>
+      <span class="training-load-results-athlete-stats">
+        <span><strong>${escapeHtml(formatSrpe(summary.totalSrpe))}</strong><em>weekly sRPE</em></span>
+        <span><strong>${summary.avgRpe != null ? summary.avgRpe.toFixed(1) : "-"}</strong><em>avg RPE</em></span>
+        <span><strong>${summary.totalDuration} min</strong><em>total duration</em></span>
+        <span><strong>${summary.ratedCount}/${summary.plannedCount}</strong><em>rated / expected</em></span>
+      </span>
+    </button>
+  `;
+}
+
+// Primary view: one card per athlete, identified by athleteId - no combined
+// club/team total anywhere on this screen, so there is never a multi-
+// athlete sum a coach could mistake for one individual's load (item 3's
+// own explicit requirement). Click -> renderResultsAthleteDetailHtml below.
+function renderResultsOverviewHtml(nav) {
+  const summaries = computeAthleteWeeklySummaries(nav.data);
+  return `
+    <div class="training-load-results-overview">
+      ${renderTrainingLoadWeekNavHeaderHtml("results", nav.data.weekStart, nav.data.weekEnd)}
+      ${summaries.length
+        ? `<div class="training-load-results-athlete-list">${summaries.map(renderResultsAthleteCardHtml).join("")}</div>`
+        : `<p class="muted training-load-empty">No submitted or expected results this week.</p>`}
+    </div>
+  `;
+}
+
+// Drilldown: one athlete's own sessions/days for the selected week - the
+// individual chart and summary tiles are scoped to this athlete alone and
+// explicitly carry their name + the week's own date range in the heading
+// (item 3's own requirement that an individual chart must never be
+// ambiguous about whose load, or which period, it shows).
+function renderResultsAthleteDetailHtml(nav, athleteId) {
+  const athleteData = filterWeeklyDataToAthlete(nav.data, athleteId);
+  const athleteName = findAthleteNameInWeeklyData(athleteData, athleteId);
+  const agg = computeWeeklyAggregates(athleteData);
+  const ratedDays = athleteData.days.map((day) => ({ ...day, sessions: day.sessions.filter((s) => s.rated) }));
+  const selectedDate = nav.selectedDate || nav.data.weekStart;
+  const selectedDaySrpe = agg.dailySrpe.find((d) => d.date === selectedDate)?.srpe || 0;
+  return `
+    <div class="training-load-results-athlete-detail">
+      <button type="button" class="plain-button compact-button" data-action="training-load-results-close-athlete">&larr; Back to all athletes</button>
+      <h3 class="training-load-results-athlete-detail-heading">${escapeHtml(athleteName)}<span class="muted"> &middot; ${escapeHtml(formatWeekRangeLabel(nav.data.weekStart, nav.data.weekEnd))}</span></h3>
+      <div class="training-load-results-summary">
+        <div class="training-load-summary-grid">
+          <div class="training-load-summary-tile"><span class="training-load-summary-value">${escapeHtml(formatSrpe(agg.totalSrpe))}</span><span class="training-load-summary-label">Weekly sRPE</span></div>
+          <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.avgRpe != null ? agg.avgRpe.toFixed(1) : "-"}</span><span class="training-load-summary-label">Avg RPE</span></div>
+          <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.totalDuration} min</span><span class="training-load-summary-label">Total duration</span></div>
+          <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.ratedCount}/${agg.plannedCount}</span><span class="training-load-summary-label">Rated / expected</span></div>
+        </div>
+        ${renderTrainingLoadBarChartHtml(agg.dailySrpe)}
+      </div>
+      ${renderTrainingLoadWeeklyShellHtml({
+        section: "results",
+        days: ratedDays,
+        weekStart: nav.data.weekStart,
+        weekEnd: nav.data.weekEnd,
+        selectedDate: nav.selectedDate,
+        emptyAgendaText: "No submitted results this day.",
+        renderSessionRow: renderResultsSessionRowHtml,
+        agendaHeaderExtra: `<p class="muted training-load-daily-total">Day total: <strong>${escapeHtml(formatSrpe(selectedDaySrpe))}</strong></p>`,
+      })}
+    </div>
+  `;
+}
+
 export function renderTrainingLoadResultsHtml() {
   const nav = state.trainingLoad.weekly.results;
   if (nav.loading && !nav.data) return `<p class="muted training-load-empty">Loading results...</p>`;
   if (nav.error) return `<p class="builder-error">${escapeHtml(nav.error)}</p>`;
   if (!nav.data) return "";
-  const agg = computeWeeklyAggregates(nav.data);
-  const ratedDays = nav.data.days.map((day) => ({ ...day, sessions: day.sessions.filter((s) => s.rated) }));
-  const selectedDate = nav.selectedDate || nav.data.weekStart;
-  const selectedDaySrpe = agg.dailySrpe.find((d) => d.date === selectedDate)?.srpe || 0;
-  return `
-    <div class="training-load-results-summary">
-      <div class="training-load-summary-grid">
-        <div class="training-load-summary-tile"><span class="training-load-summary-value">${escapeHtml(formatSrpe(agg.totalSrpe))}</span><span class="training-load-summary-label">Weekly sRPE</span></div>
-        <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.avgRpe != null ? agg.avgRpe.toFixed(1) : "-"}</span><span class="training-load-summary-label">Avg RPE</span></div>
-        <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.totalDuration} min</span><span class="training-load-summary-label">Total duration</span></div>
-        <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.ratedCount}/${agg.plannedCount}</span><span class="training-load-summary-label">Rated / planned</span></div>
-      </div>
-      ${renderTrainingLoadBarChartHtml(agg.dailySrpe)}
-    </div>
-    ${renderTrainingLoadWeeklyShellHtml({
-      section: "results",
-      days: ratedDays,
-      weekStart: nav.data.weekStart,
-      weekEnd: nav.data.weekEnd,
-      selectedDate: nav.selectedDate,
-      emptyAgendaText: "No submitted results this day.",
-      renderSessionRow: renderResultsSessionRowHtml,
-      agendaHeaderExtra: `<p class="muted training-load-daily-total">Day total: <strong>${escapeHtml(formatSrpe(selectedDaySrpe))}</strong></p>`,
-    })}
-  `;
+  const athleteId = state.trainingLoad.resultsAthleteId;
+  // Self-healing: if the drilled-into athlete no longer has any session in
+  // a freshly-loaded payload (a workspace switch, a narrowed filter, or a
+  // week with nothing for them), fall back to the overview instead of
+  // rendering a blank-named detail page - mirrors this module's own
+  // "never show a stale/invalid selection as if it were real" convention.
+  if (athleteId && findAthleteNameInWeeklyData(nav.data, athleteId)) return renderResultsAthleteDetailHtml(nav, athleteId);
+  return renderResultsOverviewHtml(nav);
 }
 
 // ------------------------------------------------------------
@@ -1371,7 +1497,7 @@ export function renderTrainingLoadCoachHtml() {
       <div class="training-load-toolbar">
         <div class="training-load-tabs" role="tablist">
           ${["today", "schedule", "results"].map((s) => `
-            <button type="button" class="training-load-tab ${section === s ? "is-active" : ""}" role="tab" aria-selected="${section === s ? "true" : "false"}" data-action="training-load-section" data-section="${s}">${s === "today" ? "Today" : s === "schedule" ? "Schedule" : "Results"}</button>
+            <button type="button" class="training-load-tab ${section === s ? "is-active" : ""}" role="tab" aria-selected="${section === s ? "true" : "false"}" data-action="training-load-section" data-section="${s}">${renderTrainingLoadTabIcon(s)}<span>${s === "today" ? "Today" : s === "schedule" ? "Schedule" : "Results"}</span></button>
           `).join("")}
         </div>
         <button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>
@@ -1446,6 +1572,11 @@ function renderFilterTabPanelHtml() {
   const orgData = state.trainingLoad.orgPickerData;
   const picker = state.trainingLoad.filterPicker;
   const filter = state.trainingLoad.filter;
+  // perf: the panel itself now opens before this data has necessarily
+  // loaded (see the training-load-filter-open action) - an explicit
+  // loading message here, never a silently-empty "No clubs/teams/
+  // athletes available" that would look like a real, final answer.
+  if (!orgData) return `<p class="muted">Loading filter options...</p>`;
   if (picker.tab === "clubs") {
     const clubs = orgData?.clubs || [];
     return `
