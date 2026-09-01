@@ -363,6 +363,16 @@ async function upsertExercise(req, res, exerciseId) {
   const name = text(body.name);
   if (!name) { res.status(400).json({ error: "Exercise name is required." }); return; }
 
+  // Existence/access checked BEFORE any getOrCreateLookup call below - a
+  // rejected edit (404: not found, not owned, or archived) must never
+  // create or reactivate a lookup value (place/complexity/starting
+  // position/attractor/etc.) as a side effect of a request that never
+  // actually gets to write anything.
+  if (exerciseId) {
+    const existing = await query(`select e.id from library.exercises e where e.id = $2 and ${exerciseScope}`, [userId, exerciseId]);
+    if (!existing.rows[0]) { res.status(404).json({ error: "Exercise not found." }); return; }
+  }
+
   const placeId = await getOrCreateLookup("places", body.place, userId);
   const complexityId = await getOrCreateLookup("complexity_levels", body.complexity, userId);
   const startingPositionId = await getOrCreateLookup("starting_positions", body.startingPosition, userId);
@@ -370,8 +380,6 @@ async function upsertExercise(req, res, exerciseId) {
 
   let finalId = exerciseId;
   if (exerciseId) {
-    const existing = await query(`select id from library.exercises where id = $2 and ${exerciseScope}`, [userId, exerciseId]);
-    if (!existing.rows[0]) { res.status(404).json({ error: "Exercise not found." }); return; }
     await query(
       `update library.exercises set
          exercise_code = $2, name = $3, aim = $4, execution_notes = $5, instruction = $6,
