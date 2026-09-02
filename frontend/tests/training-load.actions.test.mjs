@@ -41,7 +41,13 @@ function installDeferredFetchMock() {
 }
 
 const { handleTrainingLoadAction, resetTrainingLoadForWorkspaceChange } = await import("../training-load-actions.js");
-const { loadTrainingLoadWeekly, loadTrainingLoadAthleteWeekly, loadPlannedRpeSetting } = await import("../training-load-data.js");
+const {
+  loadTrainingLoadWeekly,
+  loadTrainingLoadAthleteWeekly,
+  loadPlannedRpeSetting,
+  captureTrainingLoadWeeklyMutationContext,
+  invalidateTrainingLoadWeeklyContext,
+} = await import("../training-load-data.js");
 const {
   formatFeedbackSummary,
   formatSrpe,
@@ -1851,8 +1857,11 @@ test("W5. submitting RPE via Home (the weekly overlay CLOSED the whole time) sti
   assert.equal(weeklyCalls, 1);
   assert.equal(state.trainingLoad.athleteWeeklyOpen, false, "sanity: the overlay is closed for the rest of this test");
 
-  // A Home-card submit while the overlay is CLOSED the whole time.
-  state.trainingLoad.rpeForm = emptyRpeForm({ sessionId: "sess-1", rpe: 6, durationMinutes: 30 });
+  // A Home-card submit while the overlay is CLOSED the whole time - date
+  // is the session's own real date (see openRpeFormForSessionId), the
+  // thing correctTrainingLoadAthleteWeeklyMutationContext now keys off,
+  // never the overlay's own (currently unset/irrelevant) weekStart.
+  state.trainingLoad.rpeForm = emptyRpeForm({ sessionId: "sess-1", rpe: 6, durationMinutes: 30, date: "2026-08-24" });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-rpe-submit" }), { renderTrainingLoad });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-close-rpe-form" }), { renderTrainingLoad });
   assert.equal(state.trainingLoad.athleteWeeklyOpen, false, "sanity: still closed - close-rpe-form must not have opened it");
@@ -1995,12 +2004,18 @@ test("W8. a filter change WHILE a session RPE toggle is still in flight must nev
   await confirmPromise;
 
   // The toggle's own PATCH finally resolves, last - well after the filter
-  // changed out from under it.
+  // changed out from under it. Its own post-toggle reload targets
+  // whatever filter is CURRENT (ath-9) - and since invalidate now drops
+  // EVERY filter variant of the captured week (gap 1's own fix), that
+  // includes the ath-9 entry filterFetchCall just wrote, so this reload
+  // is a genuinely NEW fetch, not a cache hit - it must be resolved
+  // BEFORE togglePromise is awaited, or this deadlocks on its own
+  // unresolved request (same pattern as W7/W9 above).
   toggleCall.resolve({ status: 200, body: {} });
-  await togglePromise;
+  await new Promise((r) => setTimeout(r, 0));
   const strayReload = deferreds.find((d) => d.call.url.startsWith("/api/training-load/weekly") && d.call.url.includes("athleteIds=ath-9") && d !== filterFetchCall);
   if (strayReload) strayReload.resolve({ status: 200, body: weekPayload("2026-08-24") });
-  await new Promise((r) => setTimeout(r, 0));
+  await togglePromise;
 
   // The ORIGINAL (no-filter) context, captured before the toggle's own
   // request was sent, must have been invalidated - clearing the filter
@@ -2047,4 +2062,188 @@ test("W9. a workspace switch WHILE a session RPE toggle is still in flight never
     if (strayReload) strayReload.resolve({ status: 200, body: weekPayload("2026-08-24") });
     await togglePromise;
   }, "a workspace switch racing a mutation's own in-flight request must never throw");
+});
+
+// ------------------------------------------------------------
+// X. Correction round 3: four named gaps, verified by actually populating
+// the relevant cache entries before the mutation and then checking real
+// CONTENT/status afterward - not just how many fetches fired.
+// ------------------------------------------------------------
+
+test("X1. gap 1: a per-session toggle invalidates EVERY cached filter variant of its own week - re-selecting a DIFFERENT, already-cached filter afterward shows the real post-toggle status via a genuine fetch, never the stale pre-toggle value from cache", async () => {
+  resetState();
+  let weeklyCalls = 0;
+  const serverRpeEnabled = { current: true };
+  installFetchMock((call) => {
+    if (call.url.includes("/rpe-enabled") && call.method === "PATCH") {
+      serverRpeEnabled.current = call.body.rpeEnabled;
+      return { status: 200, body: {} };
+    }
+    weeklyCalls += 1;
+    return {
+      status: 200,
+      body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "sess-1", athleteId: "ath-A", rated: false, rpeEnabled: serverRpeEnabled.current })] }),
+    };
+  });
+
+  state.trainingLoad.section = "schedule";
+  state.trainingLoad.weekly.schedule.weekStart = "2026-08-24";
+
+  // Same week, no filter - one cache entry.
+  await loadTrainingLoadWeekly("schedule");
+  assert.equal(state.trainingLoad.weekly.schedule.data.days[0].sessions[0].rpeEnabled, true, "sanity: enabled, no filter");
+
+  // Same week, filtered to the athlete who owns this session - a
+  // genuinely SEPARATE, independently-cached entry (real fetch below
+  // proves it's not reusing the no-filter one).
+  state.trainingLoad.filter.athleteIds = ["ath-A"];
+  await loadTrainingLoadWeekly("schedule");
+  assert.equal(weeklyCalls, 2, "sanity: the athlete-filtered view really is a distinct cache entry, its own real fetch");
+  assert.equal(state.trainingLoad.weekly.schedule.data.days[0].sessions[0].rpeEnabled, true, "sanity: enabled under the athlete filter too");
+
+  // Back to no filter, toggle the session's RPE off - server truth flips.
+  state.trainingLoad.filter.athleteIds = [];
+  await loadTrainingLoadWeekly("schedule"); // the no-filter entry is still fresh - no new fetch expected
+  assert.equal(weeklyCalls, 2, "sanity: returning to the still-fresh no-filter entry costs no new fetch");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "true" }), { renderTrainingLoad });
+  assert.equal(serverRpeEnabled.current, false, "sanity: the toggle really flipped the session off server-side");
+
+  // Re-select the athlete filter - reproduced bug: without gap 1's fix,
+  // this reads the STILL-CACHED (stale, rpeEnabled:true) entry with no
+  // new request at all.
+  const callsBeforeReselect = weeklyCalls;
+  state.trainingLoad.filter.athleteIds = ["ath-A"];
+  await loadTrainingLoadWeekly("schedule");
+  assert.ok(weeklyCalls > callsBeforeReselect, "re-selecting the athlete filter for this same week must be a genuine fetch - its own cache entry must have been invalidated by the toggle too, not just the no-filter one");
+  assert.equal(state.trainingLoad.weekly.schedule.data.days[0].sessions[0].rpeEnabled, false, "the athlete-filtered view must show the session's REAL, current rpeEnabled:false - the exact status, not just a fetch count");
+});
+
+test("X2. gap 2: a Home submit for a session whose OWN date falls in a DIFFERENT week than the athlete overlay's last-viewed-then-closed week invalidates the session's real week - re-opening it shows the fresh rated result, via a genuine fetch, never the stale pre-submit cache", async () => {
+  resetState();
+  const calls = { w1: 0, w2: 0 };
+  installFetchMock((call) => {
+    if (call.url === "/api/training-load/sessions/sess-1/rpe" && call.method === "POST") {
+      return { status: 201, body: { feedback: { rpe: 7, durationMinutes: 40, srpe: 280, note: "", submittedAt: "2026-08-17T10:00:00Z" } } };
+    }
+    if (call.url === "/api/training-load/athlete/today") return { status: 200, body: { date: "2026-08-24", sessions: [] } };
+    if (call.url.includes("weekStart=2026-08-17")) {
+      calls.w1 += 1;
+      return { status: 200, body: weekPayload("2026-08-17", { "2026-08-17": [session({ sessionId: "sess-1", rated: calls.w1 > 1 })] }) };
+    }
+    calls.w2 += 1;
+    return { status: 200, body: weekPayload("2026-08-24") };
+  });
+
+  // The athlete browses W1 (2026-08-17) - sess-1, not yet rated, gets cached.
+  state.trainingLoad.athleteWeekly.weekStart = "2026-08-17";
+  await loadTrainingLoadAthleteWeekly();
+  assert.equal(state.trainingLoad.athleteWeekly.data.days[0].sessions[0].rated, false, "sanity: not yet rated");
+  assert.equal(calls.w1, 1);
+
+  // Then browses to W2 (2026-08-24) and CLOSES the overlay there - W2 is
+  // now the overlay's own last-viewed week, entirely unrelated to sess-1.
+  state.trainingLoad.athleteWeekly.weekStart = "2026-08-24";
+  await loadTrainingLoadAthleteWeekly();
+  assert.equal(calls.w2, 1);
+  state.trainingLoad.athleteWeeklyOpen = false;
+
+  // From Home, the athlete rates sess-1 - date 2026-08-17 (W1), NOT
+  // 2026-08-24 (W2, the overlay's own last-viewed week at close time).
+  state.trainingLoad.rpeForm = emptyRpeForm({ sessionId: "sess-1", rpe: 7, durationMinutes: 40, date: "2026-08-17" });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-rpe-submit" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-close-rpe-form" }), { renderTrainingLoad });
+
+  // Reproduced bug: without gap 2's fix, the overlay's own weekStart
+  // (2026-08-24, W2) is what gets invalidated instead - W1 stays
+  // incorrectly cached with the pre-submit rated:false.
+  state.trainingLoad.athleteWeekly.weekStart = "2026-08-17";
+  await loadTrainingLoadAthleteWeekly();
+  assert.equal(calls.w1, 2, "W1's own cache entry (the session's REAL week) must have been dropped by the submit - re-entering it must be a genuine fetch");
+  assert.equal(state.trainingLoad.athleteWeekly.data.days[0].sessions[0].rated, true, "W1 must now show the session as rated - the real, fresh result, not the stale pre-submit cached value");
+});
+
+test("X3. gap 3: after a workspace switch mid-flight, the old mutation's own completion issues NO further fetch at all - never even one under the NEW workspace - and never resurrects data into the section its switch already cleared", async () => {
+  resetState();
+  const deferreds = installDeferredFetchMock();
+  state.trainingLoad.section = "schedule";
+  state.trainingLoad.weekly.schedule.weekStart = "2026-08-24";
+  state.trainingLoad.weekly.schedule.selectedDate = "2026-08-24";
+
+  const togglePromise = handleTrainingLoadAction(
+    fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "true" }),
+    { renderTrainingLoad },
+  );
+  await Promise.resolve();
+  const toggleCall = deferreds.find((d) => d.call.url.includes("/rpe-enabled"));
+  assert.ok(toggleCall, "the toggle's own PATCH must be in flight");
+  const callCountBeforeSwitch = deferreds.length;
+
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-2" } };
+  resetTrainingLoadForWorkspaceChange();
+
+  toggleCall.resolve({ status: 200, body: {} });
+  await togglePromise;
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(deferreds.length, callCountBeforeSwitch, "the old mutation's own completion, once the workspace has changed, must issue NO further fetch at all - not a wide reload under the OLD identity, and not a pointless one under the NEW workspace either");
+  assert.equal(state.trainingLoad.weekly.schedule.data, null, "the section's own visible data must still be exactly what the workspace switch left it (cleared) - never resurrected by the old mutation's late completion");
+  assert.equal(state.trainingLoad.weekly.schedule.loading, false, "and never left stuck showing a loading spinner for a fetch that will now never happen");
+});
+
+test("X4a. while a section's own cache entry is invalidated and its refresh is in flight, the render shows a visible refreshing indicator and disables the actionable RPE toggle/resolve controls - the stale content itself stays visible, never blanked", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.trainingLoad.weekly.schedule.weekStart = date;
+  state.trainingLoad.weekly.schedule.selectedDate = date;
+  state.trainingLoad.weekly.schedule.data = weekPayload(date, {
+    [date]: [session({ sessionId: "sess-1", athleteName: "Ana", rated: false, rpeEnabled: true })],
+  });
+  // Simulates the exact window this gap is about: a mutation just
+  // invalidated this entry (nav.loading set by showLoading) but the last
+  // successfully-loaded payload (nav.data) is still what's set.
+  state.trainingLoad.weekly.schedule.loading = true;
+  const html = renderTrainingLoadScheduleHtml();
+  assert.ok(html.includes("Refreshing"), "a visible indicator that this view is currently refreshing");
+  assert.ok(html.includes("Ana"), "the stale content itself must still be visible, never blanked");
+  assert.match(html, /data-action="training-load-toggle-session-rpe"[^>]*disabled/, "the RPE toggle button must be disabled while this view's own data is stale/refreshing");
+});
+
+test("X4b. once NOT loading (a plain rendered view, whether freshly loaded or an ordinary fresh cache-hit), no stale indicator appears and the RPE toggle control stays enabled", () => {
+  resetState();
+  const date = "2026-08-24";
+  state.trainingLoad.weekly.schedule.weekStart = date;
+  state.trainingLoad.weekly.schedule.selectedDate = date;
+  state.trainingLoad.weekly.schedule.data = weekPayload(date, {
+    [date]: [session({ sessionId: "sess-1", athleteName: "Ana", rated: false, rpeEnabled: true })],
+  });
+  state.trainingLoad.weekly.schedule.loading = false;
+  const html = renderTrainingLoadScheduleHtml();
+  assert.ok(!html.includes("Refreshing"), "no stale/refreshing indicator for an ordinary, non-loading render");
+  assert.doesNotMatch(html, /data-action="training-load-toggle-session-rpe"[^>]*disabled/, "the toggle control must stay enabled for an ordinary, non-loading render");
+});
+
+test("X4c. a response discarded as stale by the shared cache never leaves nav.loading stuck spinning forever, even when nothing else ever re-fetches this exact nav slot afterward", async () => {
+  resetState();
+  const deferreds = installDeferredFetchMock();
+  state.trainingLoad.weekly.today.weekStart = "2026-08-24";
+
+  // Captured BEFORE this test's own fetch starts - mirrors exactly what a
+  // real mutation handler captures before its own request.
+  const mutationContext = captureTrainingLoadWeeklyMutationContext("today");
+  const pending = loadTrainingLoadWeekly("today");
+  await Promise.resolve();
+  assert.equal(state.trainingLoad.weekly.today.loading, true, "sanity: loading is set while this fetch is in flight");
+
+  // Something invalidates this EXACT key (same identity/week/filter, so
+  // the SAME generation stays current) without dispatching any competing
+  // reload for "today" itself - e.g. a mutation whose own follow-up
+  // reload happens to land on a different nav slot entirely and never
+  // touches "today" again this session.
+  invalidateTrainingLoadWeeklyContext(mutationContext);
+
+  const firstCall = deferreds[deferreds.length - 1];
+  firstCall.resolve({ status: 200, body: weekPayload("2026-08-24") });
+  await pending;
+
+  assert.equal(state.trainingLoad.weekly.today.loading, false, "loading must resolve back to false even though this response was discarded as stale by the shared cache - it must never stay stuck spinning forever");
 });

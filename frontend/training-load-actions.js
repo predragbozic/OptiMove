@@ -21,6 +21,7 @@ import {
   submitRpe,
   submitExternalRpe,
   toggleSessionRpeEnabled,
+  trainingLoadMutationContextIsCurrentWorkspace,
   updateExternalSchedule,
 } from "./training-load-data.js";
 import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
@@ -209,11 +210,20 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     }
     // A just-toggled session must reflect the new state immediately,
     // never a stale pre-toggle flash from cache. Scoped to just this one
-    // session's own week/filter (a per-session toggle can't affect any
-    // OTHER cached week) - see invalidateTrainingLoadWeeklyContext's own
-    // header for when a WIDE invalidation is required instead.
-    invalidateTrainingLoadWeeklyContext(mutationContext);
-    await loadTrainingLoadWeekly(section, renderTrainingLoad);
+    // session's own week (across every cached filter variant of it - see
+    // invalidateTrainingLoadWeeklyContext's own header) - see
+    // invalidateAllTrainingLoadWeeklyGenerations's own header for when a
+    // WIDER invalidation is required instead. Correction round 3 (gap 3):
+    // gated on the captured identity still being the CURRENT workspace -
+    // a workspace switch mid-flight already fully reset everything for
+    // the new workspace on its own (resetTrainingLoadForWorkspaceChange),
+    // so invalidating/reloading here again, under a since-changed
+    // context, would be redundant at best and a pointless extra fetch for
+    // an unrelated workspace at worst.
+    if (trainingLoadMutationContextIsCurrentWorkspace(mutationContext)) {
+      invalidateTrainingLoadWeeklyContext(mutationContext);
+      await loadTrainingLoadWeekly(section, renderTrainingLoad);
+    }
     renderTrainingLoad();
     return true;
   }
@@ -1125,26 +1135,35 @@ async function submitRpeForm(renderTrainingLoad) {
   form.saving = true;
   form.error = "";
   renderTrainingLoad();
-  // Correction round 2 (gap 3): captured BEFORE the request, per this
-  // module's own "record the mutation's context before sending it" rule -
-  // the athlete weekly overlay's own week-nav is unreachable while this
-  // form is open (see renderTrainingLoadAthleteOverlaysHtml's own mutual-
-  // exclusivity), so this can't actually drift mid-flight today, but
-  // capturing here keeps every mutation in this file following the same
-  // pattern rather than one being a silent exception.
-  const athleteWeeklyContext = captureTrainingLoadAthleteWeeklyMutationContext();
+  // Correction round 3 (gap 2): captured BEFORE the request, from the
+  // session/assignment's own actual date (form.date - set for BOTH
+  // planned and outside-plan/external forms by openRpeFormForSessionId in
+  // this same file), never from state.trainingLoad.athleteWeekly.weekStart.
+  // The overlay's own last-viewed week and the week the RATED SESSION IS
+  // IN are two different things - Home can open the form for a not-yet-
+  // rated session from ANY earlier day, regardless of which week (if any)
+  // the overlay was browsed to and closed on beforehand. Using the
+  // overlay's own weekStart here invalidated the WRONG week's cache entry
+  // whenever they diverged, leaving the actually-affected week's entry
+  // stale.
+  const athleteWeeklyContext = captureTrainingLoadAthleteWeeklyMutationContext(form.date);
   try {
     const result = form.source === "scheduled_external"
       ? await submitExternalRpe(form.externalAssignmentId, { rpe: form.rpe, durationMinutes: Number(form.durationMinutes), note: form.note })
       : await submitRpe(form.sessionId, { rpe: form.rpe, durationMinutes: Number(form.durationMinutes), note: form.note });
     form.saving = false;
     form.savedFeedback = result.feedback;
-    // Correction round 2 (gap 3): drop the athlete weekly cache entry
-    // UNCONDITIONALLY on a successful submit, never only when the overlay
-    // happens to be open - a submit from Home (the overlay closed) must
-    // never leave an earlier-loaded weekly cache entry stale for a LATER
-    // open this session (within the cache's own TTL) to read back.
-    invalidateTrainingLoadAthleteWeeklyContext(athleteWeeklyContext);
+    // Correction round 2 (gap 3) + round 3 (gap 3): drop the athlete
+    // weekly cache entry for the session's own actual week UNCONDITIONALLY
+    // on a successful submit, never only when the overlay happens to be
+    // open - a submit from Home (the overlay closed) must never leave an
+    // earlier-loaded weekly cache entry stale for a LATER open this
+    // session (within the cache's own TTL) to read back. Gated on the
+    // captured identity still being the CURRENT workspace, same reasoning
+    // as the session RPE toggle above.
+    if (trainingLoadMutationContextIsCurrentWorkspace(athleteWeeklyContext)) {
+      invalidateTrainingLoadAthleteWeeklyContext(athleteWeeklyContext);
+    }
   } catch (error) {
     form.saving = false;
     form.error = error.message || "Could not save this session's feedback.";

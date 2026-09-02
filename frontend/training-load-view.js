@@ -394,19 +394,34 @@ function renderTrainingLoadWeekNavHeaderHtml(section, weekStart, weekEnd) {
   `;
 }
 
-function renderTrainingLoadWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate, renderSessionRow, emptyAgendaText, agendaHeaderExtra = "" }) {
+// Correction round 3 (gap 4): `stale` is true when this section's own
+// `nav.loading` AND `nav.data` are BOTH truthy at once - i.e. a cache
+// entry was just invalidated (a mutation succeeded, or the coach's own
+// TTL-driven background refresh kicked in) and a fresh fetch is now in
+// flight, but the LAST successfully-loaded payload is still what's being
+// shown underneath. Before this, that window rendered the OLD payload
+// with no visual cue at all, actionable RPE toggle/resolve buttons fully
+// clickable against data that might already be wrong (e.g. the master
+// toggle was just confirmed OFF, but a still-actionable-looking row could
+// be clicked before the real, now-inactive state lands). This never
+// touches the "genuinely fresh cache hit, TTL not yet expired" path
+// (nav.loading stays false there - see loadTrainingLoadWeeklyInto's own
+// showLoading, only ever called on a real cache miss) - the existing fast
+// section-switching/shared-cache-hit behavior is completely unaffected.
+function renderTrainingLoadWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate, renderSessionRow, emptyAgendaText, agendaHeaderExtra = "", stale = false }) {
   const todayIso = trainingLoadTodayIso();
   const selectedDay = days.find((d) => d.date === selectedDate) || days[0];
   return `
-    <div class="training-load-weekly">
+    <div class="training-load-weekly ${stale ? "is-stale" : ""}">
       ${renderTrainingLoadWeekNavHeaderHtml(section, weekStart, weekEnd)}
       <div class="training-load-weekly-strip" role="tablist" aria-label="Select a day">
         ${days.map((day) => renderTrainingLoadStripDayHtml(section, day, day.date === selectedDay?.date, todayIso)).join("")}
       </div>
       <div class="training-load-weekly-agenda">
+        ${stale ? `<p class="muted training-load-stale-banner" role="status">Refreshing&hellip;</p>` : ""}
         ${agendaHeaderExtra}
         ${selectedDay && selectedDay.sessions.length
-          ? selectedDay.sessions.map((session) => renderSessionRow(session, selectedDay.date)).join("")
+          ? selectedDay.sessions.map((session) => renderSessionRow(session, selectedDay.date, stale)).join("")
           : `<p class="muted training-load-empty">${escapeHtml(emptyAgendaText)}</p>`}
       </div>
     </div>
@@ -459,12 +474,12 @@ function groupSessionsForToday(sessions) {
   return result;
 }
 
-function renderExternalGroupRowHtml(group, date) {
+function renderExternalGroupRowHtml(group, date, stale = false) {
   const rated = group.sessions.filter((s) => s.rated);
   const totalSrpe = rated.reduce((sum, s) => sum + s.feedback.srpe, 0);
   const allRated = rated.length === group.sessions.length;
   return `
-    <button type="button" class="training-load-session-row is-clickable" data-action="training-load-open-external-group" data-schedule-id="${escapeAttr(group.scheduleId)}" data-date="${escapeAttr(date)}">
+    <button type="button" class="training-load-session-row is-clickable" data-action="training-load-open-external-group" data-schedule-id="${escapeAttr(group.scheduleId)}" data-date="${escapeAttr(date)}" ${stale ? "disabled" : ""}>
       <span class="training-load-session-time">${escapeHtml((group.sessionTime || "").slice(0, 5))}</span>
       <span class="training-load-session-main">
         <span class="training-load-session-name">${escapeHtml(group.eventName)}${renderOutsidePlanTagHtml({ source: "scheduled_external" })}</span>
@@ -498,11 +513,11 @@ function plannedStatusLabel(session) {
   return { label: "Not rated", cls: "unrated" };
 }
 
-function renderCoachSessionRowHtml(session, date) {
-  if (session.__externalGroup) return renderExternalGroupRowHtml(session, date);
+function renderCoachSessionRowHtml(session, date, stale = false) {
+  if (session.__externalGroup) return renderExternalGroupRowHtml(session, date, stale);
   const status = plannedStatusLabel(session);
   return `
-    <div class="training-load-session-row">
+    <div class="training-load-session-row ${stale ? "is-stale" : ""}">
       <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
       <span class="training-load-session-main">
         <span class="training-load-session-name">${escapeHtml(session.athleteName)}${renderOutsidePlanTagHtml(session)}</span>
@@ -527,6 +542,9 @@ export function renderTrainingLoadTodayHtml() {
     selectedDate: nav.selectedDate,
     emptyAgendaText: "No training sessions this day.",
     renderSessionRow: renderCoachSessionRowHtml,
+    // Correction round 3 (gap 4) - see renderTrainingLoadWeeklyShellHtml's
+    // own header for what this means and why.
+    stale: Boolean(nav.loading && nav.data),
   });
 }
 
@@ -559,7 +577,7 @@ function externalStatusLabel(session) {
   return { label: "Not rated", cls: "unrated" };
 }
 
-function renderScheduleSessionRowHtml(session, date) {
+function renderScheduleSessionRowHtml(session, date, stale = false) {
   const isExternal = session.source === "scheduled_external";
   const status = isExternal ? externalStatusLabel(session) : plannedStatusLabel(session);
   // A planned row opens the existing Weekly plan view; an OUTSIDE PLAN row
@@ -567,9 +585,9 @@ function renderScheduleSessionRowHtml(session, date) {
   // again) instead - the two click targets are never interchangeable.
   const clickable = isExternal || !session.historical;
   const attrs = isExternal
-    ? `type="button" data-action="training-load-open-external-schedule" data-schedule-id="${escapeAttr(session.scheduleId)}"`
+    ? `type="button" data-action="training-load-open-external-schedule" data-schedule-id="${escapeAttr(session.scheduleId)}" ${stale ? "disabled" : ""}`
     : clickable
-      ? `type="button" data-action="training-load-open-weekly-plan" data-athlete-id="${escapeAttr(session.athleteId)}" data-date="${escapeAttr(date)}"`
+      ? `type="button" data-action="training-load-open-weekly-plan" data-athlete-id="${escapeAttr(session.athleteId)}" data-date="${escapeAttr(date)}" ${stale ? "disabled" : ""}`
       : "";
   const Tag = clickable ? "button" : "div";
   const canToggle = !isExternal && clickable && session.sessionId;
@@ -583,7 +601,7 @@ function renderScheduleSessionRowHtml(session, date) {
   const needsOwnershipResolution = !isExternal && !session.historical && session.ownershipUnresolved && session.planId;
   const resolving = state.trainingLoad.resolvingOwnership;
   return `
-    <div class="training-load-schedule-row">
+    <div class="training-load-schedule-row ${stale ? "is-stale" : ""}">
       <${Tag} class="training-load-session-row ${clickable ? "is-clickable" : ""}" ${attrs}>
         <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
         <span class="training-load-session-main">
@@ -596,7 +614,7 @@ function renderScheduleSessionRowHtml(session, date) {
         <div class="training-load-schedule-row-toggle">
           <span class="training-load-rpe-state-badge is-off">RPE WORKSPACE NOT ASSIGNED</span>
           ${session.canResolveOwnership ? `
-            <button type="button" class="plain-button compact-button" data-action="training-load-resolve-plan-ownership" data-plan-id="${escapeAttr(session.planId)}" ${resolving ? "disabled" : ""}>
+            <button type="button" class="plain-button compact-button" data-action="training-load-resolve-plan-ownership" data-plan-id="${escapeAttr(session.planId)}" ${resolving || stale ? "disabled" : ""}>
               Use current workspace for RPE
             </button>
           ` : `
@@ -606,7 +624,7 @@ function renderScheduleSessionRowHtml(session, date) {
       ` : canToggle ? `
         <div class="training-load-schedule-row-toggle">
           ${renderScheduleRpeStateBadgeHtml(session)}
-          <button type="button" class="plain-button compact-button" data-action="training-load-toggle-session-rpe" data-session-id="${escapeAttr(session.sessionId)}" data-currently-enabled="${session.rpeEnabled !== false ? "true" : "false"}">
+          <button type="button" class="plain-button compact-button" data-action="training-load-toggle-session-rpe" data-session-id="${escapeAttr(session.sessionId)}" data-currently-enabled="${session.rpeEnabled !== false ? "true" : "false"}" ${stale ? "disabled" : ""}>
             ${session.rpeEnabled !== false ? "Turn RPE off" : "Turn RPE on"}
           </button>
         </div>
@@ -629,6 +647,9 @@ function renderScheduleWeeklyCalendarHtml() {
     selectedDate: nav.selectedDate,
     emptyAgendaText: "No training sessions scheduled this day.",
     renderSessionRow: renderScheduleSessionRowHtml,
+    // Correction round 3 (gap 4) - see renderTrainingLoadWeeklyShellHtml's
+    // own header for what this means and why.
+    stale: Boolean(nav.loading && nav.data),
   });
 }
 

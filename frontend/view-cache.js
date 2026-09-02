@@ -158,6 +158,28 @@ export function invalidateCacheNamespace(namespace) {
   }
 }
 
+// perf/training-load-perf-nav-results correction round 3: a mutation whose
+// blast radius is "this one identity+week (or any other fixed prefix of a
+// context key), under ANY value of whatever comes after it" - e.g. a
+// training-load session toggle affects the same week shown under every
+// different club/team/athlete filter a coach has separately cached, not
+// just the one filter that happened to be active when the toggle was
+// clicked. `contextKeyPrefix` is joined onto `namespace` the same way a
+// full contextKey would be (see storeKey) - callers build it with
+// buildContextKey(leadingParts) + the same "|" separator buildContextKey
+// itself uses, so a real match never accidentally spans a value boundary
+// (e.g. week "2026-08-2" matching a stored "2026-08-24" instead of
+// requiring the full "2026-08-24|" segment boundary).
+export function invalidateCacheEntriesWithPrefix(namespace, contextKeyPrefix) {
+  const prefix = `${namespace}::${contextKeyPrefix}`;
+  for (const key of store.keys()) {
+    if (key.startsWith(prefix)) {
+      store.delete(key);
+      bumpRevision(key);
+    }
+  }
+}
+
 // Logout/account switch: every cached view for the outgoing account must be
 // gone, not just marked stale - the very next render of any view for
 // whoever is signed in next must never be able to read a leftover entry.

@@ -11822,6 +11822,35 @@ button.tests-assignment-card {
   cursor: pointer;
 }
 
+/* Correction round 3 (gap 4): a mutation just invalidated this section's
+   own cache entry and its fresh refetch is in flight, but the LAST
+   successfully-loaded payload is still what's rendered underneath (see
+   renderTrainingLoadWeeklyShellHtml's own header in training-load-view.js) -
+   a small, unobtrusive banner (never a full-screen loading replacement,
+   the existing view stays visible per this whole module's own "no
+   permanently stale cache, but never a jarring blank/flash either"
+   convention) plus dimmed, disabled rows so a coach can't act on
+   possibly-already-changed state while the real refresh is still landing. */
+.training-load-stale-banner {
+  margin: 0 0 2px;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.training-load-weekly.is-stale .training-load-weekly-agenda {
+  opacity: 0.6;
+}
+
+.training-load-session-row.is-stale,
+.training-load-schedule-row.is-stale {
+  cursor: default;
+}
+
+.training-load-session-row[disabled],
+.training-load-schedule-row-toggle button[disabled] {
+  cursor: not-allowed;
+}
+
 .training-load-session-time {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
