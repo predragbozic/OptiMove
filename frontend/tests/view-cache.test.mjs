@@ -325,7 +325,11 @@ test("17. a late-resolving response (A) from BEFORE a mid-flight invalidation mu
   a.resolve({ rows: ["stale-from-A"] });
   const resultA = await pendingA;
 
-  assert.equal(resultA.outcome, "stale-ignored", "A's own response must be recognized as void once it resolves after the invalidation");
+  // "invalidated-stale" (correction round 4), not "stale-ignored" - this
+  // key's own CONTEXT never changed (only its cached data was
+  // invalidated), a distinction callers can use to self-heal with a
+  // retry (see training-load-data.js's own loadTrainingLoadWeeklyInto).
+  assert.equal(resultA.outcome, "invalidated-stale", "A's own response must be recognized as void once it resolves after the invalidation");
   assert.equal(dataCallsA.length, 0, "A's stale data must never reach its own caller's applyData either");
   assert.deepEqual(getCacheEntry("coaches", "ctx-1").data, { rows: ["fresh-from-B"] }, "B's fresh write must survive A's later, stale write attempt - the shared cache must never be clobbered");
 });
@@ -365,7 +369,8 @@ test("18. the same late-response race also applies when A ends in an ERROR after
   a.reject(new Error("stale network failure"));
   const resultA = await pendingA;
 
-  assert.equal(resultA.outcome, "stale-ignored");
+  // "invalidated-stale" (correction round 4) - same distinction as test 17.
+  assert.equal(resultA.outcome, "invalidated-stale");
   assert.equal(errorCallsA.length, 0, "A's now-void error must never reach applyError");
   const entry = getCacheEntry("coaches", "ctx-1");
   assert.deepEqual(entry.data, { rows: ["fresh-from-B"] }, "B's good data must survive untouched");

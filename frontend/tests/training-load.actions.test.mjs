@@ -2222,7 +2222,7 @@ test("X4b. once NOT loading (a plain rendered view, whether freshly loaded or an
   assert.doesNotMatch(html, /data-action="training-load-toggle-session-rpe"[^>]*disabled/, "the toggle control must stay enabled for an ordinary, non-loading render");
 });
 
-test("X4c. a response discarded as stale by the shared cache never leaves nav.loading stuck spinning forever, even when nothing else ever re-fetches this exact nav slot afterward", async () => {
+test("X4c. correction round 4: a response discarded as stale-but-still-wanted (the shared cache's own 'invalidated-stale' outcome) self-heals with a real retry - never leaves nav.loading stuck forever, and never leaves the view sitting on data:null with no automatic recovery", async () => {
   resetState();
   const deferreds = installDeferredFetchMock();
   state.trainingLoad.weekly.today.weekStart = "2026-08-24";
@@ -2242,8 +2242,128 @@ test("X4c. a response discarded as stale by the shared cache never leaves nav.lo
   invalidateTrainingLoadWeeklyContext(mutationContext);
 
   const firstCall = deferreds[deferreds.length - 1];
-  firstCall.resolve({ status: 200, body: weekPayload("2026-08-24") });
+  firstCall.resolve({ status: 200, body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "sess-1", rated: false })] }) });
+  // The self-heal retry (a genuinely SEPARATE, second real fetch for the
+  // now-invalidated same context) must be resolved too before `pending`
+  // (which now awaits through that retry) can settle.
+  await new Promise((r) => setTimeout(r, 0));
+  const retryCall = deferreds[deferreds.length - 1];
+  assert.notEqual(retryCall, firstCall, "the discarded response's own context must be genuinely retried, a real second fetch - not silently given up on");
+  retryCall.resolve({ status: 200, body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "sess-1", rated: true, feedback: { rpe: 5, durationMinutes: 30, srpe: 150 } })] }) });
   await pending;
 
-  assert.equal(state.trainingLoad.weekly.today.loading, false, "loading must resolve back to false even though this response was discarded as stale by the shared cache - it must never stay stuck spinning forever");
+  assert.equal(state.trainingLoad.weekly.today.loading, false, "loading must resolve back to false - never stay stuck spinning forever");
+  assert.ok(state.trainingLoad.weekly.today.data, "the view must end up with REAL data from the retry - never left at data:null with no automatic recovery");
+  assert.equal(state.trainingLoad.weekly.today.data.days[0].sessions[0].rated, true, "and that data must be the retry's own fresh result");
+});
+
+// ------------------------------------------------------------
+// X5. Correction round 4: the exact reported cross-section race -
+// 1) Schedule loads W1. 2) a per-session RPE toggle is triggered from
+// Schedule, its PATCH held. 3) WHILE it's in flight, the coach switches to
+// Today (sharing W1's cache) and confirms a NEW athlete filter - starts
+// request A. 4) the PATCH succeeds; invalidation correctly voids A (same
+// week, every filter variant - gap 1's own fix), and the post-mutation
+// reload now correctly targets the CURRENTLY VISIBLE section (Today, under
+// its own current filter) instead of the captured "schedule" - starting
+// request B for the SAME context A is fetching. 5) whichever of A/B
+// resolves last, Today must end up showing B's real, fresh, post-toggle
+// content - never A's stale one, and never left at data:null.
+// ------------------------------------------------------------
+
+async function setupCrossSectionRaceUpToBothRequests() {
+  const deferreds = installDeferredFetchMock();
+  state.trainingLoad.section = "schedule";
+  state.trainingLoad.weekly.schedule.weekStart = "2026-08-24";
+  state.trainingLoad.weekly.today.weekStart = "2026-08-24";
+
+  // Step 1: Schedule loads W1 (Today shares this same cache entry - same
+  // week, no filter yet).
+  const initialLoad = loadTrainingLoadWeekly("schedule");
+  await Promise.resolve();
+  assert.equal(deferreds.length, 1);
+  deferreds[0].resolve({ status: 200, body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "sess-1", rated: false, rpeEnabled: true })] }) });
+  await initialLoad;
+
+  // Step 2: the toggle is triggered FROM Schedule - PATCH held.
+  const togglePromise = handleTrainingLoadAction(
+    fakeAction({ action: "training-load-toggle-session-rpe", sessionId: "sess-1", currentlyEnabled: "true" }),
+    { renderTrainingLoad },
+  );
+  await Promise.resolve();
+  assert.equal(deferreds.length, 2);
+  const toggleCall = deferreds[1];
+  assert.ok(toggleCall.call.url.includes("/rpe-enabled"), "sanity: the toggle's own PATCH is in flight");
+
+  // Step 3a: switch to Today - the shared cache entry is still fresh, so
+  // this is a genuine instant hit, no new fetch (the fast section-
+  // switching this correction must not regress).
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "today" }), { renderTrainingLoad });
+  assert.equal(deferreds.length, 2, "sanity: switching to Today costs no new fetch - the shared cache is still fresh");
+  assert.equal(state.trainingLoad.section, "today");
+
+  // Step 3b: confirm a NEW athlete filter WHILE the toggle is still in
+  // flight - starts request A, for Today's own new (week, filter) context.
+  state.trainingLoad.orgPickerData = { clubs: [], teams: [], athletes: [{ id: "ath-X", name: "Xena", athlete_id: "X" }] };
+  state.trainingLoad.filter.athleteIds = ["ath-X"];
+  const filterConfirmPromise = handleTrainingLoadAction(fakeAction({ action: "training-load-filter-confirm" }), { renderTrainingLoad });
+  await Promise.resolve();
+  assert.equal(deferreds.length, 3);
+  const callA = deferreds[2];
+  assert.ok(callA.call.url.includes("athleteIds=ath-X"), "request A: Today's own filter-confirm reload, under the new filter");
+
+  // Step 4: the toggle's own PATCH finally resolves - invalidation (gap 1)
+  // voids EVERY filter variant of W1, including A's own now-in-flight
+  // one; the post-mutation reload (this round's own fix) targets the
+  // CURRENTLY VISIBLE section (Today), under Today's own CURRENT filter -
+  // the SAME context A is already fetching - starting request B.
+  toggleCall.resolve({ status: 200, body: {} });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(deferreds.length, 4);
+  const callB = deferreds[3];
+  assert.ok(callB.call.url.includes("athleteIds=ath-X"), "request B: the toggle's own post-mutation reload, now correctly targeting Today (the currently-visible section) under the SAME filter as A - never the captured, possibly-no-longer-visible 'schedule'");
+
+  return { togglePromise, filterConfirmPromise, callA, callB };
+}
+
+test("X5a. cross-section race, A resolves BEFORE B: Today ends up showing B's real fresh post-toggle content, never A's stale one, never data:null", async () => {
+  resetState();
+  const { togglePromise, filterConfirmPromise, callA, callB } = await setupCrossSectionRaceUpToBothRequests();
+
+  // A resolves first, with STALE pre-toggle data (rpeEnabled still true -
+  // what the server would have returned for the request A actually sent,
+  // before the toggle took effect).
+  callA.resolve({ status: 200, body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "sess-1", athleteId: "ath-X", rated: false, rpeEnabled: true })] }) });
+  await new Promise((r) => setTimeout(r, 0));
+  // B resolves last, with the REAL, fresh, post-toggle data.
+  callB.resolve({ status: 200, body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "sess-1", athleteId: "ath-X", rated: false, rpeEnabled: false })] }) });
+  await Promise.all([togglePromise, filterConfirmPromise]);
+
+  assert.equal(state.trainingLoad.weekly.today.loading, false, "never left spinning");
+  assert.equal(state.trainingLoad.weekly.today.error, "");
+  assert.ok(state.trainingLoad.weekly.today.data, "Today must NOT be left at data:null - the exact repro this fixes");
+  const todaySession = state.trainingLoad.weekly.today.data.days[0].sessions.find((s) => s.sessionId === "sess-1");
+  assert.ok(todaySession, "Today's own session must be present");
+  assert.equal(todaySession.rpeEnabled, false, "Today must show the REAL, current rpeEnabled:false (B's own fresh result) - never A's stale rpeEnabled:true, and not just a fetch count check");
+});
+
+test("X5b. cross-section race, B resolves BEFORE A: Today ends up showing B's real fresh post-toggle content, A's later stale response never clobbers it, never data:null", async () => {
+  resetState();
+  const { togglePromise, filterConfirmPromise, callA, callB } = await setupCrossSectionRaceUpToBothRequests();
+
+  // B resolves FIRST this time, with the real fresh post-toggle data.
+  callB.resolve({ status: 200, body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "sess-1", athleteId: "ath-X", rated: false, rpeEnabled: false })] }) });
+  await new Promise((r) => setTimeout(r, 0));
+  // A resolves LAST, with stale pre-toggle data - it was invalidated
+  // before B ever wrote anything, so it must never overwrite B's result
+  // no matter which order the two network responses actually arrive in.
+  callA.resolve({ status: 200, body: weekPayload("2026-08-24", { "2026-08-24": [session({ sessionId: "sess-1", athleteId: "ath-X", rated: false, rpeEnabled: true })] }) });
+  await Promise.all([togglePromise, filterConfirmPromise]);
+
+  assert.equal(state.trainingLoad.weekly.today.loading, false, "never left spinning");
+  assert.equal(state.trainingLoad.weekly.today.error, "");
+  assert.ok(state.trainingLoad.weekly.today.data, "Today must NOT be left at data:null - the exact repro this fixes");
+  const todaySession = state.trainingLoad.weekly.today.data.days[0].sessions.find((s) => s.sessionId === "sess-1");
+  assert.ok(todaySession, "Today's own session must be present");
+  assert.equal(todaySession.rpeEnabled, false, "Today must still show B's real, fresh rpeEnabled:false - A's later, stale response must never clobber it, regardless of resolution order");
 });

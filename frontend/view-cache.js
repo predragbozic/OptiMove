@@ -240,13 +240,22 @@ export async function loadCachedView({
   try {
     const data = await dedupeRequest(namespace, contextKey, fetcher);
     if (getCurrentContextKey && getCurrentContextKey() !== contextKey) return { outcome: "stale-ignored" };
-    if (getCacheRevision(namespace, contextKey) !== startRevision) return { outcome: "stale-ignored" };
+    // Correction round 4: a DIFFERENT outcome than the context-key check
+    // above, on purpose - "the context moved on" means some NEWER call for
+    // the CURRENT desired context already exists (whatever navigated away
+    // is the one responsible for showing something there), but "this exact
+    // context got invalidated by something ELSE while still wanted" means
+    // NOTHING else is necessarily fetching it again - a caller that cares
+    // (see training-load-data.js's own loadTrainingLoadWeeklyInto) can use
+    // this to self-heal with a retry instead of silently leaving whatever
+    // was on screen (possibly nothing at all) unrefreshed.
+    if (getCacheRevision(namespace, contextKey) !== startRevision) return { outcome: "invalidated-stale" };
     setCacheData(namespace, contextKey, data);
     await applyData(data, { fromCache: false });
     return { outcome: cached ? "background-refreshed" : "loaded" };
   } catch (error) {
     if (getCurrentContextKey && getCurrentContextKey() !== contextKey) return { outcome: "stale-ignored" };
-    if (getCacheRevision(namespace, contextKey) !== startRevision) return { outcome: "stale-ignored" };
+    if (getCacheRevision(namespace, contextKey) !== startRevision) return { outcome: "invalidated-stale" };
     const { keptCache } = setCacheError(namespace, contextKey, error);
     if (!keptCache) {
       await applyError?.(error);

@@ -248,16 +248,43 @@ async function loadTrainingLoadWeeklyInto(nav, generationKey, extraQuery, onPain
     },
     getCurrentContextKey: () => trainingLoadWeeklyContextKey(nav.weekStart, extraQuery),
   });
-  // Correction round 3 (gap 4): if THIS request's own response was
-  // discarded at the cache-primitive level (view-cache.js's own context-
-  // key/revision guard - "stale-ignored") while nothing newer has since
-  // superseded it at THIS level either (its own generation is still the
-  // current one for this nav slot), neither applyData nor applyError ever
-  // ran - showLoading()'s own `nav.loading = true` would otherwise be
-  // left stuck forever, since nothing else is going to come along and
-  // resolve it (a genuinely newer request, if one existed, would have
-  // bumped the generation counter and this check would correctly skip).
-  if (result?.outcome === "stale-ignored" && generation === weeklyRequestGeneration[generationKey] && nav.loading) {
+  // Only relevant while nothing newer has since superseded THIS nav slot's
+  // own request - a genuinely newer request, if one exists, already
+  // bumped the generation counter and OWNS the job of populating this nav
+  // slot from here; this call has nothing further to do either way.
+  if (generation !== weeklyRequestGeneration[generationKey]) return;
+
+  // Correction round 4: this exact (week, filter) context was invalidated
+  // by an UNRELATED mutation (a different section's own toggle, the
+  // master switch, an ownership resolution, ...) while THIS fetch was
+  // still in flight - view-cache.js's own revision guard correctly
+  // refused to write/apply the now-void response, but unlike "the context
+  // moved on" (stale-ignored, below - a NEWER request for the new context
+  // already exists and owns showing something there), NOTHING else is
+  // necessarily going to retry this EXACT context. Left alone, this nav
+  // slot stays however it already was - `data: null` if this was its
+  // first-ever load (the repro this fixes: Today stuck permanently blank
+  // after an unrelated Schedule-side toggle raced its own filter confirm),
+  // or a stale prior payload with `loading` never clearing - a dead end
+  // with no automatic recovery either way. Retry once, for this SAME nav
+  // slot's current desired context - nothing can have changed weekStart/
+  // filter between the previous await settling and this synchronous retry
+  // dispatch (no other code runs in between, single-threaded JS), so
+  // reusing the same `extraQuery` closure and re-reading `nav.weekStart`
+  // live (as this function already does) is exactly correct; if the user
+  // changes either WHILE this retry is itself in flight, that action's
+  // own load bumps the generation counter again, and the check above
+  // correctly defers to it on the next pass instead of retrying forever.
+  if (result?.outcome === "invalidated-stale") {
+    await loadTrainingLoadWeeklyInto(nav, generationKey, extraQuery, onPainted);
+    return;
+  }
+  // "stale-ignored" (the context moved on) reaching here with this
+  // request's own generation still current shouldn't normally happen (a
+  // context change is always paired with a generation bump elsewhere),
+  // but `loading` must never be left stuck regardless - belt-and-
+  // suspenders, matching this function's own established style.
+  if (result?.outcome === "stale-ignored" && nav.loading) {
     nav.loading = false;
     onPainted?.();
   }

@@ -220,9 +220,29 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // so invalidating/reloading here again, under a since-changed
     // context, would be redundant at best and a pointless extra fetch for
     // an unrelated workspace at worst.
+    //
+    // Correction round 4: the RELOAD below deliberately targets
+    // state.trainingLoad.section read FRESH here (current, at reload
+    // time), never the captured `section` this toggle actually started
+    // from - if the coach has since switched to a different tab while the
+    // PATCH was in flight, the view that needs refreshing is whichever
+    // one is now VISIBLE, not the one the toggle happened to be clicked
+    // from. invalidateTrainingLoadWeeklyContext above still correctly
+    // uses the CAPTURED mutationContext (the mutation's own real, original
+    // effect never moves just because the coach looked away) - only the
+    // reload TARGET changes. Reproduced bug this fixes: Schedule's own
+    // toggle invalidates the shared cache for its week across every
+    // filter (gap 1's own fix) - if the coach switched to Today and
+    // confirmed a new filter in the meantime, THAT filter-confirm's own
+    // request could get invalidated too and discarded as stale; reloading
+    // "schedule" here (the old, captured section, possibly not even
+    // visible anymore) never touched Today's own now-empty nav at all -
+    // see loadTrainingLoadWeeklyInto's own "invalidated-stale" self-heal
+    // in training-load-data.js for the other half of this fix.
+    const currentSection = state.trainingLoad.section;
     if (trainingLoadMutationContextIsCurrentWorkspace(mutationContext)) {
       invalidateTrainingLoadWeeklyContext(mutationContext);
-      await loadTrainingLoadWeekly(section, renderTrainingLoad);
+      await loadTrainingLoadWeekly(currentSection, renderTrainingLoad);
     }
     renderTrainingLoad();
     return true;
