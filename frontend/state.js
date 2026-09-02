@@ -595,6 +595,16 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // never duplicated into their own copy here, so a reminder send's updated
   // rated/pending status is reflected the instant Today re-fetches).
   todayGroupDetail: null,
+  // Results tab (item 3 correction): null shows the primary per-athlete
+  // summary list; an athleteId drills into that one athlete's own sessions/
+  // daily view for the currently-loaded week. A pure UI selection, re-
+  // derived live from weekly.results.data on every render (see training-
+  // load-view.js's own renderTrainingLoadResultsHtml) - never a second
+  // fetch, never folded into `filter` (drilling into one athlete must never
+  // touch the server-side club/team/athlete filter - see that file's own
+  // comment on why appending to its OR-based athleteIds would widen rather
+  // than narrow what's already on screen).
+  resultsAthleteId: null,
   // Reminder send (mirrors tests.reminderSelection's own shape) - keyed by
   // scheduleId, { fingerprint, ids }; remindingScheduleId guards one send in
   // flight at a time; reminderResult is a one-time confirmation banner.

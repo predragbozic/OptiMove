@@ -1,8 +1,12 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyRpeForm, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
 import {
+  captureTrainingLoadAthleteWeeklyMutationContext,
+  captureTrainingLoadWeeklyMutationContext,
   createExternalSchedule,
   invalidateAllTrainingLoadWeeklyGenerations,
+  invalidateTrainingLoadAthleteWeeklyContext,
+  invalidateTrainingLoadWeeklyContext,
   loadExternalScheduleDetail,
   loadPlannedRpeSetting,
   loadTrainingLoadAthleteToday,
@@ -17,6 +21,7 @@ import {
   submitRpe,
   submitExternalRpe,
   toggleSessionRpeEnabled,
+  trainingLoadMutationContextIsCurrentWorkspace,
   updateExternalSchedule,
 } from "./training-load-data.js";
 import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
@@ -62,9 +67,18 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // the confirmation is dismissed, so the Home card/list (and the
     // weekly overlay, if that's where this was opened from) reflect the
     // new rated status immediately, not on the next unrelated visit.
+    // Correction round 2: the athlete weekly CACHE entry is already
+    // dropped unconditionally at submit time (submitRpeForm below) -
+    // regardless of whether the overlay happens to be open right now, so
+    // a LATER open (this session, within the TTL) can never read a stale
+    // pre-submit payload. This handler only needs to actually re-fetch and
+    // repaint the overlay if it's visible right now - there's nothing to
+    // show a reload for otherwise.
     if (hadSaved) {
       await loadTrainingLoadAthleteToday();
-      if (state.trainingLoad.athleteWeeklyOpen) await loadTrainingLoadAthleteWeekly();
+      if (state.trainingLoad.athleteWeeklyOpen) {
+        await loadTrainingLoadAthleteWeekly();
+      }
     }
     renderTrainingLoad();
     return true;
@@ -83,8 +97,13 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // since this overlay was last opened. The existing "athlete" request-
     // generation counter (loadTrainingLoadWeeklyInto) already guards
     // against a stale response landing after a newer one, so this is safe.
+    // perf: opens and paints immediately (cached data if this exact week
+    // was already viewed this session, or the shell + loading state
+    // otherwise) via the onPainted callback - never waits on the network
+    // just to show the overlay itself.
     state.trainingLoad.athleteWeeklyOpen = true;
-    await loadTrainingLoadAthleteWeekly();
+    renderTrainingLoad();
+    await loadTrainingLoadAthleteWeekly(renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
@@ -98,7 +117,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const delta = type === "training-load-athlete-weekly-prev-week" ? -7 : 7;
     nav.weekStart = addDaysIso(nav.weekStart, delta);
     if (nav.selectedDate) nav.selectedDate = addDaysIso(nav.selectedDate, delta);
-    await loadTrainingLoadAthleteWeekly();
+    renderTrainingLoad();
+    await loadTrainingLoadAthleteWeekly(renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
@@ -108,7 +128,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const today = localDateIsoInTimeZone(timezone);
     nav.weekStart = weekMondayIso(today);
     nav.selectedDate = today;
-    await loadTrainingLoadAthleteWeekly();
+    renderTrainingLoad();
+    await loadTrainingLoadAthleteWeekly(renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
@@ -168,6 +189,13 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if (!sessionId) return true;
     const currentlyEnabled = action.dataset.currentlyEnabled === "true";
     const nextEnabled = !currentlyEnabled;
+    const section = state.trainingLoad.section;
+    // Correction round 2 (gap 1): captured BEFORE the request - a week-nav
+    // click, filter confirm, or section switch while this toggle (and its
+    // possible confirm-and-retry round trip below) is in flight must never
+    // change WHICH cached entry gets dropped once the response lands (see
+    // captureTrainingLoadWeeklyMutationContext's own header).
+    const mutationContext = captureTrainingLoadWeeklyMutationContext(section);
     try {
       await toggleSessionRpeEnabled(sessionId, nextEnabled);
     } catch (error) {
@@ -180,7 +208,42 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
         throw error;
       }
     }
-    await loadTrainingLoadWeekly(state.trainingLoad.section);
+    // A just-toggled session must reflect the new state immediately,
+    // never a stale pre-toggle flash from cache. Scoped to just this one
+    // session's own week (across every cached filter variant of it - see
+    // invalidateTrainingLoadWeeklyContext's own header) - see
+    // invalidateAllTrainingLoadWeeklyGenerations's own header for when a
+    // WIDER invalidation is required instead. Correction round 3 (gap 3):
+    // gated on the captured identity still being the CURRENT workspace -
+    // a workspace switch mid-flight already fully reset everything for
+    // the new workspace on its own (resetTrainingLoadForWorkspaceChange),
+    // so invalidating/reloading here again, under a since-changed
+    // context, would be redundant at best and a pointless extra fetch for
+    // an unrelated workspace at worst.
+    //
+    // Correction round 4: the RELOAD below deliberately targets
+    // state.trainingLoad.section read FRESH here (current, at reload
+    // time), never the captured `section` this toggle actually started
+    // from - if the coach has since switched to a different tab while the
+    // PATCH was in flight, the view that needs refreshing is whichever
+    // one is now VISIBLE, not the one the toggle happened to be clicked
+    // from. invalidateTrainingLoadWeeklyContext above still correctly
+    // uses the CAPTURED mutationContext (the mutation's own real, original
+    // effect never moves just because the coach looked away) - only the
+    // reload TARGET changes. Reproduced bug this fixes: Schedule's own
+    // toggle invalidates the shared cache for its week across every
+    // filter (gap 1's own fix) - if the coach switched to Today and
+    // confirmed a new filter in the meantime, THAT filter-confirm's own
+    // request could get invalidated too and discarded as stale; reloading
+    // "schedule" here (the old, captured section, possibly not even
+    // visible anymore) never touched Today's own now-empty nav at all -
+    // see loadTrainingLoadWeeklyInto's own "invalidated-stale" self-heal
+    // in training-load-data.js for the other half of this fix.
+    const currentSection = state.trainingLoad.section;
+    if (trainingLoadMutationContextIsCurrentWorkspace(mutationContext)) {
+      invalidateTrainingLoadWeeklyContext(mutationContext);
+      await loadTrainingLoadWeekly(currentSection, renderTrainingLoad);
+    }
     renderTrainingLoad();
     return true;
   }
@@ -189,14 +252,20 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
 
   if (type === "training-load-section") {
     state.trainingLoad.section = action.dataset.section;
-    // Correction: "always-refresh" (menu-cache-policy.js) means every
-    // section switch is a real fetch, never skipped just because that
-    // section already has SOME data from an earlier visit this session.
-    // (v9) The master toggle only ever renders on Schedule, but its own
-    // value is fetched fresh on every entry into that tab too - same
-    // "always-refresh, never trust a stale value" rule.
+    // perf: the tab strip itself (and whatever this section's own
+    // nav.data already holds - real data from an earlier visit this
+    // session, or nothing yet) paints INSTANTLY on the switch, never
+    // waiting on a network round trip just to show which tab is now
+    // selected. loadTrainingLoadWeekly repaints again on its own the
+    // instant a cache hit/loading state/fresh response is available (see
+    // its own onPainted parameter). Switching to a section that's asking
+    // for the exact same (workspace, week, filter) another section already
+    // has fresh in the shared cache (training-load-data.js) now genuinely
+    // skips the network round trip too, not just the loading flash - see
+    // that file's own header comment for the TTL-based rationale.
+    renderTrainingLoad();
     await Promise.all([
-      loadTrainingLoadWeekly(state.trainingLoad.section),
+      loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
       state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
     ]);
     renderTrainingLoad();
@@ -228,10 +297,18 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       setting.enabled = result.enabled;
       setting.enabledAt = result.enabledAt;
       setting.saving = false;
-      // Refreshes the currently-visible rows so an individual session's
-      // own status pill (see plannedStatusLabel) reflects the new
-      // effective state immediately, not just the toggle control itself.
-      await loadTrainingLoadWeekly(state.trainingLoad.section);
+      // Correction round 2 (gap 1): the workspace master toggle governs
+      // EVERY plan/session's own effective actionability across every
+      // week, not just whatever week/filter happens to be on screen right
+      // now - a narrow, single-key invalidation would leave every OTHER
+      // already-cached week (a coach who browsed several weeks this
+      // session) showing a stale pre-toggle state until its own TTL
+      // happens to expire. Wide invalidation (bump every generation +
+      // clear the whole weekly cache namespace) so any later visit to any
+      // week/filter is guaranteed a real, fresh fetch - then refreshes the
+      // currently-visible rows immediately for instant feedback.
+      invalidateAllTrainingLoadWeeklyGenerations();
+      await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
     } catch (error) {
       setting.saving = false;
       setting.error = error.message || "Could not save this setting.";
@@ -269,11 +346,15 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     try {
       await resolvePlanOwnership(planIds);
       state.trainingLoad.resolvingOwnership = false;
-      // Refreshes every row so a just-resolved plan's own session(s)
-      // immediately drop the "workspace not assigned" badge and become
-      // actionable (subject to the master switch and enabled_at cutoff,
-      // exactly as if it had always had a real owner).
-      await loadTrainingLoadWeekly(state.trainingLoad.section);
+      // Correction round 2 (gap 1): a resolved plan's own sessions can
+      // appear in MULTIPLE weeks (a plan spans exactly one week, but the
+      // bulk action can resolve several plans at once, each its own week) -
+      // wide invalidation, same reasoning as the master toggle above.
+      // Refreshes the currently-visible rows immediately so a just-
+      // resolved plan's own session(s) drop the "workspace not assigned"
+      // badge right away.
+      invalidateAllTrainingLoadWeeklyGenerations();
+      await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
     } catch (error) {
       state.trainingLoad.resolvingOwnership = false;
       state.trainingLoad.resolveOwnershipError = error.message || "Could not assign this workspace.";
@@ -288,7 +369,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const delta = type === "training-load-weekly-prev-week" ? -7 : 7;
     nav.weekStart = addDaysIso(nav.weekStart, delta);
     if (nav.selectedDate) nav.selectedDate = addDaysIso(nav.selectedDate, delta);
-    await loadTrainingLoadWeekly(section);
+    // perf: the week label/nav updates instantly; loadTrainingLoadWeekly
+    // paints again the instant it has something to show (cached data for
+    // this week if already visited, or a loading state) via onPainted.
+    renderTrainingLoad();
+    await loadTrainingLoadWeekly(section, renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
@@ -299,7 +384,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const today = localDateIsoInTimeZone(timezone);
     nav.weekStart = weekMondayIso(today);
     nav.selectedDate = today;
-    await loadTrainingLoadWeekly(section);
+    renderTrainingLoad();
+    await loadTrainingLoadWeekly(section, renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
@@ -316,9 +402,19 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- Coach: Club/Team/Athletes filter picker --------------------
 
   if (type === "training-load-filter-open") {
-    await loadTrainingLoadOrgPickerData().catch(() => {});
+    // perf: opens the panel IMMEDIATELY - it used to await the org-picker
+    // fetch first, so the whole panel stayed closed for that entire round
+    // trip on a coach's first-ever open this session (every later open is
+    // already instant, since loadTrainingLoadOrgPickerData caches its own
+    // result in state.trainingLoad.orgPickerData for the session). The
+    // picker's own render (renderFilterTabPanelHtml) shows an explicit
+    // loading message while orgPickerData is still null, never a
+    // silently-empty "No clubs/teams/athletes available" that looks like
+    // a real, final answer.
     state.trainingLoad.filterSnapshotAtOpen = { ...state.trainingLoad.filter, clubIds: [...state.trainingLoad.filter.clubIds], teamIds: [...state.trainingLoad.filter.teamIds], athleteIds: [...state.trainingLoad.filter.athleteIds] };
     state.trainingLoad.filterPicker.open = true;
+    renderTrainingLoad();
+    await loadTrainingLoadOrgPickerData().catch(() => {});
     renderTrainingLoad();
     return true;
   }
@@ -340,7 +436,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // section is refetched immediately for instant visible feedback.
     for (const key of Object.keys(state.trainingLoad.weekly)) state.trainingLoad.weekly[key].data = null;
     renderTrainingLoad();
-    await loadTrainingLoadWeekly(state.trainingLoad.section);
+    await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
@@ -627,7 +723,35 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       return true;
     }
     await setExternalScheduleStatus(scheduleId, statusAction);
-    await openExternalScheduleDetail(scheduleId, renderTrainingLoad);
+    // Correction round 2 (gap 1): this used to refresh only the detail
+    // overlay, never the weekly cache at all - a paused/resumed/cancelled
+    // schedule changes future occurrence generation and actionability
+    // across every week it could still appear in, not just whichever week
+    // happens to be on screen. Wide invalidation, then refresh both the
+    // detail overlay and the currently-visible weekly view so its own rows
+    // (Schedule's own management view, and Today's grouped rows) reflect
+    // the new status immediately.
+    invalidateAllTrainingLoadWeeklyGenerations();
+    await Promise.all([
+      openExternalScheduleDetail(scheduleId, renderTrainingLoad),
+      loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+    ]);
+    return true;
+  }
+
+  // -------------------- Results tab: per-athlete drilldown (item 3) --------------------
+  // A pure UI selection over the already-loaded weekly.results payload -
+  // never a fetch, never touches state.trainingLoad.filter (see training-
+  // load-view.js's own comment on filterWeeklyDataToAthlete for why).
+
+  if (type === "training-load-results-open-athlete") {
+    state.trainingLoad.resultsAthleteId = action.dataset.athleteId;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-results-close-athlete") {
+    state.trainingLoad.resultsAthleteId = null;
+    renderTrainingLoad();
     return true;
   }
 
@@ -768,7 +892,15 @@ async function submitExternalScheduleForm(renderTrainingLoad) {
       await createExternalSchedule(buildExternalScheduleBody(form));
     }
     state.trainingLoad.scheduleForm = null;
-    await loadTrainingLoadWeekly(state.trainingLoad.section);
+    // Correction round 2 (gap 1): a create/edit/schedule-again can be a
+    // recurring or multi-date (specific_dates) schedule spanning several
+    // weeks, not just the one currently on screen - a narrow, single-week
+    // invalidation would leave every OTHER already-cached week showing
+    // stale pre-save rows. Wide invalidation unconditionally (simpler and
+    // safer than branching on scheduleKind), then refresh the current
+    // section immediately for instant feedback.
+    invalidateAllTrainingLoadWeeklyGenerations();
+    await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
   } catch (error) {
     form.submitting = false;
     form.error = error.message || "Could not save this RPE session.";
@@ -1023,12 +1155,35 @@ async function submitRpeForm(renderTrainingLoad) {
   form.saving = true;
   form.error = "";
   renderTrainingLoad();
+  // Correction round 3 (gap 2): captured BEFORE the request, from the
+  // session/assignment's own actual date (form.date - set for BOTH
+  // planned and outside-plan/external forms by openRpeFormForSessionId in
+  // this same file), never from state.trainingLoad.athleteWeekly.weekStart.
+  // The overlay's own last-viewed week and the week the RATED SESSION IS
+  // IN are two different things - Home can open the form for a not-yet-
+  // rated session from ANY earlier day, regardless of which week (if any)
+  // the overlay was browsed to and closed on beforehand. Using the
+  // overlay's own weekStart here invalidated the WRONG week's cache entry
+  // whenever they diverged, leaving the actually-affected week's entry
+  // stale.
+  const athleteWeeklyContext = captureTrainingLoadAthleteWeeklyMutationContext(form.date);
   try {
     const result = form.source === "scheduled_external"
       ? await submitExternalRpe(form.externalAssignmentId, { rpe: form.rpe, durationMinutes: Number(form.durationMinutes), note: form.note })
       : await submitRpe(form.sessionId, { rpe: form.rpe, durationMinutes: Number(form.durationMinutes), note: form.note });
     form.saving = false;
     form.savedFeedback = result.feedback;
+    // Correction round 2 (gap 3) + round 3 (gap 3): drop the athlete
+    // weekly cache entry for the session's own actual week UNCONDITIONALLY
+    // on a successful submit, never only when the overlay happens to be
+    // open - a submit from Home (the overlay closed) must never leave an
+    // earlier-loaded weekly cache entry stale for a LATER open this
+    // session (within the cache's own TTL) to read back. Gated on the
+    // captured identity still being the CURRENT workspace, same reasoning
+    // as the session RPE toggle above.
+    if (trainingLoadMutationContextIsCurrentWorkspace(athleteWeeklyContext)) {
+      invalidateTrainingLoadAthleteWeeklyContext(athleteWeeklyContext);
+    }
   } catch (error) {
     form.saving = false;
     form.error = error.message || "Could not save this session's feedback.";

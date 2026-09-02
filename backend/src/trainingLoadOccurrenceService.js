@@ -19,6 +19,32 @@
 // convention) passes its own pool explicitly instead.
 import { pool as defaultPool } from "./db.js";
 
+// perf: ensureCurrentExternalOccurrencesForAthlete/-ForCoach below used to
+// await ensureCurrentExternalOccurrence one schedule at a time - for a
+// workspace/athlete reachable by several active schedules, every GET
+// /weekly (or /athlete/today) paid for that many SEQUENTIAL round trips
+// (a FOR SHARE lock + a candidate-dates function call + a generate/
+// materialize pair per candidate date, each its own query), even though
+// each schedule's own generation is already a fully independent
+// transaction against its own row (different schedule ids never lock
+// each other) - there is no correctness reason for them to run one after
+// another. Running them concurrently, capped at a small fixed batch size
+// so this can never itself exhaust the shared pg.Pool (default max 10 -
+// see db.js) regardless of how many active schedules a workspace/athlete
+// happens to have, cuts wall-clock time roughly proportionally to the
+// batch size for the common case (a handful of schedules) without
+// changing a single query, lock, or idempotency guarantee - the exact
+// same generate_external_schedule_occurrence/materialize_external_
+// assignments_for_occurrence calls still run, just in parallel batches
+// instead of strictly serially.
+const OCCURRENCE_GENERATION_CONCURRENCY = 4;
+async function ensureOccurrencesForSchedulesConcurrently(schedules, pool) {
+  for (let start = 0; start < schedules.length; start += OCCURRENCE_GENERATION_CONCURRENCY) {
+    const batch = schedules.slice(start, start + OCCURRENCE_GENERATION_CONCURRENCY);
+    await Promise.all(batch.map((schedule) => ensureCurrentExternalOccurrence(schedule, pool)));
+  }
+}
+
 export async function ensureCurrentExternalOccurrence(schedule, pool = defaultPool) {
   const client = await pool.connect();
   try {
@@ -111,9 +137,7 @@ export async function ensureCurrentExternalOccurrencesForAthlete(athleteId, pool
        )`,
     [athleteId],
   );
-  for (const schedule of schedulesResult.rows) {
-    await ensureCurrentExternalOccurrence(schedule, pool);
-  }
+  await ensureOccurrencesForSchedulesConcurrently(schedulesResult.rows, pool);
 }
 
 // Runs ensureCurrentExternalOccurrence for every schedule owned by the
@@ -145,7 +169,5 @@ export async function ensureCurrentExternalOccurrencesForCoach(scope, pool = def
     `select * from training_load.external_schedules s where s.status = 'active' and (${condition})`,
     params,
   );
-  for (const schedule of schedulesResult.rows) {
-    await ensureCurrentExternalOccurrence(schedule, pool);
-  }
+  await ensureOccurrencesForSchedulesConcurrently(schedulesResult.rows, pool);
 }

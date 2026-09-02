@@ -23,8 +23,36 @@ export const VIEW_CACHE_FRESHNESS_MS = 30000;
 
 const store = new Map();
 
+// perf/training-load-perf-nav-results correction round 2: a monotonic
+// per-key revision counter, tracked SEPARATELY from `store` so it survives
+// invalidateCacheEntry's own deletion of the entry object. Reproduced race
+// this exists to close: request A starts for key K; a mutation invalidates
+// K (deleting its entry, including A's own pendingPromise tracking) and
+// starts a fresh request B for the same K; B resolves first and writes
+// genuinely fresh data; A - still in flight, fetched BEFORE the mutation -
+// resolves last and, without this guard, would silently overwrite B's
+// fresh write with its own stale one (loadCachedView calls setCacheData
+// unconditionally on any successful response). Bumped by every
+// invalidateCacheEntry/invalidateCacheNamespace/clearAllViewCache call;
+// loadCachedView snapshots it right before fetching and re-checks it right
+// after - if it moved, the response is void and is neither written to the
+// cache nor handed to the caller's applyData/applyError (see that
+// function's own comments below).
+const revisions = new Map();
+
 function storeKey(namespace, contextKey) {
   return `${namespace}::${contextKey}`;
+}
+
+function bumpRevision(key) {
+  revisions.set(key, (revisions.get(key) || 0) + 1);
+}
+
+// Exported so a caller that needs to detect "was this key invalidated
+// since I last looked" outside of loadCachedView's own built-in guard
+// (below) can snapshot the current revision itself.
+export function getCacheRevision(namespace, contextKey) {
+  return revisions.get(storeKey(namespace, contextKey)) || 0;
 }
 
 // Joins primitive context parts into one stable string key. null/undefined
@@ -79,10 +107,21 @@ function setPendingRequest(namespace, contextKey, promise) {
   store.set(key, existing ? { ...existing, pendingPromise: promise } : { data: null, status: "loading", loadedAt: 0, contextKey, error: null, pendingPromise: promise });
 }
 
-function clearPendingRequest(namespace, contextKey) {
+// Correction: only clears the pendingPromise reference if it's STILL the
+// exact promise THIS call itself set. invalidateCacheEntry deletes the
+// WHOLE entry (not just its pendingPromise), so an older in-flight
+// request's own tracking is gone the instant a mutation invalidates its
+// key - a NEWER dedupeRequest call for that same key then creates a fresh
+// entry/promise of its own. Without this own-reference check, the OLDER
+// request's `.finally()` (firing later, since it's still genuinely in
+// flight) would blindly null out whatever `pendingPromise` currently sits
+// in the entry - which by then belongs to the NEWER, still-actually-
+// pending request - making a THIRD caller think nothing is in flight and
+// fire a redundant extra fetch.
+function clearPendingRequest(namespace, contextKey, ownPromise) {
   const key = storeKey(namespace, contextKey);
   const existing = store.get(key);
-  if (existing) store.set(key, { ...existing, pendingPromise: null });
+  if (existing && existing.pendingPromise === ownPromise) store.set(key, { ...existing, pendingPromise: null });
 }
 
 // Two fast clicks (or a click racing a background refresh) into the exact
@@ -91,26 +130,65 @@ function clearPendingRequest(namespace, contextKey) {
 export function dedupeRequest(namespace, contextKey, fetcher) {
   const existingPromise = getPendingRequest(namespace, contextKey);
   if (existingPromise) return existingPromise;
-  const promise = fetcher().finally(() => clearPendingRequest(namespace, contextKey));
+  const promise = fetcher();
   setPendingRequest(namespace, contextKey, promise);
+  // .catch(() => {}) on this SEPARATE derived chain only - it exists purely
+  // for the cleanup side effect, never to consume/handle the rejection for
+  // real callers (the returned `promise` itself is untouched and still
+  // rejects normally for whoever awaits it). Without this, a rejected
+  // fetch would leave this internal, nobody-awaits-it .finally() chain
+  // looking like an unhandled rejection to the runtime.
+  promise.finally(() => clearPendingRequest(namespace, contextKey, promise)).catch(() => {});
   return promise;
 }
 
 export function invalidateCacheEntry(namespace, contextKey) {
-  store.delete(storeKey(namespace, contextKey));
+  const key = storeKey(namespace, contextKey);
+  store.delete(key);
+  bumpRevision(key);
 }
 
 export function invalidateCacheNamespace(namespace) {
   const prefix = `${namespace}::`;
   for (const key of store.keys()) {
-    if (key.startsWith(prefix)) store.delete(key);
+    if (key.startsWith(prefix)) {
+      store.delete(key);
+      bumpRevision(key);
+    }
+  }
+}
+
+// perf/training-load-perf-nav-results correction round 3: a mutation whose
+// blast radius is "this one identity+week (or any other fixed prefix of a
+// context key), under ANY value of whatever comes after it" - e.g. a
+// training-load session toggle affects the same week shown under every
+// different club/team/athlete filter a coach has separately cached, not
+// just the one filter that happened to be active when the toggle was
+// clicked. `contextKeyPrefix` is joined onto `namespace` the same way a
+// full contextKey would be (see storeKey) - callers build it with
+// buildContextKey(leadingParts) + the same "|" separator buildContextKey
+// itself uses, so a real match never accidentally spans a value boundary
+// (e.g. week "2026-08-2" matching a stored "2026-08-24" instead of
+// requiring the full "2026-08-24|" segment boundary).
+export function invalidateCacheEntriesWithPrefix(namespace, contextKeyPrefix) {
+  const prefix = `${namespace}::${contextKeyPrefix}`;
+  for (const key of store.keys()) {
+    if (key.startsWith(prefix)) {
+      store.delete(key);
+      bumpRevision(key);
+    }
   }
 }
 
 // Logout/account switch: every cached view for the outgoing account must be
 // gone, not just marked stale - the very next render of any view for
 // whoever is signed in next must never be able to read a leftover entry.
+// Also bumps every currently-tracked key's own revision (see the
+// `revisions` Map's own header) so any request still in flight from the
+// outgoing account, however unlikely, can never write its response into
+// the fresh state the next account starts with.
 export function clearAllViewCache() {
+  for (const key of store.keys()) bumpRevision(key);
   store.clear();
 }
 
@@ -150,15 +228,35 @@ export async function loadCachedView({
   } else {
     showLoading?.();
   }
+  // Snapshotted right before fetching/joining a fetch (see the `revisions`
+  // Map's own header for the exact race this guards) - re-checked below,
+  // after the await, for BOTH the success and error paths. A mismatch
+  // means some invalidation happened while this response was in flight -
+  // it is now void: never written to the cache (which could silently
+  // clobber a fresher write that already landed) and never handed to the
+  // caller's applyData/applyError (which could show pre-mutation data as
+  // current, or a now-irrelevant error over a fresher result).
+  const startRevision = getCacheRevision(namespace, contextKey);
   try {
     const data = await dedupeRequest(namespace, contextKey, fetcher);
     if (getCurrentContextKey && getCurrentContextKey() !== contextKey) return { outcome: "stale-ignored" };
+    // Correction round 4: a DIFFERENT outcome than the context-key check
+    // above, on purpose - "the context moved on" means some NEWER call for
+    // the CURRENT desired context already exists (whatever navigated away
+    // is the one responsible for showing something there), but "this exact
+    // context got invalidated by something ELSE while still wanted" means
+    // NOTHING else is necessarily fetching it again - a caller that cares
+    // (see training-load-data.js's own loadTrainingLoadWeeklyInto) can use
+    // this to self-heal with a retry instead of silently leaving whatever
+    // was on screen (possibly nothing at all) unrefreshed.
+    if (getCacheRevision(namespace, contextKey) !== startRevision) return { outcome: "invalidated-stale" };
     setCacheData(namespace, contextKey, data);
     await applyData(data, { fromCache: false });
     return { outcome: cached ? "background-refreshed" : "loaded" };
   } catch (error) {
-    const { keptCache } = setCacheError(namespace, contextKey, error);
     if (getCurrentContextKey && getCurrentContextKey() !== contextKey) return { outcome: "stale-ignored" };
+    if (getCacheRevision(namespace, contextKey) !== startRevision) return { outcome: "invalidated-stale" };
+    const { keptCache } = setCacheError(namespace, contextKey, error);
     if (!keptCache) {
       await applyError?.(error);
       return { outcome: "error" };

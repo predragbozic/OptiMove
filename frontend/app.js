@@ -1821,6 +1821,16 @@ async function loadTrainingLoad() {
   els.context.textContent = "Training load";
   els.title.textContent = "Training load";
   els.toolbar.innerHTML = "";
+  // perf: renders the tab shell (Today/Schedule/Results nav + whatever
+  // this section's own nav.data/loading already says) BEFORE awaiting
+  // anything below - previously this whole function awaited the fetch
+  // first, so the content area (including the nav strip itself) stayed
+  // whatever it was before for the full round trip. loadTrainingLoadWeekly
+  // now also paints again on its own (instantly from cache, or once
+  // "loading" is set) via the onPainted callback passed below, so this
+  // first call just guarantees the nav/section shell itself is never
+  // waiting on network at all.
+  renderTrainingLoad();
   // (v9) Same "workspace switch must immediately load the new
   // workspace's own value, never carry over the old one" rule as every
   // other workspace-scoped Training Load fetch - this function runs both
@@ -1828,7 +1838,7 @@ async function loadTrainingLoad() {
   // onWorkspaceChanged above), so gating on the currently-active section
   // here covers both triggers with one check.
   await Promise.all([
-    loadTrainingLoadWeekly(state.trainingLoad.section),
+    loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
     state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
   ]);
   renderTrainingLoad();
