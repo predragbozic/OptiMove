@@ -76,7 +76,16 @@ export function canManageCatalogRow(req, row) {
 const VALID_SCOPES = new Set(["system", "club", "team", "user"]);
 
 export function resolveCatalogOwnerScope(req, body) {
-  const requested = VALID_SCOPES.has(body?.ownerScope) ? body.ownerScope : "user";
+  // §6 fix: an ownerScope that is PRESENT but not recognized must be a
+  // controlled error — it was previously silently treated the same as
+  // "absent", defaulting to 'user' without telling the caller their
+  // request was actually malformed. routes/trainingLoadMetrics.js also
+  // rejects this at the HTTP boundary; this check stays here too so the
+  // service itself is safe against any other caller.
+  if (body?.ownerScope !== undefined && body?.ownerScope !== null && !VALID_SCOPES.has(body.ownerScope)) {
+    return { error: `ownerScope must be one of ${[...VALID_SCOPES].join(", ")}.`, status: 400 };
+  }
+  const requested = body?.ownerScope ?? "user";
   if (requested === "system") {
     if (!isPlatformAdministrator(req.authz)) {
       return { error: "Only a platform administrator can create shared system-wide catalog content.", status: 403 };

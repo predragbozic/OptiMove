@@ -338,7 +338,7 @@ async function makeClubWithAthletes(label, count) {
 // A ready-to-use system-scoped metric definition (numeric, m, sum) —
 // created via the REAL API as platform admin, so every test that just
 // needs "some valid metric" doesn't hand-roll SQL for it.
-let sysAdminId, sysAdminCookie, distanceDefId;
+let sysAdminId, sysAdminCookie, distanceDefId, distanceVersionId;
 async function ensureSystemDefinition() {
   if (distanceDefId) return distanceDefId;
   sysAdminId = await makeUser({ email: `sysadmin-${uid()}@test.local` });
@@ -351,12 +351,32 @@ async function ensureSystemDefinition() {
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   distanceDefId = res.body.row.id;
+  distanceVersionId = res.body.row.current_version_id;
   return distanceDefId;
 }
+// Every value entry must now name an explicit metricDefinitionVersionId
+// (see §3's correction-note in trainingLoadMetricsMeasurements.js) — this
+// helper builds one for the shared system "distance" definition; ad-hoc
+// definitions created inline in a test already return current_version_id
+// on their own creation response, used directly instead of this helper.
+function distanceValue(value, extra = {}) {
+  return { metricDefinitionId: distanceDefId, metricDefinitionVersionId: distanceVersionId, value, ...extra };
+}
 
-async function makePlanSessionForAthlete(athleteId, { date = "2026-09-08", name = "Ponedeljak - Snaga", planName = "Sept Blok" } = {}) {
+// §1 fix requires resolveParticipantLink to check REAL management rights
+// over the specific plan (training_load.plan_workspace_ownership), not
+// just "the athlete is in scope" — every fixture plan built for a test
+// that then submits a measurement against it must carry a real ownership
+// row, exactly like a real Builder-created plan would (see migration v9).
+async function makePlanSessionForAthlete(athleteId, { date = "2026-09-08", name = "Ponedeljak - Snaga", planName = "Sept Blok", owner = null } = {}) {
   const planId = crypto.randomUUID();
   await query(`insert into plans.plans (id, athlete_id, name, plan_type) values ($1,$2,$3,'weekly')`, [planId, athleteId, planName]);
+  if (owner) {
+    await query(
+      `insert into training_load.plan_workspace_ownership (plan_id, owner_scope, owner_user_id, owner_club_id, owner_team_id) values ($1,$2,$3,$4,$5)`,
+      [planId, owner.ownerScope, owner.ownerUserId || null, owner.ownerClubId || null, owner.ownerTeamId || null],
+    );
+  }
   const dayId = crypto.randomUUID();
   await query(`insert into plans.plan_days (id, plan_id, date, day_order) values ($1,$2,$3,1)`, [dayId, planId, date]);
   const logicalSessionId = crypto.randomUUID();
@@ -365,12 +385,14 @@ async function makePlanSessionForAthlete(athleteId, { date = "2026-09-08", name 
   return { planId, dayId, sessionId, logicalSessionId };
 }
 
-async function makeExternalAssignmentForAthlete(athleteId, { date = "2026-09-08" } = {}) {
+async function makeExternalAssignmentForAthlete(athleteId, { date = "2026-09-08", owner = null } = {}) {
+  await ensureSystemDefinition(); // ensures sysAdminId is populated (created_by_user_id fk)
+  const effectiveOwner = owner || { ownerScope: "system" };
   const scheduleId = crypto.randomUUID();
   await query(
-    `insert into training_load.external_schedules (id, schedule_kind, timezone, start_date, opens_time, closes_time, status, event_name, created_by_user_id, owner_scope)
-     values ($1,'one_time','UTC',$2,'00:00','23:59','active','Fixture event',$3,'system')`,
-    [scheduleId, date, sysAdminId || (await ensureSystemDefinition(), sysAdminId)],
+    `insert into training_load.external_schedules (id, schedule_kind, timezone, start_date, opens_time, closes_time, status, event_name, created_by_user_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
+     values ($1,'one_time','UTC',$2,'00:00','23:59','active','Fixture event',$3,$4,$5,$6,$7)`,
+    [scheduleId, date, sysAdminId, effectiveOwner.ownerScope, effectiveOwner.ownerUserId || null, effectiveOwner.ownerClubId || null, effectiveOwner.ownerTeamId || null],
   );
   const occurrenceId = crypto.randomUUID();
   await query(
@@ -407,7 +429,7 @@ test("1. solo measurement without a plan or RPE link", async () => {
     method: "POST", cookie: coachCookie,
     body: {
       requestKey: crypto.randomUUID(), occurredDate: "2026-09-08", scopeLevel: "session",
-      participants: [{ athleteId: athletes[0].athleteId, timezone: "Europe/Sarajevo", values: [{ metricDefinitionId: defId, value: 6200 }] }],
+      participants: [{ athleteId: athletes[0].athleteId, timezone: "Europe/Sarajevo", values: [distanceValue(6200)] }],
     },
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
@@ -422,18 +444,18 @@ test("1. solo measurement without a plan or RPE link", async () => {
 // 2. Group event, real plan-session link, real external-assignment link
 // =========================================================================
 test("2. group event with a real planned-session link and a real external-assignment link", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("group", 2);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("group", 2);
   const defId = await ensureSystemDefinition();
-  const { logicalSessionId } = await makePlanSessionForAthlete(athletes[0].athleteId, { date: "2026-09-08" });
-  const { assignmentId } = await makeExternalAssignmentForAthlete(athletes[1].athleteId, { date: "2026-09-08" });
+  const { logicalSessionId } = await makePlanSessionForAthlete(athletes[0].athleteId, { date: "2026-09-08", owner: { ownerScope: "club", ownerClubId: clubId } });
+  const { assignmentId } = await makeExternalAssignmentForAthlete(athletes[1].athleteId, { date: "2026-09-08", owner: { ownerScope: "club", ownerClubId: clubId } });
 
   const res = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: coachCookie,
     body: {
       requestKey: crypto.randomUUID(), occurredDate: "2026-09-08", scopeLevel: "session",
       participants: [
-        { athleteId: athletes[0].athleteId, timezone: "Europe/Sarajevo", logicalSessionId, values: [{ metricDefinitionId: defId, value: 5000 }] },
-        { athleteId: athletes[1].athleteId, timezone: "Europe/Sarajevo", externalAssignmentId: assignmentId, values: [{ metricDefinitionId: defId, value: 4200 }] },
+        { athleteId: athletes[0].athleteId, timezone: "Europe/Sarajevo", logicalSessionId, values: [distanceValue(5000)] },
+        { athleteId: athletes[1].athleteId, timezone: "Europe/Sarajevo", externalAssignmentId: assignmentId, values: [distanceValue(4200)] },
       ],
     },
   });
@@ -456,7 +478,7 @@ test("2b. knowing a valid UUID alone is not enough — a session/assignment not 
       requestKey: crypto.randomUUID(), occurredDate: "2026-09-08", scopeLevel: "session",
       participants: [
         // logicalSessionId genuinely exists, but belongs to athletes[0], not athletes[1] below.
-        { athleteId: athletes[1].athleteId, timezone: "Europe/Sarajevo", logicalSessionId, values: [{ metricDefinitionId: defId, value: 1000 }] },
+        { athleteId: athletes[1].athleteId, timezone: "Europe/Sarajevo", logicalSessionId, values: [distanceValue(1000)] },
       ],
     },
   });
@@ -479,8 +501,8 @@ test("3. an unauthorized athlete anywhere in the group request rejects the WHOLE
     body: {
       requestKey: crypto.randomUUID(), occurredDate: "2026-09-09", scopeLevel: "session",
       participants: [
-        { athleteId: clubA.athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 100 }] },
-        { athleteId: clubB.athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 200 }] },
+        { athleteId: clubA.athletes[0].athleteId, timezone: "UTC", values: [distanceValue(100)] },
+        { athleteId: clubB.athletes[0].athleteId, timezone: "UTC", values: [distanceValue(200)] },
       ],
     },
   });
@@ -500,8 +522,8 @@ test("3b. an invalid value anywhere in the group request rejects the WHOLE reque
     body: {
       requestKey: crypto.randomUUID(), occurredDate: "2026-09-09", scopeLevel: "session",
       participants: [
-        { athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 100 }] },
-        { athleteId: athletes[1].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: "" }] }, // empty string must never silently become 0
+        { athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(100)] },
+        { athleteId: athletes[1].athleteId, timezone: "UTC", values: [distanceValue("")] }, // empty string must never silently become 0
       ],
     },
   });
@@ -524,7 +546,7 @@ test("4. two workspaces with the same (dual-membership) athlete do not see each 
 
   const resX = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: clubX.coachCookie,
-    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-10", scopeLevel: "session", participants: [{ athleteId: sharedAthleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 111 }] }] },
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-10", scopeLevel: "session", participants: [{ athleteId: sharedAthleteId, timezone: "UTC", values: [distanceValue(111)] }] },
   });
   assert.equal(resX.status, 201, JSON.stringify(resX.body));
 
@@ -543,7 +565,7 @@ test("5. a retry after rights are revoked is rejected, not silently reused", asy
   const { clubId, coachId, coachCookie, athletes } = await makeClubWithAthletes("revoke", 1);
   const defId = await ensureSystemDefinition();
   const requestKey = crypto.randomUUID();
-  const body = { requestKey, occurredDate: "2026-09-11", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 500 }] }] };
+  const body = { requestKey, occurredDate: "2026-09-11", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(500)] }] };
   const first = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
   assert.equal(first.status, 201, JSON.stringify(first.body));
 
@@ -566,14 +588,14 @@ test("6. the same request_key resubmitted under a DIFFERENT workspace is rejecte
   await setActiveWorkspace(clubA.coachId, "club", clubA.clubId);
   const first = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: clubA.coachCookie,
-    body: { requestKey, occurredDate: "2026-09-12", scopeLevel: "session", participants: [{ athleteId: clubA.athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 700 }] }] },
+    body: { requestKey, occurredDate: "2026-09-12", scopeLevel: "session", participants: [{ athleteId: clubA.athletes[0].athleteId, timezone: "UTC", values: [distanceValue(700)] }] },
   });
   assert.equal(first.status, 201, JSON.stringify(first.body));
 
   await setActiveWorkspace(clubA.coachId, "club", clubB.clubId);
   const retryDifferentWorkspace = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: clubA.coachCookie,
-    body: { requestKey, occurredDate: "2026-09-12", scopeLevel: "session", participants: [{ athleteId: clubA.athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 700 }] }] },
+    body: { requestKey, occurredDate: "2026-09-12", scopeLevel: "session", participants: [{ athleteId: clubA.athletes[0].athleteId, timezone: "UTC", values: [distanceValue(700)] }] },
   });
   assert.equal(retryDifferentWorkspace.status, 409, JSON.stringify(retryDifferentWorkspace.body));
 });
@@ -649,15 +671,17 @@ test("8. a new semantic version never reinterprets an already-captured value", a
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const defId = created.body.row.id;
+  const v1VersionIdAtSubmit = created.body.row.current_version_id;
 
   const entry = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: coachCookie,
-    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-13", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 320 }] }] },
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-13", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, metricDefinitionVersionId: v1VersionIdAtSubmit, value: 320 }] }] },
   });
   assert.equal(entry.status, 201, JSON.stringify(entry.body));
   const occasionId = entry.body.participants[0].occasionIds[0];
   const beforeDetail = await api(`/api/training-load/metrics/occasions/${occasionId}`, { cookie: coachCookie });
   const v1VersionId = beforeDetail.body.values[0].metric_definition_version_id;
+  assert.equal(v1VersionId, v1VersionIdAtSubmit);
 
   const newVersion = await api(`/api/training-load/metrics/definitions/${defId}/versions`, {
     method: "POST", cookie: sysAdminCookie,
@@ -677,13 +701,15 @@ test("8. a new semantic version never reinterprets an already-captured value", a
 test("9. manual correction preserves history, is retry-safe, and requires the complete value set", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("correction", 1);
   const distDef = await ensureSystemDefinition();
-  const speedDef = (await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `max_speed_${uid()}`, label: "Max Speed", ownerScope: "system", unit: "km/h", valueType: "numeric" } })).body.row.id;
+  const speedDefRow = (await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `max_speed_${uid()}`, label: "Max Speed", ownerScope: "system", unit: "km/h", valueType: "numeric" } })).body.row;
+  const speedDef = speedDefRow.id;
+  const speedVersionId = speedDefRow.current_version_id;
 
   const entry = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: coachCookie,
     body: {
       requestKey: crypto.randomUUID(), occurredDate: "2026-09-14", scopeLevel: "session",
-      participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: distDef, value: 6000 }, { metricDefinitionId: speedDef, value: 27.5 }] }],
+      participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(6000), { metricDefinitionId: speedDef, metricDefinitionVersionId: speedVersionId, value: 27.5 }] }],
     },
   });
   assert.equal(entry.status, 201, JSON.stringify(entry.body));
@@ -692,12 +718,12 @@ test("9. manual correction preserves history, is retry-safe, and requires the co
   // Partial correction (missing the speed metric) must be rejected.
   const partial = await api(`/api/training-load/metrics/occasions/${occasionId}/correct`, {
     method: "POST", cookie: coachCookie,
-    body: { requestKey: crypto.randomUUID(), values: [{ metricDefinitionId: distDef, value: 6300 }] },
+    body: { requestKey: crypto.randomUUID(), values: [distanceValue(6300)] },
   });
   assert.equal(partial.status, 400, JSON.stringify(partial.body));
 
   const requestKey = crypto.randomUUID();
-  const correctBody = { requestKey, values: [{ metricDefinitionId: distDef, value: 6300 }, { metricDefinitionId: speedDef, value: 27.5 }] };
+  const correctBody = { requestKey, values: [distanceValue(6300), { metricDefinitionId: speedDef, metricDefinitionVersionId: speedVersionId, value: 27.5 }] };
   const first = await api(`/api/training-load/metrics/occasions/${occasionId}/correct`, { method: "POST", cookie: coachCookie, body: correctBody });
   assert.equal(first.status, 201, JSON.stringify(first.body));
   const retry = await api(`/api/training-load/metrics/occasions/${occasionId}/correct`, { method: "POST", cookie: coachCookie, body: correctBody });
@@ -727,7 +753,7 @@ test("10. two independent effective occasions for the SAME participation+metric 
   const defId = await ensureSystemDefinition();
   const first = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: coachCookie,
-    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-15", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 6100 }] }] },
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-15", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(6100)] }] },
   });
   assert.equal(first.status, 201, JSON.stringify(first.body));
   const participantId = (await query(`select id from training_load.metric_event_participants where event_id = $1`, [first.body.eventId])).rows[0].id;
@@ -749,7 +775,7 @@ test("11. concurrent identical group-event submissions never create two events",
   const { coachCookie, athletes } = await makeClubWithAthletes("concurrent-create", 1);
   const defId = await ensureSystemDefinition();
   const requestKey = crypto.randomUUID();
-  const body = { requestKey, eventName: "Concurrent HTTP retry", occurredDate: "2026-09-16", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, value: 900 }] }] };
+  const body = { requestKey, eventName: "Concurrent HTTP retry", occurredDate: "2026-09-16", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(900)] }] };
   const [a, b] = await Promise.all([
     api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body }),
     api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body }),
@@ -788,13 +814,13 @@ test("12b. results query rejects an oversized date range instead of scanning eve
 // 13. History preserved through the existing Builder edit-draft lifecycle
 // =========================================================================
 test("13. a measurement's linked session name survives the session being renamed/replaced (Builder edit-draft pattern)", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("builderedit", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("builderedit", 1);
   const defId = await ensureSystemDefinition();
-  const { sessionId, logicalSessionId } = await makePlanSessionForAthlete(athletes[0].athleteId, { date: "2026-09-17", name: "Ponedeljak - Snaga" });
+  const { sessionId, logicalSessionId } = await makePlanSessionForAthlete(athletes[0].athleteId, { date: "2026-09-17", name: "Ponedeljak - Snaga", owner: { ownerScope: "club", ownerClubId: clubId } });
 
   const entry = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: coachCookie,
-    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-17", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", logicalSessionId, values: [{ metricDefinitionId: defId, value: 4500 }] }] },
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-17", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", logicalSessionId, values: [distanceValue(4500)] }] },
   });
   assert.equal(entry.status, 201, JSON.stringify(entry.body));
 
@@ -880,15 +906,15 @@ test("14. real correction service vs. a direct raw insert on the same identity+p
 // 15. RPE-off must not block other metrics
 // =========================================================================
 test("15. a session with RPE explicitly disabled still accepts other metric measurements", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("rpeoff", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("rpeoff", 1);
   const defId = await ensureSystemDefinition();
-  const { logicalSessionId, sessionId } = await makePlanSessionForAthlete(athletes[0].athleteId, { date: "2026-09-19" });
+  const { logicalSessionId, sessionId } = await makePlanSessionForAthlete(athletes[0].athleteId, { date: "2026-09-19", owner: { ownerScope: "club", ownerClubId: clubId } });
   await query(`alter table plans.plan_sessions add column if not exists rpe_enabled boolean not null default true`);
   await query(`update plans.plan_sessions set rpe_enabled = false where id = $1`, [sessionId]);
 
   const res = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: coachCookie,
-    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-19", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", logicalSessionId, values: [{ metricDefinitionId: defId, value: 3000 }] }] },
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-19", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", logicalSessionId, values: [distanceValue(3000)] }] },
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
 });
@@ -947,4 +973,384 @@ test("17c. deleting a structure link requires management rights over the link it
   assert.equal(forbidden.status, 403);
   const deleted = await api(`/api/training-load/metrics/structure-links/${linkRes.body.row.id}`, { method: "DELETE", cookie: ownerCookie });
   assert.equal(deleted.status, 200);
+});
+
+// =========================================================================
+// Correction round (second review): §1 authorization gaps, §2 correction
+// locking, §3 explicit versioning, §4 pagination/conflict, §5 replay
+// re-auth, §6 hide-cycle/validation.
+// =========================================================================
+
+// ------------------------------------------------------------
+// §1 — catalog-write and reference authorization gaps
+// ------------------------------------------------------------
+
+test("18. an athlete-only account cannot create catalog content", async () => {
+  const userId = await makeUser({ email: `athleteonly-${uid()}@test.local`, roleHint: "athlete" });
+  await makeAthlete({ name: "Athlete Only", userId });
+  await setActiveWorkspace(userId, "athlete", null);
+  const cookie = await loginCookie(userId);
+  const res = await api("/api/training-load/metrics/domains", { method: "POST", cookie, body: { name: "Should fail", ownerScope: "user" } });
+  assert.equal(res.status, 403, JSON.stringify(res.body));
+});
+
+test("19. a dual-role account currently acting as its ATHLETE workspace cannot write catalog content or measurements, even though it also has a coach role", async () => {
+  const { clubId, coachId } = await makeClubWithAthletes("dualrole", 0);
+  const athleteId = await makeAthlete({ name: "Dual Role Athlete", userId: coachId });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubId]);
+  await setActiveWorkspace(coachId, "athlete", null);
+  const cookie = await loginCookie(coachId);
+
+  const catalogRes = await api("/api/training-load/metrics/domains", { method: "POST", cookie, body: { name: "Should fail dual", ownerScope: "user" } });
+  assert.equal(catalogRes.status, 403, JSON.stringify(catalogRes.body));
+
+  const defId = await ensureSystemDefinition();
+  const eventRes = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-20", scopeLevel: "session", participants: [{ athleteId, timezone: "UTC", values: [distanceValue(100)] }] },
+  });
+  assert.equal(eventRes.status, 403, JSON.stringify(eventRes.body), "req.authz.isAthlete (a raw capability) must never substitute for workspace.type === 'athlete' — this account is CURRENTLY the athlete workspace and must be rejected as a writer");
+});
+
+test("20. knowing another coach's private definition UUID does not allow using it in a new measurement, and creates zero rows", async () => {
+  const ownerCoachId = await makeUser({ email: `privowner-${uid()}@test.local` });
+  await grantGlobalRole(ownerCoachId, "independent_coach");
+  await setActiveWorkspace(ownerCoachId, "private_coach", null);
+  const ownerCookie = await loginCookie(ownerCoachId);
+  const privDef = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: ownerCookie, body: { key: `secret_${uid()}`, label: "Secret Metric", ownerScope: "user", unit: "u", valueType: "numeric" } });
+  assert.equal(privDef.status, 201, JSON.stringify(privDef.body));
+  const privDefId = privDef.body.row.id;
+  const privVersionId = privDef.body.row.current_version_id;
+
+  const { coachCookie, athletes } = await makeClubWithAthletes("privleak", 1);
+  const before_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  const attempt = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-21", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: privDefId, metricDefinitionVersionId: privVersionId, value: 42 }] }] },
+  });
+  assert.equal(attempt.status, 404, JSON.stringify(attempt.body));
+  const after_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  assert.equal(after_.rows[0].n, before_.rows[0].n, "an inaccessible-definition submission must create zero rows");
+});
+
+test("21. same shared athlete managed by two workspaces — a plan owned by ONE workspace cannot be used to submit a measurement from the OTHER, even though both manage the athlete", async () => {
+  const clubX = await makeClubWithAthletes("planX", 0);
+  const clubY = await makeClubWithAthletes("planY", 0);
+  const sharedAthleteUserId = await makeUser({ email: `planshared-${uid()}@test.local`, roleHint: "athlete" });
+  const sharedAthleteId = await makeAthlete({ name: "Plan Shared Athlete", userId: sharedAthleteUserId });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [sharedAthleteId, clubX.clubId]);
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [sharedAthleteId, clubY.clubId]);
+
+  const { logicalSessionId } = await makePlanSessionForAthlete(sharedAthleteId, { date: "2026-09-22", owner: { ownerScope: "club", ownerClubId: clubX.clubId } });
+
+  const attempt = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: clubY.coachCookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-22", scopeLevel: "session", participants: [{ athleteId: sharedAthleteId, timezone: "UTC", logicalSessionId, values: [distanceValue(50)] }] },
+  });
+  assert.equal(attempt.status, 403, JSON.stringify(attempt.body), "club Y manages the same athlete but not THIS plan");
+
+  const ok = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: clubX.coachCookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-22", scopeLevel: "session", participants: [{ athleteId: sharedAthleteId, timezone: "UTC", logicalSessionId, values: [distanceValue(50)] }] },
+  });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body), "club X, the plan's real owner, must still succeed");
+});
+
+test("21b. logical_session_id resolves the LIVE published plan session, never a hidden edit-draft copy sharing the same identity", async () => {
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("draftlink", 1);
+  const { planId, dayId, logicalSessionId } = await makePlanSessionForAthlete(athletes[0].athleteId, { date: "2026-09-23", name: "Live Session", owner: { ownerScope: "club", ownerClubId: clubId } });
+  // A hidden edit-draft copy of the SAME plan, sharing the same
+  // logical_session_id — is_active=false marks it a draft (see
+  // plans.plans.is_active/is_edit_draft overload) — must never be the row
+  // resolveParticipantLink lands on.
+  const draftPlanId = crypto.randomUUID();
+  await query(`insert into plans.plans (id, athlete_id, name, plan_type, is_active, is_edit_draft, edit_source_plan_id) values ($1,$2,'Draft Copy','weekly',false,true,$3)`, [draftPlanId, athletes[0].athleteId, planId]);
+  const draftDayId = crypto.randomUUID();
+  await query(`insert into plans.plan_days (id, plan_id, date, day_order) values ($1,$2,$3,1)`, [draftDayId, draftPlanId, "2026-09-23"]);
+  const draftSessionId = crypto.randomUUID();
+  await query(`insert into plans.plan_sessions (id, plan_day_id, name, logical_session_id, session_order) values ($1,$2,'Draft Session (should never be picked)',$3,1)`, [draftSessionId, draftDayId, logicalSessionId]);
+
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-23", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", logicalSessionId, values: [distanceValue(60)] }] },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const detail = await api(`/api/training-load/metrics/occasions/${res.body.participants[0].occasionIds[0]}`, { cookie: coachCookie });
+  assert.equal(detail.body.occasion.linked_session_name_snapshot, "Live Session", "must resolve the live published session, never the hidden edit-draft sharing the same logical id");
+});
+
+// ------------------------------------------------------------
+// §2 — serializing two manual corrections of the same measurement
+// ------------------------------------------------------------
+
+test("22. two concurrent corrections of the SAME occasion with different request keys — exactly one succeeds, the other gets a controlled 409, exactly one successor exists and the original points at it", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("racecorrect", 1);
+  const entry = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-23", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(1000)] }] },
+  });
+  assert.equal(entry.status, 201, JSON.stringify(entry.body));
+  const occasionId = entry.body.participants[0].occasionIds[0];
+
+  const [a, b] = await Promise.all([
+    api(`/api/training-load/metrics/occasions/${occasionId}/correct`, { method: "POST", cookie: coachCookie, body: { requestKey: crypto.randomUUID(), values: [distanceValue(1100)] } }),
+    api(`/api/training-load/metrics/occasions/${occasionId}/correct`, { method: "POST", cookie: coachCookie, body: { requestKey: crypto.randomUUID(), values: [distanceValue(1200)] } }),
+  ]);
+  const statuses = [a.status, b.status].sort();
+  assert.deepEqual(statuses, [201, 409], JSON.stringify([a.body, b.body]));
+
+  const successors = await query(`select id from training_load.metric_measurement_occasions where supersedes_occasion_id = $1`, [occasionId]);
+  assert.equal(successors.rows.length, 1, "exactly one successor must have been created, never two");
+  const originalAfter = await query(`select superseded_by_occasion_id from training_load.metric_measurement_occasions where id = $1`, [occasionId]);
+  assert.equal(originalAfter.rows[0].superseded_by_occasion_id, successors.rows[0].id, "the original's pointer must point at the successor that actually exists");
+
+  const winner = a.status === 201 ? a : b;
+  assert.equal(winner.body.occasionId, successors.rows[0].id);
+});
+
+// ------------------------------------------------------------
+// §3 — correction must not silently change semantic version
+// ------------------------------------------------------------
+
+test("23. correcting one metric never silently reinterprets an untouched sibling metric under a version that appeared later; an explicit version bump is still allowed", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("correctversion", 1);
+  const stableDef = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `stable_${uid()}`, label: "Stable Metric", ownerScope: "system", unit: "m", valueType: "numeric" } });
+  const stableDefId = stableDef.body.row.id;
+  const stableV1 = stableDef.body.row.current_version_id;
+
+  const entry = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: crypto.randomUUID(), occurredDate: "2026-09-24", scopeLevel: "session",
+      participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(6000), { metricDefinitionId: stableDefId, metricDefinitionVersionId: stableV1, value: 100 }] }],
+    },
+  });
+  assert.equal(entry.status, 201, JSON.stringify(entry.body));
+  const occasionId = entry.body.participants[0].occasionIds[0];
+
+  const v2 = await api(`/api/training-load/metrics/definitions/${stableDefId}/versions`, { method: "POST", cookie: sysAdminCookie, body: { unit: "km", valueType: "numeric" } });
+  assert.equal(v2.status, 201, JSON.stringify(v2.body));
+
+  const correction = await api(`/api/training-load/metrics/occasions/${occasionId}/correct`, {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: crypto.randomUUID(), values: [distanceValue(6300), { metricDefinitionId: stableDefId, metricDefinitionVersionId: stableV1, value: 100 }] },
+  });
+  assert.equal(correction.status, 201, JSON.stringify(correction.body));
+  const detail = await api(`/api/training-load/metrics/occasions/${correction.body.occasionId}`, { cookie: coachCookie });
+  const stableValue = detail.body.values.find((v) => v.metric_definition_id === stableDefId);
+  assert.equal(stableValue.metric_definition_version_id, stableV1, "the untouched sibling metric must keep pointing at v1, never silently move to v2");
+
+  // A genuinely EXPLICIT version bump, on the successor occasion, must
+  // still be accepted — corrections never forbid a real version change,
+  // they just never do it implicitly.
+  const explicitBump = await api(`/api/training-load/metrics/occasions/${correction.body.occasionId}/correct`, {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: crypto.randomUUID(), values: [distanceValue(6300), { metricDefinitionId: stableDefId, metricDefinitionVersionId: v2.body.row.id, value: 0.1 }] },
+  });
+  assert.equal(explicitBump.status, 201, JSON.stringify(explicitBump.body));
+});
+
+test("24. a new entry submitted against a version that is no longer current is rejected with a controlled conflict, never silently reinterpreted under the new version", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("staleform", 1);
+  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `stale_${uid()}`, label: "Stale Form Metric", ownerScope: "system", unit: "m", valueType: "numeric" } });
+  const defId = created.body.row.id;
+  const v1 = created.body.row.current_version_id;
+  const v2res = await api(`/api/training-load/metrics/definitions/${defId}/versions`, { method: "POST", cookie: sysAdminCookie, body: { unit: "km", valueType: "numeric" } });
+  assert.equal(v2res.status, 201);
+
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-25", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, metricDefinitionVersionId: v1, value: 10 }] }] },
+  });
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  const evCount = await query(`select count(*)::int as n from training_load.metric_events where occurred_date = '2026-09-25'`);
+  assert.equal(evCount.rows[0].n, 0, "a rejected stale-version submission must create zero rows");
+});
+
+test("25. an identical retry stays idempotent even after its definition was archived in the meantime", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("retryarchive", 1);
+  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `retryarch_${uid()}`, label: "Retry Archive Metric", ownerScope: "system", unit: "u", valueType: "numeric" } });
+  const defId = created.body.row.id;
+  const v1 = created.body.row.current_version_id;
+  const requestKey = crypto.randomUUID();
+  const body = { requestKey, occurredDate: "2026-09-26", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, metricDefinitionVersionId: v1, value: 10 }] }] };
+  const first = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+
+  const archiveRes = await api(`/api/training-load/metrics/definitions/${defId}/archive`, { method: "POST", cookie: sysAdminCookie });
+  assert.equal(archiveRes.status, 200);
+
+  const retry = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
+  assert.equal(retry.status, 201, JSON.stringify(retry.body));
+  assert.equal(retry.body.eventId, first.body.eventId, "an identical retry must stay idempotent even after the definition was archived meanwhile — current authorization is still checked, but the original payload is never re-validated against new catalog state");
+});
+
+// ------------------------------------------------------------
+// §4 — Results pagination and the conflict flag
+// ------------------------------------------------------------
+
+test("26. results pagination at limit=1 never loses a value from a multi-value occasion", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("paginate-multi", 1);
+  const speedDefRow = (await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `pagespeed_${uid()}`, label: "Page Speed", ownerScope: "system", unit: "km/h", valueType: "numeric" } })).body.row;
+
+  const entry = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: crypto.randomUUID(), occurredDate: "2026-09-27", scopeLevel: "session",
+      participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(6000), { metricDefinitionId: speedDefRow.id, metricDefinitionVersionId: speedDefRow.current_version_id, value: 30 }] }],
+    },
+  });
+  assert.equal(entry.status, 201, JSON.stringify(entry.body));
+
+  const seenValueIds = new Set();
+  let cursor = null;
+  for (let i = 0; i < 5; i += 1) {
+    const qs = new URLSearchParams({ dateFrom: "2026-09-27", dateTo: "2026-09-27", athleteIds: athletes[0].athleteId, limit: "1" });
+    if (cursor) { qs.set("cursorDate", cursor.occurredDate); qs.set("cursorOccasionId", cursor.occasionId); qs.set("cursorValueId", cursor.valueId); }
+    const page = await api(`/api/training-load/metrics/results?${qs}`, { cookie: coachCookie });
+    assert.equal(page.status, 200, JSON.stringify(page.body));
+    assert.ok(page.body.rows.length <= 1);
+    for (const row of page.body.rows) seenValueIds.add(row.valueId);
+    if (!page.body.nextCursor) break;
+    cursor = page.body.nextCursor;
+  }
+  assert.equal(seenValueIds.size, 2, "both values from the same occasion must be reachable across pages, even at limit=1");
+});
+
+test("27. a conflict whose two effective values land on different pages keeps its conflict flag correct on BOTH pages", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("conflict-paginate", 1);
+  const defId = await ensureSystemDefinition();
+  const first = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-28", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(5000)] }] },
+  });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  const participantId = (await query(`select id from training_load.metric_event_participants where event_id = $1`, [first.body.eventId])).rows[0].id;
+  const secondOccRes = await query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, content_hash) values ($1,'manual','conflict-page-h') returning id`, [participantId]);
+  await query(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) values ($1,$2,$3,4800,'m')`, [secondOccRes.rows[0].id, defId, distanceVersionId]);
+
+  const qs1 = new URLSearchParams({ dateFrom: "2026-09-28", dateTo: "2026-09-28", athleteIds: athletes[0].athleteId, limit: "1" });
+  const page1 = await api(`/api/training-load/metrics/results?${qs1}`, { cookie: coachCookie });
+  assert.equal(page1.status, 200, JSON.stringify(page1.body));
+  assert.equal(page1.body.rows.length, 1);
+  assert.equal(page1.body.rows[0].conflict, true, "the conflict flag must already be correct on page 1");
+  assert.ok(page1.body.nextCursor);
+
+  const qs2 = new URLSearchParams({ dateFrom: "2026-09-28", dateTo: "2026-09-28", athleteIds: athletes[0].athleteId, limit: "1", cursorDate: page1.body.nextCursor.occurredDate, cursorOccasionId: page1.body.nextCursor.occasionId, cursorValueId: page1.body.nextCursor.valueId });
+  const page2 = await api(`/api/training-load/metrics/results?${qs2}`, { cookie: coachCookie });
+  assert.equal(page2.status, 200, JSON.stringify(page2.body));
+  assert.equal(page2.body.rows.length, 1);
+  assert.equal(page2.body.rows[0].conflict, true, "the second conflicting row on page 2 must also be flagged");
+  assert.notEqual(page1.body.rows[0].valueId, page2.body.rows[0].valueId, "the two pages must cover the two DIFFERENT conflicting values, not repeat one and lose the other");
+});
+
+// ------------------------------------------------------------
+// §5 — retry must check current authorization of the operation
+// ------------------------------------------------------------
+
+test("28. a replayed create-event result is re-checked against CURRENT rights over the object it already created, not just scope.type !== null", async () => {
+  // Direct service-level test (same convention as test 14's direct call
+  // into correctSourceIdentityOccasion): claimWriteRequest's own
+  // same-workspace check only compares ownerContext identity fields, so
+  // exercising the NEW re-authorization-on-replay check specifically
+  // requires a scope whose ownerContext matches (so the claim is treated
+  // as a legitimate same-workspace replay) but whose row-level management
+  // rights (canManageMetricEventInScope) do not — the shape a stale or
+  // inconsistent scope resolution would take.
+  const { coachId, clubId, athletes } = await makeClubWithAthletes("replayreauth", 1);
+  const defId = await ensureSystemDefinition();
+  const requestKey = crypto.randomUUID();
+  const body = { requestKey, occurredDate: "2026-09-30", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(400)] }] };
+  const ownerContext = { ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null };
+  const fakeReq = { user: { id: coachId }, authz: { platformRoles: [], clubRoles: [], teamRoles: [], managedTeamIds: [] } };
+
+  const scope = { type: "club", clubId, ownerContext };
+  const created = await measurementsService.createGroupEvent(fakeReq, scope, body);
+  assert.equal(created.error, undefined, JSON.stringify(created));
+  assert.equal(created.reused, false);
+
+  const otherClubId = await makeClub(`Replay Other Club ${uid()}`);
+  const staleScope = { type: "club", clubId: otherClubId, ownerContext };
+  const replay = await measurementsService.createGroupEvent(fakeReq, staleScope, body);
+  assert.equal(replay.status, 403, JSON.stringify(replay), "scope.type !== null alone is not enough — the replay must re-check rights over the event it actually created");
+
+  // A genuinely matching replay (same scope as the original) must still
+  // return the cached result, never re-execute the write.
+  const legitReplay = await measurementsService.createGroupEvent(fakeReq, scope, body);
+  assert.equal(legitReplay.reused, true);
+  assert.equal(legitReplay.eventId, created.eventId);
+});
+
+test("28b. a retry after the account loses its entire coach workspace is rejected before even reaching the replay check", async () => {
+  const { clubId, coachId, coachCookie, athletes } = await makeClubWithAthletes("fullrevoke", 1);
+  const defId = await ensureSystemDefinition();
+  const requestKey = crypto.randomUUID();
+  const body = { requestKey, occurredDate: "2026-10-02", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(150)] }] };
+  const first = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+
+  await query(`update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, [coachId, clubId]);
+  const retry = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
+  assert.equal(retry.status, 403, JSON.stringify(retry.body));
+});
+
+// ------------------------------------------------------------
+// §6 — hide/unhide full cycle, whitespace validation, cosmetic PATCH
+// ------------------------------------------------------------
+
+test("29. hiding a definition removes it from the hiding coach's OWN default list without affecting anyone else, and unhiding restores it", async () => {
+  const defId = await ensureSystemDefinition();
+  const { coachCookie: coachA } = await makeClubWithAthletes("hidecycleA", 0);
+  const { coachCookie: coachB } = await makeClubWithAthletes("hidecycleB", 0);
+
+  const beforeHide = await api(`/api/training-load/metrics/definitions?limit=100`, { cookie: coachA });
+  assert.ok(beforeHide.body.rows.some((r) => r.id === defId), "must be visible before hiding");
+
+  const hideRes = await api(`/api/training-load/metrics/definitions/${defId}/hide`, { method: "POST", cookie: coachA });
+  assert.equal(hideRes.status, 200);
+
+  const afterHideA = await api(`/api/training-load/metrics/definitions?limit=100`, { cookie: coachA });
+  assert.ok(!afterHideA.body.rows.some((r) => r.id === defId), "must be ABSENT from coach A's own default list after hiding");
+
+  const afterHideB = await api(`/api/training-load/metrics/definitions?limit=100`, { cookie: coachB });
+  assert.ok(afterHideB.body.rows.some((r) => r.id === defId), "coach B must still see it — hiding is per-user, not global");
+
+  const detailStillExists = await query(`select id from training_load.metric_definitions where id = $1`, [defId]);
+  assert.equal(detailStillExists.rowCount, 1, "hiding must never touch the definition row itself");
+
+  const unhideRes = await api(`/api/training-load/metrics/definitions/${defId}/hide`, { method: "DELETE", cookie: coachA });
+  assert.equal(unhideRes.status, 200);
+  const afterUnhideA = await api(`/api/training-load/metrics/definitions?limit=100`, { cookie: coachA });
+  assert.ok(afterUnhideA.body.rows.some((r) => r.id === defId), "must be visible again for coach A after unhiding");
+});
+
+test("30. a whitespace-only numeric value is rejected, never silently stored as 0", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("whitespace", 1);
+  const before_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-10-01", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue("   ")] }] },
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+  const after_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  assert.equal(after_.rows[0].n, before_.rows[0].n, "a rejected whitespace-only value must create zero rows");
+});
+
+test("31. a cosmetic PATCH of a definition cannot change its semantics", async () => {
+  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `cosmetic_${uid()}`, label: "Cosmetic Original", ownerScope: "system", unit: "m", valueType: "numeric" } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const defId = created.body.row.id;
+  const v1 = created.body.row.current_version_id;
+
+  const patched = await api(`/api/training-load/metrics/definitions/${defId}`, {
+    method: "PATCH", cookie: sysAdminCookie,
+    body: { label: "Cosmetic Renamed", shortLabel: "CR", unit: "km", valueType: "boolean", minValue: 999 },
+  });
+  assert.equal(patched.status, 200, JSON.stringify(patched.body));
+  assert.equal(patched.body.row.label, "Cosmetic Renamed");
+
+  const detail = await api(`/api/training-load/metrics/definitions/${defId}`, { cookie: sysAdminCookie });
+  assert.equal(detail.body.row.current_version_id, v1, "a cosmetic PATCH must never touch current_version_id");
+  assert.equal(detail.body.row.unit, "m", "unit is a semantic (version) field — a cosmetic PATCH must not be able to change it");
+  assert.equal(detail.body.row.value_type, "numeric", "value_type is a semantic (version) field — must be untouched by a cosmetic PATCH");
 });

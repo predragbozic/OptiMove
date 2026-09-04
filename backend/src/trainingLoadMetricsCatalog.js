@@ -98,7 +98,15 @@ function validateVersionInput(body) {
 export async function listDefinitions(req, { search, ownerScope, state, cursor, limit } = {}) {
   const params = [];
   const visSql = catalogVisibilitySql(req, "d", params);
-  const conditions = [visSql];
+  // §6 fix: hideDefinitionForUser() wrote a real row to
+  // metric_definition_hidden, but this default listing never read it back
+  // — a hidden definition kept appearing for the very user who hid it.
+  // Excluded here only (a direct GET /definitions/:id still resolves it —
+  // hiding is a default-view convenience, never a real delete of shared
+  // content, matching library.filter_hidden's own behavior).
+  params.push(req.user.id);
+  const hiddenSql = `not exists (select 1 from training_load.metric_definition_hidden h where h.definition_id = d.id and h.user_id = $${params.length})`;
+  const conditions = [visSql, hiddenSql];
   if (state) {
     params.push(state);
     conditions.push(`d.state = $${params.length}`);
