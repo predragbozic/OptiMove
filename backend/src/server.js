@@ -21,6 +21,7 @@ import taxonomyRouter from "./routes/taxonomy.js";
 import testsRouter from "./routes/tests.js";
 import testsCheckInRouter from "./routes/testsCheckIn.js";
 import trainingLoadRouter from "./routes/trainingLoad.js";
+import trainingLoadMetricsRouter from "./routes/trainingLoadMetrics.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
@@ -85,6 +86,11 @@ app.use("/api/messages", requireAuth, messagesRouter);
 app.use("/api/tests/check-in", testsCheckInRouter);
 app.use("/api/tests", requireAuth, testsRouter);
 app.use("/api/training-load", requireAuth, trainingLoadRouter);
+// requireAuth only (no requireCoach) — athletes read their own results
+// (GET /results, GET /occasions/:id) the same way they already do on
+// /api/training-load itself; coach-only routes check via
+// requireMetricsScope/resolveReadContext inside the router.
+app.use("/api/training-load/metrics", requireAuth, trainingLoadMetricsRouter);
 app.get("/api/realtime", requireAuth, realtimeRouter);
 
 // Dev/test: this is a plain ES-modules frontend with no build step - script
