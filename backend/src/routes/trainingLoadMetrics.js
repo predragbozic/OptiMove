@@ -42,10 +42,25 @@ function validDate(value) {
   const d = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
+// §3 fix: `new Date(value)` alone is not a validator — JS silently
+// NORMALIZES an out-of-range calendar date/time instead of rejecting it
+// (e.g. "2026-02-30T10:00:00Z" parses as March 2nd), so the service would
+// forward the ORIGINAL, still-invalid string to Postgres, which then
+// throws a raw error the route never expected. The pattern below pins the
+// month/day/hour/minute/second to their real valid numeric ranges AND
+// requires an explicit zone (Z or a numeric ±HH:MM offset — never a bare
+// local time, which would be ambiguous for a stored instant); the day is
+// still only range-checked per-month by the same round-trip trick
+// validDate() uses (a regex alone can't know February has 28/29 days).
+const TIMESTAMP_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-][01]\d:[0-5]\d)$/;
 function validTimestamp(value) {
   if (typeof value !== "string") return false;
-  const d = new Date(value);
-  return !Number.isNaN(d.getTime());
+  const m = TIMESTAMP_PATTERN.exec(value);
+  if (!m) return false;
+  const dateOnly = `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(`${dateOnly}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== dateOnly) return false;
+  return !Number.isNaN(new Date(value).getTime());
 }
 // Intl.DateTimeFormat's own constructor is the authoritative validator —
 // it accepts every real IANA zone name AND the special value "UTC" (which
@@ -316,7 +331,7 @@ router.post("/definitions/:id/hide", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
     const result = await hideDefinitionForUser(req, req.params.id);
-    res.json(result);
+    sendServiceResult(res, result);
   } catch (error) {
     next(error);
   }
@@ -326,7 +341,7 @@ router.delete("/definitions/:id/hide", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
     const result = await unhideDefinitionForUser(req, req.params.id);
-    res.json(result);
+    sendServiceResult(res, result);
   } catch (error) {
     next(error);
   }
@@ -402,6 +417,13 @@ function validateEventBody(body) {
     if (!Array.isArray(body.segments)) return "segments must be an array.";
     for (const s of body.segments) {
       if (!s?.label || typeof s.label !== "string") return "Each segment requires a label.";
+      // §3 fix: createGroupEvent forwards `Number(seg.order) || ...`
+      // straight into an integer DB column — an unvalidated 1.5 (or any
+      // other non-integer numeric) reached Postgres as-is and raised a raw
+      // error instead of a controlled 400.
+      if (s.order !== undefined && s.order !== null && (!Number.isInteger(s.order) || s.order < 1 || s.order > 1000)) {
+        return "Each segment's order must be a positive integer.";
+      }
     }
   }
   return null;

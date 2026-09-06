@@ -181,13 +181,22 @@ async function resolveValueEntries(client, req, rawEntries, { requireActive, req
 // and, separately, that athlete's own private coach) without having
 // access to each other's plans/schedules for them.
 //
-// §1 fix: a logical_session_id can be shared by a LIVE published plan
-// session and an in-progress Builder edit-draft copy of the same plan
-// (see migrations_v2's own plans.plans.is_edit_draft — an edit-draft is
-// `is_active = false`). The previous query took whichever physical row
-// sorted first by date, which could silently resolve to a draft the
-// athlete has never even seen yet. Now filtered to the LIVE, published
-// plan only (`p.is_active = true`).
+// §1 fix (round 2): a logical_session_id can be shared by a LIVE
+// PUBLISHED plan session and an in-progress Builder edit-draft copy of the
+// same plan (see migrations_v2's own plans.plans.is_edit_draft). The first
+// correction only filtered `p.is_active = true`, which excludes a current
+// edit-draft (an edit-draft is stored with is_active = false) but does NOT
+// exclude an ordinary, never-yet-published plan sitting in status='draft'
+// with is_active still at its true default — that plan is not "live" in
+// any sense an athlete/coach would recognize; a session inside it must
+// never be resolvable as the target of a real measurement. A published
+// Weekly plan is exactly: plan_type='weekly' (a 'program' template can
+// never be what a measurement links to), status='active' (routes/
+// builder.js's own POST /plans/:planId/submit is the only place that ever
+// flips draft->active), is_active=true, and is_edit_draft=false — the same
+// four-column shape routes/builder.js's own batch-sync WHERE clause checks
+// before ever touching a plan (see its "status = 'draft' and coalesce(
+// is_active, true) and not coalesce(is_edit_draft, false)" guard).
 async function resolveParticipantLink(client, athleteId, scope, { logicalSessionId, externalAssignmentId }) {
   if (logicalSessionId && externalAssignmentId) {
     return { error: "A participant may link a planned session OR an external assignment, never both.", status: 400 };
@@ -200,7 +209,11 @@ async function resolveParticipantLink(client, athleteId, scope, { logicalSession
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id
        left join training_load.plan_workspace_ownership pwo on pwo.plan_id = p.id
-       where ps.logical_session_id = $1 and p.is_active = true
+       where ps.logical_session_id = $1
+         and p.plan_type = 'weekly'
+         and p.status = 'active'
+         and coalesce(p.is_active, true) = true
+         and not coalesce(p.is_edit_draft, false)
        limit 1`,
       [logicalSessionId],
     );
@@ -436,7 +449,14 @@ export async function createGroupEvent(req, scope, body) {
 // engaged, producing two successors and a corrupted superseded_by
 // pointer (last UPDATE wins, silently orphaning the other successor).
 // -----------------------------------------------------------------------
-export async function correctManualOccasion(req, scope, body) {
+// `onLocked` is an optional test-only hook (default no-op, exactly the
+// convention correctSourceIdentityOccasion's own `onLocked` already
+// established) — called the instant the target row's FOR UPDATE lock is
+// actually held, so a test can deterministically pause a first correction
+// there, prove a SECOND concurrent correction is genuinely lock-waiting
+// (not just racing on wall-clock timing), and only then release the
+// first — see test 22's own use of this.
+export async function correctManualOccasion(req, scope, body, { onLocked } = {}) {
   const requestKey = body?.requestKey;
   const targetOccasionId = body?.targetOccasionId;
   if (!requestKey) return { error: "requestKey is required.", status: 400 };
@@ -454,6 +474,7 @@ export async function correctManualOccasion(req, scope, body) {
        for update of o`,
       [targetOccasionId],
     );
+    if (onLocked) await onLocked();
     const target = targetLookup.rows[0];
     if (!target) throw httpError(404, "Measurement not found.");
     if (!canManageMetricEventInScope(scope, target)) throw httpError(404, "Measurement not found.");
@@ -860,19 +881,34 @@ export async function queryResults(readContext, filters = {}) {
     conditions.push(`ev.id = $${params.length}`);
   }
   if (filters.domainId || filters.categoryId) {
-    // §1 fix: this EXISTS clause must respect the SAME visibility rule
-    // listStructureLinks() already applies (the link's own scope AND
-    // every non-null target it references) — the previous version
-    // matched ANY link with the right domain/category, including one
-    // neither this viewer nor its definition's owner could actually see,
-    // which meant a private classification link could leak which OTHER
-    // definitions share its domain/category through the results filter.
+    // §1 fix (round 2): the first correction only checked the link's OWN
+    // scope (alias l) — it did NOT check the domain/category/definition
+    // the link actually references, unlike listStructureLinks() which
+    // independently re-checks EVERY non-null target. A real scenario this
+    // missed: a coach's private link references a CLUB-scoped category and
+    // a SYSTEM-scoped definition; the coach later loses that club role but
+    // keeps a private_coach workspace — the link itself is still visible
+    // (owner_scope='user', theirs), but the category it points at no
+    // longer is. This EXISTS clause now mirrors listStructureLinks()
+    // exactly: LEFT JOIN each of domain/category/definition (never INNER —
+    // a domain-only or category-only link must not be dropped just because
+    // the OTHER target is null) and require every non-null one to pass its
+    // own catalogVisibilitySql check, in addition to the link's own scope.
     // catalogVisibilitySql pushes its own bind params directly onto the
     // SAME `params` array used by the whole query (not a separate,
     // later-concatenated array) — its generated $N placeholders are only
     // correct relative to whatever `params` already holds at call time.
     const linkVis = catalogVisibilitySql(readContext.authzContext, "l", params);
-    let linkCondition = `l.metric_definition_id = d.id and (${linkVis})`;
+    const linkDomainVis = catalogVisibilitySql(readContext.authzContext, "ld", params);
+    const linkCategoryVis = catalogVisibilitySql(readContext.authzContext, "lc", params);
+    const linkDefVis = catalogVisibilitySql(readContext.authzContext, "ldf", params);
+    let linkCondition = `
+      l.metric_definition_id = d.id
+      and (${linkVis})
+      and (ld.id is null or (${linkDomainVis}))
+      and (lc.id is null or (${linkCategoryVis}))
+      and (ldf.id is null or (${linkDefVis}))
+    `;
     if (filters.domainId) {
       params.push(filters.domainId);
       linkCondition += ` and l.domain_id = $${params.length}`;
@@ -881,7 +917,13 @@ export async function queryResults(readContext, filters = {}) {
       params.push(filters.categoryId);
       linkCondition += ` and l.category_id = $${params.length}`;
     }
-    conditions.push(`exists (select 1 from training_load.metric_structure_links l where ${linkCondition})`);
+    conditions.push(`exists (
+      select 1 from training_load.metric_structure_links l
+      left join training_load.metric_domains ld on ld.id = l.domain_id
+      left join training_load.metric_categories lc on lc.id = l.category_id
+      left join training_load.metric_definitions ldf on ldf.id = l.metric_definition_id
+      where ${linkCondition}
+    )`);
   }
 
   const pageSize = Math.min(Number.parseInt(filters.limit, 10) || RESULTS_DEFAULT_PAGE_SIZE, RESULTS_MAX_PAGE_SIZE);

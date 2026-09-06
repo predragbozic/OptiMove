@@ -216,7 +216,7 @@ async function writeMigrationsDir(runId, files) {
 let db, adminClient, migrationsDir;
 let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
-let measurementsService, catalogService, accessModule;
+let measurementsService, catalogService, accessModule, authzModule;
 
 before(async () => {
   const migrationSqls = await Promise.all(MIGRATIONS.map((name) => fsp.readFile(path.resolve(__dirname, "../../migrations_v2", name), "utf8")));
@@ -242,6 +242,7 @@ before(async () => {
   measurementsService = await import("../src/trainingLoadMetricsMeasurements.js");
   catalogService = await import("../src/trainingLoadMetricsCatalog.js");
   accessModule = await import("../src/trainingLoadMetricsAccess.js");
+  authzModule = await import("../src/authz.js");
 
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
@@ -368,9 +369,15 @@ function distanceValue(value, extra = {}) {
 // just "the athlete is in scope" — every fixture plan built for a test
 // that then submits a measurement against it must carry a real ownership
 // row, exactly like a real Builder-created plan would (see migration v9).
-async function makePlanSessionForAthlete(athleteId, { date = "2026-09-08", name = "Ponedeljak - Snaga", planName = "Sept Blok", owner = null } = {}) {
+// §2 fix (round 2): `status` defaults to 'active' — a genuinely PUBLISHED
+// weekly plan, matching routes/builder.js's own draft->active transition
+// (POST /plans/:planId/submit) — because that's what every EXISTING call
+// site actually wants (a resolvable, live session). A caller exercising
+// the negative case (an ordinary, never-published draft) passes
+// status: "draft" explicitly — see test 21c below.
+async function makePlanSessionForAthlete(athleteId, { date = "2026-09-08", name = "Ponedeljak - Snaga", planName = "Sept Blok", owner = null, status = "active" } = {}) {
   const planId = crypto.randomUUID();
-  await query(`insert into plans.plans (id, athlete_id, name, plan_type) values ($1,$2,$3,'weekly')`, [planId, athleteId, planName]);
+  await query(`insert into plans.plans (id, athlete_id, name, plan_type, status) values ($1,$2,$3,'weekly',$4)`, [planId, athleteId, planName, status]);
   if (owner) {
     await query(
       `insert into training_load.plan_workspace_ownership (plan_id, owner_scope, owner_user_id, owner_club_id, owner_team_id) values ($1,$2,$3,$4,$5)`,
@@ -1079,33 +1086,105 @@ test("21b. logical_session_id resolves the LIVE published plan session, never a 
   assert.equal(detail.body.occasion.linked_session_name_snapshot, "Live Session", "must resolve the live published session, never the hidden edit-draft sharing the same logical id");
 });
 
+test("21c. an ordinary, never-yet-published draft plan (status='draft', is_active still true) cannot be used to submit a measurement — is_active=true alone is not 'published'", async () => {
+  // §2 fix (round 2): the first correction filtered only p.is_active = true,
+  // which excludes a current Builder edit-draft (is_active=false) but does
+  // NOT exclude a plain draft a coach hasn't submitted yet — is_active's
+  // true default means an ordinary draft passes that check too. A
+  // published plan requires status='active' as well.
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("neverpublished", 1);
+  const { logicalSessionId } = await makePlanSessionForAthlete(athletes[0].athleteId, { date: "2026-09-24", owner: { ownerScope: "club", ownerClubId: clubId }, status: "draft" });
+
+  const before_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-24", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", logicalSessionId, values: [distanceValue(70)] }] },
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+  const after_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  assert.equal(after_.rows[0].n, before_.rows[0].n, "rejecting an unpublished draft's session must create zero rows");
+});
+
 // ------------------------------------------------------------
 // §2 — serializing two manual corrections of the same measurement
 // ------------------------------------------------------------
 
-test("22. two concurrent corrections of the SAME occasion with different request keys — exactly one succeeds, the other gets a controlled 409, exactly one successor exists and the original points at it", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("racecorrect", 1);
-  const entry = await api("/api/training-load/metrics/events", {
-    method: "POST", cookie: coachCookie,
-    body: { requestKey: crypto.randomUUID(), occurredDate: "2026-09-23", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(1000)] }] },
-  });
-  assert.equal(entry.status, 201, JSON.stringify(entry.body));
-  const occasionId = entry.body.participants[0].occasionIds[0];
+test("22. two concurrent corrections of the SAME occasion with different request keys — B is directly OBSERVED lock-waiting on A before A is released; exactly one successor exists and the original points at it", async () => {
+  // §4 fix: the previous version relied on a bare Promise.all over real
+  // HTTP and inferred the race was fixed purely from the [201, 409] status
+  // pair — real, but not deterministic (nothing proved B was actually
+  // lock-waiting rather than just losing a wall-clock race). This version
+  // drives correctManualOccasion directly (same "real function, real
+  // DB, controlled interleaving" convention test 14 already established
+  // for correctSourceIdentityOccasion's own onLocked hook), holds A open
+  // exactly at the point its FOR UPDATE lock is acquired, and positively
+  // confirms — via pg_stat_activity, not a timing assumption — that B's
+  // own correction is genuinely blocked on that lock before A is released.
+  const { coachId, athletes } = await makeClubWithAthletes("racecorrect", 1);
+  const authz = await authzModule.loadAuthorizationContext({ id: coachId, role_hint: "club_admin" });
+  const scope = await accessModule.resolveMetricsWorkspaceScope({ user: { id: coachId }, authz });
+  const fakeReq = { user: { id: coachId }, authz };
 
-  const [a, b] = await Promise.all([
-    api(`/api/training-load/metrics/occasions/${occasionId}/correct`, { method: "POST", cookie: coachCookie, body: { requestKey: crypto.randomUUID(), values: [distanceValue(1100)] } }),
-    api(`/api/training-load/metrics/occasions/${occasionId}/correct`, { method: "POST", cookie: coachCookie, body: { requestKey: crypto.randomUUID(), values: [distanceValue(1200)] } }),
-  ]);
-  const statuses = [a.status, b.status].sort();
-  assert.deepEqual(statuses, [201, 409], JSON.stringify([a.body, b.body]));
+  const entry = await measurementsService.createGroupEvent(
+    fakeReq, scope,
+    { requestKey: crypto.randomUUID(), occurredDate: "2026-09-23", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(1000)] }] },
+  );
+  assert.equal(entry.error, undefined, JSON.stringify(entry));
+  const occasionId = entry.participants[0].occasionIds[0];
 
-  const successors = await query(`select id from training_load.metric_measurement_occasions where supersedes_occasion_id = $1`, [occasionId]);
-  assert.equal(successors.rows.length, 1, "exactly one successor must have been created, never two");
-  const originalAfter = await query(`select superseded_by_occasion_id from training_load.metric_measurement_occasions where id = $1`, [occasionId]);
-  assert.equal(originalAfter.rows[0].superseded_by_occasion_id, successors.rows[0].id, "the original's pointer must point at the successor that actually exists");
+  const monitor = await pool.connect();
+  let releaseA = () => {};
+  let aPromise = Promise.resolve();
+  let bPromise = Promise.resolve();
+  try {
+    let signalAReached;
+    const aReachedBarrier = new Promise((res) => { signalAReached = res; });
+    const aBarrier = new Promise((res) => { releaseA = res; });
 
-  const winner = a.status === 201 ? a : b;
-  assert.equal(winner.body.occasionId, successors.rows[0].id);
+    aPromise = measurementsService.correctManualOccasion(
+      fakeReq, scope, { requestKey: crypto.randomUUID(), targetOccasionId: occasionId, values: [distanceValue(1100)] },
+      { onLocked: async () => { signalAReached(); await aBarrier; } },
+    );
+    await aReachedBarrier; // A now genuinely holds the row lock, paused before deciding anything.
+
+    bPromise = measurementsService.correctManualOccasion(fakeReq, scope, { requestKey: crypto.randomUUID(), targetOccasionId: occasionId, values: [distanceValue(1200)] });
+
+    // Discover B's pid by matching wait_event_type = 'Lock' TOGETHER WITH
+    // the lock-acquiring query text in one step — pg_stat_activity.query
+    // retains a connection's LAST-executed text even once it goes back to
+    // idle in the pool, so matching on query text alone (without also
+    // requiring it to be actively Lock-waiting right now) can match a
+    // stale, already-finished connection from an EARLIER test/correction
+    // and never actually observe B's own block.
+    let bPid = null;
+    const discoverStart = Date.now();
+    while (Date.now() - discoverStart < 3000 && bPid === null) {
+      const r = await monitor.query(
+        `select pid from pg_stat_activity
+         where pid <> pg_backend_pid() and wait_event_type = 'Lock' and query ilike '%metric_measurement_occasions o%for update of o%'`,
+      );
+      bPid = r.rows[0]?.pid ?? null;
+      if (!bPid) await new Promise((res) => setTimeout(res, 15));
+    }
+    assert.ok(bPid, "B must be directly observed Lock-waiting on A's held row lock BEFORE A is released — not merely arriving after");
+
+    releaseA();
+    const aResult = await aPromise;
+    assert.equal(aResult.error, undefined, JSON.stringify(aResult));
+    assert.equal(aResult.reused, false);
+    const bResult = await bPromise;
+    assert.equal(bResult.status, 409, JSON.stringify(bResult));
+
+    const successors = await query(`select id from training_load.metric_measurement_occasions where supersedes_occasion_id = $1`, [occasionId]);
+    assert.equal(successors.rows.length, 1, "exactly one successor must have been created, never two");
+    assert.equal(successors.rows[0].id, aResult.occasionId, "the successor that exists is A's own");
+    const originalAfter = await query(`select superseded_by_occasion_id from training_load.metric_measurement_occasions where id = $1`, [occasionId]);
+    assert.equal(originalAfter.rows[0].superseded_by_occasion_id, successors.rows[0].id, "the original's pointer must point at the successor that actually exists");
+  } finally {
+    releaseA();
+    await Promise.allSettled([aPromise, bPromise]);
+    monitor.release();
+  }
 });
 
 // ------------------------------------------------------------
@@ -1248,17 +1327,25 @@ test("27. a conflict whose two effective values land on different pages keeps it
 // §5 — retry must check current authorization of the operation
 // ------------------------------------------------------------
 
-test("28. a replayed create-event result is re-checked against CURRENT rights over the object it already created, not just scope.type !== null", async () => {
-  // Direct service-level test (same convention as test 14's direct call
-  // into correctSourceIdentityOccasion): claimWriteRequest's own
-  // same-workspace check only compares ownerContext identity fields, so
-  // exercising the NEW re-authorization-on-replay check specifically
-  // requires a scope whose ownerContext matches (so the claim is treated
-  // as a legitimate same-workspace replay) but whose row-level management
-  // rights (canManageMetricEventInScope) do not — the shape a stale or
-  // inconsistent scope resolution would take.
+test("28. [internal/defensive, not a reachable HTTP scenario] createGroupEvent's replay branch re-checks canManageMetricEventInScope against the actual created row, not just scope.type !== null", async () => {
+  // This is a targeted unit test of the re-authorization CODE PATH itself,
+  // not a claim that this exact state is reachable through real HTTP: in
+  // this codebase, scope.ownerContext and scope's own type/clubId/teamId
+  // are always co-derived from the SAME resolveActiveWorkspace() call (see
+  // trainingLoadMetricsAccess.js's scopeFromWorkspace/
+  // ownerContextFromWorkspace), so claimWriteRequest's own same-workspace
+  // check (comparing ownerContext) and canManageMetricEventInScope (which
+  // compares scope's own fields) cannot organically diverge on a real
+  // request — a genuinely different scope on retry always also fails
+  // claimWriteRequest's EXISTING same-workspace check first. The real,
+  // HTTP-reachable proof that a retry re-checks authorization is test 28b
+  // below (an actual role revocation through a normal HTTP round trip).
+  // This test exists only to prove the new re-check code itself is
+  // correct and would fire if such a divergence were ever possible (e.g.
+  // after a future refactor), by hand-constructing the inconsistent shape
+  // directly — never present it as evidence of a real-world scenario.
   const { coachId, clubId, athletes } = await makeClubWithAthletes("replayreauth", 1);
-  const defId = await ensureSystemDefinition();
+  await ensureSystemDefinition();
   const requestKey = crypto.randomUUID();
   const body = { requestKey, occurredDate: "2026-09-30", scopeLevel: "session", participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(400)] }] };
   const ownerContext = { ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null };
@@ -1281,7 +1368,18 @@ test("28. a replayed create-event result is re-checked against CURRENT rights ov
   assert.equal(legitReplay.eventId, created.eventId);
 });
 
-test("28b. a retry after the account loses its entire coach workspace is rejected before even reaching the replay check", async () => {
+test("28b. [the real HTTP proof] a retry after the account's club role is genuinely revoked through a normal admin action is rejected, never silently replayed", async () => {
+  // Unlike test 28, this is the actual, reachable retry-authorization
+  // scenario: real HTTP create, a real change to the coach's own
+  // user_club_roles row (exactly what deactivating a club_admin looks
+  // like in production), then a real HTTP retry with the SAME request
+  // key. requireMetricsScope re-resolves the workspace from scratch on
+  // every request, so this loses the workspace entirely (scope.type
+  // becomes null) rather than landing on a different-but-still-valid one
+  // — see test 28's own comment for why a narrower "still has SOME
+  // workspace, but not over this specific object" case is not otherwise
+  // reachable in this codebase without inventing state a real request
+  // could never produce.
   const { clubId, coachId, coachCookie, athletes } = await makeClubWithAthletes("fullrevoke", 1);
   const defId = await ensureSystemDefinition();
   const requestKey = crypto.randomUUID();
@@ -1353,4 +1451,88 @@ test("31. a cosmetic PATCH of a definition cannot change its semantics", async (
   assert.equal(detail.body.row.current_version_id, v1, "a cosmetic PATCH must never touch current_version_id");
   assert.equal(detail.body.row.unit, "m", "unit is a semantic (version) field — a cosmetic PATCH must not be able to change it");
   assert.equal(detail.body.row.value_type, "numeric", "value_type is a semantic (version) field — must be untouched by a cosmetic PATCH");
+});
+
+// ------------------------------------------------------------
+// §3 (round 2) — remaining concrete validation gaps: an out-of-range
+// calendar date inside a timestamp, a non-integer segment order, and
+// hide/unhide accepting a nonexistent or inaccessible definition UUID.
+// ------------------------------------------------------------
+
+test("32. occurredInstant with an out-of-range calendar date (Feb 30) is rejected with a controlled 400, never silently normalized by JS Date and forwarded to Postgres", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("badtimestamp", 1);
+  const before_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: crypto.randomUUID(), occurredDate: "2026-09-25", occurredInstant: "2026-02-30T10:00:00Z", scopeLevel: "session",
+      participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(50)] }],
+    },
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+  const after_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  assert.equal(after_.rows[0].n, before_.rows[0].n, "a rejected out-of-range timestamp must create zero rows");
+});
+
+test("32b. occurredInstant without an explicit timezone/offset is rejected — a bare local time is ambiguous for a stored instant", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("notzinstant", 1);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: crypto.randomUUID(), occurredDate: "2026-09-25", occurredInstant: "2026-09-25T10:00:00", scopeLevel: "session",
+      participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(50)] }],
+    },
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+});
+
+test("32c. a valid, explicitly-zoned occurredInstant (a real offset, not just Z) is still accepted", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("okoffsetinstant", 1);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: crypto.randomUUID(), occurredDate: "2026-09-25", occurredInstant: "2026-09-25T10:00:00+02:00", scopeLevel: "session",
+      participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(50)] }],
+    },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+});
+
+test("33. a non-integer segment order is rejected with a controlled 400, never forwarded to Postgres' integer column", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("badsegorder", 1);
+  const before_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: crypto.randomUUID(), occurredDate: "2026-09-25", scopeLevel: "session",
+      segments: [{ label: "Test", order: 1.5 }],
+      participants: [{ athleteId: athletes[0].athleteId, timezone: "UTC", values: [distanceValue(50, { segmentIndex: 0 })] }],
+    },
+  });
+  assert.equal(res.status, 400, JSON.stringify(res.body));
+  const after_ = await query(`select count(*)::int as n from training_load.metric_events`);
+  assert.equal(after_.rows[0].n, before_.rows[0].n, "a rejected non-integer segment order must create zero rows");
+});
+
+test("34. hiding a nonexistent definition UUID is a controlled 404, never a raw FK-constraint 500", async () => {
+  const { coachCookie } = await makeClubWithAthletes("hidenonexistent", 0);
+  const res = await api(`/api/training-load/metrics/definitions/${crypto.randomUUID()}/hide`, { method: "POST", cookie: coachCookie });
+  assert.equal(res.status, 404, JSON.stringify(res.body));
+  const unhideRes = await api(`/api/training-load/metrics/definitions/${crypto.randomUUID()}/hide`, { method: "DELETE", cookie: coachCookie });
+  assert.equal(unhideRes.status, 404, JSON.stringify(unhideRes.body));
+});
+
+test("34b. hiding someone else's private definition UUID is a controlled 404, not silently accepted — a syntactically valid but inaccessible UUID must be indistinguishable from a nonexistent one", async () => {
+  const ownerCoachId = await makeUser({ email: `hideownerpriv-${uid()}@test.local` });
+  await grantGlobalRole(ownerCoachId, "independent_coach");
+  await setActiveWorkspace(ownerCoachId, "private_coach", null);
+  const ownerCookie = await loginCookie(ownerCoachId);
+  const privDef = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: ownerCookie, body: { key: `hideownersecret_${uid()}`, label: "Hide Owner Secret", ownerScope: "user", unit: "u", valueType: "numeric" } });
+  assert.equal(privDef.status, 201, JSON.stringify(privDef.body));
+
+  const { coachCookie: otherCookie } = await makeClubWithAthletes("hideotherpriv", 0);
+  const hideRes = await api(`/api/training-load/metrics/definitions/${privDef.body.row.id}/hide`, { method: "POST", cookie: otherCookie });
+  assert.equal(hideRes.status, 404, JSON.stringify(hideRes.body));
+  const hiddenRowCount = await query(`select count(*)::int as n from training_load.metric_definition_hidden where definition_id = $1`, [privDef.body.row.id]);
+  assert.equal(hiddenRowCount.rows[0].n, 0, "hiding an inaccessible definition must never write a row");
 });

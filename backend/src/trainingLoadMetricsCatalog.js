@@ -304,7 +304,18 @@ export async function listDefinitionVersions(req, id) {
 // shared content.
 // ---------------------------------------------------------------
 
+// §3 fix: both used to INSERT/DELETE unconditionally — a syntactically
+// valid but nonexistent UUID hit metric_definition_hidden's own FK
+// constraint and surfaced as a raw, uncaught DB error (500) instead of a
+// controlled 404, and a syntactically valid UUID for someone ELSE's
+// private definition was accepted outright (hiding something you can't
+// even see is itself a confirmation it exists — the same "not found" vs
+// "not yours" non-distinction getDefinition already applies elsewhere in
+// this file governs here too). Both now reuse getDefinition's own
+// existence+visibility check first, with the SAME 404 either way.
 export async function hideDefinitionForUser(req, definitionId) {
+  const visible = await getDefinition(req, definitionId);
+  if (!visible) return { error: "Metric definition not found.", status: 404 };
   await query(
     `insert into training_load.metric_definition_hidden (user_id, definition_id) values ($1,$2) on conflict (user_id, definition_id) do nothing`,
     [req.user.id, definitionId],
@@ -313,6 +324,8 @@ export async function hideDefinitionForUser(req, definitionId) {
 }
 
 export async function unhideDefinitionForUser(req, definitionId) {
+  const visible = await getDefinition(req, definitionId);
+  if (!visible) return { error: "Metric definition not found.", status: 404 };
   await query(`delete from training_load.metric_definition_hidden where user_id = $1 and definition_id = $2`, [req.user.id, definitionId]);
   return { hidden: false };
 }
