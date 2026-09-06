@@ -31,6 +31,22 @@
 // fingerprint, come along — never fabricated), then the real migrate.js
 // runner applies ONLY this branch's own new v10-v13 files on top. Real
 // schema, real HTTP flow, zero writes to OPTIMOVE, dropped in after().
+//
+// Round 3 (security correction on this harness): the clone SOURCE is a
+// separate, explicit LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL — never the
+// general-purpose DATABASE_URL, which a differently-configured
+// environment could point somewhere this harness has no business reading
+// schema from. Every source/target property this harness relies on for
+// safety (source db name, source host, target name shape) is verified
+// BEFORE any pg_dump, admin connection, or CREATE DATABASE — see
+// assertSchemaSourceIsSafe()/assertValidCloneName() below. Clone creation
+// tracks whether CREATE DATABASE actually succeeded so a later failure
+// (restore, migration) still drops the half-built clone instead of
+// leaking it — see makeIsolatedClone()'s own try/catch. Credentials are
+// never passed to pg_dump/psql as a CLI argument (visible in a process
+// listing) — connection parameters are split into discrete -h/-p/-U/-d
+// flags with the password passed via the PGPASSWORD environment variable,
+// the standard non-interactive mechanism for these tools.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
@@ -46,23 +62,81 @@ import * as runner from "../src/migrate.js";
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// ---------------------------------------------------------------------
+// Schema source safety (round 3): a dedicated, explicit env var — never
+// the app's own general-purpose DATABASE_URL — and hard, pre-flight
+// checks on exactly what this harness is allowed to read a schema dump
+// FROM before it ever shells out to pg_dump or opens an admin connection.
+// ---------------------------------------------------------------------
+const SCHEMA_SOURCE_ENV_VAR = "LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL";
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const CLONE_NAME_PATTERN = /^optimove_tlmetrics_builderflow_[a-z0-9_]+$/;
+
+function assertSchemaSourceIsSafe() {
+  const raw = process.env[SCHEMA_SOURCE_ENV_VAR];
+  if (!raw) {
+    throw new Error(
+      `BLOCKER: ${SCHEMA_SOURCE_ENV_VAR} must be set to a LOCAL OPTIMOVE connection string ` +
+        `(e.g. postgresql://postgres:PASSWORD@localhost:5432/OPTIMOVE) to run this test — refusing to guess ` +
+        `a schema source from the general-purpose DATABASE_URL. No database operation has been attempted.`,
+    );
+  }
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`BLOCKER: ${SCHEMA_SOURCE_ENV_VAR} is not a valid connection URL. No database operation has been attempted.`);
+  }
+  const dbName = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+  if (dbName !== "OPTIMOVE") {
+    throw new Error(
+      `BLOCKER: ${SCHEMA_SOURCE_ENV_VAR} must point at a database named exactly "OPTIMOVE" (got "${dbName}"). ` +
+        `No database operation has been attempted.`,
+    );
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (!LOCAL_HOSTS.has(hostname)) {
+    throw new Error(
+      `BLOCKER: ${SCHEMA_SOURCE_ENV_VAR} must point at a LOCAL host (localhost/127.0.0.1/::1), got "${hostname}". ` +
+        `No database operation has been attempted.`,
+    );
+  }
+  return parsed;
+}
+
+function assertValidCloneName(name) {
+  if (!CLONE_NAME_PATTERN.test(name)) {
+    throw new Error(`BLOCKER: refusing to operate on a database name that doesn't match ${CLONE_NAME_PATTERN} (got "${name}").`);
+  }
+}
+
+function connectionParamsFromUrl(url) {
+  const u = url instanceof URL ? url : new URL(url);
+  return {
+    host: u.hostname,
+    port: u.port || "5432",
+    user: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+  };
+}
+
+// The schema source is validated once, at import time, before anything
+// else in this file runs — a test file that fails to even load is the
+// clearest possible "no database operation was attempted" signal.
+const SCHEMA_SOURCE_URL = assertSchemaSourceIsSafe();
+const SOURCE_CONN = connectionParamsFromUrl(SCHEMA_SOURCE_URL);
+
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
-const baseUrl = new URL(ORIGINAL_DATABASE_URL);
-const adminUrl = new URL(baseUrl);
-adminUrl.pathname = "/postgres";
-const ADMIN_URL = adminUrl.toString();
 
 function dbUrlFor(name) {
-  const u = new URL(baseUrl);
+  const u = new URL(SCHEMA_SOURCE_URL);
   u.pathname = `/${name}`;
   return u.toString();
 }
-function refuseForbidden(name, url) {
-  if (name.toLowerCase() === "optimove" || /monitoring2/i.test(url)) {
-    throw new Error("SAFETY: refusing to run against a forbidden database name");
-  }
-}
+const adminUrl = new URL(SCHEMA_SOURCE_URL);
+adminUrl.pathname = "/postgres";
+const ADMIN_URL = adminUrl.toString();
 
 // Locates pg_dump/psql — not guaranteed to be on PATH on Windows. Reports
 // a concrete, actionable blocker rather than silently falling back to
@@ -95,50 +169,98 @@ async function resolvePgBinary(name) {
   }
 }
 
+// Runs a pg_dump/psql invocation with connection parameters split into
+// discrete -h/-p/-U/-d flags and the password passed via the PGPASSWORD
+// environment variable — never embedded in a connection-string CLI
+// argument, which would be visible to any other user/process able to read
+// this machine's process list (`ps`/Task Manager command-line column).
+async function runPgTool(binary, args, { host, port, user, password }) {
+  return execFileAsync(binary, [...args, "-h", host, "-p", port, "-U", user], {
+    env: { ...process.env, PGPASSWORD: password },
+  });
+}
+
+async function dropClone({ name }) {
+  assertValidCloneName(name);
+  const admin = new pg.Client({ connectionString: ADMIN_URL });
+  await admin.connect();
+  try {
+    await admin.query(`select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and pid <> pg_backend_pid()`, [name]);
+    await admin.query(`drop database if exists "${name}"`);
+  } finally {
+    await admin.end();
+  }
+}
+
 // Builds a throwaway database that is a real schema-only clone of local
 // OPTIMOVE (see this file's own header) — real plans.plans/plan_days/
 // plan_sessions/app_notifications structure, zero rows, plus the REAL
 // already-applied-migrations record so migrate.js's runner only applies
 // this branch's own new v10-v13 files, never re-running or reinterpreting
 // anything already deployed.
-async function makeIsolatedClone(label) {
+//
+// `injectFailureAfterCreate` is test-only fault injection (see the
+// dedicated cleanup-safety test below): when set, it points the schema
+// restore at a nonexistent file, deterministically failing the FIRST step
+// that runs strictly after CREATE DATABASE has already succeeded — real
+// failure, real cleanup path, not a mocked one.
+async function makeIsolatedClone(label, { injectFailureAfterCreate = false } = {}) {
+  // Every safety property this harness depends on is re-checked here too
+  // (not just once at import time) — assertSchemaSourceIsSafe() is cheap
+  // and this function is the only place that actually touches a database.
+  assertSchemaSourceIsSafe();
   const pgDump = await resolvePgBinary("pg_dump");
   const psql = await resolvePgBinary("psql");
 
   const name = `optimove_tlmetrics_builderflow_${label}_${crypto.randomBytes(6).toString("hex")}`;
+  assertValidCloneName(name);
   const url = dbUrlFor(name);
-  refuseForbidden(name, url);
 
   const tmpDir = await fsp.mkdtemp(path.join(path.resolve(__dirname, "../../../"), ".tlmetrics-clone-"));
-  const schemaFile = path.join(tmpDir, "schema.sql");
+  const schemaFile = injectFailureAfterCreate ? path.join(tmpDir, "does-not-exist.sql") : path.join(tmpDir, "schema.sql");
   const dataFile = path.join(tmpDir, "migration_tracking.sql");
+  let created = false;
   try {
-    await execFileAsync(pgDump, ["--schema-only", "--no-owner", "--no-privileges", "-f", schemaFile, ORIGINAL_DATABASE_URL]);
-    await execFileAsync(pgDump, ["--data-only", "--no-owner", "--table=public.schema_migrations", "--table=public.migration_cutovers", "-f", dataFile, ORIGINAL_DATABASE_URL]);
+    // Read-only against the source — safe to run before CREATE DATABASE.
+    if (!injectFailureAfterCreate) {
+      await runPgTool(pgDump, ["--schema-only", "--no-owner", "--no-privileges", "-d", "OPTIMOVE", "-f", schemaFile], SOURCE_CONN);
+    }
+    await runPgTool(pgDump, ["--data-only", "--no-owner", "--table=public.schema_migrations", "--table=public.migration_cutovers", "-d", "OPTIMOVE", "-f", dataFile], SOURCE_CONN);
 
     const admin = new pg.Client({ connectionString: ADMIN_URL });
     await admin.connect();
-    const cur = await admin.query("select current_database() as db");
-    assert.equal(cur.rows[0].db, "postgres", "SAFETY: admin connection must be on the postgres database");
-    await admin.query(`create database "${name}"`);
-    await admin.end();
+    try {
+      const cur = await admin.query("select current_database() as db");
+      assert.equal(cur.rows[0].db, "postgres", "SAFETY: admin connection must be on the postgres database");
+      await admin.query(`create database "${name}"`);
+      created = true;
+    } finally {
+      await admin.end();
+    }
 
-    await execFileAsync(psql, ["-d", url, "-v", "ON_ERROR_STOP=1", "-f", schemaFile]);
-    await execFileAsync(psql, ["-d", url, "-v", "ON_ERROR_STOP=1", "-f", dataFile]);
-
+    // Every step from here on runs strictly AFTER the database exists —
+    // any failure below must drop it (see the catch block).
+    await runPgTool(psql, ["-d", name, "-v", "ON_ERROR_STOP=1", "-f", schemaFile], SOURCE_CONN);
+    await runPgTool(psql, ["-d", name, "-v", "ON_ERROR_STOP=1", "-f", dataFile], SOURCE_CONN);
     await runner.runMigrations({ databaseUrl: url, migrationsRoot: path.resolve(__dirname, "../../migrations_v2") });
 
     return { name, url };
+  } catch (error) {
+    if (created) {
+      try {
+        await dropClone({ name });
+      } catch (dropError) {
+        // Never swallow the drop failure silently, but the ORIGINAL setup
+        // error is still the one that must propagate — a half-built clone
+        // that also resists cleanup is worse than one that resists cleanup
+        // quietly, so this at least gets logged for a human to find.
+        console.error(`[training-load-metrics-builder-edit-draft] failed to drop clone "${name}" after a setup failure:`, dropError);
+      }
+    }
+    throw error;
   } finally {
     await fsp.rm(tmpDir, { recursive: true, force: true });
   }
-}
-async function dropClone({ name }) {
-  const admin = new pg.Client({ connectionString: ADMIN_URL });
-  await admin.connect();
-  await admin.query(`select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and pid <> pg_backend_pid()`, [name]);
-  await admin.query(`drop database if exists "${name}"`);
-  await admin.end();
 }
 
 let db, server, apiBaseUrl, query, pool, createSession, hashPassword;
@@ -159,11 +281,36 @@ before(async () => {
   apiBaseUrl = `http://localhost:${server.address().port}`;
 });
 
+// Resilient to a PARTIALLY failed before(): if before() throws after only
+// SOME of db/server/pool got assigned, this must still attempt every
+// remaining cleanup step rather than stopping at the first one that
+// throws (e.g. `pool` was never assigned because the clone itself failed
+// to come up) — collecting failures and reporting them together, exactly
+// like _test-cleanup.mjs's own runCleanupSteps convention (not reused
+// directly here since this file has only three steps and no shared
+// per-row tracking, but the same "attempt everything, then report"
+// principle applies).
 after(async () => {
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
-  await new Promise((resolve) => server.close(resolve));
-  await pool.end();
-  await dropClone(db);
+  const errors = [];
+  try {
+    if (server) await new Promise((resolve) => server.close(resolve));
+  } catch (error) {
+    errors.push(new Error(`server.close: ${error.message}`, { cause: error }));
+  }
+  try {
+    if (pool) await pool.end();
+  } catch (error) {
+    errors.push(new Error(`pool.end: ${error.message}`, { cause: error }));
+  }
+  try {
+    if (db) await dropClone(db);
+  } catch (error) {
+    errors.push(new Error(`dropClone: ${error.message}`, { cause: error }));
+  }
+  if (errors.length) {
+    throw new AggregateError(errors, `${errors.length} of 3 cleanup step(s) failed`);
+  }
 });
 
 async function api(urlPath, { method = "GET", cookie, body } = {}) {
@@ -372,4 +519,40 @@ test("a real Builder create -> publish -> measurement -> edit-draft -> submit HT
   // remains a useful, narrower additional check — this file's own value
   // is proving the SAME invariant survives the REAL Builder mechanics end
   // to end, not replacing that check.
+});
+
+// =========================================================================
+// Harness self-test (round 3): a deliberately induced failure AFTER
+// CREATE DATABASE has already succeeded must still leave zero trace —
+// makeIsolatedClone's own catch block, not a mock, is what's under test.
+// =========================================================================
+test("harness self-test: a clone-setup failure after CREATE DATABASE still drops the half-built database, never leaks it", async () => {
+  const admin = new pg.Client({ connectionString: ADMIN_URL });
+  await admin.connect();
+  try {
+    let threw = false;
+    try {
+      await makeIsolatedClone("faultinjection", { injectFailureAfterCreate: true });
+    } catch (error) {
+      threw = true;
+      // The exact wording psql/execFile produce for "file not found"
+      // differs by platform/version — what matters is that the injected
+      // failure genuinely propagated rather than being swallowed.
+      assert.ok(error, "the injected failure must propagate as a real error");
+    }
+    assert.equal(threw, true, "makeIsolatedClone must reject when the post-CREATE-DATABASE restore step fails");
+
+    // The failure happened inside makeIsolatedClone before it could return
+    // {name}, so find whatever it created by name pattern instead — this
+    // is exactly what a human investigating a real leak would also have
+    // to do, which is the point of testing it this way rather than having
+    // makeIsolatedClone hand back the name of a database it just told the
+    // caller doesn't exist.
+    const leftover = await admin.query(
+      `select datname from pg_database where datname like 'optimove_tlmetrics_builderflow_faultinjection_%'`,
+    );
+    assert.equal(leftover.rows.length, 0, `expected no leftover clone database, found: ${leftover.rows.map((r) => r.datname).join(", ")}`);
+  } finally {
+    await admin.end();
+  }
 });
