@@ -76,6 +76,21 @@ function validMaxLength(value, max) {
 function localDateInTimezone(instantIso, tz) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(instantIso));
 }
+// Shared by all 3 materialization routes (single-participant, external-
+// occurrence group, metric-event group) so their own name/activityTypeKey
+// presentation-field validation can never quietly diverge — activityTypeKey
+// EXISTENCE/active-state is a DB check and stays in the service layer
+// (trainingActivityMaterialize.js's own assertActivityTypeKeyValid, shared
+// there for the same reason); this only covers what's checkable without a
+// DB round trip.
+function validateMaterializePresentation(b) {
+  if (!validMaxLength(b?.name, MAX_NAME_LENGTH)) return `name must be at most ${MAX_NAME_LENGTH} characters.`;
+  if (b?.activityTypeKey !== undefined && b?.activityTypeKey !== null && (typeof b.activityTypeKey !== "string" || b.activityTypeKey.length > MAX_NAME_LENGTH)) {
+    return "Invalid activityTypeKey.";
+  }
+  return null;
+}
+
 function validCursor(raw) {
   if (raw === undefined || raw === null || raw === "") return { cursor: null };
   let parsed;
@@ -260,7 +275,8 @@ router.post("/materialize", async (req, res, next) => {
       return res.status(400).json({ error: "planLogicalSessionId and externalAssignmentId cannot both be provided." });
     }
     const naturalKey = b.planLogicalSessionId || b.externalAssignmentId;
-    if (!validMaxLength(b.name, MAX_NAME_LENGTH)) return res.status(400).json({ error: `name must be at most ${MAX_NAME_LENGTH} characters.` });
+    const presentationError = validateMaterializePresentation(b);
+    if (presentationError) return res.status(400).json({ error: presentationError });
     if (!validMaxLength(b.reason, MAX_REASON_LENGTH)) return res.status(400).json({ error: `reason must be at most ${MAX_REASON_LENGTH} characters.` });
 
     if (naturalKey) {
@@ -310,6 +326,8 @@ router.post("/materialize", async (req, res, next) => {
 router.post("/materialize/external-occurrence/:occurrenceId", async (req, res, next) => {
   try {
     if (!validUuid(req.params.occurrenceId)) return res.status(400).json({ error: "Invalid occurrenceId." });
+    const presentationError = validateMaterializePresentation(req.body);
+    if (presentationError) return res.status(400).json({ error: presentationError });
     const scope = await requireActivityWorkspace(req, res);
     if (!scope) return;
     const activityId = await materializeGroupFromExternalOccurrence(scope, {
@@ -324,6 +342,8 @@ router.post("/materialize/external-occurrence/:occurrenceId", async (req, res, n
 router.post("/materialize/metric-event/:eventId", async (req, res, next) => {
   try {
     if (!validUuid(req.params.eventId)) return res.status(400).json({ error: "Invalid eventId." });
+    const presentationError = validateMaterializePresentation(req.body);
+    if (presentationError) return res.status(400).json({ error: presentationError });
     const scope = await requireActivityWorkspace(req, res);
     if (!scope) return;
     const activityId = await materializeGroupFromMetricEvent(scope, {

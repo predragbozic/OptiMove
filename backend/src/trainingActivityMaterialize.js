@@ -319,6 +319,30 @@ export async function materializeActivityParticipant(scope, {
       if (timezone !== undefined && timezone !== null && timezone !== authoritative.timezone) {
         throw httpError(400, "timezone does not match the authoritative source.");
       }
+      // startInstant is compared against the authoritative source ONLY
+      // where that source genuinely has one (a planned session with a
+      // real session_time) — the client may never supply a value the
+      // source has no way to corroborate. endInstant/durationMinutes are
+      // rejected outright whenever supplied here: neither a plan session
+      // nor an external assignment carries an authoritative end
+      // instant/duration at all (no such column exists yet), so there is
+      // nothing to verify a client-supplied value against — silently
+      // discarding it (as this function used to do) would let a caller
+      // believe its value was recorded when it never was.
+      if (startInstant !== undefined && startInstant !== null) {
+        if (authoritative.startInstant === null) {
+          throw httpError(400, "startInstant cannot be supplied — the authoritative source has no known start time for this session/assignment.");
+        }
+        if (new Date(startInstant).getTime() !== new Date(authoritative.startInstant).getTime()) {
+          throw httpError(400, "startInstant does not match the authoritative source.");
+        }
+      }
+      if (endInstant !== undefined && endInstant !== null) {
+        throw httpError(400, "endInstant cannot be supplied for a planned-session/external-assignment materialize call — no authoritative end time exists yet to verify it against.");
+      }
+      if (durationMinutes !== undefined && durationMinutes !== null) {
+        throw httpError(400, "durationMinutes cannot be supplied for a planned-session/external-assignment materialize call — no authoritative duration exists yet to verify it against.");
+      }
       effectiveAthleteId = authoritative.athleteId;
       effectiveLocalDate = authoritative.localDate;
       effectiveTimezone = authoritative.timezone;
@@ -338,10 +362,8 @@ export async function materializeActivityParticipant(scope, {
     athleteId = effectiveAthleteId; localDate = effectiveLocalDate; timezone = effectiveTimezone;
     startInstant = effectiveStartInstant; endInstant = effectiveEndInstant; durationMinutes = effectiveDurationMinutes;
 
-    if (activityTypeKey) {
-      const typeRow = await client.query(`select 1 from training.activity_types where key = $1 and is_active = true`, [activityTypeKey]);
-      if (!typeRow.rowCount) throw httpError(400, `Unknown or inactive activityTypeKey "${activityTypeKey}".`);
-    }
+    assertPresentationNameValid(name);
+    await assertActivityTypeKeyValid(client.query.bind(client), activityTypeKey);
 
     const contentHash = buildContentHash({ operationKind, ownerScope, ownerIds, athleteId, localDate, timezone, startInstant, endInstant, durationMinutes, planLogicalSessionId, externalAssignmentId, name, activityTypeKey });
     const claim = await claimActivityWriteRequest(client, { requestKey, requestedBy, requestedBySourceConnectionId, operationKind, ownerScope, ownerIds, contentHash });
@@ -449,8 +471,31 @@ export async function materializeActivityParticipant(scope, {
 // directly; every caller here (and every route below in
 // routes/trainingActivity.js) resolves and checks workspace authorization
 // FIRST, exactly like the rest of this module.
+// Shared by all 3 materialization service functions (single-participant,
+// external-occurrence group, metric-event group) so a future 4th path can
+// never quietly diverge from this check — `queryFn` is either a
+// transactional client's own `.query` (bound) or the module-level `query`
+// helper, both `(text, params) => Promise<Result>`.
+const MAX_NAME_LENGTH = 200;
+async function assertActivityTypeKeyValid(queryFn, activityTypeKey) {
+  if (!activityTypeKey) return;
+  if (typeof activityTypeKey !== "string" || activityTypeKey.length > MAX_NAME_LENGTH) {
+    throw httpError(400, `Invalid activityTypeKey.`);
+  }
+  const r = await queryFn(`select 1 from training.activity_types where key = $1 and is_active = true`, [activityTypeKey]);
+  if (!r.rowCount) throw httpError(400, `Unknown or inactive activityTypeKey "${activityTypeKey}".`);
+}
+function assertPresentationNameValid(name) {
+  if (name === undefined || name === null) return;
+  if (typeof name !== "string" || name.length > MAX_NAME_LENGTH) {
+    throw httpError(400, `name must be a string of at most ${MAX_NAME_LENGTH} characters.`);
+  }
+}
+
 export async function materializeGroupFromExternalOccurrence(scope, { occurrenceId, activityTypeKey, name, performedBy }) {
   if (scope.type === null) throw httpError(403, "Forbidden");
+  assertPresentationNameValid(name);
+  await assertActivityTypeKeyValid(query, activityTypeKey);
   const occ = await query(
     `select es.owner_scope, es.owner_user_id, es.owner_club_id, es.owner_team_id
      from training_load.external_schedule_occurrences eo join training_load.external_schedules es on es.id = eo.schedule_id
@@ -464,6 +509,8 @@ export async function materializeGroupFromExternalOccurrence(scope, { occurrence
 }
 export async function materializeGroupFromMetricEvent(scope, { eventId, activityTypeKey, name, performedBy }) {
   if (scope.type === null) throw httpError(403, "Forbidden");
+  assertPresentationNameValid(name);
+  await assertActivityTypeKeyValid(query, activityTypeKey);
   const ev = await query(`select owner_scope, owner_user_id, owner_club_id, owner_team_id from training_load.metric_events where id = $1`, [eventId]);
   if (!ev.rowCount) throw httpError(404, "Metric event not found.");
   if (!canManageOwnerRow(scope, ev.rows[0])) throw httpError(404, "Metric event not found.");

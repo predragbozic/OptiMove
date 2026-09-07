@@ -220,7 +220,7 @@ async function readMigrationFiles(names) {
 let db, adminClient, migrationsDir;
 let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
-let materializeService;
+let materializeService, catalogService, measurementsService, metricsAccessModule, authzModule;
 
 before(async () => {
   db = await makeTempDb("primary");
@@ -242,6 +242,10 @@ before(async () => {
   hashPassword = authModule.hashPassword;
   const serverModule = await import("../src/server.js");
   materializeService = await import("../src/trainingActivityMaterialize.js");
+  catalogService = await import("../src/trainingLoadMetricsCatalog.js");
+  measurementsService = await import("../src/trainingLoadMetricsMeasurements.js");
+  metricsAccessModule = await import("../src/trainingLoadMetricsAccess.js");
+  authzModule = await import("../src/authz.js");
 
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
@@ -896,7 +900,7 @@ test("18. PUT scope-capabilities configures a previously-unconfigured definition
     method: "PUT", cookie: coachCookie, body: { scopeCapabilities: ["session"] },
   });
   assert.equal(configured.status, 200, JSON.stringify(configured.body));
-  assert.deepEqual(configured.body.row.scopeCapabilities, ["session"]);
+  assert.deepEqual(configured.body.row.scope_capabilities, ["session"]);
 
   const eventRes = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: coachCookie,
@@ -1182,4 +1186,261 @@ test("30. concurrent accept vs dismiss on the SAME match suggestion have exactly
     await Promise.allSettled([acceptPromise, dismissPromise]);
     monitor.release();
   }
+});
+
+// ============================================================
+// Round 3 — capability-removal vs value-insert race (§1)
+// ============================================================
+
+test("31. capability removal vs value insert race: the value insert wins first, so the removal correctly waits and then gets 409 scopeCapabilityHasHistory", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("caprace31");
+  const athlete = await makeAthleteInClub(clubId);
+  const created = await api("/api/training-load/metrics/definitions", {
+    method: "POST", cookie: coachCookie,
+    body: { key: `caprace31_${uid()}`, label: "Cap Race 31", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const defId = created.body.row.id;
+  const versionId = created.body.row.current_version_id;
+
+  const authz = await authzModule.loadAuthorizationContext({ id: coachId, role_hint: "club_admin" });
+  const fakeReq = { user: { id: coachId }, authz };
+  const scope = await metricsAccessModule.resolveMetricsWorkspaceScope(fakeReq);
+
+  const monitor = await pool.connect();
+  let releaseInsert = () => {};
+  let insertPromise = Promise.resolve();
+  let removePromise = Promise.resolve();
+  try {
+    let signalInsertReached;
+    const insertReachedBarrier = new Promise((res) => { signalInsertReached = res; });
+    const insertBarrier = new Promise((res) => { releaseInsert = res; });
+    let insertPid;
+
+    insertPromise = measurementsService.createGroupEvent(
+      fakeReq, scope,
+      { requestKey: uid(), occurredDate: "2026-09-08", scopeLevel: "session", participants: [{ athleteId: athlete.athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, metricDefinitionVersionId: versionId, value: 100 }] }] },
+      { onLocked: async (client) => { insertPid = client.processID; signalInsertReached(); await insertBarrier; } },
+    );
+    await insertReachedBarrier;
+
+    removePromise = catalogService.setDefinitionScopeCapabilities(fakeReq, defId, []);
+    const blocked = await waitUntilAnyOtherBlocked(monitor, insertPid);
+    assert.equal(blocked, true, "the capability removal must be directly observed Lock-waiting on the definition row the insert already holds FOR KEY SHARE");
+
+    releaseInsert();
+    const insertResult = await insertPromise;
+    assert.equal(insertResult.error, undefined, JSON.stringify(insertResult));
+
+    const removeResult = await removePromise;
+    assert.equal(removeResult.status, 409, JSON.stringify(removeResult));
+    assert.equal(removeResult.code, "scopeCapabilityHasHistory");
+
+    const stillConfigured = await query(`select 1 from training_load.metric_definition_scope_capabilities where metric_definition_id=$1 and scope_level='session'`, [defId]);
+    assert.equal(stillConfigured.rowCount, 1, "the capability must remain declared — the removal was correctly refused");
+    const valueCount = await query(`select count(*)::int as n from training_load.metric_values where metric_definition_id=$1`, [defId]);
+    assert.equal(valueCount.rows[0].n, 1, "the value insert must have won and be the only row");
+  } finally {
+    releaseInsert();
+    await Promise.allSettled([insertPromise, removePromise]);
+    monitor.release();
+  }
+});
+
+test("32. capability removal vs value insert race: the removal wins first, so the value insert correctly waits and then gets 409 scopeCapabilitiesRequired", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("caprace32");
+  const athlete = await makeAthleteInClub(clubId);
+  const created = await api("/api/training-load/metrics/definitions", {
+    method: "POST", cookie: coachCookie,
+    body: { key: `caprace32_${uid()}`, label: "Cap Race 32", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session"] },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const defId = created.body.row.id;
+  const versionId = created.body.row.current_version_id;
+
+  const authz = await authzModule.loadAuthorizationContext({ id: coachId, role_hint: "club_admin" });
+  const fakeReq = { user: { id: coachId }, authz };
+  const scope = await metricsAccessModule.resolveMetricsWorkspaceScope(fakeReq);
+
+  const monitor = await pool.connect();
+  let releaseRemove = () => {};
+  let insertPromise = Promise.resolve();
+  let removePromise = Promise.resolve();
+  try {
+    let signalRemoveReached;
+    const removeReachedBarrier = new Promise((res) => { signalRemoveReached = res; });
+    const removeBarrier = new Promise((res) => { releaseRemove = res; });
+    let removePid;
+
+    removePromise = catalogService.setDefinitionScopeCapabilities(fakeReq, defId, [], {
+      onLocked: async (client) => { removePid = client.processID; signalRemoveReached(); await removeBarrier; },
+    });
+    await removeReachedBarrier;
+
+    insertPromise = measurementsService.createGroupEvent(
+      fakeReq, scope,
+      { requestKey: uid(), occurredDate: "2026-09-08", scopeLevel: "session", participants: [{ athleteId: athlete.athleteId, timezone: "UTC", values: [{ metricDefinitionId: defId, metricDefinitionVersionId: versionId, value: 100 }] }] },
+    );
+    const blocked = await waitUntilAnyOtherBlocked(monitor, removePid);
+    assert.equal(blocked, true, "the value insert must be directly observed Lock-waiting on the definition row the removal already holds FOR UPDATE");
+
+    releaseRemove();
+    const removeResult = await removePromise;
+    assert.equal(removeResult.error, undefined, JSON.stringify(removeResult));
+
+    const insertResult = await insertPromise;
+    assert.equal(insertResult.error, "Metric definition " + defId + " has no configured scope capability for level 'session' — configure it before submitting a value at this scope.");
+    assert.equal(insertResult.status, 409);
+    assert.equal(insertResult.code, "scopeCapabilitiesRequired");
+
+    const capRow = await query(`select 1 from training_load.metric_definition_scope_capabilities where metric_definition_id=$1`, [defId]);
+    assert.equal(capRow.rowCount, 0, "the capability must be gone — the removal correctly won");
+    const valueCount = await query(`select count(*)::int as n from training_load.metric_values where metric_definition_id=$1`, [defId]);
+    assert.equal(valueCount.rows[0].n, 0, "the value insert must have lost and left zero rows");
+  } finally {
+    releaseRemove();
+    await Promise.allSettled([insertPromise, removePromise]);
+    monitor.release();
+  }
+});
+
+// ============================================================
+// Round 3 — don't silently ignore source-backed time fields (§2)
+// ============================================================
+
+test("33. planned/external materialize rejects client-supplied startInstant/endInstant/durationMinutes it cannot verify against the authoritative source, instead of silently discarding them", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("sourcetime33");
+  const athlete = await makeAthleteInClub(clubId);
+  const { logicalSessionId } = await makePlanSessionForAthlete(athlete.athleteId, { date: "2026-09-08", owner: { ownerScope: "club", ownerClubId: clubId } });
+
+  // This plan session has no session_time set — the authoritative source
+  // has NO real startInstant to compare against, so supplying one at all
+  // must be rejected, never silently dropped.
+  const badStart = await api("/api/training-activity/materialize", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: uid(), planLogicalSessionId: logicalSessionId, startInstant: "2026-09-08T10:00:00Z" },
+  });
+  assert.equal(badStart.status, 400, JSON.stringify(badStart.body));
+
+  const badEnd = await api("/api/training-activity/materialize", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: uid(), planLogicalSessionId: logicalSessionId, endInstant: "2026-09-08T11:00:00Z" },
+  });
+  assert.equal(badEnd.status, 400, JSON.stringify(badEnd.body));
+
+  const badDuration = await api("/api/training-activity/materialize", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: uid(), planLogicalSessionId: logicalSessionId, durationMinutes: 60 },
+  });
+  assert.equal(badDuration.status, 400, JSON.stringify(badDuration.body));
+
+  const leftover = await query(`select count(*)::int as n from training.activity_participants where athlete_id=$1`, [athlete.athleteId]);
+  assert.equal(leftover.rows[0].n, 0, "every rejected attempt must leave zero rows");
+
+  // Once no unverifiable fields are supplied, the SAME call succeeds.
+  const ok = await api("/api/training-activity/materialize", { method: "POST", cookie: coachCookie, body: { requestKey: uid(), planLogicalSessionId: logicalSessionId } });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+});
+
+// ============================================================
+// Round 3 — group-materialization routes validate too (§3)
+// ============================================================
+
+test("34. group-materialization routes (/materialize/external-occurrence, /materialize/metric-event) validate activityTypeKey and name exactly like /materialize — controlled 400, zero partial writes", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("groupvalidate34");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const sysAdmin = await makeUser({ email: `sysadmin34-${uid()}@test.local` });
+  const { occurrenceId } = await makeExternalAssignmentForAthlete(athleteId, sysAdmin, { date: "2026-09-08", owner: { ownerScope: "club", ownerClubId: clubId } });
+  const eventId = await makeMetricEvent({ ownerClubId: clubId, date: "2026-09-08", eventTimezoneSnapshot: "UTC" });
+  await addMetricParticipant({ eventId, athleteId });
+
+  const badTypeOccurrence = await api(`/api/training-activity/materialize/external-occurrence/${occurrenceId}`, { method: "POST", cookie: coachCookie, body: { activityTypeKey: "not_a_real_type" } });
+  assert.equal(badTypeOccurrence.status, 400, JSON.stringify(badTypeOccurrence.body));
+  const longNameOccurrence = await api(`/api/training-activity/materialize/external-occurrence/${occurrenceId}`, { method: "POST", cookie: coachCookie, body: { name: "x".repeat(500) } });
+  assert.equal(longNameOccurrence.status, 400);
+
+  const badTypeEvent = await api(`/api/training-activity/materialize/metric-event/${eventId}`, { method: "POST", cookie: coachCookie, body: { activityTypeKey: "not_a_real_type" } });
+  assert.equal(badTypeEvent.status, 400, JSON.stringify(badTypeEvent.body));
+  const longNameEvent = await api(`/api/training-activity/materialize/metric-event/${eventId}`, { method: "POST", cookie: coachCookie, body: { name: "x".repeat(500) } });
+  assert.equal(longNameEvent.status, 400);
+
+  const leftover = await query(`select count(*)::int as n from training.activities where owner_club_id=$1`, [clubId]);
+  assert.equal(leftover.rows[0].n, 0, "every rejected group-materialize attempt must leave zero activities");
+
+  // A valid call on each route still succeeds.
+  const goodOccurrence = await api(`/api/training-activity/materialize/external-occurrence/${occurrenceId}`, { method: "POST", cookie: coachCookie, body: { activityTypeKey: "training_session", name: "Squad" } });
+  assert.equal(goodOccurrence.status, 201, JSON.stringify(goodOccurrence.body));
+  const goodEvent = await api(`/api/training-activity/materialize/metric-event/${eventId}`, { method: "POST", cookie: coachCookie, body: { activityTypeKey: "training_session", name: "GPS" } });
+  assert.equal(goodEvent.status, 201, JSON.stringify(goodEvent.body));
+});
+
+// ============================================================
+// Round 3 — DB-level timezone integrity on activity_participants +
+// activities' own started_at/occurred_local_date consistency (§4)
+// ============================================================
+
+test("35. activity_participants itself rejects a blank/invalid timezone_snapshot, and training.activities rejects an occurred_local_date that disagrees with started_at converted into its OWN timezone_snapshot — both at the DB level, bypassing Node validation", async () => {
+  const clubId = await makeClub();
+  const activity = await query(`insert into training.activities (occurred_local_date, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state) values ('2026-09-08','UTC','club',$1,'manual','confirmed') returning id`, [clubId]);
+  const athleteUser = await makeUser({ email: `dbtz35-${uid()}@test.local` });
+  const athleteId = await makeAthlete({ userId: athleteUser, timezone: "UTC" });
+
+  await assert.rejects(
+    query(`insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot) values ($1,$2,'2026-09-08','Not/AZone')`, [activity.rows[0].id, athleteId]),
+    /is not a timezone Postgres recognizes/,
+  );
+  await assert.rejects(
+    query(`insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot) values ($1,$2,'2026-09-08','')`, [activity.rows[0].id, athleteId]),
+    /timezone_snapshot cannot be blank/,
+  );
+
+  // started_at (2026-09-08T23:30:00Z) converted into UTC is still
+  // 2026-09-08 — but occurred_local_date is deliberately wrong here.
+  await assert.rejects(
+    query(`insert into training.activities (occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state) values ('2026-09-09','2026-09-08T23:30:00Z','UTC','club',$1,'manual','confirmed')`, [clubId]),
+    /does not match started_at/,
+  );
+
+  // The midnight-crossing case itself must remain entirely legal: the
+  // activity's OWN date agrees with started_at in the activity's OWN
+  // (event) timezone, while nothing here constrains any participant's
+  // own local_date to match it.
+  const nyActivity = await query(`insert into training.activities (occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state) values ('2026-09-08','2026-09-09T03:30:00Z','America/New_York','club',$1,'manual','confirmed') returning id`, [clubId]);
+  assert.ok(nyActivity.rows[0].id);
+  const belgradeAthleteUser = await makeUser({ email: `dbtz35b-${uid()}@test.local` });
+  const belgradeAthleteId = await makeAthlete({ userId: belgradeAthleteUser, timezone: "Europe/Belgrade" });
+  const participant = await query(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot) values ($1,$2,'2026-09-09','Europe/Belgrade') returning id`,
+    [nyActivity.rows[0].id, belgradeAthleteId],
+  );
+  assert.ok(participant.rows[0].id, "a participant's own local_date the FOLLOWING day, in their own zone, remains entirely legal");
+});
+
+// ============================================================
+// Round 3 — catalog list must return capabilities (§5)
+// ============================================================
+
+test("36. the paginated definitions list returns scope_capabilities for every row, via one query, matching create/detail/PUT field naming", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("listcaps36");
+  const configuredKey = `listcaps_configured_${uid()}`;
+  const unconfiguredKey = `listcaps_unconfigured_${uid()}`;
+  const configured = await api("/api/training-load/metrics/definitions", {
+    method: "POST", cookie: coachCookie,
+    body: { key: configuredKey, label: "List Caps Configured", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric", scopeCapabilities: ["session", "component"] },
+  });
+  assert.equal(configured.status, 201);
+  const unconfigured = await api("/api/training-load/metrics/definitions", {
+    method: "POST", cookie: coachCookie,
+    body: { key: unconfiguredKey, label: "List Caps Unconfigured", ownerScope: "club", ownerClubId: clubId, unit: "m", valueType: "numeric" },
+  });
+  assert.equal(unconfigured.status, 201);
+
+  const list = await api(`/api/training-load/metrics/definitions?search=listcaps_&ownerScope=club`, { cookie: coachCookie });
+  assert.equal(list.status, 200, JSON.stringify(list.body));
+  const configuredRow = list.body.rows.find((r) => r.key === configuredKey);
+  const unconfiguredRow = list.body.rows.find((r) => r.key === unconfiguredKey);
+  assert.ok(configuredRow, "the configured definition must appear in the list");
+  assert.ok(unconfiguredRow, "the unconfigured definition must appear in the list");
+  assert.deepEqual([...configuredRow.scope_capabilities].sort(), ["component", "session"]);
+  assert.deepEqual(unconfiguredRow.scope_capabilities, [], "an unconfigured definition is explicitly an empty array, never null or omitted");
 });

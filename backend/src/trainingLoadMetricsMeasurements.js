@@ -32,6 +32,24 @@ function httpError(status, message, code) {
 // P0001 to carry that meaning back to the caller. The DB trigger remains
 // the unconditional last-resort backstop regardless of whether this was
 // ever called.
+// Takes a `FOR KEY SHARE` lock on every distinct metric_definitions row
+// about to be written against, sorted by id for a stable, deadlock-free
+// lock order across every write path that can touch more than one
+// definition in a single transaction (a group event submission
+// especially). `FOR KEY SHARE` is the weakest row lock mode that still
+// conflicts with `FOR UPDATE` (which setDefinitionScopeCapabilities in
+// trainingLoadMetricsCatalog.js takes) — it does NOT conflict with
+// itself, so unrelated concurrent value-writes against the SAME or
+// DIFFERENT definitions never block each other, only a capability
+// removal does. MUST be called before assertScopeCapabilityConfigured
+// below, on every path that can insert into metric_values.
+async function lockDefinitionsForKeyShare(client, definitionIds) {
+  const unique = [...new Set(definitionIds)].sort();
+  for (const id of unique) {
+    await client.query(`select 1 from training_load.metric_definitions where id = $1 for key share`, [id]);
+  }
+}
+
 async function assertScopeCapabilityConfigured(client, { metricDefinitionId, scopeLevel }) {
   const r = await client.query(
     `select 1 from training_load.metric_definition_scope_capabilities where metric_definition_id=$1 and scope_level=$2`,
@@ -313,7 +331,7 @@ async function claimWriteRequest(client, { requestKey, requestedBy, operationKin
 // definition, or an invalid value anywhere rejects the entire request
 // with zero partial writes.
 // -----------------------------------------------------------------------
-export async function createGroupEvent(req, scope, body) {
+export async function createGroupEvent(req, scope, body, { onLocked } = {}) {
   const requestKey = body?.requestKey;
   if (!requestKey || typeof requestKey !== "string") return { error: "requestKey is required.", status: 400 };
   if (!Array.isArray(body?.participants) || body.participants.length === 0) return { error: "At least one participant is required.", status: 400 };
@@ -364,6 +382,8 @@ export async function createGroupEvent(req, scope, body) {
     });
     const valuesResult = await resolveValueEntries(client, req, flatEntries, { requireActive: true, requireCurrentVersion: true });
     if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error);
+    await lockDefinitionsForKeyShare(client, valuesResult.values.map((v) => v.metric_definition_id));
+    if (onLocked) await onLocked(client);
     const resolvedByParticipant = new Map();
     valuesResult.values.forEach((resolvedValue, idx) => {
       const participantIndex = flatEntries[idx].__participantIndex;
@@ -534,6 +554,7 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
     const valuesResult = await resolveValueEntries(client, req, body.values, { requireActive: false, requireCurrentVersion: false });
     if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error);
     const newValues = valuesResult.values;
+    await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     const completeness = validateCompleteValueSet(oldValuesRes.rows, newValues);
     if (completeness) throw httpError(completeness.status, completeness.error);
 
@@ -635,6 +656,7 @@ export async function correctImportedOccasionManually(req, scope, body) {
     const valuesResult = await resolveValueEntries(client, req, body.values, { requireActive: false, requireCurrentVersion: false });
     if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error);
     const newValues = valuesResult.values;
+    await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     const completeness = validateCompleteValueSet(oldValuesRes.rows, newValues);
     if (completeness) throw httpError(completeness.status, completeness.error);
 
@@ -679,6 +701,7 @@ export async function correctSourceIdentityOccasion(client, { sourceIdentityId, 
   try {
     const lockRes = await client.query(`select * from training_load.metric_source_identities where id=$1 for update`, [sourceIdentityId]);
     const identity = lockRes.rows[0];
+    await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     if (onLocked) await onLocked();
     if (identity.current_occasion_id !== expectedCurrentOccasionId) {
       throw new Error(`STALE_BASE_REVISION: expected current=${expectedCurrentOccasionId} but actual current=${identity.current_occasion_id}`);
@@ -722,6 +745,7 @@ export async function importResendSynthetic(client, { sourceIdentityId, newValue
   try {
     const lockRes = await client.query(`select * from training_load.metric_source_identities where id=$1 for update`, [sourceIdentityId]);
     const identity = lockRes.rows[0];
+    await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     if (onLocked) await onLocked();
     const currentOccRes = await client.query(`select * from training_load.metric_measurement_occasions where id=$1`, [identity.current_occasion_id]);
     const currentOcc = currentOccRes.rows[0];

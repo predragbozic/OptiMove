@@ -221,6 +221,20 @@ declare
   v_allowed boolean;
   v_component_linked boolean;
 begin
+  -- Compatible lock, taken BEFORE reading capabilities below — the
+  -- app-layer write paths already take this same `FOR KEY SHARE` lock
+  -- earlier in their own transaction (see lockDefinitionsForKeyShare in
+  -- trainingLoadMetricsMeasurements.js), but this trigger fires on
+  -- EVERY insert into metric_values regardless of caller, so it is the
+  -- one place that protects a future or raw write path that never went
+  -- through that app-layer lock. `FOR KEY SHARE` conflicts with the
+  -- `FOR UPDATE` setDefinitionScopeCapabilities takes on the same
+  -- metric_definitions row (and only with that — it does not conflict
+  -- with itself), so a capability removal and a value insert against
+  -- the SAME definition always serialize through this one lock,
+  -- regardless of which side got here first.
+  perform 1 from training_load.metric_definitions where id = new.metric_definition_id for key share;
+
   select o.segment_id, e.scope_level into v_segment_id, v_event_scope_level
     from training_load.metric_measurement_occasions o
     join training_load.metric_event_participants p on p.id = o.event_participant_id

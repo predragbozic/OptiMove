@@ -196,14 +196,22 @@ create trigger activities_protect_lifecycle_transitions
   before update on training.activities
   for each row execute function training.protect_activity_lifecycle_transitions();
 
--- DB-level backstop for two invariants the service layer already
--- validates before ever reaching here (Node validation alone is never
--- sufficient — this table can be written by more than one code path over
--- time): timezone_snapshot must be a real zone Postgres itself
--- recognizes (never blank, never a typo'd string — same `... AT TIME
--- ZONE` recognition trick used for training_load.metric_events.
--- event_timezone_snapshot), and ended_at may never be BEFORE started_at
--- when both are known.
+-- DB-level backstop for invariants the service layer already validates
+-- before ever reaching here (Node validation alone is never sufficient —
+-- this table can be written by more than one code path over time):
+-- timezone_snapshot must be a real zone Postgres itself recognizes
+-- (never blank, never a typo'd string — same `... AT TIME ZONE`
+-- recognition trick used for training_load.metric_events.
+-- event_timezone_snapshot); ended_at may never be BEFORE started_at when
+-- both are known; and whenever started_at IS known, occurred_local_date
+-- must be the date of that instant IN THIS ACTIVITY'S OWN
+-- timezone_snapshot — never an independently-entered, possibly-
+-- inconsistent date. This is an ACTIVITY-level check only, deliberately —
+-- it says nothing about any one participant's own local_date (see
+-- validate_participant_timezone below), which is legitimately computed in
+-- THAT participant's own timezone and may fall on the day AFTER this
+-- activity's own date (the midnight-crossing case — see v4's
+-- materialize_activity_group_from_metric_event()).
 create function training.validate_activity_timezone_and_interval() returns trigger as $$
 begin
   if new.timezone_snapshot is null or btrim(new.timezone_snapshot) = '' then
@@ -216,6 +224,11 @@ begin
   end;
   if new.started_at is not null and new.ended_at is not null and new.ended_at < new.started_at then
     raise exception 'training.activities (id=%): ended_at cannot be before started_at', coalesce(new.id::text, '(new)');
+  end if;
+  if new.started_at is not null
+     and new.occurred_local_date is distinct from (new.started_at at time zone new.timezone_snapshot)::date then
+    raise exception 'training.activities (id=%): occurred_local_date (%) does not match started_at (%) converted into timezone_snapshot (%)',
+      coalesce(new.id::text, '(new)'), new.occurred_local_date, new.started_at, new.timezone_snapshot;
   end if;
   return new;
 end;
@@ -311,6 +324,30 @@ create table training.activity_participants (
   )
 );
 create index activity_participants_athlete_idx on training.activity_participants (athlete_id, local_date);
+
+-- Same DB-level timezone-validity backstop as training.activities'
+-- own validate_activity_timezone_and_interval — deliberately NOT
+-- extended with any cross-check against activities.occurred_local_date:
+-- a participant's own local_date is legitimately computed in THEIR OWN
+-- timezone_snapshot (see materialize_activity_group_from_metric_event(),
+-- v4) and may fall on a DIFFERENT calendar date than the activity's own
+-- date — the midnight-crossing case this whole column exists for.
+create function training.validate_participant_timezone() returns trigger as $$
+begin
+  if new.timezone_snapshot is null or btrim(new.timezone_snapshot) = '' then
+    raise exception 'training.activity_participants: timezone_snapshot cannot be blank';
+  end if;
+  begin
+    perform now() at time zone new.timezone_snapshot;
+  exception when others then
+    raise exception 'training.activity_participants: "%" is not a timezone Postgres recognizes', new.timezone_snapshot;
+  end;
+  return new;
+end;
+$$ language plpgsql;
+create trigger activity_participants_validate_timezone
+  before insert or update on training.activity_participants
+  for each row execute function training.validate_participant_timezone();
 
 create function training.protect_participant_identity_once_linked() returns trigger as $$
 declare

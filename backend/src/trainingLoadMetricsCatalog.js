@@ -144,8 +144,17 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
   }
   const pageSize = clampPageSize(limit);
   params.push(pageSize + 1);
+  // scope_capabilities via one correlated scalar subquery, aggregated —
+  // still exactly one round trip for the whole page, never N follow-up
+  // GET /definitions/:id calls per row. coalesce(...) makes an
+  // unconfigured definition an explicit empty array, never a bare null a
+  // caller could mistake for "not loaded yet".
   const result = await query(
-    `select d.*, dv.unit, dv.value_type, dv.min_value, dv.max_value, dv.condition_description, dv.daily_aggregation_method, dv.version_number
+    `select d.*, dv.unit, dv.value_type, dv.min_value, dv.max_value, dv.condition_description, dv.daily_aggregation_method, dv.version_number,
+       coalesce(
+         (select array_agg(sc.scope_level order by sc.scope_level) from training_load.metric_definition_scope_capabilities sc where sc.metric_definition_id = d.id),
+         array[]::varchar[]
+       ) as scope_capabilities
      from training_load.metric_definitions d
      join training_load.metric_definition_versions dv on dv.id = d.current_version_id
      where ${conditions.join(" and ")}
@@ -244,56 +253,82 @@ export async function createDefinition(req, body) {
 // caller gets a clean, specific error, with
 // training_load.protect_scope_capability_with_history (v3 migration)
 // as the unconditional last-resort backstop regardless of caller.
-export async function setDefinitionScopeCapabilities(req, id, rawScopeCapabilities) {
-  const existing = await query(`select * from training_load.metric_definitions where id = $1`, [id]);
-  const row = existing.rows[0];
-  if (!row) return { error: "Not found.", status: 404 };
-  if (!canManageCatalogRow(req, row)) return { error: "Outside your access.", status: 403 };
+// Race fix: this used to read the definition/current-capabilities/
+// history OUTSIDE any transaction, so a concurrent value insert could
+// slip a new historical row in between the history check and the actual
+// DELETE, leaving a real value stranded under a scope no longer
+// declared. Now takes `FOR UPDATE` on the metric_definitions row FIRST,
+// before any of those reads — every value-write path (see
+// lockDefinitionsForKeyShare below) takes a `FOR KEY SHARE` lock on the
+// SAME row before its own capability check, and `FOR UPDATE` conflicts
+// with `FOR KEY SHARE` (but not with itself across DIFFERENT
+// definitions, and KEY SHARE doesn't conflict with KEY SHARE, so
+// unrelated writes never block each other) — giving this setter and
+// every write path one real, shared serialization point per definition.
+// `onLocked` (default no-op) is a test-only hook, same convention as
+// this app's other deterministic-concurrency-tested functions.
+export async function setDefinitionScopeCapabilities(req, id, rawScopeCapabilities, { onLocked } = {}) {
   const validated = validateScopeCapabilities(rawScopeCapabilities);
   if (validated.error) return validated;
   if (validated.scopeCapabilities === undefined) return { error: "scopeCapabilities is required.", status: 400 };
   const desired = new Set(validated.scopeCapabilities);
 
-  const current = await query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [id]);
-  const currentSet = new Set(current.rows.map((r) => r.scope_level));
-  const toAdd = [...desired].filter((s) => !currentSet.has(s));
-  const toRemove = [...currentSet].filter((s) => !desired.has(s));
-
-  if (toRemove.length) {
-    const historyCheck = await query(
-      `select distinct (case when e.scope_level = 'day' then 'day' when o.segment_id is not null then 'component' else 'session' end) as observed_scope
-       from training_load.metric_values v
-       join training_load.metric_measurement_occasions o on o.id = v.occasion_id
-       join training_load.metric_event_participants p on p.id = o.event_participant_id
-       join training_load.metric_events e on e.id = p.event_id
-       where v.metric_definition_id = $1`,
-      [id],
-    );
-    const observedScopes = new Set(historyCheck.rows.map((r) => r.observed_scope));
-    const blocked = toRemove.filter((s) => observedScopes.has(s));
-    if (blocked.length) {
-      return { error: `Cannot remove scope capability for level(s) ${blocked.join(", ")} — real historical values already exist at that scope.`, status: 409, code: "scopeCapabilityHasHistory" };
-    }
-  }
-
   const client = await pool.connect();
   try {
     await client.query("begin");
+    const existing = await client.query(`select * from training_load.metric_definitions where id = $1 for update`, [id]);
+    if (onLocked) await onLocked(client);
+    const row = existing.rows[0];
+    if (!row) {
+      await client.query("rollback");
+      return { error: "Not found.", status: 404 };
+    }
+    if (!canManageCatalogRow(req, row)) {
+      await client.query("rollback");
+      return { error: "Outside your access.", status: 403 };
+    }
+
+    const current = await client.query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [id]);
+    const currentSet = new Set(current.rows.map((r) => r.scope_level));
+    const toAdd = [...desired].filter((s) => !currentSet.has(s));
+    const toRemove = [...currentSet].filter((s) => !desired.has(s));
+
+    if (toRemove.length) {
+      const historyCheck = await client.query(
+        `select distinct (case when e.scope_level = 'day' then 'day' when o.segment_id is not null then 'component' else 'session' end) as observed_scope
+         from training_load.metric_values v
+         join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+         join training_load.metric_event_participants p on p.id = o.event_participant_id
+         join training_load.metric_events e on e.id = p.event_id
+         where v.metric_definition_id = $1`,
+        [id],
+      );
+      const observedScopes = new Set(historyCheck.rows.map((r) => r.observed_scope));
+      const blocked = toRemove.filter((s) => observedScopes.has(s));
+      if (blocked.length) {
+        await client.query("rollback");
+        return { error: `Cannot remove scope capability for level(s) ${blocked.join(", ")} — real historical values already exist at that scope.`, status: 409, code: "scopeCapabilityHasHistory" };
+      }
+    }
+
     for (const s of toAdd) {
       await client.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,$2) on conflict do nothing`, [id, s]);
     }
     for (const s of toRemove) {
       await client.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id=$1 and scope_level=$2`, [id, s]);
     }
+    const after = await client.query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level`, [id]);
     await client.query("commit");
+    // snake_case scope_capabilities — same field name as create/detail/
+    // list, so a caller never has to special-case this ONE response's
+    // own shape.
+    return { row: { id, scope_capabilities: after.rows.map((r) => r.scope_level) } };
   } catch (error) {
     await client.query("rollback").catch(() => {});
     throw error;
   } finally {
     client.release();
   }
-  const after = await query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level`, [id]);
-  return { row: { id, scopeCapabilities: after.rows.map((r) => r.scope_level) } };
 }
 
 function toVersionFields(v) {
