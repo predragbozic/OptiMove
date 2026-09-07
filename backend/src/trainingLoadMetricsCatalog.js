@@ -71,6 +71,21 @@ export const archiveCategory = (req, id) => archiveNode(req, "metric_categories"
 
 const VALUE_TYPES = new Set(["numeric", "boolean", "text"]);
 const AGGREGATION_METHODS = new Set(["sum", "avg", "max", "last", "none"]);
+const SCOPE_LEVELS = new Set(["session", "component", "day"]);
+
+// scopeCapabilities is the application-level configuration path for
+// training_load.metric_definition_scope_capabilities (see migrations_v2's
+// training_activity_v3 migration) — undefined means "not provided, leave
+// as-is/unconfigured", never silently defaulted to some guessed set.
+function validateScopeCapabilities(raw) {
+  if (raw === undefined) return { scopeCapabilities: undefined };
+  if (!Array.isArray(raw)) return { error: "scopeCapabilities must be an array.", status: 400 };
+  const values = [...new Set(raw)];
+  for (const v of values) {
+    if (!SCOPE_LEVELS.has(v)) return { error: `scopeCapabilities entries must be one of ${[...SCOPE_LEVELS].join(", ")}.`, status: 400 };
+  }
+  return { scopeCapabilities: values };
+}
 
 function validateVersionInput(body) {
   const valueType = body?.valueType;
@@ -162,7 +177,8 @@ export async function getDefinition(req, id) {
     params,
   );
   if (!visibleCheck.rowCount) return null;
-  return row;
+  const capsResult = await query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level`, [id]);
+  return { ...row, scope_capabilities: capsResult.rows.map((r) => r.scope_level) };
 }
 
 export async function createDefinition(req, body) {
@@ -174,6 +190,8 @@ export async function createDefinition(req, body) {
   if (versionInput.error) return versionInput;
   const owner = resolveCatalogOwnerScope(req, body);
   if (owner.error) return owner;
+  const scopeCapInput = validateScopeCapabilities(body?.scopeCapabilities);
+  if (scopeCapInput.error) return scopeCapInput;
 
   const client = await pool.connect();
   try {
@@ -200,14 +218,82 @@ export async function createDefinition(req, body) {
       ],
     );
     await client.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [versionResult.rows[0].id, definition.id]);
+    // A brand-new definition has, by construction, zero historical
+    // values at every scope — every entry here is a genuine declaration,
+    // never a guess derived from anything.
+    const scopeCapabilities = scopeCapInput.scopeCapabilities || [];
+    for (const s of scopeCapabilities) {
+      await client.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,$2)`, [definition.id, s]);
+    }
     await client.query("commit");
-    return { row: { ...definition, current_version_id: versionResult.rows[0].id, ...toVersionFields(versionResult.rows[0]) } };
+    return { row: { ...definition, current_version_id: versionResult.rows[0].id, ...toVersionFields(versionResult.rows[0]), scope_capabilities: scopeCapabilities } };
   } catch (error) {
     await client.query("rollback").catch(() => {});
     throw error;
   } finally {
     client.release();
   }
+}
+
+// Dedicated authorized configuration path for scope capabilities — lets
+// the definition's own owner declare/change WHICH scopes ('session',
+// 'component', 'day') it may legitimately be captured at, after
+// creation. Adding a scope is always safe; REMOVING one is refused
+// (409, code scopeCapabilityHasHistory) the moment any real historical
+// value already exists at that scope — checked proactively here so the
+// caller gets a clean, specific error, with
+// training_load.protect_scope_capability_with_history (v3 migration)
+// as the unconditional last-resort backstop regardless of caller.
+export async function setDefinitionScopeCapabilities(req, id, rawScopeCapabilities) {
+  const existing = await query(`select * from training_load.metric_definitions where id = $1`, [id]);
+  const row = existing.rows[0];
+  if (!row) return { error: "Not found.", status: 404 };
+  if (!canManageCatalogRow(req, row)) return { error: "Outside your access.", status: 403 };
+  const validated = validateScopeCapabilities(rawScopeCapabilities);
+  if (validated.error) return validated;
+  if (validated.scopeCapabilities === undefined) return { error: "scopeCapabilities is required.", status: 400 };
+  const desired = new Set(validated.scopeCapabilities);
+
+  const current = await query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [id]);
+  const currentSet = new Set(current.rows.map((r) => r.scope_level));
+  const toAdd = [...desired].filter((s) => !currentSet.has(s));
+  const toRemove = [...currentSet].filter((s) => !desired.has(s));
+
+  if (toRemove.length) {
+    const historyCheck = await query(
+      `select distinct (case when e.scope_level = 'day' then 'day' when o.segment_id is not null then 'component' else 'session' end) as observed_scope
+       from training_load.metric_values v
+       join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+       join training_load.metric_event_participants p on p.id = o.event_participant_id
+       join training_load.metric_events e on e.id = p.event_id
+       where v.metric_definition_id = $1`,
+      [id],
+    );
+    const observedScopes = new Set(historyCheck.rows.map((r) => r.observed_scope));
+    const blocked = toRemove.filter((s) => observedScopes.has(s));
+    if (blocked.length) {
+      return { error: `Cannot remove scope capability for level(s) ${blocked.join(", ")} — real historical values already exist at that scope.`, status: 409, code: "scopeCapabilityHasHistory" };
+    }
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    for (const s of toAdd) {
+      await client.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,$2) on conflict do nothing`, [id, s]);
+    }
+    for (const s of toRemove) {
+      await client.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id=$1 and scope_level=$2`, [id, s]);
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  const after = await query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level`, [id]);
+  return { row: { id, scopeCapabilities: after.rows.map((r) => r.scope_level) } };
 }
 
 function toVersionFields(v) {

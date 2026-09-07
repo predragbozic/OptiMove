@@ -19,7 +19,7 @@ import {
   listDomains, createDomain, archiveDomain,
   listCategories, createCategory, archiveCategory,
   listDefinitions, getDefinition, createDefinition, updateDefinitionCosmetic, archiveDefinition,
-  createDefinitionVersion, listDefinitionVersions,
+  createDefinitionVersion, listDefinitionVersions, setDefinitionScopeCapabilities,
   hideDefinitionForUser, unhideDefinitionForUser,
   listStructureLinks, createStructureLink, deleteStructureLink,
 } from "../trainingLoadMetricsCatalog.js";
@@ -145,7 +145,11 @@ async function resolveReadContext(req, res) {
 }
 
 function sendServiceResult(res, result, successStatus = 200) {
-  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+  // `code` is optional and additive — only setDefinitionScopeCapabilities
+  // currently sets one (e.g. "scopeCapabilityHasHistory"), for a caller
+  // that needs to distinguish error REASONS programmatically, not just
+  // read a human message.
+  if (result.error) return res.status(result.status || 400).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });
   return res.status(successStatus).json(result);
 }
 
@@ -294,6 +298,25 @@ router.post("/definitions/:id/archive", async (req, res, next) => {
     const scope = await requireMetricsScope(req, res);
     if (!scope) return;
     const result = await archiveDefinition(req, req.params.id);
+    sendServiceResult(res, result);
+  } catch (error) {
+    respondToWriteError(res, next, error);
+  }
+});
+
+// Dedicated, authorized configuration path for
+// training_load.metric_definition_scope_capabilities (see
+// trainingLoadMetricsCatalog.js's own setDefinitionScopeCapabilities for
+// the full contract) — replaces the definition's declared set with
+// exactly the one given; removing a scope with real historical values is
+// refused with a controlled 409 (scopeCapabilityHasHistory), never a raw
+// DB error.
+router.put("/definitions/:id/scope-capabilities", async (req, res, next) => {
+  try {
+    if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
+    const scope = await requireMetricsScope(req, res);
+    if (!scope) return;
+    const result = await setDefinitionScopeCapabilities(req, req.params.id, req.body?.scopeCapabilities);
     sendServiceResult(res, result);
   } catch (error) {
     respondToWriteError(res, next, error);

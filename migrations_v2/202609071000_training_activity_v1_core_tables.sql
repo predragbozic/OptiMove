@@ -196,6 +196,34 @@ create trigger activities_protect_lifecycle_transitions
   before update on training.activities
   for each row execute function training.protect_activity_lifecycle_transitions();
 
+-- DB-level backstop for two invariants the service layer already
+-- validates before ever reaching here (Node validation alone is never
+-- sufficient — this table can be written by more than one code path over
+-- time): timezone_snapshot must be a real zone Postgres itself
+-- recognizes (never blank, never a typo'd string — same `... AT TIME
+-- ZONE` recognition trick used for training_load.metric_events.
+-- event_timezone_snapshot), and ended_at may never be BEFORE started_at
+-- when both are known.
+create function training.validate_activity_timezone_and_interval() returns trigger as $$
+begin
+  if new.timezone_snapshot is null or btrim(new.timezone_snapshot) = '' then
+    raise exception 'training.activities: timezone_snapshot cannot be blank';
+  end if;
+  begin
+    perform now() at time zone new.timezone_snapshot;
+  exception when others then
+    raise exception 'training.activities: "%" is not a timezone Postgres recognizes', new.timezone_snapshot;
+  end;
+  if new.started_at is not null and new.ended_at is not null and new.ended_at < new.started_at then
+    raise exception 'training.activities (id=%): ended_at cannot be before started_at', coalesce(new.id::text, '(new)');
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+create trigger activities_validate_timezone_and_interval
+  before insert or update on training.activities
+  for each row execute function training.validate_activity_timezone_and_interval();
+
 create table training.activity_field_correction_log (
   id uuid primary key default gen_random_uuid(),
   activity_id uuid not null references training.activities(id),

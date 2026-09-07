@@ -50,6 +50,38 @@ join training_load.metric_event_participants p on p.id = o.event_participant_id
 join training_load.metric_events e on e.id = p.event_id
 on conflict do nothing;
 
+-- A capability may never be removed once real historical values exist at
+-- that scope for that definition — doing so would silently strand
+-- existing metric_values under a scope the definition no longer admits
+-- (they'd stay readable, since this only guards INSERT, but the
+-- definition's own configured shape would then lie about its own
+-- history). The application layer (trainingLoadMetricsCatalog.js) is
+-- expected to prevent this from ever being attempted in the first place;
+-- this trigger is the LAST, unconditional line of defense regardless of
+-- what removed the row.
+create function training_load.protect_scope_capability_with_history() returns trigger as $$
+declare
+  v_has_history boolean;
+begin
+  select exists (
+    select 1
+    from training_load.metric_values v
+    join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+    join training_load.metric_event_participants p on p.id = o.event_participant_id
+    join training_load.metric_events e on e.id = p.event_id
+    where v.metric_definition_id = old.metric_definition_id
+      and (case when e.scope_level = 'day' then 'day' when o.segment_id is not null then 'component' else 'session' end) = old.scope_level
+  ) into v_has_history;
+  if v_has_history then
+    raise exception 'metric_definition_scope_capabilities: cannot remove scope ''%'' for definition % — real historical values already exist at that scope', old.scope_level, old.metric_definition_id;
+  end if;
+  return old;
+end;
+$$ language plpgsql;
+create trigger metric_definition_scope_capabilities_protect_history
+  before delete on training_load.metric_definition_scope_capabilities
+  for each row execute function training_load.protect_scope_capability_with_history();
+
 -- Three orthogonal dimensions on each metric_values row:
 --   aggregation_role — is this value a standalone/direct observation, a
 --     rollup ASSEMBLED FROM this source's own components
@@ -187,7 +219,6 @@ declare
   v_event_scope_level varchar;
   v_scope_level varchar;
   v_allowed boolean;
-  v_has_any_capability boolean;
   v_component_linked boolean;
 begin
   select o.segment_id, e.scope_level into v_segment_id, v_event_scope_level
@@ -201,27 +232,21 @@ begin
     else 'session'
   end;
 
+  -- Unconditional — a definition with ZERO declared capability rows is
+  -- rejected exactly like one with the WRONG capability declared. This
+  -- is deliberately the LAST strict line of defense regardless of
+  -- caller: the application layer (trainingLoadMetricsCatalog.js /
+  -- trainingLoadMetricsMeasurements.js) is expected to check this
+  -- proactively and return a clean, actionable 409
+  -- (`scopeCapabilitiesRequired`) before ever attempting the insert —
+  -- see that layer's own comments — but this trigger must still catch
+  -- anything that reaches metric_values by any other path.
   select exists (
     select 1 from training_load.metric_definition_scope_capabilities
     where metric_definition_id = new.metric_definition_id and scope_level = v_scope_level
   ) into v_allowed;
   if not v_allowed then
-    -- A definition with NO declared capability rows AT ALL predates (or
-    -- simply never adopted) the scope-capability system — the existing,
-    -- unmodified metric-definition creation route
-    -- (trainingLoadMetricsCatalog.js) has no mechanism to declare one,
-    -- so every metric_definition it has ever produced would otherwise
-    -- have every future value submission rejected by this trigger,
-    -- retroactively, the moment this migration is applied. Enforcement
-    -- is scoped to definitions that have at least one capability row
-    -- explicitly declared — never a blanket requirement on every
-    -- definition regardless of whether anything ever asked for one.
-    select exists (
-      select 1 from training_load.metric_definition_scope_capabilities where metric_definition_id = new.metric_definition_id
-    ) into v_has_any_capability;
-    if v_has_any_capability then
-      raise exception 'metric_values: metric_definition % has no declared scope_capability for level ''%''', new.metric_definition_id, v_scope_level;
-    end if;
+    raise exception 'metric_values: metric_definition % has no declared scope_capability for level ''%''', new.metric_definition_id, v_scope_level;
   end if;
 
   if v_scope_level = 'component' then

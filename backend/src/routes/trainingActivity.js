@@ -27,6 +27,13 @@ const router = Router();
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+// Same shape as trainingLoadMetrics.js's own validTimestamp — pins the
+// month/day/hour/minute/second to their real valid numeric ranges AND
+// requires an explicit zone (Z or a numeric ±HH:MM offset — never a bare
+// local time, which would be ambiguous for a stored instant).
+const TIMESTAMP_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-][01]\d:[0-5]\d)$/;
+const MAX_NAME_LENGTH = 200;
+const MAX_REASON_LENGTH = 2000;
 
 function validUuid(value) {
   return typeof value === "string" && UUID_PATTERN.test(value);
@@ -35,6 +42,54 @@ function validDate(value) {
   if (typeof value !== "string" || !DATE_PATTERN.test(value)) return false;
   const d = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+function validTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const m = TIMESTAMP_PATTERN.exec(value);
+  if (!m) return false;
+  const dateOnly = `${m[1]}-${m[2]}-${m[3]}`;
+  return validDate(dateOnly);
+}
+// The standard, reliable way to validate a real IANA timezone string in
+// Node without a DB round trip — Intl.DateTimeFormat throws RangeError
+// for anything it doesn't recognize, and correctly accepts "UTC".
+function validTimezone(value) {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function validPositiveFiniteInt(value) {
+  if (value === undefined || value === null) return true; // absent is fine
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0;
+}
+function validMaxLength(value, max) {
+  if (value === undefined || value === null) return true;
+  return typeof value === "string" && value.length <= max;
+}
+// The date, in `tz`, that `instantIso` falls on — "en-CA" formats
+// year-month-day in exactly YYYY-MM-DD order, which is what this needs.
+function localDateInTimezone(instantIso, tz) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(instantIso));
+}
+function validCursor(raw) {
+  if (raw === undefined || raw === null || raw === "") return { cursor: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { error: "Invalid cursor." };
+  }
+  if (parsed === null) return { cursor: null };
+  if (typeof parsed !== "object" || Array.isArray(parsed)) return { error: "Invalid cursor." };
+  if (!validDate(parsed.localDate) || !validUuid(parsed.activityId) || !validUuid(parsed.participantId)) {
+    return { error: "Invalid cursor." };
+  }
+  return { cursor: { localDate: parsed.localDate, activityId: parsed.activityId, participantId: parsed.participantId } };
 }
 
 // A controlled response for any error carrying httpStatus (thrown by the
@@ -97,14 +152,8 @@ router.get("/", async (req, res, next) => {
     if (athleteId !== undefined && !validUuid(athleteId)) return res.status(400).json({ error: "Invalid athleteId." });
     if (!validDate(dateFrom)) return res.status(400).json({ error: "Invalid dateFrom." });
     if (!validDate(dateTo)) return res.status(400).json({ error: "Invalid dateTo." });
-    let cursor = null;
-    if (req.query.cursor) {
-      try {
-        cursor = JSON.parse(req.query.cursor);
-      } catch {
-        return res.status(400).json({ error: "Invalid cursor." });
-      }
-    }
+    const { cursor, error: cursorError } = validCursor(req.query.cursor);
+    if (cursorError) return res.status(400).json({ error: cursorError });
     const result = await listActivities(readContext, { athleteId, dateFrom, dateTo, limit, cursor });
     res.json(result);
   } catch (error) {
@@ -201,12 +250,47 @@ router.post("/participants/:participantId/merge", async (req, res, next) => {
 router.post("/materialize", async (req, res, next) => {
   try {
     const b = req.body || {};
-    if (!validUuid(b.athleteId)) return res.status(400).json({ error: "athleteId is required." });
-    if (!validDate(b.localDate)) return res.status(400).json({ error: "localDate is required (YYYY-MM-DD)." });
-    if (typeof b.timezone !== "string" || !b.timezone) return res.status(400).json({ error: "timezone is required." });
     if (typeof b.requestKey !== "string" || !b.requestKey) return res.status(400).json({ error: "requestKey is required." });
-    if (b.planLogicalSessionId !== undefined && !validUuid(b.planLogicalSessionId)) return res.status(400).json({ error: "Invalid planLogicalSessionId." });
-    if (b.externalAssignmentId !== undefined && !validUuid(b.externalAssignmentId)) return res.status(400).json({ error: "Invalid externalAssignmentId." });
+    if (b.planLogicalSessionId !== undefined && b.planLogicalSessionId !== null && !validUuid(b.planLogicalSessionId)) return res.status(400).json({ error: "Invalid planLogicalSessionId." });
+    if (b.externalAssignmentId !== undefined && b.externalAssignmentId !== null && !validUuid(b.externalAssignmentId)) return res.status(400).json({ error: "Invalid externalAssignmentId." });
+    // Returned BEFORE any authorization/DB work — the service itself
+    // re-checks this too, but a malformed request should never even reach
+    // a transaction.
+    if (b.planLogicalSessionId && b.externalAssignmentId) {
+      return res.status(400).json({ error: "planLogicalSessionId and externalAssignmentId cannot both be provided." });
+    }
+    const naturalKey = b.planLogicalSessionId || b.externalAssignmentId;
+    if (!validMaxLength(b.name, MAX_NAME_LENGTH)) return res.status(400).json({ error: `name must be at most ${MAX_NAME_LENGTH} characters.` });
+    if (!validMaxLength(b.reason, MAX_REASON_LENGTH)) return res.status(400).json({ error: `reason must be at most ${MAX_REASON_LENGTH} characters.` });
+
+    if (naturalKey) {
+      // Identity (athleteId/localDate/timezone/startInstant/endInstant/
+      // durationMinutes) is derived AUTHORITATIVELY by the service from
+      // the real plan session / external assignment — never trusted from
+      // the client. These fields are optional here; if present, only
+      // their FORMAT is checked now (the service itself rejects a value
+      // that doesn't match the authoritative source). name/activityTypeKey
+      // remain pure presentation.
+      if (b.athleteId !== undefined && b.athleteId !== null && !validUuid(b.athleteId)) return res.status(400).json({ error: "Invalid athleteId." });
+      if (b.localDate !== undefined && b.localDate !== null && !validDate(b.localDate)) return res.status(400).json({ error: "Invalid localDate." });
+      if (b.timezone !== undefined && b.timezone !== null && !validTimezone(b.timezone)) return res.status(400).json({ error: "Invalid timezone." });
+    } else {
+      // Pure manual materialization — every identity/time field is
+      // client-supplied and must be fully validated here (Node-side); the
+      // DB additionally guards timezone validity and a reversed interval
+      // on training.activities itself.
+      if (!validUuid(b.athleteId)) return res.status(400).json({ error: "athleteId is required." });
+      if (!validDate(b.localDate)) return res.status(400).json({ error: "localDate is required (YYYY-MM-DD)." });
+      if (!validTimezone(b.timezone)) return res.status(400).json({ error: "timezone is required and must be a real IANA zone (e.g. UTC, Europe/Belgrade)." });
+      if (b.startInstant !== undefined && b.startInstant !== null && !validTimestamp(b.startInstant)) return res.status(400).json({ error: "Invalid startInstant — must be an explicitly-zoned timestamp." });
+      if (b.endInstant !== undefined && b.endInstant !== null && !validTimestamp(b.endInstant)) return res.status(400).json({ error: "Invalid endInstant — must be an explicitly-zoned timestamp." });
+      if (b.startInstant && b.endInstant && new Date(b.endInstant) < new Date(b.startInstant)) return res.status(400).json({ error: "endInstant cannot be before startInstant." });
+      if (!validPositiveFiniteInt(b.durationMinutes)) return res.status(400).json({ error: "durationMinutes must be a positive whole number." });
+      if (b.startInstant && localDateInTimezone(b.startInstant, b.timezone) !== b.localDate) {
+        return res.status(400).json({ error: "localDate does not match startInstant converted into timezone." });
+      }
+    }
+
     const operationKind = b.planLogicalSessionId ? "materialize_from_rpe" : b.externalAssignmentId ? "materialize_from_external" : "materialize_manual";
     const scope = await requireActivityWorkspace(req, res);
     if (!scope) return;

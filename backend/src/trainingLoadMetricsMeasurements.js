@@ -17,10 +17,29 @@ function uuid() {
   return crypto.randomUUID();
 }
 
-function httpError(status, message) {
+function httpError(status, message, code) {
   const e = new Error(message);
   e.httpStatus = status;
+  if (code) e.code = code;
   return e;
+}
+
+// Proactive, clean check for the SAME rule
+// training_load.check_metric_value_scope_capability (training_activity_v3
+// migration) enforces unconditionally at the DB level — this exists so a
+// real, routed write returns a specific, actionable 409
+// (scopeCapabilitiesRequired) instead of depending on the DB's own raw
+// P0001 to carry that meaning back to the caller. The DB trigger remains
+// the unconditional last-resort backstop regardless of whether this was
+// ever called.
+async function assertScopeCapabilityConfigured(client, { metricDefinitionId, scopeLevel }) {
+  const r = await client.query(
+    `select 1 from training_load.metric_definition_scope_capabilities where metric_definition_id=$1 and scope_level=$2`,
+    [metricDefinitionId, scopeLevel],
+  );
+  if (!r.rowCount) {
+    throw httpError(409, `Metric definition ${metricDefinitionId} has no configured scope capability for level '${scopeLevel}' — configure it before submitting a value at this scope.`, "scopeCapabilitiesRequired");
+  }
 }
 
 // Recursively sorts object keys at every nesting level so JSON.stringify
@@ -405,7 +424,9 @@ export async function createGroupEvent(req, scope, body) {
            values ($1,$2,$3,'manual',$4,$5)`,
           [occasionId, participantId, segmentId, occasionContentHash(groupValues), req.user.id],
         );
+        const groupScopeLevel = body.scopeLevel === "day" ? "day" : (segmentId ? "component" : "session");
         for (const v of groupValues) {
+          await assertScopeCapabilityConfigured(client, { metricDefinitionId: v.metric_definition_id, scopeLevel: groupScopeLevel });
           await client.query(
             `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text, unit_at_capture)
              values ($1,$2,$3,$4,$5,$6,$7)`,
@@ -422,7 +443,7 @@ export async function createGroupEvent(req, scope, body) {
     return { reused: false, eventId, participants: createdParticipants };
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    if (error.httpStatus) return { error: error.message, status: error.httpStatus };
+    if (error.httpStatus) return { error: error.message, status: error.httpStatus, ...(error.code ? { code: error.code } : {}) };
     throw error;
   } finally {
     client.release();
@@ -466,7 +487,7 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
   try {
     await client.query("begin");
     const targetLookup = await client.query(
-      `select o.*, p.event_id, e.owner_scope, e.owner_club_id, e.owner_team_id, e.owner_user_id
+      `select o.*, p.event_id, e.owner_scope, e.owner_club_id, e.owner_team_id, e.owner_user_id, e.scope_level as event_scope_level
        from training_load.metric_measurement_occasions o
        join training_load.metric_event_participants p on p.id = o.event_participant_id
        join training_load.metric_events e on e.id = p.event_id
@@ -522,7 +543,9 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
        values ($1,$2,$3,'manual',$4,$5,$6)`,
       [newOccasionId, target.event_participant_id, target.segment_id, occasionContentHash(newValues), req.user.id, targetOccasionId],
     );
+    const manualScopeLevel = target.event_scope_level === "day" ? "day" : (target.segment_id ? "component" : "session");
     for (const v of newValues) {
+      await assertScopeCapabilityConfigured(client, { metricDefinitionId: v.metric_definition_id, scopeLevel: manualScopeLevel });
       await client.query(
         `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text, unit_at_capture)
          values ($1,$2,$3,$4,$5,$6,$7)`,
@@ -542,7 +565,7 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
     return { reused: false, occasionId: newOccasionId };
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    if (error.httpStatus) return { error: error.message, status: error.httpStatus };
+    if (error.httpStatus) return { error: error.message, status: error.httpStatus, ...(error.code ? { code: error.code } : {}) };
     throw error;
   } finally {
     client.release();
@@ -598,7 +621,7 @@ export async function correctImportedOccasionManually(req, scope, body) {
     if (identity.current_occasion_id !== expectedCurrentOccasionId) throw httpError(409, "This revision was already superseded — reload and retry.");
 
     const targetLookup = await client.query(
-      `select o.*, p.event_id, e.owner_scope, e.owner_club_id, e.owner_team_id, e.owner_user_id
+      `select o.*, p.event_id, e.owner_scope, e.owner_club_id, e.owner_team_id, e.owner_user_id, e.scope_level as event_scope_level
        from training_load.metric_measurement_occasions o
        join training_load.metric_event_participants p on p.id = o.event_participant_id
        join training_load.metric_events e on e.id = p.event_id
@@ -621,7 +644,9 @@ export async function correctImportedOccasionManually(req, scope, body) {
        values ($1,$2,$3,'manual',$4,$5,$6,$7)`,
       [newOccasionId, target.event_participant_id, target.segment_id, occasionContentHash(newValues), sourceIdentityId, req.user.id, expectedCurrentOccasionId],
     );
+    const importScopeLevel = target.event_scope_level === "day" ? "day" : (target.segment_id ? "component" : "session");
     for (const v of newValues) {
+      await assertScopeCapabilityConfigured(client, { metricDefinitionId: v.metric_definition_id, scopeLevel: importScopeLevel });
       await client.query(
         `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text, unit_at_capture)
          values ($1,$2,$3,$4,$5,$6,$7)`,
@@ -635,7 +660,7 @@ export async function correctImportedOccasionManually(req, scope, body) {
     return { reused: false, occasionId: newOccasionId };
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    if (error.httpStatus) return { error: error.message, status: error.httpStatus };
+    if (error.httpStatus) return { error: error.message, status: error.httpStatus, ...(error.code ? { code: error.code } : {}) };
     throw error;
   } finally {
     client.release();

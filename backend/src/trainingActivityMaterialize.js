@@ -90,7 +90,7 @@ async function claimActivityWriteRequest(client, { requestKey, requestedBy, requ
 // AND-gate, not a lone higher threshold. Every candidate keeps its own
 // breakdown and the policy version that produced it, for audit
 // (activity_match_suggestions.score_breakdown/policy_version).
-const MATCH_POLICY_VERSION = 1;
+const MATCH_POLICY_VERSION = 2;
 
 function scoreCandidate({ startInstant, durationMinutes, name, activityTypeKey }, candidateRow) {
   const breakdown = {};
@@ -187,6 +187,83 @@ async function findActivityCandidates(client, { ownerScope, ownerIds, athleteId,
   return { exactKeyMatch: null, candidates };
 }
 
+// Resolves the AUTHORITATIVE identity for a natural-key materialize call —
+// never the client's own claimed athleteId/localDate/timezone/instant.
+// Returns null for a pure manual call (neither key given); throws 400 if
+// BOTH keys are given (checked before this is ever called, but re-checked
+// here too since this function is the one place that would otherwise
+// silently prefer one over the other).
+//
+//   planned  — resolved through the SAME "real, live, PUBLISHED Weekly
+//              plan" definition check_session_link_integrity() itself
+//              enforces at commit time (v2 migration) — a stale/draft/
+//              non-weekly/unpublished session resolves to nothing here
+//              either, failing fast with a clear 404 instead of a later,
+//              harder-to-diagnose DB-trigger rejection. The athlete comes
+//              from the plan's OWN athlete_id — never trusted from the
+//              caller. Timezone comes from that athlete's own
+//              device_timezone (there is no session-level timezone
+//              column); if it is null, this refuses rather than
+//              defaulting to UTC or guessing. started_at is derived from
+//              plan_days.date + plan_sessions.session_time, converted
+//              through that SAME timezone, when session_time is set —
+//              null otherwise (never fabricated).
+//   external — resolved through the real external_assignments row itself
+//              (which always carries its own timezone/local_scheduled_date
+//              — no fallback needed), joined up to its occurrence and
+//              schedule for ownership.
+async function resolveAuthoritativeSource(client, { planLogicalSessionId, externalAssignmentId }) {
+  if (planLogicalSessionId && externalAssignmentId) {
+    throw httpError(400, "planLogicalSessionId and externalAssignmentId cannot both be provided.");
+  }
+  if (planLogicalSessionId) {
+    const r = await client.query(
+      `select p.athlete_id, pd.date as local_date, a.device_timezone as timezone,
+              case when ps.session_time is not null and a.device_timezone is not null
+                then (pd.date + ps.session_time) at time zone a.device_timezone
+                else null end as start_instant,
+              pwo.owner_scope, pwo.owner_user_id, pwo.owner_club_id, pwo.owner_team_id
+       from plans.plan_sessions ps
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       join plans.plans p on p.id = pd.plan_id
+       join public.athletes a on a.id = p.athlete_id
+       left join training_load.plan_workspace_ownership pwo on pwo.plan_id = p.id
+       where ps.logical_session_id = $1
+         and p.is_active = true and p.is_edit_draft = false
+         and p.plan_type = 'weekly' and p.status = 'active'`,
+      [planLogicalSessionId],
+    );
+    if (!r.rowCount) throw httpError(404, "No real, live, published Weekly plan session was found for that logical session.");
+    const row = r.rows[0];
+    if (!row.timezone || !String(row.timezone).trim()) throw httpError(409, "The athlete's timezone is not resolvable — refusing to guess.");
+    if (!row.owner_scope) throw httpError(409, "That plan has no resolved workspace ownership.");
+    return {
+      athleteId: row.athlete_id, localDate: row.local_date, timezone: row.timezone, startInstant: row.start_instant,
+      ownerScope: row.owner_scope, ownerIds: { userId: row.owner_user_id, clubId: row.owner_club_id, teamId: row.owner_team_id },
+    };
+  }
+  if (externalAssignmentId) {
+    const r = await client.query(
+      `select ea.athlete_id, ea.local_scheduled_date as local_date, ea.timezone,
+              es.owner_scope, es.owner_user_id, es.owner_club_id, es.owner_team_id
+       from training_load.external_assignments ea
+       join training_load.external_schedule_occurrences eo on eo.id = ea.occurrence_id
+       join training_load.external_schedules es on es.id = eo.schedule_id
+       where ea.id = $1`,
+      [externalAssignmentId],
+    );
+    if (!r.rowCount) throw httpError(404, "External assignment not found.");
+    const row = r.rows[0];
+    if (!row.timezone || !String(row.timezone).trim()) throw httpError(409, "The assignment's timezone is not resolvable — refusing to guess.");
+    if (!row.owner_scope) throw httpError(409, "That external schedule has no resolved workspace ownership.");
+    return {
+      athleteId: row.athlete_id, localDate: row.local_date, timezone: row.timezone, startInstant: null,
+      ownerScope: row.owner_scope, ownerIds: { userId: row.owner_user_id, clubId: row.owner_club_id, teamId: row.owner_team_id },
+    };
+  }
+  return null;
+}
+
 // The core idempotent join for a SINGLE participant. Group identities
 // (shared external occurrence / shared metric event) go through the
 // dedicated SQL functions in migrations_v2's training_activity_v4 instead
@@ -206,13 +283,66 @@ export async function materializeActivityParticipant(scope, {
   planLogicalSessionId, externalAssignmentId,
 }) {
   if (scope.type === null) throw httpError(403, "Forbidden");
-  if (!(await isAthleteInWorkspaceScope(scope, athleteId))) throw httpError(403, "That athlete is outside your access.");
-  const ownerScope = scope.ownerContext.ownerScope;
-  const ownerIds = { userId: scope.ownerContext.ownerUserId, clubId: scope.ownerContext.ownerClubId, teamId: scope.ownerContext.ownerTeamId };
+  if (planLogicalSessionId && externalAssignmentId) {
+    throw httpError(400, "planLogicalSessionId and externalAssignmentId cannot both be provided.");
+  }
 
   const client = await pool.connect();
   try {
     await client.query("begin");
+
+    // AUTHORITATIVE identity resolution — for a natural-key call, the
+    // client's own athleteId/localDate/timezone/startInstant/endInstant/
+    // durationMinutes are NEVER trusted as the source of truth. If the
+    // client supplies athleteId/localDate/timezone anyway and it
+    // disagrees with the authoritative source, that is treated as a
+    // confused or hostile caller and rejected outright — never silently
+    // corrected — so a coach can never materialize athlete B's real
+    // session as if it belonged to athlete A merely by naming A in the
+    // request body. startInstant/endInstant/durationMinutes are always
+    // FORCED to the authoritative-derived shape for a natural-key call
+    // (there is no legitimate reason for a caller to supply timing data
+    // for an identity it does not control); name/activityTypeKey remain
+    // pure presentation — they affect matching/display only, never which
+    // athlete/date/timezone/owner this resolves to.
+    const authoritative = await resolveAuthoritativeSource(client, { planLogicalSessionId, externalAssignmentId });
+    let effectiveAthleteId = athleteId, effectiveLocalDate = localDate, effectiveTimezone = timezone;
+    let effectiveStartInstant = startInstant, effectiveEndInstant = endInstant, effectiveDurationMinutes = durationMinutes;
+    let ownerScope, ownerIds;
+    if (authoritative) {
+      if (athleteId !== undefined && athleteId !== null && String(athleteId) !== String(authoritative.athleteId)) {
+        throw httpError(400, "athleteId does not match the authoritative source (planned session / external assignment).");
+      }
+      if (localDate !== undefined && localDate !== null && String(localDate) !== String(authoritative.localDate)) {
+        throw httpError(400, "localDate does not match the authoritative source.");
+      }
+      if (timezone !== undefined && timezone !== null && timezone !== authoritative.timezone) {
+        throw httpError(400, "timezone does not match the authoritative source.");
+      }
+      effectiveAthleteId = authoritative.athleteId;
+      effectiveLocalDate = authoritative.localDate;
+      effectiveTimezone = authoritative.timezone;
+      effectiveStartInstant = authoritative.startInstant;
+      effectiveEndInstant = null;
+      effectiveDurationMinutes = null;
+      ownerScope = authoritative.ownerScope;
+      ownerIds = authoritative.ownerIds;
+      if (!canManageOwnerRow(scope, { owner_scope: ownerScope, owner_user_id: ownerIds.userId, owner_club_id: ownerIds.clubId, owner_team_id: ownerIds.teamId })) {
+        throw httpError(403, "That plan/assignment is outside your access.");
+      }
+    } else {
+      ownerScope = scope.ownerContext.ownerScope;
+      ownerIds = { userId: scope.ownerContext.ownerUserId, clubId: scope.ownerContext.ownerClubId, teamId: scope.ownerContext.ownerTeamId };
+    }
+    if (!(await isAthleteInWorkspaceScope(scope, effectiveAthleteId))) throw httpError(403, "That athlete is outside your access.");
+    athleteId = effectiveAthleteId; localDate = effectiveLocalDate; timezone = effectiveTimezone;
+    startInstant = effectiveStartInstant; endInstant = effectiveEndInstant; durationMinutes = effectiveDurationMinutes;
+
+    if (activityTypeKey) {
+      const typeRow = await client.query(`select 1 from training.activity_types where key = $1 and is_active = true`, [activityTypeKey]);
+      if (!typeRow.rowCount) throw httpError(400, `Unknown or inactive activityTypeKey "${activityTypeKey}".`);
+    }
+
     const contentHash = buildContentHash({ operationKind, ownerScope, ownerIds, athleteId, localDate, timezone, startInstant, endInstant, durationMinutes, planLogicalSessionId, externalAssignmentId, name, activityTypeKey });
     const claim = await claimActivityWriteRequest(client, { requestKey, requestedBy, requestedBySourceConnectionId, operationKind, ownerScope, ownerIds, contentHash });
     const requesterKey = requesterKeyFor({ requestedBy, requestedBySourceConnectionId });
@@ -355,7 +485,15 @@ function canManageOwnerRow(scope, row) {
 // only safe while that activity has exactly one participant). Sibling
 // open suggestions on the same source activity are dismissed
 // automatically since the ambiguity that produced them is now resolved.
-export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, reason }) {
+// `onLocked` (default no-op) is a test-only hook, same convention as
+// trainingLoadMetricsMeasurements.js's correctManualOccasion/
+// correctSourceIdentityOccasion — called right after the row lock below
+// is acquired, letting a deterministic concurrency test pause here (via
+// its own promise/barrier) so a SECOND, racing acceptMatchSuggestion/
+// dismissMatchSuggestion call can be directly observed Lock-waiting on
+// the SAME suggestion row before this one proceeds. Never awaited for
+// anything but a controlled test.
+export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, reason }, { onLocked } = {}) {
   if (scope.type === null) throw httpError(403, "Forbidden");
   const client = await pool.connect();
   try {
@@ -366,6 +504,7 @@ export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, 
        where ms.id=$1 for update`,
       [suggestionId],
     );
+    if (onLocked) await onLocked(client);
     const sug = sugRes.rows[0];
     if (!sug) throw httpError(404, "Suggestion not found.");
     if (!canManageOwnerRow(scope, sug)) throw httpError(404, "Suggestion not found.");
@@ -384,20 +523,48 @@ export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, 
   }
 }
 
-export async function dismissMatchSuggestion(scope, { suggestionId, performedBy }) {
+// Race fix: this used to be a plain unlocked read-then-write (`query`,
+// no transaction) whose final UPDATE had no `where status='open'` guard —
+// two concurrent calls (dismiss racing accept, or dismiss racing
+// dismiss) could both read status='open' before either wrote, and a
+// dismiss that lost the race could then blindly overwrite a status
+// accept had ALREADY moved to 'accepted' (after a real merge had already
+// happened), corrupting the suggestion's own audit trail. Now uses the
+// exact SAME `SELECT ... FOR UPDATE` shape as acceptMatchSuggestion,
+// locking the identical single row — Postgres's own row lock is what
+// gives accept and dismiss a single, real serialization point on the
+// SAME suggestion: whichever call's FOR UPDATE has to wait re-reads the
+// ALREADY-updated status once it acquires the lock and correctly refuses
+// with 409, rather than the second writer blindly overwriting the first.
+export async function dismissMatchSuggestion(scope, { suggestionId, performedBy }, { onLocked } = {}) {
   if (scope.type === null) throw httpError(403, "Forbidden");
-  const sugRes = await query(
-    `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
-     from training.activity_match_suggestions ms join training.activities a on a.id = ms.activity_id
-     where ms.id=$1`,
-    [suggestionId],
-  );
-  const sug = sugRes.rows[0];
-  if (!sug) throw httpError(404, "Suggestion not found.");
-  if (!canManageOwnerRow(scope, sug)) throw httpError(404, "Suggestion not found.");
-  if (sug.status !== "open") throw httpError(409, "Suggestion already resolved.");
-  await query(`update training.activity_match_suggestions set status='dismissed', resolved_by_user_id=$1, resolved_at=now() where id=$2`, [performedBy, suggestionId]);
-  return { ok: true };
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const sugRes = await client.query(
+      `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
+       from training.activity_match_suggestions ms join training.activities a on a.id = ms.activity_id
+       where ms.id=$1 for update`,
+      [suggestionId],
+    );
+    if (onLocked) await onLocked(client);
+    const sug = sugRes.rows[0];
+    if (!sug) throw httpError(404, "Suggestion not found.");
+    if (!canManageOwnerRow(scope, sug)) throw httpError(404, "Suggestion not found.");
+    if (sug.status !== "open") throw httpError(409, "Suggestion already resolved.");
+    const updated = await client.query(
+      `update training.activity_match_suggestions set status='dismissed', resolved_by_user_id=$1, resolved_at=now() where id=$2 and status='open' returning id`,
+      [performedBy, suggestionId],
+    );
+    if (!updated.rowCount) throw httpError(409, "Suggestion already resolved.");
+    await client.query("commit");
+    return { ok: true };
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // Authorized reparent/merge — both check the SOURCE participant's own

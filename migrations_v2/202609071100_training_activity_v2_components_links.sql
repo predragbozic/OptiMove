@@ -299,6 +299,13 @@ begin
       join plans.plans p on p.id = pd.plan_id
       left join training_load.plan_workspace_ownership pwo on pwo.plan_id = p.id
       where ps.logical_session_id = new.logical_session_id
+        -- The plan's OWN athlete must be the SAME athlete as this
+        -- participant — workspace/owner-scope agreement alone is not
+        -- enough (two different athletes' plans can share the exact
+        -- same owning club/team), so without this a session belonging
+        -- to athlete B could otherwise be confirmed-linked to athlete
+        -- A's own participant row.
+        and p.athlete_id = v_participant_athlete
         and p.is_active = true and p.is_edit_draft = false
         and p.plan_type = 'weekly' and p.status = 'active'
         and coalesce(pwo.owner_scope, 'unresolved') = v_owner_scope
