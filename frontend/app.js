@@ -1045,7 +1045,13 @@ async function handleContentChange(event) {
   }
 
   const form = event.target.closest("[data-builder-autosave]");
-  if (!form || !event.target.matches("input, textarea")) return;
+  // Session AM/PM and training-phase are <select> elements sharing this
+  // SAME autosave form with the name/time <input>s (see
+  // renderSessionEditPhaseSelects in builder-structure.js) - excluding
+  // "select" here meant a real, live-confirmed bug: changing AM to PM (or
+  // the training phase) fired a genuine `change` event that this guard
+  // then silently dropped, so the PATCH was never sent.
+  if (!form || !event.target.matches("input, textarea, select")) return;
   // update-item forms (Sets/Reps/Load/Instruction) are the one autosave form
   // with several sibling fields a coach tabs through quickly (Sets -> Reps ->
   // Load). Each field's own blur fires this "change" handler independently -
