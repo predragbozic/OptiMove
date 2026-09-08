@@ -202,6 +202,82 @@ router.patch("/plans/:planId", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Training Activity Integration 2A: the Weekly plan's own "Training load"
+// settings - defaults applied to a BRAND-NEW session only (see POST
+// /blocks/:blockId/sessions above), never retroactively to sessions that
+// already exist. requestRpeDefault can never be saved true while
+// trackTrainingLoadDefault is (or is being set to) false - same invariant
+// the per-session CHECK/PATCH routes already enforce, kept consistent at
+// the plan level even though nothing currently reads these two columns
+// together at write time.
+router.patch("/plans/:planId/training-load-settings", async (req, res, next) => {
+  try {
+    const plan = await requirePlan(req, req.params.planId, res);
+    if (!plan) return;
+    if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
+    const trackTrainingLoadDefault = req.body?.trackTrainingLoadDefault !== undefined ? Boolean(req.body.trackTrainingLoadDefault) : plan.track_training_load_default;
+    const requestedRpeDefault = req.body?.requestRpeDefault !== undefined ? Boolean(req.body.requestRpeDefault) : plan.request_rpe_default;
+    const requestRpeDefault = trackTrainingLoadDefault ? requestedRpeDefault : false;
+    await query(
+      "update plans.plans set track_training_load_default = $2, request_rpe_default = $3, updated_at = now() where id = $1",
+      [plan.id, trackTrainingLoadDefault, requestRpeDefault],
+    );
+    return respondWithDraft(req, res, req.user, plan);
+  } catch (error) { next(error); }
+});
+
+// Three explicit bulk actions over the CURRENTLY OPEN draft's own
+// sessions - the only way this feature ever touches an EXISTING session's
+// tracking/RPE state in bulk (plan-level defaults above only ever apply
+// to a session created AFTER they're saved). Each is a single, targeted
+// UPDATE, never a blanket rewrite of every column.
+router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", async (req, res, next) => {
+  try {
+    const plan = await requirePlan(req, req.params.planId, res);
+    if (!plan) return;
+    if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
+    await query(
+      `update plans.plan_sessions ps set training_load_enabled = $2, rpe_enabled = $3, updated_at = now()
+       from plans.plan_days pd
+       where ps.plan_day_id = pd.id and pd.plan_id = $1 and ps.bta = 'T'`,
+      [plan.id, Boolean(plan.track_training_load_default), Boolean(plan.track_training_load_default) && Boolean(plan.request_rpe_default)],
+    );
+    return respondWithDraft(req, res, req.user, plan);
+  } catch (error) { next(error); }
+});
+
+router.post("/plans/:planId/training-load-settings/turn-off-before-after", async (req, res, next) => {
+  try {
+    const plan = await requirePlan(req, req.params.planId, res);
+    if (!plan) return;
+    if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
+    await query(
+      `update plans.plan_sessions ps set training_load_enabled = false, rpe_enabled = false, updated_at = now()
+       from plans.plan_days pd
+       where ps.plan_day_id = pd.id and pd.plan_id = $1 and ps.bta in ('B', 'A')`,
+      [plan.id],
+    );
+    return respondWithDraft(req, res, req.user, plan);
+  } catch (error) { next(error); }
+});
+
+router.post("/plans/:planId/training-load-settings/turn-off-all-rpe", async (req, res, next) => {
+  try {
+    const plan = await requirePlan(req, req.params.planId, res);
+    if (!plan) return;
+    if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
+    // Tracking itself is left untouched - this only ever turns RPE off,
+    // exactly as labeled; a session that was tracked stays tracked.
+    await query(
+      `update plans.plan_sessions ps set rpe_enabled = false, updated_at = now()
+       from plans.plan_days pd
+       where ps.plan_day_id = pd.id and pd.plan_id = $1 and ps.rpe_enabled = true`,
+      [plan.id],
+    );
+    return respondWithDraft(req, res, req.user, plan);
+  } catch (error) { next(error); }
+});
+
 router.post("/plans/:planId/sync-batch", async (req, res, next) => {
   try {
     const plan = await requirePlan(req, req.params.planId, res);
@@ -529,10 +605,17 @@ router.post("/plans/:planId/duplicate", async (req, res, next) => {
       // gets the "copy" suffix, unchanged from before.
       const planName = intent === "assign" ? (source.name || "Program") : `${source.name || "Program"} copy`;
       const created = await client.query(
-        `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days, week_start, builder_batch_id)
-         values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, $9, 'builder', $10, $11, $12, $13)
+        // Training Activity Integration 2A: track_training_load_default/
+        // request_rpe_default are copied from the SOURCE plan verbatim -
+        // duplicate/assign copies a plan's own INTENTIONAL settings, same
+        // rule this file's own copyDaySessions/copyProgramTree already
+        // apply to every session-level content property. Only a
+        // genuinely brand-new plan (POST /plans above) starts at the
+        // column default (false/false).
+        `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days, week_start, builder_batch_id, track_training_load_default, request_rpe_default)
+         values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, $9, 'builder', $10, $11, $12, $13, $14, $15)
          returning id`,
-        [source.plan_type, req.user.id, target?.id || null, planName, source.note, source.icon_url, source.color, isTemplate, status, source.start_date, source.duration_days, targetWeekStart, batchId],
+        [source.plan_type, req.user.id, target?.id || null, planName, source.note, source.icon_url, source.color, isTemplate, status, source.start_date, source.duration_days, targetWeekStart, batchId, Boolean(source.track_training_load_default), Boolean(source.request_rpe_default)],
       );
       createdIds.push(created.rows[0].id);
       if (source.plan_type === "weekly") {
@@ -618,16 +701,24 @@ router.post("/plans/:planId/edit", async (req, res, next) => {
     client = await pool.connect();
     await client.query("begin");
     const created = await client.query(
+      // Training Activity Integration 2A: track_training_load_default/
+      // request_rpe_default are copied VERBATIM from the source plan -
+      // this is the SAME real plan mid-edit, not a new one (see this
+      // route's own existing comment on training_load.
+      // plan_workspace_ownership just below, which follows the identical
+      // rule).
       `insert into plans.plans (
         plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility,
         is_template, status, source_type, start_date, duration_days, week_start,
-        is_active, is_edit_draft, edit_source_plan_id, builder_batch_id
+        is_active, is_edit_draft, edit_source_plan_id, builder_batch_id,
+        track_training_load_default, request_rpe_default
       )
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', 'builder_edit_draft', $10, $11, $12, false, true, $13, $14)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', 'builder_edit_draft', $10, $11, $12, false, true, $13, $14, $15, $16)
        returning id`,
       [
         plan.plan_type, req.user.id, plan.athlete_uuid || null, plan.name, plan.note, plan.icon_url, plan.color,
         plan.visibility || "private", plan.is_template, plan.start_date, plan.duration_days, plan.week_start, plan.id, plan.builder_batch_id || null,
+        Boolean(plan.track_training_load_default), Boolean(plan.request_rpe_default),
       ],
     );
     // preserveLogicalId: true - this is the FIRST leg of the live <-> edit-
@@ -717,12 +808,13 @@ router.post("/blocks/:blockId/copy", async (req, res, next) => {
     const sourceSessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [block.id]);
     for (const session of sourceSessions.rows) {
       const createdSession = await client.query(
-        // rpe_enabled is a content property (like am_pm/bta/name), always
-        // copied unconditionally - see the migration's own header comment
-        // on why this must never be selectively omitted the way
-        // logical_session_id (an identity mechanism) is.
-        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled) values ($1, $2, $3, $4, $5, $6, $7) returning id",
-        [newBlockId, session.am_pm, session.bta, session.session_time, session.session_order, session.name, session.rpe_enabled],
+        // rpe_enabled/training_load_enabled are content properties (like
+        // am_pm/bta/name), always copied unconditionally - see the
+        // migration's own header comment on why this must never be
+        // selectively omitted the way logical_session_id (an identity
+        // mechanism) is.
+        "insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled) values ($1, $2, $3, $4, $5, $6, $7, $8) returning id",
+        [newBlockId, session.am_pm, session.bta, session.session_time, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled],
       );
       await copySessionContent(client, session.id, createdSession.rows[0].id);
     }
@@ -938,10 +1030,11 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", async (req, res, next
     );
     await client.query("begin");
     const created = await client.query(
-      // rpe_enabled: content property, always copied unconditionally.
-      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name, rpe_enabled)
-       values ($1, $2, $3, $4, $5, $6) returning id`,
-      [target.id, source.am_pm, source.bta, nextOrderResult.rows[0].next_order, source.name, source.rpe_enabled],
+      // rpe_enabled/training_load_enabled: content properties, always
+      // copied unconditionally.
+      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name, rpe_enabled, training_load_enabled)
+       values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+      [target.id, source.am_pm, source.bta, nextOrderResult.rows[0].next_order, source.name, source.rpe_enabled, source.training_load_enabled],
     );
     await copySessionContent(client, source.id, created.rows[0].id);
     await client.query("commit");
@@ -974,9 +1067,23 @@ router.post("/blocks/:blockId/sessions", async (req, res, next) => {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     const order = await nextOrder("plans.plan_sessions", "plan_day_id", block.id, "session_order");
+    const bta = phaseValue(req.body?.bta, ["B", "T", "A"]);
+    // Training Activity Integration 2A: a brand-new session's own initial
+    // tracking/RPE state follows its OWN training-phase classification,
+    // never a blanket value - the main 'T' (Training) slot inherits the
+    // plan's own explicit defaults (plans.plans.track_training_load_
+    // default/request_rpe_default, migrations_v2/202609080900); a
+    // 'Before'/'After'/unknown-or-unset session always starts OFF/OFF
+    // regardless of the plan's own defaults - never guessed. A coach
+    // remains free to change either for one specific session afterward
+    // (PATCH /sessions/:sessionId below), and every COPY path (block
+    // copy, copy-into, program-tree copy, day copy) preserves whatever a
+    // session already has verbatim instead of re-deriving it here.
+    const trackingEnabled = bta === "T" && Boolean(block.plan.track_training_load_default);
+    const rpeEnabled = trackingEnabled && Boolean(block.plan.request_rpe_default);
     await query(
-      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name) values ($1, $2, $3, $4, $5, $6)`,
-      [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), phaseValue(req.body?.bta, ["B", "T", "A"]), sessionTimeValue(req.body?.time), order, nullableText(req.body?.name)],
+      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, training_load_enabled, rpe_enabled) values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), bta, sessionTimeValue(req.body?.time), order, nullableText(req.body?.name), trackingEnabled, rpeEnabled],
     );
     return respondWithDraft(req, res, req.user, block.plan, { status: 201 });
   } catch (error) { next(error); }
@@ -995,17 +1102,26 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
     // empty name already clears the name field below.
     const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
     const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
-    // rpeEnabled follows the exact same "only touched when the request
-    // body actually includes the key" partial-update rule as amPm/bta
-    // above - Builder's edit-draft session settings form is a staging
-    // area (nothing is "live" until Submit), so no confirm-before-disable
-    // check is needed here even if the session already has RPE results;
-    // that gate belongs on the Training Load quick-toggle route instead
-    // (see PATCH /api/training-load/sessions/:sessionId/rpe-enabled).
-    const rpeEnabled = req.body?.rpeEnabled !== undefined ? Boolean(req.body.rpeEnabled) : session.rpe_enabled;
+    // trackingEnabled/rpeEnabled follow the exact same "only touched when
+    // the request body actually includes the key" partial-update rule as
+    // amPm/bta above - Builder's edit-draft session settings form is a
+    // staging area (nothing is "live" until Submit), so no
+    // confirm-before-disable check is needed here even if the session
+    // already has RPE results; that gate belongs on the Training Load
+    // quick-toggle routes instead (see PATCH /api/training-load/sessions/
+    // :sessionId/rpe-enabled and .../training-load-enabled).
+    const trackingEnabled = req.body?.trackingEnabled !== undefined ? Boolean(req.body.trackingEnabled) : session.training_load_enabled;
+    const requestedRpeEnabled = req.body?.rpeEnabled !== undefined ? Boolean(req.body.rpeEnabled) : session.rpe_enabled;
+    // The DB's own plan_sessions_rpe_requires_training_load CHECK forbids
+    // rpe_enabled=true with training_load_enabled=false - enforced here
+    // too (never relying on the constraint alone to reject a bad combo
+    // with a raw P0001): turning tracking off in THIS SAME request always
+    // forces RPE off with it, even if the request body also tried to
+    // (re)enable RPE at the same time.
+    const rpeEnabled = trackingEnabled ? requestedRpeEnabled : false;
     await query(
-      "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, rpe_enabled = $6, updated_at = now() where id = $1",
-      [session.id, sessionTimeValue(req.body?.time), nullableText(req.body?.name), amPm, bta, rpeEnabled],
+      "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, rpe_enabled = $6, training_load_enabled = $7, updated_at = now() where id = $1",
+      [session.id, sessionTimeValue(req.body?.time), nullableText(req.body?.name), amPm, bta, rpeEnabled, trackingEnabled],
     );
     return respondWithDraft(req, res, req.user, session.plan);
   } catch (error) { next(error); }
@@ -1288,7 +1404,7 @@ router.delete("/items/:itemId", async (req, res, next) => {
 async function buildDraft(plan) {
   const result = await query(
     `select pd.id as block_id, pd.block_index, pd.block_name, pd.block_type, pd.date, pd.day_order, pd.day_note,
-            ps.id as session_id, ps.am_pm, ps.bta, ps.session_time, ps.session_order, ps.name as session_name, ps.rpe_enabled,
+            ps.id as session_id, ps.am_pm, ps.bta, ps.session_time, ps.session_order, ps.name as session_name, ps.rpe_enabled, ps.training_load_enabled,
             pn.id as node_id, pn.parent_id, pn.node_type, pn.name as node_name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order,
             pi.id as item_id, pi.exercise_id, pi.title, pi.description, pi.image_url, pi.video_url, pi.sets, pi.reps, pi.load, pi.item_order
      from plans.plan_days pd
@@ -1304,7 +1420,7 @@ async function buildDraft(plan) {
     const block = blocks.get(row.block_id);
     if (!row.session_id) return;
     let session = block.sessions.find((value) => value.id === row.session_id);
-    if (!session) { session = { id: row.session_id, amPm: row.am_pm || "", bta: row.bta || "", time: row.session_time ? String(row.session_time).slice(0, 5) : "", name: row.session_name || "", rpeEnabled: row.rpe_enabled !== false, nodes: [] }; block.sessions.push(session); }
+    if (!session) { session = { id: row.session_id, amPm: row.am_pm || "", bta: row.bta || "", time: row.session_time ? String(row.session_time).slice(0, 5) : "", name: row.session_name || "", rpeEnabled: row.rpe_enabled !== false, trackingEnabled: row.training_load_enabled === true, nodes: [] }; block.sessions.push(session); }
     if (!row.node_id) return;
     let node = session.nodes.find((value) => value.id === row.node_id);
     if (!node) {
@@ -1331,6 +1447,13 @@ async function buildDraft(plan) {
       isEditDraft: Boolean(plan.is_edit_draft),
       editSourcePlanId: plan.edit_source_plan_id || "",
       batchId: plan.builder_batch_id || "",
+      // Training Activity Integration 2A: this Weekly plan's own defaults
+      // for a BRAND-NEW session's initial tracking/RPE state (see
+      // POST /blocks/:blockId/sessions above) - never re-derived from
+      // existing sessions, only ever read/changed through this field and
+      // PATCH /plans/:planId/training-load-settings below.
+      trackTrainingLoadDefault: Boolean(plan.track_training_load_default),
+      requestRpeDefault: Boolean(plan.request_rpe_default),
     },
     blocks: [...blocks.values()],
     batch: await loadBuilderBatch(plan),
@@ -1430,7 +1553,8 @@ async function syncBatchFromPlan(sourcePlan, user) {
   try {
     await client.query("begin");
     const source = await client.query(
-      `select id, builder_batch_id, created_by_user_id, plan_type, week_start, name, note, icon_url, color, start_date, duration_days
+      `select id, builder_batch_id, created_by_user_id, plan_type, week_start, name, note, icon_url, color, start_date, duration_days,
+              track_training_load_default, request_rpe_default
        from plans.plans
        where id = $1
          and created_by_user_id = $2
@@ -1474,9 +1598,11 @@ async function syncBatchFromPlan(sourcePlan, user) {
              color = $5,
              start_date = $6,
              duration_days = $7,
+             track_training_load_default = $8,
+             request_rpe_default = $9,
              updated_at = now()
          where id = $1`,
-        [sibling.id, sourceRow.name, sourceRow.note, sourceRow.icon_url, sourceRow.color, sourceRow.start_date, sourceRow.duration_days],
+        [sibling.id, sourceRow.name, sourceRow.note, sourceRow.icon_url, sourceRow.color, sourceRow.start_date, sourceRow.duration_days, Boolean(sourceRow.track_training_load_default), Boolean(sourceRow.request_rpe_default)],
       );
     }
     await client.query("commit");
@@ -1505,10 +1631,12 @@ async function applyEditDraft(req, draftPlan) {
            color = $5,
            visibility = $6,
            is_template = $7,
+           track_training_load_default = $8,
+           request_rpe_default = $9,
            status = 'active',
            updated_at = now()
        where id = $1`,
-      [source.id, draftPlan.name, draftPlan.note, draftPlan.icon_url, draftPlan.color, draftPlan.visibility || "private", draftPlan.is_template],
+      [source.id, draftPlan.name, draftPlan.note, draftPlan.icon_url, draftPlan.color, draftPlan.visibility || "private", draftPlan.is_template, Boolean(draftPlan.track_training_load_default), Boolean(draftPlan.request_rpe_default)],
     );
     // preserveLogicalId: true - the SECOND leg of the round trip (see the
     // matching comment on the live -> edit-draft copy in POST /plans/
@@ -1572,13 +1700,14 @@ export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
   const sessionParams = [];
   let sessionColumn = 0;
   sessions.rows.forEach((session) => {
-    // rpe_enabled: content property, always copied unconditionally.
-    const row = [sourceDayIdToTargetDayId.get(session.plan_day_id), session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled];
+    // rpe_enabled/training_load_enabled: content properties, always
+    // copied unconditionally.
+    const row = [sourceDayIdToTargetDayId.get(session.plan_day_id), session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
     sessionValues.push(`(${row.map(() => `$${++sessionColumn}`).join(", ")})`);
     sessionParams.push(...row);
   });
   const createdSessions = await client.query(
-    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name, rpe_enabled)
+    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name, rpe_enabled, training_load_enabled)
      values ${sessionValues.join(", ")} returning id`,
     sessionParams,
   );
@@ -1688,22 +1817,22 @@ function normalizedWeekday(dayOrder) {
 export async function copyDaySessions(client, sourceDayId, targetDayId, { preserveLogicalId = false } = {}) {
   const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [sourceDayId]);
   if (!sessions.rowCount) return;
-  // rpe_enabled is a CONTENT property (like am_pm/bta/name) - always
-  // copied, in BOTH branches below. Unlike logical_session_id (an
-  // identity mechanism, selectively preserved only for the live<->
-  // edit-draft round trip), there is no copy path in this app where
-  // silently re-enabling RPE on a session the coach explicitly turned it
-  // off for would be the right default.
+  // rpe_enabled/training_load_enabled are CONTENT properties (like am_pm/
+  // bta/name) - always copied, in BOTH branches below. Unlike
+  // logical_session_id (an identity mechanism, selectively preserved only
+  // for the live<->edit-draft round trip), there is no copy path in this
+  // app where silently re-enabling tracking/RPE on a session the coach
+  // explicitly turned off would be the right default.
   const columns = preserveLogicalId
-    ? "plan_day_id, am_pm, bta, session_order, name, rpe_enabled, logical_session_id"
-    : "plan_day_id, am_pm, bta, session_order, name, rpe_enabled";
+    ? "plan_day_id, am_pm, bta, session_order, name, rpe_enabled, training_load_enabled, logical_session_id"
+    : "plan_day_id, am_pm, bta, session_order, name, rpe_enabled, training_load_enabled";
   const values = [];
   const params = [];
   let column = 0;
   sessions.rows.forEach((session) => {
     const row = preserveLogicalId
-      ? [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled, session.logical_session_id]
-      : [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled];
+      ? [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled, session.logical_session_id]
+      : [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
   });
@@ -2096,7 +2225,7 @@ async function getEditablePlan(req, planId) {
   const result = await query(
     `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.cover_image_url, p.visibility, p.is_template, p.status,
             p.source_type, p.start_date, p.duration_days, p.athlete_id as athlete_uuid, p.is_edit_draft, p.edit_source_plan_id,
-            p.builder_batch_id,
+            p.builder_batch_id, p.track_training_load_default, p.request_rpe_default,
             a.athlete_id, a.source_external_id as athlete_source_external_id,
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
@@ -2134,7 +2263,8 @@ async function getCopySource(req, planId) {
     // cross-plan copy alike, whenever the source plan had been edited
     // and re-opened at least once (i.e. almost always, for anything but a
     // brand-new never-yet-saved draft).
-    `select id, created_by_user_id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days, can_copy, can_edit_copy
+    `select id, created_by_user_id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days, can_copy, can_edit_copy,
+            track_training_load_default, request_rpe_default
      from plans.plans
      where id = $1 and plan_type in ('program', 'weekly') and (coalesce(is_active, true) or is_edit_draft = true)`,
     [planId],
@@ -2171,7 +2301,7 @@ async function getCopySourceBlock(req, blockId) {
 // too, with zero new clipboard type.
 async function getCopySourceSession(req, sessionId) {
   const result = await query(
-    "select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, ps.rpe_enabled, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1",
+    "select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, ps.rpe_enabled, ps.training_load_enabled, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1",
     [sessionId],
   );
   const row = result.rows[0]; if (!row) return null;
@@ -2204,10 +2334,10 @@ async function getEditableBlock(req, blockId) {
 }
 
 async function getEditableSession(req, sessionId) {
-  const result = await query("select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, ps.rpe_enabled, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
+  const result = await query("select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, ps.rpe_enabled, ps.training_load_enabled, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
   const row = result.rows[0]; if (!row) return null;
   const plan = await getEditablePlan(req, row.plan_id);
-  return plan ? { id: row.id, am_pm: row.am_pm, bta: row.bta, session_time: row.session_time, name: row.name, rpe_enabled: row.rpe_enabled, plan } : null;
+  return plan ? { id: row.id, am_pm: row.am_pm, bta: row.bta, session_time: row.session_time, name: row.name, rpe_enabled: row.rpe_enabled, training_load_enabled: row.training_load_enabled, plan } : null;
 }
 
 async function getEditableNode(req, nodeId) {

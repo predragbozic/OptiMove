@@ -55,6 +55,21 @@ after(async () => {
     ["training_load.session_feedback", () => cleanupAthleteIds.size && query(
       `delete from training_load.session_feedback where athlete_id = any($1::uuid[])`, [[...cleanupAthleteIds]],
     )],
+    // Training Activity Integration 2A: a real, successful RPE submit in
+    // this file now also materializes training.activities/
+    // activity_participants/activity_participant_session_links (see
+    // materializePlannedRpeActivityForSubmit) - deleted here, in
+    // dependency order (links -> participants -> activities), BEFORE the
+    // athletes/clubs/users those rows reference.
+    ["training.activity_participant_session_links", () => cleanupAthleteIds.size && query(
+      `delete from training.activity_participant_session_links where athlete_id = any($1::uuid[])`, [[...cleanupAthleteIds]],
+    )],
+    ["training.activity_participants", () => cleanupAthleteIds.size && query(
+      `delete from training.activity_participants where athlete_id = any($1::uuid[])`, [[...cleanupAthleteIds]],
+    )],
+    ["training.activities", () => cleanupClubIds.size && query(
+      `delete from training.activities where owner_club_id = any($1::uuid[])`, [[...cleanupClubIds]],
+    )],
     // Each test's own club-scoped planned-RPE setting (see
     // enablePlannedRpeForClub below) - must be removed BEFORE the club
     // itself (owner_club_id is an ON DELETE RESTRICT foreign key), and
@@ -185,9 +200,15 @@ async function makeRealDay(planId, date, dayOrder) {
   );
   return dayResult.rows[0].id;
 }
+// Explicit rpe_enabled=true, training_load_enabled=true - this file's own
+// tests exercise real RPE submissions, so every fixture session here must
+// satisfy the DB's own plan_sessions_rpe_requires_training_load CHECK
+// (Training Activity Integration 2A, migrations_v2/202609080900); relying
+// on either column's own DEFAULT is no longer correct now that
+// rpe_enabled defaults to false (a genuinely new, untracked session).
 async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0) {
   const sessionResult = await query(
-    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order) values ($1,$2,$3,$4) returning id`,
+    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order, rpe_enabled, training_load_enabled) values ($1,$2,$3,$4,true,true) returning id`,
     [dayId, name, amPm, sessionOrder],
   );
   return sessionResult.rows[0].id;

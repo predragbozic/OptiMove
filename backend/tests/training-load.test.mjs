@@ -31,6 +31,26 @@ const MIGRATION_V5_NAME = "202609011100_training_load_v5_unified_result_source.s
 // (the external-scheduling migrations) at all.
 const MIGRATION_V9_PATH = path.resolve(__dirname, "../../migrations_v2/202609040900_training_load_v9_planned_rpe_workspace_toggle.sql");
 const MIGRATION_V9_NAME = "202609040900_training_load_v9_planned_rpe_workspace_toggle.sql";
+// Training Activity Integration 2A: a successful planned RPE submit now
+// unconditionally materializes a training.activities row (see
+// materializePlannedRpeActivityForSubmit, called from POST /sessions/
+// :sessionId/rpe in routes/trainingLoad.js), and GET /weekly|/athlete/
+// today now unconditionally read ps.training_load_enabled - both are real
+// runtime dependencies now, so this disposable DB needs the FULL real
+// deployment chain: v10-v13 (training_activity_v3 itself extends
+// training_load.metric_values, which requires v10-v13 to already exist)
+// and training_activity v1-v4, then this feature's own v14.
+const EXTRA_MIGRATION_NAMES = [
+  "202609041400_training_load_v10_metrics_catalog.sql",
+  "202609041500_training_load_v11_metrics_provenance.sql",
+  "202609041600_training_load_v12_metrics_events.sql",
+  "202609041700_training_load_v13_metrics_measurements.sql",
+  "202609071000_training_activity_v1_core_tables.sql",
+  "202609071100_training_activity_v2_components_links.sql",
+  "202609071200_training_activity_v3_metrics_core_extensions.sql",
+  "202609071300_training_activity_v4_canonical_functions.sql",
+  "202609080900_training_load_v14_session_tracking_and_rpe_defaults.sql",
+];
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -226,13 +246,14 @@ let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
 
 before(async () => {
-  const [migrationV1Sql, migrationV2Sql, migrationV3Sql, migrationV4Sql, migrationV5Sql, migrationV9Sql] = await Promise.all([
+  const [migrationV1Sql, migrationV2Sql, migrationV3Sql, migrationV4Sql, migrationV5Sql, migrationV9Sql, ...extraMigrationSqls] = await Promise.all([
     fsp.readFile(MIGRATION_V1_PATH, "utf8"),
     fsp.readFile(MIGRATION_V2_PATH, "utf8"),
     fsp.readFile(MIGRATION_V3_PATH, "utf8"),
     fsp.readFile(MIGRATION_V4_PATH, "utf8"),
     fsp.readFile(MIGRATION_V5_PATH, "utf8"),
     fsp.readFile(MIGRATION_V9_PATH, "utf8"),
+    ...EXTRA_MIGRATION_NAMES.map((name) => fsp.readFile(path.resolve(__dirname, `../../migrations_v2/${name}`), "utf8")),
   ]);
 
   db = await makeTempDb("primary");
@@ -249,6 +270,7 @@ before(async () => {
     [MIGRATION_V4_NAME]: migrationV4Sql,
     [MIGRATION_V5_NAME]: migrationV5Sql,
     [MIGRATION_V9_NAME]: migrationV9Sql,
+    ...Object.fromEntries(EXTRA_MIGRATION_NAMES.map((name, i) => [name, extraMigrationSqls[i]])),
   });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
 
@@ -441,12 +463,19 @@ async function makePlanDay(planId, date) {
   const result = await query(`insert into plans.plan_days (plan_id, date) values ($1,$2) returning id`, [planId, date]);
   return result.rows[0].id;
 }
+// rpeEnabled/trainingLoadEnabled both default to true here - this file
+// predates Training Activity Integration 2A's two-dimension model
+// (migrations_v2/202609080900) and almost every existing test in it wants
+// a normal, fully-actionable session unless it explicitly says otherwise;
+// the DB's own column defaults changed (rpe_enabled now defaults to
+// false, matching a genuinely NEW/untracked session), so this fixture
+// sets both explicitly rather than relying on either default.
 async function makeSession(planDayId, overrides = {}) {
-  const { amPm = null, bta = null, sessionTime = null, sessionOrder = 0, name = "Session" } = overrides;
+  const { amPm = null, bta = null, sessionTime = null, sessionOrder = 0, name = "Session", rpeEnabled = true, trainingLoadEnabled = rpeEnabled } = overrides;
   const result = await query(
-    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name)
-     values ($1,$2,$3,$4,$5,$6) returning id`,
-    [planDayId, amPm, bta, sessionTime, sessionOrder, name],
+    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
+     values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
+    [planDayId, amPm, bta, sessionTime, sessionOrder, name, rpeEnabled, trainingLoadEnabled],
   );
   return result.rows[0].id;
 }
@@ -850,7 +879,7 @@ test("I5. an identical retry against the RECREATED row (same logical_session_id)
   const logicalId = logicalIdResult.rows[0].logical_session_id;
   await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(7, 60) });
   await query(`delete from plans.plan_sessions where id = $1`, [sessionId]);
-  const recreated = await query(`insert into plans.plan_sessions (plan_day_id, logical_session_id) values ($1,$2) returning id`, [dayId, logicalId]);
+  const recreated = await query(`insert into plans.plan_sessions (plan_day_id, logical_session_id, rpe_enabled, training_load_enabled) values ($1,$2,true,true) returning id`, [dayId, logicalId]);
   const newSessionId = recreated.rows[0].id;
 
   const retrySame = await api(`/api/training-load/sessions/${newSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(7, 60) });
@@ -874,7 +903,7 @@ test("I6. a session copied to a DIFFERENT day as a genuinely new training sessio
   // source's logical_session_id, so it must default to a fresh one.
   const otherDayId = await makePlanDay(planId, YESTERDAY);
   const copied = await query(
-    `insert into plans.plan_sessions (plan_day_id, name) values ($1,$2) returning id, logical_session_id`,
+    `insert into plans.plan_sessions (plan_day_id, name, rpe_enabled, training_load_enabled) values ($1,$2,true,true) returning id, logical_session_id`,
     [otherDayId, "Copied to another day"],
   );
   const copiedSessionId = copied.rows[0].id;

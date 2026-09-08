@@ -140,10 +140,17 @@ async function makeRealDay(planId, date, dayOrder) {
   );
   return dayResult.rows[0].id;
 }
-async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0, rpeEnabled = true) {
+// trainingLoadEnabled defaults to mirroring rpeEnabled - the DB's own
+// plan_sessions_rpe_requires_training_load CHECK (Training Activity
+// Integration 2A, migrations_v2/202609080900) forbids rpe_enabled=true
+// with training_load_enabled=false, so every existing call site that
+// already passes rpeEnabled=true keeps working unchanged; pass
+// trainingLoadEnabled explicitly for a test that needs "tracked, RPE
+// off" (true, false) specifically.
+async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0, rpeEnabled = true, trainingLoadEnabled = rpeEnabled) {
   const sessionResult = await query(
-    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order, rpe_enabled) values ($1,$2,$3,$4,$5) returning id`,
-    [dayId, name, amPm, sessionOrder, rpeEnabled],
+    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order, rpe_enabled, training_load_enabled) values ($1,$2,$3,$4,$5,$6) returning id`,
+    [dayId, name, amPm, sessionOrder, rpeEnabled, trainingLoadEnabled],
   );
   return sessionResult.rows[0].id;
 }
@@ -181,16 +188,34 @@ test("A2. PATCH with no rpeEnabled key leaves the existing value untouched - a p
   assert.equal(await sessionRpeEnabled(sessionId), false, "a PATCH that never mentions rpeEnabled must never flip it back to true");
 });
 
-test("A3. PATCH with rpeEnabled: true re-enables a previously disabled session", async () => {
+test("A3. PATCH with rpeEnabled: true re-enables a previously disabled session that is already tracked in Training Load", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
   const planId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
-  const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false);
+  // trainingLoadEnabled=true, rpeEnabled=false - "tracked, RPE off", the
+  // one real starting state re-enabling RPE alone is meaningful for.
+  const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false, true);
 
   const res = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { rpeEnabled: true } });
   assert.equal(res.status, 200);
   assert.equal(await sessionRpeEnabled(sessionId), true);
+});
+
+test("A4. PATCH with rpeEnabled: true on a session NOT tracked in Training Load is forced back to false - RPE can never outrun tracking", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const planId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
+  const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false, false);
+
+  const res = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { rpeEnabled: true } });
+  assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
+  assert.equal(await sessionRpeEnabled(sessionId), false, "the DB's own plan_sessions_rpe_requires_training_load CHECK forbids rpe_enabled=true with training_load_enabled=false - the route must never surface that as a raw 500 either");
+
+  const trackOn = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { trackingEnabled: true, rpeEnabled: true } });
+  assert.equal(trackOn.status, 200, JSON.stringify(trackOn.body));
+  assert.equal(await sessionRpeEnabled(sessionId), true, "turning tracking AND rpe on together in the SAME request must succeed");
 });
 
 // ------------------------------------------------------------

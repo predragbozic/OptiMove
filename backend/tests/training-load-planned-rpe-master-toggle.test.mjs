@@ -31,6 +31,24 @@ const MIGRATIONS = [
   ["202609020900_training_load_v7_external_schedule_notification_rules.sql"],
   ["202609030900_training_load_v8_specific_dates_group.sql"],
   ["202609040900_training_load_v9_planned_rpe_workspace_toggle.sql"],
+  // Training Activity Integration 2A: a successful planned RPE submit now
+  // unconditionally materializes a training.activities row (see
+  // materializePlannedRpeActivityForSubmit in trainingActivityMaterialize.js,
+  // called from POST /sessions/:sessionId/rpe) - the training_activity_v1-v4
+  // migrations (already real and deployed, per this app's own current
+  // state) are now a hard runtime dependency of that route, so this
+  // disposable DB must include them too, in real deployment order
+  // (training_activity_v3 itself extends training_load.metric_values,
+  // which requires v10-v13 to already exist).
+  ["202609041400_training_load_v10_metrics_catalog.sql"],
+  ["202609041500_training_load_v11_metrics_provenance.sql"],
+  ["202609041600_training_load_v12_metrics_events.sql"],
+  ["202609041700_training_load_v13_metrics_measurements.sql"],
+  ["202609071000_training_activity_v1_core_tables.sql"],
+  ["202609071100_training_activity_v2_components_links.sql"],
+  ["202609071200_training_activity_v3_metrics_core_extensions.sql"],
+  ["202609071300_training_activity_v4_canonical_functions.sql"],
+  ["202609080900_training_load_v14_session_tracking_and_rpe_defaults.sql"],
 ].map(([name]) => ({ name, path: path.resolve(__dirname, `../../migrations_v2/${name}`) }));
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -396,11 +414,17 @@ async function makePlanDay(planId, date) {
   return result.rows[0].id;
 }
 async function makeSession(planDayId, overrides = {}) {
-  const { amPm = null, bta = null, sessionTime = null, sessionOrder = 0, name = "Session", rpeEnabled = true } = overrides;
+  // trainingLoadEnabled defaults to mirroring rpeEnabled - the DB's own
+  // plan_sessions_rpe_requires_training_load CHECK (Training Activity
+  // Integration 2A, migrations_v2/202609080900) forbids rpe_enabled=true
+  // with training_load_enabled=false, so every existing call site that
+  // already relies on the rpeEnabled=true default keeps working
+  // unchanged.
+  const { amPm = null, bta = null, sessionTime = null, sessionOrder = 0, name = "Session", rpeEnabled = true, trainingLoadEnabled = rpeEnabled } = overrides;
   const result = await query(
-    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled)
-     values ($1,$2,$3,$4,$5,$6,$7) returning id`,
-    [planDayId, amPm, bta, sessionTime, sessionOrder, name, rpeEnabled],
+    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
+     values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
+    [planDayId, amPm, bta, sessionTime, sessionOrder, name, rpeEnabled, trainingLoadEnabled],
   );
   return result.rows[0].id;
 }

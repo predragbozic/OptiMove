@@ -12,6 +12,7 @@ import {
 } from "../trainingLoadAccess.js";
 import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAthlete, ensureCurrentExternalOccurrencesForCoach } from "../trainingLoadOccurrenceService.js";
 import { emitRealtimeEvent } from "../realtime.js";
+import { materializePlannedRpeActivityForSubmit } from "../trainingActivityMaterialize.js";
 
 const router = Router();
 
@@ -187,18 +188,21 @@ router.get("/athlete/today", async (req, res, next) => {
        where ${WEEKLY_PLAN_SESSION_FILTER_SQL}
          and p.athlete_id = $1
          and pd.date = $2::date
-         -- Per-session RPE opt-out, AND (v9) the workspace-level master
-         -- toggle - a disabled session, OR one whose OWN plan is not
-         -- currently governed by an enabled workspace (see
-         -- planned_rpe_effective_for_plan - this is the plan's own
-         -- STORED ownership snapshot, never the athlete's current,
-         -- possibly-unrelated memberships), is never shown to the
-         -- athlete as a request at all (not pending, not "Not rated")
-         -- unless it already has a result. An existing result from
-         -- before either was turned off keeps showing as its already-
-         -- rated summary - existing history is never hidden.
+         -- Training Activity Integration 2A: the ONE shared eligibility
+         -- rule (training_load.planned_rpe_actionable, migrations_v2/
+         -- 202609080900) combines training_load_enabled/rpe_enabled AND
+         -- (v9) the workspace-level master toggle - a session that isn't
+         -- tracked at all, one whose RPE is specifically off, or one
+         -- whose OWN plan is not currently governed by an enabled
+         -- workspace (the plan's own STORED ownership snapshot, never the
+         -- athlete's current, possibly-unrelated memberships), is never
+         -- shown to the athlete as a request at all (not pending, not
+         -- "Not rated") unless it already has a result. An existing
+         -- result from before any of those was turned off keeps showing
+         -- as its already-rated summary - existing history is never
+         -- hidden.
          and (
-           (coalesce(ps.rpe_enabled, true) and training_load.planned_rpe_effective_for_plan(p.id, pd.date))
+           training_load.planned_rpe_actionable(p.id, pd.date, ps.training_load_enabled, ps.rpe_enabled)
            or sf.id is not null
          )
        order by ps.session_order`,
@@ -334,9 +338,14 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
     await client.query("begin");
 
     const sessionResult = await client.query(
-      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled,
+      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled, ps.training_load_enabled,
               pd.date as session_date, p.id as plan_id, p.name as plan_name, p.week_start, p.athlete_id,
               p.plan_type, p.status, p.is_active, p.is_edit_draft,
+              coalesce(a.device_timezone, 'UTC') as device_timezone,
+              case when ps.session_time is not null
+                then (pd.date + ps.session_time) at time zone coalesce(a.device_timezone, 'UTC')
+                else null end as start_instant,
+              o.owner_scope, o.owner_user_id, o.owner_club_id, o.owner_team_id,
               exists (
                 select 1 from plans.plans ld
                 where ld.edit_source_plan_id = p.id and ld.is_edit_draft and ld.legacy_pre_migration_draft
@@ -344,6 +353,8 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id
+       join public.athletes a on a.id = p.athlete_id
+       left join training_load.plan_workspace_ownership o on o.plan_id = p.id
        where ps.id = $1
        for update of ps`,
       [sessionId],
@@ -378,6 +389,17 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
       return res.status(409).json({ error: "This plan has a pending update from before a recent system upgrade. Ask your coach to finish or discard it, then try again." });
     }
 
+    // Training Activity Integration 2A: "track this session in Training
+    // Load" is now a SEPARATE decision from "request RPE" (see migrations_v2/
+    // 202609080900's own header). The DB CHECK constraint already makes
+    // rpe_enabled=true imply training_load_enabled=true, so this branch is
+    // reachable only when a session was left completely untracked - a
+    // distinct, controlled 409 from the plain "RPE off" case below, so a
+    // future client can tell the two apart and render the right message.
+    if (!session.training_load_enabled) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "This session isn't being tracked in Training Load." });
+    }
     // Per-session RPE opt-out: unlike the not-found/not-yours/not-actionable
     // cases above, a coach explicitly turning RPE off for a real, visible
     // session is not something worth hiding from the athlete behind a bare
@@ -422,7 +444,6 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
       await client.query("rollback");
       return res.status(409).json({ error: "Automatic planned RPE is currently turned off for this workspace." });
     }
-
     const localToday = await athleteLocalDate(athleteId, (sql, params) => client.query(sql, params));
     if (localToday && session.session_date > localToday) {
       await client.query("rollback");
@@ -443,7 +464,28 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
     );
 
     if (insertResult.rows.length) {
+      // Training Activity Integration 2A, point 8: materialize (or
+      // idempotently resolve) the canonical training.activity for this
+      // EXACT logical session, in the SAME transaction as the RPE insert
+      // just above - both commit together or neither does (see that
+      // function's own header for why this can never be a best-effort
+      // post-commit call). Runs ONLY on a genuine new insert (this
+      // branch) - a replay (the conflict branch below) already
+      // materialized on its own first successful submission; the natural-
+      // key lookup inside would just harmlessly re-resolve the same
+      // activity anyway, but there's no reason to pay for it twice.
+      const ownerIds = { userId: session.owner_user_id, clubId: session.owner_club_id, teamId: session.owner_team_id };
+      await materializePlannedRpeActivityForSubmit(client, {
+        logicalSessionId: session.logical_session_id, athleteId, localDate: session.session_date,
+        timezone: session.device_timezone, startInstant: session.start_instant, sessionName: session.session_name,
+        ownerScope: session.owner_scope, ownerIds, performedBy: req.user.id,
+      });
       await client.query("commit");
+      // Realtime event only ever sent AFTER a successful commit - never a
+      // best-effort fire-and-forget before/without one, so a listening
+      // coach view can never react to a materialization that then rolled
+      // back.
+      emitRealtimeEvent(athleteId, "training_load_changed", { sessionId: session.session_id });
       return res.status(201).json({ feedback: formatFeedback({ feedback_id: insertResult.rows[0].id, ...insertResult.rows[0] }) });
     }
 
@@ -498,7 +540,7 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
     await client.query("begin");
 
     const sessionResult = await client.query(
-      `select ps.id as session_id, ps.logical_session_id, p.id as plan_id, p.athlete_id
+      `select ps.id as session_id, ps.logical_session_id, ps.training_load_enabled, p.id as plan_id, p.athlete_id
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id
@@ -524,6 +566,16 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
     if (!accessResult.rowCount) {
       await client.query("rollback");
       return res.status(404).json({ error: "Training session not found." });
+    }
+
+    // Training Activity Integration 2A: RPE can never be turned ON for a
+    // session that isn't itself being tracked in Training Load (the same
+    // invariant the DB's own plan_sessions_rpe_requires_training_load
+    // CHECK enforces unconditionally) - checked here so this returns a
+    // controlled 409, never a raw P0001 constraint violation.
+    if (rpeEnabled === true && !session.training_load_enabled) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "sessionNotTracked", message: "Turn on Training Load tracking for this session before requesting RPE." });
     }
 
     // Disabling a session that already has at least one submitted result
@@ -567,6 +619,105 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
     );
     await client.query("commit");
     return res.json({ sessionId: session.session_id, rpeEnabled, draftSessionUpdated: draftSessionResult.rowCount > 0 });
+  } catch (error) {
+    if (client) {
+      try { await client.query("rollback"); } catch {}
+    }
+    next(error);
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// Coach quick toggle for the OTHER half of Training Activity Integration
+// 2A's split decision: "track this session in Training Load" at all,
+// independent of RPE. Same lock/authorization/edit-draft-cascade shape as
+// PATCH .../rpe-enabled directly above. Turning tracking OFF while RPE
+// was ON must ALSO turn RPE off, in the SAME update (the DB's own
+// plan_sessions_rpe_requires_training_load CHECK would otherwise reject a
+// row left with rpe_enabled=true and training_load_enabled=false) - and
+// since that cascade has the exact same real-world consequence as the
+// rpe-enabled route's own "disabling with existing results" case
+// (athletes stop being asked for RPE), it reuses the SAME
+// confirmDisableWithResults gate. Turning tracking back ON never touches
+// rpe_enabled - a coach must re-enable RPE explicitly and separately
+// (the CHECK constraint guarantees rpe_enabled was already false while
+// tracking was off, so there's nothing to restore).
+router.patch("/sessions/:sessionId/training-load-enabled", async (req, res, next) => {
+  let client;
+  try {
+    if (!requireCoachWorkspace(req, res)) return;
+    const sessionId = req.params.sessionId;
+    if (!UUID_PATTERN.test(sessionId)) return res.status(404).json({ error: "Training session not found." });
+    if (typeof req.body?.trainingLoadEnabled !== "boolean") {
+      return res.status(400).json({ error: "trainingLoadEnabled must be a boolean." });
+    }
+    const trainingLoadEnabled = req.body.trainingLoadEnabled;
+    const confirmDisableWithResults = req.body?.confirmDisableWithResults === true;
+
+    client = await pool.connect();
+    await client.query("begin");
+
+    const sessionResult = await client.query(
+      `select ps.id as session_id, ps.logical_session_id, ps.rpe_enabled, p.id as plan_id, p.athlete_id
+       from plans.plan_sessions ps
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       join plans.plans p on p.id = pd.plan_id
+       where ps.id = $1
+         and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
+       for update of ps`,
+      [sessionId],
+    );
+    const session = sessionResult.rows[0];
+    if (!session) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
+
+    const scope = await coachWorkspaceScopeSql(req, "a", 2);
+    const accessResult = await client.query(
+      `select 1 from public.athletes a where a.id = $1 ${scope.sql}`,
+      [session.athlete_id, ...scope.params],
+    );
+    if (!accessResult.rowCount) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
+
+    const willCascadeDisableRpe = trainingLoadEnabled === false && session.rpe_enabled === true;
+    if (willCascadeDisableRpe && !confirmDisableWithResults) {
+      const existingCountResult = await client.query(
+        `select count(*)::int as n from training_load.session_feedback where logical_session_id = $1`,
+        [session.logical_session_id],
+      );
+      if (existingCountResult.rows[0].n > 0) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "hasExistingResults", resultCount: existingCountResult.rows[0].n });
+      }
+    }
+    const nextRpeEnabled = willCascadeDisableRpe ? false : session.rpe_enabled;
+
+    // Same edit-draft cascade as PATCH .../rpe-enabled - a live plan's
+    // currently-open edit-draft copy of this same logical session must be
+    // updated in the SAME transaction, or a later "Save and finish" would
+    // silently revert this toggle.
+    const draftSessionResult = await client.query(
+      `select ps2.id
+       from plans.plans d
+       join plans.plan_days pd2 on pd2.plan_id = d.id
+       join plans.plan_sessions ps2 on ps2.plan_day_id = pd2.id
+       where d.edit_source_plan_id = $1 and d.is_edit_draft
+         and ps2.logical_session_id = $2
+       for update of ps2`,
+      [session.plan_id, session.logical_session_id],
+    );
+    const idsToUpdate = [session.session_id, ...draftSessionResult.rows.map((row) => row.id)];
+    await client.query(
+      `update plans.plan_sessions set training_load_enabled = $1, rpe_enabled = $2, updated_at = now() where id = any($3::uuid[])`,
+      [trainingLoadEnabled, nextRpeEnabled, idsToUpdate],
+    );
+    await client.query("commit");
+    return res.json({ sessionId: session.session_id, trainingLoadEnabled, rpeEnabled: nextRpeEnabled, draftSessionUpdated: draftSessionResult.rowCount > 0 });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -956,8 +1107,10 @@ router.get("/weekly", async (req, res, next) => {
       // one. A disabled session that already has a result stays visible.
       // (v9) Same workspace-level master-toggle gate as GET /athlete/today -
       // the session's own PLAN's stored ownership snapshot, never the
-      // athlete's current memberships.
-      scopeSqlLive = `and p.athlete_id = $${params.length} and ((coalesce(ps.rpe_enabled, true) and training_load.planned_rpe_effective_for_plan(p.id, pd.date)) or sf.id is not null)`;
+      // athlete's current memberships. Same shared eligibility function
+      // (training_load.planned_rpe_actionable) as every other planned-RPE
+      // read path now uses.
+      scopeSqlLive = `and p.athlete_id = $${params.length} and (training_load.planned_rpe_actionable(p.id, pd.date, ps.training_load_enabled, ps.rpe_enabled) or sf.id is not null)`;
       scopeSqlSf = `and sf.athlete_id = $${params.length}`;
       // Same rule as GET /athlete/today's own external-assignment fix: an
       // unrated row only shows here if it's genuinely actionable right
@@ -1008,7 +1161,7 @@ router.get("/weekly", async (req, res, next) => {
     }
 
     const liveResult = await query(
-      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled,
+      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled, ps.training_load_enabled,
               pd.date as session_date, p.id as plan_id, p.name as plan_name, p.created_by_user_id as plan_created_by_user_id,
               a.id as athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at,
@@ -1159,13 +1312,30 @@ router.get("/weekly", async (req, res, next) => {
         // reachable in practice (the column is NOT NULL DEFAULT true), but
         // coalesced defensively the same way the SQL-side reads already are.
         rpeEnabled: row.rpe_enabled !== false,
+        // Training Activity Integration 2A: whether this session is being
+        // tracked in Training Load at all - the flag RPE now depends on
+        // (see the DB's own plan_sessions_rpe_requires_training_load
+        // CHECK), kept separate so the frontend can render "Not tracked"
+        // distinctly from "Tracked, RPE off".
+        trainingLoadEnabled: row.training_load_enabled === true,
         // (v9) The workspace master toggle's own current effective value
         // for THIS session's date - kept separate from rpeEnabled (the
         // per-session flag) so the frontend can tell the two OFF reasons
         // apart ("this session" vs. "this whole workspace") rather than
         // collapsing them into one ambiguous boolean.
         workspacePlannedRpeEnabled: row.workspace_planned_rpe_enabled === true,
-        actionable: row.rpe_enabled !== false && row.workspace_planned_rpe_enabled === true,
+        actionable: row.training_load_enabled === true && row.rpe_enabled !== false && row.workspace_planned_rpe_enabled === true,
+        // One explicit, pre-computed label for the 4 states the Schedule
+        // tab's own per-session status pill renders - never re-derived
+        // client-side from the individual booleans above, so the UI and
+        // the backend can never quietly disagree about which of the 4
+        // applies. "workspace_off" only fires once training/rpe are BOTH
+        // already on - a session merely untracked or RPE-off is its own,
+        // more specific state regardless of the workspace switch.
+        status: row.training_load_enabled !== true ? "not_tracked"
+          : row.rpe_enabled === false ? "tracked_rpe_off"
+          : row.workspace_planned_rpe_enabled !== true ? "workspace_off"
+          : "tracked_rpe_on",
         // (correction round 2) true when this session's own PLAN has
         // never been assigned a real workspace scope - workspace
         // Planned RPE can never turn this session on by itself; a coach
@@ -1207,8 +1377,10 @@ router.get("/weekly", async (req, res, next) => {
         // rpe_enabled from at all - it's always already-rated, so this
         // is never read as an actionable "off" state either way.
         rpeEnabled: true,
+        trainingLoadEnabled: true,
         workspacePlannedRpeEnabled: true,
         actionable: false,
+        status: "tracked_rpe_on",
         ownershipUnresolved: false,
         canResolveOwnership: false,
         source: "planned",
@@ -1233,6 +1405,8 @@ router.get("/weekly", async (req, res, next) => {
         feedback: formatFeedback(row),
         historical: false,
         rpeEnabled: true,
+        trainingLoadEnabled: true,
+        status: "tracked_rpe_on",
         source: "scheduled_external",
         externalAssignmentId: row.assignment_id,
         scheduleId: row.schedule_id,
@@ -2144,7 +2318,31 @@ router.post("/external-assignments/:assignmentId/rpe", async (req, res, next) =>
 
     if (insertResult.rows.length) {
       await client.query(`update training_load.external_assignments set status = 'completed', completed_at = now() where id = $1 and status <> 'completed'`, [assignment.id]);
+      // Training Activity Integration 2A, point 9: external RPE schedules
+      // are explicitly built for RPE and never depend on any planned-
+      // session flag. The whole occurrence materializes to exactly ONE
+      // group activity, idempotently and deadlock-free under concurrency
+      // - reusing the SAME, already-tested SQL function the coach-facing
+      // /materialize/external-occurrence/:id route calls
+      // (training.materialize_activity_group_from_external_occurrence,
+      // migrations_v2's training_activity_v4), never a re-implementation.
+      // Called unconditionally on every athlete's own successful submit
+      // for this occurrence (not just the first) - it takes its own
+      // advisory lock on the occurrence id and is a pure no-op once the
+      // group activity already exists, so two athletes submitting for the
+      // SAME occurrence concurrently converge on one activity with no
+      // extra coordination needed here. Authorization is implicit: this
+      // call is only ever reached after confirming `assignment.athlete_id
+      // === athleteId` above, so an athlete can only ever trigger this
+      // for an occurrence THEY are genuinely assigned to. Runs in the
+      // SAME transaction as the feedback insert/assignment-status update
+      // above - both commit together or neither does.
+      await client.query(
+        `select training.materialize_activity_group_from_external_occurrence($1,$2,$3,$4)`,
+        [lookup.occurrence_id, null, schedule.event_name, req.user.id],
+      );
       await client.query("commit");
+      emitRealtimeEvent(athleteId, "training_load_changed", { externalAssignmentId: assignment.id });
       return res.status(201).json({ feedback: formatFeedback({ feedback_id: insertResult.rows[0].id, ...insertResult.rows[0] }) });
     }
 

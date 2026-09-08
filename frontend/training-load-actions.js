@@ -21,6 +21,7 @@ import {
   submitRpe,
   submitExternalRpe,
   toggleSessionRpeEnabled,
+  toggleSessionTrainingLoadEnabled,
   trainingLoadMutationContextIsCurrentWorkspace,
   updateExternalSchedule,
 } from "./training-load-data.js";
@@ -239,6 +240,40 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // visible anymore) never touched Today's own now-empty nav at all -
     // see loadTrainingLoadWeeklyInto's own "invalidated-stale" self-heal
     // in training-load-data.js for the other half of this fix.
+    const currentSection = state.trainingLoad.section;
+    if (trainingLoadMutationContextIsCurrentWorkspace(mutationContext)) {
+      invalidateTrainingLoadWeeklyContext(mutationContext);
+      await loadTrainingLoadWeekly(currentSection, renderTrainingLoad);
+    }
+    renderTrainingLoad();
+    return true;
+  }
+
+  // Training Activity Integration 2A: the OTHER half of the split
+  // decision - "track this session in Training Load" at all. Same
+  // confirm-before-disable contract, same cache-invalidation/reload
+  // shape as training-load-toggle-session-rpe directly above (both
+  // mutate the exact same plans.plan_sessions row, so both need the
+  // exact same "which cached week entry to drop" care).
+  if (type === "training-load-toggle-session-tracking") {
+    const sessionId = action.dataset.sessionId;
+    if (!sessionId) return true;
+    const currentlyEnabled = action.dataset.currentlyEnabled === "true";
+    const nextEnabled = !currentlyEnabled;
+    const section = state.trainingLoad.section;
+    const mutationContext = captureTrainingLoadWeeklyMutationContext(section);
+    try {
+      await toggleSessionTrainingLoadEnabled(sessionId, nextEnabled);
+    } catch (error) {
+      if (error.status === 409 && error.message === "hasExistingResults") {
+        if (!window.confirm("This session already has a recorded RPE result. Turning tracking off will also stop new RPE submissions, but the existing result stays in Results. Continue?")) {
+          return true;
+        }
+        await toggleSessionTrainingLoadEnabled(sessionId, nextEnabled, true);
+      } else {
+        throw error;
+      }
+    }
     const currentSection = state.trainingLoad.section;
     if (trainingLoadMutationContextIsCurrentWorkspace(mutationContext)) {
       invalidateTrainingLoadWeeklyContext(mutationContext);

@@ -68,7 +68,8 @@ const MINIMAL_SCHEMA_SQL = `
     bta character varying(4),
     session_order numeric,
     name character varying(255),
-    rpe_enabled boolean not null default true
+    rpe_enabled boolean not null default true,
+    training_load_enabled boolean not null default true
   );
 
   create table plans.plan_nodes (
