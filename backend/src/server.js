@@ -22,6 +22,7 @@ import testsRouter from "./routes/tests.js";
 import testsCheckInRouter from "./routes/testsCheckIn.js";
 import trainingLoadRouter from "./routes/trainingLoad.js";
 import trainingLoadMetricsRouter from "./routes/trainingLoadMetrics.js";
+import trainingActivityRouter from "./routes/trainingActivity.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
@@ -91,6 +92,11 @@ app.use("/api/training-load", requireAuth, trainingLoadRouter);
 // /api/training-load itself; coach-only routes check via
 // requireMetricsScope/resolveReadContext inside the router.
 app.use("/api/training-load/metrics", requireAuth, trainingLoadMetricsRouter);
+// requireAuth only (no requireCoach) — same reasoning as
+// /api/training-load/metrics above: an athlete reads their own canonical
+// activity results the same way; coach-only routes check via
+// requireActivityWorkspace inside the router.
+app.use("/api/training-activity", requireAuth, trainingActivityRouter);
 app.get("/api/realtime", requireAuth, realtimeRouter);
 
 // Dev/test: this is a plain ES-modules frontend with no build step - script

@@ -32,6 +32,16 @@ const MIGRATIONS = [
   "202609041500_training_load_v11_metrics_provenance.sql",
   "202609041600_training_load_v12_metrics_events.sql",
   "202609041700_training_load_v13_metrics_measurements.sql",
+  // Real deployments apply migrations cumulatively to one shared
+  // database — trainingLoadMetricsCatalog.js's createDefinition now
+  // depends on training_load.metric_definition_scope_capabilities,
+  // which only the training_activity_v3 migration creates (v1/v2 are its
+  // own prerequisites; v4 is included too so this isolated harness
+  // always matches the real, complete migration set).
+  "202609071000_training_activity_v1_core_tables.sql",
+  "202609071100_training_activity_v2_components_links.sql",
+  "202609071200_training_activity_v3_metrics_core_extensions.sql",
+  "202609071300_training_activity_v4_canonical_functions.sql",
 ];
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -348,7 +358,7 @@ async function ensureSystemDefinition() {
   sysAdminCookie = await loginCookie(sysAdminId);
   const res = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: sysAdminCookie,
-    body: { key: `total_distance_${uid()}`, label: "Total Distance", ownerScope: "system", unit: "m", valueType: "numeric", dailyAggregationMethod: "sum" },
+    body: { key: `total_distance_${uid()}`, label: "Total Distance", ownerScope: "system", unit: "m", valueType: "numeric", dailyAggregationMethod: "sum", scopeCapabilities: ["session", "component", "day"] },
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   distanceDefId = res.body.row.id;
@@ -674,7 +684,7 @@ test("8. a new semantic version never reinterprets an already-captured value", a
   const { coachCookie, athletes } = await makeClubWithAthletes("versioning", 1);
   const created = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: sysAdminCookie,
-    body: { key: `explosive_${uid()}`, label: "Explosive Distance", ownerScope: "system", unit: "m", valueType: "numeric", conditionDescription: { operator: ">", value: 60, unit: "W/kg" } },
+    body: { key: `explosive_${uid()}`, label: "Explosive Distance", ownerScope: "system", unit: "m", valueType: "numeric", conditionDescription: { operator: ">", value: 60, unit: "W/kg" }, scopeCapabilities: ["session"] },
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const defId = created.body.row.id;
@@ -708,7 +718,7 @@ test("8. a new semantic version never reinterprets an already-captured value", a
 test("9. manual correction preserves history, is retry-safe, and requires the complete value set", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("correction", 1);
   const distDef = await ensureSystemDefinition();
-  const speedDefRow = (await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `max_speed_${uid()}`, label: "Max Speed", ownerScope: "system", unit: "km/h", valueType: "numeric" } })).body.row;
+  const speedDefRow = (await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `max_speed_${uid()}`, label: "Max Speed", ownerScope: "system", unit: "km/h", valueType: "numeric", scopeCapabilities: ["session"] } })).body.row;
   const speedDef = speedDefRow.id;
   const speedVersionId = speedDefRow.current_version_id;
 
@@ -1193,7 +1203,7 @@ test("22. two concurrent corrections of the SAME occasion with different request
 
 test("23. correcting one metric never silently reinterprets an untouched sibling metric under a version that appeared later; an explicit version bump is still allowed", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("correctversion", 1);
-  const stableDef = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `stable_${uid()}`, label: "Stable Metric", ownerScope: "system", unit: "m", valueType: "numeric" } });
+  const stableDef = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `stable_${uid()}`, label: "Stable Metric", ownerScope: "system", unit: "m", valueType: "numeric", scopeCapabilities: ["session"] } });
   const stableDefId = stableDef.body.row.id;
   const stableV1 = stableDef.body.row.current_version_id;
 
@@ -1248,7 +1258,7 @@ test("24. a new entry submitted against a version that is no longer current is r
 
 test("25. an identical retry stays idempotent even after its definition was archived in the meantime", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("retryarchive", 1);
-  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `retryarch_${uid()}`, label: "Retry Archive Metric", ownerScope: "system", unit: "u", valueType: "numeric" } });
+  const created = await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `retryarch_${uid()}`, label: "Retry Archive Metric", ownerScope: "system", unit: "u", valueType: "numeric", scopeCapabilities: ["session"] } });
   const defId = created.body.row.id;
   const v1 = created.body.row.current_version_id;
   const requestKey = crypto.randomUUID();
@@ -1270,7 +1280,7 @@ test("25. an identical retry stays idempotent even after its definition was arch
 
 test("26. results pagination at limit=1 never loses a value from a multi-value occasion", async () => {
   const { coachCookie, athletes } = await makeClubWithAthletes("paginate-multi", 1);
-  const speedDefRow = (await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `pagespeed_${uid()}`, label: "Page Speed", ownerScope: "system", unit: "km/h", valueType: "numeric" } })).body.row;
+  const speedDefRow = (await api("/api/training-load/metrics/definitions", { method: "POST", cookie: sysAdminCookie, body: { key: `pagespeed_${uid()}`, label: "Page Speed", ownerScope: "system", unit: "km/h", valueType: "numeric", scopeCapabilities: ["session"] } })).body.row;
 
   const entry = await api("/api/training-load/metrics/events", {
     method: "POST", cookie: coachCookie,

@@ -383,7 +383,7 @@ async function ensureSystemDefinition() {
   sysAdminCookie = `optimove_session=${token}`;
   const res = await api("/api/training-load/metrics/definitions", {
     method: "POST", cookie: sysAdminCookie,
-    body: { key: `tl_metrics_editdraft_distance_${uid()}`, label: "Edit-draft Distance", ownerScope: "system", unit: "m", valueType: "numeric" },
+    body: { key: `tl_metrics_editdraft_distance_${uid()}`, label: "Edit-draft Distance", ownerScope: "system", unit: "m", valueType: "numeric", scopeCapabilities: ["session", "component", "day"] },
   });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   return res.body.row;

@@ -19,7 +19,7 @@ import {
   listDomains, createDomain, archiveDomain,
   listCategories, createCategory, archiveCategory,
   listDefinitions, getDefinition, createDefinition, updateDefinitionCosmetic, archiveDefinition,
-  createDefinitionVersion, listDefinitionVersions,
+  createDefinitionVersion, listDefinitionVersions, setDefinitionScopeCapabilities,
   hideDefinitionForUser, unhideDefinitionForUser,
   listStructureLinks, createStructureLink, deleteStructureLink,
 } from "../trainingLoadMetricsCatalog.js";
@@ -37,8 +37,15 @@ const OWNER_SCOPES = new Set(["system", "club", "team", "user"]);
 function validUuid(value) {
   return typeof value === "string" && UUID_PATTERN.test(value);
 }
+// Round 4 fix: year "0000" matched DATE_PATTERN and produced a real,
+// non-NaN JS Date (ECMAScript has no concept of "year zero" being
+// invalid), so this used to accept it — but Postgres itself has no year
+// zero and rejects a literal "0000-01-01" as a raw, unfriendly
+// "date/time field value out of range" error. Rejected explicitly here,
+// before it can ever reach a DB write.
 function validDate(value) {
   if (typeof value !== "string" || !DATE_PATTERN.test(value)) return false;
+  if (value.slice(0, 4) === "0000") return false;
   const d = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
@@ -58,8 +65,7 @@ function validTimestamp(value) {
   const m = TIMESTAMP_PATTERN.exec(value);
   if (!m) return false;
   const dateOnly = `${m[1]}-${m[2]}-${m[3]}`;
-  const d = new Date(`${dateOnly}T00:00:00Z`);
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== dateOnly) return false;
+  if (!validDate(dateOnly)) return false;
   return !Number.isNaN(new Date(value).getTime());
 }
 // Intl.DateTimeFormat's own constructor is the authoritative validator —
@@ -85,6 +91,14 @@ function validPositiveInt(value, { max } = {}) {
   if (!Number.isInteger(n) || n <= 0) return false;
   if (max !== undefined && n > max) return false;
   return true;
+}
+// Round 4 fix: matches training_load.metric_write_requests' own new
+// request_key length CHECK (training_activity_v3 migration) — rejected
+// here BEFORE ever reaching a transaction, same as every other
+// Node-then-DB validation pair in this app.
+const MAX_REQUEST_KEY_LENGTH = 200;
+function validRequestKey(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_REQUEST_KEY_LENGTH;
 }
 
 // P0001 = a plpgsql RAISE EXCEPTION (every CHECK/trigger violation this
@@ -145,7 +159,11 @@ async function resolveReadContext(req, res) {
 }
 
 function sendServiceResult(res, result, successStatus = 200) {
-  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+  // `code` is optional and additive — only setDefinitionScopeCapabilities
+  // currently sets one (e.g. "scopeCapabilityHasHistory"), for a caller
+  // that needs to distinguish error REASONS programmatically, not just
+  // read a human message.
+  if (result.error) return res.status(result.status || 400).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });
   return res.status(successStatus).json(result);
 }
 
@@ -300,6 +318,25 @@ router.post("/definitions/:id/archive", async (req, res, next) => {
   }
 });
 
+// Dedicated, authorized configuration path for
+// training_load.metric_definition_scope_capabilities (see
+// trainingLoadMetricsCatalog.js's own setDefinitionScopeCapabilities for
+// the full contract) — replaces the definition's declared set with
+// exactly the one given; removing a scope with real historical values is
+// refused with a controlled 409 (scopeCapabilityHasHistory), never a raw
+// DB error.
+router.put("/definitions/:id/scope-capabilities", async (req, res, next) => {
+  try {
+    if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
+    const scope = await requireMetricsScope(req, res);
+    if (!scope) return;
+    const result = await setDefinitionScopeCapabilities(req, req.params.id, req.body?.scopeCapabilities);
+    sendServiceResult(res, result);
+  } catch (error) {
+    respondToWriteError(res, next, error);
+  }
+});
+
 router.get("/definitions/:id/versions", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
@@ -397,6 +434,7 @@ router.delete("/structure-links/:id", async (req, res, next) => {
 
 function validateEventBody(body) {
   if (!body?.requestKey || typeof body.requestKey !== "string") return "requestKey is required.";
+  if (!validRequestKey(body.requestKey)) return `requestKey must be at most ${MAX_REQUEST_KEY_LENGTH} characters.`;
   if (!validDate(body.occurredDate)) return "occurredDate must be a valid YYYY-MM-DD date.";
   if (body.occurredInstant !== undefined && body.occurredInstant !== null && !validTimestamp(body.occurredInstant)) return "occurredInstant must be a valid timestamp.";
   if (!["session", "day"].includes(body?.scopeLevel)) return "scopeLevel must be 'session' or 'day'.";
@@ -483,6 +521,7 @@ router.post("/occasions/:id/correct", async (req, res, next) => {
     const scope = await requireMetricsScope(req, res);
     if (!scope) return;
     if (!req.body?.requestKey || typeof req.body.requestKey !== "string") return res.status(400).json({ error: "requestKey is required." });
+    if (!validRequestKey(req.body.requestKey)) return res.status(400).json({ error: `requestKey must be at most ${MAX_REQUEST_KEY_LENGTH} characters.` });
     const validationError = validateCorrectionValues(req.body?.values);
     if (validationError) return res.status(400).json({ error: validationError });
     const result = await correctManualOccasion(req, scope, { ...req.body, targetOccasionId: req.params.id });
@@ -501,6 +540,7 @@ router.post("/occasions/imported-correction", async (req, res, next) => {
     const scope = await requireMetricsScope(req, res);
     if (!scope) return;
     if (!req.body?.requestKey || typeof req.body.requestKey !== "string") return res.status(400).json({ error: "requestKey is required." });
+    if (!validRequestKey(req.body.requestKey)) return res.status(400).json({ error: `requestKey must be at most ${MAX_REQUEST_KEY_LENGTH} characters.` });
     if (!validUuid(req.body?.sourceIdentityId)) return res.status(400).json({ error: "sourceIdentityId is required." });
     if (!validUuid(req.body?.expectedCurrentOccasionId)) return res.status(400).json({ error: "expectedCurrentOccasionId is required." });
     const validationError = validateCorrectionValues(req.body?.values);

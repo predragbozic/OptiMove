@@ -17,10 +17,47 @@ function uuid() {
   return crypto.randomUUID();
 }
 
-function httpError(status, message) {
+function httpError(status, message, code) {
   const e = new Error(message);
   e.httpStatus = status;
+  if (code) e.code = code;
   return e;
+}
+
+// Proactive, clean check for the SAME rule
+// training_load.check_metric_value_scope_capability (training_activity_v3
+// migration) enforces unconditionally at the DB level — this exists so a
+// real, routed write returns a specific, actionable 409
+// (scopeCapabilitiesRequired) instead of depending on the DB's own raw
+// P0001 to carry that meaning back to the caller. The DB trigger remains
+// the unconditional last-resort backstop regardless of whether this was
+// ever called.
+// Takes a `FOR KEY SHARE` lock on every distinct metric_definitions row
+// about to be written against, sorted by id for a stable, deadlock-free
+// lock order across every write path that can touch more than one
+// definition in a single transaction (a group event submission
+// especially). `FOR KEY SHARE` is the weakest row lock mode that still
+// conflicts with `FOR UPDATE` (which setDefinitionScopeCapabilities in
+// trainingLoadMetricsCatalog.js takes) — it does NOT conflict with
+// itself, so unrelated concurrent value-writes against the SAME or
+// DIFFERENT definitions never block each other, only a capability
+// removal does. MUST be called before assertScopeCapabilityConfigured
+// below, on every path that can insert into metric_values.
+async function lockDefinitionsForKeyShare(client, definitionIds) {
+  const unique = [...new Set(definitionIds)].sort();
+  for (const id of unique) {
+    await client.query(`select 1 from training_load.metric_definitions where id = $1 for key share`, [id]);
+  }
+}
+
+async function assertScopeCapabilityConfigured(client, { metricDefinitionId, scopeLevel }) {
+  const r = await client.query(
+    `select 1 from training_load.metric_definition_scope_capabilities where metric_definition_id=$1 and scope_level=$2`,
+    [metricDefinitionId, scopeLevel],
+  );
+  if (!r.rowCount) {
+    throw httpError(409, `Metric definition ${metricDefinitionId} has no configured scope capability for level '${scopeLevel}' — configure it before submitting a value at this scope.`, "scopeCapabilitiesRequired");
+  }
 }
 
 // Recursively sorts object keys at every nesting level so JSON.stringify
@@ -108,6 +145,24 @@ function parseValueForType(valueType, raw) {
 // NEW use of a metric, never a correction of history that already used
 // it).
 // -----------------------------------------------------------------------
+// Round 4 fix: the state/current_version_id decision below used to be
+// made from an UNLOCKED read — and the ONLY lock any caller took on this
+// row before this point (lockDefinitionsForKeyShare, FOR KEY SHARE,
+// called by the 3 write paths AFTER this function returns) does not
+// conflict with a plain UPDATE of non-key columns like current_version_id
+// or state (createDefinitionVersion/archiveDefinition in
+// trainingLoadMetricsCatalog.js issue exactly that kind of UPDATE). So a
+// version bump or archive could land in the gap between this read and the
+// write that follows, and never be seen. FOR SHARE is the weakest lock
+// mode that DOES conflict with an ordinary UPDATE of those columns (it
+// does not conflict with itself or with FOR KEY SHARE, so unrelated
+// concurrent value-writers still never block each other) — taken here,
+// sorted, BEFORE this function's own decision, ONLY for new-entry paths
+// (requireCurrentVersion=true — corrections intentionally preserve an
+// explicit, possibly-no-longer-current version, so there is nothing here
+// for them to race against). createDefinitionVersion/archiveDefinition
+// now take FOR UPDATE on the same row before THEIR OWN decision, so the
+// two sides always serialize, whichever gets there first.
 async function resolveValueEntries(client, req, rawEntries, { requireActive, requireCurrentVersion }) {
   if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
     return { error: "At least one metric value is required.", status: 400 };
@@ -118,6 +173,13 @@ async function resolveValueEntries(client, req, rawEntries, { requireActive, req
   }
 
   const uniqueDefIds = [...new Set(rawEntries.map((e) => e.metricDefinitionId))];
+
+  if (requireCurrentVersion) {
+    for (const id of [...uniqueDefIds].sort()) {
+      await client.query(`select 1 from training_load.metric_definitions where id = $1 for share`, [id]);
+    }
+  }
+
   const defCache = new Map();
   for (const defId of uniqueDefIds) {
     const visParams = [];
@@ -294,7 +356,7 @@ async function claimWriteRequest(client, { requestKey, requestedBy, operationKin
 // definition, or an invalid value anywhere rejects the entire request
 // with zero partial writes.
 // -----------------------------------------------------------------------
-export async function createGroupEvent(req, scope, body) {
+export async function createGroupEvent(req, scope, body, { onLocked } = {}) {
   const requestKey = body?.requestKey;
   if (!requestKey || typeof requestKey !== "string") return { error: "requestKey is required.", status: 400 };
   if (!Array.isArray(body?.participants) || body.participants.length === 0) return { error: "At least one participant is required.", status: 400 };
@@ -345,6 +407,8 @@ export async function createGroupEvent(req, scope, body) {
     });
     const valuesResult = await resolveValueEntries(client, req, flatEntries, { requireActive: true, requireCurrentVersion: true });
     if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error);
+    await lockDefinitionsForKeyShare(client, valuesResult.values.map((v) => v.metric_definition_id));
+    if (onLocked) await onLocked(client);
     const resolvedByParticipant = new Map();
     valuesResult.values.forEach((resolvedValue, idx) => {
       const participantIndex = flatEntries[idx].__participantIndex;
@@ -405,7 +469,9 @@ export async function createGroupEvent(req, scope, body) {
            values ($1,$2,$3,'manual',$4,$5)`,
           [occasionId, participantId, segmentId, occasionContentHash(groupValues), req.user.id],
         );
+        const groupScopeLevel = body.scopeLevel === "day" ? "day" : (segmentId ? "component" : "session");
         for (const v of groupValues) {
+          await assertScopeCapabilityConfigured(client, { metricDefinitionId: v.metric_definition_id, scopeLevel: groupScopeLevel });
           await client.query(
             `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text, unit_at_capture)
              values ($1,$2,$3,$4,$5,$6,$7)`,
@@ -422,7 +488,7 @@ export async function createGroupEvent(req, scope, body) {
     return { reused: false, eventId, participants: createdParticipants };
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    if (error.httpStatus) return { error: error.message, status: error.httpStatus };
+    if (error.httpStatus) return { error: error.message, status: error.httpStatus, ...(error.code ? { code: error.code } : {}) };
     throw error;
   } finally {
     client.release();
@@ -466,7 +532,7 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
   try {
     await client.query("begin");
     const targetLookup = await client.query(
-      `select o.*, p.event_id, e.owner_scope, e.owner_club_id, e.owner_team_id, e.owner_user_id
+      `select o.*, p.event_id, e.owner_scope, e.owner_club_id, e.owner_team_id, e.owner_user_id, e.scope_level as event_scope_level
        from training_load.metric_measurement_occasions o
        join training_load.metric_event_participants p on p.id = o.event_participant_id
        join training_load.metric_events e on e.id = p.event_id
@@ -513,6 +579,7 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
     const valuesResult = await resolveValueEntries(client, req, body.values, { requireActive: false, requireCurrentVersion: false });
     if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error);
     const newValues = valuesResult.values;
+    await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     const completeness = validateCompleteValueSet(oldValuesRes.rows, newValues);
     if (completeness) throw httpError(completeness.status, completeness.error);
 
@@ -522,7 +589,9 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
        values ($1,$2,$3,'manual',$4,$5,$6)`,
       [newOccasionId, target.event_participant_id, target.segment_id, occasionContentHash(newValues), req.user.id, targetOccasionId],
     );
+    const manualScopeLevel = target.event_scope_level === "day" ? "day" : (target.segment_id ? "component" : "session");
     for (const v of newValues) {
+      await assertScopeCapabilityConfigured(client, { metricDefinitionId: v.metric_definition_id, scopeLevel: manualScopeLevel });
       await client.query(
         `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text, unit_at_capture)
          values ($1,$2,$3,$4,$5,$6,$7)`,
@@ -542,7 +611,7 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
     return { reused: false, occasionId: newOccasionId };
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    if (error.httpStatus) return { error: error.message, status: error.httpStatus };
+    if (error.httpStatus) return { error: error.message, status: error.httpStatus, ...(error.code ? { code: error.code } : {}) };
     throw error;
   } finally {
     client.release();
@@ -598,7 +667,7 @@ export async function correctImportedOccasionManually(req, scope, body) {
     if (identity.current_occasion_id !== expectedCurrentOccasionId) throw httpError(409, "This revision was already superseded — reload and retry.");
 
     const targetLookup = await client.query(
-      `select o.*, p.event_id, e.owner_scope, e.owner_club_id, e.owner_team_id, e.owner_user_id
+      `select o.*, p.event_id, e.owner_scope, e.owner_club_id, e.owner_team_id, e.owner_user_id, e.scope_level as event_scope_level
        from training_load.metric_measurement_occasions o
        join training_load.metric_event_participants p on p.id = o.event_participant_id
        join training_load.metric_events e on e.id = p.event_id
@@ -612,6 +681,7 @@ export async function correctImportedOccasionManually(req, scope, body) {
     const valuesResult = await resolveValueEntries(client, req, body.values, { requireActive: false, requireCurrentVersion: false });
     if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error);
     const newValues = valuesResult.values;
+    await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     const completeness = validateCompleteValueSet(oldValuesRes.rows, newValues);
     if (completeness) throw httpError(completeness.status, completeness.error);
 
@@ -621,7 +691,9 @@ export async function correctImportedOccasionManually(req, scope, body) {
        values ($1,$2,$3,'manual',$4,$5,$6,$7)`,
       [newOccasionId, target.event_participant_id, target.segment_id, occasionContentHash(newValues), sourceIdentityId, req.user.id, expectedCurrentOccasionId],
     );
+    const importScopeLevel = target.event_scope_level === "day" ? "day" : (target.segment_id ? "component" : "session");
     for (const v of newValues) {
+      await assertScopeCapabilityConfigured(client, { metricDefinitionId: v.metric_definition_id, scopeLevel: importScopeLevel });
       await client.query(
         `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text, unit_at_capture)
          values ($1,$2,$3,$4,$5,$6,$7)`,
@@ -635,7 +707,7 @@ export async function correctImportedOccasionManually(req, scope, body) {
     return { reused: false, occasionId: newOccasionId };
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    if (error.httpStatus) return { error: error.message, status: error.httpStatus };
+    if (error.httpStatus) return { error: error.message, status: error.httpStatus, ...(error.code ? { code: error.code } : {}) };
     throw error;
   } finally {
     client.release();
@@ -654,6 +726,7 @@ export async function correctSourceIdentityOccasion(client, { sourceIdentityId, 
   try {
     const lockRes = await client.query(`select * from training_load.metric_source_identities where id=$1 for update`, [sourceIdentityId]);
     const identity = lockRes.rows[0];
+    await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     if (onLocked) await onLocked();
     if (identity.current_occasion_id !== expectedCurrentOccasionId) {
       throw new Error(`STALE_BASE_REVISION: expected current=${expectedCurrentOccasionId} but actual current=${identity.current_occasion_id}`);
@@ -697,6 +770,7 @@ export async function importResendSynthetic(client, { sourceIdentityId, newValue
   try {
     const lockRes = await client.query(`select * from training_load.metric_source_identities where id=$1 for update`, [sourceIdentityId]);
     const identity = lockRes.rows[0];
+    await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     if (onLocked) await onLocked();
     const currentOccRes = await client.query(`select * from training_load.metric_measurement_occasions where id=$1`, [identity.current_occasion_id]);
     const currentOcc = currentOccRes.rows[0];
