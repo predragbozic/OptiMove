@@ -145,6 +145,24 @@ function parseValueForType(valueType, raw) {
 // NEW use of a metric, never a correction of history that already used
 // it).
 // -----------------------------------------------------------------------
+// Round 4 fix: the state/current_version_id decision below used to be
+// made from an UNLOCKED read — and the ONLY lock any caller took on this
+// row before this point (lockDefinitionsForKeyShare, FOR KEY SHARE,
+// called by the 3 write paths AFTER this function returns) does not
+// conflict with a plain UPDATE of non-key columns like current_version_id
+// or state (createDefinitionVersion/archiveDefinition in
+// trainingLoadMetricsCatalog.js issue exactly that kind of UPDATE). So a
+// version bump or archive could land in the gap between this read and the
+// write that follows, and never be seen. FOR SHARE is the weakest lock
+// mode that DOES conflict with an ordinary UPDATE of those columns (it
+// does not conflict with itself or with FOR KEY SHARE, so unrelated
+// concurrent value-writers still never block each other) — taken here,
+// sorted, BEFORE this function's own decision, ONLY for new-entry paths
+// (requireCurrentVersion=true — corrections intentionally preserve an
+// explicit, possibly-no-longer-current version, so there is nothing here
+// for them to race against). createDefinitionVersion/archiveDefinition
+// now take FOR UPDATE on the same row before THEIR OWN decision, so the
+// two sides always serialize, whichever gets there first.
 async function resolveValueEntries(client, req, rawEntries, { requireActive, requireCurrentVersion }) {
   if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
     return { error: "At least one metric value is required.", status: 400 };
@@ -155,6 +173,13 @@ async function resolveValueEntries(client, req, rawEntries, { requireActive, req
   }
 
   const uniqueDefIds = [...new Set(rawEntries.map((e) => e.metricDefinitionId))];
+
+  if (requireCurrentVersion) {
+    for (const id of [...uniqueDefIds].sort()) {
+      await client.query(`select 1 from training_load.metric_definitions where id = $1 for share`, [id]);
+    }
+  }
+
   const defCache = new Map();
   for (const defId of uniqueDefIds) {
     const visParams = [];

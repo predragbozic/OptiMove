@@ -108,6 +108,7 @@ declare
   v_old_event_link_id uuid;
   v_new_event_link_id uuid;
   v_progress boolean;
+  v_merge_status varchar;
   -- In-memory-only working state for the 'clone' strategy — see this
   -- function's own header comment for why these replace temp tables.
   v_seg_carryover jsonb;
@@ -120,9 +121,20 @@ begin
   -- what makes every read below reliable without a peek/retry loop.
   perform pg_advisory_xact_lock(hashtextextended('activity-participant:' || p_participant_id::text, 4));
 
-  select activity_id into v_from_activity_id from training.activity_participants where id = p_participant_id;
+  select activity_id, merge_status into v_from_activity_id, v_merge_status from training.activity_participants where id = p_participant_id;
   if v_from_activity_id is null then
     raise exception 'activity_participant % not found', p_participant_id;
+  end if;
+  -- Round 4 fix: a SUPERSEDED (alias) participant must never be physically
+  -- moved — its whole reason for existing is to resolve, via
+  -- resolve_canonical_participant_id, to its canonical target; reparenting
+  -- it directly would let the canonical result wrongly link the WRONG
+  -- activities together (the alias would carry the move, but every
+  -- lookup following the alias chain still lands on the canonical row,
+  -- which never moved). Checked before ANY write below — zero partial
+  -- writes on refusal.
+  if v_merge_status <> 'canonical' then
+    raise exception 'reparent_activity_participant: participant % is not canonical (merge_status=%) — resolve to its canonical id first, then reparent that', p_participant_id, v_merge_status;
   end if;
   if v_from_activity_id = p_to_activity_id then
     return; -- no-op, already there
@@ -327,7 +339,19 @@ begin
       end loop;
     elsif p_component_strategy = 'map' then
       for v_rec in select id, activity_component_id from training.activity_participant_components where activity_participant_id = p_participant_id loop
-        v_mapped_id := (p_component_mapping ->> v_rec.activity_component_id::text)::uuid;
+        -- Round 4 fix: the service layer (trainingActivityMaterialize.js's
+        -- reparentActivityParticipant) now validates component_mapping's
+        -- shape (plain object, every key/value a real UUID string) BEFORE
+        -- this function is ever called — this cast is a second, defensive
+        -- line of DB-level protection for any future/raw caller that
+        -- bypasses the service layer, so a malformed value here raises a
+        -- clear, named exception instead of a bare, confusing Postgres
+        -- 22P02 (invalid_text_representation).
+        begin
+          v_mapped_id := (p_component_mapping ->> v_rec.activity_component_id::text)::uuid;
+        exception when invalid_text_representation then
+          raise exception 'reparent_activity_participant: component_mapping entry for source component % is not a valid UUID', v_rec.activity_component_id;
+        end;
         if v_mapped_id is null then
           raise exception 'reparent_activity_participant: component_mapping has no entry for source component %', v_rec.activity_component_id;
         end if;

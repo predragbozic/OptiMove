@@ -34,12 +34,20 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIMESTAMP_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-][01]\d:[0-5]\d)$/;
 const MAX_NAME_LENGTH = 200;
 const MAX_REASON_LENGTH = 2000;
+const MAX_REQUEST_KEY_LENGTH = 200;
 
 function validUuid(value) {
   return typeof value === "string" && UUID_PATTERN.test(value);
 }
+// Round 4 fix: year "0000" matched DATE_PATTERN and produced a real,
+// non-NaN JS Date (ECMAScript has no concept of "year zero" being
+// invalid), so this used to accept it — but Postgres itself has no year
+// zero and rejects a literal "0000-01-01" as a raw, unfriendly
+// "date/time field value out of range" error. Rejected explicitly here,
+// before it can ever reach a DB write.
 function validDate(value) {
   if (typeof value !== "string" || !DATE_PATTERN.test(value)) return false;
+  if (value.slice(0, 4) === "0000") return false;
   const d = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
@@ -266,6 +274,7 @@ router.post("/materialize", async (req, res, next) => {
   try {
     const b = req.body || {};
     if (typeof b.requestKey !== "string" || !b.requestKey) return res.status(400).json({ error: "requestKey is required." });
+    if (!validMaxLength(b.requestKey, MAX_REQUEST_KEY_LENGTH)) return res.status(400).json({ error: `requestKey must be at most ${MAX_REQUEST_KEY_LENGTH} characters.` });
     if (b.planLogicalSessionId !== undefined && b.planLogicalSessionId !== null && !validUuid(b.planLogicalSessionId)) return res.status(400).json({ error: "Invalid planLogicalSessionId." });
     if (b.externalAssignmentId !== undefined && b.externalAssignmentId !== null && !validUuid(b.externalAssignmentId)) return res.status(400).json({ error: "Invalid externalAssignmentId." });
     // Returned BEFORE any authorization/DB work — the service itself

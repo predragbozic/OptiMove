@@ -156,16 +156,24 @@ create trigger activities_protect_identity_fields
 -- settled yet). The only sanctioned bypass is
 -- correct_confirmed_activity_fields() below, which sets the same
 -- session-local GUC the identity trigger checks.
+-- Round 4 fix: this used to protect ONLY while lifecycle_state='confirmed'
+-- — once an activity was superseded (every participant moved/merged
+-- away), the protection silently disappeared, so a direct UPDATE could
+-- still rewrite a superseded activity's own date/time/timezone/type. A
+-- superseded activity is exactly as historical as a confirmed one (it
+-- still anchors every fact that resolves to it through the alias chain —
+-- see training.activity_alias_ids/canonical_activity_results) and must
+-- stay protected by the SAME rule, through the SAME sanctioned bypass.
 create function training.protect_confirmed_activity_fields() returns trigger as $$
 begin
-  if old.lifecycle_state = 'confirmed' and (
+  if old.lifecycle_state in ('confirmed', 'superseded') and (
        new.occurred_local_date is distinct from old.occurred_local_date
     or new.started_at is distinct from old.started_at
     or new.ended_at is distinct from old.ended_at
     or new.timezone_snapshot is distinct from old.timezone_snapshot
     or new.activity_type_key is distinct from old.activity_type_key
   ) and current_setting('training.allow_confirmed_field_change', true) is distinct from 'on' then
-    raise exception 'training.activities (id=%): confirmed activity date/time/timezone/type fields are immutable — use correct_confirmed_activity_fields()', old.id;
+    raise exception 'training.activities (id=%): confirmed/superseded activity date/time/timezone/type fields are immutable — use correct_confirmed_activity_fields()', old.id;
   end if;
   return new;
 end;
@@ -349,22 +357,37 @@ create trigger activity_participants_validate_timezone
   before insert or update on training.activity_participants
   for each row execute function training.validate_participant_timezone();
 
+-- Round 4 fix: "load-bearing" used to mean ONLY "has an existing link/
+-- component row", and only guarded athlete_id/timezone_snapshot (not
+-- local_date). Two more real load-bearing cases were missed: a participant
+-- that has ITSELF already been merged away (merge_status='superseded' —
+-- its own identity fields are exactly what merge_activity_participants'
+-- own audit log and every reader following the alias chain rely on being
+-- stable), and a participant that is the TARGET of an incoming alias (some
+-- OTHER participant's superseded_by_participant_id points here — that
+-- other row's whole reason for resolving here depends on this row's
+-- identity never moving out from under it). local_date now gets the SAME
+-- protection as athlete_id/timezone_snapshot — it is just as much a part
+-- of "which real person, on which real day" as the other two.
 create function training.protect_participant_identity_once_linked() returns trigger as $$
 declare
-  has_links boolean;
+  is_load_bearing boolean;
 begin
   if new.athlete_id is not distinct from old.athlete_id
-     and new.timezone_snapshot is not distinct from old.timezone_snapshot then
-    -- fall through to the merge-status write-once check below
+     and new.timezone_snapshot is not distinct from old.timezone_snapshot
+     and new.local_date is not distinct from old.local_date then
+    -- fall through to the merge-status/activity_id write-once checks below
     null;
   else
     select
       exists (select 1 from training.activity_participant_session_links where activity_participant_id = old.id)
       or exists (select 1 from training.activity_participant_metric_participant_links where activity_participant_id = old.id)
       or exists (select 1 from training.activity_participant_components where activity_participant_id = old.id)
-      into has_links;
-    if has_links then
-      raise exception 'training.activity_participants (id=%): athlete_id/timezone_snapshot are immutable once linked — reparent the ACTIVITY instead, never the athlete identity', old.id;
+      or old.merge_status = 'superseded'
+      or exists (select 1 from training.activity_participants where superseded_by_participant_id = old.id)
+      into is_load_bearing;
+    if is_load_bearing then
+      raise exception 'training.activity_participants (id=%): athlete_id/timezone_snapshot/local_date are immutable once load-bearing (linked, itself an alias, or the target of an incoming alias) — reparent the ACTIVITY instead, never the athlete identity', old.id;
     end if;
   end if;
 
@@ -491,6 +514,59 @@ create table training.activity_match_suggestions (
 );
 create index activity_match_suggestions_activity_idx on training.activity_match_suggestions (activity_id) where status = 'open';
 
+-- Round 4 fix: nothing previously stopped a raw UPDATE from silently
+-- rewriting what a suggestion was actually raised for (its own identity/
+-- candidate fields), or from moving status through an illegal transition
+-- (e.g. dismissed -> accepted, or back to open) — the app layer's own
+-- FOR UPDATE + status='open' checks (acceptMatchSuggestion/
+-- dismissMatchSuggestion in trainingActivityMaterialize.js) were the ONLY
+-- protection. This trigger makes the invariant real regardless of caller:
+-- activity_id/source_participant_id/candidate_activity_id/
+-- candidate_participant_id/confidence/score_breakdown/policy_version/
+-- reason/created_at are write-once; status may only move open ->
+-- accepted|dismissed (never back to open, never sideways between accepted
+-- and dismissed); resolving MUST set resolved_by_user_id/resolved_at
+-- TOGETHER at that exact transition; and once set, those two fields are
+-- themselves write-once. This is what turns the Node-level shared
+-- advisory-lock serialization (which prevents two callers from ever
+-- concurrently resolving SIBLING suggestions on the same source identity)
+-- into a hard guarantee rather than a best-effort convention.
+create function training.protect_match_suggestion_identity_and_transitions() returns trigger as $$
+begin
+  if new.activity_id is distinct from old.activity_id
+     or new.source_participant_id is distinct from old.source_participant_id
+     or new.candidate_activity_id is distinct from old.candidate_activity_id
+     or new.candidate_participant_id is distinct from old.candidate_participant_id
+     or new.confidence is distinct from old.confidence
+     or new.score_breakdown is distinct from old.score_breakdown
+     or new.policy_version is distinct from old.policy_version
+     or new.reason is distinct from old.reason
+     or new.created_at is distinct from old.created_at then
+    raise exception 'training.activity_match_suggestions (id=%): identity/candidate fields are immutable', old.id;
+  end if;
+
+  if new.status is distinct from old.status then
+    if old.status <> 'open' or new.status not in ('accepted', 'dismissed') then
+      raise exception 'training.activity_match_suggestions (id=%): illegal status transition % -> %', old.id, old.status, new.status;
+    end if;
+    if new.resolved_by_user_id is null or new.resolved_at is null then
+      raise exception 'training.activity_match_suggestions (id=%): resolved_by_user_id and resolved_at must both be set when resolving a suggestion', old.id;
+    end if;
+  else
+    if old.resolved_at is not null and (
+      new.resolved_by_user_id is distinct from old.resolved_by_user_id
+      or new.resolved_at is distinct from old.resolved_at
+    ) then
+      raise exception 'training.activity_match_suggestions (id=%): resolved_by_user_id/resolved_at are write-once once a suggestion is resolved', old.id;
+    end if;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+create trigger activity_match_suggestions_protect_transitions
+  before update on training.activity_match_suggestions
+  for each row execute function training.protect_match_suggestion_identity_and_transitions();
+
 -- ---------------------------------------------------------------------
 -- Idempotency for user-initiated (and future non-interactive-import)
 -- materialization/merge writes. requester_key is a generated
@@ -502,7 +578,13 @@ create index activity_match_suggestions_activity_idx on training.activity_match_
 -- ---------------------------------------------------------------------
 create table training.activity_write_requests (
   id uuid primary key default gen_random_uuid(),
-  request_key text not null,
+  -- Round 4 fix: an unbounded client-supplied request_key had no DB-level
+  -- backstop against an absurd/hostile value bloating the requester_key
+  -- unique index — same reasonable bound as this app's other free-text
+  -- identifier fields (see MAX_NAME_LENGTH/MAX_REASON_LENGTH in routes/
+  -- trainingActivity.js, which reject anything longer BEFORE it ever
+  -- reaches here).
+  request_key text not null check (length(request_key) <= 200),
   requested_by_user_id uuid references public.users(id),
   requested_by_source_connection_id uuid references training_load.metric_source_connections(id),
   requester_key text generated always as (

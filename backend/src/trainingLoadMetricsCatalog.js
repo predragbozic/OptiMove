@@ -362,13 +362,41 @@ export async function updateDefinitionCosmetic(req, id, body) {
   return { row: result.rows[0] };
 }
 
-export async function archiveDefinition(req, id) {
-  const existing = await query(`select * from training_load.metric_definitions where id = $1`, [id]);
-  const row = existing.rows[0];
-  if (!row) return { error: "Not found.", status: 404 };
-  if (!canManageCatalogRow(req, row)) return { error: "Outside your access.", status: 403 };
-  const result = await query(`update training_load.metric_definitions set state = 'archived', updated_at = now() where id = $1 returning *`, [id]);
-  return { row: result.rows[0] };
+// Round 4 fix: this used to read/decide on an UNLOCKED row, then update
+// it in a separate statement — a concurrent new-entry value write
+// (resolveValueEntries in trainingLoadMetricsMeasurements.js, which now
+// takes a FOR SHARE lock before deciding requireActive) could otherwise
+// read 'active' in the gap right before this archived it, and go on to
+// insert a value against a definition it never should have been allowed
+// to. Now takes FOR UPDATE on the SAME row first, exactly like
+// setDefinitionScopeCapabilities — FOR UPDATE conflicts with FOR SHARE,
+// so the two sides always serialize, whichever gets there first.
+// `onLocked` (default no-op) is a test-only hook, same convention as this
+// app's other deterministic-concurrency-tested functions.
+export async function archiveDefinition(req, id, { onLocked } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const existing = await client.query(`select * from training_load.metric_definitions where id = $1 for update`, [id]);
+    if (onLocked) await onLocked(client);
+    const row = existing.rows[0];
+    if (!row) {
+      await client.query("rollback");
+      return { error: "Not found.", status: 404 };
+    }
+    if (!canManageCatalogRow(req, row)) {
+      await client.query("rollback");
+      return { error: "Outside your access.", status: 403 };
+    }
+    const result = await client.query(`update training_load.metric_definitions set state = 'archived', updated_at = now() where id = $1 returning *`, [id]);
+    await client.query("commit");
+    return { row: result.rows[0] };
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // Semantic change: unit / value type / bounds / condition / aggregation.
@@ -376,17 +404,30 @@ export async function archiveDefinition(req, id) {
 // current_version_id — never edits an existing version in place. Every
 // metric_values row already captured under the OLD version stays
 // interpreted against that old version's own semantics forever.
-export async function createDefinitionVersion(req, id, body) {
-  const existing = await query(`select * from training_load.metric_definitions where id = $1`, [id]);
-  const row = existing.rows[0];
-  if (!row) return { error: "Not found.", status: 404 };
-  if (!canManageCatalogRow(req, row)) return { error: "Outside your access.", status: 403 };
+// Round 4 fix: same race as archiveDefinition above — the definition row
+// is now locked FOR UPDATE first, before this function decides anything
+// or issues its own current_version_id repoint, so a concurrent new-entry
+// value write's FOR SHARE lock always serializes against it. `onLocked`
+// (default no-op) is a test-only hook, same convention as this app's
+// other deterministic-concurrency-tested functions.
+export async function createDefinitionVersion(req, id, body, { onLocked } = {}) {
   const versionInput = validateVersionInput(body);
   if (versionInput.error) return versionInput;
 
   const client = await pool.connect();
   try {
     await client.query("begin");
+    const existing = await client.query(`select * from training_load.metric_definitions where id = $1 for update`, [id]);
+    if (onLocked) await onLocked(client);
+    const row = existing.rows[0];
+    if (!row) {
+      await client.query("rollback");
+      return { error: "Not found.", status: 404 };
+    }
+    if (!canManageCatalogRow(req, row)) {
+      await client.query("rollback");
+      return { error: "Outside your access.", status: 403 };
+    }
     const currentVersionResult = await client.query(
       `select version_number from training_load.metric_definition_versions where metric_definition_id = $1 order by version_number desc limit 1 for update`,
       [id],

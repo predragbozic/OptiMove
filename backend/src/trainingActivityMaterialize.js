@@ -540,11 +540,36 @@ function canManageOwnerRow(scope, row) {
 // dismissMatchSuggestion call can be directly observed Lock-waiting on
 // the SAME suggestion row before this one proceeds. Never awaited for
 // anything but a controlled test.
+// Round 4 fix: two SIBLING suggestions on the SAME source activity/source
+// participant (an ambiguous_new materialization records one per
+// candidate) used to be serialized only at the level of their OWN
+// suggestion row — this alone is not enough. Concurrently: A locks S1's
+// row and enters merge_activity_participants, which takes an advisory
+// lock on the SOURCE participant (shared by S1 and S2) before its target;
+// B locks S2's row and, entering ITS OWN merge, blocks on that SAME
+// source-participant advisory lock A already holds. A, having merged,
+// then tries to cascade-dismiss the sibling (S2) via the bare UPDATE
+// below — which now blocks on B's own row lock on S2. That is a genuine
+// wait-for cycle (A waits on B's row lock, B waits on A's advisory lock).
+// Fixed by taking ONE shared advisory lock, keyed on the source identity
+// (source activity + source participant) common to every sibling, BEFORE
+// ever locking an individual suggestion row — every accept/dismiss call
+// for ANY suggestion sharing that identity now serializes at this single
+// point, so two callers can never simultaneously be mid-way through
+// locking two different sibling rows in the first place.
+async function lockMatchSuggestionSourceIdentity(client, suggestionId) {
+  const idLookup = await client.query(`select activity_id, source_participant_id from training.activity_match_suggestions where id=$1`, [suggestionId]);
+  if (!idLookup.rowCount) throw httpError(404, "Suggestion not found.");
+  const { activity_id: sourceActivityId, source_participant_id: sourceParticipantId } = idLookup.rows[0];
+  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 5))`, [`activity-suggestion-source:${sourceActivityId}:${sourceParticipantId}`]);
+}
+
 export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, reason }, { onLocked } = {}) {
   if (scope.type === null) throw httpError(403, "Forbidden");
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await lockMatchSuggestionSourceIdentity(client, suggestionId);
     const sugRes = await client.query(
       `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
        from training.activity_match_suggestions ms join training.activities a on a.id = ms.activity_id
@@ -588,6 +613,7 @@ export async function dismissMatchSuggestion(scope, { suggestionId, performedBy 
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await lockMatchSuggestionSourceIdentity(client, suggestionId);
     const sugRes = await client.query(
       `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
        from training.activity_match_suggestions ms join training.activities a on a.id = ms.activity_id
@@ -614,18 +640,78 @@ export async function dismissMatchSuggestion(scope, { suggestionId, performedBy 
   }
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Round 4 fix: componentMapping used to be forwarded straight to the DB
+// function untouched — a malformed shape (not an object, non-UUID keys/
+// values) would only ever have been caught deep inside
+// reparent_activity_participant's own 'map' branch as a raw Postgres
+// 22P02 (invalid_text_representation). Validated HERE, before any
+// transaction/advisory lock is ever taken, so a bad request is refused
+// with zero partial writes and a controlled 400 — the DB function's own
+// cast is now only a defensive last resort (see the v4 migration's own
+// comment on that same cast). One documented rule for every OTHER
+// strategy: componentMapping must simply be absent (undefined/null) —
+// never silently ignored if the caller mistakenly sent one for
+// 'none'/'clone', which would otherwise hide a confused client's own
+// wrong request.
+function assertValidComponentMapping(componentStrategy, componentMapping) {
+  if (componentMapping === undefined || componentMapping === null) return;
+  if (componentStrategy !== "map") {
+    throw httpError(400, "componentMapping may only be provided when componentStrategy is 'map'.");
+  }
+  if (typeof componentMapping !== "object" || Array.isArray(componentMapping)) {
+    throw httpError(400, "componentMapping must be a plain object of { sourceComponentId: targetComponentId }.");
+  }
+  for (const [k, v] of Object.entries(componentMapping)) {
+    if (!UUID_PATTERN.test(k) || typeof v !== "string" || !UUID_PATTERN.test(v)) {
+      throw httpError(400, "componentMapping keys and values must all be valid UUIDs.");
+    }
+  }
+}
+
 // Authorized reparent/merge — both check the SOURCE participant's own
 // activity is within the caller's scope before doing anything (the
 // sanctioned SQL functions themselves additionally refuse a cross-owner-
 // scope move at the DB level, but a 404 here — never a 403 leaking that a
 // participant id exists — matches this app's existing not-yours-vs-
 // missing convention).
+//
+// Round 4 fix: reparent used to authorize ONLY the source — an
+// unauthorized or nonexistent TARGET activity was invisible to this
+// function entirely, so the DB function's own cross-owner-scope refusal
+// (which names both sides' owner UUIDs in its RAISE EXCEPTION message)
+// could be reached by an authorized caller pointing at someone else's
+// activity, and that raw message would then reach the client verbatim
+// via routes/trainingActivity.js's own P0001 -> 400 passthrough. The
+// target is now loaded and authorized here, with the SAME info-hiding 404
+// the source already gets, and the two sides' owner scopes are compared
+// HERE too — so an authorized-but-cross-scope target now gets a clean,
+// sanitized 400 from Node, and the DB's own cross-scope branch becomes an
+// unreachable-via-this-app defensive backstop only (never a real path a
+// client can trigger, so its own UUID-bearing message can never leak).
 export async function reparentActivityParticipant(scope, { participantId, toActivityId, performedBy, reason, componentStrategy, componentMapping }) {
   if (scope.type === null) throw httpError(403, "Forbidden");
+  const strategy = componentStrategy || "none";
+  assertValidComponentMapping(strategy, componentMapping);
+
   const p = await query(`select ap.id, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id from training.activity_participants ap join training.activities a on a.id = ap.activity_id where ap.id=$1`, [participantId]);
   if (!p.rowCount) throw httpError(404, "Participant not found.");
   if (!canManageOwnerRow(scope, p.rows[0])) throw httpError(404, "Participant not found.");
-  await query(`select training.reparent_activity_participant($1,$2,$3,$4,$5,$6)`, [participantId, toActivityId, performedBy, reason || null, componentStrategy || "none", componentMapping ? JSON.stringify(componentMapping) : null]);
+
+  const target = await query(`select id, owner_scope, owner_user_id, owner_club_id, owner_team_id from training.activities where id=$1`, [toActivityId]);
+  if (!target.rowCount) throw httpError(404, "Target activity not found.");
+  if (!canManageOwnerRow(scope, target.rows[0])) throw httpError(404, "Target activity not found.");
+
+  const source = p.rows[0];
+  const to = target.rows[0];
+  const sameOwnerScope = source.owner_scope === to.owner_scope
+    && (source.owner_user_id || null) === (to.owner_user_id || null)
+    && (source.owner_club_id || null) === (to.owner_club_id || null)
+    && (source.owner_team_id || null) === (to.owner_team_id || null);
+  if (!sameOwnerScope) throw httpError(400, "Cannot reparent a participant across different owner scopes.");
+
+  await query(`select training.reparent_activity_participant($1,$2,$3,$4,$5,$6)`, [participantId, toActivityId, performedBy, reason || null, strategy, componentMapping ? JSON.stringify(componentMapping) : null]);
   return { ok: true };
 }
 

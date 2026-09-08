@@ -114,11 +114,47 @@ create trigger metric_definition_scope_capabilities_protect_history
 -- aggregation_role/coverage must agree with each other, and a
 -- derived_rollup requires BOTH is_derived=true AND a non-null
 -- computed_by_ref.
+-- Columns first, with only their own simple domain CHECKs (the enum
+-- shape) — a constant-default ALTER ADD COLUMN is metadata-only in PG11+,
+-- safe regardless of table size, on both a fresh install and an upgrade.
 alter table training_load.metric_values
   add column aggregation_role varchar(20) not null default 'standalone'
     check (aggregation_role in ('standalone', 'source_rollup', 'derived_rollup')),
   add column coverage varchar(20) not null default 'not_applicable'
-    check (coverage in ('complete', 'partial', 'unknown', 'not_applicable')),
+    check (coverage in ('complete', 'partial', 'unknown', 'not_applicable'));
+
+-- Round 4 upgrade-safety fix: the blanket 'standalone' default above is
+-- WRONG for any pre-existing row that already has is_derived=true and a
+-- non-null computed_by_ref — a real, already-recorded derived/computed
+-- value from before this migration ever existed. The
+-- metric_values_computed_by_ref_requires_derived constraint added below
+-- requires aggregation_role='derived_rollup' whenever computed_by_ref is
+-- set, so an UPGRADE run over real data of this shape would otherwise
+-- fail validating that constraint. This backfill derives the CORRECT role
+-- for exactly those rows before the constraint is ever added — never a
+-- guess for anything else (a plain legacy row with is_derived=false, or
+-- is_derived=true with no computed_by_ref, correctly keeps the
+-- 'standalone' default). coverage is set to 'unknown', never 'complete'
+-- — there is no way to determine actual historical coverage
+-- retroactively for data that predates this column existing at all.
+--
+-- metric_values is append-only (training_load.forbid_update_delete,
+-- applied by the real, already-deployed v10/v13 migrations) — this UPDATE
+-- is the one narrow, transactional exception this migration needs: the
+-- immutability trigger is disabled for exactly this single backfill
+-- statement and unconditionally re-enabled immediately after, both inside
+-- this same migration's own transaction. No business value column
+-- (value_numeric/value_boolean/value_text/unit_at_capture/...) is ever
+-- touched here — only the two brand-new columns this same migration just
+-- added above, which no reader could have depended on before this file
+-- ever ran.
+alter table training_load.metric_values disable trigger metric_values_immutable;
+update training_load.metric_values
+  set aggregation_role = 'derived_rollup', coverage = 'unknown'
+  where is_derived = true and computed_by_ref is not null;
+alter table training_load.metric_values enable trigger metric_values_immutable;
+
+alter table training_load.metric_values
   add constraint metric_values_computed_by_ref_requires_derived
     check (computed_by_ref is null or aggregation_role = 'derived_rollup'),
   add constraint metric_values_derived_rollup_requires_provenance
@@ -278,3 +314,12 @@ $$ language plpgsql;
 create trigger metric_values_check_scope_capability
   before insert on training_load.metric_values
   for each row execute function training_load.check_metric_value_scope_capability();
+
+-- Round 4 fix: training_load.metric_write_requests (already deployed,
+-- real v13 migration) had no length bound on its own request_key —
+-- additive over that real, deployed table, exactly like the rest of this
+-- file's own extensions. Same reasonable bound as training.
+-- activity_write_requests.request_key (v1, this branch's own table) and
+-- this app's other free-text identifier fields.
+alter table training_load.metric_write_requests
+  add constraint metric_write_requests_request_key_length check (length(request_key) <= 200);
