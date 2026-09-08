@@ -133,6 +133,24 @@ async function makeRealWeeklyPlan(coachId, athleteId, overrides = {}) {
   cleanupPlanIds.add(planId);
   return planId;
 }
+// Training Activity Integration 2A hardening: a genuine, not-yet-submitted
+// draft (status='draft', source_type='builder', edit_source_plan_id=null -
+// see isEditableDraftPlan, routes/builder.js) is one of the only two plan
+// states PATCH /sessions/:sessionId now permits a trackingEnabled/
+// rpeEnabled change against; every other field (name/time/amPm/bta)
+// remains editable on either a draft OR an already-published/active plan,
+// exactly as makeRealWeeklyPlan above still produces.
+async function makeRealDraftWeeklyPlan(coachId, athleteId, overrides = {}) {
+  const planResult = await query(
+    `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, status, source_type, visibility, week_start)
+     values ('weekly', $1, $2, 'TL rpe-enabled regression draft', 'draft', 'builder', 'private', $3)
+     returning id`,
+    [coachId, athleteId, overrides.weekStart || WEEK_START],
+  );
+  const planId = planResult.rows[0].id;
+  cleanupPlanIds.add(planId);
+  return planId;
+}
 async function makeRealDay(planId, date, dayOrder) {
   const dayResult = await query(
     `insert into plans.plan_days (plan_id, date, day_order, block_index) values ($1,$2,$3::numeric,$3::integer) returning id`,
@@ -146,11 +164,13 @@ async function makeRealDay(planId, date, dayOrder) {
 // with training_load_enabled=false, so every existing call site that
 // already passes rpeEnabled=true keeps working unchanged; pass
 // trainingLoadEnabled explicitly for a test that needs "tracked, RPE
-// off" (true, false) specifically.
-async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0, rpeEnabled = true, trainingLoadEnabled = rpeEnabled) {
+// off" (true, false) specifically. sessionTime is a trailing optional arg
+// (default null, matching every pre-existing call site's own implicit
+// behavior) - only tests exercising session_time preservation pass it.
+async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0, rpeEnabled = true, trainingLoadEnabled = rpeEnabled, sessionTime = null) {
   const sessionResult = await query(
-    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order, rpe_enabled, training_load_enabled) values ($1,$2,$3,$4,$5,$6) returning id`,
-    [dayId, name, amPm, sessionOrder, rpeEnabled, trainingLoadEnabled],
+    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order, rpe_enabled, training_load_enabled, session_time) values ($1,$2,$3,$4,$5,$6,$7) returning id`,
+    [dayId, name, amPm, sessionOrder, rpeEnabled, trainingLoadEnabled, sessionTime],
   );
   return sessionResult.rows[0].id;
 }
@@ -158,22 +178,52 @@ async function sessionRpeEnabled(sessionId) {
   const result = await query(`select rpe_enabled from plans.plan_sessions where id = $1`, [sessionId]);
   return result.rows[0]?.rpe_enabled;
 }
+async function sessionRow(sessionId) {
+  const result = await query(`select name, session_time, rpe_enabled, training_load_enabled from plans.plan_sessions where id = $1`, [sessionId]);
+  return result.rows[0];
+}
 
 // ------------------------------------------------------------
 // A. Builder PATCH /sessions/:sessionId - partial-update parity with
-// amPm/bta (only touched when the request body actually includes the key).
+// amPm/bta (only touched when the request body actually includes the key),
+// PLUS Training Activity Integration 2A hardening: (1) name/time must be
+// preserved exactly like amPm/bta/trackingEnabled/rpeEnabled always were -
+// they used to be unconditionally recomputed from req.body?.name/req.body?
+// .time even when absent, silently wiping them on any PATCH that didn't
+// mention them; (2) trackingEnabled/rpeEnabled changes are now REJECTED
+// (409, zero row changes) unless the target plan is a genuine draft or an
+// open edit-draft - a published/active plan must go through the dedicated
+// Training Load quick-toggle routes instead (see trainingLoad.js's own
+// PATCH .../rpe-enabled and .../training-load-enabled), which add real
+// ownership authorization and a confirm-before-disable-with-results gate
+// this general Builder route deliberately does not.
 // ------------------------------------------------------------
 
-test("A1. PATCH with rpeEnabled: false persists false", async () => {
+test("A1. trackingEnabled/rpeEnabled are rejected (409, notDraft) on an already-published/active plan, and change zero rows", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
   const planId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
-  const sessionId = await makeRealSession(dayId, "Mobility session", "AM");
+  const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, true, true, "07:30");
 
   const res = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { rpeEnabled: false } });
-  assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
-  assert.equal(await sessionRpeEnabled(sessionId), false);
+  assert.equal(res.status, 409, `expected 409, got ${res.status}: ${JSON.stringify(res.body)}`);
+  assert.equal(res.body.error, "notDraft");
+  const row = await sessionRow(sessionId);
+  assert.equal(row.rpe_enabled, true, "a rejected request must change zero rows");
+  assert.equal(row.name, "Mobility session");
+  assert.equal(String(row.session_time).slice(0, 5), "07:30");
+
+  const trackingRes = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { trackingEnabled: false } });
+  assert.equal(trackingRes.status, 409, `expected 409, got ${trackingRes.status}: ${JSON.stringify(trackingRes.body)}`);
+  assert.equal((await sessionRow(sessionId)).training_load_enabled, true, "trackingEnabled must be rejected the same way, changing zero rows");
+
+  // name/time/amPm/bta remain freely editable on this SAME active plan -
+  // the draft-only restriction is scoped to trackingEnabled/rpeEnabled
+  // only, never a general "this plan is locked" gate.
+  const renameRes = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { name: "Renamed" } });
+  assert.equal(renameRes.status, 200, `expected 200, got ${renameRes.status}: ${JSON.stringify(renameRes.body)}`);
+  assert.equal((await sessionRow(sessionId)).name, "Renamed");
 });
 
 test("A2. PATCH with no rpeEnabled key leaves the existing value untouched - a partial update never silently re-enables/disables it", async () => {
@@ -188,24 +238,24 @@ test("A2. PATCH with no rpeEnabled key leaves the existing value untouched - a p
   assert.equal(await sessionRpeEnabled(sessionId), false, "a PATCH that never mentions rpeEnabled must never flip it back to true");
 });
 
-test("A3. PATCH with rpeEnabled: true re-enables a previously disabled session that is already tracked in Training Load", async () => {
+test("A3. PATCH with rpeEnabled: true re-enables a previously disabled session that is already tracked in Training Load - on a genuine draft plan", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   // trainingLoadEnabled=true, rpeEnabled=false - "tracked, RPE off", the
   // one real starting state re-enabling RPE alone is meaningful for.
   const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false, true);
 
   const res = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { rpeEnabled: true } });
-  assert.equal(res.status, 200);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(await sessionRpeEnabled(sessionId), true);
 });
 
-test("A4. PATCH with rpeEnabled: true on a session NOT tracked in Training Load is forced back to false - RPE can never outrun tracking", async () => {
+test("A4. PATCH with rpeEnabled: true on a session NOT tracked in Training Load is forced back to false - RPE can never outrun tracking (on a genuine draft plan)", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false, false);
 
@@ -216,6 +266,86 @@ test("A4. PATCH with rpeEnabled: true on a session NOT tracked in Training Load 
   const trackOn = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { trackingEnabled: true, rpeEnabled: true } });
   assert.equal(trackOn.status, 200, JSON.stringify(trackOn.body));
   assert.equal(await sessionRpeEnabled(sessionId), true, "turning tracking AND rpe on together in the SAME request must succeed");
+});
+
+test("A5. trackingEnabled/rpeEnabled ARE permitted on an OPEN EDIT-DRAFT of an otherwise-active plan (POST /plans/:planId/edit)", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
+  await makeRealSession(dayId, "Mobility session", "AM", 0, true, true);
+
+  const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(editRes.status, 200, JSON.stringify(editRes.body));
+  const draftPlanId = editRes.body.plan.id;
+  cleanupPlanIds.add(draftPlanId);
+  const draftSessionId = (
+    await query(`select ps.id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1`, [draftPlanId])
+  ).rows[0].id;
+
+  const res = await api(`/api/builder/sessions/${draftSessionId}`, { method: "PATCH", cookie: coach.cookie, body: { rpeEnabled: false } });
+  assert.equal(res.status, 200, `an open edit-draft's own session must accept the change, got ${res.status}: ${JSON.stringify(res.body)}`);
+  assert.equal(await sessionRpeEnabled(draftSessionId), false);
+});
+
+// Requirement: {trackingEnabled}/{rpeEnabled} must never clear a
+// session's own name/session_time - both were unconditionally
+// recomputed from req.body?.name/req.body?.time (sessionTimeValue(undefined)
+// and nullableText(undefined) both resolve to null) regardless of whether
+// the caller's PATCH body even mentioned them, silently wiping a session's
+// own display name and specific clock time on every trackingEnabled/
+// rpeEnabled toggle - exactly what the real toggle handlers on both
+// Builder and the Training Load Schedule tab send (a bare
+// {trackingEnabled: ...} or {rpeEnabled: ...} body, nothing else).
+
+test("A6. PATCH {trackingEnabled} alone preserves a pre-existing name and session_time", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
+  const sessionId = await makeRealSession(dayId, "Gym session", "PM", 0, false, false, "18:15");
+
+  const res = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { trackingEnabled: true } });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const row = await sessionRow(sessionId);
+  assert.equal(row.training_load_enabled, true);
+  assert.equal(row.name, "Gym session", "trackingEnabled alone must never clear the session's own name");
+  assert.equal(String(row.session_time).slice(0, 5), "18:15", "trackingEnabled alone must never clear the session's own time");
+});
+
+test("A7. PATCH {rpeEnabled} alone preserves a pre-existing name and session_time", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
+  const sessionId = await makeRealSession(dayId, "Recovery session", "AM", 0, false, true, "06:45");
+
+  const res = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { rpeEnabled: true } });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const row = await sessionRow(sessionId);
+  assert.equal(row.rpe_enabled, true);
+  assert.equal(row.name, "Recovery session", "rpeEnabled alone must never clear the session's own name");
+  assert.equal(String(row.session_time).slice(0, 5), "06:45", "rpeEnabled alone must never clear the session's own time");
+});
+
+test("A8. PATCH {name} alone preserves a pre-existing session_time, and PATCH {time} alone preserves a pre-existing name", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
+  const sessionId = await makeRealSession(dayId, "Original name", "AM", 0, false, false, "08:00");
+
+  const renameRes = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { name: "New name" } });
+  assert.equal(renameRes.status, 200, JSON.stringify(renameRes.body));
+  let row = await sessionRow(sessionId);
+  assert.equal(row.name, "New name");
+  assert.equal(String(row.session_time).slice(0, 5), "08:00", "a name-only PATCH must never clear session_time");
+
+  const timeRes = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { time: "09:30" } });
+  assert.equal(timeRes.status, 200, JSON.stringify(timeRes.body));
+  row = await sessionRow(sessionId);
+  assert.equal(String(row.session_time).slice(0, 5), "09:30");
+  assert.equal(row.name, "New name", "a time-only PATCH must never clear name");
 });
 
 // ------------------------------------------------------------

@@ -38,6 +38,16 @@ alter table plans.plans
   add column if not exists track_training_load_default boolean not null default false,
   add column if not exists request_rpe_default boolean not null default false;
 
+-- Same invariant as plan_sessions_rpe_requires_training_load below, one
+-- level up: a plan can never default to requesting RPE for new Training
+-- sessions while not even defaulting to tracking them. Safe as a normal,
+-- immediately-validated CHECK (not NOT VALID) - both columns just got
+-- added a moment ago with constant defaults of false/false, so every
+-- existing row already complies trivially; there is nothing to backfill.
+alter table plans.plans
+  add constraint plans_request_rpe_default_requires_track_training_load
+  check (request_rpe_default = false or track_training_load_default = true);
+
 -- ------------------------------------------------------------
 -- The new per-session "track in Training Load" flag itself.
 -- ------------------------------------------------------------
@@ -87,10 +97,21 @@ alter table plans.plan_sessions
 -- defensively (never NULL in practice — both columns are NOT NULL — but
 -- this keeps the function safe to call from a LEFT JOIN context where the
 -- session row itself might be absent).
-create function training_load.planned_rpe_actionable(
+--
+-- Correction: p_rpe_enabled's own coalesce originally defaulted a NULL/
+-- absent value to true - backwards for this feature's own "never guess,
+-- default OFF" philosophy (an absent/unknown session should read as "RPE
+-- not requested", not "requested"). The DB's own rpe_enabled column is
+-- NOT NULL so this never fires against a real row today, but a caller in
+-- a LEFT JOIN context (the session itself absent) must see the same safe
+-- default every other boolean here already uses. CREATE OR REPLACE
+-- (rather than CREATE) so this correction applies cleanly even against a
+-- database where this function was already created by an earlier apply
+-- of this same file, before its own first real deploy.
+create or replace function training_load.planned_rpe_actionable(
   p_plan_id uuid, p_date date, p_training_load_enabled boolean, p_rpe_enabled boolean
 ) returns boolean language sql stable as $$
   select coalesce(p_training_load_enabled, false)
-     and coalesce(p_rpe_enabled, true)
+     and coalesce(p_rpe_enabled, false)
      and training_load.planned_rpe_effective_for_plan(p_plan_id, p_date)
 $$;

@@ -1435,6 +1435,39 @@ test("N2. rpe_enabled can be toggled directly and is read back correctly (schema
   assert.equal(rpeEnabled, false);
 });
 
+// This file's own test_auto_system_ownership trigger (see before(), above)
+// stamps every weekly plan owner_scope='system' - a deliberate, coherent
+// choice for the FILE's own predating-the-workspace-toggle purpose (every
+// plan implicitly belongs to a single global switch, matched against the
+// 'system' planned_rpe_workspace_settings row inserted alongside it), but
+// 'system' ownership only ever authorizes a PLATFORM workspace (see
+// canManagePlanTrainingLoadInScope, trainingLoadAccess.js) - not the plain
+// club_admin coach makeClubWithAthletes creates. The quick-toggle routes'
+// own plan_workspace_ownership authorization (Training Activity
+// Integration 2A hardening) needs a plan whose stored ownership genuinely
+// matches the calling coach's own club, so the handful of tests below that
+// actually call those routes stamp it explicitly, real per-test, instead
+// of relying on the file-wide 'system' default (every other test in this
+// file - the ~60 that never call a quick-toggle route - is entirely
+// unaffected by this).
+async function stampClubOwnershipForSession(sessionId, clubId) {
+  const planResult = await query(
+    `select pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1`,
+    [sessionId],
+  );
+  const planId = planResult.rows[0].plan_id;
+  await query(
+    `update training_load.plan_workspace_ownership set owner_scope = 'club', owner_club_id = $2, owner_user_id = null, owner_team_id = null where plan_id = $1`,
+    [planId, clubId],
+  );
+  await query(
+    `insert into training_load.planned_rpe_workspace_settings (owner_scope, owner_club_id, enabled, enabled_at)
+     values ('club', $1, true, '2000-01-01T00:00:00Z')
+     on conflict (owner_scope, owner_user_id, owner_club_id, owner_team_id) do nothing`,
+    [clubId],
+  );
+}
+
 // ------------------------------------------------------------
 // O. Per-session RPE opt-out: runtime enforcement (POST /rpe 409, athlete/
 // today + weekly filtering) and the coach quick-toggle route (PATCH
@@ -1485,8 +1518,9 @@ test("O3. the coach's weekly Schedule view still shows a disabled session (so it
 });
 
 test("O4. quick-toggle PATCH disabling a session with an existing result requires confirmDisableWithResults, and never alters/deletes the existing result", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o4", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o4", 1);
   const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await stampClubOwnershipForSession(sessionId, clubId);
   const submit = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 45) });
   assert.equal(submit.status, 201);
 
@@ -1506,15 +1540,17 @@ test("O4. quick-toggle PATCH disabling a session with an existing result require
 });
 
 test("O5. quick-toggle PATCH on a session with no existing results needs no confirmation", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o5", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o5", 1);
   const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await stampClubOwnershipForSession(sessionId, clubId);
   const res = await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
   assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
 });
 
 test("O6. re-enabling a session restores its eligibility for a not-yet-rated athlete, per the existing date rules", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o6", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o6", 1);
   const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await stampClubOwnershipForSession(sessionId, clubId);
   await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
   const blockedSubmit = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
   assert.equal(blockedSubmit.status, 409);
@@ -1526,11 +1562,12 @@ test("O6. re-enabling a session restores its eligibility for a not-yet-rated ath
 });
 
 test("O7. the quick toggle updates BOTH the live session and its open edit-draft sibling (same logical_session_id) in one transaction", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o7", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o7", 1);
   const athleteId = athletes[0].athleteId;
   const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START });
   const liveDayId = await makePlanDay(livePlanId, THIS_WEEK_START);
   const liveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Morning session" });
+  await stampClubOwnershipForSession(liveSessionId, clubId);
   const liveLogicalId = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [liveSessionId])).rows[0].logical_session_id;
 
   const draftPlanResult = await query(
@@ -1555,8 +1592,9 @@ test("O7. the quick toggle updates BOTH the live session and its open edit-draft
 });
 
 test("O8. concurrent disable-vs-submit on the same session serializes cleanly - whichever transaction's lock wins first decides the outcome, never a partial write or 500", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o8", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o8", 1);
   const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await stampClubOwnershipForSession(sessionId, clubId);
 
   const disablePromise = api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
   const submitPromise = api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });

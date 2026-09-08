@@ -206,10 +206,10 @@ async function makeRealDay(planId, date, dayOrder) {
 // (Training Activity Integration 2A, migrations_v2/202609080900); relying
 // on either column's own DEFAULT is no longer correct now that
 // rpe_enabled defaults to false (a genuinely new, untracked session).
-async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0) {
+async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0, sessionTime = null) {
   const sessionResult = await query(
-    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order, rpe_enabled, training_load_enabled) values ($1,$2,$3,$4,true,true) returning id`,
-    [dayId, name, amPm, sessionOrder],
+    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order, rpe_enabled, training_load_enabled, session_time) values ($1,$2,$3,$4,true,true,$5) returning id`,
+    [dayId, name, amPm, sessionOrder, sessionTime],
   );
   return sessionResult.rows[0].id;
 }
@@ -338,6 +338,71 @@ test("a real Builder Edit -> Save and finish round trip preserves an already-sub
   const addedSessionId = await makeRealSession(newOtherDayId, "Newly added session", null, 2);
   const addedSubmit = await api(`/api/training-load/sessions/${addedSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 3, durationMinutes: 15 } });
   assert.equal(addedSubmit.status, 201, "a genuinely new session must never be blocked or pre-rated because of an unrelated logical_session_id");
+});
+
+// Training Activity Integration 2A hardening: session_time was missing
+// from copyDaySessions() (the function this exact edit-draft round trip
+// goes through, both legs - POST /plans/:planId/edit's own copy INTO the
+// draft, and applyEditDraft's own copy back OUT to the live plan) -
+// silently dropping a session's own specific clock time on every real
+// edit round trip. Verifies both halves of the fix at once: the time
+// itself survives (same logical_session_id, same session_time, on the
+// RECREATED row), and a fresh RPE submit against that recreated row
+// materializes a training.activities row whose own started_at is
+// computed from the SURVIVING time - not null, not the athlete's local
+// midnight.
+test("a real Builder Edit -> Save and finish round trip preserves a session's own session_time - and a fresh RPE submit against the recreated row materializes training.activities.started_at from it", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+
+  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  await setPlanOwnershipDirect(livePlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
+  const todayDayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
+  const sessionId = await makeRealSession(todayDayId, "Timed session", "AM", 0, "07:15");
+  const originalLogicalId = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [sessionId])).rows[0].logical_session_id;
+
+  const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(editRes.status, 200, `expected the edit-draft to open, got ${editRes.status}: ${JSON.stringify(editRes.body)}`);
+  const draftPlanId = editRes.body.plan.id;
+  cleanupPlanIds.add(draftPlanId);
+
+  const draftSessionRow = (
+    await query(`select ps.id, ps.session_time, ps.logical_session_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1`, [draftPlanId])
+  ).rows[0];
+  assert.equal(String(draftSessionRow.session_time).slice(0, 5), "07:15", "the live -> draft copy (POST /plans/:planId/edit) must carry session_time forward");
+  assert.equal(draftSessionRow.logical_session_id, originalLogicalId);
+
+  const submitDraftRes = await api(`/api/builder/plans/${draftPlanId}/submit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(submitDraftRes.status, 200, `expected the edit-draft to apply back onto the live plan, got ${submitDraftRes.status}: ${JSON.stringify(submitDraftRes.body)}`);
+
+  const recreatedRow = (
+    await query(`select ps.id, ps.session_time, ps.logical_session_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1`, [livePlanId])
+  ).rows[0];
+  assert.notEqual(recreatedRow.id, sessionId, "the live row was really deleted and recreated (applyEditDraft's own delete-and-recreate)");
+  assert.equal(recreatedRow.logical_session_id, originalLogicalId, "the SAME logical identity survives the full round trip");
+  assert.equal(String(recreatedRow.session_time).slice(0, 5), "07:15", "the draft -> live copy (applyEditDraft) must carry session_time forward too - not just the live -> draft leg");
+
+  const submit = await api(`/api/training-load/sessions/${recreatedRow.id}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 6, durationMinutes: 50 } });
+  assert.equal(submit.status, 201, `expected 201, got ${submit.status}: ${JSON.stringify(submit.body)}`);
+
+  const activity = (
+    await query(
+      `select a.started_at, a.occurred_local_date
+       from training.activity_participant_session_links l
+       join training.activity_participants p on p.id = l.activity_participant_id
+       join training.activities a on a.id = p.activity_id
+       where l.logical_session_id = $1 and l.link_status = 'confirmed'`,
+      [originalLogicalId],
+    )
+  ).rows[0];
+  assert.ok(activity, "the materialized activity must be reachable through the same logical_session_id");
+  assert.equal(String(activity.occurred_local_date).slice(0, 10), TODAY);
+  // The athlete's own device_timezone is 'UTC' (makeAthleteInClub) - the
+  // submit route's own start_instant computation is (date + session_time)
+  // at time zone device_timezone, so started_at must land at exactly
+  // 07:15 UTC, never null and never the athlete's local midnight.
+  assert.equal(new Date(activity.started_at).toISOString(), `${TODAY}T07:15:00.000Z`, "started_at must be computed from the SURVIVING session_time, not left null");
 });
 
 // ------------------------------------------------------------

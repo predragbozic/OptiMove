@@ -4,6 +4,7 @@ import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import {
   canManageExternalScheduleInScope,
+  canManagePlanTrainingLoadInScope,
   canResolvePlanOwnership,
   externalScheduleScopeForWorkspace,
   externalScheduleScopeSqlForWorkspace,
@@ -540,10 +541,12 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
     await client.query("begin");
 
     const sessionResult = await client.query(
-      `select ps.id as session_id, ps.logical_session_id, ps.training_load_enabled, p.id as plan_id, p.athlete_id
+      `select ps.id as session_id, ps.logical_session_id, ps.training_load_enabled, p.id as plan_id, p.athlete_id,
+              o.owner_scope, o.owner_user_id, o.owner_club_id, o.owner_team_id
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id
+       left join training_load.plan_workspace_ownership o on o.plan_id = p.id
        where ps.id = $1
          and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
        for update of ps`,
@@ -556,14 +559,21 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
     }
 
     // Real workspace-authorization gate, not just a UI-level restriction -
-    // the same EXISTS-against-athlete_memberships/user_athletes shape every
-    // other coach-facing query in this file already uses.
-    const scope = await coachWorkspaceScopeSql(req, "a", 2);
-    const accessResult = await client.query(
-      `select 1 from public.athletes a where a.id = $1 ${scope.sql}`,
-      [session.athlete_id, ...scope.params],
-    );
-    if (!accessResult.rowCount) {
+    // and NOT "does the coach's current active workspace merely happen to
+    // also cover this athlete via some membership" (isAthleteInWorkspaceScope/
+    // coachWorkspaceScopeSql answer a genuinely different question: athlete
+    // VISIBILITY, not plan OWNERSHIP). A dual-role coach sitting in Club A's
+    // workspace must never be able to quick-toggle a session on a plan that
+    // was actually created under Club B, merely because the same athlete
+    // also has an active membership in Club A. The plan's own stored
+    // plan_workspace_ownership snapshot (resolved once, at creation/edit-
+    // draft/duplicate time - see routes/builder.js) is the real boundary -
+    // resolved from the SAME single active-workspace read used everywhere
+    // else in this file, never a second independent resolveActiveWorkspace
+    // call that could disagree with itself mid-request.
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
+    const ownership = { owner_scope: session.owner_scope, owner_user_id: session.owner_user_id, owner_club_id: session.owner_club_id, owner_team_id: session.owner_team_id };
+    if (!canManagePlanTrainingLoadInScope(scope, ownership)) {
       await client.query("rollback");
       return res.status(404).json({ error: "Training session not found." });
     }
@@ -659,10 +669,12 @@ router.patch("/sessions/:sessionId/training-load-enabled", async (req, res, next
     await client.query("begin");
 
     const sessionResult = await client.query(
-      `select ps.id as session_id, ps.logical_session_id, ps.rpe_enabled, p.id as plan_id, p.athlete_id
+      `select ps.id as session_id, ps.logical_session_id, ps.rpe_enabled, p.id as plan_id, p.athlete_id,
+              o.owner_scope, o.owner_user_id, o.owner_club_id, o.owner_team_id
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id
+       left join training_load.plan_workspace_ownership o on o.plan_id = p.id
        where ps.id = $1
          and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
        for update of ps`,
@@ -674,12 +686,13 @@ router.patch("/sessions/:sessionId/training-load-enabled", async (req, res, next
       return res.status(404).json({ error: "Training session not found." });
     }
 
-    const scope = await coachWorkspaceScopeSql(req, "a", 2);
-    const accessResult = await client.query(
-      `select 1 from public.athletes a where a.id = $1 ${scope.sql}`,
-      [session.athlete_id, ...scope.params],
-    );
-    if (!accessResult.rowCount) {
+    // Same plan_workspace_ownership authorization as PATCH .../rpe-enabled
+    // above (see that route's own comment for the full reasoning) - never
+    // the looser "does the active workspace merely cover this athlete"
+    // check.
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
+    const ownership = { owner_scope: session.owner_scope, owner_user_id: session.owner_user_id, owner_club_id: session.owner_club_id, owner_team_id: session.owner_team_id };
+    if (!canManagePlanTrainingLoadInScope(scope, ownership)) {
       await client.query("rollback");
       return res.status(404).json({ error: "Training session not found." });
     }

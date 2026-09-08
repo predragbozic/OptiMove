@@ -306,6 +306,10 @@ test("B1. turning tracking OFF via the quick toggle also cascades RPE off in the
     [coach.coachId, athlete.athleteId, WEEK_START],
   ).then((r) => r.rows[0].id);
   cleanupPlanIds.add(planId);
+  await query(
+    `insert into training_load.plan_workspace_ownership (plan_id, owner_scope, owner_club_id) values ($1,'club',$2)`,
+    [planId, coach.clubId],
+  );
   const dayId = await query(`insert into plans.plan_days (plan_id, date, day_order, block_index) values ($1,$2,1,1) returning id`, [planId, TODAY]).then((r) => r.rows[0].id);
   const sessionId = await query(
     `insert into plans.plan_sessions (plan_day_id, name, rpe_enabled, training_load_enabled) values ($1,'Session',true,true) returning id`,
@@ -353,6 +357,59 @@ test("B2. turning tracking off requires confirmDisableWithResults when a real RP
 
   const feedbackCount = (await query(`select count(*)::int as n from training_load.session_feedback where athlete_id=$1`, [athlete.athleteId])).rows[0].n;
   assert.equal(feedbackCount, 1, "the historical result must never be deleted by turning tracking off");
+});
+
+// Training Activity Integration 2A hardening: the quick-toggle routes now
+// authorize against the plan's OWN stored plan_workspace_ownership
+// snapshot, resolved against the calling coach's single active workspace -
+// never against "does this workspace merely also cover the same athlete
+// via some other membership" (see canManagePlanTrainingLoadInScope,
+// trainingLoadAccess.js, and this route's own comment for the full
+// reasoning). This is the exact cross-workspace scenario that gap allowed:
+// one athlete with active memberships in TWO different clubs, a plan
+// genuinely owned by Club A, and a SEPARATE coach who only administers
+// Club B (no relationship to Club A at all) - Club B's own workspace must
+// never be able to toggle a session on Club A's plan just because it can
+// also see the same athlete.
+test("B3. a coach whose workspace merely ALSO covers the same athlete (via a different club) cannot quick-toggle a session on a plan owned by a DIFFERENT club - controlled 404, zero row changes", async () => {
+  const ownerCoach = await makeCoachWithClub();
+  const otherCoach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(ownerCoach.clubId);
+  // Same athlete, a SECOND active club membership - otherCoach's own
+  // workspace (Club B) genuinely covers this athlete too, which is
+  // exactly the condition that used to be (wrongly) sufficient.
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athlete.athleteId, otherCoach.clubId]);
+
+  const planId = await query(
+    `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, status, source_type, visibility, week_start)
+     values ('weekly', $1, $2, 'TL tracking plan b3', 'active', 'builder', 'private', $3) returning id`,
+    [ownerCoach.coachId, athlete.athleteId, WEEK_START],
+  ).then((r) => r.rows[0].id);
+  cleanupPlanIds.add(planId);
+  await query(
+    `insert into training_load.plan_workspace_ownership (plan_id, owner_scope, owner_club_id) values ($1,'club',$2)`,
+    [planId, ownerCoach.clubId],
+  );
+  const dayId = await query(`insert into plans.plan_days (plan_id, date, day_order, block_index) values ($1,$2,1,1) returning id`, [planId, TODAY]).then((r) => r.rows[0].id);
+  const sessionId = await query(
+    `insert into plans.plan_sessions (plan_day_id, name, rpe_enabled, training_load_enabled) values ($1,'Session',true,true) returning id`,
+    [dayId],
+  ).then((r) => r.rows[0].id);
+
+  const trainingLoadRes = await api(`/api/training-load/sessions/${sessionId}/training-load-enabled`, { method: "PATCH", cookie: otherCoach.cookie, body: { trainingLoadEnabled: false } });
+  assert.equal(trainingLoadRes.status, 404, `Club B's workspace must not resolve Club A's plan at all, got ${trainingLoadRes.status}: ${JSON.stringify(trainingLoadRes.body)}`);
+
+  const rpeRes = await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: otherCoach.cookie, body: { rpeEnabled: false } });
+  assert.equal(rpeRes.status, 404, `same rejection for the sibling rpe-enabled route, got ${rpeRes.status}: ${JSON.stringify(rpeRes.body)}`);
+
+  const row = (await query(`select rpe_enabled, training_load_enabled from plans.plan_sessions where id=$1`, [sessionId])).rows[0];
+  assert.equal(row.rpe_enabled, true, "neither rejected request may have changed a single row");
+  assert.equal(row.training_load_enabled, true);
+
+  // The plan's REAL owner (Club A) can still toggle it normally - this is
+  // an authorization gap fix, not a general lockout.
+  const ownerRes = await api(`/api/training-load/sessions/${sessionId}/training-load-enabled`, { method: "PATCH", cookie: ownerCoach.cookie, body: { trainingLoadEnabled: false } });
+  assert.equal(ownerRes.status, 200, `the real owning workspace must still succeed, got ${ownerRes.status}: ${JSON.stringify(ownerRes.body)}`);
 });
 
 // ============================================================

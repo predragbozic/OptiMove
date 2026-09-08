@@ -212,11 +212,17 @@ router.patch("/plans/:planId", async (req, res, next) => {
 // together at write time.
 router.patch("/plans/:planId/training-load-settings", async (req, res, next) => {
   try {
-    const plan = await requirePlan(req, req.params.planId, res);
+    const plan = await requireDraftPlan(req, req.params.planId, res);
     if (!plan) return;
     if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
-    const trackTrainingLoadDefault = req.body?.trackTrainingLoadDefault !== undefined ? Boolean(req.body.trackTrainingLoadDefault) : plan.track_training_load_default;
-    const requestedRpeDefault = req.body?.requestRpeDefault !== undefined ? Boolean(req.body.requestRpeDefault) : plan.request_rpe_default;
+    if (req.body?.trackTrainingLoadDefault !== undefined && strictBoolean(req.body.trackTrainingLoadDefault) === undefined) {
+      return res.status(400).json({ error: "trackTrainingLoadDefault must be true or false." });
+    }
+    if (req.body?.requestRpeDefault !== undefined && strictBoolean(req.body.requestRpeDefault) === undefined) {
+      return res.status(400).json({ error: "requestRpeDefault must be true or false." });
+    }
+    const trackTrainingLoadDefault = req.body?.trackTrainingLoadDefault !== undefined ? strictBoolean(req.body.trackTrainingLoadDefault) : plan.track_training_load_default;
+    const requestedRpeDefault = req.body?.requestRpeDefault !== undefined ? strictBoolean(req.body.requestRpeDefault) : plan.request_rpe_default;
     const requestRpeDefault = trackTrainingLoadDefault ? requestedRpeDefault : false;
     await query(
       "update plans.plans set track_training_load_default = $2, request_rpe_default = $3, updated_at = now() where id = $1",
@@ -233,7 +239,7 @@ router.patch("/plans/:planId/training-load-settings", async (req, res, next) => 
 // UPDATE, never a blanket rewrite of every column.
 router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", async (req, res, next) => {
   try {
-    const plan = await requirePlan(req, req.params.planId, res);
+    const plan = await requireDraftPlan(req, req.params.planId, res);
     if (!plan) return;
     if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
     await query(
@@ -248,7 +254,7 @@ router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", 
 
 router.post("/plans/:planId/training-load-settings/turn-off-before-after", async (req, res, next) => {
   try {
-    const plan = await requirePlan(req, req.params.planId, res);
+    const plan = await requireDraftPlan(req, req.params.planId, res);
     if (!plan) return;
     if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
     await query(
@@ -263,7 +269,7 @@ router.post("/plans/:planId/training-load-settings/turn-off-before-after", async
 
 router.post("/plans/:planId/training-load-settings/turn-off-all-rpe", async (req, res, next) => {
   try {
-    const plan = await requirePlan(req, req.params.planId, res);
+    const plan = await requireDraftPlan(req, req.params.planId, res);
     if (!plan) return;
     if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
     // Tracking itself is left untouched - this only ever turns RPE off,
@@ -1030,11 +1036,13 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", async (req, res, next
     );
     await client.query("begin");
     const created = await client.query(
-      // rpe_enabled/training_load_enabled: content properties, always
-      // copied unconditionally.
-      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name, rpe_enabled, training_load_enabled)
-       values ($1, $2, $3, $4, $5, $6, $7) returning id`,
-      [target.id, source.am_pm, source.bta, nextOrderResult.rows[0].next_order, source.name, source.rpe_enabled, source.training_load_enabled],
+      // session_time/rpe_enabled/training_load_enabled: content
+      // properties, always copied unconditionally (session_time was
+      // missing here - a genuine bug, silently dropping a session's
+      // specific time on every standalone session copy).
+      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
+       values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
+      [target.id, source.am_pm, source.bta, source.session_time, nextOrderResult.rows[0].next_order, source.name, source.rpe_enabled, source.training_load_enabled],
     );
     await copySessionContent(client, source.id, created.rows[0].id);
     await client.query("commit");
@@ -1093,25 +1101,59 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
   try {
     const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
-    // amPm/bta are only touched when the request body actually includes the
-    // key - a caller that PATCHes just {name, time} (e.g. an older client,
-    // or a deliberate partial update) must never silently wipe the existing
-    // AM/PM/training-phase classification. An included empty string ("",
-    // what the coach's own "Time of day"/"Training phase" placeholder
-    // option submits) is still a real, explicit clear - same as how an
-    // empty name already clears the name field below.
+    // Every field below follows the SAME "only touched when the request
+    // body actually includes the key" partial-update rule - a caller that
+    // PATCHes just {name} (e.g. renaming a session) must never silently
+    // wipe time/amPm/bta/tracking/rpe, and a caller that PATCHes just
+    // {trackingEnabled} must never silently wipe name/time. This used to
+    // hold for amPm/bta/trackingEnabled/rpeEnabled but NOT for name/time,
+    // which were unconditionally recomputed from req.body?.name/req.body?
+    // .time even when absent - sessionTimeValue(undefined)/nullableText
+    // (undefined) both resolve to null, so any PATCH that didn't mention
+    // them (e.g. the trackingEnabled/rpeEnabled toggle handlers) silently
+    // cleared a session's own name and time. Fixed by applying the same
+    // "only touched when present" rule uniformly to every column.
+    const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : session.session_time;
+    const name = req.body?.name !== undefined ? nullableText(req.body.name) : session.name;
+    // An included empty string ("", what the coach's own "Time of day"/
+    // "Training phase" placeholder option submits) is still a real,
+    // explicit clear - same as how an empty name is a real, explicit clear
+    // above.
     const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
     const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
-    // trackingEnabled/rpeEnabled follow the exact same "only touched when
-    // the request body actually includes the key" partial-update rule as
-    // amPm/bta above - Builder's edit-draft session settings form is a
-    // staging area (nothing is "live" until Submit), so no
-    // confirm-before-disable check is needed here even if the session
-    // already has RPE results; that gate belongs on the Training Load
-    // quick-toggle routes instead (see PATCH /api/training-load/sessions/
-    // :sessionId/rpe-enabled and .../training-load-enabled).
-    const trackingEnabled = req.body?.trackingEnabled !== undefined ? Boolean(req.body.trackingEnabled) : session.training_load_enabled;
-    const requestedRpeEnabled = req.body?.rpeEnabled !== undefined ? Boolean(req.body.rpeEnabled) : session.rpe_enabled;
+
+    // trackingEnabled/rpeEnabled are a staging-only decision: Builder's
+    // edit-draft session settings form is a staging area (nothing is
+    // "live" until Submit), so this route intentionally applies neither
+    // confirm-before-disable-with-results NOR the plan_workspace_ownership
+    // authorization the dedicated Training Load quick-toggle routes
+    // enforce (PATCH /api/training-load/sessions/:sessionId/rpe-enabled
+    // and .../training-load-enabled) - those extra safeguards only make
+    // sense once a change is about to affect a LIVE plan's real athletes.
+    // Reaching that same live plan through THIS route instead (Builder's
+    // general session PATCH also allows editing an already-published
+    // plan directly, e.g. renaming a session) would silently bypass both
+    // safeguards, so a request that actually TOUCHES either field is
+    // rejected outright - before any row is read for update - unless the
+    // target plan is a genuine, not-yet-submitted draft or an open
+    // edit-draft. Every other field on this route (name/time/amPm/bta)
+    // is unaffected and still freely editable on a live plan, exactly as
+    // before.
+    const touchesTrainingLoadFields = req.body?.trackingEnabled !== undefined || req.body?.rpeEnabled !== undefined;
+    if (touchesTrainingLoadFields && !isEditableDraftPlan(session.plan)) {
+      return res.status(409).json({
+        error: "notDraft",
+        message: "Training Load tracking/RPE can only be changed on a draft or an open edit-draft. Use the Training Load quick toggle for a published plan.",
+      });
+    }
+    if (req.body?.trackingEnabled !== undefined && strictBoolean(req.body.trackingEnabled) === undefined) {
+      return res.status(400).json({ error: "trackingEnabled must be true or false." });
+    }
+    if (req.body?.rpeEnabled !== undefined && strictBoolean(req.body.rpeEnabled) === undefined) {
+      return res.status(400).json({ error: "rpeEnabled must be true or false." });
+    }
+    const trackingEnabled = req.body?.trackingEnabled !== undefined ? strictBoolean(req.body.trackingEnabled) : session.training_load_enabled;
+    const requestedRpeEnabled = req.body?.rpeEnabled !== undefined ? strictBoolean(req.body.rpeEnabled) : session.rpe_enabled;
     // The DB's own plan_sessions_rpe_requires_training_load CHECK forbids
     // rpe_enabled=true with training_load_enabled=false - enforced here
     // too (never relying on the constraint alone to reject a bad combo
@@ -1121,7 +1163,7 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
     const rpeEnabled = trackingEnabled ? requestedRpeEnabled : false;
     await query(
       "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, rpe_enabled = $6, training_load_enabled = $7, updated_at = now() where id = $1",
-      [session.id, sessionTimeValue(req.body?.time), nullableText(req.body?.name), amPm, bta, rpeEnabled, trackingEnabled],
+      [session.id, sessionTime, name, amPm, bta, rpeEnabled, trackingEnabled],
     );
     return respondWithDraft(req, res, req.user, session.plan);
   } catch (error) { next(error); }
@@ -1700,14 +1742,16 @@ export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
   const sessionParams = [];
   let sessionColumn = 0;
   sessions.rows.forEach((session) => {
-    // rpe_enabled/training_load_enabled: content properties, always
-    // copied unconditionally.
-    const row = [sourceDayIdToTargetDayId.get(session.plan_day_id), session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
+    // session_time/rpe_enabled/training_load_enabled: content properties,
+    // always copied unconditionally (session_time was missing here - a
+    // genuine bug, silently dropping every session's specific time on a
+    // program-to-program copy).
+    const row = [sourceDayIdToTargetDayId.get(session.plan_day_id), session.am_pm, session.bta, session.session_time, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
     sessionValues.push(`(${row.map(() => `$${++sessionColumn}`).join(", ")})`);
     sessionParams.push(...row);
   });
   const createdSessions = await client.query(
-    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name, rpe_enabled, training_load_enabled)
+    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
      values ${sessionValues.join(", ")} returning id`,
     sessionParams,
   );
@@ -1817,22 +1861,26 @@ function normalizedWeekday(dayOrder) {
 export async function copyDaySessions(client, sourceDayId, targetDayId, { preserveLogicalId = false } = {}) {
   const sessions = await client.query("select * from plans.plan_sessions where plan_day_id = $1 order by session_order", [sourceDayId]);
   if (!sessions.rowCount) return;
-  // rpe_enabled/training_load_enabled are CONTENT properties (like am_pm/
-  // bta/name) - always copied, in BOTH branches below. Unlike
+  // session_time/rpe_enabled/training_load_enabled are CONTENT properties
+  // (like am_pm/bta/name) - always copied, in BOTH branches below. Unlike
   // logical_session_id (an identity mechanism, selectively preserved only
   // for the live<->edit-draft round trip), there is no copy path in this
   // app where silently re-enabling tracking/RPE on a session the coach
-  // explicitly turned off would be the right default.
+  // explicitly turned off would be the right default, or where dropping
+  // a session's own specific time (session_time was missing here - a
+  // genuine bug affecting every real call site: the live<->edit-draft
+  // round trip, batch-sync, assign/duplicate, and day-to-day paste all
+  // go through this one function) would be correct either.
   const columns = preserveLogicalId
-    ? "plan_day_id, am_pm, bta, session_order, name, rpe_enabled, training_load_enabled, logical_session_id"
-    : "plan_day_id, am_pm, bta, session_order, name, rpe_enabled, training_load_enabled";
+    ? "plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled, logical_session_id"
+    : "plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled";
   const values = [];
   const params = [];
   let column = 0;
   sessions.rows.forEach((session) => {
     const row = preserveLogicalId
-      ? [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled, session.logical_session_id]
-      : [targetDayId, session.am_pm, session.bta, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
+      ? [targetDayId, session.am_pm, session.bta, session.session_time, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled, session.logical_session_id]
+      : [targetDayId, session.am_pm, session.bta, session.session_time, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
   });
@@ -2325,6 +2373,52 @@ async function requirePlan(req, planId, res) {
   const plan = await getEditablePlan(req, planId);
   if (!plan) { res.status(404).json({ error: "Draft program not found" }); return null; }
   return plan;
+}
+
+// Training Activity Integration 2A hardening: a "genuine draft" is either
+// (a) a brand-new Weekly plan that has never been submitted (status=
+// 'draft', source_type='builder', no edit_source_plan_id), or (b) the
+// open edit-draft of an already-live plan (is_edit_draft=true). Anything
+// else - most importantly an already-published/active plan being edited
+// directly through Builder's general session-editing surface - is NOT
+// one, even though getEditablePlan/requirePlan happily return it for
+// every OTHER Builder field (name, time, amPm, bta, exercises: all
+// legitimately editable on a live plan). Scoped narrowly to just the two
+// call sites below that touch trackingEnabled/rpeEnabled/the plan-level
+// Training Load settings - not a general plan-status gate.
+function isEditableDraftPlan(plan) {
+  return plan.is_edit_draft === true || (plan.status === "draft" && plan.source_type === "builder" && !plan.edit_source_plan_id);
+}
+
+// Same access check as requirePlan, plus the draft-only restriction above.
+// Used ONLY by the plan-level Training Load settings/bulk-action routes -
+// every other existing requirePlan call site (plan rename, sync-batch,
+// etc.) is untouched, since those remain legitimately editable on a live
+// plan. Changes ZERO rows before this returns - a rejected request never
+// reaches its own UPDATE.
+async function requireDraftPlan(req, planId, res) {
+  const plan = await requirePlan(req, planId, res);
+  if (!plan) return null;
+  if (!isEditableDraftPlan(plan)) {
+    res.status(409).json({
+      error: "notDraft",
+      message: "Training Load settings can only be changed on a draft or an open edit-draft. Use the Training Load quick toggle for a published plan.",
+    });
+    return null;
+  }
+  return plan;
+}
+
+// true/false ONLY - a caller that sends a string, number, null, array, or
+// object for a boolean field gets a controlled 400 and zero row changes,
+// never a silent Boolean(...) coercion (Boolean("false") === true is
+// exactly the kind of surprise this guards against). `undefined` (the key
+// genuinely absent from the JSON body) is a distinct, valid third outcome
+// meaning "leave the existing value alone" - every call site below checks
+// presence with `!== undefined` before calling this, so `null` (present,
+// but not a boolean) is correctly rejected rather than treated as absent.
+function strictBoolean(value) {
+  return value === true || value === false ? value : undefined;
 }
 
 async function getEditableBlock(req, blockId) {

@@ -66,6 +66,7 @@ const MINIMAL_SCHEMA_SQL = `
     plan_day_id uuid references plans.plan_days(id) on delete cascade,
     am_pm character varying(4),
     bta character varying(4),
+    session_time time,
     session_order numeric,
     name character varying(255),
     rpe_enabled boolean not null default true,
