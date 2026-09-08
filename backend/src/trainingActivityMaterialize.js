@@ -584,7 +584,19 @@ export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, 
     const sourceParticipantId = sug.source_participant_id;
     const mergeRes = await client.query(`select training.merge_activity_participants($1,$2,$3,$4) as id`, [sourceParticipantId, sug.candidate_participant_id, performedBy, reason || "accepted ambiguous match suggestion"]);
     await client.query(`update training.activity_match_suggestions set status='accepted', resolved_by_user_id=$1, resolved_at=now() where id=$2`, [performedBy, suggestionId]);
-    await client.query(`update training.activity_match_suggestions set status='dismissed', resolved_by_user_id=$1, resolved_at=now() where activity_id=$2 and id<>$3 and status='open'`, [performedBy, sug.activity_id, suggestionId]);
+    // Round 5 fix: the shared serialization key introduced in Round 4 is
+    // (activity_id, source_participant_id) — a SINGLE provisional
+    // activity can carry sibling suggestions for MORE THAN ONE
+    // participant (a group materialization where several participants
+    // each independently ended up ambiguous). This cascade used to filter
+    // only by activity_id, so accepting one participant's suggestion
+    // would also silently dismiss a COMPLETELY UNRELATED participant's
+    // still-open suggestions on the same activity — resolved participant
+    // A's ambiguity must never resolve participant B's. Filtering by
+    // source_participant_id too keeps the cascade scoped to exactly the
+    // SAME identity this call's own advisory lock (lockMatchSuggestion
+    // SourceIdentity) already serializes on.
+    await client.query(`update training.activity_match_suggestions set status='dismissed', resolved_by_user_id=$1, resolved_at=now() where activity_id=$2 and source_participant_id=$3 and id<>$4 and status='open'`, [performedBy, sug.activity_id, sourceParticipantId, suggestionId]);
     await client.query("commit");
     return { canonicalParticipantId: mergeRes.rows[0].id, sourceParticipantId };
   } catch (error) {
@@ -715,11 +727,40 @@ export async function reparentActivityParticipant(scope, { participantId, toActi
   return { ok: true };
 }
 
+// Round 5 fix: this used to authorize only the SOURCE participant —
+// targetParticipantId was forwarded straight to
+// training.merge_activity_participants() untouched, so an unauthorized or
+// nonexistent target was invisible to this service layer entirely. Same
+// gap and same fix as reparentActivityParticipant's own Round 4
+// correction: the target participant (with its own activity's owner
+// fields) is now loaded and authorized with the SAME info-hiding 404 the
+// source already gets, and the two sides' owner scopes are compared here
+// and rejected with a clean, sanitized 400 BEFORE the DB is ever called —
+// so merge_activity_participants()'s own cross-owner-scope RAISE
+// EXCEPTION (which names both sides' owner UUIDs) becomes an
+// unreachable-via-this-app defensive backstop only, never a real leak
+// path an authorized caller could trigger by pointing at someone else's
+// participant. The DB function's own "same athlete" and "target must be
+// canonical" checks are left exactly as they are — those remain the
+// authoritative, last-resort protection regardless of caller.
 export async function mergeActivityParticipants(scope, { sourceParticipantId, targetParticipantId, performedBy, reason }) {
   if (scope.type === null) throw httpError(403, "Forbidden");
   const p = await query(`select ap.id, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id from training.activity_participants ap join training.activities a on a.id = ap.activity_id where ap.id=$1`, [sourceParticipantId]);
   if (!p.rowCount) throw httpError(404, "Participant not found.");
   if (!canManageOwnerRow(scope, p.rows[0])) throw httpError(404, "Participant not found.");
+
+  const t = await query(`select ap.id, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id from training.activity_participants ap join training.activities a on a.id = ap.activity_id where ap.id=$1`, [targetParticipantId]);
+  if (!t.rowCount) throw httpError(404, "Target participant not found.");
+  if (!canManageOwnerRow(scope, t.rows[0])) throw httpError(404, "Target participant not found.");
+
+  const source = p.rows[0];
+  const target = t.rows[0];
+  const sameOwnerScope = source.owner_scope === target.owner_scope
+    && (source.owner_user_id || null) === (target.owner_user_id || null)
+    && (source.owner_club_id || null) === (target.owner_club_id || null)
+    && (source.owner_team_id || null) === (target.owner_team_id || null);
+  if (!sameOwnerScope) throw httpError(400, "Cannot merge participants across different owner scopes.");
+
   const r = await query(`select training.merge_activity_participants($1,$2,$3,$4) as id`, [sourceParticipantId, targetParticipantId, performedBy, reason || null]);
   return { canonicalParticipantId: r.rows[0].id };
 }

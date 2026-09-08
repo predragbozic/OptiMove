@@ -321,5 +321,19 @@ create trigger metric_values_check_scope_capability
 -- file's own extensions. Same reasonable bound as training.
 -- activity_write_requests.request_key (v1, this branch's own table) and
 -- this app's other free-text identifier fields.
+--
+-- Round 5 upgrade-safety fix: a plain `ADD CONSTRAINT ... CHECK (...)`
+-- validates EVERY existing row as part of the ALTER TABLE itself — this
+-- table is real and already deployed, so a single historical request_key
+-- longer than 200 characters (written before this bound ever existed)
+-- would make the whole migration fail on a real production upgrade.
+-- `NOT VALID` skips that initial scan of existing rows (an old,
+-- over-length historical key is grandfathered in, left exactly as-is —
+-- never truncated, rewritten, or deleted) while the constraint is still
+-- fully enforced against every NEW insert/update from this point forward
+-- — Postgres's own documented behavior for NOT VALID constraints,
+-- not a partial or best-effort check. training.activity_write_requests
+-- (below/v1) is a brand-new table on this branch with no legacy data, so
+-- its own CHECK stays a normal, immediately-validated constraint.
 alter table training_load.metric_write_requests
-  add constraint metric_write_requests_request_key_length check (length(request_key) <= 200);
+  add constraint metric_write_requests_request_key_length check (length(request_key) <= 200) not valid;

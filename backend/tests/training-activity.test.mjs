@@ -299,6 +299,9 @@ async function makeAthlete({ name, userId = null, timezone = "UTC" } = {}) {
 async function grantClubAdmin(userId, clubId) {
   await query(`insert into public.user_club_roles (user_id, club_id, role) values ($1,$2,'club_admin')`, [userId, clubId]);
 }
+async function grantGlobalRole(userId, role) {
+  await query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,$2,true)`, [userId, role]);
+}
 async function setActiveWorkspace(userId, type, scopeId = null) {
   await query(
     `insert into public.user_workspace_preferences (user_id, workspace_type, scope_id, updated_at) values ($1,$2,$3,now())
@@ -317,6 +320,13 @@ async function makeClubCoach(label) {
   await setActiveWorkspace(coachId, "club", clubId);
   const coachCookie = await loginCookie(coachId);
   return { clubId, coachId, coachCookie };
+}
+async function makePlatformAdmin(label) {
+  const adminId = await makeUser({ email: `${label}-admin-${uid()}@test.local` });
+  await grantGlobalRole(adminId, "platform_admin");
+  await setActiveWorkspace(adminId, "platform", null);
+  const adminCookie = await loginCookie(adminId);
+  return { adminId, adminCookie };
 }
 async function makeAthleteInClub(clubId, { timezone = "UTC" } = {}) {
   const userId = await makeUser({ email: `athlete-${uid()}@test.local`, roleHint: "athlete" });
@@ -494,6 +504,19 @@ test("2. upgrade safety: applying training_activity_v3 over a database with pre-
       [derivedOccRes.rows[0].id, definitionId, versionId, JSON.stringify({ formula: "sum", of: ["a", "b"] })],
     );
 
+    // Round 5: a real, pre-existing training_load.metric_write_requests
+    // row whose request_key is already LONGER than the 200-char bound
+    // this branch's own v3 migration is about to add — the exact shape
+    // that would make a plain (validated-on-add) CHECK constraint fail
+    // the whole migration on a real production upgrade, since that row
+    // genuinely already exists and cannot be un-written.
+    const overLongLegacyKey = "k".repeat(250);
+    const legacyWriteReqRes = await client.query(
+      `insert into training_load.metric_write_requests (request_key, requested_by_user_id, operation_kind, owner_scope, owner_club_id, request_content_hash)
+       values ($1,$2,'create_manual_occasion','club',$3,$4) returning id, request_key`,
+      [overLongLegacyKey, athleteUserRes.rows[0].id, clubId, `h-${uid()}`],
+    );
+
     const beforeValues = await client.query(`select occasion_id, metric_definition_id, value_numeric from training_load.metric_values order by occasion_id`);
 
     // --- THE UPGRADE: apply ONLY the 4 NEW training_activity migrations
@@ -543,6 +566,28 @@ test("2. upgrade safety: applying training_activity_v3 over a database with pre-
     const results = await client.query(`select detail from training.canonical_activity_results($1) where fact_kind='metric_value'`, [activityRes.rows[0].id]);
     assert.equal(results.rows.length, 1, "exactly one metric_value fact post-upgrade");
     assert.equal(Number(results.rows[0].detail.valueNumeric), 15);
+
+    // Round 5: the NOT VALID request_key length constraint must never
+    // have touched the pre-existing over-length row (no truncation, no
+    // rewrite, no deletion) — the migration succeeding at all (no throw
+    // above) is half the proof; this confirms the row's own content is
+    // byte-for-byte untouched.
+    const legacyAfter = await client.query(`select request_key from training_load.metric_write_requests where id=$1`, [legacyWriteReqRes.rows[0].id]);
+    assert.equal(legacyAfter.rows[0].request_key, overLongLegacyKey, "the historical over-length request_key must be left exactly as-is — NOT VALID grandfathers existing rows, never edits them");
+    assert.equal(legacyAfter.rows[0].request_key.length, 250);
+
+    // A NEW over-length request_key, inserted AFTER the migration, must
+    // be rejected — NOT VALID only skips the initial scan of EXISTING
+    // rows; it still fully enforces the constraint against everything new.
+    await assert.rejects(
+      client.query(
+        `insert into training_load.metric_write_requests (request_key, requested_by_user_id, operation_kind, owner_scope, owner_club_id, request_content_hash)
+         values ($1,$2,'create_manual_occasion','club',$3,$4)`,
+        ["k".repeat(250), athleteUserRes.rows[0].id, clubId, `h-${uid()}`],
+      ),
+      /metric_write_requests_request_key_length/,
+      "a brand-new over-length request_key must be rejected by the (now-enforced-going-forward) constraint",
+    );
   } finally {
     if (dir) await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
     await client.end();
@@ -1932,4 +1977,218 @@ test("50. a localDate/startInstant with year \"0000\" is refused with a controll
 
   const badTimestamp = await api("/api/training-activity/materialize", { method: "POST", cookie: coachCookie, body: { requestKey: uid(), athleteId, localDate: "2026-09-08", timezone: "UTC", startInstant: "0000-09-08T10:00:00Z" } });
   assert.equal(badTimestamp.status, 400, JSON.stringify(badTimestamp.body));
+});
+
+// ============================================================
+// Round 5 — merge must also authorize the TARGET (§1)
+// ============================================================
+
+test("51. merging into a NONEXISTENT target participant is refused with a controlled 404 — zero partial writes", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("mrg51");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const source = await api("/api/training-activity/materialize", { method: "POST", cookie: coachCookie, body: { requestKey: uid(), athleteId, localDate: "2026-09-08", timezone: "UTC", name: "S51" } });
+
+  const attempt = await api(`/api/training-activity/participants/${source.body.participantId}/merge`, { method: "POST", cookie: coachCookie, body: { targetParticipantId: crypto.randomUUID() } });
+  assert.equal(attempt.status, 404, JSON.stringify(attempt.body));
+
+  const unchanged = await query(`select merge_status, activity_id from training.activity_participants where id=$1`, [source.body.participantId]);
+  assert.equal(unchanged.rows[0].merge_status, "canonical");
+  assert.equal(unchanged.rows[0].activity_id, source.body.activityId, "zero partial writes");
+});
+
+test("52. merging into a target participant OUTSIDE the caller's workspace is refused with an info-hiding 404 — zero partial writes", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("mrg52a");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const source = await api("/api/training-activity/materialize", { method: "POST", cookie: coachCookie, body: { requestKey: uid(), athleteId, localDate: "2026-09-08", timezone: "UTC", name: "S52" } });
+
+  const otherClub = await makeClubCoach("mrg52b");
+  const { athleteId: otherAthleteId } = await makeAthleteInClub(otherClub.clubId);
+  const foreignTarget = await api("/api/training-activity/materialize", { method: "POST", cookie: otherClub.coachCookie, body: { requestKey: uid(), athleteId: otherAthleteId, localDate: "2026-09-08", timezone: "UTC", name: "T52" } });
+
+  const attempt = await api(`/api/training-activity/participants/${source.body.participantId}/merge`, { method: "POST", cookie: coachCookie, body: { targetParticipantId: foreignTarget.body.participantId } });
+  assert.equal(attempt.status, 404, JSON.stringify(attempt.body));
+  assert.doesNotMatch(JSON.stringify(attempt.body), new RegExp(otherClub.clubId), "the response must never leak the foreign club's own id");
+
+  const unchanged = await query(`select merge_status, activity_id from training.activity_participants where id=$1`, [source.body.participantId]);
+  assert.equal(unchanged.rows[0].merge_status, "canonical");
+  assert.equal(unchanged.rows[0].activity_id, source.body.activityId, "zero partial writes");
+});
+
+test("53. merging into a target participant that IS visible but belongs to a DIFFERENT owner scope is refused with a controlled, sanitized 400 — zero partial writes", async () => {
+  const { adminCookie } = await makePlatformAdmin("mrg53admin");
+  const clubA = await makeClubCoach("mrg53a");
+  const { athleteId: athleteA } = await makeAthleteInClub(clubA.clubId);
+  const source = await api("/api/training-activity/materialize", { method: "POST", cookie: clubA.coachCookie, body: { requestKey: uid(), athleteId: athleteA, localDate: "2026-09-08", timezone: "UTC", name: "S53" } });
+
+  const clubB = await makeClubCoach("mrg53b");
+  const { athleteId: athleteB } = await makeAthleteInClub(clubB.clubId);
+  const target = await api("/api/training-activity/materialize", { method: "POST", cookie: clubB.coachCookie, body: { requestKey: uid(), athleteId: athleteB, localDate: "2026-09-08", timezone: "UTC", name: "T53" } });
+
+  // A platform admin can SEE both (canManageOwnerRow is unconditional for
+  // scope.type==='platform') — so this exercises the sameOwnerScope check
+  // itself, never the earlier 404 branches.
+  const attempt = await api(`/api/training-activity/participants/${source.body.participantId}/merge`, { method: "POST", cookie: adminCookie, body: { targetParticipantId: target.body.participantId } });
+  assert.equal(attempt.status, 400, JSON.stringify(attempt.body));
+  assert.match(attempt.body.error, /different owner scopes/i);
+  assert.doesNotMatch(JSON.stringify(attempt.body), new RegExp(clubA.clubId));
+  assert.doesNotMatch(JSON.stringify(attempt.body), new RegExp(clubB.clubId), "the DB function's own cross-scope message (which names both owner UUIDs) must never reach the client — this is rejected in Node BEFORE the DB is ever called");
+
+  const unchanged = await query(`select merge_status, activity_id from training.activity_participants where id=$1`, [source.body.participantId]);
+  assert.equal(unchanged.rows[0].merge_status, "canonical");
+  assert.equal(unchanged.rows[0].activity_id, source.body.activityId, "zero partial writes");
+});
+
+test("54. a valid merge within the SAME owner scope still works after the target-authorization fix", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("mrg54");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const first = await api("/api/training-activity/materialize", { method: "POST", cookie: coachCookie, body: { requestKey: uid(), athleteId, localDate: "2026-09-10", timezone: "UTC", name: "First54" } });
+  const second = await api("/api/training-activity/materialize", { method: "POST", cookie: coachCookie, body: { requestKey: uid(), athleteId, localDate: "2026-09-11", timezone: "UTC", name: "Second54" } });
+
+  const merged = await api(`/api/training-activity/participants/${first.body.participantId}/merge`, { method: "POST", cookie: coachCookie, body: { targetParticipantId: second.body.participantId, reason: "regression check" } });
+  assert.equal(merged.status, 200, JSON.stringify(merged.body));
+  assert.equal(merged.body.canonicalParticipantId, second.body.participantId);
+
+  const sourceAfter = await query(`select merge_status, superseded_by_participant_id from training.activity_participants where id=$1`, [first.body.participantId]);
+  assert.equal(sourceAfter.rows[0].merge_status, "superseded");
+  assert.equal(sourceAfter.rows[0].superseded_by_participant_id, second.body.participantId);
+});
+
+// ============================================================
+// Round 5 — sibling cascade-dismiss must use the FULL source identity (§3)
+// ============================================================
+
+// Builds a single "shared" activity carrying TWO independent open
+// suggestion groups for TWO DIFFERENT participants — a DB state the
+// current live materialize flow does not itself produce (every
+// single-participant ambiguous_new call always creates its OWN brand-new
+// activity), but one the schema fully permits (activity_match_suggestions
+// has no constraint tying one activity_id to one source_participant_id)
+// and that the fix must defend regardless. Built directly via SQL, the
+// same convention this suite already uses for other DB-state edge cases
+// (see e.g. test 2's own upgrade fixture).
+async function makeSharedActivityWithTwoSuggestionGroups(clubId) {
+  const athleteA = await makeAthleteInClub(clubId);
+  const athleteB = await makeAthleteInClub(clubId);
+  const candA1 = await makeAthlete({ name: `CandA1 ${uid()}` });
+  const candA2 = await makeAthlete({ name: `CandA2 ${uid()}` });
+
+  async function makeConfirmedActivity(athleteId, label) {
+    const a = await query(
+      `insert into training.activities (occurred_local_date, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, name) values ('2026-09-08','UTC','club',$1,'manual','confirmed',$2) returning id`,
+      [clubId, label],
+    );
+    const p = await query(
+      `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot) values ($1,$2,'2026-09-08','UTC') returning id`,
+      [a.rows[0].id, athleteId],
+    );
+    return { activityId: a.rows[0].id, participantId: p.rows[0].id };
+  }
+  const candidateA1 = await makeConfirmedActivity(athleteA.athleteId, "CandidateA1");
+  const candidateA2 = await makeConfirmedActivity(athleteA.athleteId, "CandidateA2");
+  const candidateB1 = await makeConfirmedActivity(athleteB.athleteId, "CandidateB1");
+  const candidateB2 = await makeConfirmedActivity(athleteB.athleteId, "CandidateB2");
+
+  const shared = await query(
+    `insert into training.activities (occurred_local_date, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, name) values ('2026-09-08','UTC','club',$1,'manual','provisional','Shared55') returning id`,
+    [clubId],
+  );
+  const participantA = await query(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot) values ($1,$2,'2026-09-08','UTC') returning id`,
+    [shared.rows[0].id, athleteA.athleteId],
+  );
+  const participantB = await query(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot) values ($1,$2,'2026-09-08','UTC') returning id`,
+    [shared.rows[0].id, athleteB.athleteId],
+  );
+
+  async function makeSuggestion(sourceParticipantId, candidate) {
+    const s = await query(
+      `insert into training.activity_match_suggestions (activity_id, source_participant_id, candidate_activity_id, candidate_participant_id, confidence, score_breakdown, policy_version, reason)
+       values ($1,$2,$3,$4,10,'{}'::jsonb,2,'test fixture') returning id`,
+      [shared.rows[0].id, sourceParticipantId, candidate.activityId, candidate.participantId],
+    );
+    return s.rows[0].id;
+  }
+  const s1a = await makeSuggestion(participantA.rows[0].id, candidateA1);
+  const s2a = await makeSuggestion(participantA.rows[0].id, candidateA2);
+  const s1b = await makeSuggestion(participantB.rows[0].id, candidateB1);
+  const s2b = await makeSuggestion(participantB.rows[0].id, candidateB2);
+
+  return {
+    sharedActivityId: shared.rows[0].id,
+    participantAId: participantA.rows[0].id, participantBId: participantB.rows[0].id,
+    candidateA1, candidateA2, candidateB1, candidateB2,
+    s1a, s2a, s1b, s2b,
+  };
+}
+
+test("55. accepting one participant's suggestion on a SHARED activity must never cascade-dismiss a DIFFERENT participant's independent, still-open suggestion group on that same activity", async () => {
+  const { clubId, coachId } = await makeClubCoach("sib55");
+  const fixture = await makeSharedActivityWithTwoSuggestionGroups(clubId);
+  const scope = { type: "club", clubId, ownerContext: { ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null } };
+
+  const accepted = await materializeService.acceptMatchSuggestion(scope, { suggestionId: fixture.s1a, performedBy: coachId, reason: "test" });
+  assert.equal(accepted.canonicalParticipantId, fixture.candidateA1.participantId);
+
+  const statuses = await query(`select id, status from training.activity_match_suggestions where id in ($1,$2,$3,$4)`, [fixture.s1a, fixture.s2a, fixture.s1b, fixture.s2b]);
+  const byId = Object.fromEntries(statuses.rows.map((r) => [r.id, r.status]));
+  assert.equal(byId[fixture.s1a], "accepted");
+  assert.equal(byId[fixture.s2a], "dismissed", "participant A's OWN sibling must still be cascade-dismissed");
+  assert.equal(byId[fixture.s1b], "open", "participant B's suggestion must be COMPLETELY unaffected by A's own resolution");
+  assert.equal(byId[fixture.s2b], "open", "participant B's OTHER suggestion must also remain untouched");
+});
+
+test("56. concurrent accepts for TWO DIFFERENT participants' independent suggestion groups on the SAME shared activity produce no lock cycle and never cross-dismiss each other", async () => {
+  const { clubId, coachId } = await makeClubCoach("sib56");
+  const fixture = await makeSharedActivityWithTwoSuggestionGroups(clubId);
+  const scope = { type: "club", clubId, ownerContext: { ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null } };
+
+  // Note: A's and B's suggestions use DIFFERENT advisory-lock keys (each
+  // keyed on its OWN source_participant_id), so they never contend on
+  // that lock — but the suggestion-lookup query itself is a plain `JOIN
+  // ... FOR UPDATE` against `training.activities`, which (with no `FOR
+  // UPDATE OF ms` restriction) locks the JOINED activities row too. Since
+  // A and B's suggestions share the SAME underlying activity row, the two
+  // calls DO still serialize on THAT lock — safe (bounded, no cycle,
+  // resolves the instant the first commits) but not fully concurrent.
+  // This test proves exactly that: real, observed blocking (not a
+  // deadlock/hang), and — the actual regression this fix targets — that
+  // neither call's cascade-dismiss ever touches the OTHER's suggestions.
+  const monitor = await pool.connect();
+  let releaseA = () => {};
+  let acceptAPromise = Promise.resolve();
+  let acceptBPromise = Promise.resolve();
+  try {
+    let signalAReached;
+    const aReachedBarrier = new Promise((res) => { signalAReached = res; });
+    const aBarrier = new Promise((res) => { releaseA = res; });
+    let aPid;
+
+    acceptAPromise = materializeService.acceptMatchSuggestion(scope, { suggestionId: fixture.s1a, performedBy: coachId, reason: "race" }, {
+      onLocked: async (client) => { aPid = client.processID; signalAReached(); await aBarrier; },
+    });
+    await aReachedBarrier;
+
+    acceptBPromise = materializeService.acceptMatchSuggestion(scope, { suggestionId: fixture.s1b, performedBy: coachId, reason: "race" });
+    const blocked = await waitUntilAnyOtherBlocked(monitor, aPid);
+    assert.equal(blocked, true, "B must be observed genuinely Lock-waiting (on the shared activities row A's own suggestion-lookup JOIN also locked) — real serialization, not an independent race");
+
+    releaseA();
+    const aResult = await acceptAPromise;
+    assert.equal(aResult.canonicalParticipantId, fixture.candidateA1.participantId);
+
+    const bResult = await acceptBPromise;
+    assert.equal(bResult.canonicalParticipantId, fixture.candidateB1.participantId, "B must complete cleanly once unblocked — no deadlock, no lock cycle");
+
+    const statuses = await query(`select id, status from training.activity_match_suggestions where id in ($1,$2,$3,$4)`, [fixture.s1a, fixture.s2a, fixture.s1b, fixture.s2b]);
+    const byId = Object.fromEntries(statuses.rows.map((r) => [r.id, r.status]));
+    assert.equal(byId[fixture.s1a], "accepted");
+    assert.equal(byId[fixture.s2a], "dismissed", "A's own cascade");
+    assert.equal(byId[fixture.s1b], "accepted");
+    assert.equal(byId[fixture.s2b], "dismissed", "B's own cascade — resolved independently of A, never by A's cascade");
+  } finally {
+    releaseA();
+    await Promise.allSettled([acceptAPromise, acceptBPromise]);
+    monitor.release();
+  }
 });
