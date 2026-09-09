@@ -12,6 +12,7 @@
 import crypto from "crypto";
 import { pool, query } from "./db.js";
 import { isAthleteInWorkspaceScope, canManageMetricEventInScope, metricEventScopeSqlForWorkspace, catalogVisibilitySql } from "./trainingLoadMetricsAccess.js";
+import { linkMetricEventToActivity } from "./trainingActivityMetricsLink.js";
 
 function uuid() {
   return crypto.randomUUID();
@@ -265,7 +266,7 @@ async function resolveParticipantLink(client, athleteId, scope, { logicalSession
   }
   if (logicalSessionId) {
     const result = await client.query(
-      `select ps.name as session_name, p.name as plan_name, p.athlete_id,
+      `select ps.name as session_name, p.name as plan_name, p.athlete_id, ps.training_load_enabled,
               pwo.owner_scope, pwo.owner_user_id, pwo.owner_club_id, pwo.owner_team_id
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
@@ -286,7 +287,10 @@ async function resolveParticipantLink(client, athleteId, scope, { logicalSession
     if (!row.owner_scope || !canManageMetricEventInScope(scope, row)) {
       return { error: "You do not have access to the plan this session belongs to.", status: 403 };
     }
-    return { logicalSessionId, linkedSessionNameSnapshot: row.session_name || null, linkedPlanNameSnapshot: row.plan_name || null, externalAssignmentId: null };
+    return {
+      logicalSessionId, linkedSessionNameSnapshot: row.session_name || null, linkedPlanNameSnapshot: row.plan_name || null,
+      externalAssignmentId: null, trainingLoadEnabled: row.training_load_enabled,
+    };
   }
   if (externalAssignmentId) {
     const result = await client.query(
@@ -304,9 +308,9 @@ async function resolveParticipantLink(client, athleteId, scope, { logicalSession
     if (!canManageMetricEventInScope(scope, row)) {
       return { error: "You do not have access to the schedule this assignment belongs to.", status: 403 };
     }
-    return { logicalSessionId: null, linkedSessionNameSnapshot: null, linkedPlanNameSnapshot: null, externalAssignmentId };
+    return { logicalSessionId: null, linkedSessionNameSnapshot: null, linkedPlanNameSnapshot: null, externalAssignmentId, trainingLoadEnabled: null };
   }
-  return { logicalSessionId: null, linkedSessionNameSnapshot: null, linkedPlanNameSnapshot: null, externalAssignmentId: null };
+  return { logicalSessionId: null, linkedSessionNameSnapshot: null, linkedPlanNameSnapshot: null, externalAssignmentId: null, trainingLoadEnabled: null };
 }
 
 // -----------------------------------------------------------------------
@@ -356,7 +360,7 @@ async function claimWriteRequest(client, { requestKey, requestedBy, operationKin
 // definition, or an invalid value anywhere rejects the entire request
 // with zero partial writes.
 // -----------------------------------------------------------------------
-export async function createGroupEvent(req, scope, body, { onLocked } = {}) {
+export async function createGroupEvent(req, scope, body, { onLocked, onActivityNaturalKeyLocked } = {}) {
   const requestKey = body?.requestKey;
   if (!requestKey || typeof requestKey !== "string") return { error: "requestKey is required.", status: 400 };
   if (!Array.isArray(body?.participants) || body.participants.length === 0) return { error: "At least one participant is required.", status: 400 };
@@ -393,8 +397,25 @@ export async function createGroupEvent(req, scope, body, { onLocked } = {}) {
         await client.query("rollback");
         return { error: "You no longer have rights over this measurement.", status: 403 };
       }
+      // An identical retry must return the SAME canonical activityId/
+      // linkStatus a first-time success would have — read back the
+      // already-confirmed event link (session-level events only; a
+      // day-level event never gets one, see the write branch below) rather
+      // than re-deriving it.
+      let replayActivityId = null;
+      let replayLinkStatus = null;
+      if (eventLookup.rows[0].scope_level === "session") {
+        const linkLookup = await client.query(
+          `select training.resolve_canonical_activity_id(activity_id) as id from training.activity_metric_event_links where metric_event_id=$1 and link_status='confirmed'`,
+          [claim.row.result_event_id],
+        );
+        if (linkLookup.rowCount) {
+          replayActivityId = linkLookup.rows[0].id;
+          replayLinkStatus = "confirmed";
+        }
+      }
       await client.query("commit");
-      return { reused: true, eventId: claim.row.result_event_id };
+      return { reused: true, eventId: claim.row.result_event_id, activityId: replayActivityId, linkStatus: replayLinkStatus };
     }
 
     // Validate EVERY participant fully (athlete-in-scope + link ownership)
@@ -427,12 +448,21 @@ export async function createGroupEvent(req, scope, body, { onLocked } = {}) {
       preparedParticipants.push({ input: p, link, values: resolvedByParticipant.get(idx) || [] });
     }
 
+    // Training Activity 2B: a session-level event's own event_timezone_
+    // snapshot (training_activity_v3) is write-once and required before
+    // the standalone-group materialization path below can ever run
+    // (training.materialize_activity_group_from_metric_event refuses to
+    // guess it) — set it once, at insert time, from an explicit
+    // provider-neutral body.eventTimezone, falling back to the first
+    // participant's own timezone when absent. A day-level event never
+    // gets one (day events never touch Activity at all — see below).
+    const eventTimezone = body.scopeLevel === "session" ? (body.eventTimezone || body.participants[0]?.timezone || null) : null;
     const eventId = uuid();
     await client.query(
-      `insert into training_load.metric_events (id, event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_user_id, owner_club_id, owner_team_id, created_by_user_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      `insert into training_load.metric_events (id, event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_user_id, owner_club_id, owner_team_id, created_by_user_id, event_timezone_snapshot)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [eventId, body.eventName || null, body.occurredDate, body.occurredInstant || null, body.scopeLevel,
-        scope.ownerContext.ownerScope, scope.ownerContext.ownerUserId, scope.ownerContext.ownerClubId, scope.ownerContext.ownerTeamId, req.user.id],
+        scope.ownerContext.ownerScope, scope.ownerContext.ownerUserId, scope.ownerContext.ownerClubId, scope.ownerContext.ownerTeamId, req.user.id, eventTimezone],
     );
 
     const segmentIds = [];
@@ -442,8 +472,8 @@ export async function createGroupEvent(req, scope, body, { onLocked } = {}) {
       segmentIds.push(segId);
     }
 
-    const createdParticipants = [];
-    for (const { input, link, values } of preparedParticipants) {
+    for (const prepared of preparedParticipants) {
+      const { input, link } = prepared;
       const participantId = uuid();
       await client.query(
         `insert into training_load.metric_event_participants
@@ -451,6 +481,41 @@ export async function createGroupEvent(req, scope, body, { onLocked } = {}) {
          values ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [participantId, eventId, input.athleteId, input.timezone, link.logicalSessionId, link.linkedSessionNameSnapshot, link.linkedPlanNameSnapshot, link.externalAssignmentId],
       );
+      prepared.participantId = participantId;
+    }
+
+    // Section 3's own ordering: canonical Activity resolution/
+    // materialization and confirmed links/suggestions happen HERE — after
+    // the event/participant/segment rows exist, but BEFORE any occasion/
+    // value row is written (a component-scope value insert requires its
+    // segment to already carry a CONFIRMED activity_component_metric_
+    // segment_links row — see the real DB trigger training_load.
+    // check_metric_value_scope_capability, training_activity_v3). Rule 1:
+    // a day-level event NEVER creates or links to a training.activity at
+    // all — sleep/recovery/resting-HR and similar stay daily/test data.
+    let activityLinkResult = null;
+    if (body.scopeLevel === "session") {
+      const usedSegmentIndices = new Set();
+      for (const p of preparedParticipants) for (const v of p.values) if (v.segmentIndex !== null && v.segmentIndex !== undefined) usedSegmentIndices.add(v.segmentIndex);
+      const segmentsForLinking = [...usedSegmentIndices]
+        .filter((idx) => segmentIds[idx])
+        .map((idx) => ({ segmentId: segmentIds[idx], label: (body.segments || [])[idx]?.label || null, activityComponentId: (body.segments || [])[idx]?.activityComponentId || null }));
+
+      activityLinkResult = await linkMetricEventToActivity(client, {
+        scope, eventId, occurredDate: body.occurredDate, occurredInstant: body.occurredInstant || null,
+        eventName: body.eventName || null, activityTypeKey: body.activityTypeKey || null,
+        explicitActivityId: body.activityId || null,
+        segments: segmentsForLinking,
+        participants: preparedParticipants.map((p) => ({
+          metricEventParticipantId: p.participantId, athleteId: p.input.athleteId, timezone: p.input.timezone,
+          logicalSessionId: p.link.logicalSessionId, externalAssignmentId: p.link.externalAssignmentId, trainingLoadEnabled: p.link.trainingLoadEnabled,
+        })),
+        performedBy: req.user.id,
+      }, { onNaturalKeyLocked: onActivityNaturalKeyLocked });
+    }
+
+    const createdParticipants = [];
+    for (const { input, values, participantId } of preparedParticipants) {
       // Group this participant's values by segment (undefined/null =
       // session-level occasion) — one occasion per distinct group.
       const groups = new Map();
@@ -485,7 +550,12 @@ export async function createGroupEvent(req, scope, body, { onLocked } = {}) {
 
     await client.query(`update training_load.metric_write_requests set result_event_id = $1 where requested_by_user_id = $2 and request_key = $3`, [eventId, req.user.id, requestKey]);
     await client.query("commit");
-    return { reused: false, eventId, participants: createdParticipants };
+    return {
+      reused: false, eventId, participants: createdParticipants,
+      activityId: activityLinkResult?.activityId || null,
+      linkStatus: activityLinkResult?.linkStatus || null,
+      suggestions: activityLinkResult?.suggestions || [],
+    };
   } catch (error) {
     await client.query("rollback").catch(() => {});
     if (error.httpStatus) return { error: error.message, status: error.httpStatus, ...(error.code ? { code: error.code } : {}) };
@@ -1026,7 +1096,30 @@ export async function queryResults(readContext, filters = {}) {
          d.id as metric_definition_id, d.label, d.short_label, d.icon_url,
          dv.id as metric_definition_version_id, dv.version_number, dv.unit, dv.daily_aggregation_method,
          v.id as value_id, v.value_numeric, v.value_boolean, v.value_text,
-         count(*) over (partition by o.event_participant_id, o.segment_id, v.metric_definition_id) as effective_count
+         v.aggregation_role, v.coverage,
+         si.source_connection_id,
+         apml.activity_participant_id as canonical_activity_participant_id,
+         ap.activity_id as activity_id,
+         acsl.activity_component_id as activity_component_id,
+         -- Training Activity 2B: the SAME metric (same athlete, same
+         -- session/component SCOPE) reported through two DIFFERENT metric
+         -- events that both resolve to the SAME canonical Activity
+         -- (participant/component identity) must be flagged as a real
+         -- conflict — never silently split into two separate, unrelated-
+         -- looking single-value groups just because they came from two
+         -- different metric_events. Partitions on the canonical Activity
+         -- participant/component identity when this value is linked to
+         -- one (every session-level value is, since createGroupEvent's own
+         -- Activity-linking step — see trainingActivityMetricsLink.js);
+         -- falls back to the OLD per-(event_participant, segment) grouping
+         -- only for values with no such link yet (day-level values, which
+         -- never get one by design — see rule 1).
+         count(*) over (
+           partition by
+             coalesce(apml.activity_participant_id::text, 'ep:' || o.event_participant_id::text),
+             coalesce(acsl.activity_component_id::text, 'seg:' || coalesce(o.segment_id::text, 'session')),
+             v.metric_definition_id
+         ) as effective_count
        from training_load.metric_values v
        join training_load.metric_measurement_occasions o on o.id = v.occasion_id
        join training_load.metric_event_participants p on p.id = o.event_participant_id
@@ -1035,6 +1128,10 @@ export async function queryResults(readContext, filters = {}) {
        join training_load.metric_definitions d on d.id = v.metric_definition_id
        join training_load.metric_definition_versions dv on dv.id = v.metric_definition_version_id
        join public.athletes a on a.id = p.athlete_id
+       left join training_load.metric_source_identities si on si.id = o.source_identity_id
+       left join training.activity_participant_metric_participant_links apml on apml.metric_event_participant_id = p.id and apml.link_status = 'confirmed'
+       left join training.activity_participants ap on ap.id = apml.activity_participant_id
+       left join training.activity_component_metric_segment_links acsl on acsl.metric_event_segment_id = o.segment_id and acsl.link_status = 'confirmed'
        where ${conditions.join(" and ")}
      )
      select er.* from effective_rows er
@@ -1065,8 +1162,15 @@ export async function queryResults(readContext, filters = {}) {
     occasionId: r.occasion_id,
     entryMethod: r.entry_method,
     isImported: r.source_identity_id !== null,
+    sourceConnectionId: r.source_connection_id,
     hasHistory: r.supersedes_occasion_id !== null,
+    aggregationRole: r.aggregation_role,
+    coverage: r.coverage,
+    activityId: r.activity_id,
+    activityComponentId: r.activity_component_id,
+    scope: r.segment_id ? "component" : (r.scope_level === "day" ? "day" : "session"),
     conflict: Number(r.effective_count) > 1,
+    conflictCandidateCount: Number(r.effective_count),
   }));
   const hasMore = result.rows.length > pageSize;
   const nextCursor = hasMore ? { occurredDate: rows[rows.length - 1].occurredDate, occasionId: rows[rows.length - 1].occasionId, valueId: rows[rows.length - 1].valueId } : null;

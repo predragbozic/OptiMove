@@ -244,6 +244,29 @@ async function makeIsolatedClone(label, { injectFailureAfterCreate = false } = {
     await runPgTool(psql, ["-d", name, "-v", "ON_ERROR_STOP=1", "-f", dataFile], SOURCE_CONN);
     await runner.runMigrations({ databaseUrl: url, migrationsRoot: path.resolve(__dirname, "../../migrations_v2") });
 
+    // Training Activity 2B: training_activity_v1's own catalog seed rows
+    // (training.activity_types) were inserted the ONE time that migration
+    // actually ran against the real local OPTIMOVE database — a
+    // schema-only pg_dump (this clone's own approach, see this file's own
+    // header) never carries that data along, and migrate.js correctly
+    // skips a migration it already sees recorded as applied rather than
+    // re-running its INSERTs. This clone is disposable and local-only
+    // (never OPTIMOVE itself) — reseeding here is the minimal, targeted
+    // fixup for exactly this one known gap, not a general schema
+    // reconstruction.
+    const seedClient = new pg.Client({ connectionString: url });
+    await seedClient.connect();
+    try {
+      await seedClient.query(
+        `insert into training.activity_types (key, label) values
+           ('training_session', 'Training session'), ('match', 'Match'),
+           ('testing_session', 'Testing session'), ('recovery_session', 'Recovery session')
+         on conflict (key) do nothing`,
+      );
+    } finally {
+      await seedClient.end();
+    }
+
     return { name, url };
   } catch (error) {
     if (created) {
@@ -437,6 +460,16 @@ test("a real Builder create -> publish -> measurement -> edit-draft -> submit HT
   const submitRes = await api(`/api/builder/plans/${livePlanId}/submit`, { method: "POST", cookie: coach.cookie });
   assert.equal(submitRes.status, 200, `expected the plan to publish, got ${submitRes.status}: ${JSON.stringify(submitRes.body)}`);
   assert.equal(submitRes.body.plan.status, "active");
+
+  // Training Activity 2B: a metric event only ever automatically links via
+  // a logicalSessionId whose session is training_load_enabled=true — a
+  // brand-new session defaults to false (see migrations_v2's v14), so this
+  // real round trip explicitly turns it on first, exactly like a coach
+  // would via the real toggle route, before ever submitting a measurement
+  // against it.
+  const liveSessionRow = await query(`select id from plans.plan_sessions where logical_session_id = $1 and plan_day_id in (select id from plans.plan_days where plan_id = $2)`, [logicalSessionId, livePlanId]);
+  const toggleRes = await api(`/api/training-load/sessions/${liveSessionRow.rows[0].id}/training-load-enabled`, { method: "PATCH", cookie: coach.cookie, body: { trainingLoadEnabled: true } });
+  assert.equal(toggleRes.status, 200, `expected training-load-enabled to toggle on, got ${toggleRes.status}: ${JSON.stringify(toggleRes.body)}`);
 
   // 3) MEASUREMENT, through the real training-load-metrics route, linked
   // to the just-published live session.

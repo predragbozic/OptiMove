@@ -557,6 +557,24 @@ function canManageOwnerRow(scope, row) {
 // for ANY suggestion sharing that identity now serializes at this single
 // point, so two callers can never simultaneously be mid-way through
 // locking two different sibling rows in the first place.
+// Training Activity 2B fix: acceptMatchSuggestion/dismissMatchSuggestion's
+// own row lookup used to say plain `for update` on a `ms join a` query —
+// Postgres locks EVERY joined table's row under a bare `for update`, so
+// this was unnecessarily also locking the ACTIVITY row, not just the
+// suggestion row it actually needs exclusive access to. That over-broad
+// lock serialized this call against ANY other concurrent writer of the
+// SAME activity row — including, since Phase 2B, a genuinely unrelated
+// createGroupEvent call reusing a strong-candidate activity via this
+// module's own `select ... from training.activities where id=$1 for
+// update` (materializeSoloFuzzyActivity, trainingActivityMetricsLink.js) —
+// even though the two operations touch completely disjoint data (a
+// DIFFERENT participant's suggestion vs. a DIFFERENT, unrelated metric
+// event). Narrowed to `for update of ms` below: only the suggestion row is
+// locked now, so two callers touching the SAME activity through different,
+// unrelated identities no longer serialize on each other at all, while
+// sibling suggestions sharing the SAME source identity still correctly
+// serialize through lockMatchSuggestionSourceIdentity's own advisory lock
+// above (untouched by this fix).
 async function lockMatchSuggestionSourceIdentity(client, suggestionId) {
   const idLookup = await client.query(`select activity_id, source_participant_id from training.activity_match_suggestions where id=$1`, [suggestionId]);
   if (!idLookup.rowCount) throw httpError(404, "Suggestion not found.");
@@ -573,7 +591,7 @@ export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, 
     const sugRes = await client.query(
       `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
        from training.activity_match_suggestions ms join training.activities a on a.id = ms.activity_id
-       where ms.id=$1 for update`,
+       where ms.id=$1 for update of ms`,
       [suggestionId],
     );
     if (onLocked) await onLocked(client);
@@ -629,7 +647,7 @@ export async function dismissMatchSuggestion(scope, { suggestionId, performedBy 
     const sugRes = await client.query(
       `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
        from training.activity_match_suggestions ms join training.activities a on a.id = ms.activity_id
-       where ms.id=$1 for update`,
+       where ms.id=$1 for update of ms`,
       [suggestionId],
     );
     if (onLocked) await onLocked(client);
@@ -795,15 +813,53 @@ export async function materializePlannedRpeActivityForSubmit(client, {
   logicalSessionId, athleteId, localDate, timezone, startInstant,
   sessionName, ownerScope, ownerIds, performedBy,
 }) {
-  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`activity-link:${athleteId}:${logicalSessionId}`]);
+  return materializeNaturalKeyActivity(client, {
+    logicalSessionId, externalAssignmentId: null, athleteId, localDate, timezone, startInstant,
+    sessionName, ownerScope, ownerIds, performedBy,
+  });
+}
+
+// ---------------------------------------------------------------------
+// Generalized natural-key confirmed-link materialization — the SAME
+// deterministic-identity-only logic materializePlannedRpeActivityForSubmit
+// above already used (that function is now a thin logicalSessionId-only
+// wrapper around this one, so the RPE submit path's own behavior is
+// byte-for-byte unchanged), extended to accept externalAssignmentId as the
+// alternative natural key. Shared by that RPE path AND Training Activity
+// 2B's own Metrics Core group-event linking (trainingActivityMetricsLink.js)
+// so there is exactly ONE natural-key resolution/materialization
+// implementation for both, per this module's own "maximally reuse the
+// existing model" mandate. ALWAYS transaction-aware: `client` is the
+// CALLER's own already-open transaction, never opened/committed/rolled
+// back here — safe to call from inside createGroupEvent's own single
+// transaction.
+// ---------------------------------------------------------------------
+export async function materializeNaturalKeyActivity(client, {
+  logicalSessionId, externalAssignmentId, athleteId, localDate, timezone, startInstant,
+  sessionName, ownerScope, ownerIds, performedBy,
+}, { onLocked } = {}) {
+  if ((logicalSessionId ? 1 : 0) + (externalAssignmentId ? 1 : 0) !== 1) {
+    throw new Error("materializeNaturalKeyActivity: exactly one of logicalSessionId/externalAssignmentId is required");
+  }
+  const naturalKey = logicalSessionId || externalAssignmentId;
+  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`activity-link:${athleteId}:${naturalKey}`]);
+  // Test-only hook (default no-op), same convention as every other
+  // deterministic-lock-proof point in this module (acceptMatchSuggestion/
+  // dismissMatchSuggestion) and in trainingLoadMetricsMeasurements.js
+  // (createGroupEvent/correctManualOccasion) — called the instant this
+  // advisory lock is genuinely held, letting a test pause here and prove a
+  // second concurrent call for the SAME natural key is really lock-waiting
+  // (via pg_stat_activity) before releasing the first.
+  if (onLocked) await onLocked(client);
 
   const keyMatch = await client.query(
     `select ap.id as participant_id, ap.activity_id
      from training.activity_participant_session_links l
      join training.activity_participants ap on ap.id = l.activity_participant_id
-     where l.link_status = 'confirmed' and ap.athlete_id = $1 and l.logical_session_id = $2
+     where l.link_status = 'confirmed' and ap.athlete_id = $1
+       and (($2::uuid is not null and l.logical_session_id = $2) or ($3::uuid is not null and l.external_assignment_id = $3))
      limit 1`,
-    [athleteId, logicalSessionId],
+    [athleteId, logicalSessionId || null, externalAssignmentId || null],
   );
   if (keyMatch.rowCount) {
     const canonicalParticipant = await client.query(`select training.resolve_canonical_participant_id($1) as id`, [keyMatch.rows[0].participant_id]);
@@ -815,8 +871,9 @@ export async function materializePlannedRpeActivityForSubmit(client, {
 
   const activityInsert = await client.query(
     `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_user_id, owner_club_id, owner_team_id, origin, lifecycle_state, created_by_user_id)
-     values ('training_session',$1,$2,$3,$4,$5,$6,$7,$8,'planned_session','confirmed',$9) returning id`,
-    [sessionName || null, localDate, startInstant || null, timezone, ownerScope, ownerIds?.userId || null, ownerIds?.clubId || null, ownerIds?.teamId || null, performedBy || null],
+     values ('training_session',$1,$2,$3,$4,$5,$6,$7,$8,$9,'confirmed',$10) returning id`,
+    [sessionName || null, localDate, startInstant || null, timezone, ownerScope, ownerIds?.userId || null, ownerIds?.clubId || null, ownerIds?.teamId || null,
+      logicalSessionId ? "planned_session" : "external_assignment", performedBy || null],
   );
   const activityId = activityInsert.rows[0].id;
   const participantInsert = await client.query(
@@ -826,11 +883,11 @@ export async function materializePlannedRpeActivityForSubmit(client, {
   );
   const participantId = participantInsert.rows[0].id;
   await client.query(
-    `insert into training.activity_participant_session_links (activity_participant_id, athlete_id, logical_session_id, link_method, link_status, confirmed_by_user_id, confirmed_at, created_by_user_id)
-     values ($1,$2,$3,'automatic','confirmed',$4,now(),$4)`,
-    [participantId, athleteId, logicalSessionId, performedBy || null],
+    `insert into training.activity_participant_session_links (activity_participant_id, athlete_id, logical_session_id, external_assignment_id, link_method, link_status, confirmed_by_user_id, confirmed_at, created_by_user_id)
+     values ($1,$2,$3,$4,'automatic','confirmed',$5,now(),$5)`,
+    [participantId, athleteId, logicalSessionId || null, externalAssignmentId || null, performedBy || null],
   );
   return { activityId, participantId, reused: false };
 }
 
-export { uuid, httpError };
+export { uuid, httpError, findActivityCandidates, canManageOwnerRow, assertActivityTypeKeyValid, assertPresentationNameValid };

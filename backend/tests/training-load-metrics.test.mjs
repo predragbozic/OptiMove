@@ -42,6 +42,13 @@ const MIGRATIONS = [
   "202609071100_training_activity_v2_components_links.sql",
   "202609071200_training_activity_v3_metrics_core_extensions.sql",
   "202609071300_training_activity_v4_canonical_functions.sql",
+  // Training Activity 2B: resolveParticipantLink now also reads
+  // plans.plan_sessions.training_load_enabled (added by v14) so its own
+  // Activity-linking decision (createGroupEvent) can enforce "never
+  // automatically link to an untracked session" — every existing
+  // logicalSessionId-participant test in this file exercises that same
+  // code path now, so this migration must be present here too.
+  "202609080900_training_load_v14_session_tracking_and_rpe_defaults.sql",
 ];
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -385,7 +392,15 @@ function distanceValue(value, extra = {}) {
 // site actually wants (a resolvable, live session). A caller exercising
 // the negative case (an ordinary, never-published draft) passes
 // status: "draft" explicitly — see test 21c below.
-async function makePlanSessionForAthlete(athleteId, { date = "2026-09-08", name = "Ponedeljak - Snaga", planName = "Sept Blok", owner = null, status = "active" } = {}) {
+// trainingLoadEnabled defaults true — Training Activity 2B's own
+// createGroupEvent now refuses to automatically link via a logicalSessionId
+// whose planned session is training_load_enabled=false (see
+// trainingActivityMetricsLink.js), and every EXISTING test using this
+// fixture predates that column — a real, live, tracked Weekly session
+// (the common case every one of those tests actually wants) is the correct
+// default; a test specifically exercising the training_load_enabled=false
+// rejection passes trainingLoadEnabled: false explicitly.
+async function makePlanSessionForAthlete(athleteId, { date = "2026-09-08", name = "Ponedeljak - Snaga", planName = "Sept Blok", owner = null, status = "active", trainingLoadEnabled = true } = {}) {
   const planId = crypto.randomUUID();
   await query(`insert into plans.plans (id, athlete_id, name, plan_type, status) values ($1,$2,$3,'weekly',$4)`, [planId, athleteId, planName, status]);
   if (owner) {
@@ -398,7 +413,10 @@ async function makePlanSessionForAthlete(athleteId, { date = "2026-09-08", name 
   await query(`insert into plans.plan_days (id, plan_id, date, day_order) values ($1,$2,$3,1)`, [dayId, planId, date]);
   const logicalSessionId = crypto.randomUUID();
   const sessionId = crypto.randomUUID();
-  await query(`insert into plans.plan_sessions (id, plan_day_id, name, logical_session_id, session_order) values ($1,$2,$3,$4,1)`, [sessionId, dayId, name, logicalSessionId]);
+  await query(
+    `insert into plans.plan_sessions (id, plan_day_id, name, logical_session_id, session_order, training_load_enabled) values ($1,$2,$3,$4,1,$5)`,
+    [sessionId, dayId, name, logicalSessionId, trainingLoadEnabled],
+  );
   return { planId, dayId, sessionId, logicalSessionId };
 }
 
