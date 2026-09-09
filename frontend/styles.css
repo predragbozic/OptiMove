@@ -7782,7 +7782,18 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-session-tracking-hint { font-size: 11px; }
 .builder-training-load-settings { margin-top: 12px; }
 .builder-training-load-defaults-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-.builder-training-load-bulk-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+.builder-training-load-note { font-size: 11px; margin-top: 6px; }
+/* UX correction round: the three bulk actions used to be bare .text-action
+   green links - reads as a much heavier, more permanent-looking action
+   than the neutral toggle pills right above it. Now the SAME neutral
+   surface (.plain-button), same height/radius as those toggles
+   (.compact-button), laid out as a clearly separated, labeled block of
+   its own underneath - never the default green .text-action styling. */
+.builder-training-load-bulk { margin-top: 12px; }
+.builder-training-load-bulk-label { margin-bottom: 6px; }
+.builder-training-load-bulk-row { display: flex; flex-direction: column; gap: 6px; }
+.builder-training-load-bulk-button { justify-content: flex-start; text-align: left; width: 100%; white-space: normal; color: var(--text, #20242a); }
+.builder-training-load-bulk-button .builder-icon-svg { flex: none; color: var(--muted, #667085); }
 .builder-session-select { width: 96px; min-height: 24px; padding: 2px 4px; font-size: 12px; color: var(--muted, #667085); }
 .builder-session-select:has(option:checked:not([value=""])) { color: var(--text, #20242a); }
 .builder-session span:last-child, .builder-node-button small { color: var(--muted, #667085); font-size: 12px; font-weight: 600; }

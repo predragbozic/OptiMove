@@ -18,6 +18,14 @@ export const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" ari
 const ICON_PASTE = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><rect x="4" y="5" width="12" height="16" rx="2"></rect><path d="M8 3.5h4a1 1 0 0 1 1 1V6H7V4.5a1 1 0 0 1 1-1Z"></path><path d="M12 10h9v10a1 1 0 0 1-1 1h-8"></path><path d="M15 14h3M15 17h3"></path></svg>`;
 const ICON_PENCIL = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z"></path><path d="M13 7l4 4"></path></svg>`;
 const ICON_IMPORT = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M12 3v11"></path><path d="M8 10l4 4 4-4"></path><path d="M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"></path></svg>`;
+// Two curved arrows forming a loop - "apply/sync these settings", used by
+// the Training load panel's own bulk-apply action below.
+const ICON_SYNC = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.66-5.66L20 8"></path><path d="M20 4v4h-4"></path><path d="M20 12a8 8 0 0 1-13.66 5.66L4 16"></path><path d="M4 20v-4h4"></path></svg>`;
+// A plain circle-minus - "turn this off in bulk", shared by both of the
+// Training load panel's own bulk turn-off actions below (never the
+// tracking/RPE toggle dot's own accent-colored ON state - this is neutral
+// line art, matching every other icon in this file).
+const ICON_MINUS_CIRCLE = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M8 12h8"></path></svg>`;
 
 function renderConfirmIconButton({ type = "submit", action = "", dataAttrs = "", label = "Add" } = {}) {
   return `<button class="plain-button builder-icon-action builder-confirm-icon" type="${type}" ${action ? `data-action="${escapeAttr(action)}"` : ""} ${dataAttrs} aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}">${ICON_CHECK}</button>`;
@@ -305,9 +313,30 @@ function renderSessionTrainingLoadControls(session) {
 // existing sessions, each doing exactly what its own label says and
 // nothing more. Neutral panel styling, matching the rest of this app -
 // no large colored surface, the accent color only ever marks the ON dot.
+//
+// UX correction round: a bulk action that would touch ZERO sessions is
+// simply not rendered at all - a coach should never see a live control
+// with no real effect. Counts are computed from the draft's own current
+// session state, matching EXACTLY what each backend bulk route itself
+// targets (routes/builder.js): apply-to-training-sessions only ever
+// touches bta='T' sessions whose current trackingEnabled/rpeEnabled
+// differ from the plan's own selected defaults; turn-off-before-after
+// only ever touches bta in ('B','A'); turn-off-all-rpe only ever touches
+// any session with rpeEnabled=true. None of this changes what a click
+// actually sends - see builder-actions.js, unchanged.
+function countBuilderTrainingLoadBulkTargets(draft, trackOn, rpeOn) {
+  const sessions = (draft.blocks || []).flatMap((block) => block.sessions || []);
+  const applyCount = sessions.filter((session) => session.bta === "T" && (Boolean(session.trackingEnabled) !== trackOn || Boolean(session.rpeEnabled) !== rpeOn)).length;
+  const beforeAfterOnCount = sessions.filter((session) => (session.bta === "B" || session.bta === "A") && (session.trackingEnabled || session.rpeEnabled)).length;
+  const rpeOnCount = sessions.filter((session) => session.rpeEnabled).length;
+  return { applyCount, beforeAfterOnCount, rpeOnCount };
+}
+
 export function renderBuilderTrainingLoadSettings(draft) {
   const trackOn = draft.plan.trackTrainingLoadDefault === true;
   const rpeOn = trackOn && draft.plan.requestRpeDefault === true;
+  const { applyCount, beforeAfterOnCount, rpeOnCount } = countBuilderTrainingLoadBulkTargets(draft, trackOn, rpeOn);
+  const hasBulkActions = applyCount > 0 || beforeAfterOnCount > 0 || rpeOnCount > 0;
   return `
     <section class="panel builder-training-load-settings">
       <div class="section-heading">
@@ -315,17 +344,23 @@ export function renderBuilderTrainingLoadSettings(draft) {
       </div>
       <div class="builder-training-load-defaults-row">
         <button type="button" class="plain-button compact-button builder-session-rpe-toggle ${trackOn ? "is-on" : "is-off"}" data-action="builder-toggle-plan-track-default" aria-pressed="${trackOn ? "true" : "false"}" title="Default for a new main Training session">
-          <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Track main Training sessions
+          <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Include main Training sessions in Training Load
         </button>
-        <button type="button" class="plain-button compact-button builder-session-rpe-toggle ${rpeOn ? "is-on" : "is-off"}" data-action="builder-toggle-plan-rpe-default" aria-pressed="${rpeOn ? "true" : "false"}" ${trackOn ? "" : "disabled"} title="${trackOn ? "Default for a new main Training session" : "Turn on tracking above first"}">
-          <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Request RPE for tracked sessions
+        <button type="button" class="plain-button compact-button builder-session-rpe-toggle ${rpeOn ? "is-on" : "is-off"}" data-action="builder-toggle-plan-rpe-default" aria-pressed="${rpeOn ? "true" : "false"}" ${trackOn ? "" : "disabled"} title="${trackOn ? "Default for a new main Training session" : "Include sessions in Training Load first"}">
+          <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Request RPE from athletes
         </button>
       </div>
-      <div class="builder-training-load-bulk-row">
-        <button type="button" class="text-action" data-action="builder-bulk-apply-training-sessions">Apply to current Training sessions</button>
-        <button type="button" class="text-action" data-action="builder-bulk-turn-off-before-after">Turn off for Before/After sessions</button>
-        <button type="button" class="text-action" data-action="builder-bulk-turn-off-all-rpe">Turn off RPE for all sessions</button>
-      </div>
+      ${trackOn ? "" : `<span class="builder-session-tracking-hint muted">Include sessions in Training Load first</span>`}
+      <p class="muted builder-training-load-note">Including a session in Training Load does not automatically request GPS or other metrics.</p>
+      ${hasBulkActions ? `
+      <div class="builder-training-load-bulk">
+        <p class="eyebrow builder-training-load-bulk-label">Existing sessions</p>
+        <div class="builder-training-load-bulk-row">
+          ${applyCount > 0 ? `<button type="button" class="plain-button compact-button icon-button builder-training-load-bulk-button" data-action="builder-bulk-apply-training-sessions">${ICON_SYNC}<span>Apply these settings to existing Training sessions</span></button>` : ""}
+          ${beforeAfterOnCount > 0 ? `<button type="button" class="plain-button compact-button icon-button builder-training-load-bulk-button" data-action="builder-bulk-turn-off-before-after">${ICON_MINUS_CIRCLE}<span>Exclude existing Before/After sessions (${beforeAfterOnCount})</span></button>` : ""}
+          ${rpeOnCount > 0 ? `<button type="button" class="plain-button compact-button icon-button builder-training-load-bulk-button" data-action="builder-bulk-turn-off-all-rpe">${ICON_MINUS_CIRCLE}<span>Turn off RPE for all existing sessions (${rpeOnCount})</span></button>` : ""}
+        </div>
+      </div>` : ""}
     </section>
   `;
 }
