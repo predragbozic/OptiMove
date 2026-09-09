@@ -416,6 +416,20 @@ async function materializeRpeActivity(athleteId, logicalSessionId, { date = "202
   }
 }
 
+// Materializes a genuine solo activity via the real, existing
+// /materialize route — used to seed a real pre-existing candidate for the
+// group-fuzzy-matching correction round's own tests. matchStatus in the
+// response tells the fixture whether it landed as a clean single row
+// (useful for scoreCandidate's own strong-match thresholds).
+async function materializeManualActivity(coachCookie, { athleteId, localDate, timezone = "UTC", name, activityTypeKey, startInstant } = {}) {
+  const res = await api("/api/training-activity/materialize", {
+    method: "POST", cookie: coachCookie,
+    body: { requestKey: `k-${uid()}`, athleteId, localDate, timezone, name, activityTypeKey, startInstant },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  return res.body;
+}
+
 // ============================================================
 // Tests
 // ============================================================
@@ -976,4 +990,592 @@ test("20. no historical RPE reconciliation: an old session_feedback row with no 
     [athleteId],
   );
   assert.equal(historicalLinks.rows[0].n, 0, "the old session_feedback row must never have been retroactively linked to any Activity");
+});
+
+// ============================================================
+// Correction round — group standalone matching (section 1), the
+// third-activity conflict (section 2), mixed-group scenarios (section 3),
+// authorization/atomicity (section 4), and results/conflicts (section 5).
+// ============================================================
+
+test("G1 (case 5). group event, no identity, no candidates -> exactly one new activity", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("g1");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-01", scopeLevel: "session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", values: [distanceValue(4000)] },
+        { athleteId: a2, timezone: "UTC", values: [distanceValue(4000)] },
+      ],
+    },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  assert.equal(res.body.linkStatus, "confirmed");
+  const participants = await query(`select count(*)::int as n from training.activity_participants where activity_id=$1`, [res.body.activityId]);
+  assert.equal(participants.rows[0].n, 2, "both athletes must be participants of the ONE new activity");
+});
+
+test("G2 (case 6). group event, no identity, ONE strong candidate -> auto-matched to the existing activity", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("g2");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  const existing = await materializeManualActivity(coachCookie, {
+    athleteId: a1, localDate: "2026-10-02", timezone: "UTC", name: "Morning Session", activityTypeKey: "training_session", startInstant: "2026-10-02T09:00:00Z",
+  });
+
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-02", occurredInstant: "2026-10-02T09:05:00Z", scopeLevel: "session",
+      eventName: "Morning Session", activityTypeKey: "training_session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", values: [distanceValue(4100)] },
+        { athleteId: a2, timezone: "UTC", values: [distanceValue(4100)] },
+      ],
+    },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  assert.equal(res.body.activityId, existing.activityId, "must reuse the existing strongly-matched activity, never create a duplicate");
+  assert.equal(res.body.linkStatus, "confirmed");
+  const suggestions = await query(`select count(*)::int as n from training.activity_match_suggestions where activity_id=$1`, [existing.activityId]);
+  assert.equal(suggestions.rows[0].n, 0, "an unambiguous strong match must never ALSO leave a suggestion behind");
+});
+
+test("G3 (case 7). group event, no identity, ambiguous candidates -> provisional activity + suggestions, never an automatic merge", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("g3");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  // Two plausible, but not both strong, candidates for a1 on the same day —
+  // same shape as materializeActivityParticipant's own "ambiguous_new" case.
+  const cand1 = await materializeManualActivity(coachCookie, { athleteId: a1, localDate: "2026-10-03", timezone: "UTC", name: "Candidate One" });
+  const cand2 = await materializeManualActivity(coachCookie, { athleteId: a1, localDate: "2026-10-03", timezone: "UTC", name: "Candidate Two" });
+
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-03", scopeLevel: "session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", values: [distanceValue(4200)] },
+        { athleteId: a2, timezone: "UTC", values: [distanceValue(4200)] },
+      ],
+    },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  assert.equal(res.body.linkStatus, "suggested");
+  assert.notEqual(res.body.activityId, cand1.activityId);
+  assert.notEqual(res.body.activityId, cand2.activityId);
+  const activity = await query(`select lifecycle_state from training.activities where id=$1`, [res.body.activityId]);
+  assert.equal(activity.rows[0].lifecycle_state, "provisional");
+  const suggestions = await query(`select candidate_activity_id from training.activity_match_suggestions where activity_id=$1 and status='open'`, [res.body.activityId]);
+  const candidateIds = suggestions.rows.map((r) => r.candidate_activity_id).sort();
+  assert.deepEqual(candidateIds, [cand1.activityId, cand2.activityId].sort(), "both candidates must be recorded as open suggestions, never auto-merged");
+  // a2 (no candidates of its own) must still be a plain participant of the
+  // new provisional activity, with no suggestion of its own.
+  const a2Participant = await query(`select id from training.activity_participants where activity_id=$1 and athlete_id=$2`, [res.body.activityId, a2]);
+  assert.equal(a2Participant.rowCount, 1);
+});
+
+test("G4. group fuzzy matching never links across a DIFFERENT owner scope, even with an identical same-day candidate", async () => {
+  await ensureSystemDefinition();
+  const { clubId: clubA, coachCookie: coachCookieA } = await makeClubCoach("g4a");
+  const { clubId: clubB, coachCookie: coachCookieB } = await makeClubCoach("g4b");
+  const athleteUserId = await makeUser({ email: `g4-shared-${uid()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ userId: athleteUserId, timezone: "UTC" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubA]);
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubB]);
+
+  const candidateInB = await materializeManualActivity(coachCookieB, { athleteId, localDate: "2026-10-04", timezone: "UTC", name: "Club B Session", activityTypeKey: "training_session", startInstant: "2026-10-04T09:00:00Z" });
+
+  const { athleteId: a2 } = await makeAthleteInClub(clubA);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookieA,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-04", occurredInstant: "2026-10-04T09:02:00Z", scopeLevel: "session",
+      eventName: "Club B Session", activityTypeKey: "training_session",
+      participants: [
+        { athleteId, timezone: "UTC", values: [distanceValue(1000)] },
+        { athleteId: a2, timezone: "UTC", values: [distanceValue(1000)] },
+      ],
+    },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  assert.notEqual(res.body.activityId, candidateInB.activityId, "must never match a candidate owned by a different workspace, even a near-identical one");
+  const activity = await query(`select owner_scope, owner_club_id from training.activities where id=$1`, [res.body.activityId]);
+  assert.equal(activity.rows[0].owner_club_id, clubA);
+});
+
+test("G5 (case 9). retry with the same requestKey on a group-fuzzy-matched event returns the SAME response, no duplicates", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("g5");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  const requestKey = `k-${uid()}`;
+  const body = {
+    requestKey, occurredDate: "2026-10-05", scopeLevel: "session",
+    participants: [
+      { athleteId: a1, timezone: "UTC", values: [distanceValue(3000)] },
+      { athleteId: a2, timezone: "UTC", values: [distanceValue(3000)] },
+    ],
+  };
+  const first = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  const second = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
+  assert.equal(second.status, 201, JSON.stringify(second.body));
+  assert.equal(second.body.reused, true);
+  assert.equal(second.body.activityId, first.body.activityId);
+  assert.equal(second.body.linkStatus, "confirmed");
+  const activityCount = await query(
+    `select count(distinct a.id)::int as n from training.activities a
+     join training.activity_participants ap on ap.activity_id = a.id
+     where ap.athlete_id = any($1::uuid[]) and ap.local_date = '2026-10-05'`,
+    [[a1, a2]],
+  );
+  assert.equal(activityCount.rows[0].n, 1);
+});
+
+test("G6 (case 8). two parallel imports describing the SAME real group session converge on ONE canonical activity (deterministic lock proof, no sleep)", async () => {
+  await ensureSystemDefinition();
+  const measurementsService = await import("../src/trainingLoadMetricsMeasurements.js");
+  const { clubId, coachCookie } = await makeClubCoach("g6");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  const coachRow = await query(`select user_id from public.user_club_roles where club_id=$1 limit 1`, [clubId]);
+  const coachUserId = coachRow.rows[0].user_id;
+  const scope = { type: "club", clubId, ownerContext: { ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null } };
+  const fakeReq = { user: { id: coachUserId }, authz: { platformRoles: [], clubRoles: [{ clubId, role: "club_admin" }], teamRoles: [], managedTeamIds: [] } };
+
+  const monitor = await pool.connect();
+  let releaseFirst = () => {};
+  try {
+    let signalFirstReached;
+    const firstReachedBarrier = new Promise((res) => { signalFirstReached = res; });
+    const firstBarrier = new Promise((res) => { releaseFirst = res; });
+    let firstPid;
+
+    // Same eventName + activityTypeKey + a close occurredInstant on BOTH
+    // submissions — genuinely identical group content (as the test name
+    // says), which is what makes the second call's own candidate search
+    // score a STRONG match against whatever the first call materializes
+    // (matching the existing scoreCandidate policy's own thresholds: an
+    // exact name match plus a <=30min time difference), so this proves
+    // real convergence under the existing matching policy — not just that
+    // the advisory lock exists.
+    const firstPromise = measurementsService.createGroupEvent(fakeReq, scope, {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-06", occurredInstant: "2026-10-06T09:00:00Z", scopeLevel: "session",
+      eventName: "Shared Group Session", activityTypeKey: "training_session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", values: [distanceValue(5000)] },
+        { athleteId: a2, timezone: "UTC", values: [distanceValue(5000)] },
+      ],
+    }, {
+      onActivityGroupFuzzyLocked: async (client) => { firstPid = client.processID; signalFirstReached(); await firstBarrier; },
+    });
+
+    await firstReachedBarrier;
+    const secondPromise = measurementsService.createGroupEvent(fakeReq, scope, {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-06", occurredInstant: "2026-10-06T09:05:00Z", scopeLevel: "session",
+      eventName: "Shared Group Session", activityTypeKey: "training_session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", values: [distanceValue(5100)] },
+        { athleteId: a2, timezone: "UTC", values: [distanceValue(5100)] },
+      ],
+    });
+
+    let secondBlocked = false;
+    const start = Date.now();
+    while (Date.now() - start < 3000) {
+      const r = await monitor.query(`select pid from pg_stat_activity where wait_event_type='Lock' and pid <> $1`, [firstPid]);
+      if (r.rowCount > 0) { secondBlocked = true; break; }
+      await new Promise((res) => setTimeout(res, 15));
+    }
+    assert.ok(secondBlocked, "the second, concurrent import for the SAME group must be genuinely lock-waiting behind the first's held group-fuzzy advisory lock");
+
+    releaseFirst();
+    const [firstResult, secondResult] = await Promise.all([firstPromise, secondPromise]);
+    assert.equal(secondResult.activityId, firstResult.activityId, "both imports must converge on exactly one canonical activity");
+
+    const activityCount = await query(
+      `select count(distinct a.id)::int as n from training.activities a
+       join training.activity_participants ap on ap.activity_id = a.id
+       where ap.athlete_id = any($1::uuid[]) and ap.local_date = '2026-10-06'`,
+      [[a1, a2]],
+    );
+    assert.equal(activityCount.rows[0].n, 1, "no duplicate activity was created under concurrency");
+  } finally {
+    releaseFirst();
+    monitor.release();
+  }
+});
+
+test("G7 (case 1). all authoritative participants already resolve to the SAME activity -> no reparent needed, clean confirm", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("g7");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  const { logicalSessionId: s1 } = await makePlanSessionForAthlete(a1, { date: "2026-10-07", owner: { ownerScope: "club", ownerClubId: clubId } });
+  const { logicalSessionId: s2 } = await makePlanSessionForAthlete(a2, { date: "2026-10-07", owner: { ownerScope: "club", ownerClubId: clubId } });
+
+  const first = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-07", scopeLevel: "session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", logicalSessionId: s1, values: [distanceValue(2000)] },
+        { athleteId: a2, timezone: "UTC", logicalSessionId: s2, values: [distanceValue(2000)] },
+      ],
+    },
+  });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  // The FIRST submission itself needed a reparent — neither a1 nor a2 had
+  // any pre-existing activity, so each participant's own fresh natural-key
+  // materialization inevitably creates its OWN new activity before the
+  // group event's own merge step unifies them into one. That reparent is
+  // expected and correct; this test's own point is the SECOND submission.
+  const reparentsAfterFirst = await query(`select count(*)::int as n from training.activity_participant_reparent_log where to_activity_id=$1`, [first.body.activityId]);
+
+  // A second, DIFFERENT metric event (different source), same 2 authoritative
+  // participants — both natural keys now ALREADY resolve (via the first
+  // submission's own confirmed session links) to the SAME activity, so no
+  // reparent is ever needed the second time around.
+  const second = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-07", scopeLevel: "session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", logicalSessionId: s1, values: [distanceValue(2100)] },
+        { athleteId: a2, timezone: "UTC", logicalSessionId: s2, values: [distanceValue(2100)] },
+      ],
+    },
+  });
+  assert.equal(second.status, 201, JSON.stringify(second.body));
+  assert.equal(second.body.activityId, first.body.activityId);
+  const reparentsAfterSecond = await query(`select count(*)::int as n from training.activity_participant_reparent_log where to_activity_id=$1`, [first.body.activityId]);
+  assert.equal(reparentsAfterSecond.rows[0].n, reparentsAfterFirst.rows[0].n, "the SECOND submission must trigger no additional reparent — both participants already agreed");
+});
+
+test("G8 (case 3). one authoritative participant, others without identity -> everyone joins the SAME activity", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("g8");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  const { logicalSessionId } = await makePlanSessionForAthlete(a1, { date: "2026-10-08", owner: { ownerScope: "club", ownerClubId: clubId } });
+
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-08", scopeLevel: "session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", logicalSessionId, values: [distanceValue(2500)] },
+        { athleteId: a2, timezone: "UTC", values: [distanceValue(2500)] },
+      ],
+    },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  const participants = await query(`select athlete_id from training.activity_participants where activity_id=$1`, [res.body.activityId]);
+  const athleteIds = participants.rows.map((r) => r.athlete_id).sort();
+  assert.deepEqual(athleteIds, [a1, a2].sort(), "the unauthoritative participant must join the SAME activity the authoritative one resolved to");
+});
+
+test("G9 (case 4 / section 2). a participant already anchored to a THIRD, unrelated activity via real metric data is a controlled 409 activityLinkConflict, atomic rollback, no UUID leak", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("g9");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  const { logicalSessionId: s1 } = await makePlanSessionForAthlete(a1, { date: "2026-10-09", owner: { ownerScope: "club", ownerClubId: clubId } });
+  const { logicalSessionId: s2 } = await makePlanSessionForAthlete(a2, { date: "2026-10-09", owner: { ownerScope: "club", ownerClubId: clubId } });
+
+  // a1's own natural key (s1) is materialized FIRST, standalone — this
+  // becomes activity X, and (since a1 is processed first in the group
+  // event's own participants array below) will be picked as the merge
+  // TARGET.
+  const materializeService = await import("../src/trainingActivityMaterialize.js");
+  async function materializeFor(athleteId, logicalSessionId) {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const r = await materializeService.materializeNaturalKeyActivity(client, {
+        logicalSessionId, externalAssignmentId: null, athleteId, localDate: "2026-10-09", timezone: "UTC", startInstant: null,
+        sessionName: "Session", ownerScope: "club", ownerIds: { clubId }, performedBy: null,
+      });
+      await client.query("commit");
+      return r;
+    } finally {
+      client.release();
+    }
+  }
+  const activityX = await materializeFor(a1, s1);
+
+  // a2's own natural key (s2) is ALSO materialized standalone — activity Y
+  // — and then a2 records REAL metric data explicitly against Y (a
+  // perfectly normal, independent prior submission). This is what anchors
+  // a2's own activity_participants row to Y with a genuine confirmed
+  // metric-participant link — the exact real-world shape that later makes
+  // an automatic reparent unsafe.
+  const activityY = await materializeFor(a2, s2);
+  const anchorRes = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-09", scopeLevel: "session", activityId: activityY.activityId,
+      participants: [{ athleteId: a2, timezone: "UTC", values: [distanceValue(900)] }],
+    },
+  });
+  assert.equal(anchorRes.status, 201, JSON.stringify(anchorRes.body));
+  assert.equal(anchorRes.body.activityId, activityY.activityId);
+
+  const before = await query(`select count(*)::int as n from training_load.metric_events`);
+  // Now a group event names BOTH a1 (s1, resolving to X) and a2 (s2,
+  // resolving to Y) as authoritative participants of the SAME session —
+  // the automatic merge would need to reparent a2 from Y into X, but a2's
+  // own confirmed metric link is to an event that is linked to Y, not X —
+  // refused, never a silent/wrong relink.
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-09", scopeLevel: "session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", logicalSessionId: s1, values: [distanceValue(3300)] },
+        { athleteId: a2, timezone: "UTC", logicalSessionId: s2, values: [distanceValue(3300)] },
+      ],
+    },
+  });
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.equal(res.body.code, "activityLinkConflict");
+  assert.doesNotMatch(res.body.error, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i, "the error message must never leak a raw UUID");
+
+  const after = await query(`select count(*)::int as n from training_load.metric_events`);
+  assert.equal(after.rows[0].n, before.rows[0].n, "zero partial writes on an activityLinkConflict rejection");
+  const stillInY = await query(`select activity_id from training.activity_participants where athlete_id=$1 and activity_id=$2`, [a2, activityY.activityId]);
+  assert.equal(stillInY.rowCount, 1, "a2 must still be exactly where they were before the rejected merge — never partially reparented");
+});
+
+test("G10. a day-level GROUP event never creates or links a training.activity for any participant", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("g10");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-10", scopeLevel: "day",
+      participants: [
+        { athleteId: a1, timezone: "UTC", values: [distanceValue(1)] },
+        { athleteId: a2, timezone: "UTC", values: [distanceValue(1)] },
+      ],
+    },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  assert.equal(res.body.activityId, null);
+  const links = await query(`select count(*)::int as n from training.activity_metric_event_links where metric_event_id=$1`, [res.body.eventId]);
+  assert.equal(links.rows[0].n, 0);
+});
+
+// ------------------------------------------------------------
+// Section 4 — authorization and atomicity
+// ------------------------------------------------------------
+
+test("A1. a retry after the account's club role is genuinely revoked is rejected, never silently replayed with a stale activityId", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachId, coachCookie } = await makeClubCoach("a1");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const requestKey = `k-${uid()}`;
+  const body = {
+    requestKey, occurredDate: "2026-10-11", scopeLevel: "session",
+    participants: [{ athleteId, timezone: "UTC", values: [distanceValue(1200)] }],
+  };
+  const first = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+
+  await query(`update public.user_club_roles set is_active=false where user_id=$1 and club_id=$2`, [coachId, clubId]);
+  const retry = await api("/api/training-load/metrics/events", { method: "POST", cookie: coachCookie, body });
+  assert.equal(retry.status, 403, JSON.stringify(retry.body));
+});
+
+test("A2. an activityComponentId belonging to an activity in a DIFFERENT WORKSPACE is refused with the same info-hiding rejection, zero partial writes", async () => {
+  await ensureSystemDefinition();
+  const { clubId: clubA, coachCookie: coachCookieA } = await makeClubCoach("a2a");
+  const { clubId: clubB } = await makeClubCoach("a2b");
+  const { athleteId } = await makeAthleteInClub(clubA);
+  const targetActivity = await query(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state)
+     values ('training_session','Target','2026-10-12','UTC','club',$1,'manual','confirmed') returning id`,
+    [clubA],
+  );
+  const foreignWorkspaceActivity = await query(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state)
+     values ('training_session','Other workspace activity','2026-10-12','UTC','club',$1,'manual','confirmed') returning id`,
+    [clubB],
+  );
+  const foreignComponent = await query(
+    `insert into training.activity_components (activity_id, component_type_key, name_snapshot, origin) values ($1,'exercise','Foreign workspace component','manual') returning id`,
+    [foreignWorkspaceActivity.rows[0].id],
+  );
+
+  const before = await query(`select count(*)::int as n from training_load.metric_events`);
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookieA,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-12", scopeLevel: "session", activityId: targetActivity.rows[0].id,
+      segments: [{ label: "Segment", activityComponentId: foreignComponent.rows[0].id }],
+      participants: [{ athleteId, timezone: "UTC", values: [distanceValue(400, { segmentIndex: 0 })] }],
+    },
+  });
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  const after = await query(`select count(*)::int as n from training_load.metric_events`);
+  assert.equal(after.rows[0].n, before.rows[0].n);
+});
+
+// ------------------------------------------------------------
+// Section 5 — results and conflicts
+// ------------------------------------------------------------
+
+test("R1. queryResults never duplicates a value after a canonical merge/alias chain", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("r1");
+  const { athleteId: a1 } = await makeAthleteInClub(clubId);
+  const { athleteId: a2 } = await makeAthleteInClub(clubId);
+  const { logicalSessionId: s1 } = await makePlanSessionForAthlete(a1, { date: "2026-10-13", owner: { ownerScope: "club", ownerClubId: clubId } });
+  const { logicalSessionId: s2 } = await makePlanSessionForAthlete(a2, { date: "2026-10-13", owner: { ownerScope: "club", ownerClubId: clubId } });
+
+  // Two SEPARATE prior activities (one per athlete), then a group event
+  // that proves they're the same session -> merge (reparent) into one.
+  const materializeService = await import("../src/trainingActivityMaterialize.js");
+  async function materializeFor(athleteId, logicalSessionId) {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const r = await materializeService.materializeNaturalKeyActivity(client, {
+        logicalSessionId, externalAssignmentId: null, athleteId, localDate: "2026-10-13", timezone: "UTC", startInstant: null,
+        sessionName: "Session", ownerScope: "club", ownerIds: { clubId }, performedBy: null,
+      });
+      await client.query("commit");
+      return r;
+    } finally {
+      client.release();
+    }
+  }
+  await materializeFor(a1, s1);
+  await materializeFor(a2, s2);
+
+  const res = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-13", scopeLevel: "session",
+      participants: [
+        { athleteId: a1, timezone: "UTC", logicalSessionId: s1, values: [distanceValue(6000)] },
+        { athleteId: a2, timezone: "UTC", logicalSessionId: s2, values: [distanceValue(6200)] },
+      ],
+    },
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+
+  const results = await api(
+    `/api/training-load/metrics/results?dateFrom=2026-10-13&dateTo=2026-10-13&athleteIds=${a1},${a2}&metricDefinitionIds=${distanceDefId}`,
+    { cookie: coachCookie },
+  );
+  assert.equal(results.status, 200, JSON.stringify(results.body));
+  const forA1 = results.body.rows.filter((r) => r.athleteId === a1);
+  const forA2 = results.body.rows.filter((r) => r.athleteId === a2);
+  assert.equal(forA1.length, 1, "a1's own value must appear exactly once, never duplicated by the merge");
+  assert.equal(forA2.length, 1, "a2's own value must appear exactly once, never duplicated by the merge");
+  assert.equal(forA1[0].conflict, false);
+  assert.equal(forA2[0].conflict, false);
+});
+
+test("R2. a day-level result is never mixed into a session/activity-scoped conflict group, even for the same athlete/metric/date", async () => {
+  await ensureSystemDefinition();
+  const { clubId, coachCookie } = await makeClubCoach("r2");
+  const { athleteId } = await makeAthleteInClub(clubId);
+
+  await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-14", scopeLevel: "day",
+      participants: [{ athleteId, timezone: "UTC", values: [distanceValue(1)] }],
+    },
+  });
+  await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookie,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-14", scopeLevel: "session",
+      participants: [{ athleteId, timezone: "UTC", values: [distanceValue(2)] }],
+    },
+  });
+
+  const results = await api(
+    `/api/training-load/metrics/results?dateFrom=2026-10-14&dateTo=2026-10-14&athleteIds=${athleteId}&metricDefinitionIds=${distanceDefId}`,
+    { cookie: coachCookie },
+  );
+  assert.equal(results.status, 200, JSON.stringify(results.body));
+  assert.equal(results.body.rows.length, 2);
+  const dayRow = results.body.rows.find((r) => r.scope === "day");
+  const sessionRow = results.body.rows.find((r) => r.scope === "session");
+  assert.ok(dayRow && sessionRow, "both a day and a session row must be present");
+  assert.equal(dayRow.conflict, false, "the day-level value must never be flagged as conflicting with the unrelated session-level value");
+  assert.equal(sessionRow.conflict, false);
+  assert.equal(dayRow.activityId, null, "a day-level value never carries an activityId");
+  assert.ok(sessionRow.activityId, "a session-level value must carry its own activityId");
+});
+
+test("R3. queryResults never leaks another workspace's activityId/componentId for a shared athlete", async () => {
+  await ensureSystemDefinition();
+  const { clubId: clubA, coachCookie: coachCookieA } = await makeClubCoach("r3a");
+  const { clubId: clubB, coachCookie: coachCookieB } = await makeClubCoach("r3b");
+  const athleteUserId = await makeUser({ email: `r3-shared-${uid()}@test.local`, roleHint: "athlete" });
+  const athleteId = await makeAthlete({ userId: athleteUserId, timezone: "UTC" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubA]);
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubB]);
+
+  const resA = await api("/api/training-load/metrics/events", {
+    method: "POST", cookie: coachCookieA,
+    body: {
+      requestKey: `k-${uid()}`, occurredDate: "2026-10-15", scopeLevel: "session",
+      participants: [{ athleteId, timezone: "UTC", values: [distanceValue(1700)] }],
+    },
+  });
+  assert.equal(resA.status, 201, JSON.stringify(resA.body));
+
+  const resultsFromB = await api(
+    `/api/training-load/metrics/results?dateFrom=2026-10-15&dateTo=2026-10-15&athleteIds=${athleteId}&metricDefinitionIds=${distanceDefId}`,
+    { cookie: coachCookieB },
+  );
+  assert.equal(resultsFromB.status, 200, JSON.stringify(resultsFromB.body));
+  assert.equal(resultsFromB.body.rows.length, 0, "club B must never see club A's own measurement/activity for the shared athlete");
+});
+
+test("R4. a superseded correction is never shown, even once the occasion carries an activityId", async () => {
+  await ensureSystemDefinition();
+  const measurementsService = await import("../src/trainingLoadMetricsMeasurements.js");
+  const { clubId, coachId, coachCookie } = await makeClubCoach("r4");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const scope = { type: "club", clubId, ownerContext: { ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null } };
+  const fakeReq = { user: { id: coachId }, authz: { platformRoles: [], clubRoles: [{ clubId, role: "club_admin" }], teamRoles: [], managedTeamIds: [] } };
+
+  const created = await measurementsService.createGroupEvent(fakeReq, scope, {
+    requestKey: `k-${uid()}`, occurredDate: "2026-10-16", scopeLevel: "session",
+    participants: [{ athleteId, timezone: "UTC", values: [distanceValue(2800)] }],
+  });
+  assert.ok(created.activityId);
+  const occasionId = created.participants[0].occasionIds[0];
+
+  const correction = await measurementsService.correctManualOccasion(fakeReq, scope, {
+    requestKey: `k-${uid()}`, targetOccasionId: occasionId,
+    values: [distanceValue(2900)],
+  });
+  assert.equal(correction.error, undefined, JSON.stringify(correction));
+
+  const results = await api(
+    `/api/training-load/metrics/results?dateFrom=2026-10-16&dateTo=2026-10-16&athleteIds=${athleteId}&metricDefinitionIds=${distanceDefId}`,
+    { cookie: coachCookie },
+  );
+  assert.equal(results.status, 200, JSON.stringify(results.body));
+  assert.equal(results.body.rows.length, 1, "only the CURRENT, corrected value must show — never the superseded original");
+  assert.equal(Number(results.body.rows[0].value), 2900);
+  assert.equal(results.body.rows[0].activityId, created.activityId);
+  assert.equal(results.body.rows[0].conflict, false);
 });

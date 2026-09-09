@@ -360,7 +360,7 @@ async function claimWriteRequest(client, { requestKey, requestedBy, operationKin
 // definition, or an invalid value anywhere rejects the entire request
 // with zero partial writes.
 // -----------------------------------------------------------------------
-export async function createGroupEvent(req, scope, body, { onLocked, onActivityNaturalKeyLocked } = {}) {
+export async function createGroupEvent(req, scope, body, { onLocked, onActivityNaturalKeyLocked, onActivityGroupFuzzyLocked } = {}) {
   const requestKey = body?.requestKey;
   if (!requestKey || typeof requestKey !== "string") return { error: "requestKey is required.", status: 400 };
   if (!Array.isArray(body?.participants) || body.participants.length === 0) return { error: "At least one participant is required.", status: 400 };
@@ -511,7 +511,7 @@ export async function createGroupEvent(req, scope, body, { onLocked, onActivityN
           logicalSessionId: p.link.logicalSessionId, externalAssignmentId: p.link.externalAssignmentId, trainingLoadEnabled: p.link.trainingLoadEnabled,
         })),
         performedBy: req.user.id,
-      }, { onNaturalKeyLocked: onActivityNaturalKeyLocked });
+      }, { onNaturalKeyLocked: onActivityNaturalKeyLocked, onGroupFuzzyLocked: onActivityGroupFuzzyLocked });
     }
 
     const createdParticipants = [];

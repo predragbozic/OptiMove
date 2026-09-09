@@ -5,17 +5,26 @@
 // see createGroupEvent's own branch.
 //
 // Maximally reuses the existing Training Activity model rather than adding
-// new schema: training.materialize_activity_group_from_metric_event() (the
-// real, already-deployed training_activity_v4 DB function) for the pure
-// standalone GROUP case; materializeNaturalKeyActivity (this branch's own
+// new schema: materializeNaturalKeyActivity (this branch's own
 // generalization of the already-deployed planned-RPE natural-key path,
 // trainingActivityMaterialize.js) for a per-participant logicalSessionId/
 // externalAssignmentId claim; findActivityCandidates/scoreCandidate (the
 // already-deployed fuzzy-match scoring used by the solo materialize route)
-// for a solo event with no authoritative identity; training.
-// reparent_activity_participant() for the deterministic "prove two
-// separately-identified participants belong to the same group session ->
-// merge into one activity" case (section 4). No new migration.
+// for both a solo event AND a standalone group event with no authoritative
+// identity (materializeGroupFuzzyActivity below aggregates the SAME
+// per-athlete scoring across every participant — see its own header);
+// training.reparent_activity_participant() for the deterministic "prove
+// two separately-identified participants belong to the same group session
+// -> merge into one activity" case (section 4), with a proactive check
+// (assertNoConflictingThirdActivityLink) turning its own raw conflict
+// exception into a controlled, info-hiding 409 (section 2). The real,
+// already-deployed training.materialize_activity_group_from_metric_event()
+// DB function is NOT used by this automatic flow — it has no candidate-
+// search concept (see materializeGroupFuzzyActivity's own header) — but
+// stays in place, unmodified, for the separate manual
+// POST /materialize/metric-event/:eventId route
+// (trainingActivityMaterialize.js's materializeGroupFromMetricEvent). No
+// new migration.
 import {
   findActivityCandidates, materializeNaturalKeyActivity,
 } from "./trainingActivityMaterialize.js";
@@ -153,17 +162,13 @@ async function resolveOrCreateComponentLink(client, { activityId, segment, perfo
   return targetComponentId;
 }
 
-// Solo (single-participant), no-authoritative-identity path — the ONLY
-// place this module performs fuzzy candidate matching (multi-athlete group
-// fuzzy-matching has no existing single-call primitive to reuse; a
-// standalone GROUP event instead always goes through
-// materialize_activity_group_from_metric_event below — see this module's
-// own header and the delivery notes for why that is a deliberate,
-// documented scope boundary for this phase). Mirrors
+// Solo (single-participant), no-authoritative-identity path — mirrors
 // materializeActivityParticipant's own decision table exactly: 0
 // candidates -> new confirmed; 1 strong candidate -> auto-matched; anything
 // else -> a NEW provisional activity plus one suggestion per candidate,
-// never an automatic merge of an uncertain match.
+// never an automatic merge of an uncertain match. The multi-participant
+// generalization of this same policy is materializeGroupFuzzyActivity,
+// below.
 async function materializeSoloFuzzyActivity(client, { ownerScope, ownerIds, athleteId, localDate, timezone, startInstant, eventName, activityTypeKey, performedBy }) {
   const { candidates } = await findActivityCandidates(client, {
     ownerScope, ownerIds, athleteId, localDate, startInstant, endInstant: null, durationMinutes: null,
@@ -210,6 +215,150 @@ async function materializeSoloFuzzyActivity(client, { ownerScope, ownerIds, athl
 }
 
 // -----------------------------------------------------------------------
+// Group (multi-participant), no-authoritative-identity path — the SAME
+// candidate scoring findActivityCandidates/scoreCandidate already use for
+// the solo path (MATCH_POLICY_VERSION, the same time/duration/name/type
+// signal breakdown), run ONCE per participant against that participant's
+// own athlete/date, then AGGREGATED across the whole group. This is
+// deliberately not a new/parallel policy — no new scoring dimension is
+// invented — but "participant overlap" (rule 1's own explicit signal) IS
+// real here: when the group's candidate search converges on exactly ONE
+// activity id and every participant who found any candidate found ONLY
+// that same strong one, that convergence across independent per-athlete
+// searches (never a single-participant coincidence) IS the overlap
+// signal — captured structurally by the consistency check below, not by
+// inventing a new weighted score.
+//
+// Decision table (mirrors materializeSoloFuzzyActivity's own table,
+// generalized to N participants):
+//   0 distinct candidate activities across the WHOLE group -> new, confirmed
+//   1 distinct candidate activity, AND every participant's own candidate
+//     set is either empty or EXACTLY that one activity scored strong
+//     -> auto-matched (reuse the existing activity)
+//   otherwise (2+ distinct candidate activities, or any participant has an
+//     ambiguous/weak candidate set) -> ONE new provisional activity, every
+//     participant added to it, and — for each participant that actually
+//     has candidates — one activity_match_suggestions row per candidate,
+//     using that participant's own activity_participants row as
+//     source_participant_id. This is the SAME per-participant suggestion
+//     shape the solo path and materializeActivityParticipant's own
+//     ambiguous_new branch already use; a "group suggestion" is simply
+//     every member of the group who has one recorded independently, all
+//     sharing the SAME provisional activity_id — resolved one at a time
+//     through the EXISTING accept/dismiss flow (already proven, by tests
+//     55/56/57 in training-activity.test.mjs, to handle a shared activity
+//     with several independent participants' suggestion groups without
+//     cross-resolving each other).
+//
+// Concurrency: advisory-locked on the group's own identity (owner scope +
+// date + the FULL sorted set of athlete ids) BEFORE any candidate search —
+// same convention as the solo path's own per-athlete lock, generalized so
+// two concurrent imports describing the SAME real group session (same
+// participants, same date, same owner) can never independently decide
+// "no candidates -> new activity" and each create their own duplicate.
+async function materializeGroupFuzzyActivity(client, { ownerScope, ownerIds, localDate, startInstant, eventName, activityTypeKey, participants, performedBy }, { onLocked } = {}) {
+  const sortedAthleteIds = [...new Set(participants.map((p) => p.athleteId))].sort();
+  const groupKey = `activity-group-fuzzy:${ownerScope}:${ownerIds?.userId || ""}:${ownerIds?.clubId || ""}:${ownerIds?.teamId || ""}:${localDate}:${sortedAthleteIds.join(",")}`;
+  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 8))`, [groupKey]);
+  // Test-only hook (default no-op), same convention as every other
+  // deterministic-lock-proof point in this codebase — called the instant
+  // this advisory lock is genuinely held, so a test can pause here and
+  // prove a second, concurrent import describing the SAME real group
+  // (same athletes/date/owner) is really lock-waiting before releasing
+  // the first.
+  if (onLocked) await onLocked(client);
+
+  const perParticipant = [];
+  for (const p of participants) {
+    const { candidates } = await findActivityCandidates(client, {
+      ownerScope, ownerIds, athleteId: p.athleteId, localDate, startInstant, endInstant: null, durationMinutes: null,
+      name: eventName, activityTypeKey, planLogicalSessionId: null, externalAssignmentId: null,
+    });
+    perParticipant.push({ athleteId: p.athleteId, candidates });
+  }
+
+  const allCandidateActivityIds = new Set();
+  for (const pp of perParticipant) for (const c of pp.candidates) allCandidateActivityIds.add(c.activity_id);
+
+  if (allCandidateActivityIds.size === 0) {
+    const activityInsert = await client.query(
+      `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_user_id, owner_club_id, owner_team_id, origin, lifecycle_state, created_by_user_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'source_import','confirmed',$10) returning id`,
+      [activityTypeKey || null, eventName || null, localDate, startInstant || null, participants[0].timezone, ownerScope, ownerIds?.userId || null, ownerIds?.clubId || null, ownerIds?.teamId || null, performedBy || null],
+    );
+    return { activityId: activityInsert.rows[0].id, suggestions: [] };
+  }
+
+  if (allCandidateActivityIds.size === 1) {
+    const [onlyId] = allCandidateActivityIds;
+    const allConsistentAndStrong = perParticipant.every(
+      (pp) => pp.candidates.length === 0 || (pp.candidates.length === 1 && pp.candidates[0].activity_id === onlyId && pp.candidates[0].strong),
+    );
+    if (allConsistentAndStrong) {
+      await client.query(`select 1 from training.activities where id=$1 for update`, [onlyId]);
+      return { activityId: onlyId, suggestions: [] };
+    }
+  }
+
+  // Ambiguous — never an automatic merge of an uncertain match.
+  const activityInsert = await client.query(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_user_id, owner_club_id, owner_team_id, origin, lifecycle_state, created_by_user_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'source_import','provisional',$10) returning id`,
+    [activityTypeKey || null, eventName || null, localDate, startInstant || null, participants[0].timezone, ownerScope, ownerIds?.userId || null, ownerIds?.clubId || null, ownerIds?.teamId || null, performedBy || null],
+  );
+  const activityId = activityInsert.rows[0].id;
+  const suggestions = [];
+  for (const p of participants) {
+    const participantInsert = await client.query(
+      `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status)
+       values ($1,$2,$3,$4,'participated') returning id`,
+      [activityId, p.athleteId, localDate, p.timezone],
+    );
+    const sourceParticipantId = participantInsert.rows[0].id;
+    const pp = perParticipant.find((x) => x.athleteId === p.athleteId);
+    for (const c of pp.candidates) {
+      const sugInsert = await client.query(
+        `insert into training.activity_match_suggestions (activity_id, source_participant_id, candidate_activity_id, candidate_participant_id, confidence, score_breakdown, policy_version, reason)
+         values ($1,$2,$3,$4,$5,$6,$7,'candidate recorded for human review — see score_breakdown for why it did not auto-confirm (group event)') returning id`,
+        [activityId, sourceParticipantId, c.activity_id, c.participant_id, c.score, JSON.stringify(c.breakdown), c.policyVersion],
+      );
+      suggestions.push({ suggestionId: sugInsert.rows[0].id, candidateActivityId: c.activity_id, athleteId: p.athleteId, confidence: c.score });
+    }
+  }
+  return { activityId, suggestions };
+}
+
+// Section 2 (correction round): reparent_activity_participant() itself
+// raises a raw P0001 (with the conflicting event's own UUID embedded in
+// the message) when the participant being moved has a CONFIRMED metric-
+// participant link whose event is not (yet) linked to the target activity
+// — i.e. that participant is ALSO tied to a genuinely THIRD, unrelated
+// activity this merge never asked to touch. That is a real, expected
+// business conflict, not a bug — but it must reach the API as a
+// controlled, info-hiding 409, never the DB's own raw message (which both
+// leaks a UUID and isn't a stable contract). Checked PROACTIVELY, before
+// ever calling reparent, so the failure path never depends on parsing a
+// P0001 message string; reparent's own raise stays as an unconditional
+// last-resort backstop for any path that reaches it some other way.
+async function assertNoConflictingThirdActivityLink(client, { activityParticipantId, targetActivityId }) {
+  const rows = await client.query(
+    `select mep.event_id from training.activity_participant_metric_participant_links mpl
+     join training_load.metric_event_participants mep on mep.id = mpl.metric_event_participant_id
+     where mpl.activity_participant_id = $1 and mpl.link_status = 'confirmed'`,
+    [activityParticipantId],
+  );
+  for (const row of rows.rows) {
+    const linked = await client.query(
+      `select 1 from training.activity_metric_event_links where activity_id=$1 and metric_event_id=$2 and link_status='confirmed'`,
+      [targetActivityId, row.event_id],
+    );
+    if (!linked.rowCount) {
+      throw httpError(409, "This participant is already linked to a different, unrelated activity through an existing metric event — refusing to merge automatically.", "activityLinkConflict");
+    }
+  }
+}
+
+// -----------------------------------------------------------------------
 // Main entry point — called by createGroupEvent (trainingLoadMetricsMeasurements.js)
 // once, right after the event/segments/participants rows are inserted and
 // BEFORE any occasion/value row is written (a component-scope value insert
@@ -231,7 +380,7 @@ async function materializeSoloFuzzyActivity(client, { ownerScope, ownerIds, athl
 export async function linkMetricEventToActivity(client, {
   scope, eventId, occurredDate, occurredInstant, eventName, activityTypeKey,
   explicitActivityId, segments, participants, performedBy,
-}, { onNaturalKeyLocked } = {}) {
+}, { onNaturalKeyLocked, onGroupFuzzyLocked } = {}) {
   const ownerScope = scope.ownerContext.ownerScope;
   const ownerIds = { userId: scope.ownerContext.ownerUserId, clubId: scope.ownerContext.ownerClubId, teamId: scope.ownerContext.ownerTeamId };
 
@@ -291,6 +440,7 @@ export async function linkMetricEventToActivity(client, {
       for (const otherId of distinctIds.slice(1)) {
         for (const nr of naturalResults) {
           if (nr.activityId === otherId) {
+            await assertNoConflictingThirdActivityLink(client, { activityParticipantId: nr.participantId, targetActivityId: activityId });
             await client.query(`select training.reparent_activity_participant($1,$2,$3,$4,'none',null)`, [nr.participantId, activityId, performedBy, "merged via Training Activity 2B group metric event linking — proven same session"]);
           }
         }
@@ -308,12 +458,26 @@ export async function linkMetricEventToActivity(client, {
       linkStatus = suggestions.length ? "suggested" : "confirmed";
       linkMethod = "automatic";
     } else {
-      const r = await client.query(
-        `select training.materialize_activity_group_from_metric_event($1,$2,$3,$4) as id`,
-        [eventId, activityTypeKey || null, eventName || null, performedBy],
-      );
-      activityId = r.rows[0].id;
-      linkStatus = "confirmed";
+      // Correction round: a standalone GROUP event (no explicit activityId,
+      // no participant has an authoritative logicalSessionId/
+      // externalAssignmentId) used to call training.materialize_activity_
+      // group_from_metric_event() unconditionally — that DB function has no
+      // candidate-search concept at all (it only resolves via an EXISTING
+      // confirmed link on this exact event id, or else always creates a
+      // brand-new activity), so it could silently duplicate an
+      // already-existing, genuinely-the-same real-world session recorded
+      // through a DIFFERENT metric event (e.g. a future GPEXE group
+      // import). Replaced with materializeGroupFuzzyActivity, which reuses
+      // the SAME per-athlete candidate scoring the solo path already uses,
+      // aggregated across the whole group — see that function's own header
+      // for the full decision table.
+      const result = await materializeGroupFuzzyActivity(client, {
+        ownerScope, ownerIds, localDate: occurredDate, startInstant: occurredInstant,
+        eventName, activityTypeKey, participants, performedBy,
+      }, { onLocked: onGroupFuzzyLocked });
+      activityId = result.activityId;
+      suggestions = result.suggestions;
+      linkStatus = suggestions.length ? "suggested" : "confirmed";
       linkMethod = "automatic";
     }
   }
