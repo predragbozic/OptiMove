@@ -55,6 +55,21 @@ after(async () => {
     ["training_load.session_feedback", () => cleanupAthleteIds.size && query(
       `delete from training_load.session_feedback where athlete_id = any($1::uuid[])`, [[...cleanupAthleteIds]],
     )],
+    // Training Activity Integration 2A: a real, successful RPE submit in
+    // this file now also materializes training.activities/
+    // activity_participants/activity_participant_session_links (see
+    // materializePlannedRpeActivityForSubmit) - deleted here, in
+    // dependency order (links -> participants -> activities), BEFORE the
+    // athletes/clubs/users those rows reference.
+    ["training.activity_participant_session_links", () => cleanupAthleteIds.size && query(
+      `delete from training.activity_participant_session_links where athlete_id = any($1::uuid[])`, [[...cleanupAthleteIds]],
+    )],
+    ["training.activity_participants", () => cleanupAthleteIds.size && query(
+      `delete from training.activity_participants where athlete_id = any($1::uuid[])`, [[...cleanupAthleteIds]],
+    )],
+    ["training.activities", () => cleanupClubIds.size && query(
+      `delete from training.activities where owner_club_id = any($1::uuid[])`, [[...cleanupClubIds]],
+    )],
     // Each test's own club-scoped planned-RPE setting (see
     // enablePlannedRpeForClub below) - must be removed BEFORE the club
     // itself (owner_club_id is an ON DELETE RESTRICT foreign key), and
@@ -185,10 +200,16 @@ async function makeRealDay(planId, date, dayOrder) {
   );
   return dayResult.rows[0].id;
 }
-async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0) {
+// Explicit rpe_enabled=true, training_load_enabled=true - this file's own
+// tests exercise real RPE submissions, so every fixture session here must
+// satisfy the DB's own plan_sessions_rpe_requires_training_load CHECK
+// (Training Activity Integration 2A, migrations_v2/202609080900); relying
+// on either column's own DEFAULT is no longer correct now that
+// rpe_enabled defaults to false (a genuinely new, untracked session).
+async function makeRealSession(dayId, name, amPm = null, sessionOrder = 0, sessionTime = null) {
   const sessionResult = await query(
-    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order) values ($1,$2,$3,$4) returning id`,
-    [dayId, name, amPm, sessionOrder],
+    `insert into plans.plan_sessions (plan_day_id, name, am_pm, session_order, rpe_enabled, training_load_enabled, session_time) values ($1,$2,$3,$4,true,true,$5) returning id`,
+    [dayId, name, amPm, sessionOrder, sessionTime],
   );
   return sessionResult.rows[0].id;
 }
@@ -317,6 +338,71 @@ test("a real Builder Edit -> Save and finish round trip preserves an already-sub
   const addedSessionId = await makeRealSession(newOtherDayId, "Newly added session", null, 2);
   const addedSubmit = await api(`/api/training-load/sessions/${addedSessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 3, durationMinutes: 15 } });
   assert.equal(addedSubmit.status, 201, "a genuinely new session must never be blocked or pre-rated because of an unrelated logical_session_id");
+});
+
+// Training Activity Integration 2A hardening: session_time was missing
+// from copyDaySessions() (the function this exact edit-draft round trip
+// goes through, both legs - POST /plans/:planId/edit's own copy INTO the
+// draft, and applyEditDraft's own copy back OUT to the live plan) -
+// silently dropping a session's own specific clock time on every real
+// edit round trip. Verifies both halves of the fix at once: the time
+// itself survives (same logical_session_id, same session_time, on the
+// RECREATED row), and a fresh RPE submit against that recreated row
+// materializes a training.activities row whose own started_at is
+// computed from the SURVIVING time - not null, not the athlete's local
+// midnight.
+test("a real Builder Edit -> Save and finish round trip preserves a session's own session_time - and a fresh RPE submit against the recreated row materializes training.activities.started_at from it", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+
+  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  await setPlanOwnershipDirect(livePlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
+  const todayDayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
+  const sessionId = await makeRealSession(todayDayId, "Timed session", "AM", 0, "07:15");
+  const originalLogicalId = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [sessionId])).rows[0].logical_session_id;
+
+  const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(editRes.status, 200, `expected the edit-draft to open, got ${editRes.status}: ${JSON.stringify(editRes.body)}`);
+  const draftPlanId = editRes.body.plan.id;
+  cleanupPlanIds.add(draftPlanId);
+
+  const draftSessionRow = (
+    await query(`select ps.id, ps.session_time, ps.logical_session_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1`, [draftPlanId])
+  ).rows[0];
+  assert.equal(String(draftSessionRow.session_time).slice(0, 5), "07:15", "the live -> draft copy (POST /plans/:planId/edit) must carry session_time forward");
+  assert.equal(draftSessionRow.logical_session_id, originalLogicalId);
+
+  const submitDraftRes = await api(`/api/builder/plans/${draftPlanId}/submit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(submitDraftRes.status, 200, `expected the edit-draft to apply back onto the live plan, got ${submitDraftRes.status}: ${JSON.stringify(submitDraftRes.body)}`);
+
+  const recreatedRow = (
+    await query(`select ps.id, ps.session_time, ps.logical_session_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1`, [livePlanId])
+  ).rows[0];
+  assert.notEqual(recreatedRow.id, sessionId, "the live row was really deleted and recreated (applyEditDraft's own delete-and-recreate)");
+  assert.equal(recreatedRow.logical_session_id, originalLogicalId, "the SAME logical identity survives the full round trip");
+  assert.equal(String(recreatedRow.session_time).slice(0, 5), "07:15", "the draft -> live copy (applyEditDraft) must carry session_time forward too - not just the live -> draft leg");
+
+  const submit = await api(`/api/training-load/sessions/${recreatedRow.id}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe: 6, durationMinutes: 50 } });
+  assert.equal(submit.status, 201, `expected 201, got ${submit.status}: ${JSON.stringify(submit.body)}`);
+
+  const activity = (
+    await query(
+      `select a.started_at, a.occurred_local_date
+       from training.activity_participant_session_links l
+       join training.activity_participants p on p.id = l.activity_participant_id
+       join training.activities a on a.id = p.activity_id
+       where l.logical_session_id = $1 and l.link_status = 'confirmed'`,
+      [originalLogicalId],
+    )
+  ).rows[0];
+  assert.ok(activity, "the materialized activity must be reachable through the same logical_session_id");
+  assert.equal(String(activity.occurred_local_date).slice(0, 10), TODAY);
+  // The athlete's own device_timezone is 'UTC' (makeAthleteInClub) - the
+  // submit route's own start_instant computation is (date + session_time)
+  // at time zone device_timezone, so started_at must land at exactly
+  // 07:15 UTC, never null and never the athlete's local midnight.
+  assert.equal(new Date(activity.started_at).toISOString(), `${TODAY}T07:15:00.000Z`, "started_at must be computed from the SURVIVING session_time, not left null");
 });
 
 // ------------------------------------------------------------
@@ -500,4 +586,136 @@ test("a batch-sync against an ALREADY-PUBLISHED sibling plan must never touch it
 
   const retryDifferent = await api(`/api/training-load/sessions/${siblingSessionId}/rpe`, { method: "POST", cookie: athleteB.cookie, body: { rpe: 9, durationMinutes: 90 } });
   assert.equal(retryDifferent.status, 409, "a genuinely different retry must still be rejected - never a fresh 201 against a re-opened session");
+});
+
+// ------------------------------------------------------------
+// Correction round 3, item 1: the draft-only gate's own atomicity - a
+// Training Load settings/session PATCH racing a real "Save and finish"
+// (POST /plans/:draftId/submit -> applyEditDraft()) on the SAME open
+// edit-draft, deterministically proven both ways via a real held Postgres
+// lock (never a sleep/timing guess). A raw client (`lockClient`) BEGINs
+// and takes `select ... for update` on the draft's own plans.plans row -
+// the exact lock applyEditDraft()'s own freshDraftResult SELECT (and
+// lockDraftPlanOrReject, for a plan-level/session PATCH) takes as ITS
+// first statement - so a concurrent real HTTP request against that SAME
+// row provably blocks behind it. waitUntilBlocked polls pg_stat_activity
+// for any OTHER backend (excluding lockClient's own pid and the monitor's
+// own pid) sitting in wait_event_type='Lock', the same technique already
+// used elsewhere in this suite for deterministic lock-order proofs.
+// ------------------------------------------------------------
+
+async function waitUntilBlocked(monitorClient, excludePids, timeoutMs = 3000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const r = await monitorClient.query(
+      `select pid from pg_stat_activity where wait_event_type = 'Lock' and pid <> all($1::int[])`,
+      [excludePids],
+    );
+    if (r.rowCount > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  return false;
+}
+
+test("edit-draft atomicity: a Training Load settings PATCH that wins the draft row's lock first commits, and a concurrent real Save-and-finish (Submit -> applyEditDraft) then waits and publishes that SAME new value onto the live plan", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  await setPlanOwnershipDirect(livePlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
+  const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
+  await makeRealSession(dayId, "Morning session", "AM", 0);
+
+  const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(editRes.status, 200, JSON.stringify(editRes.body));
+  const draftPlanId = editRes.body.plan.id;
+  cleanupPlanIds.add(draftPlanId);
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query("select id from plans.plans where id = $1 for update", [draftPlanId]);
+
+    const submitPromise = api(`/api/builder/plans/${draftPlanId}/submit`, { method: "POST", cookie: coach.cookie });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "Save-and-finish must be directly observed Lock-waiting behind the settings PATCH's own held lock on the draft row");
+
+    // The lock-holder performs the EXACT write PATCH /training-load-
+    // settings would run against this SAME draft row, under the SAME
+    // held transaction/lock - a real concurrent HTTP PATCH can't be used
+    // for this side (lockClient itself stands in for "the PATCH got
+    // there first" - the whole point being to hold that row's lock for a
+    // controllable, observable duration).
+    await lockClient.query(
+      "update plans.plans set track_training_load_default = true, request_rpe_default = true, updated_at = now() where id = $1",
+      [draftPlanId],
+    );
+    await lockClient.query("commit");
+
+    const submitRes = await submitPromise;
+    assert.equal(submitRes.status, 200, `expected Save-and-finish to succeed once unblocked, got ${submitRes.status}: ${JSON.stringify(submitRes.body)}`);
+    assert.equal(submitRes.body.plan.id, livePlanId, "applyEditDraft() re-activates the ORIGINAL live plan id");
+    assert.equal(submitRes.body.plan.trackTrainingLoadDefault, true, "the PUBLISHED live plan must carry the setting that committed first on the draft, not a stale pre-lock value");
+    assert.equal(submitRes.body.plan.requestRpeDefault, true);
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+
+  const liveRow = (await query(`select track_training_load_default, request_rpe_default, status from plans.plans where id = $1`, [livePlanId])).rows[0];
+  assert.equal(liveRow.status, "active");
+  assert.equal(liveRow.track_training_load_default, true);
+  assert.equal(liveRow.request_rpe_default, true);
+});
+
+test("edit-draft atomicity: a real Save-and-finish that consumes the draft first (applyEditDraft's own delete) leaves a concurrent Training Load settings PATCH waiting, then rejected 409 - the now-active live plan is never mutated by it", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  await setPlanOwnershipDirect(livePlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
+  const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
+  await makeRealSession(dayId, "Morning session", "AM", 0);
+
+  const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(editRes.status, 200, JSON.stringify(editRes.body));
+  const draftPlanId = editRes.body.plan.id;
+  cleanupPlanIds.add(draftPlanId);
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query("select id from plans.plans where id = $1 for update", [draftPlanId]);
+
+    const patchPromise = api(`/api/builder/plans/${draftPlanId}/training-load-settings`, { method: "PATCH", cookie: coach.cookie, body: { trackTrainingLoadDefault: true, requestRpeDefault: true } });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "the settings PATCH must be directly observed Lock-waiting behind Save-and-finish's own held lock on the draft row");
+
+    // Simulates applyEditDraft()'s own final effect on the draft row
+    // (real applyEditDraft() also copies content onto the live plan and
+    // flips its status inside the SAME transaction - irrelevant to what
+    // this test proves, which is specifically what happens to a
+    // concurrent PATCH once the draft row it was about to lock is gone).
+    await lockClient.query("update plans.plans set status = 'active', updated_at = now() where id = $1", [livePlanId]);
+    await lockClient.query("delete from plans.plans where id = $1", [draftPlanId]);
+    await lockClient.query("commit");
+
+    const patchRes = await patchPromise;
+    assert.equal(patchRes.status, 409, `expected 409 once the draft is already consumed, got ${patchRes.status}: ${JSON.stringify(patchRes.body)}`);
+    assert.equal(patchRes.body.error, "notDraft");
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+
+  const liveRow = (await query(`select track_training_load_default, request_rpe_default from plans.plans where id = $1`, [livePlanId]))
+    .rows[0];
+  assert.equal(liveRow.track_training_load_default, false, "the rejected PATCH must never have reached the now-active live plan");
+  assert.equal(liveRow.request_rpe_default, false);
+  const draftGone = await query(`select 1 from plans.plans where id = $1`, [draftPlanId]);
+  assert.equal(draftGone.rowCount, 0, "the draft row is really gone, exactly as a real Save-and-finish leaves it");
 });

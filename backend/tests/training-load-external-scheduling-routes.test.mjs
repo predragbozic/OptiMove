@@ -34,6 +34,22 @@ const MIGRATIONS = [
   // query, even for a request/fixture that only ever touches EXTERNAL
   // assignments - the query itself still runs.
   ["202609040900_training_load_v9_planned_rpe_workspace_toggle.sql"],
+  // Training Activity Integration 2A: GET /weekly's own planned-session
+  // query now unconditionally reads ps.training_load_enabled, and a
+  // successful external RPE submit now unconditionally calls
+  // training.materialize_activity_group_from_external_occurrence (see
+  // POST /external-assignments/:assignmentId/rpe in routes/
+  // trainingLoad.js) - both are real, hard runtime dependencies now, for
+  // a fixture that only ever exercises EXTERNAL assignments too.
+  ["202609041400_training_load_v10_metrics_catalog.sql"],
+  ["202609041500_training_load_v11_metrics_provenance.sql"],
+  ["202609041600_training_load_v12_metrics_events.sql"],
+  ["202609041700_training_load_v13_metrics_measurements.sql"],
+  ["202609071000_training_activity_v1_core_tables.sql"],
+  ["202609071100_training_activity_v2_components_links.sql"],
+  ["202609071200_training_activity_v3_metrics_core_extensions.sql"],
+  ["202609071300_training_activity_v4_canonical_functions.sql"],
+  ["202609080900_training_load_v14_session_tracking_and_rpe_defaults.sql"],
 ].map(([name]) => ({ name, path: path.resolve(__dirname, `../../migrations_v2/${name}`) }));
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");

@@ -20,6 +20,7 @@ import {
   renderBuilderAddBlockCard,
   renderBuilderBlock,
   renderBuilderStructureModal,
+  renderBuilderTrainingLoadSettings,
   renderImportBlockIconButton,
 } from "./builder-structure.js";
 import { els } from "./dom.js";
@@ -449,6 +450,7 @@ function renderBuilderInner() {
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : ""}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type === "cross-plan-block" ? "block" : state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
+      ${isWeekly ? renderBuilderTrainingLoadSettings(draft) : ""}
       <div class="builder-layout">
         <section class="panel builder-outline">
           <div class="section-heading">

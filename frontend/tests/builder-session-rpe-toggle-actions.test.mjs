@@ -37,7 +37,11 @@ function makeDraft(session) {
   return {
     plan: { id: "plan-1", status: "active" },
     batch: null,
-    blocks: [{ id: "block-1", index: 1, name: "", date: "", note: "", sessions: [{ id: "session-1", amPm: "AM", bta: "T", time: "", rpeEnabled: true, nodes: [], ...session }] }],
+    // trackingEnabled: true by default - the RPE toggle handler is now a
+    // no-op unless the session is tracked (Training Activity Integration
+    // 2A - see builder-session-tracking-toggle-actions.test.mjs for that
+    // control's own dedicated tests).
+    blocks: [{ id: "block-1", index: 1, name: "", date: "", note: "", sessions: [{ id: "session-1", amPm: "AM", bta: "T", time: "", rpeEnabled: true, trackingEnabled: true, nodes: [], ...session }] }],
   };
 }
 

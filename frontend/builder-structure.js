@@ -267,20 +267,66 @@ function isInlineAddHere(session, parentId, context) {
   return context.inlineAddOpen && context.inlineAddSessionId === session.id && context.inlineAddParentId === parentId;
 }
 
-// Per-session RPE opt-out - Weekly plans only (Program/Template sessions
-// never collect RPE at all, so the control is meaningless there). A
-// discrete toggle button, not a checkbox in the autosave form - see
+// Training Activity Integration 2A: "Track this session in Training Load"
+// and "Request RPE from athletes" are two separate decisions - Weekly
+// plans only (Program/Template sessions never collect RPE or Training
+// Load data at all, so this whole control is meaningless there). Both are
+// discrete toggle buttons, not checkboxes in the autosave form - see
 // builder-actions.js's own comment on why a checkbox can't express
 // "explicitly turned off" through FormData's own omit-when-unchecked
 // behavior. Neutral styling (no large colored surface) - the accent color
 // is used only as a small dot/indicator for the ON state, matching the
-// rest of the app's own restrained use of it.
-function renderSessionRpeToggle(session) {
-  const on = session.rpeEnabled !== false;
+// rest of the app's own restrained use of it. RPE can never be requested
+// while tracking is off (same invariant the backend's own CHECK
+// constraint enforces) - the RPE button is rendered disabled, with a
+// short explanation replacing it, so the session stays visibly IN the
+// plan without looking like it silently expects a Training Load result.
+function renderSessionTrainingLoadControls(session) {
+  const trackingOn = session.trackingEnabled === true;
+  const rpeOn = trackingOn && session.rpeEnabled !== false;
   return `
-    <button type="button" class="plain-button compact-button builder-session-rpe-toggle ${on ? "is-on" : "is-off"}" data-action="builder-toggle-session-rpe" data-session-id="${escapeAttr(session.id)}" aria-pressed="${on ? "true" : "false"}" title="${on ? "RPE is being collected for this session - click to turn it off" : "RPE is turned off for this session - click to turn it back on"}">
-      <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Collect RPE
-    </button>
+    <div class="builder-session-training-load-controls">
+      <button type="button" class="plain-button compact-button builder-session-rpe-toggle builder-session-tracking-toggle ${trackingOn ? "is-on" : "is-off"}" data-action="builder-toggle-session-tracking" data-session-id="${escapeAttr(session.id)}" aria-pressed="${trackingOn ? "true" : "false"}" title="${trackingOn ? "This session is tracked in Training Load - click to turn it off" : "This session is not tracked in Training Load - click to turn it on"}">
+        <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Track this session
+      </button>
+      <button type="button" class="plain-button compact-button builder-session-rpe-toggle ${rpeOn ? "is-on" : "is-off"}" data-action="builder-toggle-session-rpe" data-session-id="${escapeAttr(session.id)}" aria-pressed="${rpeOn ? "true" : "false"}" ${trackingOn ? "" : "disabled"} title="${trackingOn ? (rpeOn ? "RPE is being collected for this session - click to turn it off" : "RPE is turned off for this session - click to turn it back on") : "Turn on tracking first to request RPE"}">
+        <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Request RPE
+      </button>
+      ${trackingOn ? "" : `<span class="builder-session-tracking-hint muted">Stays in the plan - won't automatically expect Training Load data or RPE</span>`}
+    </div>
+  `;
+}
+
+// Training Activity Integration 2A: the Weekly plan's own compact
+// "Training load" settings section - two plan-level defaults (applied
+// only to a session created AFTER they're saved, never retroactively -
+// see routes/builder.js's own POST /blocks/:blockId/sessions) plus three
+// explicit bulk actions that DO retroactively change the current draft's
+// existing sessions, each doing exactly what its own label says and
+// nothing more. Neutral panel styling, matching the rest of this app -
+// no large colored surface, the accent color only ever marks the ON dot.
+export function renderBuilderTrainingLoadSettings(draft) {
+  const trackOn = draft.plan.trackTrainingLoadDefault === true;
+  const rpeOn = trackOn && draft.plan.requestRpeDefault === true;
+  return `
+    <section class="panel builder-training-load-settings">
+      <div class="section-heading">
+        <div><p class="eyebrow">Training load</p><h3>New session defaults</h3><p class="muted">Applies only to sessions added from now on - use the actions below to change sessions already in this plan.</p></div>
+      </div>
+      <div class="builder-training-load-defaults-row">
+        <button type="button" class="plain-button compact-button builder-session-rpe-toggle ${trackOn ? "is-on" : "is-off"}" data-action="builder-toggle-plan-track-default" aria-pressed="${trackOn ? "true" : "false"}" title="Default for a new main Training session">
+          <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Track main Training sessions
+        </button>
+        <button type="button" class="plain-button compact-button builder-session-rpe-toggle ${rpeOn ? "is-on" : "is-off"}" data-action="builder-toggle-plan-rpe-default" aria-pressed="${rpeOn ? "true" : "false"}" ${trackOn ? "" : "disabled"} title="${trackOn ? "Default for a new main Training session" : "Turn on tracking above first"}">
+          <span class="builder-session-rpe-toggle-dot" aria-hidden="true"></span>Request RPE for tracked sessions
+        </button>
+      </div>
+      <div class="builder-training-load-bulk-row">
+        <button type="button" class="text-action" data-action="builder-bulk-apply-training-sessions">Apply to current Training sessions</button>
+        <button type="button" class="text-action" data-action="builder-bulk-turn-off-before-after">Turn off for Before/After sessions</button>
+        <button type="button" class="text-action" data-action="builder-bulk-turn-off-all-rpe">Turn off RPE for all sessions</button>
+      </div>
+    </section>
   `;
 }
 
@@ -307,7 +353,7 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             ${session.name ? `<strong class="builder-session-name">${escapeHtml(session.name)}</strong>` : ""}
             <span class="builder-session-badge-row"><span>${escapeHtml(context.sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span></span>
-          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them">${renderSessionEditPhaseSelects(session)}<input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${isWeekly ? renderSessionRpeToggle(session) : ""}${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div></div>
+          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them">${renderSessionEditPhaseSelects(session)}<input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${isWeekly ? renderSessionTrainingLoadControls(session) : ""}${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div></div>
           ${isInlineAddHere(session, "", context) ? renderBuilderInlineAddForm(session, "", context) : ""}
           ${renderBuilderNodeTree(session, "", selectedNodeId, context)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}

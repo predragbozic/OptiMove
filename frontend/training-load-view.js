@@ -497,19 +497,25 @@ function renderExternalGroupRowHtml(group, date, stale = false) {
 // never left looking actionable while the master switch is off but
 // LOOKING like a normal "session-level off" the coach could just
 // individually flip back on.
+// Training Activity Integration 2A: `session.status` (backend-computed,
+// GET /weekly - see routes/trainingLoad.js) is now the single source of
+// truth for the 4 non-rated states below - never re-derived here from
+// the individual booleans, so this label can never quietly disagree with
+// `actionable` (which feeds the rated/expected denominator).
 function plannedStatusLabel(session) {
   if (session.rated) return { label: formatFeedbackSummary(session.feedback), cls: "rated" };
-  if (session.rpeEnabled === false) return { label: "RPE off", cls: "off" };
   // (correction round 2) A plan whose ownership was never resolved is a
   // DIFFERENT situation from "the workspace switch is off" - the coach
   // needs to explicitly assign a workspace, not just flip the switch (see
   // renderScheduleSessionRowHtml's own "Use current workspace for RPE"
-  // control below). Checked before workspacePlannedRpeEnabled so it's
-  // never mislabeled as a plain switch-off - an unresolved plan reads
-  // workspacePlannedRpeEnabled=false too (it can never match any real
-  // settings row), but that's not the actionable reason here.
+  // control below). Checked first so it's never mislabeled as a plain
+  // switch-off - an unresolved plan reads workspacePlannedRpeEnabled=
+  // false too (it can never match any real settings row), but that's not
+  // the actionable reason here.
   if (session.ownershipUnresolved) return { label: "RPE workspace not assigned", cls: "off" };
-  if (session.workspacePlannedRpeEnabled === false) return { label: "Automatic RPE off", cls: "off" };
+  if (session.status === "not_tracked") return { label: "Not tracked", cls: "off" };
+  if (session.status === "tracked_rpe_off") return { label: "Tracked · RPE off", cls: "off" };
+  if (session.status === "workspace_off") return { label: "Workspace automatic RPE off", cls: "off" };
   return { label: "Not rated", cls: "unrated" };
 }
 
@@ -553,11 +559,19 @@ export function renderTrainingLoadTodayHtml() {
 // (data-action="training-load-open-weekly-plan"), never a separate RPE-
 // specific schedule screen. A historical (session-deleted) row has no
 // live session left to open, so it renders as a plain, non-clickable row.
-// PLANNED · RPE ON / PLANNED · RPE OFF - "OUTSIDE PLAN" (external
-// sessions) is a separate row kind added once external scheduling ships.
+// Training Activity Integration 2A: the 4 explicit states - NOT TRACKED /
+// TRACKED · RPE OFF / TRACKED · RPE ON / WORKSPACE AUTOMATIC RPE OFF -
+// driven by the SAME backend-computed `session.status` plannedStatusLabel
+// above uses, never a second, independently-derived copy of that logic.
+// "OUTSIDE PLAN" (external sessions) is a separate row kind, its own
+// badge just below.
 function renderScheduleRpeStateBadgeHtml(session) {
-  const on = session.rpeEnabled !== false;
-  return `<span class="training-load-rpe-state-badge ${on ? "is-on" : "is-off"}">PLANNED &middot; RPE ${on ? "ON" : "OFF"}</span>`;
+  const isOn = session.status === "tracked_rpe_on";
+  const label = session.status === "not_tracked" ? "NOT TRACKED"
+    : session.status === "tracked_rpe_off" ? "TRACKED &middot; RPE OFF"
+    : session.status === "workspace_off" ? "WORKSPACE AUTOMATIC RPE OFF"
+    : "TRACKED &middot; RPE ON";
+  return `<span class="training-load-rpe-state-badge ${isOn ? "is-on" : "is-off"}">${label}</span>`;
 }
 
 function renderOutsidePlanBadgeHtml() {
@@ -624,7 +638,10 @@ function renderScheduleSessionRowHtml(session, date, stale = false) {
       ` : canToggle ? `
         <div class="training-load-schedule-row-toggle">
           ${renderScheduleRpeStateBadgeHtml(session)}
-          <button type="button" class="plain-button compact-button" data-action="training-load-toggle-session-rpe" data-session-id="${escapeAttr(session.sessionId)}" data-currently-enabled="${session.rpeEnabled !== false ? "true" : "false"}" ${stale ? "disabled" : ""}>
+          <button type="button" class="plain-button compact-button" data-action="training-load-toggle-session-tracking" data-session-id="${escapeAttr(session.sessionId)}" data-currently-enabled="${session.trainingLoadEnabled === true ? "true" : "false"}" ${stale ? "disabled" : ""}>
+            ${session.trainingLoadEnabled === true ? "Turn tracking off" : "Turn tracking on"}
+          </button>
+          <button type="button" class="plain-button compact-button" data-action="training-load-toggle-session-rpe" data-session-id="${escapeAttr(session.sessionId)}" data-currently-enabled="${session.rpeEnabled !== false ? "true" : "false"}" ${stale || session.trainingLoadEnabled !== true ? "disabled" : ""} title="${session.trainingLoadEnabled === true ? "" : "Turn tracking on first"}">
             ${session.rpeEnabled !== false ? "Turn RPE off" : "Turn RPE on"}
           </button>
         </div>

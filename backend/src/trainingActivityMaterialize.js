@@ -765,4 +765,72 @@ export async function mergeActivityParticipants(scope, { sourceParticipantId, ta
   return { canonicalParticipantId: r.rows[0].id };
 }
 
+// ---------------------------------------------------------------------
+// Planned RPE -> Training Activity materialization (Training Activity
+// Integration 2A). ALWAYS transaction-aware: `client` is the CALLER's own
+// already-open, already-locked transaction (routes/trainingLoad.js's own
+// POST /sessions/:sessionId/rpe, right after its session_feedback INSERT
+// actually happened) — this function never opens, commits, or rolls back
+// a transaction of its own. A materialization failure here aborts the
+// SAME transaction as the RPE insert, so the RPE result and its
+// Training Activity link can never end up in a half-written state: both
+// commit together, or neither does. Never call this from a route that
+// manages a SEPARATE transaction, and never call it over a fresh
+// `pool.connect()` of its own.
+//
+// Deterministic natural-key identity only — no fuzzy candidate search is
+// possible or needed here, unlike materializeActivityParticipant's own
+// natural-key branch (which this mirrors): a planned session's own
+// logical_session_id either already has a CONFIRMED
+// activity_participant_session_links row (a prior submit — or a
+// concurrent one that wins the race below — already materialized this
+// exact identity; resolved through the canonical alias chain in case a
+// later merge/reparent moved it), or it doesn't (create a brand-new
+// confirmed activity + participant + link, exactly once). Serialized by
+// the SAME advisory-lock convention materializeActivityParticipant's own
+// natural-key path uses (`activity-link:<athleteId>:<naturalKey>`, salt
+// 0) — a concurrent HTTP /materialize call or a retried submit against
+// the SAME logical session can never race this into two activities.
+export async function materializePlannedRpeActivityForSubmit(client, {
+  logicalSessionId, athleteId, localDate, timezone, startInstant,
+  sessionName, ownerScope, ownerIds, performedBy,
+}) {
+  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`activity-link:${athleteId}:${logicalSessionId}`]);
+
+  const keyMatch = await client.query(
+    `select ap.id as participant_id, ap.activity_id
+     from training.activity_participant_session_links l
+     join training.activity_participants ap on ap.id = l.activity_participant_id
+     where l.link_status = 'confirmed' and ap.athlete_id = $1 and l.logical_session_id = $2
+     limit 1`,
+    [athleteId, logicalSessionId],
+  );
+  if (keyMatch.rowCount) {
+    const canonicalParticipant = await client.query(`select training.resolve_canonical_participant_id($1) as id`, [keyMatch.rows[0].participant_id]);
+    const canonicalParticipantId = canonicalParticipant.rows[0].id;
+    const canonicalParticipantRow = await client.query(`select activity_id from training.activity_participants where id=$1`, [canonicalParticipantId]);
+    const canonicalActivity = await client.query(`select training.resolve_canonical_activity_id($1) as id`, [canonicalParticipantRow.rows[0].activity_id]);
+    return { activityId: canonicalActivity.rows[0].id, participantId: canonicalParticipantId, reused: true };
+  }
+
+  const activityInsert = await client.query(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_user_id, owner_club_id, owner_team_id, origin, lifecycle_state, created_by_user_id)
+     values ('training_session',$1,$2,$3,$4,$5,$6,$7,$8,'planned_session','confirmed',$9) returning id`,
+    [sessionName || null, localDate, startInstant || null, timezone, ownerScope, ownerIds?.userId || null, ownerIds?.clubId || null, ownerIds?.teamId || null, performedBy || null],
+  );
+  const activityId = activityInsert.rows[0].id;
+  const participantInsert = await client.query(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status)
+     values ($1,$2,$3,$4,'participated') returning id`,
+    [activityId, athleteId, localDate, timezone],
+  );
+  const participantId = participantInsert.rows[0].id;
+  await client.query(
+    `insert into training.activity_participant_session_links (activity_participant_id, athlete_id, logical_session_id, link_method, link_status, confirmed_by_user_id, confirmed_at, created_by_user_id)
+     values ($1,$2,$3,'automatic','confirmed',$4,now(),$4)`,
+    [participantId, athleteId, logicalSessionId, performedBy || null],
+  );
+  return { activityId, participantId, reused: false };
+}
+
 export { uuid, httpError };

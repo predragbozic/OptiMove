@@ -121,6 +121,15 @@ function session(overrides = {}) {
     feedback: null,
     historical: false,
     rpeEnabled: true,
+    // Training Activity Integration 2A: defaults to "on" so every
+    // EXISTING fixture/test that never mentions it keeps behaving exactly
+    // like a normal, tracked+actionable planned session. Field name
+    // matches the REAL GET /weekly|/athlete/today response
+    // (trainingLoadEnabled - see routes/trainingLoad.js) - deliberately
+    // NOT the same name Builder's own draft response uses
+    // (trackingEnabled, routes/builder.js/buildDraft) - two different
+    // API contracts for the same underlying column.
+    trainingLoadEnabled: true,
     // (v9) workspace master toggle - defaults to "on" so every EXISTING
     // fixture/test that never mentions it keeps behaving exactly like a
     // normal, actionable planned session.
@@ -131,13 +140,24 @@ function session(overrides = {}) {
     ...overrides,
   };
   // actionable mirrors what the REAL backend always computes it as
-  // (rpe_enabled !== false AND workspace_planned_rpe_enabled) UNLESS a
-  // test overrides it explicitly - so overriding just rpeEnabled/
-  // workspacePlannedRpeEnabled alone (the common case) still produces a
-  // consistent, realistic combination, never rpeEnabled:false +
-  // actionable:true (impossible from the real backend).
+  // (training_load_enabled AND rpe_enabled !== false AND
+  // workspace_planned_rpe_enabled) UNLESS a test overrides it explicitly -
+  // so overriding just trainingLoadEnabled/rpeEnabled/workspacePlannedRpeEnabled
+  // alone (the common case) still produces a consistent, realistic
+  // combination, never trainingLoadEnabled:false + actionable:true
+  // (impossible from the real backend).
   if (overrides.actionable === undefined) {
-    merged.actionable = merged.rpeEnabled !== false && merged.workspacePlannedRpeEnabled !== false;
+    merged.actionable = merged.trainingLoadEnabled === true && merged.rpeEnabled !== false && merged.workspacePlannedRpeEnabled !== false;
+  }
+  // status mirrors the REAL backend's own precomputed field (routes/
+  // trainingLoad.js) the SAME way - never independently re-derived by
+  // the view layer, so a test overriding just the individual booleans
+  // still gets the one, real, consistent status string.
+  if (overrides.status === undefined) {
+    merged.status = merged.trainingLoadEnabled !== true ? "not_tracked"
+      : merged.rpeEnabled === false ? "tracked_rpe_off"
+      : merged.workspacePlannedRpeEnabled === false ? "workspace_off"
+      : "tracked_rpe_on";
   }
   return merged;
 }
@@ -1555,13 +1575,13 @@ test("U8. a workspace switch immediately drops the OLD workspace's own value, an
   assert.equal(state.trainingLoad.plannedRpeSetting.loaded, false, "the stale in-flight response (for the OLD workspace) must never overwrite the just-reset state");
 });
 
-test("U9. an individual planned session row shows a distinct 'Automatic RPE off' status, never a plain 'Not rated' that would look like a real pending request, while the master switch is off", () => {
+test("U9. an individual planned session row shows a distinct 'Workspace automatic RPE off' status, never a plain 'Not rated' that would look like a real pending request, while the master switch is off", () => {
   resetState();
   state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
     "2026-08-24": [session({ workspacePlannedRpeEnabled: false, actionable: false })],
   });
   const html = renderTrainingLoadScheduleHtml();
-  assert.ok(html.includes("Automatic RPE off"));
+  assert.ok(html.includes("Workspace automatic RPE off"));
   assert.ok(!html.includes(">Not rated<"));
 });
 

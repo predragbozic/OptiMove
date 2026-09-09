@@ -180,6 +180,36 @@ export function canManageExternalScheduleInScope(scope, schedule) {
   return false;
 }
 
+// Training Activity Integration 2A hardening: the Training Load
+// quick-toggle routes (PATCH .../rpe-enabled, PATCH .../training-load-
+// enabled) used to authorize purely against isAthleteInWorkspaceScope -
+// "does the CURRENT active workspace happen to cover this athlete right
+// now" - which is the wrong question. An athlete visible from the active
+// workspace via SOME membership is not proof that THIS specific plan was
+// ever created under that workspace: a coach who administers both Club A
+// and Club B, sitting in the Club A workspace, could toggle a session on
+// a plan Club B actually owns, purely because the same athlete also has
+// an active membership in Club A. The plan's own stored
+// plan_workspace_ownership snapshot (written once, at creation/edit-
+// draft/duplicate time - see routes/builder.js and routes/trainingLoad.js's
+// own header comments) is the real, immutable-once-resolved boundary,
+// exactly the same one canManageExternalScheduleInScope above already
+// enforces for schedule ownership. Mirrors that function's shape exactly:
+// platform overrides everything; every other scope must match the plan's
+// own owner_scope/owner_*_id precisely. An 'unresolved' (or missing)
+// ownership snapshot never matches any non-platform scope - a legacy plan
+// that predates this feature must be resolved first (POST /plans/
+// resolve-rpe-ownership) before its sessions can be quick-toggled, same
+// as every other ownership-gated action in this app.
+export function canManagePlanTrainingLoadInScope(scope, ownership) {
+  if (scope.type === "platform") return true;
+  if (!ownership || ownership.owner_scope == null || ownership.owner_scope === "unresolved") return false;
+  if (scope.type === "club") return ownership.owner_scope === "club" && String(ownership.owner_club_id) === String(scope.clubId);
+  if (scope.type === "team") return ownership.owner_scope === "team" && String(ownership.owner_team_id) === String(scope.teamId);
+  if (scope.type === "private_coach") return ownership.owner_scope === "user" && String(ownership.owner_user_id) === String(scope.userId);
+  return false;
+}
+
 // List-query equivalent of canManageExternalScheduleInScope's own per-row
 // check - appends its own param(s) to the caller's params array (matching
 // this file's existing SQL-fragment-builder convention) and returns just

@@ -31,6 +31,26 @@ const MIGRATION_V5_NAME = "202609011100_training_load_v5_unified_result_source.s
 // (the external-scheduling migrations) at all.
 const MIGRATION_V9_PATH = path.resolve(__dirname, "../../migrations_v2/202609040900_training_load_v9_planned_rpe_workspace_toggle.sql");
 const MIGRATION_V9_NAME = "202609040900_training_load_v9_planned_rpe_workspace_toggle.sql";
+// Training Activity Integration 2A: a successful planned RPE submit now
+// unconditionally materializes a training.activities row (see
+// materializePlannedRpeActivityForSubmit, called from POST /sessions/
+// :sessionId/rpe in routes/trainingLoad.js), and GET /weekly|/athlete/
+// today now unconditionally read ps.training_load_enabled - both are real
+// runtime dependencies now, so this disposable DB needs the FULL real
+// deployment chain: v10-v13 (training_activity_v3 itself extends
+// training_load.metric_values, which requires v10-v13 to already exist)
+// and training_activity v1-v4, then this feature's own v14.
+const EXTRA_MIGRATION_NAMES = [
+  "202609041400_training_load_v10_metrics_catalog.sql",
+  "202609041500_training_load_v11_metrics_provenance.sql",
+  "202609041600_training_load_v12_metrics_events.sql",
+  "202609041700_training_load_v13_metrics_measurements.sql",
+  "202609071000_training_activity_v1_core_tables.sql",
+  "202609071100_training_activity_v2_components_links.sql",
+  "202609071200_training_activity_v3_metrics_core_extensions.sql",
+  "202609071300_training_activity_v4_canonical_functions.sql",
+  "202609080900_training_load_v14_session_tracking_and_rpe_defaults.sql",
+];
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -226,13 +246,14 @@ let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
 
 before(async () => {
-  const [migrationV1Sql, migrationV2Sql, migrationV3Sql, migrationV4Sql, migrationV5Sql, migrationV9Sql] = await Promise.all([
+  const [migrationV1Sql, migrationV2Sql, migrationV3Sql, migrationV4Sql, migrationV5Sql, migrationV9Sql, ...extraMigrationSqls] = await Promise.all([
     fsp.readFile(MIGRATION_V1_PATH, "utf8"),
     fsp.readFile(MIGRATION_V2_PATH, "utf8"),
     fsp.readFile(MIGRATION_V3_PATH, "utf8"),
     fsp.readFile(MIGRATION_V4_PATH, "utf8"),
     fsp.readFile(MIGRATION_V5_PATH, "utf8"),
     fsp.readFile(MIGRATION_V9_PATH, "utf8"),
+    ...EXTRA_MIGRATION_NAMES.map((name) => fsp.readFile(path.resolve(__dirname, `../../migrations_v2/${name}`), "utf8")),
   ]);
 
   db = await makeTempDb("primary");
@@ -249,6 +270,7 @@ before(async () => {
     [MIGRATION_V4_NAME]: migrationV4Sql,
     [MIGRATION_V5_NAME]: migrationV5Sql,
     [MIGRATION_V9_NAME]: migrationV9Sql,
+    ...Object.fromEntries(EXTRA_MIGRATION_NAMES.map((name, i) => [name, extraMigrationSqls[i]])),
   });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
 
@@ -441,12 +463,19 @@ async function makePlanDay(planId, date) {
   const result = await query(`insert into plans.plan_days (plan_id, date) values ($1,$2) returning id`, [planId, date]);
   return result.rows[0].id;
 }
+// rpeEnabled/trainingLoadEnabled both default to true here - this file
+// predates Training Activity Integration 2A's two-dimension model
+// (migrations_v2/202609080900) and almost every existing test in it wants
+// a normal, fully-actionable session unless it explicitly says otherwise;
+// the DB's own column defaults changed (rpe_enabled now defaults to
+// false, matching a genuinely NEW/untracked session), so this fixture
+// sets both explicitly rather than relying on either default.
 async function makeSession(planDayId, overrides = {}) {
-  const { amPm = null, bta = null, sessionTime = null, sessionOrder = 0, name = "Session" } = overrides;
+  const { amPm = null, bta = null, sessionTime = null, sessionOrder = 0, name = "Session", rpeEnabled = true, trainingLoadEnabled = rpeEnabled } = overrides;
   const result = await query(
-    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name)
-     values ($1,$2,$3,$4,$5,$6) returning id`,
-    [planDayId, amPm, bta, sessionTime, sessionOrder, name],
+    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
+     values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
+    [planDayId, amPm, bta, sessionTime, sessionOrder, name, rpeEnabled, trainingLoadEnabled],
   );
   return result.rows[0].id;
 }
@@ -850,7 +879,7 @@ test("I5. an identical retry against the RECREATED row (same logical_session_id)
   const logicalId = logicalIdResult.rows[0].logical_session_id;
   await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(7, 60) });
   await query(`delete from plans.plan_sessions where id = $1`, [sessionId]);
-  const recreated = await query(`insert into plans.plan_sessions (plan_day_id, logical_session_id) values ($1,$2) returning id`, [dayId, logicalId]);
+  const recreated = await query(`insert into plans.plan_sessions (plan_day_id, logical_session_id, rpe_enabled, training_load_enabled) values ($1,$2,true,true) returning id`, [dayId, logicalId]);
   const newSessionId = recreated.rows[0].id;
 
   const retrySame = await api(`/api/training-load/sessions/${newSessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(7, 60) });
@@ -874,7 +903,7 @@ test("I6. a session copied to a DIFFERENT day as a genuinely new training sessio
   // source's logical_session_id, so it must default to a fresh one.
   const otherDayId = await makePlanDay(planId, YESTERDAY);
   const copied = await query(
-    `insert into plans.plan_sessions (plan_day_id, name) values ($1,$2) returning id, logical_session_id`,
+    `insert into plans.plan_sessions (plan_day_id, name, rpe_enabled, training_load_enabled) values ($1,$2,true,true) returning id, logical_session_id`,
     [otherDayId, "Copied to another day"],
   );
   const copiedSessionId = copied.rows[0].id;
@@ -1406,6 +1435,71 @@ test("N2. rpe_enabled can be toggled directly and is read back correctly (schema
   assert.equal(rpeEnabled, false);
 });
 
+// Correction round 3, item 2: the v14 migration's own DB-level CHECK
+// (plans_request_rpe_default_requires_track_training_load) must reject
+// track_training_load_default=false with request_rpe_default=true even
+// via a DIRECT SQL statement that bypasses the app entirely - the same
+// invariant routes/builder.js's own PATCH .../training-load-settings
+// already enforces at the API layer, but never relying on that alone.
+test("N3. the DB's own CHECK rejects track_training_load_default=false with request_rpe_default=true, bypassing the app layer entirely", async () => {
+  const { athletes } = await makeClubWithAthletes("n3", 1);
+  const planId = await makeWeeklyPlan(athletes[0].athleteId);
+  await assert.rejects(
+    () => query(`update plans.plans set track_training_load_default = false, request_rpe_default = true where id = $1`, [planId]),
+    /plans_request_rpe_default_requires_track_training_load/,
+    "a direct SQL UPDATE violating the invariant must be rejected by the CHECK constraint itself",
+  );
+  const row = (await query(`select track_training_load_default, request_rpe_default from plans.plans where id = $1`, [planId])).rows[0];
+  assert.equal(row.track_training_load_default, false, "the rejected statement must never have partially applied");
+  assert.equal(row.request_rpe_default, false);
+});
+
+// Correction round 3, item 2: training_load.planned_rpe_actionable's own
+// p_rpe_enabled coalesce was corrected from a true default to false (a
+// NULL/absent rpe_enabled must never be treated as "RPE requested") -
+// verified by calling the function directly against a real plan/date,
+// never inferred only from an app-level read path that happens to never
+// pass NULL today.
+test("N4. training_load.planned_rpe_actionable(validPlan, validDate, true, NULL) is false - NULL never defaults to 'requested'", async () => {
+  const { athletes } = await makeClubWithAthletes("n4", 1);
+  const planId = await makeWeeklyPlan(athletes[0].athleteId);
+  const result = await query(`select training_load.planned_rpe_actionable($1, $2::date, true, null) as actionable`, [planId, TODAY]);
+  assert.equal(result.rows[0].actionable, false);
+});
+
+// This file's own test_auto_system_ownership trigger (see before(), above)
+// stamps every weekly plan owner_scope='system' - a deliberate, coherent
+// choice for the FILE's own predating-the-workspace-toggle purpose (every
+// plan implicitly belongs to a single global switch, matched against the
+// 'system' planned_rpe_workspace_settings row inserted alongside it), but
+// 'system' ownership only ever authorizes a PLATFORM workspace (see
+// canManagePlanTrainingLoadInScope, trainingLoadAccess.js) - not the plain
+// club_admin coach makeClubWithAthletes creates. The quick-toggle routes'
+// own plan_workspace_ownership authorization (Training Activity
+// Integration 2A hardening) needs a plan whose stored ownership genuinely
+// matches the calling coach's own club, so the handful of tests below that
+// actually call those routes stamp it explicitly, real per-test, instead
+// of relying on the file-wide 'system' default (every other test in this
+// file - the ~60 that never call a quick-toggle route - is entirely
+// unaffected by this).
+async function stampClubOwnershipForSession(sessionId, clubId) {
+  const planResult = await query(
+    `select pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1`,
+    [sessionId],
+  );
+  const planId = planResult.rows[0].plan_id;
+  await query(
+    `update training_load.plan_workspace_ownership set owner_scope = 'club', owner_club_id = $2, owner_user_id = null, owner_team_id = null where plan_id = $1`,
+    [planId, clubId],
+  );
+  await query(
+    `insert into training_load.planned_rpe_workspace_settings (owner_scope, owner_club_id, enabled, enabled_at)
+     values ('club', $1, true, '2000-01-01T00:00:00Z')
+     on conflict (owner_scope, owner_user_id, owner_club_id, owner_team_id) do nothing`,
+    [clubId],
+  );
+}
+
 // ------------------------------------------------------------
 // O. Per-session RPE opt-out: runtime enforcement (POST /rpe 409, athlete/
 // today + weekly filtering) and the coach quick-toggle route (PATCH
@@ -1456,8 +1550,9 @@ test("O3. the coach's weekly Schedule view still shows a disabled session (so it
 });
 
 test("O4. quick-toggle PATCH disabling a session with an existing result requires confirmDisableWithResults, and never alters/deletes the existing result", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o4", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o4", 1);
   const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await stampClubOwnershipForSession(sessionId, clubId);
   const submit = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 45) });
   assert.equal(submit.status, 201);
 
@@ -1477,15 +1572,17 @@ test("O4. quick-toggle PATCH disabling a session with an existing result require
 });
 
 test("O5. quick-toggle PATCH on a session with no existing results needs no confirmation", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o5", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o5", 1);
   const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await stampClubOwnershipForSession(sessionId, clubId);
   const res = await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
   assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`);
 });
 
 test("O6. re-enabling a session restores its eligibility for a not-yet-rated athlete, per the existing date rules", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o6", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o6", 1);
   const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await stampClubOwnershipForSession(sessionId, clubId);
   await api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
   const blockedSubmit = await api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(5, 30) });
   assert.equal(blockedSubmit.status, 409);
@@ -1497,11 +1594,12 @@ test("O6. re-enabling a session restores its eligibility for a not-yet-rated ath
 });
 
 test("O7. the quick toggle updates BOTH the live session and its open edit-draft sibling (same logical_session_id) in one transaction", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o7", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o7", 1);
   const athleteId = athletes[0].athleteId;
   const livePlanId = await makeWeeklyPlan(athleteId, { weekStart: THIS_WEEK_START });
   const liveDayId = await makePlanDay(livePlanId, THIS_WEEK_START);
   const liveSessionId = await makeSession(liveDayId, { amPm: "AM", sessionOrder: 0, name: "Morning session" });
+  await stampClubOwnershipForSession(liveSessionId, clubId);
   const liveLogicalId = (await query(`select logical_session_id from plans.plan_sessions where id = $1`, [liveSessionId])).rows[0].logical_session_id;
 
   const draftPlanResult = await query(
@@ -1526,8 +1624,9 @@ test("O7. the quick toggle updates BOTH the live session and its open edit-draft
 });
 
 test("O8. concurrent disable-vs-submit on the same session serializes cleanly - whichever transaction's lock wins first decides the outcome, never a partial write or 500", async () => {
-  const { coachCookie, athletes } = await makeClubWithAthletes("o8", 1);
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("o8", 1);
   const sessionId = await makeActiveSessionOn(athletes[0].athleteId, TODAY);
+  await stampClubOwnershipForSession(sessionId, clubId);
 
   const disablePromise = api(`/api/training-load/sessions/${sessionId}/rpe-enabled`, { method: "PATCH", cookie: coachCookie, body: { rpeEnabled: false } });
   const submitPromise = api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athletes[0].cookie, body: rpeBody(6, 40) });

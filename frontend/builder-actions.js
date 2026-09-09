@@ -619,9 +619,62 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   if (type === "builder-toggle-session-rpe") {
     const sessionId = action.dataset.sessionId || "";
     const session = findBuilderSession(state.builder.draft, sessionId);
-    if (!session) return true;
+    // Mirrors the button's own `disabled` attribute (renderSessionTrainingLoadControls,
+    // builder-structure.js) - RPE can never be requested while tracking is
+    // off, so a stray dispatch here (disabled buttons still fire clicks in
+    // some browsers/via keyboard) is a silent no-op rather than a request
+    // the server would reject anyway.
+    if (!session || !session.trackingEnabled) return true;
     const payload = withBatchSyncPayload({ rpeEnabled: !session.rpeEnabled });
     setBuilderDraft(await queuedBuilderApi(`/api/builder/sessions/${encodeURIComponent(sessionId)}`, { method: "PATCH", body: JSON.stringify(payload) }));
+    handlers.renderBuilder();
+    return true;
+  }
+  // Training Activity Integration 2A: "Track this session in Training
+  // Load" - the other half of the split decision. Turning tracking OFF
+  // sends rpeEnabled:false in the SAME request (the server already
+  // enforces this cascade too - see PATCH /api/builder/sessions/:id - but
+  // sending it explicitly here keeps the very next re-render correct
+  // without waiting on a round trip's own response shape to carry it).
+  if (type === "builder-toggle-session-tracking") {
+    const sessionId = action.dataset.sessionId || "";
+    const session = findBuilderSession(state.builder.draft, sessionId);
+    if (!session) return true;
+    const trackingEnabled = !session.trackingEnabled;
+    const payload = withBatchSyncPayload(trackingEnabled ? { trackingEnabled } : { trackingEnabled, rpeEnabled: false });
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/sessions/${encodeURIComponent(sessionId)}`, { method: "PATCH", body: JSON.stringify(payload) }));
+    handlers.renderBuilder();
+    return true;
+  }
+  // Training Activity Integration 2A: the Weekly plan's own "Training
+  // load" defaults - applied only to a session created AFTER these are
+  // saved (see routes/builder.js's own POST /blocks/:blockId/sessions),
+  // never retroactively. The three bulk actions just below are the only
+  // way this feature ever changes an EXISTING session's state in bulk.
+  if (type === "builder-toggle-plan-track-default") {
+    const planId = state.builder.draft?.plan?.id;
+    if (!planId) return true;
+    const trackTrainingLoadDefault = !state.builder.draft.plan.trackTrainingLoadDefault;
+    const body = trackTrainingLoadDefault ? { trackTrainingLoadDefault } : { trackTrainingLoadDefault, requestRpeDefault: false };
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}/training-load-settings`, { method: "PATCH", body: JSON.stringify(body) }));
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-toggle-plan-rpe-default") {
+    const planId = state.builder.draft?.plan?.id;
+    if (!planId || !state.builder.draft.plan.trackTrainingLoadDefault) return true;
+    const requestRpeDefault = !state.builder.draft.plan.requestRpeDefault;
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}/training-load-settings`, { method: "PATCH", body: JSON.stringify({ requestRpeDefault }) }));
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-bulk-apply-training-sessions" || type === "builder-bulk-turn-off-before-after" || type === "builder-bulk-turn-off-all-rpe") {
+    const planId = state.builder.draft?.plan?.id;
+    if (!planId) return true;
+    const routeSuffix = type === "builder-bulk-apply-training-sessions" ? "apply-to-training-sessions"
+      : type === "builder-bulk-turn-off-before-after" ? "turn-off-before-after"
+      : "turn-off-all-rpe";
+    setBuilderDraft(await queuedBuilderApi(`/api/builder/plans/${encodeURIComponent(planId)}/training-load-settings/${routeSuffix}`, { method: "POST" }));
     handlers.renderBuilder();
     return true;
   }

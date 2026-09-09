@@ -432,6 +432,19 @@ export async function toggleSessionRpeEnabled(sessionId, rpeEnabled, confirmDisa
   });
 }
 
+// Training Activity Integration 2A: the OTHER half of the split decision -
+// "track this session in Training Load" at all. Same confirm-before-
+// disable contract as toggleSessionRpeEnabled above (a 409 {error:
+// "hasExistingResults"} means a real RPE result already exists and this
+// call must be retried with confirmDisableWithResults:true once the coach
+// confirms) - turning tracking off also cascades RPE off server-side.
+export async function toggleSessionTrainingLoadEnabled(sessionId, trainingLoadEnabled, confirmDisableWithResults = false) {
+  return api(`/api/training-load/sessions/${encodeURIComponent(sessionId)}/training-load-enabled`, {
+    method: "PATCH",
+    body: JSON.stringify({ trainingLoadEnabled, ...(confirmDisableWithResults ? { confirmDisableWithResults: true } : {}) }),
+  });
+}
+
 // ------------------------------------------------------------
 // External (outside-plan) RPE scheduling - "New RPE session" on the
 // Schedule tab. Same CRUD/lifecycle contract as WELLNESS's own schedule
