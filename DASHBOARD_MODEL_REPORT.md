@@ -1,10 +1,118 @@
 # Training Load 3B1 — Analysis Dashboard: model, ownership, data semantics, API contract, and disposable-DB PoC results
 
-**Status: design phase only — Round 2 (corrective).** Nothing in this round touches `migrations_v2`, the backend app, or the frontend app. `schema.sql` is a standalone, additive proposal validated only against a disposable, throwaway database created and dropped by `test-harness.mjs`. Waiting for a NEW confirmation of this corrected model before any real migration or application code is written.
+**Status: design phase only — Round 3 (final corrective pass before real migrations).** Nothing in this round touches `migrations_v2`, the backend app, or the frontend app. `schema.sql` is a standalone, additive proposal validated only against a disposable, throwaway database created and dropped by `test-harness.mjs`. Waiting for a NEW confirmation of this corrected model before any real migration or application code is written.
 
-Every claim below is labeled **[confirmed]** (read directly from `origin/main`'s real code/schema), **[decision]** (a choice made for this proposal, with rejected alternatives), or **[PoC-proven]** (demonstrated by `test-harness.mjs` against real, unmodified `migrations_v2` files + this proposal's `schema.sql`, on a disposable database, **three consecutive runs, 50/50 passing each time**, database confirmed dropped after each, zero leftovers). Round 1 had 24 proof points; Round 2 fixes 10 categories of gap the reviewer identified in Round 1 and adds 26 more proof points (listed in full under "PoC results" below) plus a real query adapter.
+Every claim below is labeled **[confirmed]** (read directly from `origin/main`'s real code/schema), **[decision]** (a choice made for this proposal, with rejected alternatives), or **[PoC-proven]** (demonstrated by `test-harness.mjs` against real, unmodified `migrations_v2` files + this proposal's `schema.sql`, on a disposable database, **three consecutive runs, 86/86 passing each time**, database confirmed dropped after each, zero leftovers). Round 1 had 24 proof points, Round 2 added 26 more (50 total), Round 3 adds the final **36** required by this pass — see "PoC results" below for the full breakdown and **§0-R3.9 for an honest, unflinching readiness assessment** (the task's own explicit instruction: green tests alone do not mean "ready").
 
-**Read this first — jump straight to what changed:** §0 immediately below is the complete Round-2 changelog the delivery instructions asked to see "posebno prikazano" (owner-vs-data-workspace model, lock order, revision/cache contract, atomic layout-save contract, query semantics table, unit/version policy, PoC-proven vs. application-layer boundary). Everything after §0 is the Round 1 report, amended in place where Round 2 changed it (each amendment is marked **[Round 2]**).
+**Read this first — jump straight to what changed:** §0-R3 immediately below is the complete Round-3 changelog. §0 (Round 2) beneath it is kept as historical context, amended in place where Round 3 further changed it (each such amendment is marked **[Round 3]**). Everything after §0 is the Round 1 report, amended in place across both later rounds.
+
+---
+
+## §0-R3. Round 3 (final corrective pass) — what changed, and why
+
+This round's own corrective task was explicit about its central risk: **"nemoj proglasiti model spremnim samo zato što su testovi zeleni."** §0-R3.9 below is written to honor that literally — it is not a summary of what passed, it is an audit of what is and is NOT genuinely executed.
+
+### §0-R3.1 Two-stage aggregation — the central fix
+
+**The gap.** Round 2's `dashboard_widget_series.aggregation_method` was forced, by a trigger, to equal the underlying metric's own `metric_definition_versions.daily_aggregation_method`. This was wrong: it conflated two genuinely different concepts into one column and one equality rule.
+
+**The fix — two independent stages, now real, separately-named columns:**
+
+| Stage | Column | Meaning | Mutable per-series? |
+|---|---|---|---|
+| **1 — daily reduction** | `metric_definitions.daily_aggregation_method` (unchanged, real Metrics Core column) | The metric's own fixed, natural same-day reduction (e.g. Total Distance is always naturally summed within one day) | No — a fact about the metric itself |
+| **2 — analytical aggregation** | `dashboard_widget_series.analytical_aggregation` **[R3, renamed from `aggregation_method`]** | How THIS widget reduces the (already day-reduced when needed) values across whatever `group_by` bucket it uses | **Yes — freely chosen per series** |
+
+The Round 2 equality trigger (`dashboard_widget_series_validate_aggregation`) is **deleted**, not merely relaxed — replaced with an explanatory comment in `schema.sql`. The literal example the task required is now real and PoC-proven: the SAME "Total Distance" metric (`daily_aggregation_method='sum'`) backs one widget showing a weekly sum, another a per-training average, another a per-training max, and another every individual activity unaggregated — **[PoC-proven]** §10.1–§10.5, asserting the actual final NUMBERS (150/80, 230, 115, 150 again under `max`, `[150,80]` under `none`), never just row counts. §10.4 is the sharpest proof: Stage 2 set to `'max'` still shows a day-bucket of 150 (the Stage-1 SUM), never `max(100,50)=100` — proving the two stages are genuinely sequenced, not merged.
+
+The **real 9-step pipeline** the task required is implemented AND executed, end to end, by `runSeriesPipeline()` in `test-harness.mjs`, built on top of — never reimplementing — `queryBuiltInSeries()`/`queryMetricSeries()` (which themselves stay built on the real, unmodified `training.canonical_activity_results()`):
+
+| Step | What actually runs | Where |
+|---|---|---|
+| 1. Canonical/effective facts | `training.canonical_activity_results()` (unmodified) | `fetchCanonicalFacts` |
+| 2. Workspace + series filters | 5-type workspace scoping (§0-R3.2) + role/coverage/source-policy filters (§0-R3.5) | `fetchActivitiesInRange`, `queryMetricSeries` |
+| 3. Prevent double-count | `data_scope_level` equality (component XOR session — unchanged mechanism from Round 2, now proven through the FULL pipeline, not just the raw adapter) | `queryMetricSeries`, **[PoC-proven]** §10.9 |
+| 4. Group by unit | Real, structurally SEPARATE `groups[]` per distinct unit — never one array with just a flag | `queryMetricSeries`, **[PoC-proven]** §10.10 |
+| 5. Daily reduction | `metric_definitions.daily_aggregation_method`, collapsing same-calendar-day raw facts | `reduceRows`, **[PoC-proven]** §10.1 |
+| 6. Dashboard grouping | `group_by` ∈ {day,session,component,athlete,team} — `'team'` genuinely merges ACROSS athletes, not just relabels a per-athlete bucket | `reduceRows`, **[PoC-proven]** §10.6, §10.7, §10.12 |
+| 7. Analytical aggregation | `analytical_aggregation`, Stage 2 | `reduceRows`, **[PoC-proven]** §10.2–§10.5 |
+| 8. Comparison period | Real shifted-date-range re-run of the WHOLE pipeline (`shiftDateRange` + a second `runForRange` call) — never a guessed offset | `runSeriesPipeline`, **[PoC-proven]** §10.8 |
+| 9. Conflict metadata | `unitConflict`/`conflict` carried through every stage to the final bucketed result | `reduceRows` |
+
+### §0-R3.2 Full 5-type workspace filtering
+
+**The gap.** Round 2's query adapter only ever implemented `club`/`team` filtering; `platform`/`private_coach`/`athlete` silently fell through to `scopeSql = 'true'` (an accidental unrestricted default) wherever they were reached at all.
+
+**The fix.** `fetchActivitiesInRange()` now requires an EXPLICIT, recognized `dataWorkspaceType` — an unrecognized or missing value is a thrown error, not a silent fallback (**[PoC-proven]** §10.19). All 5 types are genuinely implemented, each against the correct real column shape:
+
+| Workspace type | Real filter | Basis |
+|---|---|---|
+| `platform` | none (deliberately, explicitly unrestricted) | An explicit opt-in, matching `resolveActiveWorkspace`'s own real "platform admin sees everything" semantic — never reached by omission (**[PoC-proven]** §10.13) |
+| `club` | `training.activities.owner_scope='club' AND owner_club_id=...` | unchanged from Round 2 |
+| `team` | `owner_scope='team' AND owner_team_id=...` | now actually exercised against a real team-owned activity fixture (Round 2's fixture had none) (**[PoC-proven]** §10.14) |
+| `private_coach` | `owner_scope='user' AND owner_user_id=<the coach>` | owner-based, NEW (**[PoC-proven]** §10.15, §10.17) |
+| `athlete` | participant-based (`activity_participants`), NOT owner-based, and ignores any caller-supplied `athleteIds` — always forced to the current viewing athlete | structurally different from every other type, matching `dashboards.data_workspace_scope_id` being NULL for `athlete` (resolved from the CURRENT viewer, never baked into the row) (**[PoC-proven]** §10.16 |
+
+**The dual-role/"other relation" risk, closed with a real fixture, not just documentation:** `privateCoach` has a genuine `public.user_athletes` relationship to Marko, a real Club A/Team A roster athlete — §10.17 proves that querying `private_coach` workspace with `athleteIds:[marko]` returns **zero** activities, because workspace visibility is owner-based, never relationship-based. The metric/source-connection visibility triggers' own "dashboard owner's private catalog" carve-out (§0.1 below, unchanged) is workspace-TYPE-agnostic by construction (it never reads `data_workspace_type` at all) — §10.18 proves this does NOT mean `platform` leaks club-scope data: a private coach's `platform`-bound dashboard sees their own private metric but is rejected outright for Club A's club-scoped one.
+
+### §0-R3.3 Mutable-parent holes closed
+
+| Field | Rule | Why | Proof |
+|---|---|---|---|
+| `dashboard_widgets.dashboard_id` | Immutable after INSERT | A raw UPDATE moving a widget to another dashboard would bypass every dashboard-scoped invariant (visibility, overlap, cap, axis, revision) this file builds | §10.20 |
+| `dashboard_widget_series.widget_id` | Immutable after INSERT | Same reasoning, one level down | §10.21 |
+| `dashboards.created_by_user_id` | Unconditionally immutable (not just "once in use") | An identity/audit field, not content | §10.22 |
+| `dashboards.cloned_from_dashboard_id` | Write-once (decided only at INSERT, never changeable after), self-clone rejected by CHECK, must reference a real `is_template=true` row, provenance cycle rejected by a bounded walk | `cloned_from_dashboard_id` claims to represent template lineage — every one of these was a real, exploitable gap in Round 2's shape | §10.23, §10.24 |
+| `dashboard_widget_types` (min/max width/height, max_series, has_shared_axis, supports_comparison_period) | Immutable once ANY widget references the type | Round 2 reasoned shrinking was "harmless" because nothing retroactively re-validated existing rows — the task explicitly rejects that framing; `is_active`/`label`/`default_width`/`default_height` stay freely mutable | §4.6 (max_series), §10.25 (has_shared_axis, supports_comparison_period) |
+
+### §0-R3.4 Revision/cache contract reconciled — and a real deadlock risk found and fixed
+
+**The gap, found by tracing through Postgres's own locking mechanics, not by testing alone:** Round 2 deliberately excluded widget position/size (layout) changes from bumping `dashboards.revision`, reasoning that only the WIDGET's own revision needed to move. Round 3 requires layout changes to ALSO bump `dashboards.revision` (it is the cache token for the whole rendered grid, not just widget-set membership). Naively extending the existing per-row trigger to call `bump_dashboard_revision()` on every layout UPDATE introduces a genuine, provable deadlock risk: **Postgres locks an UPDATE's own target row (via `GetTupleForTrigger`) BEFORE any BEFORE-ROW trigger body runs** — so a raw `UPDATE dashboard_widgets SET x=... WHERE id=X` locks the WIDGET row first, then (via the trigger) tries to lock the DASHBOARD row second — the exact reverse of `replace_dashboard_layout()`'s own dashboard-then-widget order. Two such operations running concurrently on the same dashboard form a genuine AB-BA cycle.
+
+**The fix, two parts:**
+1. `dashboard_widgets_bump_revision` is restructured to distinguish LAYOUT fields (x/y/width/height/mobile_order — bump BOTH this widget's revision AND, via `bump_dashboard_revision`, the dashboard's) from CONTENT fields (widget_type/title/group_by/state/display_config/local_filter_override — bump only the widget's own revision, unchanged from Round 2).
+2. A NEW, genuinely deadlock-safe single-widget entry point, `training_load.update_widget_layout()`, explicitly locks the DASHBOARD row first (its own `SELECT ... FOR UPDATE`, before touching `dashboard_widgets` at all) and only then updates the widget — real dashboard-then-widget ordering, matching `replace_dashboard_layout()`. **[PoC-proven]** §10.27 (returns a fresh widget_revision AND dashboard_revision from one call) and, the critical proof, §10.28: `update_widget_layout()` and `replace_dashboard_layout()` running concurrently on the SAME dashboard genuinely queue behind each other's dashboard-row lock and **never deadlock** — a real two-connection lock-wait proof, not a timing guess.
+
+**Honesty about the boundary this leaves:** the existing per-row trigger (`dashboard_widgets_lock_dashboard_before_layout_write`) is kept, and its comment now says plainly that it achieves true dashboard-first ordering only for an INSERT, not an UPDATE — a raw ad-hoc `UPDATE dashboard_widgets SET x=...` remains functionally correct (both revisions still end up bumped) but is **not proven deadlock-safe** against `replace_dashboard_layout()`/`update_widget_layout()`. The real application's route layer must use only the two sanctioned functions for any layout write — this is stated as a hard implementation requirement in §0-R3.9, not left implicit.
+
+`replace_dashboard_layout()`'s own `RETURNS TABLE` now includes `dashboard_revision` alongside each widget's own `revision` — the caller gets both fresh tokens from the one call, matching the task's "mora vratiti stvarni novi revision token" requirement.
+
+### §0-R3.5 Template metric binding fixed
+
+`template_metric_key_hints` accepts a richer shape — `{ key, valueType?, unit?, scopeLevel? }`, not just a bare key string (a bare string is still accepted for backward compatibility and simply skips the extra checks). `resolveTemplateHint()` now filters candidates by EVERY hint field actually present, never key alone: a unit mismatch excludes an otherwise key-matching, visibility-matching candidate (**[PoC-proven]** §10.35); a `scopeLevel` mismatch excludes a metric configured ONLY for a different scope capability, while an UNCONFIGURED metric (no capability rows at all) is never falsely excluded — the same "never guess from absence" rule `dashboard_widget_series_validate_scope_capability` itself already uses (**[PoC-proven]** §10.36). Visibility filtering (system / same-data-workspace club-or-team / the resolving user's own private catalog) is unchanged from Round 2 and is what already guarantees another user's private metric UUID can never leak through a template — the richer field-matching only ever NARROWS the candidate set further, never widens it.
+
+### §0-R3.6 Source-connection visibility fixed
+
+`dashboard_widget_series_validate_source_connection_visibility` had no branch at all for `owner_scope='user'` connections — any private coach's own import connection was unconditionally rejected, even on their own dashboard. Fixed with the identical carve-out `dashboard_widget_series_validate_metric_visibility` already uses for a coach's own private metric catalog: a `'user'`-scope connection is visible on a `'user'`-owned dashboard **only** when it belongs to that SAME dashboard's own owner — never merely compared against the data-workspace scope id, and never another private coach's connection.
+
+### §0-R3.7 Other integrities
+
+- `dashboard_active_selection` now rejects selecting an `archived` dashboard outright (**[PoC-proven]** §10.26).
+- `source_policy` gained `'not_applicable'`, legal ONLY for a built-in series (RPE/sRPE/duration) and REQUIRED for one — `'manual'` is no longer accepted for a built-in (it wrongly implied "a human chose to enter this instead of importing it", a distinction built-ins have none of). `queryMetricSeries()` (the Metrics-Core path) actively REJECTS `'not_applicable'` outright (**[PoC-proven]** §4.5, §10.34).
+- `source_policy` is now genuinely, distinctly EXECUTED for every declared value — `manual`/`api_import`/`csv_import` (real `entry_method` equality), `source_connection` (a real extra join to `metric_events.source_connection_id`, on top of — never reimplementing — `canonical_activity_results()`), `derived` (`metric_values.is_derived`) — each proven to return a real, DIFFERENT, correct numeric result set from a shared fixture with genuinely distinct rows per policy (**[PoC-proven]** §10.29–§10.33).
+- `metric_structure_links`' own nullable/domain-only/category-only semantics are completely untouched by this round — no edit anywhere in `schema.sql` touches that table or its trigger.
+- Widget-type-change re-validation (series cap, axis-unit, comparison_period) is unchanged from Round 2 and still correct; metric/source-connection VISIBILITY is invariant to `widget_type` by construction (it depends only on the dashboard's data workspace, never the widget's own type), so no additional re-validation trigger was needed there — stated explicitly rather than left to be inferred.
+
+### §0-R3.8 The 36 new required tests
+
+Organized exactly as the task specified — Query results (§10.1–§10.12), Workspace isolation (§10.13–§10.19), Integrity and revision (§10.20–§10.28), Binding/source (§10.29–§10.36) — see "PoC results" below for the full run record. Every existing Round 1/2 test (§1–§9, 50 of them) still passes unchanged in meaning; the handful whose FIELD NAMES or EXPECTED BEHAVIOR changed (`aggregation_method`→`analytical_aggregation`, built-in `source_policy` `'manual'`→`'not_applicable'`, the `max_series`-shrink-is-harmless case in §4.6) were updated in place to match the new, corrected contract — never left silently asserting the old, now-wrong behavior.
+
+### §0-R3.9 Honest readiness assessment — required verbatim by the task, not a formality
+
+**All 86 tests pass, three consecutive runs, disposable database confirmed dropped every time, zero leftovers, no hardcoded credentials, the safety guard intact.** That is necessary, but per the task's own explicit instruction, **it is not sufficient to declare this model ready** — here is what genuinely is, and is not, true underneath the green checkmarks:
+
+**Genuinely implemented and executed (not just accepted config):**
+- Two-stage aggregation, all 5 workspace types, `group_by` (including the real cross-athlete `'team'` merge), `analytical_aggregation`, `source_policy` (all 7 named values, each with distinct real behavior or an explicit rejection for `'not_applicable'`), `source_connection_id` pinning, `comparison_period` (real shifted-range re-computation), the richer template-hint shape, every immutability rule listed in §0-R3.3, and the deadlock-safe layout-write pair.
+
+**Explicitly NOT ready, stated plainly rather than papered over:**
+- **Route-level authorization remains entirely unbuilt**, exactly as Round 1/2 already disclosed (§ "what this PoC does not prove," unchanged) — the DB-level data-workspace correctness this round hardens is necessary but not sufficient; a real route layer must call `resolveActiveWorkspace`/an equivalent scope check on every request, never trust a cached grant.
+- **`update_widget_layout()`/`replace_dashboard_layout()` are the ONLY proven-safe layout-write entry points.** This is a real constraint the application MUST honor: the real backend's route layer must call exclusively these two functions for any position/size/mobile_order change — a raw `UPDATE dashboard_widgets` remains functionally correct but is not proven deadlock-safe under concurrency with them. This is a genuine, non-optional implementation requirement, not a nice-to-have.
+- **`comparison_period`'s real backend wiring (the route that calls `runSeriesPipeline`'s comparison branch and returns both numbers to the frontend) does not exist yet** — the PoC proves the COMPUTATION is real and correct; the API surface that exposes it is still Section 8's design-only contract, unchanged from Round 2.
+- **The 'athlete' workspace's "current viewing athlete" resolution** (`athleteWorkspaceAthleteId` in this PoC) is a parameter the harness's own tests supply directly — the real equivalent (resolving the logged-in user's own athlete profile) is application code, not exercised here.
+- **No option was found this round that is declared in the schema/API contract but NOT genuinely executed by the adapter** — every column added or renamed this round (`analytical_aggregation`, `source_policy`'s new/renamed values, `group_by='team'`, `comparison_period`) has a real, tested, numerically-verified code path. Where an early draft of this round's own adapter had a genuinely unexecuted gap (`group_by='team'` was, briefly, only a relabeled copy of `'athlete'` bucketing, caught before this report was written — see `reduceRows`'s own comment in `test-harness.mjs`), it was fixed to be REAL, not removed from the contract, because implementing it correctly was straightforward and already proven safe.
+- **A real `unit_policy`/conversion engine still does not exist** — unchanged from Round 2, still deliberately not even hinted at in the schema.
+
+This section's purpose is to make the NEXT reviewer's job easy: everything above the "Explicitly NOT ready" line is safe to build real migrations and routes on top of; everything below it is a known, named gap to close during implementation, not a surprise to discover later.
 
 ---
 
@@ -36,7 +144,7 @@ Rules (all **[PoC-proven]**, §1.1–§1.8 in the harness):
 | Column | Values | Validated against |
 |---|---|---|
 | `data_scope_level` | day / session / component | For a metric-based series: soft-checked against `metric_definition_scope_capabilities` when any exist (§2.4-adjacent). For a built-in series: **fixed** by the catalog (`dashboard_builtin_series.fixed_data_scope_level`) — never a per-widget choice (§2.4). |
-| `aggregation_method` | sum / avg / max / last / none | Must equal the underlying series' own declared method (`metric_definition_versions.daily_aggregation_method` or `dashboard_builtin_series.default_aggregation_method`), or be `'none'` (raw) — never a stronger/different claim than the metric's own real semantics support (§2.1). |
+| ~~`aggregation_method`~~ **[R3: renamed & reworked, see §0-R3.1]** | sum / avg / max / last / none | **This row is superseded.** Round 2's equality-with-the-metric's-own-method rule is REMOVED in Round 3 — the column is renamed `analytical_aggregation` and is now a freely-chosen Stage 2 reduction, deliberately independent of the metric's own fixed `daily_aggregation_method` (Stage 1). See §0-R3.1 for the full two-stage model and its proof. |
 | `aggregation_role_policy` | standalone_only / standalone_and_source_rollup / all_including_derived | Named policies mapping directly onto `metric_values.aggregation_role`'s real value set — never a free-text/undefined convention (§2.2, exercised for real by the query adapter in §9.4/§9.9). |
 | `coverage_policy` | complete_only / complete_and_partial / any | Same shape, mapping onto `metric_values.coverage` (§2.2, §9.9). |
 | `comparison_period` | previous_period / previous_year / NULL | Only settable on a widget type that declares `supports_comparison_period` (KPI, in this phase) — genuinely changes the query (two period ranges), so an incompatible setting is refused outright, not silently ignored (§2.3). |
@@ -178,13 +286,13 @@ Broader club/team-*membership*-based visibility (e.g. "any metric visible to any
 See `schema.sql` for the full, commented definitions. Table set (all in the existing `training_load` schema); columns marked **[R2]** are new in Round 2:
 
 1. `dashboard_widget_types` — extensible catalog: `key`, `label`, `min/max_width`, `min/max_height`, `default_width/height`, `max_series`, `has_shared_axis` **[R2]**, `supports_comparison_period` **[R2]**.
-2. `dashboard_builtin_series` — extensible catalog: `key`, `label`, `unit`, `value_type` (§A), `default_aggregation_method` **[R2]**, `fixed_data_scope_level` **[R2]**.
+2. `dashboard_builtin_series` — extensible catalog: `key`, `label`, `unit`, `value_type` (§A), `default_analytical_aggregation` **[R3, renamed from R2's `default_aggregation_method` — now only a picker pre-fill hint, never enforced, see §0-R3.1]**, `fixed_data_scope_level` **[R2]**.
 3. `dashboards` — identity, `owner_scope`/owner columns, `data_workspace_type`/`data_workspace_scope_id` **[R2, §0.1]**, `is_template`, `status` ('active'|'archived'), `cloned_from_dashboard_id`, `default_filter jsonb`, `revision`, `created_by_user_id`, timestamps.
 4. `dashboard_widgets` — `dashboard_id`, `widget_type`, `title`, `widget_order`, `x`/`y`/`width`/`height` (12-col grid), `mobile_order`, `group_by`, `state` ('active'|'collapsed'), `display_config jsonb` (now requires a `schemaVersion` key **[R2]**), `local_filter_override jsonb`, `revision`.
-5. `dashboard_widget_series` — see §C; `data_scope_level`/`aggregation_method`/`aggregation_role_policy`/`coverage_policy`/`comparison_period` all **[R2, §0.2]**.
-6. `dashboard_active_selection` — see §0.1 (Round 2 reworked its visibility rule to require an exact data-workspace match, not owner-scope visibility).
+5. `dashboard_widget_series` — see §C; `data_scope_level`/`aggregation_role_policy`/`coverage_policy`/`comparison_period` **[R2, §0.2]**; `analytical_aggregation` **[R3, renamed+reworked, §0-R3.1]**; `source_policy` gained `'not_applicable'` **[R3, §0-R3.7]**; `widget_id` is now immutable after insert **[R3, §0-R3.3]**.
+6. `dashboard_active_selection` — see §0.1 (Round 2 reworked its visibility rule to require an exact data-workspace match, not owner-scope visibility); now also rejects an `archived` dashboard **[R3, §0-R3.7]**.
 
-Plus one new function, `training_load.replace_dashboard_layout()` **[R2, §0.5]** — the atomic layout-save entry point.
+Plus functions: `training_load.replace_dashboard_layout()` **[R2, §0.5; return shape extended with `dashboard_revision` in R3]** and `training_load.update_widget_layout()` **[R3, NEW, §0-R3.4]** — the two sanctioned, deadlock-safe layout-write entry points.
 
 ---
 
@@ -269,19 +377,27 @@ Other routes (list/create/get/update/archive dashboard; clone; add/update/remove
 
 ---
 
-## PoC results (Round 2)
+## PoC results (Round 3 — final)
 
 `test-harness.mjs`, run three consecutive times against a fresh disposable database each time (`optimove_poc_dashboard_run_<random>`, created via `CREATE DATABASE` and dropped via `DROP DATABASE` by the script itself — never `OPTIMOVE`, never `monitoring2`, never staging/Supabase/production; a hardcoded name/URL guard refuses any of those):
 
 | Run | Result | DB confirmed dropped |
 |---|---|---|
-| 1 | 50/50 pass | yes |
-| 2 | 50/50 pass | yes |
-| 3 | 50/50 pass | yes |
+| 1 | 86/86 pass | yes |
+| 2 | 86/86 pass | yes |
+| 3 | 86/86 pass | yes |
 
-All 50 tests are organized by the task's own section numbers (§1.x ownership/data-workspace, §2.x series semantics, §3.x revision, §4.x reverse invariants, §5.x locking, §6.x atomic layout, §7.x units/versions, §8.x templates, §9.x the query adapter). Every concurrency claim (§3.4, §5.1, §5.2, §5.3, §6.1, §6.6) uses **two real `pg` connections and a deterministic barrier** — a second connection's write is confirmed genuinely blocked by polling `pg_stat_activity.wait_event_type = 'Lock'` for its own real backend pid, never a `sleep`/timing guess.
+50 tests are the original Round 1/2 suite (§1.x ownership/data-workspace, §2.x series semantics, §3.x revision, §4.x reverse invariants, §5.x locking, §6.x atomic layout, §7.x units/versions, §8.x templates, §9.x the query adapter) — updated in place wherever Round 3 changed a field name or expected behavior (§0-R3.8). The 36 new Round 3 tests are §10.1–§10.36, organized exactly as required: Query results (§10.1–§10.12), Workspace isolation (§10.13–§10.19), Integrity and revision (§10.20–§10.28), Binding/source (§10.29–§10.36).
 
-Final leftover check after all three runs: `select datname from pg_database where datname like 'optimove_poc_dashboard_%'` → **zero rows**. No real database (OPTIMOVE, monitoring2, staging, Supabase, production) was ever touched — every connection this harness opens is either the disposable database itself or the `postgres` maintenance database, used only to create/drop it.
+Every concurrency claim (§3.4, §5.1, §5.2, §5.3, §6.1, §6.6, and Round 3's own §10.28) uses **two real `pg` connections and a deterministic barrier** — a second connection's write is confirmed genuinely blocked by polling `pg_stat_activity.wait_event_type = 'Lock'` for its own real backend pid, never a `sleep`/timing guess. §10.28 is the round's most important new proof: `update_widget_layout()` and `replace_dashboard_layout()` running concurrently on the same dashboard genuinely queue behind each other's dashboard-row lock and never deadlock.
+
+Final leftover check after all three runs: `select datname from pg_database where datname like 'optimove_poc_dashboard_%'` → **zero rows**. No real database (OPTIMOVE, monitoring2, staging, Supabase, production) was ever touched — every connection this harness opens is either the disposable database itself or the `postgres` maintenance database, used only to create/drop it. No hardcoded credentials anywhere in `schema.sql` or `test-harness.mjs` — `DATABASE_URL` is read from the environment only.
+
+**Real bugs THIS round's PoC caught before they could ever reach a real migration:**
+- `reduceRows`' own `'team'` `group_by` branch was, in an early draft, only a relabeled copy of `'athlete'` bucketing (same per-athlete buckets, different key name) — it did not actually merge values ACROSS athletes. Caught by writing §10.6/§10.7 against a real two-athlete fixture before trusting the implementation; fixed to genuinely aggregate across every athlete in the queried set into one bucket per unit.
+- `fetchActivityDates()`'s conversion of a Postgres `date` column to a `YYYY-MM-DD` string went through a JS `Date` object's `.toISOString()`, which silently shifted every date back by one day under this machine's local timezone. Caught by §10.1 asserting the exact real bucket keys, not just bucket VALUES — fixed by casting to `text` directly in SQL and never round-tripping through a JS `Date` at all (the same latent bug existed in the already-shipped `last_session_date` built-in from Round 2 and was fixed at the same time).
+- §10.9's own first draft used `coveragePolicy: 'any'` and got a polluted result (9500 instead of 5000) because it shared `distanceClubA` with an EARLIER test (§9.9) in the same sequential suite that adds its own partial-coverage rollup to that same metric — the exact shared-fixture-pollution class of bug `makeQuickMetric()` already exists to avoid elsewhere in this file. Fixed by scoping §10.9 to `coveragePolicy: 'complete_only'`.
+- The original §10.29 fixture reused the SAME activity for a second source-connection's fact as the entry-method fixture, so `source_policy='manual'` incidentally matched TWO real rows through two different connections instead of one — entry-method policies are (correctly) connection-agnostic, so this was a fixture design issue, not an adapter bug. Fixed by moving the second connection's fact onto its own separate activity, so §10.29–§10.31 (entry-method policies) naturally exclude it via `activityIds` while §10.33 (the connection-aware policy) opts back in explicitly.
 
 **Real bugs this round's PoC caught before they could ever reach a real migration** (the entire point of doing this phase first) — beyond the three already listed in Round 1:
 - The atomic-layout revision check used `dashboards.revision` as its concurrency token, but a pure layout write never bumped that column (only per-widget revisions did, by design) — so two sequential `replace_dashboard_layout()` calls would both see the "same" revision and neither would ever be correctly rejected as stale. Fixed by having `replace_dashboard_layout()` bump `dashboards.revision` once per call, on top of (not instead of) each touched widget's own revision.
@@ -294,7 +410,7 @@ Final leftover check after all three runs: `select datname from pg_database wher
 
 ## What this PoC does NOT prove — real application-authorization work still required
 
-Being explicit about the boundary, as asked — unchanged in spirit from Round 1, restated precisely for the corrected model:
+Being explicit about the boundary, as asked — unchanged in spirit from Round 1, restated precisely for the corrected model. **See §0-R3.9 above for Round 3's own, required, unflinching readiness assessment** — this section is the durable/general boundary statement; §0-R3.9 is the specific, current audit.
 
 - **Route-level authorization** (who is *currently* a platform admin / club admin / team coach / has an active role in a given club or team) is entirely outside this schema, exactly like every other `owner_scope`-based feature in this codebase (`resolveActiveWorkspace`, `req.authz`). §1.6 documents this narrowly: revoking a coach's club role does not change what the *storage layer* would accept, because the storage layer was never the thing checking it, in either round — a real implementation's routes must call the same `resolveActiveWorkspace`/scope-check pattern `trainingActivityAccess.js` already uses, on **every** selection/query/edit request, never a cached grant. This is the single largest remaining gap between "PoC-proven" and "safe to ship" — the schema-level guarantees (§0.1) close the DATA-leak risk; only a real route layer closes the AUTHORIZATION-recency risk.
 - **Per-request metric/source-connection visibility beyond exact-scope-match** (e.g., "any metric visible to any club this coach also happens to administer") is real, but is a membership *query*, not a static trigger — left to the application layer, matching `isAthleteInWorkspaceScope` precedent, for both metrics (§0.1) and source connections (§0.6).
@@ -307,9 +423,9 @@ Being explicit about the boundary, as asked — unchanged in spirit from Round 1
 
 ## Deliverables
 
-- `schema.sql` — the corrected, additive schema (Round 2), applied on top of real `migrations_v2` in the PoC.
-- `test-harness.mjs` — the disposable-DB PoC, 50 tests across all 10 corrective sections plus the original 8 model sections, run 3×, 50/50 each time, including a real query adapter.
-- `DASHBOARD_UX_SPEC.md` — desktop/tablet/mobile UX contract, updated for the atomic layout-save flow and the new unit-conflict/ambiguous-template/stale-revision/revoked-workspace UI states.
+- `schema.sql` — the corrected, additive schema (Round 3, final), applied on top of real `migrations_v2` in the PoC.
+- `test-harness.mjs` — the disposable-DB PoC, 86 tests (50 original + 36 new this round), run 3×, 86/86 each time, including a real 9-step query pipeline.
+- `DASHBOARD_UX_SPEC.md` — desktop/tablet/mobile UX contract, updated this round for analytical-aggregation picker semantics, the corrected built-in source-policy language, and workspace-type-specific UX notes.
 - this report.
 
 Waiting for confirmation of this model before writing any real `migrations_v2` file or application code.

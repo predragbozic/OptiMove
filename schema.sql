@@ -55,17 +55,54 @@ insert into training_load.dashboard_widget_types
   ('line_chart', 'Line chart', 3, 12, 3, 8,  6, 4, 8,  true,  false),
   ('bar_chart',  'Bar chart',  3, 12, 3, 8,  6, 4, 8,  true,  false);
 
+create function training_load.protect_dashboard_widget_types_once_used() returns trigger as $$
+declare
+  in_use boolean;
+begin
+  if new.min_width is not distinct from old.min_width
+     and new.max_width is not distinct from old.max_width
+     and new.min_height is not distinct from old.min_height
+     and new.max_height is not distinct from old.max_height
+     and new.max_series is not distinct from old.max_series
+     and new.has_shared_axis is not distinct from old.has_shared_axis
+     and new.supports_comparison_period is not distinct from old.supports_comparison_period then
+    return new;
+  end if;
+  select exists (select 1 from training_load.dashboard_widgets where widget_type = old.key) into in_use;
+  if in_use then
+    raise exception 'dashboard_widget_types (key=%): already referenced by a widget — size/series-cap/axis/comparison-period contract is immutable once in use; is_active, label, and the default_width/default_height picker hints stay mutable', old.key;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboard_widget_types_protect_once_used
+  before update on training_load.dashboard_widget_types
+  for each row execute function training_load.protect_dashboard_widget_types_once_used();
+
 -- Round 2, §4 "catalog rows must not retroactively change meaning": `key`
 -- is the PK and is referenced by dashboard_widgets.widget_type with the
 -- default NO ACTION — Postgres itself already refuses to change a
 -- referenced key, so no extra trigger is needed for key immutability.
--- Shrinking min/max/max_series or flipping is_active=false does NOT
--- retroactively touch any EXISTING widget row (the validation triggers
--- below only ever fire on that WIDGET row's own future writes) — proven
--- by PoC rather than asserted; see "Round 2 §4" tests. is_active is
--- checked only on a genuinely NEW widget or a widget_type CHANGE (not on
--- an ordinary resize of an already-existing widget of that type) — see
--- dashboard_widgets_validate_layout below.
+-- is_active is checked only on a genuinely NEW widget or a widget_type
+-- CHANGE (not on an ordinary resize of an already-existing widget of that
+-- type) — see dashboard_widgets_validate_layout below.
+--
+-- Round 3, §7 CORRECTION: Round 2 previously let min/max width/height,
+-- max_series, has_shared_axis, and supports_comparison_period keep
+-- changing freely even after widgets referenced a type, reasoning that
+-- the per-widget validation triggers only fire on that widget's OWN
+-- future writes so a shrink is "harmless". The task explicitly rejects
+-- that framing: a catalog change that would retroactively invalidate an
+-- EXISTING widget's already-saved layout/series (e.g. shrinking max_width
+-- below a widget's current width, or lowering max_series below a
+-- widget's current series count) must be REJECTED outright, not silently
+-- left to "still technically pass because nothing re-checks it". Simpler
+-- and safer than versioning the catalog: once ANY widget references a
+-- type, its size/series/axis/comparison contract is frozen — see
+-- protect_dashboard_widget_types_once_used below. is_active and label
+-- stay freely mutable (deactivating a type must not break existing
+-- widgets — that half of Round 2's reasoning is unchanged and correct).
 
 -- ------------------------------------------------------------
 -- 2. Built-in series catalog — stable, non-Metrics-Core series a widget
@@ -78,17 +115,22 @@ create table training_load.dashboard_builtin_series (
   label text not null,
   unit text,
   value_type varchar(20) not null check (value_type in ('numeric', 'boolean', 'text')),
-  -- Round 2, §2: a built-in series has ONE intrinsically correct
-  -- aggregation method and ONE intrinsically correct scope level — never a
-  -- free per-widget choice (see dashboard_widget_series_validate_aggregation
-  -- and _validate_scope_level below).
-  default_aggregation_method varchar(20) not null check (default_aggregation_method in ('sum', 'avg', 'max', 'last', 'none')),
+  -- Round 3, §1: this is now ONLY a suggested UI default for the widget's
+  -- own, freely-choosable `analytical_aggregation` (dashboard_widget_
+  -- series, below) — never an enforced equality. RENAMED from Round 2's
+  -- `default_aggregation_method` to make that explicit: this column no
+  -- longer claims to be "the one correct method", only "the one we
+  -- pre-select in the picker". fixed_data_scope_level is still a real,
+  -- enforced fact (RPE/sRPE/duration are always session-level; session_
+  -- count/last_session_date are always day-level) — that part is
+  -- unchanged from Round 2 (see _validate_scope_level below).
+  default_analytical_aggregation varchar(20) not null check (default_analytical_aggregation in ('sum', 'avg', 'max', 'last', 'none')),
   fixed_data_scope_level varchar(20) not null check (fixed_data_scope_level in ('day', 'session', 'component')),
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
 
-insert into training_load.dashboard_builtin_series (key, label, unit, value_type, default_aggregation_method, fixed_data_scope_level) values
+insert into training_load.dashboard_builtin_series (key, label, unit, value_type, default_analytical_aggregation, fixed_data_scope_level) values
   ('rpe', 'RPE', null, 'numeric', 'avg', 'session'),
   ('srpe', 'sRPE', 'AU', 'numeric', 'sum', 'session'),
   ('duration_minutes', 'Duration', 'min', 'numeric', 'sum', 'session'),
@@ -99,23 +141,26 @@ insert into training_load.dashboard_builtin_series (key, label, unit, value_type
   ('session_count', 'Sessions', null, 'numeric', 'sum', 'day'),
   ('last_session_date', 'Last session', null, 'text', 'last', 'day');
 
--- Round 2, §4: unit/value_type/aggregation/scope-level semantics become
--- immutable the moment ANY series references this built-in — silently
--- changing what "srpe" MEANS would reinterpret every widget already
--- plotting it.
+-- Round 2, §4: unit/value_type/scope-level semantics become immutable the
+-- moment ANY series references this built-in — silently changing what
+-- "srpe" MEANS would reinterpret every widget already plotting it.
+-- default_analytical_aggregation is deliberately EXCLUDED from this
+-- protection (Round 3, §1) — it is only ever a picker pre-fill hint now,
+-- never load-bearing for any already-created series (each series row
+-- freezes its OWN analytical_aggregation choice at creation time), so
+-- tweaking the SUGGESTED default later is harmless.
 create function training_load.protect_builtin_series_semantics_once_used() returns trigger as $$
 declare
   in_use boolean;
 begin
   if new.unit is not distinct from old.unit
      and new.value_type is not distinct from old.value_type
-     and new.default_aggregation_method is not distinct from old.default_aggregation_method
      and new.fixed_data_scope_level is not distinct from old.fixed_data_scope_level then
     return new;
   end if;
   select exists (select 1 from training_load.dashboard_widget_series where built_in_series_key = old.key) into in_use;
   if in_use then
-    raise exception 'dashboard_builtin_series (key=%): already referenced by a widget — unit/value_type/aggregation/scope semantics are immutable', old.key;
+    raise exception 'dashboard_builtin_series (key=%): already referenced by a widget — unit/value_type/scope semantics are immutable', old.key;
   end if;
   return new;
 end;
@@ -203,7 +248,16 @@ create table training_load.dashboards (
   -- that exact same club/team — no independent choice for these two
   -- scopes (only a 'user'-owned dashboard genuinely picks one).
   check (owner_scope <> 'club' or (data_workspace_type = 'club' and data_workspace_scope_id = owner_club_id)),
-  check (owner_scope <> 'team' or (data_workspace_type = 'team' and data_workspace_scope_id = owner_team_id))
+  check (owner_scope <> 'team' or (data_workspace_type = 'team' and data_workspace_scope_id = owner_team_id)),
+  -- Round 3, §3: a dashboard can never claim to be cloned from itself.
+  -- Cycle detection (A clones B clones A) and "the referenced dashboard
+  -- must actually be a template" cannot be expressed as a plain CHECK
+  -- (both need to read OTHER rows) — see dashboards_validate_clone_provenance
+  -- below for those. created_by_user_id and cloned_from_dashboard_id are
+  -- both made unconditionally write-once by dashboards_protect_identity_
+  -- once_created below (post-creation, not just "once in use" the way
+  -- owner_scope/data_workspace are).
+  check (cloned_from_dashboard_id is null or cloned_from_dashboard_id <> id)
 );
 
 create index dashboards_owner_idx on training_load.dashboards (owner_scope, owner_club_id, owner_team_id, owner_user_id);
@@ -245,6 +299,79 @@ $$ language plpgsql;
 create trigger dashboards_protect_ownership
   before update on training_load.dashboards
   for each row execute function training_load.protect_dashboard_ownership_once_used();
+
+-- Round 3, §3: created_by_user_id and cloned_from_dashboard_id are
+-- identity/audit fields, not ordinary content — unlike owner_scope/
+-- data_workspace above (which only lock once actually IN USE),
+-- these are unconditionally write-once from the moment the row exists,
+-- whether or not anything yet references it. cloned_from_dashboard_id
+-- going NULL -> a value on a later UPDATE is exactly as forbidden as
+-- value -> a different value: the task's own wording is "changing the
+-- original dashboard post-creation" is forbidden outright — clone
+-- provenance is decided once, at INSERT time, or never (see
+-- dashboards_validate_clone_provenance below for the INSERT-time checks).
+create function training_load.dashboards_protect_identity_once_created() returns trigger as $$
+begin
+  if new.created_by_user_id is distinct from old.created_by_user_id then
+    raise exception 'training_load.dashboards (id=%): created_by_user_id is immutable', old.id;
+  end if;
+  if new.cloned_from_dashboard_id is distinct from old.cloned_from_dashboard_id then
+    raise exception 'training_load.dashboards (id=%): cloned_from_dashboard_id is immutable after creation', old.id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboards_protect_identity_once_created
+  before update on training_load.dashboards
+  for each row execute function training_load.dashboards_protect_identity_once_created();
+
+-- Round 3, §3: the two clone-provenance rules that can't be a plain CHECK
+-- (self-clone IS a plain CHECK, above) — the referenced dashboard must
+-- actually be a template (cloned_from_dashboard_id's whole meaning is
+-- "template lineage" per the contract), and the chain can never cycle
+-- back to this row. BEFORE INSERT only — cloned_from_dashboard_id can
+-- never change after insert anyway (see the write-once trigger above), so
+-- there is nothing to re-validate on UPDATE.
+create function training_load.dashboards_validate_clone_provenance() returns trigger as $$
+declare
+  v_current uuid;
+  v_is_template boolean;
+  v_depth integer := 0;
+begin
+  if new.cloned_from_dashboard_id is null then
+    return new;
+  end if;
+  select is_template into v_is_template from training_load.dashboards where id = new.cloned_from_dashboard_id;
+  if not found then
+    raise exception 'training_load.dashboards: cloned_from_dashboard_id % does not exist', new.cloned_from_dashboard_id;
+  end if;
+  if not v_is_template then
+    raise exception 'training_load.dashboards: cloned_from_dashboard_id % is not a template (is_template=false) — cloned_from_dashboard_id must reference a valid template', new.cloned_from_dashboard_id;
+  end if;
+  -- Bounded walk up the clone-provenance chain. A real template in this
+  -- model is always hand-authored with cloned_from_dashboard_id NULL, so
+  -- in practice this loop terminates in one hop — but it walks for real,
+  -- defensively, rather than trusting that convention alone, and is
+  -- bounded at 50 hops so a corrupt chain can never hang the insert.
+  v_current := new.cloned_from_dashboard_id;
+  while v_current is not null and v_depth < 50 loop
+    if v_current = new.id then
+      raise exception 'training_load.dashboards (id=%): clone provenance cycle detected via %', new.id, new.cloned_from_dashboard_id;
+    end if;
+    select cloned_from_dashboard_id into v_current from training_load.dashboards where id = v_current;
+    v_depth := v_depth + 1;
+  end loop;
+  if v_depth >= 50 then
+    raise exception 'training_load.dashboards: clone provenance chain too deep (possible cycle) starting at %', new.cloned_from_dashboard_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboards_validate_clone_provenance
+  before insert on training_load.dashboards
+  for each row execute function training_load.dashboards_validate_clone_provenance();
 
 -- Round 2, §4: is_template may not flip true->false while any of this
 -- dashboard's widgets still carries an UNRESOLVED (hints-only) series —
@@ -365,6 +492,27 @@ create trigger dashboard_widgets_bump_parent_on_delete
   after delete on training_load.dashboard_widgets
   for each row execute function training_load.dashboard_widgets_bump_parent_dashboard_revision();
 
+-- Round 3, §3: dashboard_id is immutable after insert — a raw UPDATE
+-- moving a widget to a different dashboard would bypass every dashboard-
+-- scoped invariant this file builds (metric/source visibility checked
+-- against the OLD dashboard's data workspace, the overlap/cap/axis checks
+-- run against the NEW dashboard's sibling widgets without ever having
+-- validated against IT, both dashboards' revisions left stale). Moving a
+-- widget to another dashboard must be a real delete-then-recreate, never
+-- an UPDATE of this column.
+create function training_load.protect_dashboard_widgets_dashboard_id() returns trigger as $$
+begin
+  if new.dashboard_id is distinct from old.dashboard_id then
+    raise exception 'dashboard_widgets (id=%): dashboard_id is immutable — delete and recreate the widget under the new dashboard instead', old.id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboard_widgets_protect_dashboard_id
+  before update of dashboard_id on training_load.dashboard_widgets
+  for each row execute function training_load.protect_dashboard_widgets_dashboard_id();
+
 -- Per-type min/max size + is_active. Round 2: is_active is now checked
 -- ONLY on insert or an incoming widget_type change — never on a plain
 -- resize of an existing widget whose type may since have been
@@ -459,6 +607,22 @@ create trigger dashboard_widgets_revalidate_series_on_type_change
 -- both pass) — it does NOT itself check for overlap anymore (Round 2 §6:
 -- that is now the DEFERRED constraint trigger below, so a legitimate
 -- atomic swap within one transaction is never rejected mid-flight).
+--
+-- Round 3, §4 HONESTY CORRECTION: for an INSERT, this trigger genuinely
+-- achieves dashboard-before-widget ordering (no widget row exists yet to
+-- compete for). For an UPDATE, it does NOT — Postgres already acquires
+-- the target widget row's own lock (via GetTupleForTrigger, to fetch the
+-- row for this trigger's OLD/NEW binding) BEFORE any before-row trigger
+-- body runs, so by the time this trigger's own `for update` on dashboards
+-- executes, the widget row is already locked — the reverse order. This
+-- trigger is kept for the INSERT case (where it IS correct) and as a
+-- defense-in-depth correctness backstop for the UPDATE case (the lock
+-- still gets taken, just not provably first) — but it must never be
+-- treated as the proof of dashboard-first ordering for an UPDATE-based
+-- layout write. training_load.update_widget_layout() and
+-- replace_dashboard_layout() are the only two entry points that actually
+-- prove that ordering (each takes its own explicit dashboard lock BEFORE
+-- issuing any dashboard_widgets statement) — see their own comments.
 create function training_load.dashboard_widgets_lock_dashboard_before_layout_write() returns trigger as $$
 begin
   perform 1 from training_load.dashboards where id = new.dashboard_id for update;
@@ -505,20 +669,57 @@ create constraint trigger dashboard_widgets_check_no_overlap
   deferrable initially deferred
   for each row execute function training_load.dashboard_widgets_check_no_overlap();
 
+-- Round 3, §4 RESTRUCTURED: layout fields (x/y/width/height/mobile_order)
+-- now bump BOTH this widget's own revision AND the parent dashboard's
+-- revision — reversing Round 2's deliberate choice to exclude
+-- position/size from the dashboard-level signal. The task's own
+-- reasoning: dashboard.revision is the cache token for the WHOLE
+-- rendered layout (every widget's position/size), not just widget SET
+-- membership, so a position/size change genuinely invalidates that
+-- cache too. Content fields (widget_type/title/group_by/state/
+-- display_config/local_filter_override) still bump ONLY this widget's
+-- own revision, unchanged from Round 2 — the dashboard's cached LAYOUT
+-- did not change, only this widget's own content.
 create function training_load.dashboard_widgets_bump_revision() returns trigger as $$
+declare
+  v_layout_changed boolean;
+  v_content_changed boolean;
 begin
-  if new.widget_type is distinct from old.widget_type -- Round 2 §3 fix: was missing
-     or new.title is distinct from old.title
-     or new.widget_order is distinct from old.widget_order
-     or new.x is distinct from old.x or new.y is distinct from old.y
-     or new.width is distinct from old.width or new.height is distinct from old.height
-     or new.mobile_order is distinct from old.mobile_order
-     or new.group_by is distinct from old.group_by
-     or new.state is distinct from old.state
-     or new.display_config is distinct from old.display_config
-     or new.local_filter_override is distinct from old.local_filter_override then
+  v_layout_changed := (
+    new.x is distinct from old.x or new.y is distinct from old.y
+    or new.width is distinct from old.width or new.height is distinct from old.height
+    or new.mobile_order is distinct from old.mobile_order
+  );
+  v_content_changed := (
+    new.widget_type is distinct from old.widget_type
+    or new.title is distinct from old.title
+    or new.widget_order is distinct from old.widget_order
+    or new.group_by is distinct from old.group_by
+    or new.state is distinct from old.state
+    or new.display_config is distinct from old.display_config
+    or new.local_filter_override is distinct from old.local_filter_override
+  );
+  if v_layout_changed or v_content_changed then
     new.revision := old.revision + 1;
     new.updated_at := now();
+  end if;
+  -- Deadlock-safety note (report "lock order" section): calling
+  -- bump_dashboard_revision from THIS before-row trigger does NOT, by
+  -- itself, achieve dashboard-before-widget lock ordering for a raw
+  -- ad-hoc UPDATE — Postgres already acquires THIS row's own lock (via
+  -- GetTupleForTrigger, internally, to fetch the row for the trigger's
+  -- OLD/NEW binding) BEFORE any before-row trigger body runs, so by the
+  -- time this trigger tries to lock the dashboard, the WIDGET row is
+  -- already locked — the reverse of dashboard-then-widget. This is still
+  -- functionally correct (dashboard.revision DOES end up bumped) but is
+  -- NOT proven deadlock-safe against a concurrent replace_dashboard_layout
+  -- / update_widget_layout call, which lock dashboard-then-widget. Kept
+  -- anyway as defense-in-depth correctness for any writer that bypasses
+  -- the two sanctioned functions below — see their own comments, and the
+  -- report's lock-order section, for the full AB-BA trace and the
+  -- deliberate decision to keep this trigger despite it.
+  if v_layout_changed then
+    perform training_load.bump_dashboard_revision(new.dashboard_id);
   end if;
   return new;
 end;
@@ -557,13 +758,35 @@ create table training_load.dashboard_widget_series (
   axis varchar(10) not null default 'primary' check (axis in ('primary', 'secondary')),
   color text,
   display_label text,
+  -- Round 3, §1: 'not_applicable' added — a built-in series (RPE/sRPE/
+  -- duration/...) has no Metrics-Core provenance concept at all; it is
+  -- never fairly described as 'manual' (which implies "a human chose to
+  -- enter this instead of importing it", a REAL distinction Metrics Core
+  -- values make that simply does not exist for session_feedback). See the
+  -- CHECK constraints below: 'not_applicable' is legal ONLY for a
+  -- built-in series, and a built-in series may ONLY use 'not_applicable'.
   source_policy varchar(20) not null default 'all_with_conflicts'
-    check (source_policy in ('all_with_conflicts', 'source_connection', 'manual', 'api_import', 'csv_import', 'derived')),
+    check (source_policy in ('all_with_conflicts', 'source_connection', 'manual', 'api_import', 'csv_import', 'derived', 'not_applicable')),
   source_connection_id uuid references training_load.metric_source_connections(id) on delete restrict,
   -- Round 2, §2 — the previously-missing query-affecting semantics, now
   -- real normalized columns instead of an undefined frontend convention:
   data_scope_level varchar(20) not null default 'session' check (data_scope_level in ('day', 'session', 'component')),
-  aggregation_method varchar(20) not null default 'sum' check (aggregation_method in ('sum', 'avg', 'max', 'last', 'none')),
+  -- Round 3, §1 — RENAMED from Round 2's `aggregation_method`, and its
+  -- meaning is now genuinely different: this is STAGE 2 ("dashboard
+  -- analytical aggregation" — how the widget reduces values ACROSS
+  -- activities/days/weeks/athletes, e.g. "sum per week" / "avg per
+  -- training" / "max per training" / "none, show every activity") —
+  -- freely choosable, deliberately NOT constrained to equal
+  -- metric_definitions.daily_aggregation_method (that is STAGE 1, a fixed
+  -- fact about the metric itself, always applied by the query adapter
+  -- when it needs to collapse same-day raw facts into one daily value on
+  -- the way to whatever this column asks for — report "two-stage
+  -- aggregation" / query adapter §0.9-successor). The
+  -- dashboard_widget_series_validate_aggregation equality trigger from
+  -- Round 2 is REMOVED in Round 3 — this is the literal fix for "nemoj
+  -- više zahtevati da dashboard aggregation_method bude jednak daily_
+  -- aggregation_method definicije".
+  analytical_aggregation varchar(20) not null default 'sum' check (analytical_aggregation in ('sum', 'avg', 'max', 'last', 'none')),
   -- Named policies rather than a raw role/coverage array — see report
   -- "query semantics table" for the exact meaning of each; matches
   -- metric_values.aggregation_role/coverage's own real value sets rather
@@ -591,11 +814,38 @@ create table training_load.dashboard_widget_series (
   -- 'csv_import' are meaningless for it (report §4 "built-in RPE ne sme
   -- prihvatiti neprimenljiv source policy"); 'manual' is the only sensible
   -- policy (session_feedback is always a direct athlete/coach entry).
-  check (built_in_series_key is null or (source_policy = 'manual' and source_connection_id is null))
+  -- Round 3, §1: a built-in series MUST use 'not_applicable' (never
+  -- 'manual' — see the source_policy column comment above); conversely a
+  -- real Metrics-Core-backed series (metric_definition_id set) MUST NOT
+  -- use 'not_applicable' — that value has no meaning outside the built-in
+  -- case. Both directions enforced so neither can drift into the wrong
+  -- shape.
+  check (built_in_series_key is null or (source_policy = 'not_applicable' and source_connection_id is null)),
+  check (metric_definition_id is null or source_policy <> 'not_applicable')
 );
 
 create index dashboard_widget_series_widget_idx on training_load.dashboard_widget_series (widget_id, series_order);
 create index dashboard_widget_series_definition_idx on training_load.dashboard_widget_series (metric_definition_id) where metric_definition_id is not null;
+
+-- Round 3, §3: widget_id is immutable after insert — the same reasoning
+-- as dashboard_widgets.dashboard_id above, one level down: a raw UPDATE
+-- moving a series to a different widget would bypass the series cap,
+-- axis-unit compatibility, and metric/source visibility checks for the
+-- NEW widget (they only ever ran against the widget this row was
+-- inserted under) and leave both widgets' revisions stale. Moving a
+-- series to another widget must be delete-then-recreate.
+create function training_load.protect_dashboard_widget_series_widget_id() returns trigger as $$
+begin
+  if new.widget_id is distinct from old.widget_id then
+    raise exception 'dashboard_widget_series (id=%): widget_id is immutable — delete and recreate the series under the new widget instead', old.id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboard_widget_series_protect_widget_id
+  before update of widget_id on training_load.dashboard_widget_series
+  for each row execute function training_load.protect_dashboard_widget_series_widget_id();
 
 -- Round 2, §5: lock order step 2 — every series-row trigger below that
 -- validates a WIDGET-wide invariant (series cap, axis-unit) locks the
@@ -706,39 +956,20 @@ create trigger dashboard_widget_series_validate_axis_unit
   before insert or update of metric_definition_id, built_in_series_key, axis on training_load.dashboard_widget_series
   for each row execute function training_load.dashboard_widget_series_validate_axis_unit();
 
--- Round 2, §2: aggregation_method must be compatible with the underlying
--- series' own declared method — a widget can never pick 'sum' for a
--- metric the catalog itself says is not meaningfully summable
--- (daily_aggregation_method='none'), and never a stronger claim than the
--- series' own default ('last'-only data queried as 'sum' would silently
--- fabricate a total that was never a real fact). The only choices allowed
--- beyond the series' own declared method are 'none' (raw/ungrouped) and
--- the declared method itself — never a DIFFERENT real aggregation than
--- the one the metric's own semantics support.
-create function training_load.dashboard_widget_series_validate_aggregation() returns trigger as $$
-declare
-  v_declared varchar;
-begin
-  if new.metric_definition_id is not null then
-    select mdv.daily_aggregation_method into v_declared
-      from training_load.metric_definitions md
-      join training_load.metric_definition_versions mdv on mdv.id = md.current_version_id
-      where md.id = new.metric_definition_id;
-  elsif new.built_in_series_key is not null then
-    select default_aggregation_method into v_declared from training_load.dashboard_builtin_series where key = new.built_in_series_key;
-  else
-    return new; -- unresolved template hint
-  end if;
-  if new.aggregation_method <> 'none' and new.aggregation_method <> v_declared then
-    raise exception 'dashboard_widget_series: aggregation_method % is not compatible with this series'' own declared method % (widget %)', new.aggregation_method, v_declared, new.widget_id;
-  end if;
-  return new;
-end;
-$$ language plpgsql;
-
-create trigger dashboard_widget_series_validate_aggregation
-  before insert or update of metric_definition_id, built_in_series_key, aggregation_method on training_load.dashboard_widget_series
-  for each row execute function training_load.dashboard_widget_series_validate_aggregation();
+-- Round 3, §1: the Round 2 dashboard_widget_series_validate_aggregation
+-- trigger (which forced analytical_aggregation to EQUAL the metric's own
+-- daily_aggregation_method) is REMOVED here — that equality was exactly
+-- the bug this round's task fixes. metric_definitions.daily_aggregation_
+-- method (STAGE 1: the metric's own fixed, natural same-day reduction,
+-- untouched Metrics Core contract) and dashboard_widget_series.
+-- analytical_aggregation (STAGE 2: how THIS widget reduces the — already
+-- day-reduced when needed — values across whatever `group_by` bucket it
+-- uses) are independent by design now: the SAME "Total Distance" metric
+-- (daily_aggregation_method='sum') can back one widget showing a weekly
+-- sum, another showing a per-training average, another a per-training
+-- max, and another showing every individual activity with no aggregation
+-- at all — see the query adapter's own two-stage pipeline for where each
+-- stage is actually applied.
 
 -- Round 2, §2: comparison_period only valid on a widget_type that
 -- declares supports_comparison_period — it changes the QUERY (two period
@@ -878,18 +1109,29 @@ create trigger dashboard_widget_series_validate_metric_visibility
 -- Club B's import connection.
 create function training_load.dashboard_widget_series_validate_source_connection_visibility() returns trigger as $$
 declare
-  v_data_type varchar; v_data_scope uuid;
-  v_conn_scope varchar; v_conn_club uuid; v_conn_team uuid;
+  v_data_type varchar; v_data_scope uuid; v_dash_owner_scope varchar; v_dash_owner_user uuid;
+  v_conn_scope varchar; v_conn_club uuid; v_conn_team uuid; v_conn_user uuid;
 begin
   if new.source_connection_id is null then
     return new;
   end if;
-  select d.data_workspace_type, d.data_workspace_scope_id into v_data_type, v_data_scope
+  select d.data_workspace_type, d.data_workspace_scope_id, d.owner_scope, d.owner_user_id
+    into v_data_type, v_data_scope, v_dash_owner_scope, v_dash_owner_user
     from training_load.dashboard_widgets w join training_load.dashboards d on d.id = w.dashboard_id
     where w.id = new.widget_id;
-  select owner_scope, owner_club_id, owner_team_id into v_conn_scope, v_conn_club, v_conn_team
+  select owner_scope, owner_club_id, owner_team_id, owner_user_id
+    into v_conn_scope, v_conn_club, v_conn_team, v_conn_user
     from training_load.metric_source_connections where id = new.source_connection_id;
   if v_conn_scope = 'system' then
+    return new;
+  end if;
+  -- A private coach's OWN import connection is always visible to their own
+  -- dashboards, independent of which data workspace those dashboards are
+  -- bound to — mirrors dashboard_widget_series_validate_metric_visibility's
+  -- identical carve-out for a coach's own private metric catalog. Another
+  -- private coach's connection stays invisible (v_conn_user must equal the
+  -- DASHBOARD's own owner_user_id, never merely compared against v_data_scope).
+  if v_dash_owner_scope = 'user' and v_conn_scope = 'user' and v_conn_user = v_dash_owner_user then
     return new;
   end if;
   if v_conn_scope = 'club' and v_data_type = 'club' and v_conn_club = v_data_scope then
@@ -898,7 +1140,8 @@ begin
   if v_conn_scope = 'team' and v_data_type = 'team' and v_conn_team = v_data_scope then
     return new;
   end if;
-  raise exception 'dashboard_widget_series: source_connection % (owner_scope=%) is not visible to this dashboard''s data workspace %/%', new.source_connection_id, v_conn_scope, v_data_type, v_data_scope;
+  raise exception 'dashboard_widget_series: source_connection % (owner_scope=%/%/%/%) is not visible to this dashboard''s data workspace %/%',
+    new.source_connection_id, v_conn_scope, v_conn_club, v_conn_team, v_conn_user, v_data_type, v_data_scope;
 end;
 $$ language plpgsql;
 
@@ -939,17 +1182,25 @@ create trigger dashboard_widget_series_bump_widget_on_delete
 --    caller's expected revision, apply every row, force the deferred
 --    overlap check to run NOW (not silently deferred to whatever
 --    unrelated commit happens to come next), and return the fresh state.
---    A caller MAY still write dashboard_widgets directly for a
---    single-widget change (add one widget, resize just one) — the
---    deferred overlap trigger protects that path too, it just resolves
---    at that statement's own (non-deferred-elsewhere) transaction commit
---    since nothing there calls SET CONSTRAINTS IMMEDIATE itself.
+--
+--    Round 3, §4 CORRECTION: Round 2's comment here said a caller "MAY
+--    still write dashboard_widgets directly for a single-widget change".
+--    That is no longer accurate as a RECOMMENDATION (it remains
+--    functionally correct — see dashboard_widgets_bump_revision's own
+--    comment) — a raw single-widget UPDATE locks the WIDGET row before
+--    the DASHBOARD row (Postgres locks an UPDATE's target row before any
+--    before-row trigger fires), the reverse of THIS function's own
+--    dashboard-then-widget order, which is a real, provable deadlock risk
+--    under concurrency. training_load.update_widget_layout() below is now
+--    the SANCTIONED single-widget entry point — genuinely dashboard-
+--    first, proven safe to run concurrently with this function (see its
+--    own comment and the report's lock-order section for the full trace).
 -- ------------------------------------------------------------
 create function training_load.replace_dashboard_layout(
   p_dashboard_id uuid,
   p_expected_revision integer,
   p_layout jsonb -- [{"widgetId": "...", "x":0,"y":0,"width":4,"height":2,"mobileOrder":1}, ...]
-) returns table (widget_id uuid, x smallint, y smallint, width smallint, height smallint, mobile_order integer, revision integer) as $$
+) returns table (widget_id uuid, x smallint, y smallint, width smallint, height smallint, mobile_order integer, revision integer, dashboard_revision integer) as $$
 declare
   v_current_revision integer;
   v_entry jsonb;
@@ -986,23 +1237,90 @@ begin
   set constraints training_load.dashboard_widgets_check_no_overlap, training_load.dashboard_widgets_order_unique, training_load.dashboard_widgets_mobile_order_unique immediate;
 
   -- This function's own optimistic-concurrency token IS dashboards.revision
-  -- (checked above) — but a pure per-widget position/size change does NOT
-  -- otherwise bump it (only each WIDGET's own revision does, deliberately,
-  -- so two edits to two DIFFERENT widgets never falsely conflict with each
-  -- other — report §D5). A whole-layout REPLACE is different: it is
-  -- itself the dashboard-wide operation this revision guards, so it must
-  -- bump dashboards.revision on every successful call — otherwise two
-  -- sequential replace_dashboard_layout calls would keep seeing the exact
-  -- same "current" revision and neither would ever detect the other as
-  -- stale. Each individual widget's own revision still bumps too, via the
-  -- ordinary per-row UPDATE trigger already firing above — this call adds
-  -- the missing DASHBOARD-level signal on top, it does not replace it.
+  -- (checked above). Round 3, §4: each per-widget UPDATE above ALREADY
+  -- bumps dashboards.revision on its own now (dashboard_widgets_bump_
+  -- revision's layout branch, since Round 2's exclusion of position/size
+  -- from the dashboard-level signal was reversed this round) — this extra,
+  -- explicit call is kept anyway as a deliberate, unconditional guarantee:
+  -- it makes dashboards.revision bump at least once per successful call
+  -- to THIS function even in the (currently impossible, but not worth
+  -- depending on) case of an empty p_layout array, and it keeps
+  -- replace_dashboard_layout's own correctness independent of exactly how
+  -- dashboard_widgets_bump_revision happens to be implemented. A harmless
+  -- double-bump on the normal (non-empty) path is explicitly fine — the
+  -- task's own contract is "revision need not increment by exactly 1",
+  -- only that the returned token is fresh and sole-authoritative.
   perform training_load.bump_dashboard_revision(p_dashboard_id);
 
   return query
-    select w.id, w.x, w.y, w.width, w.height, w.mobile_order, w.revision
+    select w.id, w.x, w.y, w.width, w.height, w.mobile_order, w.revision, d.revision
     from training_load.dashboard_widgets w
+    join training_load.dashboards d on d.id = w.dashboard_id
     where w.dashboard_id = p_dashboard_id and w.id in (select (e ->> 'widgetId')::uuid from jsonb_array_elements(p_layout) e);
+end;
+$$ language plpgsql;
+
+-- Round 3, §4: the SANCTIONED, deadlock-safe single-widget layout-change
+-- entry point — proven safe to run concurrently with replace_dashboard_
+-- layout() because it locks the DASHBOARD row FIRST via its own explicit
+-- `SELECT ... FOR UPDATE` (after only a plain, unlocked read to resolve
+-- the widget's dashboard_id) and only THEN touches the widget row —
+-- genuinely dashboard-before-widget. A raw `UPDATE dashboard_widgets SET
+-- x=... WHERE id=...` cannot achieve this order: Postgres locks an
+-- UPDATE's own target row before any before-row trigger runs, so
+-- dashboard_widgets_lock_dashboard_before_layout_write's attempt to lock
+-- the dashboard "first" is already too late for an UPDATE (it IS
+-- genuinely first for an INSERT, where no widget row exists yet to lock —
+-- see that trigger's own comment). The application's route layer must use
+-- THIS function (or replace_dashboard_layout for a multi-widget batch)
+-- for every layout write — see the PoC's dedicated concurrency test
+-- proving this function and replace_dashboard_layout never deadlock
+-- against each other, and the report's lock-order section for the full
+-- AB-BA trace a raw UPDATE would risk instead.
+create function training_load.update_widget_layout(
+  p_widget_id uuid,
+  p_expected_widget_revision integer,
+  p_x smallint,
+  p_y smallint,
+  p_width smallint,
+  p_height smallint,
+  p_mobile_order integer
+) returns table (
+  widget_id uuid, dashboard_id uuid, x smallint, y smallint, width smallint, height smallint,
+  mobile_order integer, widget_revision integer, dashboard_revision integer
+) as $$
+declare
+  v_dashboard_id uuid;
+  v_current_widget_revision integer;
+begin
+  select w.dashboard_id, w.revision into v_dashboard_id, v_current_widget_revision
+    from training_load.dashboard_widgets w where w.id = p_widget_id;
+  if not found then
+    raise exception 'update_widget_layout: widget % not found', p_widget_id;
+  end if;
+  if v_current_widget_revision <> p_expected_widget_revision then
+    raise exception 'update_widget_layout: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
+  end if;
+
+  -- Lock the DASHBOARD first, before this function ever touches the
+  -- dashboard_widgets row — the entire reason this function exists
+  -- instead of a raw UPDATE (see the function comment above).
+  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+
+  update training_load.dashboard_widgets w
+    set x = p_x, y = p_y, width = p_width, height = p_height, mobile_order = p_mobile_order
+    where w.id = p_widget_id;
+
+  -- Same reasoning as replace_dashboard_layout: force the deferred
+  -- overlap/order checks to run inside THIS function's own transaction
+  -- scope rather than silently deferring to the caller's outer commit.
+  set constraints training_load.dashboard_widgets_check_no_overlap, training_load.dashboard_widgets_order_unique, training_load.dashboard_widgets_mobile_order_unique immediate;
+
+  return query
+    select w.id, w.dashboard_id, w.x, w.y, w.width, w.height, w.mobile_order, w.revision, d.revision
+    from training_load.dashboard_widgets w
+    join training_load.dashboards d on d.id = w.dashboard_id
+    where w.id = p_widget_id;
 end;
 $$ language plpgsql;
 
@@ -1037,12 +1355,23 @@ create table training_load.dashboard_active_selection (
 
 create index dashboard_active_selection_dashboard_idx on training_load.dashboard_active_selection (dashboard_id);
 
+-- Round 3, §7: an ARCHIVED dashboard must never become (or remain
+-- selectable as) a user's active dashboard for a workspace — status is
+-- read fresh on every insert/update of this row, same as the data-
+-- workspace equality check below, so archiving a dashboard that is
+-- CURRENTLY someone's active selection is still caught on their next
+-- explicit re-selection (this trigger does not retroactively clear an
+-- existing selection row on archive — see report for that documented gap
+-- versus a real-time push-based invalidation, out of scope for this PoC).
 create function training_load.dashboard_active_selection_validate_visibility() returns trigger as $$
 declare
-  v_data_type varchar; v_data_scope uuid;
+  v_data_type varchar; v_data_scope uuid; v_status varchar;
 begin
-  select data_workspace_type, data_workspace_scope_id into v_data_type, v_data_scope
+  select data_workspace_type, data_workspace_scope_id, status into v_data_type, v_data_scope, v_status
     from training_load.dashboards where id = new.dashboard_id;
+  if v_status is distinct from 'active' then
+    raise exception 'dashboard_active_selection: dashboard % is not active (status=%) and cannot be selected', new.dashboard_id, v_status;
+  end if;
   if v_data_type is distinct from new.workspace_type or v_data_scope is distinct from new.scope_id then
     raise exception 'dashboard_active_selection: dashboard % (data workspace %/%) does not match the exact selection context %/% for user %', new.dashboard_id, v_data_type, v_data_scope, new.workspace_type, new.scope_id, new.user_id;
   end if;
