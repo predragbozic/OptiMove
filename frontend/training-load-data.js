@@ -77,7 +77,7 @@ function clampSelectedDateToWeek(selectedDate, data) {
   return data.weekStart;
 }
 
-function trainingLoadFilterQuery() {
+export function trainingLoadFilterQuery() {
   const { clubIds, teamIds, athleteIds } = state.trainingLoad.filter;
   const parts = [];
   if (clubIds.length) parts.push(`clubIds=${clubIds.map(encodeURIComponent).join(",")}`);

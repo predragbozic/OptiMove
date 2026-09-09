@@ -63,6 +63,7 @@ import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
+import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import { els } from "./dom.js";
 import {
@@ -905,6 +906,24 @@ function handleContentInput(event) {
   const weekStartInput = event.target.closest("[data-builder-week-start]");
   if (weekStartInput) {
     state.builder.weekStart = weekStartInput.value;
+    return;
+  }
+  // Training Load Frontend 3A: metric picker search (item 8) — filtering
+  // is synchronous over already-loaded definitions (no network round trip
+  // per keystroke), so this re-renders immediately; focus/cursor position
+  // is restored right after, same "never lose focus after a rerender"
+  // convention item 11 requires everywhere else in this feature.
+  const metricPickerSearch = event.target.closest("[data-tl-calendar-metric-search]");
+  if (metricPickerSearch) {
+    state.trainingLoad.calendar.metricPicker.search = metricPickerSearch.value;
+    const selectionStart = metricPickerSearch.selectionStart;
+    const selectionEnd = metricPickerSearch.selectionEnd;
+    renderTrainingLoad();
+    const restored = els.content.querySelector("[data-tl-calendar-metric-search]");
+    if (restored) {
+      restored.focus();
+      restored.setSelectionRange(selectionStart, selectionEnd);
+    }
     return;
   }
   const templateSearch = event.target.closest("[data-template-filter='search']");
@@ -1843,8 +1862,15 @@ async function loadTrainingLoad() {
   // on a fresh tab entry AND right after a workspace switch (see
   // onWorkspaceChanged above), so gating on the currently-active section
   // here covers both triggers with one check.
+  // "today" is the Calendar tab (item 3) — its own canonical-activity
+  // read model, opening on today's date on first entry exactly like the
+  // old Today tab did (loadTrainingLoadCalendarWeek seeds weekStart/
+  // selectedDate to today on its own first call, same convention as
+  // loadTrainingLoadWeekly).
   await Promise.all([
-    loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+    state.trainingLoad.section === "today"
+      ? loadTrainingLoadCalendarWeek(renderTrainingLoad)
+      : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
     state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
   ]);
   renderTrainingLoad();

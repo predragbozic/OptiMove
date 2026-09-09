@@ -648,6 +648,66 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // Schedule view.
   resolvingOwnership: false,
   resolveOwnershipError: "",
+  // ------------------------------------------------------------
+  // Training Load Frontend 3A — Calendar (the visible tab label; the
+  // internal section key stays "today", per this feature's own explicit
+  // instruction to keep the existing, already-wired key). A genuinely
+  // separate data slice from `weekly.today` above — GET /api/training-load/
+  // calendar returns canonical-activity-shaped items (never RPE-session-
+  // shaped rows), so conflating the two would mean two very different
+  // payload shapes racing to occupy the same nav slot.
+  // ------------------------------------------------------------
+  calendar: {
+    // Week-shaped (7-day) data — always loaded first; drives the summary
+    // strip and, when monthMode is false, the agenda below it.
+    weekStart: "", selectedDate: "", data: null, loading: false, error: "",
+    // Expanded state (item 4): month grid replaces the 7-day strip, but
+    // the SAME selectedDate/weekStart stay authoritative — collapsing
+    // back to week mode never loses or resets the current selection.
+    monthMode: false,
+    // The calendar month currently shown in month mode (YYYY-MM-01) —
+    // independent of weekStart, since the selected week does not have to
+    // be the first week of the shown month.
+    monthCursor: "",
+    monthData: null, monthLoading: false, monthError: "",
+    // Selection/context (item 6) — always canonical ids, never a name.
+    // null selectedActivityId = "whole day" (every activity of
+    // selectedDate); a non-null one narrows to that one canonical
+    // activity; selectedComponentId (only meaningful alongside a selected
+    // activity) further narrows to "Whole session" (null) or one
+    // component.
+    selectedActivityId: null,
+    selectedComponentId: null,
+    // Opens the athlete drawer (item 6, "izabran sportista") without
+    // losing date/activity/component context — an athleteId while open,
+    // null when closed.
+    selectedResultsAthleteId: null,
+    // Activity Detail (item 7) — cached by activityId so flipping back to
+    // an already-open activity this session repaints instantly; a NEW
+    // activityId always starts a fresh fetch (never shows a stale OTHER
+    // activity's detail while loading).
+    activityDetail: { activityId: null, data: null, loading: false, error: "" },
+    activityDetailTab: "overview",
+    // Metric picker (item 8) — pure frontend view-state for THIS visit,
+    // never persisted server-side (no dashboard-preferences table in this
+    // phase, by explicit instruction). `selectedIds` is null until the
+    // coach's first real pick — see the view layer's own "smart default"
+    // (RPE/sRPE/duration + a small number of real activity metrics) for
+    // what renders before that.
+    metricPicker: { open: false, search: "", selectedIds: null, definitions: null, loading: false, error: "" },
+    // Sort state for the results table (item 8) — column key + direction,
+    // reset per activity/component selection (never carried from one
+    // activity's table to an unrelated one).
+    resultsSort: { column: "athlete", direction: "asc" },
+    // Mobile-only: when the results table itself would overflow, a
+    // compact per-athlete summary shows instead, with a "View table"
+    // escape hatch — same filter/context, never a second data source.
+    mobileTableExpanded: false,
+    // A conflict cell's own full value list while its inline detail panel
+    // is open (item 8) — null when closed. Never picks a "winner"; this is
+    // purely a read-only expansion of what's already in activityDetail.data.
+    conflictValues: null,
+  },
   ...overrides,
 });
 

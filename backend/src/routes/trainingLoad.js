@@ -14,6 +14,7 @@ import {
 import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAthlete, ensureCurrentExternalOccurrencesForCoach } from "../trainingLoadOccurrenceService.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { materializePlannedRpeActivityForSubmit } from "../trainingActivityMaterialize.js";
+import { activityScopeForWorkspace, activityScopeSqlForWorkspace } from "../trainingActivityAccess.js";
 
 const router = Router();
 
@@ -1441,6 +1442,304 @@ router.get("/weekly", async (req, res, next) => {
     }
 
     res.json({ weekStart, weekEnd, days });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ------------------------------------------------------------
+// Training Load Frontend 3A — unified calendar read model. GET /weekly
+// (above) is entirely RPE/session_feedback-shaped: it has no concept of a
+// canonical training.activity, metric coverage, conflicts, or provisional/
+// suggestion state at all. Rather than bolt that onto /weekly's already
+// very large, carefully-tuned query set, this is a NEW, purely additive,
+// read-only endpoint — no schema change, no new migration, reuses the
+// exact same coach/athlete workspace-scoping helpers and
+// WEEKLY_PLAN_SESSION_FILTER_SQL /weekly already established above.
+//
+// One item per canonical training.activity (never per participant — a
+// group session with N athletes is ONE item, with its own participantCount)
+// PLUS one item per tracked planned session / external assignment that has
+// NOT yet been materialized into an activity (checked via a real NOT
+// EXISTS against training.activity_participant_session_links — never a
+// name/time heuristic). The instant a planned/external item IS
+// materialized (via an RPE submit or a metrics event — see
+// trainingActivityMaterialize.js/trainingActivityMetricsLink.js), it stops
+// appearing here as a 'planned'/'external' item and starts appearing
+// exactly once as an 'activity' item instead — the two queries below are
+// structurally disjoint (the planned/external query explicitly excludes
+// anything already linked), so the SAME real session can never appear
+// twice under two different kinds.
+//
+// A day-level metric event (scope_level='day') never becomes a
+// training.activity at all (see trainingActivityMetricsLink.js) — so it
+// structurally cannot appear here; nothing extra needs to filter it out.
+//
+// Max range bounded to cover a full 6-row month grid (up to 42 days) plus
+// a little slack — far tighter than listActivities' own 366-day cap, since
+// each activity row here does real aggregation work (see the LATERAL
+// joins below), not just a plain read.
+const CALENDAR_MAX_RANGE_DAYS = 62;
+
+function calendarActivityOwnerScopeSql(scope, alias, params) {
+  return activityScopeSqlForWorkspace(scope, alias, params);
+}
+
+router.get("/calendar", async (req, res, next) => {
+  try {
+    const dateFrom = String(req.query?.dateFrom || "");
+    const dateTo = String(req.query?.dateTo || "");
+    if (!isValidGregorianDateString(dateFrom) || !isValidGregorianDateString(dateTo)) {
+      return res.status(400).json({ error: "dateFrom and dateTo must be valid YYYY-MM-DD dates." });
+    }
+    if (dateTo < dateFrom) return res.status(400).json({ error: "dateTo must not be before dateFrom." });
+    if ((new Date(`${dateTo}T00:00:00Z`) - new Date(`${dateFrom}T00:00:00Z`)) / 86400000 > CALENDAR_MAX_RANGE_DAYS) {
+      return res.status(400).json({ error: `Date range must not exceed ${CALENDAR_MAX_RANGE_DAYS} days.` });
+    }
+
+    const clubFilter = parseUuidListParam(req.query.clubIds);
+    const teamFilter = parseUuidListParam(req.query.teamIds);
+    const athleteFilter = parseUuidListParam(req.query.athleteIds);
+    if (clubFilter.invalid || teamFilter.invalid || athleteFilter.invalid) {
+      return res.status(400).json({ error: "clubIds/teamIds/athleteIds must be valid UUIDs." });
+    }
+
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const isAthlete = workspace?.type === "athlete";
+    if (isAthlete && !req.authz.athleteId) return res.status(403).json({ error: "This account has no athlete profile." });
+    if (!isAthlete && !requireCoachWorkspace(req, res)) return;
+
+    let activitySql, activityParams, plannedScopeSql, externalScopeSql, planParams, externalParams;
+
+    if (isAthlete) {
+      const athleteId = req.authz.athleteId;
+      activityParams = [dateFrom, dateTo, athleteId];
+      activitySql = `exists (select 1 from training.activity_participants ap0 where ap0.activity_id = a.id and ap0.athlete_id = $3 and ap0.merge_status = 'canonical')`;
+      planParams = [dateFrom, dateTo, athleteId];
+      plannedScopeSql = `and p.athlete_id = $3`;
+      externalParams = [dateFrom, dateTo, athleteId];
+      externalScopeSql = `and asg.athlete_id = $3`;
+      await ensureCurrentExternalOccurrencesForAthlete(athleteId);
+    } else {
+      const activityScope = activityScopeForWorkspace(workspace, req);
+      if (activityScope.type === null) return res.status(403).json({ error: "Forbidden" });
+      activityParams = [dateFrom, dateTo];
+      let ownerSql = calendarActivityOwnerScopeSql(activityScope, "a", activityParams);
+      // Beyond base owner-scope visibility, an optional Club/Team/Athletes
+      // filter narrows to activities with AT LEAST ONE participant matching
+      // it — same "any mix, union across kinds" semantics as
+      // athleteExtraFilterSql already establishes for /weekly, applied
+      // here via a participant-membership EXISTS rather than /weekly's own
+      // direct athlete-row filter (an activity is not itself "owned" by an
+      // athlete membership the way a plan session is).
+      if (clubFilter.ids || teamFilter.ids || athleteFilter.ids) {
+        const memberParams = [];
+        const memberSql = athleteExtraFilterSql("a2", clubFilter.ids, teamFilter.ids, athleteFilter.ids, memberParams);
+        activityParams.push(...memberParams);
+        const base = activityParams.length - memberParams.length;
+        const shiftedMemberSql = memberSql.replace(/\$(\d+)/g, (_, n) => `$${base + Number(n)}`);
+        ownerSql += ` and exists (select 1 from training.activity_participants ap5 join public.athletes a2 on a2.id = ap5.athlete_id where ap5.activity_id = a.id and ap5.merge_status = 'canonical' ${shiftedMemberSql})`;
+      }
+      activitySql = ownerSql;
+
+      // The planned/external queries below alias the athletes table as
+      // `ath` (see their own FROM clauses) — never `a`, which the
+      // activities query above already claims for training.activities
+      // itself. coachWorkspaceScopeSqlForWorkspace/athleteExtraFilterSql
+      // are generic on their `alias` argument, so this is simply passed
+      // through correctly, never a copy-paste of the activities alias.
+      const scope = coachWorkspaceScopeSqlForWorkspace(workspace, req, "ath", 3);
+      planParams = [dateFrom, dateTo].concat(scope.params);
+      plannedScopeSql = scope.sql + athleteExtraFilterSql("ath", clubFilter.ids, teamFilter.ids, athleteFilter.ids, planParams);
+      externalParams = [dateFrom, dateTo].concat(scope.params);
+      externalScopeSql = scope.sql + athleteExtraFilterSql("ath", clubFilter.ids, teamFilter.ids, athleteFilter.ids, externalParams);
+
+      await ensureCurrentExternalOccurrencesForCoach(externalScheduleScopeForWorkspace(workspace, req));
+    }
+
+    // Every canonical (non-superseded) activity in range/scope, ONE row
+    // per activity — never per participant. Coverage/conflict counts are
+    // computed via LATERAL subqueries in this SAME query (one round trip,
+    // no N+1), reusing the exact same "effective occasion" predicate
+    // (superseded_by_occasion_id/import_conflict_status/current source
+    // identity) queryResults() and canonical_activity_results() already
+    // use, and the exact same "RPE requested" rule (an external-assignment
+    // link is always a request; a planned-session link is a request only
+    // when that session's own rpe_enabled=true) trainingActivityMetricsLink.js's
+    // own linking step already encodes.
+    const activityResult = await query(
+      `select
+         a.id as activity_id, a.name, a.activity_type_key, a.occurred_local_date, a.started_at, a.timezone_snapshot,
+         a.origin, a.lifecycle_state,
+         coalesce(pc.participant_count, 0) as participant_count,
+         coalesce(rc.requested, 0) as rpe_requested, coalesce(rc.rated, 0) as rpe_rated,
+         coalesce(mc.total, 0) as metrics_total, coalesce(mc.with_data, 0) as metrics_with_data,
+         coalesce(cc.conflict_count, 0) as conflict_count,
+         coalesce(sc.open_suggestions, 0) as open_suggestion_count
+       from training.activities a
+       left join lateral (
+         select count(*) as participant_count from training.activity_participants ap where ap.activity_id = a.id and ap.merge_status = 'canonical'
+       ) pc on true
+       left join lateral (
+         select
+           count(*) filter (where l.external_assignment_id is not null or ps.rpe_enabled = true) as requested,
+           count(*) filter (where sf.id is not null and (l.external_assignment_id is not null or ps.rpe_enabled = true)) as rated
+         from training.activity_participants ap
+         join training.activity_participant_session_links l on l.activity_participant_id = ap.id and l.link_status = 'confirmed'
+         left join plans.plan_sessions ps on ps.logical_session_id = l.logical_session_id
+         left join training_load.session_feedback sf on sf.athlete_id = ap.athlete_id
+           and ((l.logical_session_id is not null and sf.logical_session_id = l.logical_session_id) or (l.external_assignment_id is not null and sf.external_assignment_id = l.external_assignment_id))
+         where ap.activity_id = a.id and ap.merge_status = 'canonical'
+       ) rc on true
+       left join lateral (
+         select count(distinct ap.id) as total, count(distinct ap.id) filter (where v.id is not null) as with_data
+         from training.activity_participants ap
+         join training.activity_participant_metric_participant_links mpl on mpl.activity_participant_id = ap.id and mpl.link_status = 'confirmed'
+         left join training_load.metric_measurement_occasions o on o.event_participant_id = mpl.metric_event_participant_id
+           and o.superseded_by_occasion_id is null and o.import_conflict_status is null
+           and (o.source_identity_id is null or exists (select 1 from training_load.metric_source_identities si where si.id = o.source_identity_id and si.current_occasion_id = o.id))
+         left join training_load.metric_values v on v.occasion_id = o.id
+         where ap.activity_id = a.id and ap.merge_status = 'canonical'
+       ) mc on true
+       left join lateral (
+         select count(*) as conflict_count from (
+           select mpl.activity_participant_id, o.segment_id, v.metric_definition_id
+           from training.activity_participants ap
+           join training.activity_participant_metric_participant_links mpl on mpl.activity_participant_id = ap.id and mpl.link_status = 'confirmed'
+           join training_load.metric_measurement_occasions o on o.event_participant_id = mpl.metric_event_participant_id
+             and o.superseded_by_occasion_id is null and o.import_conflict_status is null
+             and (o.source_identity_id is null or exists (select 1 from training_load.metric_source_identities si where si.id = o.source_identity_id and si.current_occasion_id = o.id))
+           join training_load.metric_values v on v.occasion_id = o.id
+           where ap.activity_id = a.id and ap.merge_status = 'canonical'
+           group by mpl.activity_participant_id, o.segment_id, v.metric_definition_id
+           having count(*) > 1
+         ) conflicts
+       ) cc on true
+       left join lateral (
+         select count(*) as open_suggestions from training.activity_match_suggestions ms where ms.activity_id = a.id and ms.status = 'open'
+       ) sc on true
+       where a.lifecycle_state <> 'superseded'
+         and a.occurred_local_date between $1::date and $2::date
+         and (${activitySql})
+       order by a.occurred_local_date, a.started_at nulls last`,
+      activityParams,
+    );
+
+    // Tracked planned sessions with NO confirmed activity link yet.
+    const plannedResult = await query(
+      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.session_time, ps.rpe_enabled,
+              pd.date as occurred_date, p.id as plan_id,
+              ath.id as athlete_id, coalesce(ath.display_name, ath.full_name, concat_ws(' ', ath.first_name, ath.last_name), ath.athlete_id) as athlete_name
+       from plans.plan_sessions ps
+       join plans.plan_days pd on pd.id = ps.plan_day_id
+       join plans.plans p on p.id = pd.plan_id
+       join public.athletes ath on ath.id = p.athlete_id
+       where ps.training_load_enabled = true
+         and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
+         and pd.date between $1::date and $2::date
+         ${plannedScopeSql}
+         and not exists (
+           select 1 from training.activity_participant_session_links l
+           where l.logical_session_id = ps.logical_session_id and l.athlete_id = p.athlete_id and l.link_status = 'confirmed'
+         )
+       order by pd.date, athlete_name, ath.id, ps.session_order`,
+      planParams,
+    );
+
+    // External assignments with NO confirmed activity link yet.
+    const externalResult = await query(
+      `select asg.id as assignment_id, asg.local_scheduled_date, asg.opens_at, asg.closes_at, asg.status as assignment_status,
+              s.id as schedule_id, s.event_name, s.status as schedule_status,
+              ath.id as athlete_id, coalesce(ath.display_name, ath.full_name, concat_ws(' ', ath.first_name, ath.last_name), ath.athlete_id) as athlete_name
+       from training_load.external_assignments asg
+       join training_load.external_schedule_occurrences eo on eo.id = asg.occurrence_id
+       join training_load.external_schedules s on s.id = eo.schedule_id
+       join public.athletes ath on ath.id = asg.athlete_id
+       where asg.local_scheduled_date between $1::date and $2::date
+         ${externalScopeSql}
+         and not exists (
+           select 1 from training.activity_participant_session_links l
+           where l.external_assignment_id = asg.id and l.link_status = 'confirmed'
+         )
+       order by asg.local_scheduled_date, athlete_name, ath.id, asg.opens_at`,
+      externalParams,
+    );
+
+    const days = [];
+    const byDate = new Map();
+    let cursor = dateFrom;
+    while (cursor <= dateTo) {
+      const bucket = { date: cursor, items: [] };
+      days.push(bucket);
+      byDate.set(cursor, bucket);
+      cursor = addDaysIso(cursor, 1);
+    }
+
+    for (const row of activityResult.rows) {
+      const bucket = byDate.get(row.occurred_local_date instanceof Date ? row.occurred_local_date.toISOString().slice(0, 10) : String(row.occurred_local_date));
+      if (!bucket) continue;
+      bucket.items.push({
+        kind: "activity",
+        activityId: row.activity_id,
+        name: row.name,
+        activityTypeKey: row.activity_type_key,
+        occurredLocalDate: row.occurred_local_date,
+        startedAt: row.started_at,
+        timezoneSnapshot: row.timezone_snapshot,
+        origin: row.origin,
+        lifecycleState: row.lifecycle_state,
+        // Every count below comes back from Postgres as a bigint — the
+        // pg driver returns those as STRINGS (never a plain number,
+        // to avoid silent precision loss on a value bigger than
+        // Number.MAX_SAFE_INTEGER) - explicitly coerced here since none of
+        // these calendar counts can realistically approach that ceiling.
+        participantCount: Number(row.participant_count),
+        rpe: Number(row.rpe_requested) > 0 ? { requested: Number(row.rpe_requested), rated: Number(row.rpe_rated) } : null,
+        metrics: Number(row.metrics_total) > 0 ? { total: Number(row.metrics_total), withData: Number(row.metrics_with_data) } : null,
+        conflictCount: Number(row.conflict_count),
+        openSuggestionCount: Number(row.open_suggestion_count),
+        sortTime: row.started_at || `${row.occurred_local_date}T00:00:00Z`,
+      });
+    }
+    for (const row of plannedResult.rows) {
+      const bucket = byDate.get(row.occurred_date instanceof Date ? row.occurred_date.toISOString().slice(0, 10) : String(row.occurred_date));
+      if (!bucket) continue;
+      bucket.items.push({
+        kind: "planned",
+        sessionId: row.session_id,
+        logicalSessionId: row.logical_session_id,
+        planId: row.plan_id,
+        sessionName: row.session_name,
+        sessionTime: row.session_time || "",
+        rpeEnabled: row.rpe_enabled,
+        athleteId: row.athlete_id,
+        athleteName: row.athlete_name,
+        sortTime: row.session_time ? `${row.occurred_date}T${row.session_time}` : `${row.occurred_date}T23:59:59Z`,
+      });
+    }
+    for (const row of externalResult.rows) {
+      const bucket = byDate.get(row.local_scheduled_date instanceof Date ? row.local_scheduled_date.toISOString().slice(0, 10) : String(row.local_scheduled_date));
+      if (!bucket) continue;
+      bucket.items.push({
+        kind: "external",
+        externalAssignmentId: row.assignment_id,
+        scheduleId: row.schedule_id,
+        eventName: row.event_name,
+        scheduleStatus: row.schedule_status,
+        assignmentStatus: row.assignment_status,
+        opensAt: row.opens_at,
+        closesAt: row.closes_at,
+        athleteId: row.athlete_id,
+        athleteName: row.athlete_name,
+        sortTime: row.opens_at || `${row.local_scheduled_date}T23:59:59Z`,
+      });
+    }
+    for (const bucket of days) {
+      bucket.items.sort((x, y) => (x.sortTime < y.sortTime ? -1 : x.sortTime > y.sortTime ? 1 : 0));
+      for (const item of bucket.items) delete item.sortTime;
+    }
+
+    res.json({ dateFrom, dateTo, days });
   } catch (error) {
     next(error);
   }

@@ -1,6 +1,7 @@
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, formatDayMonth, formatWeekday, initialsFor, localDateIso, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
+import { renderTrainingLoadCalendarHtml } from "./training-load-calendar-view.js";
 
 // Training load (RPE/sRPE), first complete phase. Deliberately its own
 // visual language - white surfaces, neutral gray borders, dark text, muted
@@ -1535,12 +1536,12 @@ export function renderTrainingLoadCoachHtml() {
       <div class="training-load-toolbar">
         <div class="training-load-tabs" role="tablist">
           ${["today", "schedule", "results"].map((s) => `
-            <button type="button" class="training-load-tab ${section === s ? "is-active" : ""}" role="tab" aria-selected="${section === s ? "true" : "false"}" data-action="training-load-section" data-section="${s}">${renderTrainingLoadTabIcon(s)}<span>${s === "today" ? "Today" : s === "schedule" ? "Schedule" : "Results"}</span></button>
+            <button type="button" class="training-load-tab ${section === s ? "is-active" : ""}" role="tab" aria-selected="${section === s ? "true" : "false"}" data-action="training-load-section" data-section="${s}">${renderTrainingLoadTabIcon(s)}<span>${s === "today" ? "Calendar" : s === "schedule" ? "Schedule" : "Results"}</span></button>
           `).join("")}
         </div>
         <button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>
       </div>
-      ${section === "today" ? renderTrainingLoadTodayHtml() : ""}
+      ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}
       ${section === "schedule" ? renderTrainingLoadScheduleHtml() : ""}
       ${section === "results" ? renderTrainingLoadResultsHtml() : ""}
       ${state.trainingLoad.filterPicker.open ? renderTrainingLoadFilterPickerHtml() : ""}
