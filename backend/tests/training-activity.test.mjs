@@ -2138,47 +2138,50 @@ test("55. accepting one participant's suggestion on a SHARED activity must never
   assert.equal(byId[fixture.s2b], "open", "participant B's OTHER suggestion must also remain untouched");
 });
 
-test("56. concurrent accepts for TWO DIFFERENT participants' independent suggestion groups on the SAME shared activity produce no lock cycle and never cross-dismiss each other", async () => {
+// Training Activity 2B, section 8: acceptMatchSuggestion/
+// dismissMatchSuggestion's own row lookup used to say plain `for update`
+// on a `ms join a` query — Postgres locks EVERY joined table's row under a
+// bare `for update`, so this ALSO locked the joined activities row, not
+// just the suggestion row it actually needs. This test used to assert that
+// over-broad lock's own side effect (two different participants' accepts
+// serializing on the shared activity row) as if it were the correct,
+// intended behavior — it now proves the CORRECTED behavior the fix
+// requires instead: two DIFFERENT participant identities' accepts on the
+// SAME shared activity never block each other via the suggestion-lookup
+// itself. A still legitimately locks the activities row a moment later,
+// inside its own merge_activity_participants() call (real, necessary
+// locking for THAT function's own correctness — untouched by this fix),
+// but B is proven to complete its ENTIRE accept — including B's own
+// merge_activity_participants() call against the SAME activity row —
+// while A is still genuinely paused BEFORE it has ever reached that point,
+// never needing to wait for A at all.
+test("56. concurrent accepts for TWO DIFFERENT participants' independent suggestion groups on the SAME shared activity never block on each other, and never cross-dismiss", async () => {
   const { clubId, coachId } = await makeClubCoach("sib56");
   const fixture = await makeSharedActivityWithTwoSuggestionGroups(clubId);
   const scope = { type: "club", clubId, ownerContext: { ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null } };
 
-  // Note: A's and B's suggestions use DIFFERENT advisory-lock keys (each
-  // keyed on its OWN source_participant_id), so they never contend on
-  // that lock — but the suggestion-lookup query itself is a plain `JOIN
-  // ... FOR UPDATE` against `training.activities`, which (with no `FOR
-  // UPDATE OF ms` restriction) locks the JOINED activities row too. Since
-  // A and B's suggestions share the SAME underlying activity row, the two
-  // calls DO still serialize on THAT lock — safe (bounded, no cycle,
-  // resolves the instant the first commits) but not fully concurrent.
-  // This test proves exactly that: real, observed blocking (not a
-  // deadlock/hang), and — the actual regression this fix targets — that
-  // neither call's cascade-dismiss ever touches the OTHER's suggestions.
-  const monitor = await pool.connect();
   let releaseA = () => {};
   let acceptAPromise = Promise.resolve();
-  let acceptBPromise = Promise.resolve();
   try {
     let signalAReached;
     const aReachedBarrier = new Promise((res) => { signalAReached = res; });
     const aBarrier = new Promise((res) => { releaseA = res; });
-    let aPid;
 
     acceptAPromise = materializeService.acceptMatchSuggestion(scope, { suggestionId: fixture.s1a, performedBy: coachId, reason: "race" }, {
-      onLocked: async (client) => { aPid = client.processID; signalAReached(); await aBarrier; },
+      onLocked: async () => { signalAReached(); await aBarrier; },
     });
     await aReachedBarrier;
 
-    acceptBPromise = materializeService.acceptMatchSuggestion(scope, { suggestionId: fixture.s1b, performedBy: coachId, reason: "race" });
-    const blocked = await waitUntilAnyOtherBlocked(monitor, aPid);
-    assert.equal(blocked, true, "B must be observed genuinely Lock-waiting (on the shared activities row A's own suggestion-lookup JOIN also locked) — real serialization, not an independent race");
+    // B must complete WHILE A is still genuinely paused, holding only its
+    // own suggestion-row lock (A has not yet reached merge_activity_
+    // participants, the only place it would legitimately touch the shared
+    // activities row) — a real completion event, not a wall-clock guess.
+    const bResult = await materializeService.acceptMatchSuggestion(scope, { suggestionId: fixture.s1b, performedBy: coachId, reason: "race" });
+    assert.equal(bResult.canonicalParticipantId, fixture.candidateB1.participantId, "B must complete entirely on its own, never waiting for A");
 
     releaseA();
     const aResult = await acceptAPromise;
-    assert.equal(aResult.canonicalParticipantId, fixture.candidateA1.participantId);
-
-    const bResult = await acceptBPromise;
-    assert.equal(bResult.canonicalParticipantId, fixture.candidateB1.participantId, "B must complete cleanly once unblocked — no deadlock, no lock cycle");
+    assert.equal(aResult.canonicalParticipantId, fixture.candidateA1.participantId, "A must still complete correctly once resumed, after B has already committed its own merge against the same activity row");
 
     const statuses = await query(`select id, status from training.activity_match_suggestions where id in ($1,$2,$3,$4)`, [fixture.s1a, fixture.s2a, fixture.s1b, fixture.s2b]);
     const byId = Object.fromEntries(statuses.rows.map((r) => [r.id, r.status]));
@@ -2188,7 +2191,55 @@ test("56. concurrent accepts for TWO DIFFERENT participants' independent suggest
     assert.equal(byId[fixture.s2b], "dismissed", "B's own cascade — resolved independently of A, never by A's cascade");
   } finally {
     releaseA();
-    await Promise.allSettled([acceptAPromise, acceptBPromise]);
+    await Promise.allSettled([acceptAPromise]);
+  }
+});
+
+// Sibling suggestions (the SAME source identity) must still serialize
+// correctly — untouched by the section 8 fix, since that serialization
+// comes entirely from lockMatchSuggestionSourceIdentity's own advisory
+// lock (keyed on source activity + source participant), never from the
+// suggestion-lookup's row lock this fix narrowed. Direct proof, using a
+// real dismiss (which never needs to touch the activities row at all,
+// unlike accept's own necessary merge_activity_participants call) so the
+// ONLY thing that can legitimately be blocking B here is that shared
+// advisory lock.
+test("57. sibling suggestions sharing the SAME source identity still correctly serialize after the section 8 lock-narrowing fix", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("lock57");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const { s1Id, s2Id } = await makeSiblingSuggestions(coachCookie, athleteId, "2026-09-28");
+  const scope = { type: "club", clubId, ownerContext: { ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null } };
+
+  const monitor = await pool.connect();
+  let releaseAccept = () => {};
+  let acceptPromise = Promise.resolve();
+  let dismissPromise = Promise.resolve();
+  try {
+    let signalAcceptReached;
+    const acceptReachedBarrier = new Promise((res) => { signalAcceptReached = res; });
+    const acceptBarrier = new Promise((res) => { releaseAccept = res; });
+    let acceptPid;
+
+    acceptPromise = materializeService.acceptMatchSuggestion(scope, { suggestionId: s1Id, performedBy: coachId, reason: "race" }, {
+      onLocked: async (client) => { acceptPid = client.processID; signalAcceptReached(); await acceptBarrier; },
+    });
+    await acceptReachedBarrier;
+
+    dismissPromise = materializeService.dismissMatchSuggestion(scope, { suggestionId: s2Id, performedBy: coachId });
+    const blocked = await waitUntilAnyOtherBlocked(monitor, acceptPid);
+    assert.equal(blocked, true, "the dismiss of the SIBLING suggestion must still be genuinely Lock-waiting — same source identity, serialized via the advisory lock, unaffected by the suggestion-row-lock narrowing");
+
+    releaseAccept();
+    const acceptResult = await acceptPromise;
+    assert.ok(acceptResult.canonicalParticipantId);
+
+    await assert.rejects(dismissPromise, (err) => {
+      assert.match(err.message, /already resolved/i);
+      return true;
+    }, "the sibling dismiss must lose the race with a controlled 409 once accept's own cascade already resolved it");
+  } finally {
+    releaseAccept();
+    await Promise.allSettled([acceptPromise, dismissPromise]);
     monitor.release();
   }
 });

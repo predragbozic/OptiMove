@@ -438,6 +438,19 @@ function validateEventBody(body) {
   if (!validDate(body.occurredDate)) return "occurredDate must be a valid YYYY-MM-DD date.";
   if (body.occurredInstant !== undefined && body.occurredInstant !== null && !validTimestamp(body.occurredInstant)) return "occurredInstant must be a valid timestamp.";
   if (!["session", "day"].includes(body?.scopeLevel)) return "scopeLevel must be 'session' or 'day'.";
+  // Training Activity 2B — provider-neutral additions to the event
+  // contract. activityId/activityComponentId/activityTypeKey/eventTimezone
+  // are all optional; a day-level event never touches Activity at all
+  // (createGroupEvent's own scopeLevel==='session' gate), so an activityId
+  // on a day-level submission is simply ignored rather than rejected —
+  // consistent with this route's existing "reject only what is genuinely
+  // malformed" convention.
+  if (body.activityId !== undefined && body.activityId !== null && !validUuid(body.activityId)) return "Invalid activityId.";
+  if (body.activityTypeKey !== undefined && body.activityTypeKey !== null && (typeof body.activityTypeKey !== "string" || body.activityTypeKey.length > 200)) return "Invalid activityTypeKey.";
+  if (body.eventTimezone !== undefined && body.eventTimezone !== null) {
+    if (typeof body.eventTimezone !== "string" || !body.eventTimezone.trim()) return "Invalid eventTimezone.";
+    try { new Intl.DateTimeFormat(undefined, { timeZone: body.eventTimezone }); } catch { return "Invalid eventTimezone."; }
+  }
   if (!Array.isArray(body?.participants) || body.participants.length === 0) return "At least one participant is required.";
   for (const p of body.participants) {
     if (!validUuid(p?.athleteId)) return "Each participant requires a valid athleteId.";
@@ -461,6 +474,9 @@ function validateEventBody(body) {
       // error instead of a controlled 400.
       if (s.order !== undefined && s.order !== null && (!Number.isInteger(s.order) || s.order < 1 || s.order > 1000)) {
         return "Each segment's order must be a positive integer.";
+      }
+      if (s.activityComponentId !== undefined && s.activityComponentId !== null && !validUuid(s.activityComponentId)) {
+        return "Invalid activityComponentId.";
       }
     }
   }
