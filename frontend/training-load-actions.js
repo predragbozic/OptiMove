@@ -1,5 +1,5 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyRpeForm, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
-import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
+import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
   captureTrainingLoadAthleteWeeklyMutationContext,
   captureTrainingLoadWeeklyMutationContext,
@@ -25,6 +25,15 @@ import {
   trainingLoadMutationContextIsCurrentWorkspace,
   updateExternalSchedule,
 } from "./training-load-data.js";
+import {
+  captureTrainingLoadCalendarMutationContext,
+  invalidateAllTrainingLoadCalendarGenerations,
+  invalidateTrainingLoadCalendarContext,
+  loadActivityDetail,
+  loadCalendarMetricDefinitions,
+  loadTrainingLoadCalendarMonth,
+  loadTrainingLoadCalendarWeek,
+} from "./training-load-calendar-data.js";
 import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 // Every data-action="training-load-*" click/input in the Athlete Home card/
@@ -197,6 +206,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // change WHICH cached entry gets dropped once the response lands (see
     // captureTrainingLoadWeeklyMutationContext's own header).
     const mutationContext = captureTrainingLoadWeeklyMutationContext(section);
+    // Calendar (item 10) — its own independent week nav, captured
+    // separately: a toggle fired from Schedule must still invalidate
+    // whatever week the Calendar tab currently shows, even though the two
+    // tabs' own weekStart values are otherwise fully decoupled.
+    const calendarMutationContext = captureTrainingLoadCalendarMutationContext();
     try {
       await toggleSessionRpeEnabled(sessionId, nextEnabled);
     } catch (error) {
@@ -245,6 +259,9 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       invalidateTrainingLoadWeeklyContext(mutationContext);
       await loadTrainingLoadWeekly(currentSection, renderTrainingLoad);
     }
+    if (trainingLoadMutationContextIsCurrentWorkspace(calendarMutationContext)) {
+      invalidateTrainingLoadCalendarContext(calendarMutationContext);
+    }
     renderTrainingLoad();
     return true;
   }
@@ -262,6 +279,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const nextEnabled = !currentlyEnabled;
     const section = state.trainingLoad.section;
     const mutationContext = captureTrainingLoadWeeklyMutationContext(section);
+    const calendarMutationContext = captureTrainingLoadCalendarMutationContext();
     try {
       await toggleSessionTrainingLoadEnabled(sessionId, nextEnabled);
     } catch (error) {
@@ -278,6 +296,9 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if (trainingLoadMutationContextIsCurrentWorkspace(mutationContext)) {
       invalidateTrainingLoadWeeklyContext(mutationContext);
       await loadTrainingLoadWeekly(currentSection, renderTrainingLoad);
+    }
+    if (trainingLoadMutationContextIsCurrentWorkspace(calendarMutationContext)) {
+      invalidateTrainingLoadCalendarContext(calendarMutationContext);
     }
     renderTrainingLoad();
     return true;
@@ -299,8 +320,16 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // skips the network round trip too, not just the loading flash - see
     // that file's own header comment for the TTL-based rationale.
     renderTrainingLoad();
+    // "today" is now the Calendar tab (item 3 - the internal section key
+    // stays "today", only the visible label changed) - it reads its own
+    // canonical-activity-shaped data (training-load-calendar-data.js), never
+    // the RPE-session-shaped state.trainingLoad.weekly.today, which nothing
+    // renders anymore for this tab. Schedule/Results are completely
+    // unaffected - same loadTrainingLoadWeekly call as before.
     await Promise.all([
-      loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+      state.trainingLoad.section === "today"
+        ? loadTrainingLoadCalendarWeek(renderTrainingLoad)
+        : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
       state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
     ]);
     renderTrainingLoad();
@@ -343,6 +372,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       // week/filter is guaranteed a real, fresh fetch - then refreshes the
       // currently-visible rows immediately for instant feedback.
       invalidateAllTrainingLoadWeeklyGenerations();
+      invalidateAllTrainingLoadCalendarGenerations();
       await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
     } catch (error) {
       setting.saving = false;
@@ -389,6 +419,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       // resolved plan's own session(s) drop the "workspace not assigned"
       // badge right away.
       invalidateAllTrainingLoadWeeklyGenerations();
+      invalidateAllTrainingLoadCalendarGenerations();
       await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
     } catch (error) {
       state.trainingLoad.resolvingOwnership = false;
@@ -434,6 +465,190 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
 
+  // -------------------- Training Load Frontend 3A: Calendar --------------------
+
+  if (type === "training-load-calendar-prev" || type === "training-load-calendar-next") {
+    const cal = state.trainingLoad.calendar;
+    const delta = type === "training-load-calendar-prev" ? -1 : 1;
+    if (cal.monthMode) {
+      cal.monthCursor = addMonthsIso(cal.monthCursor || cal.weekStart, delta);
+      renderTrainingLoad();
+      await loadTrainingLoadCalendarMonth(renderTrainingLoad);
+    } else {
+      cal.weekStart = addDaysIso(cal.weekStart, delta * 7);
+      if (cal.selectedDate) cal.selectedDate = addDaysIso(cal.selectedDate, delta * 7);
+      renderTrainingLoad();
+      await loadTrainingLoadCalendarWeek(renderTrainingLoad);
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-today") {
+    const cal = state.trainingLoad.calendar;
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const today = localDateIsoInTimeZone(timezone);
+    cal.weekStart = weekMondayIso(today);
+    cal.selectedDate = today;
+    cal.selectedActivityId = null;
+    cal.selectedComponentId = null;
+    if (cal.monthMode) cal.monthCursor = monthStartIso(today);
+    renderTrainingLoad();
+    await Promise.all([
+      loadTrainingLoadCalendarWeek(renderTrainingLoad),
+      cal.monthMode ? loadTrainingLoadCalendarMonth(renderTrainingLoad) : Promise.resolve(),
+    ]);
+    renderTrainingLoad();
+    return true;
+  }
+  // Item 4: expanding/collapsing the calendar NEVER changes the current
+  // selection — only the presentation (7-day strip vs. full month grid)
+  // toggles; selectedDate/selectedActivityId are left completely alone.
+  if (type === "training-load-calendar-toggle-month") {
+    const cal = state.trainingLoad.calendar;
+    cal.monthMode = !cal.monthMode;
+    if (cal.monthMode) {
+      if (!cal.monthCursor) cal.monthCursor = monthStartIso(cal.selectedDate || cal.weekStart);
+      renderTrainingLoad();
+      await loadTrainingLoadCalendarMonth(renderTrainingLoad);
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-select-day") {
+    const cal = state.trainingLoad.calendar;
+    const date = action.dataset.date;
+    cal.selectedDate = date;
+    // A new day resets any activity/component selection from a DIFFERENT
+    // day — never leaves a stale "selected activity" pointing at a day
+    // that's no longer on screen.
+    cal.selectedActivityId = null;
+    cal.selectedComponentId = null;
+    const newWeekStart = weekMondayIso(date);
+    if (newWeekStart !== cal.weekStart) {
+      cal.weekStart = newWeekStart;
+      renderTrainingLoad();
+      await loadTrainingLoadCalendarWeek(renderTrainingLoad);
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-select-activity") {
+    const cal = state.trainingLoad.calendar;
+    const activityId = action.dataset.activityId;
+    if (!activityId) return true;
+    cal.selectedActivityId = activityId;
+    cal.selectedComponentId = null;
+    cal.activityDetailTab = "overview";
+    cal.metricPicker.selectedIds = null;
+    cal.resultsSort = { column: "athlete", direction: "asc" };
+    // Item 4 (mobile): after picking a specific activity, an EXPANDED
+    // month grid collapses back to the 7-day strip to leave room for
+    // results — never on desktop/tablet, and the user can always
+    // re-expand via the same toggle.
+    if (cal.monthMode && window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
+      cal.monthMode = false;
+    }
+    renderTrainingLoad();
+    // Fired alongside (not awaited before) the activity fetch — memoized
+    // per workspace (loadCalendarMetricDefinitions's own header), so this
+    // is a real network request only the FIRST time an activity is opened
+    // this visit. Without this, the results table's default columns would
+    // show generic "Metric" placeholders (no real label/unit/icon) until
+    // the coach happened to open the metric picker at least once.
+    void loadCalendarMetricDefinitions().then(renderTrainingLoad);
+    await loadActivityDetail(activityId, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-clear-activity") {
+    const cal = state.trainingLoad.calendar;
+    cal.selectedActivityId = null;
+    cal.selectedComponentId = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-select-detail-tab") {
+    state.trainingLoad.calendar.activityDetailTab = action.dataset.tlCalendarDetailTab;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-select-component") {
+    const cal = state.trainingLoad.calendar;
+    cal.selectedComponentId = action.dataset.componentId || null;
+    cal.resultsSort = { column: "athlete", direction: "asc" };
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-select-athlete") {
+    state.trainingLoad.calendar.selectedResultsAthleteId = action.dataset.athleteId;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-close-athlete") {
+    state.trainingLoad.calendar.selectedResultsAthleteId = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-sort") {
+    const sort = state.trainingLoad.calendar.resultsSort;
+    const column = action.dataset.column;
+    sort.direction = sort.column === column && sort.direction === "asc" ? "desc" : "asc";
+    sort.column = column;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-view-conflict") {
+    try {
+      state.trainingLoad.calendar.conflictValues = JSON.parse(action.dataset.values || "[]");
+    } catch {
+      state.trainingLoad.calendar.conflictValues = [];
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-conflict-close") {
+    state.trainingLoad.calendar.conflictValues = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-metric-picker-open") {
+    const picker = state.trainingLoad.calendar.metricPicker;
+    picker.open = true;
+    renderTrainingLoad();
+    await loadCalendarMetricDefinitions();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-metric-picker-close") {
+    state.trainingLoad.calendar.metricPicker.open = false;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-calendar-metric-toggle") {
+    const picker = state.trainingLoad.calendar.metricPicker;
+    const metricId = action.dataset.metricId;
+    if (!metricId) return true;
+    // The FIRST toggle interaction materializes `selectedIds` out of
+    // whatever the smart default currently implies (see
+    // pickedMetricColumns in training-load-calendar-view.js), so unchecking
+    // one metric never silently discards every other one that was showing
+    // by default a moment ago.
+    if (picker.selectedIds === null) {
+      const cal = state.trainingLoad.calendar;
+      const detail = cal.activityDetail.data;
+      const currentIds = new Set();
+      if (detail) {
+        for (const f of detail.facts) if (f.factKind === "metric_value") currentIds.add(f.detail.metricDefinitionId);
+      }
+      picker.selectedIds = currentIds.size <= 4 ? [...currentIds] : [];
+    }
+    const idx = picker.selectedIds.indexOf(metricId);
+    if (idx >= 0) picker.selectedIds.splice(idx, 1);
+    else picker.selectedIds.push(metricId);
+    renderTrainingLoad();
+    return true;
+  }
+
   // -------------------- Coach: Club/Team/Athletes filter picker --------------------
 
   if (type === "training-load-filter-open") {
@@ -472,6 +687,34 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     for (const key of Object.keys(state.trainingLoad.weekly)) state.trainingLoad.weekly[key].data = null;
     renderTrainingLoad();
     await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
+    // Calendar (item 2's own "workspace and athlete/team filters"
+    // requirement): the Calendar tab shares this exact Filter control but
+    // reads a wholly separate state slice/cache (state.trainingLoad.calendar,
+    // never state.trainingLoad.weekly) - without this, confirming a filter
+    // while on Calendar silently did nothing to it at all. Gated on
+    // `cal.weekStart` (only set once the Calendar has actually been opened
+    // this session) so this stays a true no-op whenever Calendar has never
+    // been visited - both in production (nothing to refresh yet) and for
+    // every OLDER test in this suite that only ever exercises the
+    // weekly-cache-backed Schedule/Results sections and never touches
+    // state.trainingLoad.calendar at all. A previously-selected activity/
+    // component may no longer be visible under the new filter, so that
+    // selection is cleared exactly like a workspace switch already does
+    // (resetTrainingLoadForWorkspaceChange's own reasoning).
+    const cal = state.trainingLoad.calendar;
+    if (cal.weekStart) {
+      cal.data = null;
+      cal.monthData = null;
+      cal.selectedActivityId = null;
+      cal.selectedComponentId = null;
+      cal.selectedResultsAthleteId = null;
+      cal.activityDetail = { activityId: null, data: null, loading: false, error: "" };
+      renderTrainingLoad();
+      await Promise.all([
+        loadTrainingLoadCalendarWeek(renderTrainingLoad),
+        cal.monthMode ? loadTrainingLoadCalendarMonth(renderTrainingLoad) : Promise.resolve(),
+      ]);
+    }
     renderTrainingLoad();
     return true;
   }
@@ -767,6 +1010,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // (Schedule's own management view, and Today's grouped rows) reflect
     // the new status immediately.
     invalidateAllTrainingLoadWeeklyGenerations();
+    invalidateAllTrainingLoadCalendarGenerations();
     await Promise.all([
       openExternalScheduleDetail(scheduleId, renderTrainingLoad),
       loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
@@ -935,6 +1179,7 @@ async function submitExternalScheduleForm(renderTrainingLoad) {
     // safer than branching on scheduleKind), then refresh the current
     // section immediately for instant feedback.
     invalidateAllTrainingLoadWeeklyGenerations();
+    invalidateAllTrainingLoadCalendarGenerations();
     await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
   } catch (error) {
     form.submitting = false;
@@ -1219,6 +1464,15 @@ async function submitRpeForm(renderTrainingLoad) {
     if (trainingLoadMutationContextIsCurrentWorkspace(athleteWeeklyContext)) {
       invalidateTrainingLoadAthleteWeeklyContext(athleteWeeklyContext);
     }
+    // Calendar (item 10): the acting identity here is the ATHLETE, not any
+    // particular coach — there is no single coach workspace context to
+    // capture at this mutation site the way the coach-side toggles above
+    // can. A real submit can materialize a brand-new training.activity
+    // (see trainingActivityMaterialize.js), which any coach who manages
+    // this athlete could be looking at right now — wide invalidation, same
+    // "can't narrow the blast radius, so don't guess" reasoning as the
+    // workspace master toggle above.
+    invalidateAllTrainingLoadCalendarGenerations();
   } catch (error) {
     form.saving = false;
     form.error = error.message || "Could not save this session's feedback.";
@@ -1244,11 +1498,23 @@ export function resetTrainingLoadForWorkspaceChange() {
   // request that was in flight at the moment of the switch leaves its
   // section stuck showing a permanent spinner.
   invalidateAllTrainingLoadWeeklyGenerations();
+  invalidateAllTrainingLoadCalendarGenerations();
   for (const key of Object.keys(state.trainingLoad.weekly)) {
     state.trainingLoad.weekly[key].data = null;
     state.trainingLoad.weekly[key].error = "";
     state.trainingLoad.weekly[key].loading = false;
   }
+  // Calendar (item 10): the OLD workspace's own week/month/activity-detail
+  // data, and any activity/component/athlete selection made under it, must
+  // never survive into the new workspace — a stale selection pointing at
+  // an activityId the new workspace may not even be authorized to see is
+  // worse than just resetting to "no selection".
+  const cal = state.trainingLoad.calendar;
+  cal.data = null; cal.error = ""; cal.loading = false;
+  cal.monthMode = false; cal.monthData = null; cal.monthError = ""; cal.monthLoading = false; cal.monthCursor = "";
+  cal.selectedActivityId = null; cal.selectedComponentId = null; cal.selectedResultsAthleteId = null;
+  cal.activityDetail = { activityId: null, data: null, loading: false, error: "" };
+  cal.metricPicker = { open: false, search: "", selectedIds: null, definitions: null, loading: false, error: "" };
   state.trainingLoad.athleteWeekly.data = null;
   state.trainingLoad.athleteWeekly.error = "";
   state.trainingLoad.athleteWeekly.loading = false;

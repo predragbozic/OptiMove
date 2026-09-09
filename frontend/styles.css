@@ -11680,6 +11680,7 @@ button.tests-assignment-card {
 
 .training-load-root {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -12380,4 +12381,557 @@ button.tests-assignment-card {
   display: inline-flex;
   width: 20px;
   flex-shrink: 0;
+}
+
+/* -------------------- Training Load Frontend 3A: Calendar --------------------
+   Same neutral white/gray language as the rest of Training Load (see that
+   section's own header) - teal (var(--accent)) reserved for the active
+   selection/status only, never a large green/teal block. Reuses the
+   existing .training-load-weekly-... and .builder-athlete-overlay / -picker
+   / -backdrop structural classes wherever the shape already matches (week nav, day
+   strip, modal overlay) rather than duplicating them. */
+
+.tl-calendar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.tl-calendar-expand-toggle {
+  white-space: nowrap;
+}
+
+/* .training-load-weekly-nav (shared with the old Today/Schedule/Results
+   week strip) has no flex-wrap of its own, which was fine for its original
+   4 items (prev/date/Today/next) but overflows once the Month-view toggle
+   is added as a 5th item at narrow widths - scoped to .tl-calendar-nav only
+   so the old weekly nav elsewhere is untouched. */
+.tl-calendar-nav {
+  flex-wrap: wrap;
+}
+
+.tl-calendar-month-grid {
+  display: grid;
+  gap: 4px;
+}
+
+.tl-calendar-month-weekday-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.tl-calendar-month-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.tl-calendar-month-day {
+  display: grid;
+  gap: 3px;
+  min-height: 64px;
+  padding: 6px 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) - 3px);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+}
+
+.tl-calendar-month-day.is-outside {
+  opacity: 0.45;
+}
+
+.tl-calendar-month-day.is-today {
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+
+.tl-calendar-month-day.is-selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.tl-calendar-month-day-number {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.tl-calendar-month-day-badges {
+  display: grid;
+  gap: 2px;
+}
+
+.tl-calendar-month-badge {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-calendar-month-badge-more {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.tl-calendar-month-day-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  justify-self: start;
+}
+
+/* Narrow mobile: text badges give way to a single dot + count, per item 4's
+   own "ako tekst ne može bezbedno da stane" allowance. */
+@media (max-width: 420px) {
+  .tl-calendar-month-day {
+    min-height: 48px;
+  }
+  .tl-calendar-month-badge {
+    display: none;
+  }
+  .tl-calendar-month-day-dot {
+    display: block;
+  }
+}
+@media (min-width: 421px) {
+  .tl-calendar-month-day-dot {
+    display: none;
+  }
+}
+
+.tl-context-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.tl-context-breadcrumb {
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.tl-context-part {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.tl-context-sep {
+  color: var(--muted);
+}
+
+.tl-agenda-list {
+  display: grid;
+  gap: 6px;
+}
+
+.tl-agenda-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  width: 100%;
+  cursor: pointer;
+}
+
+.tl-agenda-card-static {
+  cursor: default;
+}
+
+.tl-agenda-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tl-agenda-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tl-agenda-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-agenda-provisional-tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 4px;
+}
+
+.tl-agenda-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-agenda-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.tl-agenda-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.tl-agenda-badge-muted {
+  color: var(--muted);
+}
+
+.tl-agenda-badge-warn {
+  color: #8a5a00;
+  background: #fff4e0;
+  border-color: #f0d6a0;
+}
+
+.tl-activity-detail-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+.tl-activity-detail-tab {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tl-activity-detail-tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.tl-activity-detail-panel {
+  padding: 10px 0;
+}
+
+.tl-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.tl-overview-tile {
+  display: grid;
+  gap: 2px;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.tl-overview-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.tl-overview-value {
+  font-weight: 700;
+}
+
+.tl-status-provisional {
+  color: var(--accent);
+}
+
+.tl-overview-suggestion-note {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.tl-athletes-list, .tl-components-list, .tl-sources-list {
+  display: grid;
+  gap: 6px;
+}
+
+.tl-athlete-row, .tl-component-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  width: 100%;
+}
+
+.tl-component-row.is-selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.tl-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.tl-source-kind {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  text-transform: uppercase;
+}
+
+.tl-source-kind-rpe {
+  color: var(--accent);
+}
+
+.tl-results-section {
+  margin-top: 14px;
+}
+
+.tl-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* Item 8: the table gets its OWN controlled horizontal scroll container -
+   the page itself must never overflow horizontally. */
+.tl-results-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-width: 100%;
+}
+
+.tl-results-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+.tl-results-table th, .tl-results-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tl-results-table thead th {
+  background: var(--bg);
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Sticky athlete column - stays usable while the rest of the table
+   scrolls horizontally on narrow viewports. */
+.tl-sticky-col {
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+  z-index: 1;
+  box-shadow: 1px 0 0 var(--line);
+}
+
+.tl-results-table thead .tl-sticky-col {
+  background: var(--bg);
+}
+
+.tl-sort-button {
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-weight: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.tl-cell-empty {
+  color: var(--muted);
+}
+
+.tl-cell-unit, .tl-col-unit {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tl-cell-conflict {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #f0d6a0;
+  background: #fff4e0;
+  color: #8a5a00;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tl-conflict-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d98c00;
+}
+
+.tl-metric-icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+  margin-right: 3px;
+}
+
+.tl-metric-icon-fallback {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  color: var(--muted);
+  margin-right: 3px;
+}
+
+.tl-metric-picker-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tl-metric-picker-search {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font: inherit;
+}
+
+.tl-metric-picker-body {
+  overflow-y: auto;
+  max-height: 60vh;
+  margin-top: 10px;
+  display: grid;
+  gap: 14px;
+}
+
+.tl-metric-picker-group-label {
+  margin: 0 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tl-metric-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+
+.tl-metric-picker-option-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.tl-metric-picker-option-unit {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tl-conflict-panel {
+  max-width: 360px;
+  width: 100%;
+  padding: 20px;
+  display: grid;
+  gap: 8px;
+}
+
+.tl-conflict-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tl-athlete-drawer {
+  max-width: 380px;
+  width: 100%;
+}
+
+.tl-athlete-drawer-metrics {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+/* Mobile: no page-level horizontal overflow anywhere in this feature. */
+@media (max-width: 480px) {
+  .tl-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tl-context-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }

@@ -60,7 +60,58 @@ export async function getCanonicalActivityResults(readContext, activityId) {
   // own facts only", so that narrowing happens here, not in the route.
   const scoped = readContext.isAthleteSelf ? facts.filter((f) => f.athleteId === null || String(f.athleteId) === String(readContext.athleteId)) : facts;
   const canonicalActivityId = results.rows[0]?.canonical_activity_id || (await query(`select training.resolve_canonical_activity_id($1) as id`, [activityId])).rows[0].id;
-  return { canonicalActivityId, facts: scoped };
+
+  // Training Load Frontend 3A — compatible, additive extension: the
+  // canonical read contract (training.canonical_activity_results, a pure
+  // SQL function with no idea what an "athlete display name" even is)
+  // returns athleteId only. A results TABLE needs a real name per row, and
+  // the frontend must never resolve that by re-deriving/guessing it from
+  // anywhere else — one extra query here, keyed on the exact athleteIds
+  // this response already scoped/authorized above, never a schema change.
+  const athleteIds = [...new Set(scoped.map((f) => f.athleteId).filter(Boolean))];
+  let athleteNamesById = {};
+  if (athleteIds.length) {
+    const names = await query(
+      `select id, coalesce(display_name, full_name, concat_ws(' ', first_name, last_name), athlete_id) as name from public.athletes where id = any($1::uuid[])`,
+      [athleteIds],
+    );
+    athleteNamesById = Object.fromEntries(names.rows.map((r) => [r.id, r.name]));
+  }
+
+  // Training Load Frontend 3A — another compatible, additive extension: the
+  // canonical read contract's own component-related fact kinds
+  // (component_performance, component_metric_segment_link) only surface a
+  // component when a participant has actually performed it or a metric
+  // segment has been linked to it — there is currently no write path at
+  // all for activity_participant_components, so most real components would
+  // otherwise never appear here, and a merely-linked one would carry no
+  // name. The activity's OWN component hierarchy (name/order/duration)
+  // lives on training.activity_components regardless of performance/link
+  // facts, so it is fetched directly here, across every alias activity
+  // (mirrors alias_activities in canonical_activity_results itself), and
+  // returned as a separate top-level field — never folded into `facts`.
+  const componentRows = await query(
+    `select c.id, c.activity_id, c.parent_component_id, c.component_type_key, c.exercise_id, c.name_snapshot,
+            c.sort_order, c.planned_duration_seconds, c.actual_duration_seconds
+     from training.activity_components c
+     cross join lateral training.activity_alias_ids($1::uuid) aa
+     where c.activity_id = aa.activity_id
+     order by c.sort_order, c.id`,
+    [canonicalActivityId],
+  );
+  const components = componentRows.rows.map((r) => ({
+    id: r.id,
+    activityId: r.activity_id,
+    parentComponentId: r.parent_component_id,
+    componentTypeKey: r.component_type_key,
+    exerciseId: r.exercise_id,
+    name: r.name_snapshot,
+    sortOrder: Number(r.sort_order),
+    plannedDurationSeconds: r.planned_duration_seconds === null ? null : Number(r.planned_duration_seconds),
+    actualDurationSeconds: r.actual_duration_seconds === null ? null : Number(r.actual_duration_seconds),
+  }));
+
+  return { canonicalActivityId, facts: scoped, athleteNamesById, components };
 }
 
 const LIST_MAX_PAGE_SIZE = 200;

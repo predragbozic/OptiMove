@@ -380,20 +380,29 @@ test("D10. closing the form WITHOUT having saved never re-fetches anything", asy
 // it's cheap and changes independently of the weekly payload) still
 // fetches fresh every time Schedule is entered, regardless of the shared
 // weekly cache.
-test("E1. entering Schedule always re-fetches the master-toggle setting fresh, even though the shared weekly payload itself is now reused across section switches", async () => {
+test("E1. entering Schedule always re-fetches the master-toggle setting fresh; Today (Calendar) reads its own separate endpoint so it always costs its own request", async () => {
   resetState();
   let calls = 0;
   // (v9) Switching INTO "schedule" also fetches the master-toggle
   // setting (that's the only tab it renders on) - one extra call each
   // time, never fired for any other section.
-  installFetchMock((call) => { calls += 1; return { status: 200, body: call.url === "/api/training-load/planned-rpe-setting" ? { enabled: false, enabledAt: null } : weekPayload("2026-08-24") }; });
+  installFetchMock((call) => {
+    calls += 1;
+    if (call.url === "/api/training-load/planned-rpe-setting") return { status: 200, body: { enabled: false, enabledAt: null } };
+    if (call.url.startsWith("/api/training-load/calendar")) return { status: 200, body: { dateFrom: "2026-08-24", dateTo: "2026-08-30", days: [] } };
+    return { status: 200, body: weekPayload("2026-08-24") };
+  });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "schedule" }), { renderTrainingLoad });
   assert.equal(state.trainingLoad.section, "schedule");
   assert.equal(calls, 2, "the weekly fetch AND the master-toggle setting fetch, entering schedule the first time");
+  // Training Load Frontend 3A: "today" is the Calendar tab now - it reads
+  // its own separate calendar endpoint/cache (training-load-calendar-data.js),
+  // never the old shared /weekly payload Schedule/Results still use, so
+  // switching into it always costs a genuine new request, not a cache hit.
   await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "today" }), { renderTrainingLoad });
-  assert.equal(calls, 2, "today reuses the already-cached weekly payload for the same week/filter - no new request");
+  assert.equal(calls, 3, "Calendar's own first-ever fetch of its separate endpoint");
   await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "schedule" }), { renderTrainingLoad });
-  assert.equal(calls, 3, "back in schedule: the weekly payload is still shared/cached, but the master-toggle setting fetches again regardless");
+  assert.equal(calls, 4, "back in schedule: the OLD weekly payload is still shared/cached from before, but the master-toggle setting fetches again regardless");
 });
 
 test("E2. Prev/Next/Today shift the week exactly 7 days, matching the Tests weekly nav contract", async () => {
@@ -444,29 +453,32 @@ test("E4. two IDENTICAL concurrent requests (same section/week/filter) coalesce 
   assert.equal(state.trainingLoad.weekly.today.loading, false);
 });
 
-test("E5. switching Today -> Schedule -> Results for the SAME already-loaded week shares the payload - only the first section actually fetches", async () => {
+test("E5. Today (Calendar) reads its own separate endpoint entirely; Schedule -> Results for the SAME already-loaded week still share the OLD weekly payload between themselves", async () => {
   resetState();
-  let calls = 0;
+  let weeklyCalls = 0;
+  let calendarCalls = 0;
   installFetchMock((call) => {
-    if (call.url.startsWith("/api/training-load/weekly")) calls += 1;
+    if (call.url.startsWith("/api/training-load/weekly")) weeklyCalls += 1;
+    if (call.url.startsWith("/api/training-load/calendar")) {
+      calendarCalls += 1;
+      return { status: 200, body: { dateFrom: "2026-08-24", dateTo: "2026-08-30", days: [] } };
+    }
     return { status: 200, body: weekPayload("2026-08-24") };
   });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "today" }), { renderTrainingLoad });
-  assert.equal(calls, 1);
-  assert.ok(state.trainingLoad.weekly.today.data);
+  assert.equal(calendarCalls, 1, "Calendar's own first fetch, via its own separate endpoint");
+  assert.equal(weeklyCalls, 0, "Calendar must never touch the old /weekly endpoint or cache at all");
+  assert.ok(state.trainingLoad.calendar.data);
 
-  // Schedule and Results seed their OWN nav.weekStart to "today's week"
-  // on first visit too (loadTrainingLoadWeeklyInto's own seeding) - since
-  // nothing has navigated either away from the current week yet, they
-  // land on the exact same week/filter/workspace context Today already
-  // fetched, so their own first entry should be an instant cache hit,
-  // never a second real request.
+  // Schedule and Results still share the SAME old weekly cache/endpoint
+  // between themselves, exactly as before - only Today/Calendar moved off
+  // of it.
   await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "schedule" }), { renderTrainingLoad });
-  assert.equal(calls, 1, "Schedule must reuse Today's own already-fetched payload for the same week, never re-fetch it");
-  assert.ok(state.trainingLoad.weekly.schedule.data, "the shared payload must still be applied to Schedule's own nav slot");
+  assert.equal(weeklyCalls, 1, "Schedule's own first-ever weekly fetch - it can no longer inherit anything from Calendar's separate cache");
+  assert.ok(state.trainingLoad.weekly.schedule.data);
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "results" }), { renderTrainingLoad });
-  assert.equal(calls, 1, "Results must also reuse the same shared payload");
+  assert.equal(weeklyCalls, 1, "Results reuses Schedule's already-fetched weekly payload for the same week");
 });
 
 // ------------------------------------------------------------
