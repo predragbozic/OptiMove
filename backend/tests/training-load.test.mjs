@@ -1435,6 +1435,38 @@ test("N2. rpe_enabled can be toggled directly and is read back correctly (schema
   assert.equal(rpeEnabled, false);
 });
 
+// Correction round 3, item 2: the v14 migration's own DB-level CHECK
+// (plans_request_rpe_default_requires_track_training_load) must reject
+// track_training_load_default=false with request_rpe_default=true even
+// via a DIRECT SQL statement that bypasses the app entirely - the same
+// invariant routes/builder.js's own PATCH .../training-load-settings
+// already enforces at the API layer, but never relying on that alone.
+test("N3. the DB's own CHECK rejects track_training_load_default=false with request_rpe_default=true, bypassing the app layer entirely", async () => {
+  const { athletes } = await makeClubWithAthletes("n3", 1);
+  const planId = await makeWeeklyPlan(athletes[0].athleteId);
+  await assert.rejects(
+    () => query(`update plans.plans set track_training_load_default = false, request_rpe_default = true where id = $1`, [planId]),
+    /plans_request_rpe_default_requires_track_training_load/,
+    "a direct SQL UPDATE violating the invariant must be rejected by the CHECK constraint itself",
+  );
+  const row = (await query(`select track_training_load_default, request_rpe_default from plans.plans where id = $1`, [planId])).rows[0];
+  assert.equal(row.track_training_load_default, false, "the rejected statement must never have partially applied");
+  assert.equal(row.request_rpe_default, false);
+});
+
+// Correction round 3, item 2: training_load.planned_rpe_actionable's own
+// p_rpe_enabled coalesce was corrected from a true default to false (a
+// NULL/absent rpe_enabled must never be treated as "RPE requested") -
+// verified by calling the function directly against a real plan/date,
+// never inferred only from an app-level read path that happens to never
+// pass NULL today.
+test("N4. training_load.planned_rpe_actionable(validPlan, validDate, true, NULL) is false - NULL never defaults to 'requested'", async () => {
+  const { athletes } = await makeClubWithAthletes("n4", 1);
+  const planId = await makeWeeklyPlan(athletes[0].athleteId);
+  const result = await query(`select training_load.planned_rpe_actionable($1, $2::date, true, null) as actionable`, [planId, TODAY]);
+  assert.equal(result.rows[0].actionable, false);
+});
+
 // This file's own test_auto_system_ownership trigger (see before(), above)
 // stamps every weekly plan owner_scope='system' - a deliberate, coherent
 // choice for the FILE's own predating-the-workspace-toggle purpose (every

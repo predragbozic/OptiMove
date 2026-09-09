@@ -211,77 +211,133 @@ router.patch("/plans/:planId", async (req, res, next) => {
 // the plan level even though nothing currently reads these two columns
 // together at write time.
 router.patch("/plans/:planId/training-load-settings", async (req, res, next) => {
+  let client;
   try {
-    const plan = await requireDraftPlan(req, req.params.planId, res);
-    if (!plan) return;
-    if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
+    const accessPlan = await requirePlan(req, req.params.planId, res);
+    if (!accessPlan) return;
+    if (accessPlan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
     if (req.body?.trackTrainingLoadDefault !== undefined && strictBoolean(req.body.trackTrainingLoadDefault) === undefined) {
       return res.status(400).json({ error: "trackTrainingLoadDefault must be true or false." });
     }
     if (req.body?.requestRpeDefault !== undefined && strictBoolean(req.body.requestRpeDefault) === undefined) {
       return res.status(400).json({ error: "requestRpeDefault must be true or false." });
     }
+
+    client = await pool.connect();
+    await client.query("begin");
+    const plan = await lockDraftPlanOrReject(client, res, accessPlan.id);
+    if (!plan) { await client.query("rollback"); client.release(); return; }
+
     const trackTrainingLoadDefault = req.body?.trackTrainingLoadDefault !== undefined ? strictBoolean(req.body.trackTrainingLoadDefault) : plan.track_training_load_default;
     const requestedRpeDefault = req.body?.requestRpeDefault !== undefined ? strictBoolean(req.body.requestRpeDefault) : plan.request_rpe_default;
     const requestRpeDefault = trackTrainingLoadDefault ? requestedRpeDefault : false;
-    await query(
+    await client.query(
       "update plans.plans set track_training_load_default = $2, request_rpe_default = $3, updated_at = now() where id = $1",
       [plan.id, trackTrainingLoadDefault, requestRpeDefault],
     );
+    await client.query("commit");
+    client.release();
+    client = null;
     return respondWithDraft(req, res, req.user, plan);
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    next(error);
+  }
 });
 
 // Three explicit bulk actions over the CURRENTLY OPEN draft's own
 // sessions - the only way this feature ever touches an EXISTING session's
 // tracking/RPE state in bulk (plan-level defaults above only ever apply
 // to a session created AFTER they're saved). Each is a single, targeted
-// UPDATE, never a blanket rewrite of every column.
+// UPDATE, never a blanket rewrite of every column. All three lock+re-read
+// the plan (lockDraftPlanOrReject) before reading plan.track_training_load_
+// default/plan.request_rpe_default below - the source values these bulk
+// actions apply are always the freshest committed ones, never a pre-lock
+// snapshot that a concurrent settings PATCH could have already superseded.
 router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", async (req, res, next) => {
+  let client;
   try {
-    const plan = await requireDraftPlan(req, req.params.planId, res);
-    if (!plan) return;
-    if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
-    await query(
+    const accessPlan = await requirePlan(req, req.params.planId, res);
+    if (!accessPlan) return;
+    if (accessPlan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
+
+    client = await pool.connect();
+    await client.query("begin");
+    const plan = await lockDraftPlanOrReject(client, res, accessPlan.id);
+    if (!plan) { await client.query("rollback"); client.release(); return; }
+
+    await client.query(
       `update plans.plan_sessions ps set training_load_enabled = $2, rpe_enabled = $3, updated_at = now()
        from plans.plan_days pd
        where ps.plan_day_id = pd.id and pd.plan_id = $1 and ps.bta = 'T'`,
       [plan.id, Boolean(plan.track_training_load_default), Boolean(plan.track_training_load_default) && Boolean(plan.request_rpe_default)],
     );
+    await client.query("commit");
+    client.release();
+    client = null;
     return respondWithDraft(req, res, req.user, plan);
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    next(error);
+  }
 });
 
 router.post("/plans/:planId/training-load-settings/turn-off-before-after", async (req, res, next) => {
+  let client;
   try {
-    const plan = await requireDraftPlan(req, req.params.planId, res);
-    if (!plan) return;
-    if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
-    await query(
+    const accessPlan = await requirePlan(req, req.params.planId, res);
+    if (!accessPlan) return;
+    if (accessPlan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
+
+    client = await pool.connect();
+    await client.query("begin");
+    const plan = await lockDraftPlanOrReject(client, res, accessPlan.id);
+    if (!plan) { await client.query("rollback"); client.release(); return; }
+
+    await client.query(
       `update plans.plan_sessions ps set training_load_enabled = false, rpe_enabled = false, updated_at = now()
        from plans.plan_days pd
        where ps.plan_day_id = pd.id and pd.plan_id = $1 and ps.bta in ('B', 'A')`,
       [plan.id],
     );
+    await client.query("commit");
+    client.release();
+    client = null;
     return respondWithDraft(req, res, req.user, plan);
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    next(error);
+  }
 });
 
 router.post("/plans/:planId/training-load-settings/turn-off-all-rpe", async (req, res, next) => {
+  let client;
   try {
-    const plan = await requireDraftPlan(req, req.params.planId, res);
-    if (!plan) return;
-    if (plan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
+    const accessPlan = await requirePlan(req, req.params.planId, res);
+    if (!accessPlan) return;
+    if (accessPlan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
+
+    client = await pool.connect();
+    await client.query("begin");
+    const plan = await lockDraftPlanOrReject(client, res, accessPlan.id);
+    if (!plan) { await client.query("rollback"); client.release(); return; }
+
     // Tracking itself is left untouched - this only ever turns RPE off,
     // exactly as labeled; a session that was tracked stays tracked.
-    await query(
+    await client.query(
       `update plans.plan_sessions ps set rpe_enabled = false, updated_at = now()
        from plans.plan_days pd
        where ps.plan_day_id = pd.id and pd.plan_id = $1 and ps.rpe_enabled = true`,
       [plan.id],
     );
+    await client.query("commit");
+    client.release();
+    client = null;
     return respondWithDraft(req, res, req.user, plan);
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    next(error);
+  }
 });
 
 router.post("/plans/:planId/sync-batch", async (req, res, next) => {
@@ -406,6 +462,15 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     // WHERE clause: whichever request's UPDATE commits first is the one
     // that actually matches `status = 'draft'`, the other's UPDATE
     // affects 0 rows once it proceeds.
+    //
+    // This single-statement UPDATE is ALSO this branch's own half of the
+    // shared deterministic lock order lockDraftPlanOrReject documents
+    // (its own header comment, above): a plain UPDATE already takes the
+    // target row's write lock as part of running, identical in effect to
+    // a `select ... for update` taken first - so a concurrent Training
+    // Load settings/bulk-action/session PATCH racing this exact Submit
+    // for the SAME plan id always serializes correctly against it,
+    // whichever of the two reaches the row first.
     let activatedPlans;
     if (shouldSyncBatch) {
       const updated = await client.query(
@@ -1098,62 +1163,85 @@ router.post("/blocks/:blockId/sessions", async (req, res, next) => {
 });
 
 router.patch("/sessions/:sessionId", async (req, res, next) => {
+  let client;
   try {
     const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
-    // Every field below follows the SAME "only touched when the request
-    // body actually includes the key" partial-update rule - a caller that
-    // PATCHes just {name} (e.g. renaming a session) must never silently
-    // wipe time/amPm/bta/tracking/rpe, and a caller that PATCHes just
-    // {trackingEnabled} must never silently wipe name/time. This used to
-    // hold for amPm/bta/trackingEnabled/rpeEnabled but NOT for name/time,
-    // which were unconditionally recomputed from req.body?.name/req.body?
-    // .time even when absent - sessionTimeValue(undefined)/nullableText
-    // (undefined) both resolve to null, so any PATCH that didn't mention
-    // them (e.g. the trackingEnabled/rpeEnabled toggle handlers) silently
-    // cleared a session's own name and time. Fixed by applying the same
-    // "only touched when present" rule uniformly to every column.
-    const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : session.session_time;
-    const name = req.body?.name !== undefined ? nullableText(req.body.name) : session.name;
-    // An included empty string ("", what the coach's own "Time of day"/
-    // "Training phase" placeholder option submits) is still a real,
-    // explicit clear - same as how an empty name is a real, explicit clear
-    // above.
-    const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
-    const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
 
-    // trackingEnabled/rpeEnabled are a staging-only decision: Builder's
-    // edit-draft session settings form is a staging area (nothing is
-    // "live" until Submit), so this route intentionally applies neither
-    // confirm-before-disable-with-results NOR the plan_workspace_ownership
-    // authorization the dedicated Training Load quick-toggle routes
-    // enforce (PATCH /api/training-load/sessions/:sessionId/rpe-enabled
-    // and .../training-load-enabled) - those extra safeguards only make
-    // sense once a change is about to affect a LIVE plan's real athletes.
-    // Reaching that same live plan through THIS route instead (Builder's
-    // general session PATCH also allows editing an already-published
-    // plan directly, e.g. renaming a session) would silently bypass both
-    // safeguards, so a request that actually TOUCHES either field is
-    // rejected outright - before any row is read for update - unless the
-    // target plan is a genuine, not-yet-submitted draft or an open
-    // edit-draft. Every other field on this route (name/time/amPm/bta)
-    // is unaffected and still freely editable on a live plan, exactly as
-    // before.
-    const touchesTrainingLoadFields = req.body?.trackingEnabled !== undefined || req.body?.rpeEnabled !== undefined;
-    if (touchesTrainingLoadFields && !isEditableDraftPlan(session.plan)) {
-      return res.status(409).json({
-        error: "notDraft",
-        message: "Training Load tracking/RPE can only be changed on a draft or an open edit-draft. Use the Training Load quick toggle for a published plan.",
-      });
-    }
     if (req.body?.trackingEnabled !== undefined && strictBoolean(req.body.trackingEnabled) === undefined) {
       return res.status(400).json({ error: "trackingEnabled must be true or false." });
     }
     if (req.body?.rpeEnabled !== undefined && strictBoolean(req.body.rpeEnabled) === undefined) {
       return res.status(400).json({ error: "rpeEnabled must be true or false." });
     }
-    const trackingEnabled = req.body?.trackingEnabled !== undefined ? strictBoolean(req.body.trackingEnabled) : session.training_load_enabled;
-    const requestedRpeEnabled = req.body?.rpeEnabled !== undefined ? strictBoolean(req.body.rpeEnabled) : session.rpe_enabled;
+    // trackingEnabled/rpeEnabled are a staging-only decision: Builder's
+    // edit-draft session settings form is a staging area (nothing is
+    // "live" until Submit), so this route intentionally applies neither
+    // confirm-before-disable-with-results NOR the plan_workspace_ownership
+    // authorization the dedicated Training Load quick-toggle routes
+    // enforce - those extra safeguards only make sense once a change is
+    // about to affect a LIVE plan's real athletes. Reaching that same
+    // live plan through THIS route instead (Builder's general session
+    // PATCH also allows editing an already-published plan directly, e.g.
+    // renaming a session) would silently bypass both, so a request that
+    // actually TOUCHES either field must go through the locked, draft-
+    // reconfirmed path below - see lockDraftPlanOrReject's own header
+    // comment for the full atomicity reasoning (this is one of its
+    // shared-lock-order call sites, along with the plan-level Training
+    // Load routes above, the genuine-draft Submit branch, and
+    // applyEditDraft()).
+    const touchesTrainingLoadFields = req.body?.trackingEnabled !== undefined || req.body?.rpeEnabled !== undefined;
+
+    if (!touchesTrainingLoadFields) {
+      // Fast, unlocked path - name/time/amPm/bta only, exactly as before;
+      // these are freely editable on a live plan and never race against
+      // Submit/applyEditDraft, so no transaction/lock is needed here.
+      const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : session.session_time;
+      const name = req.body?.name !== undefined ? nullableText(req.body.name) : session.name;
+      const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
+      const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
+      await query(
+        "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, updated_at = now() where id = $1",
+        [session.id, sessionTime, name, amPm, bta],
+      );
+      return respondWithDraft(req, res, req.user, session.plan);
+    }
+
+    client = await pool.connect();
+    await client.query("begin");
+    const plan = await lockDraftPlanOrReject(client, res, session.plan.id);
+    if (!plan) { await client.query("rollback"); client.release(); return; }
+
+    // The session row's own current values are ALSO re-read fresh under
+    // the same transaction (locked, not just the plan) - the plan-row
+    // lock above already serializes against Submit/applyEditDraft (which
+    // can delete-and-recreate this whole session tree), but locking the
+    // session row too guards a genuinely concurrent second PATCH against
+    // the SAME session, so name/time/amPm/bta's own partial-update
+    // fallback (when this request doesn't mention them) never reads a
+    // stale pre-lock snapshot either.
+    const sessionResult = await client.query(
+      `select id, session_time, name, am_pm, bta, rpe_enabled, training_load_enabled
+       from plans.plan_sessions where id = $1 for update`,
+      [session.id],
+    );
+    const freshSession = sessionResult.rows[0];
+    if (!freshSession) {
+      await client.query("rollback");
+      client.release();
+      return res.status(404).json({ error: "Program session not found" });
+    }
+
+    const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : freshSession.session_time;
+    const name = req.body?.name !== undefined ? nullableText(req.body.name) : freshSession.name;
+    // An included empty string ("", what the coach's own "Time of day"/
+    // "Training phase" placeholder option submits) is still a real,
+    // explicit clear - same as how an empty name is a real, explicit clear
+    // above.
+    const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : freshSession.am_pm;
+    const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : freshSession.bta;
+    const trackingEnabled = req.body?.trackingEnabled !== undefined ? strictBoolean(req.body.trackingEnabled) : freshSession.training_load_enabled;
+    const requestedRpeEnabled = req.body?.rpeEnabled !== undefined ? strictBoolean(req.body.rpeEnabled) : freshSession.rpe_enabled;
     // The DB's own plan_sessions_rpe_requires_training_load CHECK forbids
     // rpe_enabled=true with training_load_enabled=false - enforced here
     // too (never relying on the constraint alone to reject a bad combo
@@ -1161,12 +1249,18 @@ router.patch("/sessions/:sessionId", async (req, res, next) => {
     // forces RPE off with it, even if the request body also tried to
     // (re)enable RPE at the same time.
     const rpeEnabled = trackingEnabled ? requestedRpeEnabled : false;
-    await query(
+    await client.query(
       "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, rpe_enabled = $6, training_load_enabled = $7, updated_at = now() where id = $1",
-      [session.id, sessionTime, name, amPm, bta, rpeEnabled, trackingEnabled],
+      [freshSession.id, sessionTime, name, amPm, bta, rpeEnabled, trackingEnabled],
     );
-    return respondWithDraft(req, res, req.user, session.plan);
-  } catch (error) { next(error); }
+    await client.query("commit");
+    client.release();
+    client = null;
+    return respondWithDraft(req, res, req.user, plan);
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    next(error);
+  }
 });
 
 router.delete("/sessions/:sessionId", async (req, res, next) => {
@@ -1661,7 +1755,34 @@ async function applyEditDraft(req, draftPlan) {
   try {
     client = await pool.connect();
     await client.query("begin");
-    const source = await getEditablePlan(req, draftPlan.edit_source_plan_id);
+    // Lock and re-read the draft's OWN plans.plans row fresh, inside this
+    // transaction - the caller's draftPlan parameter was read before this
+    // transaction (often before the whole request started - POST /plans/
+    // :planId/submit's own requirePlan() call at the top), so a concurrent
+    // Training Load settings PATCH or a session trackingEnabled/rpeEnabled
+    // PATCH could have committed a change to this SAME draft in between.
+    // Same shared lock order as every other draft-mutating route
+    // (lockDraftPlanOrReject's own header comment) - this draft's own row,
+    // by id, as the first statement of this transaction - so whichever
+    // request gets there first wins and the other serializes behind it;
+    // nothing below trusts a field on the passed-in draftPlan for
+    // anything it writes.
+    const freshDraftResult = await client.query(
+      `select id, plan_type, week_start, name, note, icon_url, color, visibility, is_template,
+              is_edit_draft, edit_source_plan_id, track_training_load_default, request_rpe_default
+       from plans.plans where id = $1 for update`,
+      [draftPlan.id],
+    );
+    const freshDraft = freshDraftResult.rows[0];
+    if (!freshDraft || !freshDraft.is_edit_draft || !freshDraft.edit_source_plan_id) {
+      // A concurrent request already applied (or discarded) this SAME
+      // edit-draft first - nothing left here to apply. Genuinely rare
+      // (a real double-submit), never the ordinary "a PATCH won the
+      // race" case (that one still finds a perfectly normal edit-draft
+      // row here and proceeds below).
+      throw new Error("Edit draft was already applied or discarded.");
+    }
+    const source = await getEditablePlan(req, freshDraft.edit_source_plan_id);
     if (!source) throw new Error("Original program not found or not editable.");
     const sourceDays = await client.query("select id from plans.plan_days where plan_id = $1", [source.id]);
     for (const day of sourceDays.rows) await deleteBlockTreeWithClient(client, day.id);
@@ -1678,7 +1799,7 @@ async function applyEditDraft(req, draftPlan) {
            status = 'active',
            updated_at = now()
        where id = $1`,
-      [source.id, draftPlan.name, draftPlan.note, draftPlan.icon_url, draftPlan.color, draftPlan.visibility || "private", draftPlan.is_template, Boolean(draftPlan.track_training_load_default), Boolean(draftPlan.request_rpe_default)],
+      [source.id, freshDraft.name, freshDraft.note, freshDraft.icon_url, freshDraft.color, freshDraft.visibility || "private", freshDraft.is_template, Boolean(freshDraft.track_training_load_default), Boolean(freshDraft.request_rpe_default)],
     );
     // preserveLogicalId: true - the SECOND leg of the round trip (see the
     // matching comment on the live -> edit-draft copy in POST /plans/
@@ -1686,11 +1807,11 @@ async function applyEditDraft(req, draftPlan) {
     // session tree (assign/duplicate to a new plan, batch-sync to a
     // sibling plan) is a genuinely different logical session and must
     // never pass this flag.
-    if (draftPlan.plan_type === "weekly") await copyWeeklyPlanTree(client, draftPlan.id, source.id, draftPlan.week_start, { preserveLogicalId: true });
-    else await copyProgramTree(client, draftPlan.id, source.id);
-    const draftDays = await client.query("select id from plans.plan_days where plan_id = $1", [draftPlan.id]);
+    if (freshDraft.plan_type === "weekly") await copyWeeklyPlanTree(client, freshDraft.id, source.id, freshDraft.week_start, { preserveLogicalId: true });
+    else await copyProgramTree(client, freshDraft.id, source.id);
+    const draftDays = await client.query("select id from plans.plan_days where plan_id = $1", [freshDraft.id]);
     for (const day of draftDays.rows) await deleteBlockTreeWithClient(client, day.id);
-    await client.query("delete from plans.plans where id = $1", [draftPlan.id]);
+    await client.query("delete from plans.plans where id = $1", [freshDraft.id]);
     await client.query("commit");
     client.release();
     client = null;
@@ -2390,16 +2511,68 @@ function isEditableDraftPlan(plan) {
   return plan.is_edit_draft === true || (plan.status === "draft" && plan.source_type === "builder" && !plan.edit_source_plan_id);
 }
 
-// Same access check as requirePlan, plus the draft-only restriction above.
-// Used ONLY by the plan-level Training Load settings/bulk-action routes -
-// every other existing requirePlan call site (plan rename, sync-batch,
-// etc.) is untouched, since those remain legitimately editable on a live
-// plan. Changes ZERO rows before this returns - a rejected request never
-// reaches its own UPDATE.
-async function requireDraftPlan(req, planId, res) {
-  const plan = await requirePlan(req, planId, res);
-  if (!plan) return null;
-  if (!isEditableDraftPlan(plan)) {
+// Correction (atomicity hardening): isEditableDraftPlan's own status read
+// used to come from an UNLOCKED getEditablePlan() call, taken before this
+// route's transaction (often before the request handler had even begun
+// its own DB work). That left a genuine TOCTOU window: a coach clicks
+// "Save and finish" (POST /plans/:planId/submit, either the genuine-draft
+// branch's own `update ... where status='draft'` or applyEditDraft() for
+// an edit-draft) at almost the same moment a Training Load
+// settings/bulk-action/session PATCH request lands - the isEditableDraftPlan
+// check could pass against the stale pre-Submit snapshot, and the write
+// could land AFTER Submit had already published the plan, silently
+// mutating an already-active plan's data outside the draft-only contract
+// this whole gate exists to enforce.
+//
+// Fixed by giving every one of these routes ONE shared, deterministic
+// lock order: `select ... from plans.plans where id = $1 for update`
+// against the SAME plans.plans row (by id, exactly one row locked per
+// transaction here - never more), as the very FIRST statement inside the
+// route's own transaction, with isEditableDraftPlan re-checked against
+// THAT locked read, not the earlier unlocked one. The genuine-draft
+// Submit branch's own `update plans.plans set status='active' ... where
+// id=$1 and status='draft'` takes the identical row's write lock as part
+// of running the UPDATE itself (no separate SELECT FOR UPDATE needed
+// there - a single-statement UPDATE already acquires it), and
+// applyEditDraft() below takes the SAME lock on the draft's own row as
+// the first statement of ITS transaction too. Whichever transaction
+// reaches the row first therefore always wins the race and the other
+// blocks until it commits or rolls back, then re-evaluates against the
+// now-current, real state - never a stale pre-lock snapshot:
+//   - a settings/bulk/session PATCH that gets there first commits its
+//     change while the plan is still genuinely a draft; Submit (whichever
+//     branch) then proceeds normally once unblocked and publishes that
+//     already-committed value - never overwrites or discards it.
+//   - a Submit that gets there first commits the status flip (or, for an
+//     edit-draft, deletes the draft row entirely) first; the PATCH then
+//     unblocks, re-reads under its own lock, finds the plan no longer a
+//     genuine draft (or the row simply gone), and is rejected with a
+//     controlled 409 (`notDraft`) having changed zero rows - never a
+//     write that lands after publication.
+//
+// This never conflicts with the Training Load quick-toggle routes
+// (PATCH .../rpe-enabled, .../training-load-enabled in trainingLoad.js):
+// those only ever match a session whose plan has status='active' (see
+// WEEKLY_PLAN_SESSION_FILTER_SQL), so their own `for update of ps` lock
+// is always taken on a plan that has ALREADY finished the draft->active
+// transition this gate guards - the two lock domains (a plan still
+// mid-draft vs. an already-published plan) are disjoint by construction,
+// never contending for the same row at the same time.
+//
+// Returns the freshly-locked plan row (every column isEditableDraftPlan
+// and the callers below need) on success. On rejection, sends the 409
+// itself and returns null - the caller's own responsibility is only to
+// `rollback` and return, since nothing has been written yet at this point.
+async function lockDraftPlanOrReject(client, res, planId) {
+  const result = await client.query(
+    `select id, plan_type, week_start, name, note, icon_url, color, visibility, is_template,
+            status, source_type, is_edit_draft, edit_source_plan_id,
+            track_training_load_default, request_rpe_default
+     from plans.plans where id = $1 for update`,
+    [planId],
+  );
+  const plan = result.rows[0];
+  if (!plan || !isEditableDraftPlan(plan)) {
     res.status(409).json({
       error: "notDraft",
       message: "Training Load settings can only be changed on a draft or an open edit-draft. Use the Training Load quick toggle for a published plan.",

@@ -587,3 +587,135 @@ test("a batch-sync against an ALREADY-PUBLISHED sibling plan must never touch it
   const retryDifferent = await api(`/api/training-load/sessions/${siblingSessionId}/rpe`, { method: "POST", cookie: athleteB.cookie, body: { rpe: 9, durationMinutes: 90 } });
   assert.equal(retryDifferent.status, 409, "a genuinely different retry must still be rejected - never a fresh 201 against a re-opened session");
 });
+
+// ------------------------------------------------------------
+// Correction round 3, item 1: the draft-only gate's own atomicity - a
+// Training Load settings/session PATCH racing a real "Save and finish"
+// (POST /plans/:draftId/submit -> applyEditDraft()) on the SAME open
+// edit-draft, deterministically proven both ways via a real held Postgres
+// lock (never a sleep/timing guess). A raw client (`lockClient`) BEGINs
+// and takes `select ... for update` on the draft's own plans.plans row -
+// the exact lock applyEditDraft()'s own freshDraftResult SELECT (and
+// lockDraftPlanOrReject, for a plan-level/session PATCH) takes as ITS
+// first statement - so a concurrent real HTTP request against that SAME
+// row provably blocks behind it. waitUntilBlocked polls pg_stat_activity
+// for any OTHER backend (excluding lockClient's own pid and the monitor's
+// own pid) sitting in wait_event_type='Lock', the same technique already
+// used elsewhere in this suite for deterministic lock-order proofs.
+// ------------------------------------------------------------
+
+async function waitUntilBlocked(monitorClient, excludePids, timeoutMs = 3000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const r = await monitorClient.query(
+      `select pid from pg_stat_activity where wait_event_type = 'Lock' and pid <> all($1::int[])`,
+      [excludePids],
+    );
+    if (r.rowCount > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  return false;
+}
+
+test("edit-draft atomicity: a Training Load settings PATCH that wins the draft row's lock first commits, and a concurrent real Save-and-finish (Submit -> applyEditDraft) then waits and publishes that SAME new value onto the live plan", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  await setPlanOwnershipDirect(livePlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
+  const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
+  await makeRealSession(dayId, "Morning session", "AM", 0);
+
+  const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(editRes.status, 200, JSON.stringify(editRes.body));
+  const draftPlanId = editRes.body.plan.id;
+  cleanupPlanIds.add(draftPlanId);
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query("select id from plans.plans where id = $1 for update", [draftPlanId]);
+
+    const submitPromise = api(`/api/builder/plans/${draftPlanId}/submit`, { method: "POST", cookie: coach.cookie });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "Save-and-finish must be directly observed Lock-waiting behind the settings PATCH's own held lock on the draft row");
+
+    // The lock-holder performs the EXACT write PATCH /training-load-
+    // settings would run against this SAME draft row, under the SAME
+    // held transaction/lock - a real concurrent HTTP PATCH can't be used
+    // for this side (lockClient itself stands in for "the PATCH got
+    // there first" - the whole point being to hold that row's lock for a
+    // controllable, observable duration).
+    await lockClient.query(
+      "update plans.plans set track_training_load_default = true, request_rpe_default = true, updated_at = now() where id = $1",
+      [draftPlanId],
+    );
+    await lockClient.query("commit");
+
+    const submitRes = await submitPromise;
+    assert.equal(submitRes.status, 200, `expected Save-and-finish to succeed once unblocked, got ${submitRes.status}: ${JSON.stringify(submitRes.body)}`);
+    assert.equal(submitRes.body.plan.id, livePlanId, "applyEditDraft() re-activates the ORIGINAL live plan id");
+    assert.equal(submitRes.body.plan.trackTrainingLoadDefault, true, "the PUBLISHED live plan must carry the setting that committed first on the draft, not a stale pre-lock value");
+    assert.equal(submitRes.body.plan.requestRpeDefault, true);
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+
+  const liveRow = (await query(`select track_training_load_default, request_rpe_default, status from plans.plans where id = $1`, [livePlanId])).rows[0];
+  assert.equal(liveRow.status, "active");
+  assert.equal(liveRow.track_training_load_default, true);
+  assert.equal(liveRow.request_rpe_default, true);
+});
+
+test("edit-draft atomicity: a real Save-and-finish that consumes the draft first (applyEditDraft's own delete) leaves a concurrent Training Load settings PATCH waiting, then rejected 409 - the now-active live plan is never mutated by it", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  await setPlanOwnershipDirect(livePlanId, coach.clubId);
+  await enablePlannedRpeForClub(coach.clubId);
+  const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
+  await makeRealSession(dayId, "Morning session", "AM", 0);
+
+  const editRes = await api(`/api/builder/plans/${livePlanId}/edit`, { method: "POST", cookie: coach.cookie });
+  assert.equal(editRes.status, 200, JSON.stringify(editRes.body));
+  const draftPlanId = editRes.body.plan.id;
+  cleanupPlanIds.add(draftPlanId);
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query("select id from plans.plans where id = $1 for update", [draftPlanId]);
+
+    const patchPromise = api(`/api/builder/plans/${draftPlanId}/training-load-settings`, { method: "PATCH", cookie: coach.cookie, body: { trackTrainingLoadDefault: true, requestRpeDefault: true } });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "the settings PATCH must be directly observed Lock-waiting behind Save-and-finish's own held lock on the draft row");
+
+    // Simulates applyEditDraft()'s own final effect on the draft row
+    // (real applyEditDraft() also copies content onto the live plan and
+    // flips its status inside the SAME transaction - irrelevant to what
+    // this test proves, which is specifically what happens to a
+    // concurrent PATCH once the draft row it was about to lock is gone).
+    await lockClient.query("update plans.plans set status = 'active', updated_at = now() where id = $1", [livePlanId]);
+    await lockClient.query("delete from plans.plans where id = $1", [draftPlanId]);
+    await lockClient.query("commit");
+
+    const patchRes = await patchPromise;
+    assert.equal(patchRes.status, 409, `expected 409 once the draft is already consumed, got ${patchRes.status}: ${JSON.stringify(patchRes.body)}`);
+    assert.equal(patchRes.body.error, "notDraft");
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+
+  const liveRow = (await query(`select track_training_load_default, request_rpe_default from plans.plans where id = $1`, [livePlanId]))
+    .rows[0];
+  assert.equal(liveRow.track_training_load_default, false, "the rejected PATCH must never have reached the now-active live plan");
+  assert.equal(liveRow.request_rpe_default, false);
+  const draftGone = await query(`select 1 from plans.plans where id = $1`, [draftPlanId]);
+  assert.equal(draftGone.rowCount, 0, "the draft row is really gone, exactly as a real Save-and-finish leaves it");
+});

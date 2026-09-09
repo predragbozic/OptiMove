@@ -208,6 +208,36 @@ test("A2. PATCH training-load-settings updates the defaults, and requestRpeDefau
   assert.equal(turnTrackOff.body.plan.requestRpeDefault, false, "requestRpeDefault must be forced off the instant track is off, even though only trackTrainingLoadDefault was sent");
 });
 
+// Correction round 3, item 2: trackTrainingLoadDefault/requestRpeDefault
+// accept ONLY a real JSON true/false - every other JSON type is a
+// controlled 400 with zero rows changed, never a silent Boolean(...)
+// coercion.
+const NON_BOOLEAN_VALUES = [
+  ["the string \"true\"", "true"],
+  ["the number 1", 1],
+  ["null", null],
+  ["an array", ["true"]],
+  ["an object", { value: true }],
+];
+
+test("A2b. PATCH training-load-settings rejects a non-boolean trackTrainingLoadDefault/requestRpeDefault for every JSON type, and changes zero rows", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const { planId } = await makeRealPlanViaApi(coach, athlete.externalId);
+
+  for (const [label, value] of NON_BOOLEAN_VALUES) {
+    const trackRes = await api(`/api/builder/plans/${planId}/training-load-settings`, { method: "PATCH", cookie: coach.cookie, body: { trackTrainingLoadDefault: value } });
+    assert.equal(trackRes.status, 400, `trackTrainingLoadDefault=${label}: expected 400, got ${trackRes.status}: ${JSON.stringify(trackRes.body)}`);
+
+    const rpeRes = await api(`/api/builder/plans/${planId}/training-load-settings`, { method: "PATCH", cookie: coach.cookie, body: { requestRpeDefault: value } });
+    assert.equal(rpeRes.status, 400, `requestRpeDefault=${label}: expected 400, got ${rpeRes.status}: ${JSON.stringify(rpeRes.body)}`);
+  }
+
+  const row = (await query(`select track_training_load_default, request_rpe_default from plans.plans where id = $1`, [planId])).rows[0];
+  assert.equal(row.track_training_load_default, false, "every rejected value must have changed zero rows - the plan still has its own original default");
+  assert.equal(row.request_rpe_default, false);
+});
+
 test("A3. a NEW main Training session inherits the plan's CURRENT defaults; Before/After/unclassified always start OFF/OFF regardless", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
@@ -615,4 +645,205 @@ test("D4. two DIFFERENT athletes' external RPE submits for the SAME occurrence c
 
   const activityCount = await query(`select count(*)::int as n from training.activities where id=$1`, [links.rows[0].activity_id]);
   assert.equal(activityCount.rows[0].n, 1);
+});
+
+// ------------------------------------------------------------
+// E. Draft-only gate atomicity (Correction round 3, item 1): a plan-level
+// Training Load settings PATCH or a session trackingEnabled/rpeEnabled
+// PATCH racing a real, genuine-draft Submit (POST /plans/:planId/submit,
+// the never-yet-submitted branch) on the SAME plan - deterministically
+// proven both orderings via a real held Postgres lock (never a sleep/
+// timing guess). A raw client (`lockClient`) BEGINs and takes
+// `select ... for update` on the plan's own plans.plans row - the exact
+// lock lockDraftPlanOrReject's own SELECT (and Submit's own single-
+// statement UPDATE, which takes the same row's write lock as part of
+// running) contend for - so a concurrent real HTTP request against that
+// SAME row provably blocks behind it. waitUntilBlocked polls
+// pg_stat_activity for any OTHER backend (excluding lockClient's and the
+// monitor's own pids) sitting in wait_event_type='Lock'.
+// ------------------------------------------------------------
+
+async function waitUntilBlocked(monitorClient, excludePids, timeoutMs = 3000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const r = await monitorClient.query(
+      `select pid from pg_stat_activity where wait_event_type = 'Lock' and pid <> all($1::int[])`,
+      [excludePids],
+    );
+    if (r.rowCount > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  return false;
+}
+
+test("E1. plan default atomicity: a settings PATCH that wins the row lock first commits, and a concurrent genuine-draft Submit then waits and publishes that SAME new default", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const { planId, blockId } = await makeRealPlanViaApi(coach, athlete.externalId);
+  // Real content, not just a bare session - Submit's own PRE-EXISTING
+  // "empty draft is discarded" behavior (removeEmptyDraftOnSubmit,
+  // unrelated to this correction round) would otherwise delete the whole
+  // plan tree in its OWN separate transaction the instant Submit runs,
+  // regardless of this test's own lock - a real, previously-undetected
+  // deadlock between that unrelated delete path and lockClient's held
+  // row lock, not a flaw in the draft-only gate itself.
+  const sessionRes = await api(`/api/builder/blocks/${blockId}/sessions`, { method: "POST", cookie: coach.cookie, body: { bta: "T", name: "Main" } });
+  assert.equal(sessionRes.status, 201, JSON.stringify(sessionRes.body));
+  const sessionId = sessionRes.body.blocks.find((b) => b.id === blockId).sessions.find((s) => s.name === "Main").id;
+  const nodeRes = await api(`/api/builder/sessions/${sessionId}/nodes`, { method: "POST", cookie: coach.cookie, body: { nodeType: "section", name: "Warm-up" } });
+  assert.equal(nodeRes.status, 201, JSON.stringify(nodeRes.body));
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query("select id from plans.plans where id = $1 for update", [planId]);
+
+    const submitPromise = api(`/api/builder/plans/${planId}/submit`, { method: "POST", cookie: coach.cookie });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "Submit must be directly observed Lock-waiting behind the settings PATCH's own held lock");
+
+    // The exact write PATCH /training-load-settings itself would run,
+    // under the SAME held transaction/lock (lockClient stands in for
+    // "the PATCH got there first" - a real HTTP request can't be used
+    // for this side, since the whole point is holding the row's lock for
+    // a controllable, observable duration).
+    await lockClient.query(
+      "update plans.plans set track_training_load_default = true, request_rpe_default = true, updated_at = now() where id = $1",
+      [planId],
+    );
+    await lockClient.query("commit");
+
+    const submitRes = await submitPromise;
+    assert.equal(submitRes.status, 200, `expected Submit to succeed once unblocked, got ${submitRes.status}: ${JSON.stringify(submitRes.body)}`);
+    assert.equal(submitRes.body.plan.status, "active");
+    assert.equal(submitRes.body.plan.trackTrainingLoadDefault, true, "the PUBLISHED plan must carry the setting that committed first, not a stale pre-lock value");
+    assert.equal(submitRes.body.plan.requestRpeDefault, true);
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+});
+
+test("E2. plan default atomicity: a genuine-draft Submit that wins the row lock first commits (activating the plan), and a concurrent settings PATCH then waits and is rejected 409 - never mutating the now-active plan", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const { planId } = await makeRealPlanViaApi(coach, athlete.externalId);
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    // The EXACT statement the genuine-draft Submit branch itself runs -
+    // a plain UPDATE already takes the row's write lock as part of
+    // running (see that route's own comment on why no separate SELECT
+    // FOR UPDATE is needed there).
+    await lockClient.query(
+      "update plans.plans set status = 'active', updated_at = now() where id = $1 and status = 'draft' returning id",
+      [planId],
+    );
+
+    const patchPromise = api(`/api/builder/plans/${planId}/training-load-settings`, { method: "PATCH", cookie: coach.cookie, body: { trackTrainingLoadDefault: true, requestRpeDefault: true } });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "the settings PATCH must be directly observed Lock-waiting behind Submit's own held lock");
+
+    await lockClient.query("commit");
+
+    const patchRes = await patchPromise;
+    assert.equal(patchRes.status, 409, `expected 409 once the plan is already active, got ${patchRes.status}: ${JSON.stringify(patchRes.body)}`);
+    assert.equal(patchRes.body.error, "notDraft");
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+
+  const row = (await query(`select status, track_training_load_default, request_rpe_default from plans.plans where id = $1`, [planId])).rows[0];
+  assert.equal(row.status, "active");
+  assert.equal(row.track_training_load_default, false, "the rejected PATCH must have changed zero rows");
+  assert.equal(row.request_rpe_default, false);
+});
+
+test("E3. session tracking/RPE atomicity: a session PATCH that wins the row lock first commits, and a concurrent genuine-draft Submit then waits and publishes that SAME session state", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const { planId, blockId } = await makeRealPlanViaApi(coach, athlete.externalId);
+  const sessionRes = await api(`/api/builder/blocks/${blockId}/sessions`, { method: "POST", cookie: coach.cookie, body: { bta: "T", name: "Main" } });
+  assert.equal(sessionRes.status, 201, JSON.stringify(sessionRes.body));
+  const sessionId = sessionRes.body.blocks.find((b) => b.id === blockId).sessions.find((s) => s.name === "Main").id;
+  // Real content, not just a bare session - see E1's own comment on why
+  // (Submit's PRE-EXISTING, unrelated "empty draft is discarded" behavior
+  // would otherwise delete the whole plan tree in its own transaction).
+  const nodeRes = await api(`/api/builder/sessions/${sessionId}/nodes`, { method: "POST", cookie: coach.cookie, body: { nodeType: "section", name: "Warm-up" } });
+  assert.equal(nodeRes.status, 201, JSON.stringify(nodeRes.body));
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query("select id from plans.plans where id = $1 for update", [planId]);
+
+    const submitPromise = api(`/api/builder/plans/${planId}/submit`, { method: "POST", cookie: coach.cookie });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "Submit must be directly observed Lock-waiting behind the session PATCH's own held plan-row lock");
+
+    await lockClient.query(
+      "update plans.plan_sessions set training_load_enabled = true, rpe_enabled = true, updated_at = now() where id = $1",
+      [sessionId],
+    );
+    await lockClient.query("commit");
+
+    const submitRes = await submitPromise;
+    assert.equal(submitRes.status, 200, `expected Submit to succeed once unblocked, got ${submitRes.status}: ${JSON.stringify(submitRes.body)}`);
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+
+  // The genuine-draft Submit branch only ever flips status - it never
+  // touches plan_sessions rows at all (that delete-and-recreate is
+  // applyEditDraft's own behavior, for an EDIT-draft specifically) - so
+  // the same session id is still the live, published one.
+  const row = (await query(`select training_load_enabled, rpe_enabled from plans.plan_sessions where id = $1`, [sessionId])).rows[0];
+  assert.equal(row.training_load_enabled, true, "the published session must carry the setting that committed first");
+  assert.equal(row.rpe_enabled, true);
+});
+
+test("E4. session tracking/RPE atomicity: a genuine-draft Submit that wins the row lock first commits, and a concurrent session PATCH then waits and is rejected 409 - never mutating the now-active plan's session", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const { planId, blockId } = await makeRealPlanViaApi(coach, athlete.externalId);
+  const sessionRes = await api(`/api/builder/blocks/${blockId}/sessions`, { method: "POST", cookie: coach.cookie, body: { bta: "T", name: "Main" } });
+  assert.equal(sessionRes.status, 201, JSON.stringify(sessionRes.body));
+  const sessionId = sessionRes.body.blocks.find((b) => b.id === blockId).sessions.find((s) => s.name === "Main").id;
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query(
+      "update plans.plans set status = 'active', updated_at = now() where id = $1 and status = 'draft' returning id",
+      [planId],
+    );
+
+    const patchPromise = api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { trackingEnabled: true, rpeEnabled: true } });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "the session PATCH must be directly observed Lock-waiting behind Submit's own held lock");
+
+    await lockClient.query("commit");
+
+    const patchRes = await patchPromise;
+    assert.equal(patchRes.status, 409, `expected 409 once the plan is already active, got ${patchRes.status}: ${JSON.stringify(patchRes.body)}`);
+    assert.equal(patchRes.body.error, "notDraft");
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+
+  const row = (await query(`select training_load_enabled, rpe_enabled from plans.plan_sessions where id = $1`, [sessionId])).rows[0];
+  assert.equal(row.training_load_enabled, false, "the rejected PATCH must have changed zero rows");
+  assert.equal(row.rpe_enabled, false);
 });

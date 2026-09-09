@@ -348,6 +348,49 @@ test("A8. PATCH {name} alone preserves a pre-existing session_time, and PATCH {t
   assert.equal(row.name, "New name", "a time-only PATCH must never clear name");
 });
 
+// Strict boolean validation (Correction round 3, item 2): trackingEnabled/
+// rpeEnabled accept ONLY a real JSON true/false - a string, number, null,
+// array, or object must be a controlled 400 with zero rows changed, never
+// silently coerced via Boolean(...) (Boolean("false") === true is exactly
+// the kind of surprise this guards against).
+const NON_BOOLEAN_VALUES = [
+  ["the string \"true\"", "true"],
+  ["the number 1", 1],
+  ["null", null],
+  ["an array", ["true"]],
+  ["an object", { value: true }],
+];
+
+test("A9. PATCH {trackingEnabled: <non-boolean>} is a controlled 400 for every non-boolean JSON type, and changes zero rows", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
+  const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false, false);
+
+  for (const [label, value] of NON_BOOLEAN_VALUES) {
+    const res = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { trackingEnabled: value } });
+    assert.equal(res.status, 400, `${label}: expected 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+    const row = await sessionRow(sessionId);
+    assert.equal(row.training_load_enabled, false, `${label}: a rejected value must never change training_load_enabled`);
+  }
+});
+
+test("A10. PATCH {rpeEnabled: <non-boolean>} is a controlled 400 for every non-boolean JSON type, and changes zero rows", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
+  const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false, true);
+
+  for (const [label, value] of NON_BOOLEAN_VALUES) {
+    const res = await api(`/api/builder/sessions/${sessionId}`, { method: "PATCH", cookie: coach.cookie, body: { rpeEnabled: value } });
+    assert.equal(res.status, 400, `${label}: expected 400, got ${res.status}: ${JSON.stringify(res.body)}`);
+    const row = await sessionRow(sessionId);
+    assert.equal(row.rpe_enabled, false, `${label}: a rejected value must never change rpe_enabled`);
+  }
+});
+
 // ------------------------------------------------------------
 // B. Copy-path propagation - rpe_enabled is a CONTENT property, always
 // copied unconditionally, unlike logical_session_id (identity, only
