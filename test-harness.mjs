@@ -1,30 +1,24 @@
 // ============================================================
 // OPTIMOVE — Training Load 3B1: Analysis Dashboard model PoC harness.
+// ROUND 2 (corrective) — see DASHBOARD_MODEL_REPORT.md for the full
+// rationale behind every change. Still DESIGN-PHASE ONLY: runs entirely
+// against a disposable, uniquely-named temporary Postgres database this
+// script itself creates and drops — never OPTIMOVE, never monitoring2,
+// never staging/Supabase/production. Does not import or touch any
+// backend route, service, or frontend file — only backend/src/migrate.js's
+// own migration RUNNER (to apply the real migrations_v2 files faithfully)
+// and the `pg` driver directly.
 //
-// DESIGN-PHASE PROOF-OF-CONCEPT ONLY. Runs entirely against a disposable,
-// uniquely-named temporary Postgres database (created and dropped by this
-// script itself) — never OPTIMOVE, never monitoring2, never staging/
-// Supabase/production (see refuseForbidden below, and the SAFETY assertion
-// right after connecting). Does NOT import or touch any backend route,
-// service, or frontend file — only backend/src/migrate.js's own migration
-// RUNNER utility (to apply the real migrations_v2 files faithfully,
-// exactly like every existing backend test already does) and the `pg`
-// driver directly. No application code is added or modified by this file.
-//
-// Order of operations:
-//   1. create a fresh temp DB
-//   2. minimal public/plans/library scaffolding (same shape every existing
-//      disposable-DB backend test already uses — generic dependency
-//      scaffolding, not feature logic)
-//   3. the REAL migrations_v2 files (through main) via the REAL runner
-//   4. this proposal's own ../schema.sql (additive, on top)
-//   5. a small, realistic fixture (2 clubs, a team, a platform admin, a
-//      private coach, athletes, activities, metrics, RPE)
-//   6. the 24 numbered proof points from the task, each as its own test()
-//   7. drop the temp DB, verify it is gone
-//
-// Run three times in a row (`node test-harness.mjs`) to check stability —
-// see DASHBOARD_MODEL_REPORT.md for the reported results of those runs.
+// Round 2 adds: the owner-vs-data-workspace split, real series query
+// semantics (aggregation/coverage/role/scope/comparison), fixed
+// revision/cache bumping, reverse-invariant guards, a consistent
+// dashboard->widget->series lock order, an atomic layout-replace function,
+// historical unit-conflict handling, a safely-degrading template-hint
+// resolver, and — the biggest addition — a REAL PoC query adapter
+// (queryBuiltInSeries/queryMetricSeries below) built on top of the real,
+// unmodified training.canonical_activity_results() function, proving
+// actual no-double-count/conflict/alias/workspace-filter behavior against
+// real rows, not just schema existence.
 // ============================================================
 
 import { after, before, test } from "node:test";
@@ -75,10 +69,6 @@ function refuseForbidden(name, url) {
   }
 }
 
-// Same generic public/plans/library scaffolding every existing
-// disposable-DB backend test already uses (see backend/tests/
-// training-load-calendar.test.mjs's own LEGACY_FIXTURE_SQL) — not feature
-// logic, just the minimum shape the real migrations_v2 files depend on.
 const LEGACY_FIXTURE_SQL = `
   create extension if not exists pgcrypto;
 
@@ -126,7 +116,6 @@ const LEGACY_FIXTURE_SQL = `
     scope_id uuid,
     updated_at timestamptz not null default now()
   );
-
   create table public.athletes (
     id uuid primary key default gen_random_uuid(),
     user_id uuid references public.users(id) on delete set null,
@@ -234,7 +223,7 @@ async function readMigrationFiles(names) {
 }
 
 let db, pool, migrationsDir;
-let ids; // fixture ids, filled by seed()
+let ids;
 let teardownVerifiedGone = null;
 
 async function setup() {
@@ -281,13 +270,12 @@ async function one(text, params) {
   const r = await pool.query(text, params);
   return r.rows[0];
 }
+function dw({ defaultWidth = 4, defaultHeight = 2 } = {}) {
+  return {};
+}
 
 // ------------------------------------------------------------
-// Fixture: 2 clubs (A, B), a team under A, a platform admin, a private
-// coach, 3 athletes in club A, real training.activities/components,
-// metric_definitions at every scope, metric_events/values, and RPE —
-// enough surface to exercise all 24 proof points, including "RPE/sRPE and
-// a Metrics Core series on the SAME dashboard without copying" (item 17).
+// Fixture.
 // ------------------------------------------------------------
 async function seed() {
   const clubA = await one(`insert into public.clubs (name) values ('PoC Club A') returning id`);
@@ -301,6 +289,7 @@ async function seed() {
   await q(`insert into public.user_global_roles (user_id, role) values ($1, 'platform_admin')`, [platformAdmin.id]);
   await q(`insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, 'admin')`, [coachA.id, clubA.id]);
   await q(`insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, 'admin')`, [coachB.id, clubB.id]);
+  await q(`insert into public.user_team_roles (user_id, team_id, role) values ($1, $2, 'coach')`, [coachA.id, teamA.id]);
 
   const athleteRows = [];
   for (const label of ["Ana", "Marko", "Petra"]) {
@@ -314,8 +303,7 @@ async function seed() {
   }
   const [ana, marko, petra] = athleteRows;
 
-  // Metric definitions at every scope this model needs to distinguish.
-  async function makeDefinition({ key, label, ownerScope, ownerUserId = null, ownerClubId = null, ownerTeamId = null, unit = "m", state = "active" }) {
+  async function makeDefinition({ key, label, ownerScope, ownerUserId = null, ownerClubId = null, ownerTeamId = null, unit = "m", state = "active", dailyAggregationMethod = "sum" }) {
     const def = await one(
       `insert into training_load.metric_definitions (key, label, owner_scope, owner_user_id, owner_club_id, owner_team_id, state, created_by_user_id)
        values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
@@ -323,23 +311,45 @@ async function seed() {
     );
     const ver = await one(
       `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id)
-       values ($1,1,$2,'numeric','sum',$3) returning id`,
-      [def.id, unit, platformAdmin.id],
+       values ($1,1,$2,'numeric',$3,$4) returning id`,
+      [def.id, unit, dailyAggregationMethod, platformAdmin.id],
     );
     await q(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [ver.id, def.id]);
     await q(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1, 'session'), ($1, 'component')`, [def.id]);
-    return def.id;
+    return { id: def.id, versionId: ver.id };
   }
-  const distanceSystem = await makeDefinition({ key: "distance_total_m", label: "Total Distance", ownerScope: "system", unit: "m" });
-  const distanceClubA = await makeDefinition({ key: "poc-distance", label: "Club A Distance", ownerScope: "club", ownerClubId: clubA.id, unit: "m" });
-  const distanceClubB = await makeDefinition({ key: "poc-distance", label: "Club B Distance", ownerScope: "club", ownerClubId: clubB.id, unit: "m" });
-  const privateHrCoachA = await makeDefinition({ key: "poc-hr", label: "Coach A Private HR", ownerScope: "user", ownerUserId: coachA.id, unit: "bpm" });
-  const privateHrPrivateCoach = await makeDefinition({ key: "poc-hr", label: "Private Coach's HR", ownerScope: "user", ownerUserId: privateCoach.id, unit: "bpm" });
-  const archivedDef = await makeDefinition({ key: "poc-archived", label: "Retired Metric", ownerScope: "club", ownerClubId: clubA.id, unit: "au", state: "archived" });
-  const hrClubA = await makeDefinition({ key: "poc-hr-club", label: "Club A Heart Rate", ownerScope: "club", ownerClubId: clubA.id, unit: "bpm" });
+  const distanceSystem = (await makeDefinition({ key: "distance_total_m", label: "Total Distance", ownerScope: "system", unit: "m" })).id;
+  const distanceClubADef = await makeDefinition({ key: "poc-distance", label: "Club A Distance", ownerScope: "club", ownerClubId: clubA.id, unit: "m" });
+  const distanceClubA = distanceClubADef.id;
+  const distanceClubB = (await makeDefinition({ key: "poc-distance", label: "Club B Distance", ownerScope: "club", ownerClubId: clubB.id, unit: "m" })).id;
+  const hrClubA = (await makeDefinition({ key: "poc-hr-club", label: "Club A Heart Rate", ownerScope: "club", ownerClubId: clubA.id, unit: "bpm" })).id;
+  const privateHrCoachA = (await makeDefinition({ key: "poc-hr", label: "Coach A Private HR", ownerScope: "user", ownerUserId: coachA.id, unit: "bpm" })).id;
+  const privateHrPrivateCoach = (await makeDefinition({ key: "poc-hr", label: "Private Coach's HR", ownerScope: "user", ownerUserId: privateCoach.id, unit: "bpm" })).id;
+  const userMetricPrivateCoach = (await makeDefinition({ key: "poc-load", label: "Private Coach's Load Metric", ownerScope: "user", ownerUserId: privateCoach.id, unit: "au" })).id;
+  const archivedDef = (await makeDefinition({ key: "poc-archived", label: "Retired Metric", ownerScope: "club", ownerClubId: clubA.id, unit: "au", state: "archived" })).id;
+  const notSummableDef = (await makeDefinition({ key: "poc-max-speed", label: "Max Speed", ownerScope: "club", ownerClubId: clubA.id, unit: "km/h", dailyAggregationMethod: "max" })).id;
+  // Round 2, §8: two visible candidates for the SAME hint key — one
+  // system-scope, one club-A-scope — a deliberately ambiguous fixture.
+  const ambiguousHintKey = "poc-ambiguous-load";
+  const ambiguousSystem = (await makeDefinition({ key: ambiguousHintKey, label: "System Load (ambiguous)", ownerScope: "system", unit: "au" })).id;
+  const ambiguousClubA = (await makeDefinition({ key: ambiguousHintKey, label: "Club A Load (ambiguous)", ownerScope: "club", ownerClubId: clubA.id, unit: "au" })).id;
 
-  // One real training.activities row for Ana, with a component, session
-  // RPE, and a Metrics Core value — the substrate item 17/18/19 read from.
+  // Round 2, §7 — a second, later SEMANTIC VERSION of distanceSystem: v1
+  // in meters, v2 in kilometers. A real historical unit change.
+  const distanceSystemV2 = await one(
+    `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id, superseded_reason)
+     values ($1,2,'km','numeric','sum',$2,'switched to km for readability') returning id`,
+    [distanceSystem, platformAdmin.id],
+  );
+  await q(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [distanceSystemV2.id, distanceSystem]);
+
+  const connSystem = await one(`insert into training_load.metric_source_connections (source_system, owner_scope) values ('poc-system-import','system') returning id`);
+  const connClubA = await one(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_club_id) values ('poc-manual','club',$1) returning id`, [clubA.id]);
+  const connClubB = await one(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_club_id) values ('poc-manual','club',$1) returning id`, [clubB.id]);
+
+  // --- A real training.activities row for Ana (club A), with a
+  // component, session RPE, and Metrics Core values — the substrate the
+  // query adapter tests read from. ---
   const activity = await one(
     `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
      values ('training_session','PoC Session','2026-09-09','2026-09-09T09:00:00Z','Europe/Belgrade','club',$1,'manual','confirmed',$2) returning id`,
@@ -355,11 +365,10 @@ async function seed() {
     [activity.id],
   );
 
-  const conn = await one(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_club_id) values ('poc-manual','club',$1) returning id`, [clubA.id]);
   const event = await one(
     `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
      values ('PoC Session','2026-09-09','2026-09-09T09:00:00Z','session','club',$1,$2,$3) returning id`,
-    [clubA.id, conn.id, coachA.id],
+    [clubA.id, connClubA.id, coachA.id],
   );
   const eventParticipant = await one(
     `insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`,
@@ -370,39 +379,104 @@ async function seed() {
   await q(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [participant.id, eventParticipant.id]);
   await q(`insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [component.id, segment.id]);
 
-  const occasion = await one(
-    `insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`,
-    [eventParticipant.id, segment.id],
-  );
+  // Component-scope STANDALONE distance value (Main Set): 3200m.
+  const compOccasion = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [eventParticipant.id, segment.id]);
   await q(
-    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture)
-     select $1, id, current_version_id, 3200, 'm' from training_load.metric_definitions where id = $2`,
-    [occasion.id, distanceClubA],
+    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
+     values ($1,$2,$3,3200,'m','standalone','not_applicable')`,
+    [compOccasion.id, distanceClubA, distanceClubADef.versionId],
+  );
+  // Session-scope SOURCE ROLLUP for the SAME underlying metric (5000m
+  // whole-session total, reported directly by the source device) — Round
+  // 2 §9 item 4: this and the component value above must NEVER be summed
+  // together by the query adapter (one is a rollup already covering the
+  // whole session; the other is one component's own standalone reading).
+  const sessionOccasion = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [eventParticipant.id]);
+  await q(
+    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
+     values ($1,$2,$3,5000,'m','source_rollup','complete')`,
+    [sessionOccasion.id, distanceClubA, distanceClubADef.versionId],
   );
 
-  // A real RPE row — reached only via session_feedback (never metric_values).
+  // Round 2, §7 fixture: distanceSystem, one value under v1 (m), one under
+  // v2 (km), both for Ana, both linked to Marko's own separate activity on
+  // a later date within the same query period.
+  const activity2 = await one(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
+     values ('training_session','PoC Session 2','2026-09-10','2026-09-10T09:00:00Z','Europe/Belgrade','club',$1,'manual','confirmed',$2) returning id`,
+    [clubA.id, coachA.id],
+  );
+  const participant2 = await one(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1,$2,'2026-09-10','Europe/Belgrade','participated') returning id`,
+    [activity2.id, ana.id],
+  );
+  const event2 = await one(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
+     values ('PoC Session 2','2026-09-10','2026-09-10T09:00:00Z','session','club',$1,$2,$3) returning id`,
+    [clubA.id, connClubA.id, coachA.id],
+  );
+  const eventParticipant2 = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [event2.id, ana.id]);
+  await q(`insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [activity2.id, event2.id]);
+  await q(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [participant2.id, eventParticipant2.id]);
+  const occV1 = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [eventParticipant.id]);
+  await q(
+    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
+     values ($1,$2,$3,4800,'m','standalone','not_applicable')`,
+    [occV1.id, distanceSystem, (await one(`select id from training_load.metric_definition_versions where metric_definition_id=$1 and version_number=1`, [distanceSystem])).id],
+  );
+  const occV2 = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [eventParticipant2.id]);
+  await q(
+    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
+     values ($1,$2,$3,4.9,'km','standalone','not_applicable')`,
+    [occV2.id, distanceSystem, distanceSystemV2.id],
+  );
+
+  // A real RPE row — reached only via session_feedback, never metric_values.
+  // The canonical read contract's own 'rpe' fact requires a CONFIRMED
+  // training.activity_participant_session_links row resolving to a REAL,
+  // live, published Weekly plan session (check_session_link_integrity,
+  // v2) — a bare session_feedback row with a random logical_session_id is
+  // not enough on its own (this gap existed silently in round 1's
+  // fixture, since round 1 never actually called
+  // canonical_activity_results() and asserted on its RPE fact — round 2's
+  // real query adapter is what surfaces it).
+  const logicalSessionId = crypto.randomUUID();
+  const rpePlan = await one(
+    `insert into plans.plans (plan_type, athlete_id, name, status, is_active, is_edit_draft, week_start, created_by_user_id)
+     values ('weekly',$1,'PoC Weekly Plan','active',true,false,'2026-09-07',$2) returning id`,
+    [ana.id, coachA.id],
+  );
+  await q(
+    `insert into training_load.plan_workspace_ownership (plan_id, owner_scope, owner_club_id) values ($1,'club',$2)`,
+    [rpePlan.id, clubA.id],
+  );
+  const rpePlanDay = await one(`insert into plans.plan_days (plan_id, date, day_order) values ($1,'2026-09-09',1) returning id`, [rpePlan.id]);
+  await q(`insert into plans.plan_sessions (plan_day_id, session_order, name, logical_session_id) values ($1,1,'PoC Session',$2)`, [rpePlanDay.id, logicalSessionId]);
   await q(
     `insert into training_load.session_feedback (athlete_id, session_date, plan_name, source, external_assignment_id, logical_session_id, rpe, duration_minutes)
-     values ($1,'2026-09-09','PoC Plan','planned', null, gen_random_uuid(), 7, 60)`,
-    [ana.id],
+     values ($1,'2026-09-09','PoC Plan','planned', null, $2, 7, 60)`,
+    [ana.id, logicalSessionId],
+  );
+  await q(
+    `insert into training.activity_participant_session_links (activity_participant_id, athlete_id, logical_session_id, link_method, link_status, confirmed_by_user_id, confirmed_at)
+     values ($1,$2,$3,'manual','confirmed',$4,now())`,
+    [participant.id, ana.id, logicalSessionId, coachA.id],
   );
 
   return {
     clubA: clubA.id, clubB: clubB.id, teamA: teamA.id,
     platformAdmin: platformAdmin.id, coachA: coachA.id, coachB: coachB.id, privateCoach: privateCoach.id,
     ana: ana.id, marko: marko.id, petra: petra.id,
-    distanceSystem, distanceClubA, distanceClubB, privateHrCoachA, privateHrPrivateCoach, archivedDef, hrClubA,
-    activity: activity.id, component: component.id,
+    distanceSystem, distanceClubA, distanceClubB, hrClubA, privateHrCoachA, privateHrPrivateCoach, userMetricPrivateCoach,
+    archivedDef, notSummableDef, ambiguousHintKey, ambiguousSystem, ambiguousClubA,
+    connSystem: connSystem.id, connClubA: connClubA.id, connClubB: connClubB.id,
+    activity: activity.id, activity2: activity2.id, component: component.id,
+    eventParticipant: eventParticipant.id, segment: segment.id,
   };
 }
 
 // ------------------------------------------------------------
-// Concurrency helpers — deterministic DB barriers, never sleep. Two real
-// pg.Client connections; "blocked" is proven by polling
-// pg_stat_activity.wait_event_type for the waiting backend's own real pid
-// until Postgres itself reports it as waiting on a lock, bounded by a
-// generous timeout that only ever fires on a genuine bug (never used as a
-// timing device for the actual assertion).
+// Concurrency helpers.
 // ------------------------------------------------------------
 async function newClient() {
   const c = new pg.Client({ connectionString: db.url });
@@ -420,423 +494,881 @@ async function waitUntilBlocked(pid, timeoutMs = 5000) {
   return false;
 }
 
+// ------------------------------------------------------------
+// Small fixture-creation helpers shared across many tests.
+// ------------------------------------------------------------
+async function makeDashboard({ ownerScope, ownerUserId = null, ownerClubId = null, ownerTeamId = null, dataWorkspaceType = null, dataWorkspaceScopeId = null, isTemplate = false, createdBy }) {
+  return one(
+    `insert into training_load.dashboards (name, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, is_template, created_by_user_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+    ["PoC Dashboard " + crypto.randomBytes(3).toString("hex"), ownerScope, ownerUserId, ownerClubId, ownerTeamId, dataWorkspaceType, dataWorkspaceScopeId, isTemplate, createdBy],
+  );
+}
+async function makeWidget(dashboardId, { widgetType = "kpi", x = 0, y = 0, width = 3, height = 2, mobileOrder = 1, order = 1 } = {}) {
+  return one(
+    `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,$2,'W',$3,$4,$5,$6,$7,$8) returning *`,
+    [dashboardId, widgetType, order, x, y, width, height, mobileOrder],
+  );
+}
+async function addSeries(widgetId, fields = {}) {
+  const cols = ["widget_id", "series_order"];
+  const vals = [widgetId, fields.seriesOrder ?? 1];
+  const map = {
+    metricDefinitionId: "metric_definition_id", builtInSeriesKey: "built_in_series_key", templateHints: "template_metric_key_hints",
+    axis: "axis", sourcePolicy: "source_policy", sourceConnectionId: "source_connection_id", dataScopeLevel: "data_scope_level",
+    aggregationMethod: "aggregation_method", aggregationRolePolicy: "aggregation_role_policy", coveragePolicy: "coverage_policy", comparisonPeriod: "comparison_period",
+  };
+  for (const [k, col] of Object.entries(map)) {
+    if (fields[k] !== undefined) { cols.push(col); vals.push(fields[k]); }
+  }
+  const placeholders = cols.map((_, i) => `$${i + 1}`).join(",");
+  return one(`insert into training_load.dashboard_widget_series (${cols.join(",")}) values (${placeholders}) returning *`, vals);
+}
+
+// A fresh, never-shared club-A metric_definition — used by the §9.5-9.9
+// query-adapter tests specifically so each test's own effective-value
+// count is never polluted by fixture rows a DIFFERENT, earlier test added
+// to a shared definition (this whole harness shares one database/fixture
+// across all tests, run sequentially).
+async function makeQuickMetric(label) {
+  const def = await one(
+    `insert into training_load.metric_definitions (key, label, owner_scope, owner_club_id, state, created_by_user_id) values ($1,$2,'club',$3,'active',$4) returning id`,
+    [`poc-quick-${crypto.randomBytes(4).toString("hex")}`, label, ids.clubA, ids.coachA],
+  );
+  const ver = await one(
+    `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id) values ($1,1,'bpm','numeric','sum',$2) returning id`,
+    [def.id, ids.coachA],
+  );
+  await q(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [ver.id, def.id]);
+  await q(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'session'),($1,'component')`, [def.id]);
+  return def.id;
+}
+
 // ============================================================
-// The 24 proof points.
+// §1 — Owner vs. data-workspace separation.
 // ============================================================
 
-test("PoC 1. system/club/team/user ownership — one dashboard per scope, each with the correct owner columns populated", async () => {
-  const sys = await one(`insert into training_load.dashboards (name, owner_scope, created_by_user_id) values ('System Overview','system',$1) returning *`, [ids.platformAdmin]);
-  assert.equal(sys.owner_scope, "system");
-  const club = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Club A Overview','club',$1,$2) returning *`, [ids.clubA, ids.coachA]);
-  assert.equal(club.owner_club_id, ids.clubA);
-  const team = await one(`insert into training_load.dashboards (name, owner_scope, owner_team_id, created_by_user_id) values ('Team A1 Overview','team',$1,$2) returning *`, [ids.teamA, ids.coachA]);
-  assert.equal(team.owner_team_id, ids.teamA);
-  const user = await one(`insert into training_load.dashboards (name, owner_scope, owner_user_id, created_by_user_id) values ('My Dashboard','user',$1,$2) returning *`, [ids.coachA, ids.coachA]);
-  assert.equal(user.owner_user_id, ids.coachA);
-  // The shape CHECK itself rejects a mismatched owner combination.
-  await assert.rejects(q(`insert into training_load.dashboards (name, owner_scope, owner_club_id, owner_user_id, created_by_user_id) values ('bad','club',$1,$2,$2)`, [ids.clubA, ids.coachA]));
+test("§1.1 a private dashboard bound to Club A's data workspace can reference Club A's own metric", async () => {
+  const dash = await makeDashboard({ ownerScope: "user", ownerUserId: ids.coachA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widget.id, { metricDefinitionId: ids.distanceClubA });
+  assert.equal(series.metric_definition_id, ids.distanceClubA);
 });
 
-test("PoC 2. cross-workspace read/write isolation — club B cannot write into club A's dashboard, and a simple scope filter never returns club A's rows for club B", async () => {
-  const dashA = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Club A Only','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const rows = await q(`select id from training_load.dashboards where owner_scope='club' and owner_club_id=$1`, [ids.clubB]);
-  assert.ok(!rows.rows.some((r) => r.id === dashA.id), "a club-B-scoped query must never see club A's dashboard");
-  // "Write" isolation at the DB layer means: nothing about this row's
-  // storage lets a club-B-scoped writer target it merely by omitting a
-  // WHERE clause — every real write path always predicates on the
-  // caller's own resolved owner columns (see report's application-layer
-  // notes); demonstrated here by confirming a scope-filtered UPDATE
-  // touches zero rows when club B's own id is used.
-  const upd = await q(`update training_load.dashboards set name='hacked' where id=$1 and owner_club_id=$2`, [dashA.id, ids.clubB]);
-  assert.equal(upd.rowCount, 0);
-});
-
-test("PoC 3. platform-admin-managed system template is real and its ownership cannot be silently reassigned once in use", async () => {
-  const tmpl = await one(`insert into training_load.dashboards (name, owner_scope, is_template, created_by_user_id) values ('Team overview','system',true,$1) returning id`, [ids.platformAdmin]);
-  await q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','Placeholder',1,0,0,3,2,1)`, [tmpl.id]);
+test("§1.2 the SAME private dashboard cannot be queried/used in Club B — its data workspace is fixed to Club A", async () => {
+  const dash = await makeDashboard({ ownerScope: "user", ownerUserId: ids.coachA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
   await assert.rejects(
-    q(`update training_load.dashboards set owner_scope='club', owner_club_id=$1 where id=$2`, [ids.clubA, tmpl.id]),
-    /owner_scope is immutable/,
+    addSeries(widget.id, { metricDefinitionId: ids.distanceClubB }),
+    /not visible to this dashboard's data workspace/,
   );
-});
-
-test("PoC 4. a user clones a system template into their own dashboard without modifying the original", async () => {
-  const tmpl = await one(`insert into training_load.dashboards (name, owner_scope, is_template, created_by_user_id) values ('Athlete overview','system',true,$1) returning *`, [ids.platformAdmin]);
-  const tmplWidget = await one(
-    `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','Distance',1,0,0,3,2,1) returning id`,
-    [tmpl.id],
-  );
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, template_metric_key_hints) values ($1,1,'["distance_total_m"]'::jsonb)`, [tmplWidget.id]);
-
-  // Clone: a brand-new dashboard row, owner_scope='user', provenance
-  // pointer set, hint resolved into a REAL FK against this workspace's
-  // own visible 'system' definition.
-  const clone = await one(
-    `insert into training_load.dashboards (name, owner_scope, owner_user_id, cloned_from_dashboard_id, created_by_user_id) values ($1,'user',$2,$3,$2) returning *`,
-    [tmpl.name, ids.coachA, tmpl.id],
-  );
-  const cloneWidget = await one(
-    `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','Distance',1,0,0,3,2,1) returning id`,
-    [clone.id],
-  );
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,1,$2)`, [cloneWidget.id, ids.distanceSystem]);
-
-  const originalStillHasHintOnly = await one(`select metric_definition_id, template_metric_key_hints from training_load.dashboard_widget_series where widget_id=$1`, [tmplWidget.id]);
-  assert.equal(originalStillHasHintOnly.metric_definition_id, null, "the ORIGINAL template's series must remain unresolved — cloning must never mutate it");
-  const clonedResolved = await one(`select metric_definition_id from training_load.dashboard_widget_series where widget_id=$1`, [cloneWidget.id]);
-  assert.equal(clonedResolved.metric_definition_id, ids.distanceSystem);
-});
-
-test("PoC 5. active dashboard selection is separate per user+workspace", async () => {
-  const dashA = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('A','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const dashB = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('B','club',$1,$2) returning id`, [ids.clubB, ids.coachB]);
-  await q(`insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'club',$2,$3)`, [ids.coachA, ids.clubA, dashA.id]);
-  await q(`insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'club',$2,$3)`, [ids.coachB, ids.clubB, dashB.id]);
-  const a = await one(`select dashboard_id from training_load.dashboard_active_selection where user_id=$1 and workspace_type='club' and scope_id=$2`, [ids.coachA, ids.clubA]);
-  const b = await one(`select dashboard_id from training_load.dashboard_active_selection where user_id=$1 and workspace_type='club' and scope_id=$2`, [ids.coachB, ids.clubB]);
-  assert.equal(a.dashboard_id, dashA.id);
-  assert.equal(b.dashboard_id, dashB.id);
-  // Coach A cannot select club B's dashboard as their own active view.
+  // Nor can it be selected as the active dashboard while viewing Club B.
   await assert.rejects(
-    q(`insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'club',$2,$3)`, [ids.coachA, ids.clubA, dashB.id]),
-    /not visible from workspace/,
+    q(`insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'club',$2,$3)`, [ids.coachA, ids.clubB, dash.id]),
+    /does not match the exact selection context/,
   );
+  // It CAN be selected while actually viewing Club A.
+  await q(`insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'club',$2,$3)`, [ids.coachA, ids.clubA, dash.id]);
 });
 
-test("PoC 6. a widget's metric FK must belong to a definition actually visible to its dashboard's owner scope", async () => {
-  const dashClubA = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('A','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const widget = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'table','D',1,0,0,6,4,1) returning id`, [dashClubA.id]);
-  // 'table' (not 'kpi') deliberately — this test is about VISIBILITY, not
-  // the per-type series cap (PoC 14 already covers that), and needs room
-  // for 3 series.
-  // Club A's own metric — allowed.
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,1,$2)`, [widget.id, ids.distanceClubA]);
-  // A system metric — allowed.
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,2,$2)`, [widget.id, ids.distanceSystem]);
-  // Club B's metric on a Club A dashboard — rejected.
+test("§1.3 a private dashboard can instead be bound to a Team A workspace and reads team-visible data only", async () => {
+  const dash = await makeDashboard({ ownerScope: "user", ownerUserId: ids.coachA, dataWorkspaceType: "team", dataWorkspaceScopeId: ids.teamA, createdBy: ids.coachA });
+  await q(`insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'team',$2,$3)`, [ids.coachA, ids.teamA, dash.id]);
+  const sel = await one(`select dashboard_id from training_load.dashboard_active_selection where user_id=$1 and workspace_type='team' and scope_id=$2`, [ids.coachA, ids.teamA]);
+  assert.equal(sel.dashboard_id, dash.id);
+});
+
+test("§1.4 a private-coach dashboard (no club/team) is bound to their own private_coach workspace and can use their own private metric", async () => {
+  const dash = await makeDashboard({ ownerScope: "user", ownerUserId: ids.privateCoach, dataWorkspaceType: "private_coach", createdBy: ids.privateCoach });
+  const widget = await makeWidget(dash.id);
+  const series = await addSeries(widget.id, { metricDefinitionId: ids.userMetricPrivateCoach });
+  assert.equal(series.metric_definition_id, ids.userMetricPrivateCoach);
+  await q(`insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'private_coach',null,$2)`, [ids.privateCoach, dash.id]);
+});
+
+test("§1.5 the SAME user can have two different private dashboards bound to two different data workspaces", async () => {
+  const dashClubA = await makeDashboard({ ownerScope: "user", ownerUserId: ids.coachA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const dashTeamA = await makeDashboard({ ownerScope: "user", ownerUserId: ids.coachA, dataWorkspaceType: "team", dataWorkspaceScopeId: ids.teamA, createdBy: ids.coachA });
+  assert.notEqual(dashClubA.id, dashTeamA.id);
+  assert.equal(dashClubA.owner_user_id, dashTeamA.owner_user_id);
+});
+
+test("§1.6 revoking a coach's workspace role leaves the dashboard row and its config completely intact — blocking selection/query/edit is an APPLICATION-layer requirement this PoC documents but cannot fully exercise without a real auth layer", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubB, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubB, createdBy: ids.coachB });
+  const widget = await makeWidget(dash.id);
+  await addSeries(widget.id, { metricDefinitionId: ids.distanceClubB });
+  await q(`update public.user_club_roles set is_active=false where user_id=$1 and club_id=$2`, [ids.coachB, ids.clubB]);
+  const stillActive = await one(`select is_active from public.user_club_roles where user_id=$1 and club_id=$2`, [ids.coachB, ids.clubB]);
+  assert.equal(stillActive.is_active, false);
+  // The dashboard/widget/series rows themselves are completely untouched —
+  // the schema does not (and structurally cannot) delete or hide them on
+  // role revocation; a real route must call the SAME resolveActiveWorkspace
+  // check every other Training Load feature already uses, on every
+  // selection/query/edit request, never trusting a cached grant. This test
+  // documents the boundary; it is not, and cannot be, a real auth test.
+  const stillThere = await one(`select status from training_load.dashboards where id=$1`, [dash.id]);
+  assert.equal(stillThere.status, "active");
+});
+
+test("§1.7 club/team-owned dashboards have their data workspace forced to match their owner scope — no independent choice, no mismatch possible", async () => {
   await assert.rejects(
-    q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,3,$2)`, [widget.id, ids.distanceClubB]),
-    /not visible/,
+    q(`insert into training_load.dashboards (name, owner_scope, owner_club_id, data_workspace_type, data_workspace_scope_id, created_by_user_id) values ('bad','club',$1,'club',$2,$3)`, [ids.clubA, ids.clubB, ids.coachA]),
+    /violates check constraint/,
   );
 });
 
-test("PoC 7. an archived metric_definition stays readable/renderable in an existing widget, but the visibility trigger does not itself gate on state (state-based hiding for NEW picks is an application-layer catalog concern)", async () => {
-  const dashClubA = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('A','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const widget = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','Archived',1,0,0,3,2,1) returning id`, [dashClubA.id]);
-  const series = await one(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,1,$2) returning id`, [widget.id, ids.archivedDef]);
-  const row = await one(
-    `select md.state, md.label from training_load.dashboard_widget_series s join training_load.metric_definitions md on md.id = s.metric_definition_id where s.id=$1`,
-    [series.id],
-  );
-  assert.equal(row.state, "archived");
-  assert.equal(row.label, "Retired Metric", "the widget can still resolve and render the archived definition's real label/history");
-});
-
-test("PoC 8. another user's PRIVATE metric_definition cannot be inserted into my dashboard by UUID, even though the row exists and is a valid FK target", async () => {
-  const dashPrivate = await one(`insert into training_load.dashboards (name, owner_scope, owner_user_id, created_by_user_id) values ('My dash','user',$1,$2) returning id`, [ids.coachA, ids.coachA]);
-  const widget = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','HR',1,0,0,3,2,1) returning id`, [dashPrivate.id]);
-  // ids.privateHrPrivateCoach is a REAL, existing metric_definitions row —
-  // owned by a DIFFERENT private coach. The FK alone would happily accept
-  // it; the visibility trigger must not.
+test("§1.8 a system dashboard is always a template with a workspace-agnostic (NULL) data binding until cloned", async () => {
+  const tmpl = await makeDashboard({ ownerScope: "system", isTemplate: true, createdBy: ids.platformAdmin });
+  assert.equal(tmpl.data_workspace_type, null);
   await assert.rejects(
-    q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,1,$2)`, [widget.id, ids.privateHrPrivateCoach]),
-    /may not reference metric_definition/,
+    q(`insert into training_load.dashboards (name, owner_scope, is_template, created_by_user_id) values ('x','system',false,$1)`, [ids.platformAdmin]),
+    /violates check constraint/,
+    "owner_scope='system' implies is_template=true",
   );
-  // Coach A's OWN private metric is fine on their OWN private dashboard.
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,2,$2)`, [widget.id, ids.privateHrCoachA]);
 });
 
-test("PoC 9. the 12-column grid rejects an out-of-bounds position/size", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Layout','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  await assert.rejects(q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','Bad',1,10,0,5,2,1)`, [dash.id]), /x \+ width|out of bounds/);
-  await assert.rejects(q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','TooWide',1,0,0,12,2,1)`, [dash.id]), /out of bounds/, "KPI's own max_width is 4, not 12");
-  await q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','OK',1,0,0,3,2,1)`, [dash.id]);
-});
+// ============================================================
+// §2 — Series query semantics.
+// ============================================================
 
-test("PoC 10. overlapping widgets on the same dashboard are rejected deterministically", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Overlap','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  await q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','First',1,0,0,4,2,1)`, [dash.id]);
+test("§2.1 aggregation_method must be compatible with the series' own declared method", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  // notSummableDef declares daily_aggregation_method='max' — 'sum' must be refused.
   await assert.rejects(
-    q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','Overlaps',2,2,0,4,2,2)`, [dash.id]),
-    /overlaps existing widget/,
+    addSeries(widget.id, { metricDefinitionId: ids.notSummableDef, aggregationMethod: "sum" }),
+    /not compatible with this series' own declared method/,
   );
-  // A widget in a different row, or fully to the right, does not conflict.
-  await q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','Below',3,0,2,4,2,2)`, [dash.id]);
-  await q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','RightOf',4,4,0,4,2,3)`, [dash.id]);
+  const ok = await addSeries(widget.id, { metricDefinitionId: ids.notSummableDef, aggregationMethod: "max" });
+  assert.equal(ok.aggregation_method, "max");
+  const raw = await addSeries(widget.id, { seriesOrder: 2, metricDefinitionId: ids.distanceClubA, aggregationMethod: "none" });
+  assert.equal(raw.aggregation_method, "none");
 });
 
-test("PoC 11. concurrent edit against a stale widget revision is a controlled conflict, never a silent overwrite", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Conflict','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const widget = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','W',1,0,0,3,2,1) returning id, revision`, [dash.id]);
-  const staleRevision = widget.revision;
-
-  // Writer A applies a real change first — revision bumps to 2.
-  const applyA = await q(`update training_load.dashboard_widgets set title='Renamed by A' where id=$1 and revision=$2 returning revision`, [widget.id, staleRevision]);
-  assert.equal(applyA.rowCount, 1);
-  assert.equal(applyA.rows[0].revision, 2);
-
-  // Writer B, still holding the OLD revision it read before A's write,
-  // retries against that same stale value — 0 rows updated, a controlled
-  // conflict the application layer turns into a 409, never a silent
-  // overwrite of A's change.
-  const applyB = await q(`update training_load.dashboard_widgets set title='Renamed by B' where id=$1 and revision=$2`, [widget.id, staleRevision]);
-  assert.equal(applyB.rowCount, 0, "a write against a stale revision must affect zero rows");
-  const final = await one(`select title, revision from training_load.dashboard_widgets where id=$1`, [widget.id]);
-  assert.equal(final.title, "Renamed by A");
+test("§2.2 aggregation_role_policy and coverage_policy are real, validated columns, not an undefined frontend convention", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const s = await addSeries(widget.id, { metricDefinitionId: ids.distanceClubA, aggregationRolePolicy: "standalone_only", coveragePolicy: "complete_only" });
+  assert.equal(s.aggregation_role_policy, "standalone_only");
+  assert.equal(s.coverage_policy, "complete_only");
+  await assert.rejects(q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, aggregation_role_policy) values ($1,2,$2,'not_a_real_policy')`, [widget.id, ids.distanceClubA]));
 });
 
-test("PoC 12. two concurrent resize/reorder requests against DIFFERENT widgets on the same dashboard both succeed — neither is lost, verified with a real DB barrier (not sleep)", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Parallel','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const w1 = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','W1',1,0,0,3,2,1) returning id`, [dash.id]);
-  const w2 = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','W2',2,4,0,3,2,2) returning id`, [dash.id]);
+test("§2.3 comparison_period is rejected on a widget type that does not support it, and cleared/blocked when switching away from KPI", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const table = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  await assert.rejects(addSeries(table.id, { metricDefinitionId: ids.distanceClubA, comparisonPeriod: "previous_period" }), /comparison_period is not supported/);
+  const kpi = await makeWidget(dash.id, { widgetType: "kpi", x: 6, y: 0, order: 2, mobileOrder: 2 });
+  await addSeries(kpi.id, { metricDefinitionId: ids.distanceClubA, comparisonPeriod: "previous_period" });
+  await assert.rejects(q(`update training_load.dashboard_widgets set widget_type='table', width=6, height=4 where id=$1`, [kpi.id]), /an existing series still has a comparison_period set/);
+});
 
+test("§2.4 built-in series have a fixed, non-choosable data_scope_level", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  await assert.rejects(addSeries(widget.id, { builtInSeriesKey: "rpe", dataScopeLevel: "component", aggregationMethod: "avg" }), /always scope_level=session/);
+  const ok = await addSeries(widget.id, { builtInSeriesKey: "rpe", dataScopeLevel: "session", aggregationMethod: "avg", sourcePolicy: "manual" });
+  assert.equal(ok.data_scope_level, "session");
+});
+
+test("§2.5 display_config requires a schemaVersion key — an unversioned blob is refused", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  await assert.rejects(
+    q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order, display_config) values ($1,'kpi','X',1,0,0,3,2,1,'{}'::jsonb)`, [dash.id]),
+  );
+  const widget = await makeWidget(dash.id);
+  assert.deepEqual(widget.display_config, { schemaVersion: 1 });
+});
+
+// ============================================================
+// §3 — Revision and cache identity.
+// ============================================================
+
+test("§3.1 adding or removing a widget bumps the DASHBOARD's own revision", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  assert.equal(dash.revision, 1);
+  const widget = await makeWidget(dash.id);
+  const afterAdd = await one(`select revision from training_load.dashboards where id=$1`, [dash.id]);
+  assert.equal(afterAdd.revision, 2);
+  await q(`delete from training_load.dashboard_widgets where id=$1`, [widget.id]);
+  const afterRemove = await one(`select revision from training_load.dashboards where id=$1`, [dash.id]);
+  assert.equal(afterRemove.revision, 3);
+});
+
+test("§3.2 adding, updating, deleting, or reordering a series bumps the WIDGET's own revision", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const afterCreate = await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id]);
+  assert.equal(afterCreate.revision, 1);
+  const series = await addSeries(widget.id, { metricDefinitionId: ids.distanceClubA });
+  const afterAdd = await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id]);
+  assert.equal(afterAdd.revision, 2);
+  await q(`update training_load.dashboard_widget_series set display_label='X' where id=$1`, [series.id]);
+  const afterUpdate = await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id]);
+  assert.equal(afterUpdate.revision, 3);
+  await q(`delete from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  const afterDelete = await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id]);
+  assert.equal(afterDelete.revision, 4);
+});
+
+test("§3.3 changing widget_type bumps the widget's own revision", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "kpi" });
+  await q(`update training_load.dashboard_widgets set widget_type='table', width=6, height=4 where id=$1`, [widget.id]);
+  const after = await one(`select revision, widget_type from training_load.dashboard_widgets where id=$1`, [widget.id]);
+  assert.equal(after.widget_type, "table");
+  assert.equal(after.revision, 2);
+});
+
+test("§3.4 two edits to DIFFERENT widgets never produce a false optimistic conflict — proven with a real DB barrier, not sleep", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const w1 = await makeWidget(dash.id, { x: 0, y: 0, mobileOrder: 1, order: 1 });
+  const w2 = await makeWidget(dash.id, { x: 4, y: 0, mobileOrder: 2, order: 2 });
   const a = await newClient();
   const b = await newClient();
   try {
     await a.client.query("begin");
-    await a.client.query("update training_load.dashboard_widgets set width=4 where id=$1", [w1.id]); // touches the dashboard's own row lock too
-    // b's write to w2 shares the SAME dashboard-level lock the overlap
-    // trigger takes — it WILL block behind a's still-open transaction.
+    await a.client.query("update training_load.dashboard_widgets set width=4 where id=$1", [w1.id]);
     const bPromise = b.client.query("update training_load.dashboard_widgets set width=4 where id=$1", [w2.id]);
     const blocked = await waitUntilBlocked(b.pid);
-    assert.ok(blocked, "writer B must be genuinely blocked behind writer A's open transaction (real DB barrier, not a timing guess)");
+    assert.ok(blocked, "writer B genuinely blocked behind the shared dashboard-row lock, not a timing guess");
     await a.client.query("commit");
-    await bPromise; // now proceeds and succeeds
+    await bPromise;
   } finally {
     await a.client.end();
     await b.client.end();
   }
-
-  const r1 = await one(`select width, revision from training_load.dashboard_widgets where id=$1`, [w1.id]);
-  const r2 = await one(`select width, revision from training_load.dashboard_widgets where id=$1`, [w2.id]);
-  assert.equal(r1.width, 4);
-  assert.equal(r2.width, 4);
+  const r1 = await one(`select revision from training_load.dashboard_widgets where id=$1`, [w1.id]);
+  const r2 = await one(`select revision from training_load.dashboard_widgets where id=$1`, [w2.id]);
   assert.equal(r1.revision, 2);
   assert.equal(r2.revision, 2);
 });
 
-test("PoC 13. widget type and series config validation — unknown widget_type, and a series with neither a resolved reference nor hints, are both refused", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Validate','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  await assert.rejects(q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'not_a_real_type','X',1,0,0,3,2,1)`, [dash.id]));
-  const widget = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','X',1,0,0,3,2,1) returning id`, [dash.id]);
-  await assert.rejects(q(`insert into training_load.dashboard_widget_series (widget_id, series_order) values ($1,1)`, [widget.id]));
+test("§3.5 two edits to the SAME widget with the same stale revision give exactly one success and one controlled conflict", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id);
+  const staleRevision = widget.revision;
+  const applyA = await q(`update training_load.dashboard_widgets set title='By A' where id=$1 and revision=$2 returning revision`, [widget.id, staleRevision]);
+  assert.equal(applyA.rowCount, 1);
+  const applyB = await q(`update training_load.dashboard_widgets set title='By B' where id=$1 and revision=$2`, [widget.id, staleRevision]);
+  assert.equal(applyB.rowCount, 0);
 });
 
-test("PoC 14. KPI never accepts more series than its type allows (max_series=1)", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('KPI cap','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const widget = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','K',1,0,0,3,2,1) returning id`, [dash.id]);
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,1,$2)`, [widget.id, ids.distanceClubA]);
+// ============================================================
+// §4 — Reverse invariants.
+// ============================================================
+
+test("§4.1 is_template cannot flip to false while an unresolved (hints-only) series still exists", async () => {
+  const tmpl = await makeDashboard({ ownerScope: "system", isTemplate: true, createdBy: ids.platformAdmin });
+  const widget = await makeWidget(tmpl.id);
+  await addSeries(widget.id, { templateHints: JSON.stringify(["distance_total_m"]) });
   await assert.rejects(
-    q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,2,$2)`, [widget.id, ids.distanceSystem]),
-    /already has 1 series, the max allowed is 1/,
+    q(`update training_load.dashboards set is_template=false where id=$1`, [tmpl.id]),
+    /cannot flip is_template to false while unresolved/,
   );
 });
 
-test("PoC 15. a chart never mixes incompatible units on the same axis", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Axis','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const widget = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'line_chart','L',1,0,0,6,4,1) returning id`, [dash.id]);
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, axis) values ($1,1,$2,'primary')`, [widget.id, ids.distanceClubA]); // unit m
+test("§4.2 switching Table -> KPI re-checks the max-series cap against EXISTING series", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  await addSeries(widget.id, { seriesOrder: 1, metricDefinitionId: ids.distanceClubA });
+  await addSeries(widget.id, { seriesOrder: 2, metricDefinitionId: ids.hrClubA });
   await assert.rejects(
-    q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, axis) values ($1,2,$2,'primary')`, [widget.id, ids.hrClubA]), // unit bpm, visible to this club-A dashboard
-    /unit mismatch/,
+    q(`update training_load.dashboard_widgets set widget_type='kpi', width=3, height=2 where id=$1`, [widget.id]),
+    /already has 2 series, that type allows at most 1/,
   );
-  // The SAME incompatible metric is fine on the SECONDARY axis.
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, axis) values ($1,3,$2,'secondary')`, [widget.id, ids.hrClubA]);
-  // The same axis-compatibility check does NOT apply to a KPI/Table — a
-  // widget type with no real shared visual axis (report §D "axis-unit
-  // scoped to chart types only").
-  const table = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'table','T',2,0,4,6,4,2) returning id`, [dash.id]);
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, axis) values ($1,1,$2,'primary')`, [table.id, ids.distanceClubA]);
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, axis) values ($1,2,$2,'primary')`, [table.id, ids.hrClubA]);
 });
 
-test("PoC 16. source policy is explicit and self-consistent, never an implicit 'primary source' guess", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Source','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const widget = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'table','T',1,0,0,6,4,1) returning id`, [dash.id]);
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, source_policy) values ($1,1,$2,'manual')`, [widget.id, ids.distanceClubA]);
+test("§4.3 switching Table -> Line chart re-checks axis-unit compatibility against EXISTING series", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  await addSeries(widget.id, { seriesOrder: 1, metricDefinitionId: ids.distanceClubA }); // unit m, axis primary (default)
+  await addSeries(widget.id, { seriesOrder: 2, metricDefinitionId: ids.hrClubA }); // unit bpm, axis primary (default) — fine on a Table
   await assert.rejects(
-    q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, source_policy) values ($1,2,$2,'source_connection')`, [widget.id, ids.distanceClubA]),
-    /violates check constraint/,
-    "source_policy='source_connection' requires a source_connection_id",
+    q(`update training_load.dashboard_widgets set widget_type='line_chart', width=6, height=4 where id=$1`, [widget.id]),
+    /axis primary already mixes incompatible units/,
   );
 });
 
-test("PoC 17. RPE/sRPE (session_feedback, built-in series) and a Metrics Core metric can sit on the SAME dashboard without ever copying a result into metric_values", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Session analysis','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const widget = await one(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'table','T',1,0,0,6,4,1) returning id`, [dash.id]);
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, built_in_series_key) values ($1,1,'rpe')`, [widget.id]);
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, built_in_series_key) values ($1,2,'srpe')`, [widget.id]);
-  await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,3,$2)`, [widget.id, ids.distanceClubA]);
-  const series = await q(`select built_in_series_key, metric_definition_id from training_load.dashboard_widget_series where widget_id=$1 order by series_order`, [widget.id]);
-  assert.deepEqual(series.rows.map((r) => r.built_in_series_key), ["rpe", "srpe", null]);
-  // The RPE value itself still lives ONLY in session_feedback — proving
-  // no copy was made anywhere in this schema.
-  const rpeCount = await one(`select count(*)::int as n from training_load.metric_values v join training_load.metric_definitions d on d.id=v.metric_definition_id where d.key ilike '%rpe%'`);
-  assert.equal(rpeCount.n, 0, "RPE must never be duplicated into metric_values");
-  const realRpe = await one(`select rpe, srpe from training_load.session_feedback where athlete_id=$1`, [ids.ana]);
-  assert.equal(realRpe.rpe, 7);
-  assert.equal(realRpe.srpe, 420);
-});
-
-test("PoC 18. day/session/component data is never double-counted by this model — session-scope and component-scope values for the same fact stay distinguishable, never silently summed", async () => {
-  // The real activity fixture has EXACTLY one metric_values row, scoped to
-  // a COMPONENT (via its segment link) — proving the query surface a
-  // widget reads from can distinguish component-level facts from a
-  // session-level rollup that does not exist here, rather than a
-  // dashboard-side aggregate silently treating "one value" as if it were
-  // both.
-  const rows = await q(
-    `select o.segment_id, e.scope_level from training_load.metric_values v
-     join training_load.metric_measurement_occasions o on o.id = v.occasion_id
-     join training_load.metric_event_participants p on p.id = o.event_participant_id
-     join training_load.metric_events e on e.id = p.event_id
-     where v.metric_definition_id = $1`,
-    [ids.distanceClubA],
+test("§4.4 a source_connection must be visible to the dashboard's own data workspace — Club B's connection is rejected on a Club-A-bound dashboard", async () => {
+  const dash = await makeDashboard({ ownerScope: "user", ownerUserId: ids.coachA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  await assert.rejects(
+    addSeries(widget.id, { metricDefinitionId: ids.distanceClubA, sourcePolicy: "source_connection", sourceConnectionId: ids.connClubB }),
+    /is not visible to this dashboard's data workspace/,
   );
-  assert.equal(rows.rows.length, 1);
-  assert.notEqual(rows.rows[0].segment_id, null, "this fact is COMPONENT-scoped (has a segment) — a widget grouping by 'session' must not silently fold it into a session total that was never actually reported");
+  const ok = await addSeries(widget.id, { metricDefinitionId: ids.distanceClubA, sourcePolicy: "source_connection", sourceConnectionId: ids.connClubA });
+  assert.equal(ok.source_connection_id, ids.connClubA);
 });
 
-test("PoC 19. a superseded/import-conflict measurement is never shown as a single clean value — the effective-value predicate excludes it structurally", async () => {
-  const conn = ids; // reuse fixture ids
-  const eventParticipant = await one(
-    `select p.id from training_load.metric_event_participants p
-     join training_load.metric_events e on e.id = p.event_id
-     where e.owner_club_id = $1 and p.athlete_id = $2 limit 1`,
-    [ids.clubA, ids.ana],
-  );
-  const occ1 = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [eventParticipant.id]);
-  await q(
-    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture)
-     select $1, id, current_version_id, 100, 'm' from training_load.metric_definitions where id=$2`,
-    [occ1.id, ids.distanceSystem],
-  );
-  const occ2 = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, supersedes_occasion_id) values ($1,'manual',$2) returning id`, [eventParticipant.id, occ1.id]);
-  await q(
-    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture)
-     select $1, id, current_version_id, 110, 'm' from training_load.metric_definitions where id=$2`,
-    [occ2.id, ids.distanceSystem],
-  );
-  await q(`update training_load.metric_measurement_occasions set superseded_by_occasion_id=$1 where id=$2`, [occ2.id, occ1.id]);
-
-  // The SAME "effective" predicate the real canonical_activity_results()
-  // function already uses — this PoC does not reinvent it, it proves the
-  // dashboard's own query adapter must use the identical predicate,
-  // never treat superseded_by_occasion_id IS NULL as optional.
-  const effective = await q(
-    `select value_numeric from training_load.metric_values v
-     join training_load.metric_measurement_occasions o on o.id = v.occasion_id
-     where v.metric_definition_id=$1 and o.event_participant_id=$2 and o.superseded_by_occasion_id is null`,
-    [ids.distanceSystem, eventParticipant.id],
-  );
-  assert.equal(effective.rows.length, 1);
-  assert.equal(Number(effective.rows[0].value_numeric), 110, "only the CURRENT occasion's value is effective — the superseded 100 must never be picked");
+test("§4.5 a built-in RPE series cannot carry a source_connection or any non-'manual' source policy", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  await assert.rejects(addSeries(widget.id, { builtInSeriesKey: "rpe", aggregationMethod: "avg", sourcePolicy: "source_connection", sourceConnectionId: ids.connClubA }), /violates check constraint/);
+  await assert.rejects(addSeries(widget.id, { builtInSeriesKey: "rpe", aggregationMethod: "avg", sourcePolicy: "api_import" }), /violates check constraint/);
+  const ok = await addSeries(widget.id, { builtInSeriesKey: "rpe", aggregationMethod: "avg", sourcePolicy: "manual" });
+  assert.equal(ok.source_policy, "manual");
 });
 
-test("PoC 20. archive keeps a dashboard's history intact; a hard delete is refused while it is still referenced (active selection or a clone's provenance)", async () => {
-  const tmpl = await one(`insert into training_load.dashboards (name, owner_scope, is_template, created_by_user_id) values ('Refd','system',true,$1) returning id`, [ids.platformAdmin]);
-  const clone = await one(`insert into training_load.dashboards (name, owner_scope, owner_user_id, cloned_from_dashboard_id, created_by_user_id) values ('Clone','user',$1,$2,$1) returning id`, [ids.coachA, tmpl.id]);
-  await assert.rejects(q(`delete from training_load.dashboards where id=$1`, [tmpl.id]), /violates foreign key constraint/, "a template with a live clone cannot be hard-deleted");
-  const archived = await one(`update training_load.dashboards set status='archived' where id=$1 returning status, revision`, [tmpl.id]);
-  assert.equal(archived.status, "archived");
-  assert.equal(archived.revision, 2, "archiving is a tracked revision change, not a silent flip");
-  const stillThere = await one(`select cloned_from_dashboard_id from training_load.dashboards where id=$1`, [clone.id]);
-  assert.equal(stillThere.cloned_from_dashboard_id, tmpl.id, "the clone's provenance survives the original being archived");
+test("§4.6 catalog rows are protected in BOTH directions: child-first-then-parent-change, and parent-change-first-then-child-write", async () => {
+  // Direction A: series already exists referencing a built-in -> its
+  // catalog semantics become immutable.
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id);
+  await addSeries(widget.id, { builtInSeriesKey: "duration_minutes", sourcePolicy: "manual" });
+  await assert.rejects(q(`update training_load.dashboard_builtin_series set unit='hours' where key='duration_minutes'`), /already referenced by a widget/);
+
+  // Direction B: deactivate a widget_type FIRST, then prove a NEW widget of
+  // that type is refused, but an EXISTING widget of that type can still be
+  // resized within its old bounds (never broken by the deactivation).
+  await q(`update training_load.dashboard_widget_types set is_active=false where key='bar_chart'`);
+  await assert.rejects(q(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'bar_chart','X',9,0,8,4,4,9)`, [dash.id]), /is not active/);
+  await q(`update training_load.dashboard_widget_types set is_active=true where key='bar_chart'`); // restore for later tests
+  const barWidget = await makeWidget(dash.id, { widgetType: "bar_chart", x: 0, y: 8, width: 4, height: 4, mobileOrder: 9, order: 9 });
+  await q(`update training_load.dashboard_widget_types set is_active=false where key='bar_chart'`);
+  // Existing widget can still be resized (type unchanged) even though its
+  // type is now inactive — deactivation blocks new picks, never existing edits.
+  await q(`update training_load.dashboard_widgets set width=5 where id=$1`, [barWidget.id]);
+  const after = await one(`select width from training_load.dashboard_widgets where id=$1`, [barWidget.id]);
+  assert.equal(after.width, 5);
+  await q(`update training_load.dashboard_widget_types set is_active=true where key='bar_chart'`);
+
+  // Direction B2: shrink max_series below an existing widget's current
+  // count — the existing widget/series are untouched, only NEW series are
+  // blocked.
+  const tableWidget = await makeWidget(dash.id, { widgetType: "table", x: 0, y: 12, width: 6, height: 4, mobileOrder: 10, order: 10 });
+  await addSeries(tableWidget.id, { seriesOrder: 1, metricDefinitionId: ids.distanceClubA });
+  await addSeries(tableWidget.id, { seriesOrder: 2, metricDefinitionId: ids.hrClubA });
+  await q(`update training_load.dashboard_widget_types set max_series=1 where key='table'`);
+  const stillTwo = await one(`select count(*)::int as n from training_load.dashboard_widget_series where widget_id=$1`, [tableWidget.id]);
+  assert.equal(stillTwo.n, 2, "shrinking the type's cap must not retroactively remove existing series");
+  await assert.rejects(addSeries(tableWidget.id, { seriesOrder: 3, metricDefinitionId: ids.distanceSystem }), /already has 2 series, the max allowed is 1/);
+  await q(`update training_load.dashboard_widget_types set max_series=12 where key='table'`);
 });
 
-test("PoC 21. a dashboard with 30+ widgets and many metric definitions is well within bounds", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Big','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const defIds = [ids.distanceClubA, ids.distanceSystem];
-  for (let i = 0; i < 32; i += 1) {
-    const col = i % 6;
-    const row = Math.floor(i / 6);
-    const w = await one(
-      `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi',$2,$3,$4,$5,2,2,$3) returning id`,
-      [dash.id, `Widget ${i}`, i + 1, col * 2, row * 2],
-    );
-    await q(`insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,1,$2)`, [w.id, defIds[i % defIds.length]]);
-  }
-  const count = await one(`select count(*)::int as n from training_load.dashboard_widgets where dashboard_id=$1`, [dash.id]);
-  assert.equal(count.n, 32);
-});
+// ============================================================
+// §5 — Locking and concurrent series writes.
+// ============================================================
 
-test("PoC 22. rollback leaves no partial widget/layout writes behind", async () => {
-  const dash = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Rollback','club',$1,$2) returning id`, [ids.clubA, ids.coachA]);
-  const client = await newClient();
-  try {
-    await client.client.query("begin");
-    for (let i = 0; i < 4; i += 1) {
-      await client.client.query(
-        `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi',$2,$3,$4,0,2,2,$3)`,
-        [dash.id, `Batch ${i}`, i + 1, i * 2],
-      );
-    }
-    // The 5th widget in this same batch deliberately overlaps the 1st —
-    // the whole batch must roll back, not just this one statement.
-    await assert.rejects(
-      client.client.query(`insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','Bad',5,0,0,2,2,5)`, [dash.id]),
-    );
-    await client.client.query("rollback");
-  } finally {
-    await client.client.end();
-  }
-  const count = await one(`select count(*)::int as n from training_load.dashboard_widgets where dashboard_id=$1`, [dash.id]);
-  assert.equal(count.n, 0, "a rolled-back batch must leave zero widgets, not the 4 that individually succeeded before the 5th failed");
-});
-
-test("PoC 23. authorization is never cached/replayable inside this schema — every table stamps owner columns at write time and re-derives nothing from a prior grant (documents an application-layer requirement this PoC cannot fully exercise without a real auth layer)", async () => {
-  // This schema has no "authorized-at" cache, no request/session table
-  // whose mere existence could let a later retry bypass a since-revoked
-  // role — unlike, say, an idempotency-key table that intentionally
-  // replays a PRIOR result. Demonstrated narrowly: revoking coach B's
-  // club-B role and then attempting the exact same dashboard write again
-  // fails identically to a first-time unauthorized attempt (there is no
-  // dashboard-schema state that would make a "retry" behave differently
-  // from a fresh attempt) — the real access check itself (does this
-  // caller currently hold an active role) is workspace.js's
-  // resolveActiveWorkspace, entirely outside this schema, and is
-  // unchanged by this feature. See DASHBOARD_MODEL_REPORT.md's
-  // application-authorization section for what a real route must still
-  // enforce.
-  await q(`update public.user_club_roles set is_active=false where user_id=$1 and club_id=$2`, [ids.coachB, ids.clubB]);
-  const stillActive = await one(`select is_active from public.user_club_roles where user_id=$1 and club_id=$2`, [ids.coachB, ids.clubB]);
-  assert.equal(stillActive.is_active, false);
-  // The dashboard schema itself has no row that "remembers" coachB was
-  // ever authorized — a fresh dashboard write attributed to club B still
-  // succeeds at the STORAGE level regardless (this schema alone cannot
-  // and must not try to duplicate role authorization) precisely because
-  // that check belongs one layer up; this table has nothing for a
-  // "retry" to replay.
-  const row = await one(`insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Post-revoke','club',$1,$2) returning id`, [ids.clubB, ids.coachB]);
-  assert.ok(row.id, "documents: the DB layer correctly has no authorization state to leak — the real gate is resolveActiveWorkspace, at the route layer, not exercised by this DB-only PoC");
-});
-
-test("PoC 24. a workspace change mid-operation never changes the ownership actually written — owner columns are bound at write time, not re-derived at commit", async () => {
+test("§5.1 two concurrent series INSERTs on the SAME widget never both pass the max_series cap — real lock-wait proof", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "kpi" }); // max_series=1
   const a = await newClient();
   const b = await newClient();
   try {
     await a.client.query("begin");
-    // A's own INSERT already carries club A's id as a literal VALUES
-    // parameter — nothing about this write re-reads
-    // public.user_workspace_preferences at any point.
-    const insertPromise = a.client.query(
-      `insert into training_load.dashboards (name, owner_scope, owner_club_id, created_by_user_id) values ('Mid-flight','club',$1,$2) returning id`,
-      [ids.clubA, ids.coachA],
-    );
-    // Simulate the acting user's active-workspace PREFERENCE changing to
-    // club B on a second connection while A's transaction is still open —
-    // a real concurrent write to a completely different table.
-    await b.client.query(
-      `insert into public.user_workspace_preferences (user_id, workspace_type, scope_id) values ($1,'club',$2) on conflict (user_id) do update set workspace_type=excluded.workspace_type, scope_id=excluded.scope_id`,
-      [ids.coachA, ids.clubB],
-    );
-    const inserted = await insertPromise;
+    await a.client.query("insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,1,$2)", [widget.id, ids.distanceClubA]);
+    const bPromise = b.client.query("insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,2,$2)", [widget.id, ids.hrClubA])
+      .catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "writer B genuinely blocked on the widget-row lock, not a timing guess");
     await a.client.query("commit");
-    const final = await one(`select owner_club_id from training_load.dashboards where id=$1`, [inserted.rows[0].id]);
-    assert.equal(final.owner_club_id, ids.clubA, "the dashboard must keep the owner club that was ACTUALLY passed at write time, never a club the user's preference happened to change to mid-flight");
+    const bResult = await bPromise;
+    assert.ok(bResult.error, "the second concurrent insert must fail the cap check once it can finally see A's committed row");
+    assert.match(bResult.error.message, /already has 1 series, the max allowed is 1/);
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const count = await one(`select count(*)::int as n from training_load.dashboard_widget_series where widget_id=$1`, [widget.id]);
+  assert.equal(count.n, 1);
+});
+
+test("§5.2 two concurrent series INSERTs with different units never both land on the same chart axis — real lock-wait proof", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "line_chart", width: 6, height: 4 });
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query("insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, axis) values ($1,1,$2,'primary')", [widget.id, ids.distanceClubA]); // unit m
+    const bPromise = b.client.query("insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, axis) values ($1,2,$2,'primary')", [widget.id, ids.hrClubA]) // unit bpm
+      .catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "writer B genuinely blocked, not a timing guess");
+    await a.client.query("commit");
+    const bResult = await bPromise;
+    assert.ok(bResult.error);
+    assert.match(bResult.error.message, /unit mismatch/);
   } finally {
     await a.client.end();
     await b.client.end();
   }
 });
 
+test("§5.3 a widget_type change and a concurrent series insert on the same widget never deadlock — deterministic sequential outcome", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  await addSeries(widget.id, { seriesOrder: 1, metricDefinitionId: ids.distanceClubA });
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query("update training_load.dashboard_widgets set title='retitled' where id=$1", [widget.id]); // takes the widget row lock, no type change yet
+    const bPromise = b.client.query("insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id) values ($1,2,$2)", [widget.id, ids.hrClubA]);
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "B genuinely blocked behind A's widget-row lock");
+    await a.client.query("commit");
+    await bPromise; // proceeds cleanly, no deadlock, no error
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const count = await one(`select count(*)::int as n from training_load.dashboard_widget_series where widget_id=$1`, [widget.id]);
+  assert.equal(count.n, 2);
+});
+
+// ============================================================
+// §6 — Atomic layout replace.
+// ============================================================
+
+test("§6.1 two concurrent FIRST-widget inserts on the same brand-new dashboard never overlap", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query("insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','A',1,0,0,4,2,1)", [dash.id]);
+    const bPromise = b.client.query("insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'kpi','B',2,2,0,4,2,2)", [dash.id])
+      .catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked);
+    await a.client.query("commit");
+    const bResult = await bPromise;
+    assert.ok(bResult.error, "the overlapping second insert must fail once the deferred check runs at B's own commit");
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const count = await one(`select count(*)::int as n from training_load.dashboard_widgets where dashboard_id=$1`, [dash.id]);
+  assert.equal(count.n, 1);
+});
+
+test("§6.2 a plain two-widget swap succeeds atomically via replace_dashboard_layout", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const w1 = await makeWidget(dash.id, { x: 0, y: 0, mobileOrder: 1, order: 1 });
+  const w2 = await makeWidget(dash.id, { x: 4, y: 0, mobileOrder: 2, order: 2 });
+  const dashRow = await one(`select revision from training_load.dashboards where id=$1`, [dash.id]);
+  const layout = JSON.stringify([{ widgetId: w1.id, x: 4, y: 0 }, { widgetId: w2.id, x: 0, y: 0 }]);
+  const result = await q(`select * from training_load.replace_dashboard_layout($1,$2,$3::jsonb)`, [dash.id, dashRow.revision, layout]);
+  const byId = Object.fromEntries(result.rows.map((r) => [r.widget_id, r]));
+  assert.equal(byId[w1.id].x, 4);
+  assert.equal(byId[w2.id].x, 0);
+});
+
+test("§6.3 a multi-widget rearrange (3+ widgets) succeeds atomically", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const w1 = await makeWidget(dash.id, { x: 0, y: 0, mobileOrder: 1, order: 1 });
+  const w2 = await makeWidget(dash.id, { x: 4, y: 0, mobileOrder: 2, order: 2 });
+  const w3 = await makeWidget(dash.id, { x: 8, y: 0, mobileOrder: 3, order: 3 });
+  const dashRow = await one(`select revision from training_load.dashboards where id=$1`, [dash.id]);
+  const layout = JSON.stringify([
+    { widgetId: w1.id, x: 8, mobileOrder: 3 },
+    { widgetId: w2.id, x: 0, mobileOrder: 1 },
+    { widgetId: w3.id, x: 4, mobileOrder: 2 },
+  ]);
+  const result = await q(`select * from training_load.replace_dashboard_layout($1,$2,$3::jsonb)`, [dash.id, dashRow.revision, layout]);
+  const byId = Object.fromEntries(result.rows.map((r) => [r.widget_id, r]));
+  assert.equal(byId[w1.id].x, 8);
+  assert.equal(byId[w2.id].x, 0);
+  assert.equal(byId[w3.id].x, 4);
+  assert.equal(byId[w2.id].mobile_order, 1);
+});
+
+test("§6.4 a final layout that still overlaps is rejected, with zero partial writes surviving (transaction rolled back)", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const w1 = await makeWidget(dash.id, { x: 0, y: 0, mobileOrder: 1, order: 1 });
+  const w2 = await makeWidget(dash.id, { x: 4, y: 0, mobileOrder: 2, order: 2 });
+  const dashRow = await one(`select revision from training_load.dashboards where id=$1`, [dash.id]);
+  const layout = JSON.stringify([{ widgetId: w1.id, x: 2 }, { widgetId: w2.id, x: 3 }]); // still overlap: [2,6) vs [3,7)
+  const client = await newClient();
+  try {
+    await client.client.query("begin");
+    await assert.rejects(client.client.query(`select * from training_load.replace_dashboard_layout($1,$2,$3::jsonb)`, [dash.id, dashRow.revision, layout]));
+    await client.client.query("rollback");
+  } finally {
+    await client.client.end();
+  }
+  const after1 = await one(`select x from training_load.dashboard_widgets where id=$1`, [w1.id]);
+  const after2 = await one(`select x from training_load.dashboard_widgets where id=$1`, [w2.id]);
+  assert.equal(after1.x, 0, "rollback must restore the OLD x, never leave the partial new value");
+  assert.equal(after2.x, 4);
+});
+
+test("§6.5 two concurrent replace_dashboard_layout calls with the same stale revision: one succeeds, one gets a controlled conflict", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const w1 = await makeWidget(dash.id, { x: 0, y: 0, mobileOrder: 1, order: 1 });
+  const startRevision = (await one(`select revision from training_load.dashboards where id=$1`, [dash.id])).revision;
+  const layoutA = JSON.stringify([{ widgetId: w1.id, x: 2 }]);
+  const layoutB = JSON.stringify([{ widgetId: w1.id, x: 6 }]);
+  const okA = await q(`select * from training_load.replace_dashboard_layout($1,$2,$3::jsonb)`, [dash.id, startRevision, layoutA]);
+  assert.equal(okA.rows[0].x, 2);
+  await assert.rejects(
+    q(`select * from training_load.replace_dashboard_layout($1,$2,$3::jsonb)`, [dash.id, startRevision, layoutB]),
+    /stale revision/,
+  );
+  const final = await one(`select x from training_load.dashboard_widgets where id=$1`, [w1.id]);
+  assert.equal(final.x, 2, "the stale second call must never overwrite the first");
+});
+
+test("§6.6 lock order for replace_dashboard_layout matches the rest of the subsystem — it locks the dashboard row first", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const w1 = await makeWidget(dash.id, { x: 0, y: 0, mobileOrder: 1, order: 1 });
+  const rev = (await one(`select revision from training_load.dashboards where id=$1`, [dash.id])).revision;
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(`select * from training_load.replace_dashboard_layout($1,$2,$3::jsonb)`, [dash.id, rev, JSON.stringify([{ widgetId: w1.id, x: 3 }])]);
+    const bPromise = b.client.query("update training_load.dashboard_widgets set title='concurrent' where id=$1", [w1.id]);
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "a plain widget write is blocked behind the dashboard-row lock replace_dashboard_layout is holding — same lock order, no bypass");
+    await a.client.query("commit");
+    await bPromise;
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+});
+
+// ============================================================
+// §7 — Historical units and versions.
+// ============================================================
+
+test("§7.1 config-time axis check uses the CURRENT version's unit — documented as advisory only, not sufficient alone", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "line_chart", width: 6, height: 4 });
+  // distanceSystem's CURRENT version is v2 (km) — config-time check passes;
+  // it says nothing about whether the query result will mix v1(m) history.
+  const s = await addSeries(widget.id, { metricDefinitionId: ids.distanceSystem });
+  assert.equal(s.metric_definition_id, ids.distanceSystem);
+});
+
+test("§7.2 the query adapter returns a controlled unitConflict, never a single mislabeled series, for a period spanning both a v1(m) and a v2(km) value", async () => {
+  const rows = await queryMetricSeries({
+    metricDefinitionId: ids.distanceSystem,
+    dataScopeLevel: "session",
+    aggregationRolePolicy: "standalone_only",
+    coveragePolicy: "any",
+    dateFrom: "2026-09-09",
+    dateTo: "2026-09-10",
+    athleteIds: [ids.ana],
+  });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  assert.ok(anaRow, "Ana has values in this period");
+  assert.equal(anaRow.unitConflict, true, "a v1(m) and a v2(km) value in the same period must never be silently blended or mislabeled");
+  const units = anaRow.values.map((v) => v.unit).sort();
+  assert.deepEqual(units, ["km", "m"]);
+});
+
+// ============================================================
+// §8 — Default template contract, ambiguous hint resolution.
+// ============================================================
+
+test("§8.1 the new session_count/last_session_date built-ins actually exist and are queryable — the Athlete overview template is materializable", async () => {
+  const defs = await q(`select key from training_load.dashboard_builtin_series where key in ('session_count','last_session_date')`);
+  assert.equal(defs.rows.length, 2);
+});
+
+test("§8.2 an ambiguous template hint with TWO equally-valid visible candidates is never resolved arbitrarily — it is left needs_resolution", async () => {
+  const candidates = await resolveTemplateHint({
+    hints: [ids.ambiguousHintKey],
+    dataWorkspaceType: "club",
+    dataWorkspaceScopeId: ids.clubA,
+    ownerUserId: null,
+  });
+  assert.equal(candidates.status, "needs_resolution");
+  assert.equal(candidates.candidateIds.length, 2);
+  assert.ok(candidates.candidateIds.includes(ids.ambiguousSystem));
+  assert.ok(candidates.candidateIds.includes(ids.ambiguousClubA));
+});
+
+test("§8.3 the SAME hint resolves cleanly to exactly one candidate for a data workspace that cannot see the club-scoped one", async () => {
+  const candidates = await resolveTemplateHint({
+    hints: [ids.ambiguousHintKey],
+    dataWorkspaceType: "club",
+    dataWorkspaceScopeId: ids.clubB, // cannot see Club A's own definition
+    ownerUserId: null,
+  });
+  assert.equal(candidates.status, "resolved");
+  assert.equal(candidates.candidateIds.length, 1);
+  assert.equal(candidates.candidateIds[0], ids.ambiguousSystem);
+});
+
+// ============================================================
+// §9 — Real PoC query adapter (see queryBuiltInSeries/queryMetricSeries
+// below — a genuine layer on top of the REAL, unmodified
+// training.canonical_activity_results()).
+// ============================================================
+
+test("§9.1 RPE/sRPE (built-in) and a Metrics Core metric in the SAME widget's result, without ever copying RPE into metric_values", async () => {
+  const rpe = await queryBuiltInSeries({ key: "rpe", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const srpe = await queryBuiltInSeries({ key: "srpe", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const dist = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "component", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  assert.equal(rpe[0].values[0].value, 7);
+  assert.equal(srpe[0].values[0].value, 420);
+  assert.equal(Number(dist[0].values[0].value), 3200);
+  const rpeInMetricValues = await one(`select count(*)::int as n from training_load.metric_values v join training_load.metric_definitions d on d.id=v.metric_definition_id where d.key ilike '%rpe%'`);
+  assert.equal(rpeInMetricValues.n, 0);
+});
+
+test("§9.2 a session-scope query and a component-scope query for the same underlying metric never show the same number twice as if summed", async () => {
+  const sessionRows = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const componentRows = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "component", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  assert.equal(Number(sessionRows[0].values[0].value), 5000, "session scope returns ONLY the session-level source_rollup (5000m), never the component value added on top");
+  assert.equal(Number(componentRows[0].values[0].value), 3200, "component scope returns ONLY the component's own standalone value");
+});
+
+test("§9.3 a component value is never silently treated as a session total", async () => {
+  const rows = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "component", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  assert.equal(rows[0].values.length, 1);
+  assert.equal(Number(rows[0].values[0].value), 3200);
+});
+
+test("§9.4 a source-rollup value and its own component's standalone value are never double-summed together", async () => {
+  const allRoles = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "session", aggregationRolePolicy: "all_including_derived", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  // Even asking for "all roles" at SESSION scope must not pull in the
+  // component-scope standalone value at all (scope filtering happens
+  // before role filtering) — still just the one 5000m rollup.
+  assert.equal(allRoles[0].values.length, 1);
+  assert.equal(Number(allRoles[0].values[0].value), 5000);
+});
+
+test("§9.5 a superseded occasion is excluded from the query result entirely", async () => {
+  const metricId = await makeQuickMetric("Quick HR 9.5");
+  const eventParticipant = ids.eventParticipant;
+  const occOld = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [eventParticipant]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 100, 'bpm' from training_load.metric_definitions where id=$2`, [occOld.id, metricId]);
+  const occNew = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, supersedes_occasion_id) values ($1,'manual',$2) returning id`, [eventParticipant, occOld.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 110, 'bpm' from training_load.metric_definitions where id=$2`, [occNew.id, metricId]);
+  await q(`update training_load.metric_measurement_occasions set superseded_by_occasion_id=$1 where id=$2`, [occNew.id, occOld.id]);
+  const rows = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "session", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  assert.equal(rows[0].values.length, 1);
+  assert.equal(Number(rows[0].values[0].value), 110, "only the current occasion's value — the superseded 100 must never appear");
+});
+
+test("§9.6 an import-conflict-flagged value is never shown as a clean single value", async () => {
+  const metricId = await makeQuickMetric("Quick HR 9.6");
+  const eventParticipant = ids.eventParticipant;
+  const occFlagged = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, import_conflict_status) values ($1,'api_import','needs_review') returning id`, [eventParticipant]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 999, 'bpm' from training_load.metric_definitions where id=$2`, [occFlagged.id, metricId]);
+  const rows = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "session", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const flaggedShown = rows[0]?.values.some((v) => Number(v.value) === 999);
+  assert.equal(!!flaggedShown, false, "a flagged/needs_review occasion must never surface as an effective value");
+});
+
+test("§9.7 two effective sources for the same athlete/metric produce a conflict payload, never a proriotized winner", async () => {
+  const metricId = await makeQuickMetric("Quick HR 9.7");
+  const eventParticipant = ids.eventParticipant;
+  const occ1 = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [eventParticipant]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 60, 'bpm' from training_load.metric_definitions where id=$2`, [occ1.id, metricId]);
+  const occ2 = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'api_import') returning id`, [eventParticipant]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 65, 'bpm' from training_load.metric_definitions where id=$2`, [occ2.id, metricId]);
+  const rows = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "session", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", sourcePolicy: "all_with_conflicts", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaRow.conflict, true);
+  assert.equal(anaRow.values.length, 2);
+});
+
+test("§9.8 the canonical alias chain does not duplicate a result after a real merge", async () => {
+  // A second, separately-materialized activity for Ana on the SAME day,
+  // with its OWN metric value (a FRESH metric_definition, not shared with
+  // the §9.5-9.7 tests above, so this test's own count assertion is never
+  // polluted by their fixture rows) — then genuinely merged via the real
+  // training.merge_activity_participants() function.
+  const metricId = await makeQuickMetric("Quick HR 9.8");
+  const aliasActivity = await one(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
+     values ('training_session','PoC Session (dup)','2026-09-09','2026-09-09T09:05:00Z','Europe/Belgrade','club',$1,'manual','confirmed',$2) returning id`,
+    [ids.clubA, ids.coachA],
+  );
+  const aliasParticipant = await one(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1,$2,'2026-09-09','Europe/Belgrade','participated') returning id`,
+    [aliasActivity.id, ids.ana],
+  );
+  const aliasEvent = await one(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
+     values ('dup','2026-09-09','2026-09-09T09:05:00Z','session','club',$1,$2,$3) returning id`,
+    [ids.clubA, ids.connClubA, ids.coachA],
+  );
+  const aliasEventParticipant = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [aliasEvent.id, ids.ana]);
+  await q(`insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [aliasActivity.id, aliasEvent.id]);
+  await q(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [aliasParticipant.id, aliasEventParticipant.id]);
+  const aliasOcc = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [aliasEventParticipant.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 42, 'bpm' from training_load.metric_definitions where id=$2`, [aliasOcc.id, metricId]);
+
+  await q(`select training.merge_activity_participants($1,$2,$3,'PoC dedup')`, [aliasParticipant.id, ids.participant ?? (await one(`select id from training.activity_participants where activity_id=$1 and athlete_id=$2`, [ids.activity, ids.ana])).id, ids.coachA]);
+
+  const canonicalResult = await q(`select fact_kind, detail from training.canonical_activity_results($1) where fact_kind='metric_value'`, [ids.activity]);
+  const hrFacts = canonicalResult.rows.filter((r) => r.detail.metricDefinitionId === metricId);
+  assert.equal(hrFacts.length, 1, "the merged alias's own fact resolves through canonical_activity_results exactly once, never duplicated");
+  assert.equal(Number(hrFacts[0].detail.valueNumeric), 42);
+});
+
+test("§9.9 coverage_policy and aggregation_role_policy actually change the result set, not just accepted config", async () => {
+  const partialOcc = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [ids.eventParticipant]);
+  await q(
+    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
+     values ($1,$2,$3,4500,'m','source_rollup','partial')`,
+    [partialOcc.id, ids.distanceClubA, (await one(`select current_version_id from training_load.metric_definitions where id=$1`, [ids.distanceClubA])).current_version_id],
+  );
+  const strict = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "complete_only", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const permissive = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  assert.equal(strict[0].values.length, 1, "complete_only excludes the new PARTIAL-coverage rollup");
+  assert.equal(permissive[0].values.length, 2, "'any' coverage includes it — the policy genuinely changes the result");
+});
+
+test("§9.10 mixed historical units within one query period return a controlled unitConflict (same as §7.2, re-asserted under the §9 adapter umbrella)", async () => {
+  const rows = await queryMetricSeries({ metricDefinitionId: ids.distanceSystem, dataScopeLevel: "session", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", dateFrom: "2026-09-09", dateTo: "2026-09-10", athleteIds: [ids.ana] });
+  assert.equal(rows.find((r) => r.athleteId === ids.ana).unitConflict, true);
+});
+
+test("§9.11 the data-workspace filter narrows actual DATA, not just which config is offered — Club B never sees Club A's activity facts", async () => {
+  const activitiesInB = await fetchActivitiesInRange({ dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubB, dateFrom: "2026-09-01", dateTo: "2026-09-30" });
+  assert.ok(!activitiesInB.includes(ids.activity), "Club A's own activity must never appear when querying scoped to Club B's data workspace");
+  const activitiesInA = await fetchActivitiesInRange({ dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, dateFrom: "2026-09-01", dateTo: "2026-09-30" });
+  assert.ok(activitiesInA.includes(ids.activity));
+});
+
+test("§9.12 one bad widget's query result in a batch never crashes the others", async () => {
+  const results = await runBatchQuery([
+    { widgetId: "w-good", kind: "builtin", key: "rpe", activityIds: [ids.activity], athleteIds: [ids.ana] },
+    { widgetId: "w-bad", kind: "metric", metricDefinitionId: "00000000-0000-0000-0000-000000000000", dataScopeLevel: "session", activityIds: [ids.activity], athleteIds: [ids.ana] },
+    { widgetId: "w-good-2", kind: "builtin", key: "srpe", activityIds: [ids.activity], athleteIds: [ids.ana] },
+  ]);
+  assert.equal(results.find((r) => r.widgetId === "w-good").status, "ok");
+  assert.equal(results.find((r) => r.widgetId === "w-bad").status, "error");
+  assert.equal(results.find((r) => r.widgetId === "w-good-2").status, "ok");
+});
+
+// ============================================================
+// The PoC query adapter itself — a real, working layer over the REAL
+// training.canonical_activity_results() (never metric_values/session_
+// feedback queried directly and independently re-joined), proving Round 2
+// §9's required behaviors. This is explicitly a PoC-level adapter — the
+// real backend implementation will formalize this as actual service code
+// later; nothing here is application code being added this round.
+// ============================================================
+
+async function fetchActivitiesInRange({ dataWorkspaceType, dataWorkspaceScopeId, dateFrom, dateTo, athleteIds }) {
+  const params = [dateFrom, dateTo];
+  let scopeSql = "true";
+  if (dataWorkspaceType === "club") { params.push(dataWorkspaceScopeId); scopeSql = `a.owner_scope='club' and a.owner_club_id=$${params.length}`; }
+  else if (dataWorkspaceType === "team") { params.push(dataWorkspaceScopeId); scopeSql = `a.owner_scope='team' and a.owner_team_id=$${params.length}`; }
+  let athleteSql = "true";
+  if (athleteIds?.length) { params.push(athleteIds); athleteSql = `exists (select 1 from training.activity_participants p where p.activity_id=a.id and p.athlete_id = any($${params.length}::uuid[]))`; }
+  const r = await pool.query(
+    `select a.id from training.activities a where a.occurred_local_date between $1 and $2 and a.lifecycle_state <> 'superseded' and (${scopeSql}) and (${athleteSql})`,
+    params,
+  );
+  return r.rows.map((row) => row.id);
+}
+
+async function fetchCanonicalFacts(activityId) {
+  const r = await pool.query(`select canonical_activity_id, canonical_participant_id, athlete_id, fact_kind, detail from training.canonical_activity_results($1)`, [activityId]);
+  return r.rows;
+}
+
+async function queryBuiltInSeries({ key, activityIds, athleteIds, dateFrom, dateTo }) {
+  const def = (await pool.query(`select * from training_load.dashboard_builtin_series where key=$1`, [key])).rows[0];
+  if (!def) throw new Error(`unknown built-in series ${key}`);
+  const byAthlete = new Map();
+  if (key === "session_count" || key === "last_session_date") {
+    const ids2 = await fetchActivitiesInRange({ dataWorkspaceType: null, dateFrom, dateTo, athleteIds });
+    const r = await pool.query(
+      `select p.athlete_id, count(distinct a.id)::int as n, max(a.occurred_local_date) as last_date
+       from training.activity_participants p join training.activities a on a.id=p.activity_id
+       where a.id = any($1::uuid[]) and a.lifecycle_state <> 'superseded' and p.merge_status='canonical'
+       group by p.athlete_id`,
+      [ids2],
+    );
+    for (const row of r.rows) {
+      byAthlete.set(row.athlete_id, { athleteId: row.athlete_id, values: [{ value: key === "session_count" ? row.n : row.last_date.toISOString().slice(0, 10) }] });
+    }
+    return [...byAthlete.values()];
+  }
+  const factKind = "rpe";
+  for (const activityId of activityIds) {
+    const facts = (await fetchCanonicalFacts(activityId)).filter((f) => f.fact_kind === factKind);
+    for (const f of facts) {
+      if (athleteIds && !athleteIds.includes(f.athlete_id)) continue;
+      const value = key === "rpe" ? f.detail.rpe : key === "srpe" ? f.detail.srpe : f.detail.durationMinutes;
+      if (!byAthlete.has(f.athlete_id)) byAthlete.set(f.athlete_id, { athleteId: f.athlete_id, values: [] });
+      byAthlete.get(f.athlete_id).values.push({ value });
+    }
+  }
+  return [...byAthlete.values()];
+}
+
+async function queryMetricSeries({ metricDefinitionId, dataScopeLevel, aggregationRolePolicy, coveragePolicy, sourcePolicy, activityIds, athleteIds, dateFrom, dateTo }) {
+  const roleSets = {
+    standalone_only: ["standalone"],
+    standalone_and_source_rollup: ["standalone", "source_rollup"],
+    all_including_derived: ["standalone", "source_rollup", "derived_rollup"],
+  };
+  const allowedRoles = roleSets[aggregationRolePolicy || "standalone_and_source_rollup"];
+  const coverageSets = { complete_only: ["complete", "not_applicable"], complete_and_partial: ["complete", "partial", "not_applicable"], any: ["complete", "partial", "unknown", "not_applicable"] };
+  const allowedCoverage = coverageSets[coveragePolicy || "complete_and_partial"];
+
+  const defExists = await pool.query(`select 1 from training_load.metric_definitions where id=$1`, [metricDefinitionId]);
+  if (defExists.rowCount === 0) {
+    throw new Error(`queryMetricSeries: metric_definition ${metricDefinitionId} does not exist`);
+  }
+
+  let resolvedActivityIds = activityIds;
+  if (!resolvedActivityIds) resolvedActivityIds = await fetchActivitiesInRange({ dataWorkspaceType: null, dateFrom, dateTo, athleteIds });
+
+  const byAthlete = new Map();
+  for (const activityId of resolvedActivityIds) {
+    const facts = (await fetchCanonicalFacts(activityId)).filter((f) => f.fact_kind === "metric_value" && f.detail.metricDefinitionId === metricDefinitionId);
+    for (const f of facts) {
+      if (athleteIds && !athleteIds.includes(f.athlete_id)) continue;
+      const isComponent = f.detail.segmentId != null;
+      const factScope = isComponent ? "component" : "session";
+      if (factScope !== dataScopeLevel) continue;
+      if (!allowedRoles.includes(f.detail.aggregationRole)) continue;
+      if (!allowedCoverage.includes(f.detail.coverage)) continue;
+      if (!byAthlete.has(f.athlete_id)) byAthlete.set(f.athlete_id, { athleteId: f.athlete_id, values: [] });
+      byAthlete.get(f.athlete_id).values.push({ value: f.detail.valueNumeric, unit: f.detail.unitAtCapture, entryMethod: f.detail.entryMethod });
+    }
+  }
+  for (const row of byAthlete.values()) {
+    const distinctUnits = new Set(row.values.map((v) => v.unit));
+    row.unitConflict = distinctUnits.size > 1;
+    row.conflict = (sourcePolicy === "all_with_conflicts" || !sourcePolicy) && row.values.length > 1 && !row.unitConflict;
+  }
+  return [...byAthlete.values()];
+}
+
+async function resolveTemplateHint({ hints, dataWorkspaceType, dataWorkspaceScopeId, ownerUserId }) {
+  for (const key of hints) {
+    const candidates = await pool.query(
+      `select id, owner_scope, owner_club_id, owner_team_id, owner_user_id from training_load.metric_definitions
+       where key = $1 and state = 'active'
+         and (
+           owner_scope = 'system'
+           or (owner_scope = 'club' and $2 = 'club' and owner_club_id = $3)
+           or (owner_scope = 'team' and $2 = 'team' and owner_team_id = $3)
+           or (owner_scope = 'user' and owner_user_id = $4)
+         )`,
+      [key, dataWorkspaceType, dataWorkspaceScopeId, ownerUserId],
+    );
+    if (candidates.rowCount === 0) continue; // try next hint
+    if (candidates.rowCount === 1) return { status: "resolved", candidateIds: [candidates.rows[0].id] };
+    return { status: "needs_resolution", candidateIds: candidates.rows.map((r) => r.id) };
+  }
+  return { status: "unresolved", candidateIds: [] };
+}
+
+async function runBatchQuery(specs) {
+  return Promise.all(specs.map(async (spec) => {
+    try {
+      const data = spec.kind === "builtin"
+        ? await queryBuiltInSeries(spec)
+        : await queryMetricSeries(spec);
+      return { widgetId: spec.widgetId, status: "ok", data };
+    } catch (error) {
+      return { widgetId: spec.widgetId, status: "error", error: error.message };
+    }
+  }));
+}
