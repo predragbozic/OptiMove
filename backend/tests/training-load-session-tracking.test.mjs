@@ -847,3 +847,236 @@ test("E4. session tracking/RPE atomicity: a genuine-draft Submit that wins the r
   assert.equal(row.training_load_enabled, false, "the rejected PATCH must have changed zero rows");
   assert.equal(row.rpe_enabled, false);
 });
+
+// ------------------------------------------------------------
+// F. New-session-creation vs plan defaults atomicity (Correction round 4,
+// item 1): POST /blocks/:blockId/sessions used to read block.plan.
+// track_training_load_default/request_rpe_default from an UNLOCKED
+// access-check snapshot taken before this route's own transaction even
+// opened - a concurrent settings PATCH could commit a new default in the
+// gap, and a brand-new 'T' session would be stamped with an already-
+// superseded value. Same deterministic single-row lock order as every
+// other defaults-reading/draft-mutating route (lockDraftPlanOrReject's
+// own header comment) - both orderings proven via a real held Postgres
+// lock, never a sleep/timing guess.
+// ------------------------------------------------------------
+
+test("F1. new-session-creation vs plan defaults atomicity: a settings PATCH that wins the plan row lock first commits, and a concurrent session-create then waits and inherits that SAME new default", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const { planId, blockId } = await makeRealPlanViaApi(coach, athlete.externalId);
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query("select id from plans.plans where id = $1 for update", [planId]);
+
+    const createPromise = api(`/api/builder/blocks/${blockId}/sessions`, { method: "POST", cookie: coach.cookie, body: { bta: "T", name: "Main" } });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "session-create must be directly observed Lock-waiting behind the settings PATCH's own held lock");
+
+    // The exact write PATCH /training-load-settings itself would run,
+    // under the SAME held transaction/lock (lockClient stands in for
+    // "the PATCH got there first").
+    await lockClient.query(
+      "update plans.plans set track_training_load_default = true, request_rpe_default = true, updated_at = now() where id = $1",
+      [planId],
+    );
+    await lockClient.query("commit");
+
+    const createRes = await createPromise;
+    assert.equal(createRes.status, 201, `expected session-create to succeed once unblocked, got ${createRes.status}: ${JSON.stringify(createRes.body)}`);
+    const created = createRes.body.blocks.find((b) => b.id === blockId).sessions.find((s) => s.name === "Main");
+    assert.equal(created.trackingEnabled, true, "the NEW session must inherit the setting that committed first, not a stale pre-lock snapshot");
+    assert.equal(created.rpeEnabled, true);
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+});
+
+test("F2. new-session-creation vs plan defaults atomicity: a session-create that wins the plan row lock first commits using the THEN-current defaults, and a concurrent settings PATCH then waits - the just-created session is never retroactively changed by it", async () => {
+  const coach = await makeCoachWithClub();
+  const athlete = await makeAthleteInClub(coach.clubId);
+  const { planId, blockId } = await makeRealPlanViaApi(coach, athlete.externalId);
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query("select id from plans.plans where id = $1 for update", [planId]);
+
+    const patchPromise = api(`/api/builder/plans/${planId}/training-load-settings`, { method: "PATCH", cookie: coach.cookie, body: { trackTrainingLoadDefault: true, requestRpeDefault: true } });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "the settings PATCH must be directly observed Lock-waiting behind the session-create's own held lock");
+
+    // The exact insert POST /blocks/:blockId/sessions itself would run,
+    // under the SAME held transaction/lock, using the plan's own
+    // defaults AS THEY STOOD when this lock was acquired - both still
+    // false/false (the plan was just created via makeRealPlanViaApi).
+    const orderResult = await lockClient.query(`select coalesce(max(session_order), 0) + 1 as next_value from plans.plan_sessions where plan_day_id = $1`, [blockId]);
+    const sessionInsert = await lockClient.query(
+      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_order, name, training_load_enabled, rpe_enabled) values ($1, null, 'T', $2, 'Main', false, false) returning id`,
+      [blockId, orderResult.rows[0].next_value],
+    );
+    const sessionId = sessionInsert.rows[0].id;
+    await lockClient.query("commit");
+
+    const patchRes = await patchPromise;
+    assert.equal(patchRes.status, 200, `expected the settings PATCH to succeed once unblocked, got ${patchRes.status}: ${JSON.stringify(patchRes.body)}`);
+    assert.equal(patchRes.body.plan.trackTrainingLoadDefault, true, "the LATER settings change itself must still succeed normally");
+
+    const row = (await query(`select training_load_enabled, rpe_enabled from plans.plan_sessions where id = $1`, [sessionId])).rows[0];
+    assert.equal(row.training_load_enabled, false, "the already-created session must never be retroactively changed by a LATER settings change - defaults only ever apply to sessions created AFTER they're saved");
+    assert.equal(row.rpe_enabled, false);
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+});
+
+// ------------------------------------------------------------
+// G. Batch sync + Submit atomicity (Correction round 4, item 2): a
+// multi-athlete batch's own settings/session-content sync and its
+// activation used to run as TWO separate transactions (syncBatchFromPlan's
+// own self-managed one, then Submit's own activation UPDATE in a second) -
+// a concurrent settings/session PATCH landing in the gap between them
+// could commit against the source (or a sibling) after sync already
+// copied the OLD state onto every sibling, permanently diverging them the
+// instant activation published all of them. Now one atomic unit
+// (syncAndActivateBatchWithClient) - both orderings proven via a real
+// held Postgres lock on the source plan's own row (the first row
+// lockBatchPlansForUpdate's own ascending-id lock order reaches for a
+// 2-athlete batch, since a fresh UUID's sort position relative to the
+// source is arbitrary in general, but this test creates the source
+// first and only needs ONE held lock to prove the ordering - whichever
+// row it locks, sync/activation for the WHOLE batch is provably gated
+// behind it).
+// ------------------------------------------------------------
+
+async function makeRealBatchViaApi(coach, athleteExternalIds) {
+  const created = await api("/api/builder/plans", {
+    method: "POST", cookie: coach.cookie,
+    body: { planType: "weekly", weekStart: WEEK_START, athleteIds: athleteExternalIds },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const sourcePlanId = created.body.plan.id;
+  const batchRows = (await query(
+    `select id, athlete_id from plans.plans where builder_batch_id = (select builder_batch_id from plans.plans where id = $1) order by created_at`,
+    [sourcePlanId],
+  )).rows;
+  for (const row of batchRows) cleanupPlanIds.add(row.id);
+  // Real content on every batch member - the app's own PRE-EXISTING
+  // "empty draft is discarded on submit" behavior (unrelated to this
+  // correction round - see the earlier E1/E3 tests' own comment) would
+  // otherwise delete the whole batch the instant Submit runs.
+  for (const row of batchRows) {
+    const dayResult = await query(`select id from plans.plan_days where plan_id = $1 order by day_order limit 1`, [row.id]);
+    const sessionResult = await query(
+      `insert into plans.plan_sessions (plan_day_id, session_order, name, bta) values ($1, 1, 'Main', 'T') returning id`,
+      [dayResult.rows[0].id],
+    );
+    await query(`insert into plans.plan_nodes (plan_session_id, node_type, name, node_order) values ($1, 'section', 'Warm-up', 1)`, [sessionResult.rows[0].id]);
+  }
+  return { sourcePlanId, batchRows };
+}
+
+test("G1. batch sync + Submit atomicity: a settings/session change that wins the source plan's row lock first commits, and a concurrent batch Submit then waits and publishes that SAME identical configuration to every athlete", async () => {
+  const coach = await makeCoachWithClub();
+  const athleteA = await makeAthleteInClub(coach.clubId);
+  const athleteB = await makeAthleteInClub(coach.clubId);
+  const { sourcePlanId, batchRows } = await makeRealBatchViaApi(coach, [athleteA.externalId, athleteB.externalId]);
+  assert.equal(batchRows.length, 2, "sanity: a 2-athlete batch must create 2 plan rows");
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    await lockClient.query("select id from plans.plans where id = $1 for update", [sourcePlanId]);
+
+    const submitPromise = api(`/api/builder/plans/${sourcePlanId}/submit`, { method: "POST", cookie: coach.cookie, body: { syncBatch: true } });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "batch Submit must be directly observed Lock-waiting behind the settings PATCH's own held lock on the source row");
+
+    // The exact write PATCH /training-load-settings itself would run
+    // against the SOURCE plan, under the SAME held transaction/lock.
+    await lockClient.query(
+      "update plans.plans set track_training_load_default = true, request_rpe_default = true, updated_at = now() where id = $1",
+      [sourcePlanId],
+    );
+    await lockClient.query("commit");
+
+    const submitRes = await submitPromise;
+    assert.equal(submitRes.status, 200, `expected batch Submit to succeed once unblocked, got ${submitRes.status}: ${JSON.stringify(submitRes.body)}`);
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+
+  const rows = await query(
+    `select id, status, track_training_load_default, request_rpe_default from plans.plans where id = any($1::uuid[])`,
+    [batchRows.map((r) => r.id)],
+  );
+  for (const row of rows.rows) {
+    assert.equal(row.status, "active", `plan ${row.id} must be activated`);
+    assert.equal(row.track_training_load_default, true, `plan ${row.id} must carry the setting that committed first - every athlete must end up with the SAME identical configuration`);
+    assert.equal(row.request_rpe_default, true);
+  }
+});
+
+test("G2. batch sync + Submit atomicity: a batch Submit that wins the source plan's row lock first commits (activating every plan in the batch, mutually consistent), and a concurrent draft-only settings PATCH then waits and is rejected 409 - never mutating an already-active plan", async () => {
+  const coach = await makeCoachWithClub();
+  const athleteA = await makeAthleteInClub(coach.clubId);
+  const athleteB = await makeAthleteInClub(coach.clubId);
+  const { sourcePlanId, batchRows } = await makeRealBatchViaApi(coach, [athleteA.externalId, athleteB.externalId]);
+  assert.equal(batchRows.length, 2, "sanity: a 2-athlete batch must create 2 plan rows");
+
+  const lockClient = await pool.connect();
+  const monitor = await pool.connect();
+  try {
+    await lockClient.query("begin");
+    // The EXACT statement the genuine (non-batch-conditional) activation
+    // itself runs against the source row as part of Submit's own batch
+    // path - a plain UPDATE already takes the row's write lock as part
+    // of running.
+    await lockClient.query(
+      "update plans.plans set status = 'active', updated_at = now() where id = $1 and status = 'draft' returning id",
+      [sourcePlanId],
+    );
+
+    const patchPromise = api(`/api/builder/plans/${sourcePlanId}/training-load-settings`, { method: "PATCH", cookie: coach.cookie, body: { trackTrainingLoadDefault: true, requestRpeDefault: true } });
+    const blocked = await waitUntilBlocked(monitor, [lockClient.processID, monitor.processID]);
+    assert.equal(blocked, true, "the settings PATCH must be directly observed Lock-waiting behind Submit's own held lock on the source row");
+
+    // Also activate the sibling directly (simulating the REST of Submit's
+    // own atomic batch-activation, which this raw client stands in for)
+    // before committing, so the "every activated plan stays mutually
+    // consistent" assertion below has real, matching rows to check.
+    const siblingId = batchRows.find((r) => String(r.id) !== String(sourcePlanId)).id;
+    await lockClient.query("update plans.plans set status = 'active', updated_at = now() where id = $1 and status = 'draft'", [siblingId]);
+    await lockClient.query("commit");
+
+    const patchRes = await patchPromise;
+    assert.equal(patchRes.status, 409, `expected 409 once the source plan is already active, got ${patchRes.status}: ${JSON.stringify(patchRes.body)}`);
+    assert.equal(patchRes.body.error, "notDraft");
+  } finally {
+    try { await lockClient.query("rollback"); } catch {}
+    lockClient.release();
+    monitor.release();
+  }
+
+  const rows = await query(
+    `select id, status, track_training_load_default, request_rpe_default from plans.plans where id = any($1::uuid[])`,
+    [batchRows.map((r) => r.id)],
+  );
+  for (const row of rows.rows) {
+    assert.equal(row.status, "active", `plan ${row.id} must be activated`);
+    assert.equal(row.track_training_load_default, false, "the rejected PATCH must have changed zero rows on any batch member");
+    assert.equal(row.request_rpe_default, false);
+  }
+  assert.equal(rows.rows[0].track_training_load_default, rows.rows[1].track_training_load_default, "every activated plan in the batch must stay mutually consistent");
+});

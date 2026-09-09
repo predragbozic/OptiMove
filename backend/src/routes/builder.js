@@ -444,18 +444,27 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
       return res.json(await buildDraft(updated));
     }
     const shouldSyncBatch = wantsBatchSync(req, plan);
-    if (shouldSyncBatch) await syncBatchFromPlan(plan, req.user);
-    const emptyDraft = await removeEmptyDraftOnSubmit(req.user, plan, req);
-    if (emptyDraft) return res.json(emptyDraft);
+    // Non-batch: the empty-draft check stays its OWN separate, quick
+    // transaction (removeEmptyDraftOnSubmit, unchanged) - a single plan
+    // has no sibling to diverge from, so there is no cross-plan
+    // atomicity gap to close for it. The batch case's OWN emptiness
+    // check instead lives INSIDE syncAndActivateBatchWithClient below,
+    // alongside sync and activation, in the SAME transaction - see that
+    // function's own header comment for why (correction round 4).
+    if (!shouldSyncBatch) {
+      const emptyDraft = await removeEmptyDraftOnSubmit(req.user, plan, req);
+      if (emptyDraft) return res.json(emptyDraft);
+    }
 
     client = await pool.connect();
     await client.query("begin");
-    // `and status = 'draft'` on both statements below is what makes a
-    // retried Submit (double click, network retry) a clean no-op instead
-    // of a second notification attempt: a plan already flipped to
-    // 'active' by an earlier, successful call to this same route simply
-    // isn't returned here the second time, so notifyPlanAssignments never
-    // even sees it again. The dedupe_key/ON CONFLICT inside
+    // `and status = 'draft'` on the single-plan UPDATE below (and inside
+    // syncAndActivateBatchWithClient's own activation UPDATE) is what
+    // makes a retried Submit (double click, network retry) a clean no-op
+    // instead of a second notification attempt: a plan already flipped
+    // to 'active' by an earlier, successful call to this same route
+    // simply isn't returned here the second time, so notifyPlanAssignments
+    // never even sees it again. The dedupe_key/ON CONFLICT inside
     // notifyPlanAssignments is the second, DB-level guarantee for the
     // genuine race case (two parallel requests both reading 'draft'
     // before either commits) - `for update` isn't needed on top of that
@@ -473,19 +482,30 @@ router.post("/plans/:planId/submit", async (req, res, next) => {
     // whichever of the two reaches the row first.
     let activatedPlans;
     if (shouldSyncBatch) {
-      const updated = await client.query(
-        `update plans.plans
-         set status = 'active', updated_at = now()
-         where builder_batch_id = $1
-           and created_by_user_id = $2
-           and source_type = 'builder'
-           and status = 'draft'
-           and coalesce(is_active, true)
-           and not coalesce(is_edit_draft, false)
-         returning id, athlete_id, name, plan_type, week_start`,
-        [plan.builder_batch_id, req.user.id],
-      );
-      activatedPlans = updated.rows;
+      const result = await syncAndActivateBatchWithClient(client, plan.id, req.user);
+      if (result.emptyDraftResponse) {
+        await client.query("commit");
+        client.release();
+        client = null;
+        return res.json(result.emptyDraftResponse);
+      }
+      if (result.activatedPlans !== null) {
+        activatedPlans = result.activatedPlans;
+      } else {
+        // Not actually part of a real batch (no builder_batch_id, or no
+        // longer owned/active) - fall back to the plain single-plan
+        // activation below. syncAndActivateBatchWithClient already
+        // locked and re-read this exact row (result.sourceRow) - this
+        // UPDATE targets the SAME id under the SAME still-held lock,
+        // never a second independent one.
+        const updated = await client.query(
+          `update plans.plans set status = 'active', updated_at = now()
+           where id = $1 and status = 'draft'
+           returning id, athlete_id, name, plan_type, week_start`,
+          [plan.id],
+        );
+        activatedPlans = updated.rows;
+      }
     } else {
       const updated = await client.query(
         `update plans.plans set status = 'active', updated_at = now()
@@ -1136,30 +1156,82 @@ router.patch("/blocks/:blockId", async (req, res, next) => {
 });
 
 router.post("/blocks/:blockId/sessions", async (req, res, next) => {
+  let client;
   try {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
-    const order = await nextOrder("plans.plan_sessions", "plan_day_id", block.id, "session_order");
     const bta = phaseValue(req.body?.bta, ["B", "T", "A"]);
+
+    // Correction round 4 hardening: block.plan.track_training_load_
+    // default/request_rpe_default above were read by the UNLOCKED access
+    // check before this transaction even opened - a concurrent PATCH
+    // /plans/:planId/training-load-settings could commit a new default
+    // in the window between that read and this INSERT, leaving a brand-
+    // new 'T' session stamped with a stale, already-superseded default.
+    // Same shared lock order as every other defaults-reading/draft-
+    // mutating route (lockDraftPlanOrReject's own header comment): the
+    // plan's own plans.plans row, by id, locked FOR UPDATE as this
+    // transaction's first statement, so a concurrent settings PATCH
+    // either already committed (this read sees its fresh value) or is
+    // still in flight (this blocks behind it, then sees it once
+    // unblocked) - never a stale in-between snapshot either way.
+    client = await pool.connect();
+    await client.query("begin");
+    const planResult = await client.query(
+      `select id, track_training_load_default, request_rpe_default from plans.plans where id = $1 for update`,
+      [block.plan.id],
+    );
+    const plan = planResult.rows[0];
+    if (!plan) {
+      await client.query("rollback");
+      client.release();
+      return res.status(404).json({ error: "Program block not found" });
+    }
+    // Re-confirm the target day still exists and still belongs to this
+    // SAME locked plan, inside the transaction - a concurrent delete (or
+    // an edit-draft being consumed by Submit/applyEditDraft between the
+    // earlier unlocked getEditableBlock() read and this lock) must never
+    // let a session be inserted under a day/plan pairing that no longer
+    // holds.
+    const dayResult = await client.query(`select id, plan_id from plans.plan_days where id = $1`, [block.id]);
+    const day = dayResult.rows[0];
+    if (!day || String(day.plan_id) !== String(plan.id)) {
+      await client.query("rollback");
+      client.release();
+      return res.status(404).json({ error: "Program block not found" });
+    }
+
+    const orderResult = await client.query(
+      `select coalesce(max(session_order), 0) + 1 as next_value from plans.plan_sessions where plan_day_id = $1`,
+      [block.id],
+    );
+    const order = Number(orderResult.rows[0].next_value);
     // Training Activity Integration 2A: a brand-new session's own initial
     // tracking/RPE state follows its OWN training-phase classification,
     // never a blanket value - the main 'T' (Training) slot inherits the
     // plan's own explicit defaults (plans.plans.track_training_load_
-    // default/request_rpe_default, migrations_v2/202609080900); a
-    // 'Before'/'After'/unknown-or-unset session always starts OFF/OFF
-    // regardless of the plan's own defaults - never guessed. A coach
-    // remains free to change either for one specific session afterward
-    // (PATCH /sessions/:sessionId below), and every COPY path (block
-    // copy, copy-into, program-tree copy, day copy) preserves whatever a
-    // session already has verbatim instead of re-deriving it here.
-    const trackingEnabled = bta === "T" && Boolean(block.plan.track_training_load_default);
-    const rpeEnabled = trackingEnabled && Boolean(block.plan.request_rpe_default);
-    await query(
+    // default/request_rpe_default, migrations_v2/202609080900), now read
+    // fresh under the lock above; a 'Before'/'After'/unknown-or-unset
+    // session always starts OFF/OFF regardless of the plan's own
+    // defaults - never guessed. A coach remains free to change either
+    // for one specific session afterward (PATCH /sessions/:sessionId),
+    // and every COPY path (block copy, copy-into, program-tree copy, day
+    // copy) preserves whatever a session already has verbatim instead of
+    // re-deriving it here.
+    const trackingEnabled = bta === "T" && Boolean(plan.track_training_load_default);
+    const rpeEnabled = trackingEnabled && Boolean(plan.request_rpe_default);
+    await client.query(
       `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, training_load_enabled, rpe_enabled) values ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), bta, sessionTimeValue(req.body?.time), order, nullableText(req.body?.name), trackingEnabled, rpeEnabled],
     );
+    await client.query("commit");
+    client.release();
+    client = null;
     return respondWithDraft(req, res, req.user, block.plan, { status: 201 });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    next(error);
+  }
 });
 
 router.patch("/sessions/:sessionId", async (req, res, next) => {
@@ -1683,64 +1755,126 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
 // round trip does). So this only ever targets DRAFT siblings - an ACTIVE
 // or ARCHIVED one is never touched, regardless of what the source plan's
 // own status is.
+// Correction round 4: source + every draft sibling's own plans.plans row
+// is now locked FOR UPDATE, in ascending id order, as the FIRST thing
+// this does - the one shared deterministic lock order every caller that
+// ever needs more than one plans.plans row in a single transaction must
+// use (lockDraftPlanOrReject's own header comment documents the single-
+// row half of this; this is its multi-row counterpart). Ascending id
+// order is what makes two concurrent batch operations - or a batch
+// operation racing a single-plan settings/session PATCH's own lock on
+// exactly one of these same ids - deadlock-free by construction: neither
+// side can ever be holding row B while waiting on row A if the other is
+// holding row A while waiting on row B, because both always acquire in
+// the same sorted order.
+//
+// builder_batch_id is read once, unlocked, purely to DISCOVER the
+// candidate id set - it is immutable once a plan is created (nothing in
+// this app ever changes it afterward), so reading it before the lock is
+// safe; every value actually WRITTEN below comes from a row re-read
+// fresh AFTER its own lock is acquired, never from this discovery read.
+async function lockBatchPlansForUpdate(client, sourcePlanId, user) {
+  const candidates = await client.query(
+    `select id from plans.plans
+     where (id = $1 or builder_batch_id = (select builder_batch_id from plans.plans where id = $1))
+       and created_by_user_id = $2
+       and coalesce(is_active, true)
+       and not coalesce(is_edit_draft, false)`,
+    [sourcePlanId, user.id],
+  );
+  const ids = candidates.rows.map((row) => String(row.id)).sort();
+  if (!ids.length) return { sourceRow: null, siblingRows: [] };
+  const rowsById = new Map();
+  for (const id of ids) {
+    const result = await client.query(
+      `select id, builder_batch_id, created_by_user_id, athlete_id, plan_type, week_start, name, note, icon_url, color,
+              start_date, duration_days, status, track_training_load_default, request_rpe_default
+       from plans.plans where id = $1 for update`,
+      [id],
+    );
+    if (result.rows[0]) rowsById.set(id, result.rows[0]);
+  }
+  const sourceRow = rowsById.get(String(sourcePlanId)) || null;
+  if (!sourceRow?.builder_batch_id) return { sourceRow, siblingRows: [] };
+  // Matches syncBatchFromPlan's own original filter exactly: only a
+  // DRAFT sibling is ever synced/activated/discarded here - see this
+  // section's own header comment above for why an already-ACTIVE
+  // sibling (a retried Submit landing after the first one already
+  // published everything) must never be touched again.
+  const siblingRows = [...rowsById.values()].filter((row) => String(row.id) !== String(sourceRow.id) && row.status === "draft");
+  return { sourceRow, siblingRows };
+}
+
+// Training load hardening: batch-sync deletes-and-recreates a sibling's
+// ENTIRE session tree from the source plan's own current content, always
+// minting a fresh logical_session_id for every recreated session (never
+// the source's own - that would make a DIFFERENT athlete's session look
+// like it shares identity with the source athlete's one). That's exactly
+// right for the ONLY scenario this mechanism was ever meant for: keeping
+// not-yet-published sibling DRAFTS in sync with each other while a coach
+// is still building a batch-assigned plan, before any of them has a real
+// athlete-facing history yet. It is never safe once a sibling is ACTIVE
+// (published) - an athlete could already have submitted real RPE against
+// one of its real sessions, and wiping the tree would silently orphan
+// that result and re-open the recreated session for a second, duplicate
+// submission (training_load.session_feedback has no way to know the
+// recreated session is "the same" one, since batch-sync never attempts
+// the live<->edit-draft style identity-preservation applyEditDraft's own
+// round trip does). So this only ever targets DRAFT siblings - an ACTIVE
+// or ARCHIVED one is never touched, regardless of what the source plan's
+// own status is.
+//
+// Pure content/metadata sync - no activation, no emptiness check, no
+// notification. Shared by both syncBatchFromPlan (the standalone
+// /sync-batch route, its own transaction) and syncAndActivateBatchWithClient
+// (Submit, the caller's already-open transaction) - the ONE place this
+// copy logic is ever written, never duplicated between them.
+async function syncBatchContentWithClient(client, sourceRow, siblingRows) {
+  for (const sibling of siblingRows) {
+    if (sourceRow.plan_type === "weekly") {
+      await copyWeeklyPlanTree(client, sourceRow.id, sibling.id, sibling.week_start || sourceRow.week_start);
+    } else {
+      const blocks = await client.query(
+        "select id from plans.plan_days where plan_id = $1 order by block_order nulls last, block_index",
+        [sibling.id],
+      );
+      for (const block of blocks.rows) await deleteBlockTreeWithClient(client, block.id);
+      await copyProgramTree(client, sourceRow.id, sibling.id);
+    }
+    await client.query(
+      `update plans.plans
+       set name = $2,
+           note = $3,
+           icon_url = $4,
+           color = $5,
+           start_date = $6,
+           duration_days = $7,
+           track_training_load_default = $8,
+           request_rpe_default = $9,
+           updated_at = now()
+       where id = $1`,
+      [sibling.id, sourceRow.name, sourceRow.note, sourceRow.icon_url, sourceRow.color, sourceRow.start_date, sourceRow.duration_days, Boolean(sourceRow.track_training_load_default), Boolean(sourceRow.request_rpe_default)],
+    );
+  }
+}
+
+// Standalone entry point for POST /plans/:planId/sync-batch below - opens
+// its OWN client/transaction (this is the only caller that needs to; a
+// Submit-triggered sync runs inside Submit's own already-open transaction
+// instead, via syncAndActivateBatchWithClient) and delegates every bit of
+// actual locking/copying logic to lockBatchPlansForUpdate/
+// syncBatchContentWithClient above - never its own separate copy of it.
 async function syncBatchFromPlan(sourcePlan, user) {
   if (!sourcePlan?.id || sourcePlan.is_edit_draft) return;
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const source = await client.query(
-      `select id, builder_batch_id, created_by_user_id, plan_type, week_start, name, note, icon_url, color, start_date, duration_days,
-              track_training_load_default, request_rpe_default
-       from plans.plans
-       where id = $1
-         and created_by_user_id = $2
-         and coalesce(is_active, true)
-         and not coalesce(is_edit_draft, false)`,
-      [sourcePlan.id, user.id],
-    );
-    const sourceRow = source.rows[0];
+    const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlan.id, user);
     if (!sourceRow?.builder_batch_id) {
       await client.query("rollback");
       return;
     }
-    const siblings = await client.query(
-      `select id, plan_type, week_start
-       from plans.plans
-       where builder_batch_id = $1
-         and id <> $2
-         and created_by_user_id = $3
-         and coalesce(is_active, true)
-         and not coalesce(is_edit_draft, false)
-         and status = 'draft'
-       order by created_at`,
-      [sourceRow.builder_batch_id, sourceRow.id, user.id],
-    );
-    for (const sibling of siblings.rows) {
-      if (sourceRow.plan_type === "weekly") {
-        await copyWeeklyPlanTree(client, sourceRow.id, sibling.id, sibling.week_start || sourceRow.week_start);
-      } else {
-        const blocks = await client.query(
-          "select id from plans.plan_days where plan_id = $1 order by block_order nulls last, block_index",
-          [sibling.id],
-        );
-        for (const block of blocks.rows) await deleteBlockTreeWithClient(client, block.id);
-        await copyProgramTree(client, sourceRow.id, sibling.id);
-      }
-      await client.query(
-        `update plans.plans
-         set name = $2,
-             note = $3,
-             icon_url = $4,
-             color = $5,
-             start_date = $6,
-             duration_days = $7,
-             track_training_load_default = $8,
-             request_rpe_default = $9,
-             updated_at = now()
-         where id = $1`,
-        [sibling.id, sourceRow.name, sourceRow.note, sourceRow.icon_url, sourceRow.color, sourceRow.start_date, sourceRow.duration_days, Boolean(sourceRow.track_training_load_default), Boolean(sourceRow.request_rpe_default)],
-      );
-    }
+    await syncBatchContentWithClient(client, sourceRow, siblingRows);
     await client.query("commit");
   } catch (error) {
     try { await client.query("rollback"); } catch {}
@@ -1748,6 +1882,63 @@ async function syncBatchFromPlan(sourcePlan, user) {
   } finally {
     client.release();
   }
+}
+
+// Submit's own batch path (correction round 4): lock every batch member,
+// sync content, re-check emptiness (matching removeEmptyDraftOnSubmit's
+// OWN batch-case semantics exactly - a source with no real content
+// discards the whole still-draft batch instead of publishing it), THEN
+// activate, all inside the CALLER's already-open transaction/client -
+// never a separate one. Closes the exact window the two-transaction
+// version left open: a settings/session PATCH committing between an
+// earlier syncBatchFromPlan() and a later, independent activation UPDATE
+// could leave source and its siblings permanently diverged the instant
+// activation published all of them. Returns either
+// `{ emptyDraftResponse }` (nothing was activated - the route must
+// return this directly, exactly like the existing single-plan
+// removeEmptyDraftOnSubmit path already does) or `{ activatedPlans }`
+// (ready for notifyPlanAssignments, in this SAME transaction).
+async function syncAndActivateBatchWithClient(client, sourcePlanId, user) {
+  const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlanId, user);
+  if (!sourceRow) return { activatedPlans: [] };
+  if (!sourceRow.builder_batch_id) {
+    // Not actually part of a batch (or no longer owned/active) - the
+    // caller falls back to its own plain single-plan activation using
+    // this SAME locked source row, never a second independent lock.
+    return { sourceRow, activatedPlans: null };
+  }
+  await syncBatchContentWithClient(client, sourceRow, siblingRows);
+
+  const emptinessTargets = sourceRow.status === "draft" ? [sourceRow, ...siblingRows] : siblingRows;
+  const deletedIds = [];
+  for (const target of emptinessTargets) {
+    const hasContent = sourceRow.plan_type === "weekly"
+      ? await planHasWeeklyTrainingContentWithClient(client, target.id)
+      : await planHasBuilderContentWithClient(client, target.id);
+    if (hasContent) continue;
+    await deletePlanTreeWithClient(client, target.id);
+    deletedIds.push(target.id);
+  }
+  if (deletedIds.some((id) => String(id) === String(sourceRow.id))) {
+    return {
+      emptyDraftResponse: {
+        deleted: true,
+        empty: true,
+        planId: sourceRow.id,
+        deletedIds,
+        message: "Empty draft was not saved.",
+      },
+    };
+  }
+
+  const remainingIds = [sourceRow.id, ...siblingRows.map((row) => row.id)].filter((id) => !deletedIds.includes(id));
+  const updated = await client.query(
+    `update plans.plans set status = 'active', updated_at = now()
+     where id = any($1::uuid[]) and status = 'draft'
+     returning id, athlete_id, name, plan_type, week_start`,
+    [remainingIds],
+  );
+  return { activatedPlans: updated.rows };
 }
 
 async function applyEditDraft(req, draftPlan) {
