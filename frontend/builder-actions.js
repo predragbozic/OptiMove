@@ -671,6 +671,26 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   if (type === "builder-bulk-apply-training-sessions" || type === "builder-bulk-turn-off-before-after" || type === "builder-bulk-turn-off-all-rpe") {
     const planId = state.builder.draft?.plan?.id;
     if (!planId) return true;
+    // UX correction round: the two bulk TURN-OFF actions get an explicit
+    // confirm step, same convention as every other bulk/disable action in
+    // this app (window.confirm - see e.g. the Training Load quick-toggle's
+    // own confirmDisableWithResults dialog in training-load-actions.js).
+    // Neither backend bulk route gates on existing results itself (both
+    // only ever run against a draft/edit-draft's own sessions, unlike the
+    // live quick-toggle routes) - a session in an OPEN EDIT-DRAFT can
+    // still carry real, already-submitted RPE results from before the
+    // coach reopened it, so this is the only place that warning is ever
+    // shown for these two routes. Apply (which can turn things ON just as
+    // easily as off, depending on the plan's own current defaults) is
+    // unchanged - no confirm, matching its existing behavior.
+    if (type === "builder-bulk-turn-off-before-after"
+      && !window.confirm("Exclude every Before/After session from Training Load and RPE? Sessions stay in the plan - any results already collected stay saved and visible, only future requests stop.")) {
+      return true;
+    }
+    if (type === "builder-bulk-turn-off-all-rpe"
+      && !window.confirm("Turn off RPE for every session in this plan? Any results already collected stay saved and visible, only future requests stop.")) {
+      return true;
+    }
     const routeSuffix = type === "builder-bulk-apply-training-sessions" ? "apply-to-training-sessions"
       : type === "builder-bulk-turn-off-before-after" ? "turn-off-before-after"
       : "turn-off-all-rpe";
