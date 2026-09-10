@@ -427,6 +427,46 @@ async function waitUntilBlocked(pid, timeoutMs = 5000) {
   }
   return false;
 }
+// Used only when the blocked side is a SERVICE FUNCTION (createDefinitionVersion)
+// that owns its own pool.connect()'d client internally — no pid is handed back
+// to the caller the way newClient()'s raw client exposes one. Polls for ANY
+// backend genuinely queued on a real lock, excluding this test process's own
+// query connection — safe in this suite because each concurrency test drives
+// exactly one blocking actor at a time. Never a sleep() heuristic standing in
+// for a real wait — every caller still asserts a real pg_stat_activity fact.
+async function waitForAnyLockWait(timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const r = await pool.query("select pid from pg_stat_activity where wait_event_type = 'Lock' and pid <> pg_backend_pid()");
+    if (r.rows.length > 0) return r.rows[0].pid;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return null;
+}
+// Real component-grain fixture (merge-readiness FINAL round, finding #7) —
+// never a random/nonexistent component UUID standing in for a real one. Two
+// real training.activity_components under the SAME real activity, two real
+// training_load.metric_event_segments under that activity's own real metric
+// event, and a CONFIRMED training.activity_component_metric_segment_links row
+// for each — the exact chain training.canonical_activity_results() requires
+// to emit a component_metric_segment_link fact and canonically bucket a
+// component-grain metric_value fact.
+async function makeComponentFixture({ clubId, coachId, athleteId, connectionId, date }) {
+  const act = await makeActivityWithEvent({ clubId, coachId, athleteId, connectionId, date });
+  const compA = await query(`insert into training.activity_components (activity_id, component_type_key, name_snapshot, origin) values ($1,'exercise','Component A','manual') returning id`, [act.activityId]);
+  const compB = await query(`insert into training.activity_components (activity_id, component_type_key, name_snapshot, origin) values ($1,'exercise','Component B','manual') returning id`, [act.activityId]);
+  const segA = await query(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'Segment A',0) returning id`, [act.eventId]);
+  const segB = await query(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'Segment B',1) returning id`, [act.eventId]);
+  await query(
+    `insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status, confirmed_by_user_id, confirmed_at) values ($1,$2,'manual','confirmed',$3,now())`,
+    [compA.rows[0].id, segA.rows[0].id, coachId],
+  );
+  await query(
+    `insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status, confirmed_by_user_id, confirmed_at) values ($1,$2,'manual','confirmed',$3,now())`,
+    [compB.rows[0].id, segB.rows[0].id, coachId],
+  );
+  return { ...act, componentAId: compA.rows[0].id, componentBId: compB.rows[0].id, segmentAId: segA.rows[0].id, segmentBId: segB.rows[0].id };
+}
 
 // ============================================================
 // §1 — Real migrations: clean apply / re-apply / upgrade-from-earlier /
@@ -639,7 +679,8 @@ test("§3.2 a stale widget revision on update_widget_content maps to a controlle
 test("§3.3 a stale dashboard revision on layout replace maps to a controlled 409", async () => {
   const { coachCookie } = await makeClubCoach("l33");
   const dashboard = await makeDashboardHttp(coachCookie);
-  const bad = await api(`/api/training-load/dashboards/${dashboard.id}/layout`, { method: "PUT", cookie: coachCookie, body: { expectedRevision: 999, layout: [] } });
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+  const bad = await api(`/api/training-load/dashboards/${dashboard.id}/layout`, { method: "PUT", cookie: coachCookie, body: { expectedRevision: 999, layout: [{ widgetId: w.widgetId, x: 0 }] } });
   assert.equal(bad.status, 409);
 });
 
@@ -669,7 +710,7 @@ test("§3.5 an unresolved series is preserved and later resolved via the sanctio
   const w = await makeWidgetHttp(coachCookie, dashboard);
   const added = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
     method: "POST", cookie: coachCookie,
-    body: { expectedWidgetRevision: 1, seriesOrder: 1, templateMetricKeyHints: [{ key: "totally-unknown-metric-key" }], resolutionStatus: "unresolved" },
+    body: { expectedWidgetRevision: 1, seriesOrder: 1, templateMetricKeyHints: [{ key: "totally-unknown-metric-key" }] },
   });
   assert.equal(added.status, 201);
   const queried = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-01-01", dateTo: "2026-01-02" } });
@@ -693,7 +734,7 @@ test("§3.6 resolve_series_binding() rejects binding to a metric from ANOTHER cl
   const dashboard = await makeDashboardHttp(coachCookie);
   const w = await makeWidgetHttp(coachCookie, dashboard);
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
-    method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, templateMetricKeyHints: [{ key: "x" }], resolutionStatus: "unresolved" },
+    method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, templateMetricKeyHints: [{ key: "x" }] },
   });
   const detail = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
   const seriesRow = detail.body.widgets[0].series[0];
@@ -1111,7 +1152,7 @@ test("§8.3 clone with 2 equally-valid template hint candidates lands as 'ambigu
   const tw = await makeWidgetHttp(adminCookie, template);
   await api(`/api/training-load/dashboards/${template.id}/widgets/${tw.widgetId}/series`, {
     method: "POST", cookie: adminCookie,
-    body: { expectedWidgetRevision: 1, seriesOrder: 1, templateMetricKeyHints: [{ key: sharedKey }], resolutionStatus: "unresolved" },
+    body: { expectedWidgetRevision: 1, seriesOrder: 1, templateMetricKeyHints: [{ key: sharedKey }] },
   });
   const cloned = await api(`/api/training-load/dashboards/${template.id}/clone`, { method: "POST", cookie: coachCookie, body: { ownerScope: "club", ownerClubId: clubId } });
   assert.equal(cloned.status, 201);
@@ -1131,7 +1172,7 @@ test("§8.3b a clone whose hint matches ZERO candidates stays 'unresolved' — v
   const tw = await makeWidgetHttp(adminCookie, template);
   await api(`/api/training-load/dashboards/${template.id}/widgets/${tw.widgetId}/series`, {
     method: "POST", cookie: adminCookie,
-    body: { expectedWidgetRevision: 1, seriesOrder: 1, templateMetricKeyHints: [{ key: `no-such-metric-${uid()}` }], resolutionStatus: "unresolved" },
+    body: { expectedWidgetRevision: 1, seriesOrder: 1, templateMetricKeyHints: [{ key: `no-such-metric-${uid()}` }] },
   });
   const cloned = await api(`/api/training-load/dashboards/${template.id}/clone`, { method: "POST", cookie: coachCookie, body: { ownerScope: "club", ownerClubId: clubId } });
   const detail = await api(`/api/training-load/dashboards/${cloned.body.dashboard.id}`, { cookie: coachCookie });
@@ -1435,7 +1476,7 @@ test("§9.1 an archived dashboard is fully read-only: GET stays visible, query/c
   assert.equal(metaPatch.status, 409);
   assert.equal(metaPatch.body.error, "dashboardArchived");
 
-  const layoutPatch = await api(`/api/training-load/dashboards/${dashboard.id}/layout`, { method: "PUT", cookie: coachCookie, body: { expectedRevision: revisionAfterArchive, layout: [] } });
+  const layoutPatch = await api(`/api/training-load/dashboards/${dashboard.id}/layout`, { method: "PUT", cookie: coachCookie, body: { expectedRevision: revisionAfterArchive, layout: [{ widgetId: w.widgetId, x: 0 }] } });
   assert.equal(layoutPatch.status, 409);
   assert.equal(layoutPatch.body.error, "dashboardArchived");
 
@@ -2066,31 +2107,543 @@ test("§9.18 resolveTemplateSeriesForWorkspace() stays set-based at real scale: 
 
   const widgetsModule = await import("../src/trainingLoadDashboardWidgets.js");
   const original = pool.query.bind(pool);
-  let statementsUsed = 0;
-  pool.query = (...args) => { statementsUsed += 1; return original(...args); };
-  const start = Date.now();
-  let ambiguousCount = 0;
-  try {
-    for (let i = 1; i <= HINT_COUNT; i += 1) {
-      const resolved = await widgetsModule.resolveTemplateSeriesForWorkspace(query, {
-        hints: [{ key: `${keyPrefix}-${i}`, scopeLevel: "session" }],
-        dataWorkspaceType: "club", dataWorkspaceScopeId: clubId, ownerUserId: null,
-      });
-      if (resolved.status === "ambiguous") {
-        assert.equal(resolved.candidateIds.length, 2, `hint ${i} must resolve to exactly the 2 real candidates (1 system + 1 club) — never more, never fewer`);
-        ambiguousCount += 1;
-      }
+
+  // finding #6 requires the resolver phase to cost a CONSTANT, small
+  // (<=2-3) number of SELECTs whether the batch holds 1, 10, or 100
+  // hint-bearing series — measured as three SEPARATE batch calls here,
+  // each over a DIFFERENT slice of the 1000-definition pool so no result
+  // is cached/reused across measurements.
+  async function measureBatch(count, offset) {
+    const specs = [];
+    for (let i = 1; i <= count; i += 1) specs.push({ sourceSeriesId: `s${offset + i}`, hints: [{ key: `${keyPrefix}-${offset + i}`, scopeLevel: "session" }] });
+    let statements = 0;
+    pool.query = (...args) => { statements += 1; return original(...args); };
+    const start = Date.now();
+    let results;
+    try {
+      results = await widgetsModule.resolveTemplateSeriesBatchForWorkspace(query, specs, { dataWorkspaceType: "club", dataWorkspaceScopeId: clubId, ownerUserId: null });
+    } finally {
+      pool.query = original;
     }
-  } finally {
-    pool.query = original;
+    const elapsedMs = Date.now() - start;
+    for (const spec of specs) {
+      const r = results.get(spec.sourceSeriesId);
+      assert.equal(r.status, "ambiguous", `every hint must genuinely see both its system and club candidate`);
+      assert.equal(r.candidateIds.length, 2, "exactly the 2 real candidates — never more, never fewer");
+    }
+    return { statements, elapsedMs };
   }
-  const elapsedMs = Date.now() - start;
-  assert.equal(ambiguousCount, HINT_COUNT, "every one of the 100 resolved hints must genuinely see both its system and club candidate");
-  // 2 queries per hint (1 for candidates, 1 for the set-based capability
-  // check) is the real, current per-hint cost — bounded well clear of
-  // any per-CANDIDATE blowup (the bug this finding fixed): a per-candidate
-  // N+1 would have cost ~4-6 queries per hint here (2 candidates x 2 each
-  // + 1), i.e. approaching 500-600 total, not ~200.
-  assert.ok(statementsUsed <= HINT_COUNT * 3, `resolveTemplateSeriesForWorkspace must cost a small, PER-HINT-bounded query count, not scale with candidate count or the 1000-definition pool size — got ${statementsUsed} statements for ${HINT_COUNT} hints`);
-  console.log(`[§9.18] 1000 metric definitions (500 keys x 2 owner scopes), ${HINT_COUNT} resolved hints -> ${statementsUsed} DB statements, ${elapsedMs}ms`);
+
+  const batch1 = await measureBatch(1, 0);
+  const batch10 = await measureBatch(10, 1);
+  const batch100 = await measureBatch(100, 11);
+
+  for (const [label, { statements }] of [["1", batch1], ["10", batch10], ["100", batch100]]) {
+    assert.ok(statements <= 3, `resolveTemplateSeriesBatchForWorkspace() must cost <=3 SELECTs for a batch of ${label} hint-bearing series — got ${statements}`);
+  }
+  console.log(`[§9.18] 1000 metric definitions (500 keys x 2 owner scopes) — batch resolver cost: 1 series -> ${batch1.statements} stmts/${batch1.elapsedMs}ms, 10 series -> ${batch10.statements} stmts/${batch10.elapsedMs}ms, 100 series -> ${batch100.statements} stmts/${batch100.elapsedMs}ms`);
+});
+
+// ============================================================
+// §10 — LAST merge-readiness corrective round (from commit 2edac10): the
+// 8 strict findings, each fail-fast test reproducing its problem BEFORE
+// the fix it now verifies. §10.6 is deliberately absent — the rewritten
+// §9.18 above already IS that fail-fast test for finding #6 (the batch
+// resolver), verbatim to the letter of fail-fast #10.
+// ============================================================
+
+// --- Finding #1: account-identity gap in dataWorkspaceMatches() ---
+
+test("§10.1 platform-admin/dual-role cross-account isolation: a private_coach or athlete workspace never matches ANOTHER account's private dashboard for query/active-selection (info-hiding 404) — GET (structure) still works for a platform admin, and the OWNER's own original workspace keeps working — finding #1, fail-fast #1/#2", async () => {
+  // --- private_coach half ---
+  const coachA = await makeUser({ email: `l101-coacha-${uid()}@test.local` });
+  await grantGlobalRole(coachA, "independent_coach");
+  await setActiveWorkspace(coachA, "private_coach", null);
+  const coachACookie = await loginCookie(coachA);
+  const dashA = await makeDashboardHttp(coachACookie);
+  assert.equal(dashA.data_workspace_type, "private_coach");
+
+  const admin = await makeUser({ email: `l101-dualadmin-${uid()}@test.local` });
+  await grantGlobalRole(admin, "platform_admin");
+  await grantGlobalRole(admin, "independent_coach");
+  await setActiveWorkspace(admin, "private_coach", null);
+  const adminCookie = await loginCookie(admin);
+
+  const seenStructure = await api(`/api/training-load/dashboards/${dashA.id}`, { cookie: adminCookie });
+  assert.equal(seenStructure.status, 200, "a platform admin may still view the STRUCTURE of another coach's private dashboard");
+
+  const queried = await api(`/api/training-load/dashboards/${dashA.id}/query`, { method: "POST", cookie: adminCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.equal(queried.status, 404, "querying from the admin's OWN (different) private_coach workspace must be info-hiding 404, never 403");
+  assert.equal(queried.body.error, "notFound");
+
+  const setActive = await api("/api/training-load/dashboards/active", { method: "POST", cookie: adminCookie, body: { dashboardId: dashA.id } });
+  assert.equal(setActive.status, 404, "setting ANOTHER account's private_coach dashboard active must be info-hiding 404");
+  assert.equal(setActive.body.error, "notFound");
+
+  const ownQuery = await api(`/api/training-load/dashboards/${dashA.id}/query`, { method: "POST", cookie: coachACookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.equal(ownQuery.status, 200, "the OWNER, in their own original private_coach workspace, must keep working");
+  const ownActive = await api("/api/training-load/dashboards/active", { method: "POST", cookie: coachACookie, body: { dashboardId: dashA.id } });
+  assert.equal(ownActive.status, 200);
+
+  // --- athlete half ---
+  const clubX = await makeClub("l101 club");
+  const athleteUser = await makeUser({ email: `l101-athleteuser-${uid()}@test.local`, roleHint: "athlete" });
+  const athleteRow = await makeAthlete({ userId: athleteUser, timezone: "UTC" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteRow, clubX]);
+  await setActiveWorkspace(athleteUser, "athlete", null);
+  const athleteCookie = await loginCookie(athleteUser);
+  const dashAthlete = await makeDashboardHttp(athleteCookie);
+  assert.equal(dashAthlete.data_workspace_type, "athlete");
+
+  const dualAthleteRow = await makeAthlete({ userId: admin, timezone: "UTC" });
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [dualAthleteRow, clubX]);
+  await setActiveWorkspace(admin, "athlete", null);
+  const adminAsAthleteCookie = await loginCookie(admin);
+
+  const seenStructure2 = await api(`/api/training-load/dashboards/${dashAthlete.id}`, { cookie: adminAsAthleteCookie });
+  assert.equal(seenStructure2.status, 200, "a platform admin may still view the STRUCTURE of another athlete's private dashboard");
+  const queried2 = await api(`/api/training-load/dashboards/${dashAthlete.id}/query`, { method: "POST", cookie: adminAsAthleteCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.equal(queried2.status, 404);
+  assert.equal(queried2.body.error, "notFound");
+  const setActive2 = await api("/api/training-load/dashboards/active", { method: "POST", cookie: adminAsAthleteCookie, body: { dashboardId: dashAthlete.id } });
+  assert.equal(setActive2.status, 404);
+  assert.equal(setActive2.body.error, "notFound");
+
+  const ownQuery2 = await api(`/api/training-load/dashboards/${dashAthlete.id}/query`, { method: "POST", cookie: athleteCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.equal(ownQuery2.status, 200, "the athlete OWNER, in their own workspace, must keep working");
+});
+
+// --- Finding #2: partial layout PATCH must COALESCE, never null out omitted fields ---
+
+test("§10.2 partial layout PATCH preserves every OMITTED field and changes only what was SENT — finding #2, fail-fast #3", async () => {
+  const { coachCookie } = await makeClubCoach("l102");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w = await makeWidgetHttp(coachCookie, dashboard, { x: 2, y: 3, width: 6, height: 4, mobileOrder: 7 });
+  const patched = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/layout`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 1, width: 8 } });
+  assert.equal(patched.status, 200, JSON.stringify(patched.body));
+  assert.equal(patched.body.widget.width, 8, "the SENT field changed");
+  assert.equal(patched.body.widget.x, 2, "x must be preserved, not nulled");
+  assert.equal(patched.body.widget.y, 3, "y must be preserved, not nulled");
+  assert.equal(patched.body.widget.height, 4, "height must be preserved, not nulled");
+  assert.equal(patched.body.widget.mobile_order, 7, "mobileOrder must be preserved, not nulled");
+  assert.equal(patched.body.widget.widget_revision, 2, "the widget revision must have bumped exactly once");
+});
+
+test("§10.2b partial layout PATCH strict matrix: width:0, height:0, x:12, an empty body, and an unknown nested field all reject 400 with ZERO writes and an unchanged revision — finding #2, fail-fast #4", async () => {
+  const { coachCookie } = await makeClubCoach("l102b");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w = await makeWidgetHttp(coachCookie, dashboard, { x: 0, y: 0, width: 6, height: 4, mobileOrder: 1 });
+  const attempts = [{ width: 0 }, { height: 0 }, { x: 12 }, {}, { unknownField: 1 }];
+  for (const body of attempts) {
+    const res = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/layout`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 1, ...body } });
+    assert.equal(res.status, 400, `${JSON.stringify(body)} must reject with 400 — got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.error, "invalidRequest");
+  }
+  const check = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  const widgetRow = check.body.widgets.find((x) => x.id === w.widgetId);
+  assert.equal(widgetRow.x, 0);
+  assert.equal(widgetRow.width, 6);
+  assert.equal(widgetRow.revision, 1, "no rejected attempt may have bumped the widget revision");
+});
+
+// --- Finding #3: unified nullable-field PATCH semantics ---
+
+test("§10.3 series color/displayLabel: absent preserves, explicit null clears, a string replaces — finding #3, fail-fast #5", async () => {
+  const { coachCookie } = await makeClubCoach("l103");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+  const series = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "rpe", color: "#ff0000", displayLabel: "My RPE" } });
+  assert.equal(series.status, 201, JSON.stringify(series.body));
+  const seriesId = series.body.seriesId;
+  // A series add/update/delete bumps its PARENT WIDGET's own revision too
+  // (training_load.bump_widget_revision(), v16) — every subsequent call
+  // must thread the ACTUAL returned widgetRevision, never a guessed value.
+  let widgetRevision = series.body.widgetRevision;
+
+  const p1 = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/${seriesId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: widgetRevision, axis: "secondary" } });
+  assert.equal(p1.status, 200, JSON.stringify(p1.body));
+  widgetRevision = p1.body.widgetRevision;
+  let detail = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  let s = detail.body.widgets[0].series[0];
+  assert.equal(s.color, "#ff0000", "absent color must be PRESERVED, not nulled");
+  assert.equal(s.display_label, "My RPE", "absent displayLabel must be PRESERVED, not nulled");
+  assert.equal(s.axis, "secondary");
+
+  const p2 = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/${seriesId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: widgetRevision, color: null, displayLabel: null } });
+  assert.equal(p2.status, 200, JSON.stringify(p2.body));
+  widgetRevision = p2.body.widgetRevision;
+  detail = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  s = detail.body.widgets[0].series[0];
+  assert.equal(s.color, null, "explicit null must actually CLEAR color");
+  assert.equal(s.display_label, null, "explicit null must actually CLEAR displayLabel");
+
+  const p3 = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/${seriesId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: widgetRevision, color: "#00ff00" } });
+  assert.equal(p3.status, 200, JSON.stringify(p3.body));
+  detail = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  s = detail.body.widgets[0].series[0];
+  assert.equal(s.color, "#00ff00", "a string value must REPLACE");
+  assert.equal(s.display_label, null, "displayLabel stays cleared — untouched by this PATCH");
+});
+
+test("§10.3b sourceConnectionId:null while sourcePolicy stays 'source_connection' is rejected 400 (zero writes); switching sourcePolicy away in the SAME request auto-clears the pin — finding #3", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l103b");
+  const connectionId = await makeSourceConnection(clubId);
+  const { metricDefinitionId } = await makeMetricDefinition({ clubId, adminId: coachId });
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+  const series = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, sourcePolicy: "source_connection", sourceConnectionId: connectionId, dataScopeLevel: "session", analyticalAggregation: "sum" } });
+  assert.equal(series.status, 201, JSON.stringify(series.body));
+  const seriesId = series.body.seriesId;
+  const widgetRevision = series.body.widgetRevision;
+
+  const rejected = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/${seriesId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: widgetRevision, sourceConnectionId: null } });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.error, "invalidRequest");
+  let detail = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  let s = detail.body.widgets[0].series[0];
+  assert.equal(s.source_connection_id, connectionId, "the rejected request must not have cleared the pin");
+
+  const cleared = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/${seriesId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: widgetRevision, sourcePolicy: "manual", sourceConnectionId: null } });
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
+  detail = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  s = detail.body.widgets[0].series[0];
+  assert.equal(s.source_policy, "manual");
+  assert.equal(s.source_connection_id, null, "switching sourcePolicy away from 'source_connection' in the SAME request auto-clears the pin");
+});
+
+// --- Finding #4: strict Node-side validation, DB CHECK/FK is only a backstop ---
+
+test("§10.4 every enum gets at least one invalid example → 400 invalidRequest, zero writes, unchanged revision — finding #4, fail-fast #6", async () => {
+  const { coachCookie } = await makeClubCoach("l104");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+  const seriesOk = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "rpe" } });
+  assert.equal(seriesOk.status, 201, JSON.stringify(seriesOk.body));
+  const seriesId = seriesOk.body.seriesId;
+  // Adding the series already bumped widget.revision once (trigger-driven,
+  // v16) — every REJECTED attempt below must be checked against THAT real
+  // value, and must never bump it further.
+  const widgetRevision = seriesOk.body.widgetRevision;
+
+  const badGroupBy = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: widgetRevision, groupBy: "bogus" } });
+  assert.equal(badGroupBy.status, 400);
+  const badState = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: widgetRevision, state: "bogus" } });
+  assert.equal(badState.status, 400);
+
+  const seriesCases = [
+    { axis: "bogus" }, { sourcePolicy: "bogus" }, { dataScopeLevel: "bogus" },
+    { analyticalAggregation: "bogus" }, { aggregationRolePolicy: "bogus" }, { coveragePolicy: "bogus" }, { comparisonPeriod: "bogus" },
+  ];
+  for (const body of seriesCases) {
+    const res = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/${seriesId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: widgetRevision, ...body } });
+    assert.equal(res.status, 400, `${JSON.stringify(body)} must reject — got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.error, "invalidRequest");
+  }
+
+  const detail = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  const widgetRow = detail.body.widgets.find((x) => x.id === w.widgetId);
+  assert.equal(widgetRow.revision, widgetRevision, "no rejected PATCH may have bumped the widget revision");
+  assert.equal(widgetRow.series[0].axis, "primary", "no rejected series PATCH may have changed anything");
+});
+
+test("§10.4b strict Node validation — description length, displayConfig shape, unknown widgetType/builtInSeriesKey, duplicate ids in a layout/reorder batch, and contradictory owner fields — finding #4, fail-fast #7", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("l104b");
+  const dashboard = await makeDashboardHttp(coachCookie);
+
+  const tooLong = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: dashboard.revision, description: "x".repeat(2001) } });
+  assert.equal(tooLong.status, 400);
+
+  const badDisplayConfig = await api(`/api/training-load/dashboards/${dashboard.id}/widgets`, { method: "POST", cookie: coachCookie, body: { expectedDashboardRevision: dashboard.revision, widgetType: "table", title: "W", widgetOrder: 9001, x: 0, y: 0, width: 6, height: 4, mobileOrder: 9001, displayConfig: { foo: "bar" } } });
+  assert.equal(badDisplayConfig.status, 400, "displayConfig without a positive integer schemaVersion must reject");
+
+  const unknownWidgetType = await api(`/api/training-load/dashboards/${dashboard.id}/widgets`, { method: "POST", cookie: coachCookie, body: { expectedDashboardRevision: dashboard.revision, widgetType: "totally-bogus-type", title: "W", widgetOrder: 9002, x: 0, y: 0, width: 6, height: 4, mobileOrder: 9002 } });
+  assert.equal(unknownWidgetType.status, 400);
+
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+  const unknownBuiltIn = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "totally-bogus-key" } });
+  assert.equal(unknownBuiltIn.status, 400);
+
+  // Creating w already bumped dashboard.revision (trigger-driven, v16) —
+  // w.dashboardRevision (from createWidget's own return) is the real,
+  // fresh value, never the stale pre-creation dashboard.revision.
+  const w2 = await api(`/api/training-load/dashboards/${dashboard.id}/widgets`, { method: "POST", cookie: coachCookie, body: { expectedDashboardRevision: w.dashboardRevision, widgetType: "table", title: "W2", widgetOrder: 9003, x: 6, y: 0, width: 6, height: 4, mobileOrder: 9003 } });
+  assert.equal(w2.status, 201, JSON.stringify(w2.body));
+  const dupLayout = await api(`/api/training-load/dashboards/${dashboard.id}/layout`, { method: "PUT", cookie: coachCookie, body: { expectedRevision: w2.body.dashboardRevision, layout: [{ widgetId: w.widgetId, x: 0 }, { widgetId: w.widgetId, x: 1 }] } });
+  assert.equal(dupLayout.status, 400, "a layout batch repeating the same widgetId must reject");
+
+  const s1 = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "rpe" } });
+  assert.equal(s1.status, 201, JSON.stringify(s1.body));
+  // s1's own add bumped widget.revision again — s2 must use that REAL value.
+  const s2 = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: s1.body.widgetRevision, seriesOrder: 2, builtInSeriesKey: "srpe" } });
+  assert.equal(s2.status, 201, JSON.stringify(s2.body));
+  const dupReorder = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/reorder`, { method: "PUT", cookie: coachCookie, body: { expectedWidgetRevision: s2.body.widgetRevision, order: [{ seriesId: s1.body.seriesId, seriesOrder: 1 }, { seriesId: s1.body.seriesId, seriesOrder: 2 }] } });
+  assert.equal(dupReorder.status, 400, "a reorder batch repeating the same seriesId must reject");
+
+  const badOwner = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "X", ownerScope: "club", ownerClubId: clubId, ownerTeamId: crypto.randomUUID() } });
+  assert.equal(badOwner.status, 400, "an irrelevant owner field for the requested ownerScope must reject, never be silently ignored");
+});
+
+// --- Finding #5: authoritative, server-derived template-hint contract ---
+
+test("§10.5 add_series() on a template dashboard: the server ALWAYS derives templateMetricKeyHints from the LOCKED real metric definition — pairing a real metricDefinitionId with a client hint (or the retired resolutionStatus field) is rejected 400 with ZERO writes, and a legitimate metric-backed series gets the metric's OWN real key/unit/valueType, never a spoofed one — finding #5, fail-fast #8", async () => {
+  const { adminId, adminCookie } = await makePlatformAdmin("l105");
+  const created = await api("/api/training-load/dashboards", { method: "POST", cookie: adminCookie, body: { name: "Sys Template", ownerScope: "system" } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const dashboard = created.body.dashboard;
+  const w = await makeWidgetHttp(adminCookie, dashboard);
+
+  const defRes = await query(`insert into training_load.metric_definitions (key, label, owner_scope, state, created_by_user_id) values ($1,$2,'system','active',$3) returning id, key`, [`metric-${uid()}`, "System Metric", adminId]);
+  const metricDefinitionId = defRes.rows[0].id;
+  const realKey = defRes.rows[0].key;
+  const verRes = await query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id) values ($1,1,'bpm','numeric','sum',$2) returning id`, [metricDefinitionId, adminId]);
+  await query(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [verRes.rows[0].id, metricDefinitionId]);
+  await query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'session')`, [metricDefinitionId]);
+
+  const spoofedHint = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: adminCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, templateMetricKeyHints: [{ key: "totally-fake-metric" }] } });
+  assert.equal(spoofedHint.status, 400);
+  assert.equal(spoofedHint.body.error, "invalidRequest");
+
+  const spoofedStatus = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: adminCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, resolutionStatus: "resolved" } });
+  assert.equal(spoofedStatus.status, 400, "resolutionStatus is retired — always an unknown-field 400");
+
+  const zeroRows = await query(`select count(*)::int as n from training_load.dashboard_widget_series where widget_id=$1`, [w.widgetId]);
+  assert.equal(zeroRows.rows[0].n, 0, "neither spoofed attempt may have written a series row");
+
+  const legit = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: adminCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId } });
+  assert.equal(legit.status, 201, JSON.stringify(legit.body));
+  const detail = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: adminCookie });
+  const s = detail.body.widgets[0].series[0];
+  assert.equal(s.resolution_status, "resolved");
+  assert.deepEqual(s.template_metric_key_hints, [{ key: realKey, valueType: "numeric", unit: "bpm", scopeLevel: "session" }], "the server's own hint must name the metric's REAL key/unit/valueType — never a client-influenced value");
+});
+
+// --- Finding #7: real component-grain proof ---
+
+test("§10.7 real component-grain fixture: BOTH real components bucket distinctly, componentId=A narrows to A only, a session-grain series of the SAME activity stays visible under a component filter, dashboard-default/runtime-clear/widget-local-clear all work over REAL components, and a foreign component returns zero data without widening the authorized set — finding #7, fail-fast #11", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l107");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const connectionId = await makeSourceConnection(clubId);
+  const { metricDefinitionId, versionId } = await makeMetricDefinition({ clubId, adminId: coachId, scopeLevels: ["session", "component"] });
+  const fx = await makeComponentFixture({ clubId, coachId, athleteId, connectionId, date: "2026-09-09" });
+
+  await addMetricValue({ eventParticipantId: fx.eventParticipantId, metricDefinitionId, versionId, value: 10, segmentId: fx.segmentAId, aggregationRole: "standalone", coverage: "not_applicable" });
+  await addMetricValue({ eventParticipantId: fx.eventParticipantId, metricDefinitionId, versionId, value: 20, segmentId: fx.segmentBId, aggregationRole: "standalone", coverage: "not_applicable" });
+  await addMetricValue({ eventParticipantId: fx.eventParticipantId, metricDefinitionId, versionId, value: 99, segmentId: null, aggregationRole: "standalone", coverage: "not_applicable" });
+
+  const dashboard = await makeDashboardHttp(coachCookie);
+  // W1: component-grain series, groupBy='component' — the ONLY groupBy that
+  // buckets per real canonical component (groupBy='session'/'day' would sum
+  // both components' values into one bucket, defeating this test's own proof).
+  const w1 = await makeWidgetHttp(coachCookie, dashboard, { groupBy: "component" });
+  const compSeries = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w1.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "component", analyticalAggregation: "sum" } });
+  assert.equal(compSeries.status, 201, JSON.stringify(compSeries.body));
+  // W2: session-grain series of the SAME activity, in its OWN widget (groupBy
+  // is a per-widget property) — proves the session value stays visible under
+  // a componentId filter, per the adopted contract.
+  const dAfterW1 = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  const w2 = await makeWidgetHttp(coachCookie, dAfterW1.body.dashboard, { x: 6, groupBy: "session" });
+  const sessSeries = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w2.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum" } });
+  assert.equal(sessSeries.status, 201, JSON.stringify(sessSeries.body));
+
+  function seriesResultFor(body, widgetId) {
+    return body.widgets.find((w) => w.widgetId === widgetId).series[0];
+  }
+
+  // 1. No filter: both REAL components exist as distinct canonical buckets;
+  //    the session-grain value is also visible in its own widget.
+  const noFilter = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.equal(noFilter.status, 200, JSON.stringify(noFilter.body));
+  assert.deepEqual(seriesResultFor(noFilter.body, w1.widgetId).data.current.map((r) => Number(r.value)).sort((a, b) => a - b), [10, 20], "no filter: BOTH real components show as distinct canonical buckets");
+  assert.deepEqual(seriesResultFor(noFilter.body, w2.widgetId).data.current.map((r) => Number(r.value)), [99], "the session-grain value is visible");
+
+  // 2. componentId=A narrows the component series to ONLY A; the session
+  //    series of the SAME activity stays visible.
+  const filteredA = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09", componentId: fx.componentAId } });
+  assert.equal(filteredA.status, 200, JSON.stringify(filteredA.body));
+  assert.deepEqual(seriesResultFor(filteredA.body, w1.widgetId).data.current.map((r) => Number(r.value)), [10], "componentId=A narrows the component-grain series to ONLY A");
+  assert.deepEqual(seriesResultFor(filteredA.body, w2.widgetId).data.current.map((r) => Number(r.value)), [99], "a session-grain series of the SAME activity stays visible under a component filter, per the adopted contract");
+
+  // 3. Dashboard default componentId over REAL data. w2's own creation
+  //    already bumped dashboard.revision — its return carries the REAL,
+  //    current value (the original `dashboard.revision` captured before W1/
+  //    W2 existed is stale by now).
+  const patched = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: w2.dashboardRevision, defaultFilter: { componentId: fx.componentAId } } });
+  assert.equal(patched.status, 200, JSON.stringify(patched.body));
+  const withDefault = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.deepEqual(seriesResultFor(withDefault.body, w1.widgetId).data.current.map((r) => Number(r.value)), [10], "a real dashboard-default componentId narrows the component series over REAL data");
+
+  // 4. Runtime componentId:null clears the real default.
+  const clearedRuntime = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09", componentId: null } });
+  assert.deepEqual(seriesResultFor(clearedRuntime.body, w1.widgetId).data.current.map((r) => Number(r.value)).sort((a, b) => a - b), [10, 20], "an explicit runtime componentId:null clears the real default — both real components show again");
+
+  // 5. Widget-local componentId:null overrides the real dashboard default for
+  //    THAT widget only.
+  const dAfterDefault = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  const w3 = await makeWidgetHttp(coachCookie, dAfterDefault.body.dashboard, { x: 0, y: 4, groupBy: "component", localFilterOverride: { componentId: null } });
+  const w3Series = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w3.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "component", analyticalAggregation: "sum" } });
+  assert.equal(w3Series.status, 201, JSON.stringify(w3Series.body));
+  const withWidgetOverride = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.deepEqual(seriesResultFor(withWidgetOverride.body, w3.widgetId).data.current.map((r) => Number(r.value)).sort((a, b) => a - b), [10, 20], "widget-local componentId:null overrides the real dashboard default for THAT widget only, over real components");
+  assert.deepEqual(seriesResultFor(withWidgetOverride.body, w1.widgetId).data.current.map((r) => Number(r.value)), [10], "the OTHER widget (no local override) still inherits the real dashboard default");
+
+  // 6. A foreign component UUID from another workspace returns zero data,
+  //    never widening the authorized set.
+  const { clubId: foreignClubId, coachId: foreignCoachId, coachCookie: foreignCoachCookie } = await makeClubCoach("l107foreign");
+  const { athleteId: foreignAthleteId } = await makeAthleteInClub(foreignClubId);
+  const foreignConn = await makeSourceConnection(foreignClubId);
+  const foreignFx = await makeComponentFixture({ clubId: foreignClubId, coachId: foreignCoachId, athleteId: foreignAthleteId, connectionId: foreignConn, date: "2026-09-09" });
+  void foreignCoachCookie;
+  const foreignFiltered = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09", componentId: foreignFx.componentAId } });
+  assert.equal(foreignFiltered.status, 200, JSON.stringify(foreignFiltered.body));
+  assert.equal(seriesResultFor(foreignFiltered.body, w1.widgetId).data.current.length, 0, "a foreign component UUID from another workspace must return zero data, never widen the authorized set to the foreign activity");
+});
+
+// --- Finding #8: remaining concurrency/clone proofs ---
+
+test("§10.8 an in-flight/already-resolved request keeps using ITS OWN workspace snapshot for its entire lifetime, even after the preference changes mid-lifetime — a genuinely NEW request afterward sees the NEW workspace — finding #8, fail-fast #12", async () => {
+  const dashAccess = await import("../src/trainingLoadDashboardAccess.js");
+  const authzModule = await import("../src/authz.js");
+  const clubAId = await makeClub("l108 club A");
+  const clubBId = await makeClub("l108 club B");
+  const coachId = await makeUser({ email: `l108-coach-${uid()}@test.local` });
+  await grantClubAdmin(coachId, clubAId);
+  await grantClubAdmin(coachId, clubBId);
+  await setActiveWorkspace(coachId, "club", clubAId);
+
+  const authz = await authzModule.loadAuthorizationContext({ id: coachId });
+  const req = { user: { id: coachId }, authz };
+  const resolved1 = await dashAccess.resolveActiveDataWorkspace(req);
+  assert.equal(resolved1.dataWorkspaceScopeId, clubAId);
+
+  // The preference changes WHILE this same request object is still (as far
+  // as its own lifetime is concerned) active — a real HTTP request holds
+  // its resolved snapshot for its whole duration, never re-resolving mid-
+  // flight even if the underlying preference row changes concurrently.
+  await setActiveWorkspace(coachId, "club", clubBId);
+  const resolved2 = await dashAccess.resolveActiveDataWorkspace(req);
+  assert.strictEqual(resolved2, resolved1, "a second call on the SAME request object must return the IDENTICAL cached snapshot object, never re-resolve");
+  assert.equal(resolved2.dataWorkspaceScopeId, clubAId, "the SAME request must keep seeing the workspace that was active when IT resolved, never a value changed mid-request");
+
+  // A genuinely NEW request (a fresh req object, as a new HTTP request would
+  // build) issued AFTER the change must see the NEW workspace.
+  const authz2 = await authzModule.loadAuthorizationContext({ id: coachId });
+  const req2 = { user: { id: coachId }, authz: authz2 };
+  const resolved3 = await dashAccess.resolveActiveDataWorkspace(req2);
+  assert.equal(resolved3.dataWorkspaceScopeId, clubBId, "a NEW request must see the NEW workspace preference");
+});
+
+test("§10.9 clone aborts atomically (409 sourceConnectionResolutionRequired, zero new rows) when a pinned source connection is INACTIVE (deactivated AFTER being legitimately pinned) in the SAME target workspace — never a foreign-workspace substitute — finding #8, fail-fast #13", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l109");
+  const connectionId = await makeSourceConnection(clubId);
+  const { metricDefinitionId } = await makeMetricDefinition({ clubId, adminId: coachId });
+  const template = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "Inactive-Conn Template", ownerScope: "club", ownerClubId: clubId, isTemplate: true } });
+  assert.equal(template.status, 201, JSON.stringify(template.body));
+  const templateId = template.body.dashboard.id;
+  const w = await makeWidgetHttp(coachCookie, template.body.dashboard);
+  const addSeriesRes = await api(`/api/training-load/dashboards/${templateId}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, sourcePolicy: "source_connection", sourceConnectionId: connectionId, dataScopeLevel: "session", analyticalAggregation: "sum" } });
+  assert.equal(addSeriesRes.status, 201, JSON.stringify(addSeriesRes.body));
+
+  // Deactivated strictly AFTER being legitimately pinned — add_series()'s own
+  // pre-check (assertSourceConnectionReferenceOk) would reject binding an
+  // ALREADY-inactive connection, so this ordering is the only real way an
+  // inactive PINNED connection can ever exist.
+  await query(`update training_load.metric_source_connections set state='inactive' where id=$1`, [connectionId]);
+
+  const beforeDash = (await query(`select count(*)::int as n from training_load.dashboards`)).rows[0].n;
+  const beforeWidgets = (await query(`select count(*)::int as n from training_load.dashboard_widgets`)).rows[0].n;
+  const beforeSeries = (await query(`select count(*)::int as n from training_load.dashboard_widget_series`)).rows[0].n;
+
+  const failedClone = await api(`/api/training-load/dashboards/${templateId}/clone`, { method: "POST", cookie: coachCookie, body: { ownerScope: "club", ownerClubId: clubId } });
+  assert.equal(failedClone.status, 409);
+  assert.equal(failedClone.body.error, "sourceConnectionResolutionRequired");
+
+  const afterDash = (await query(`select count(*)::int as n from training_load.dashboards`)).rows[0].n;
+  const afterWidgets = (await query(`select count(*)::int as n from training_load.dashboard_widgets`)).rows[0].n;
+  const afterSeries = (await query(`select count(*)::int as n from training_load.dashboard_widget_series`)).rows[0].n;
+  assert.equal(afterDash, beforeDash, "zero new dashboards after the atomic rollback");
+  assert.equal(afterWidgets, beforeWidgets, "zero new widgets");
+  assert.equal(afterSeries, beforeSeries, "zero new series rows");
+  // NOTE (documented, per the finding's own explicit instruction — not
+  // tested here): a "nonexistent pinned connection" at clone time is
+  // STRUCTURALLY IMPOSSIBLE once a series is legitimately created — the
+  // real `on delete restrict` FK from dashboard_widget_series.
+  // source_connection_id to metric_source_connections(id) (v16) means the
+  // connection row can never be deleted while any series still points at
+  // it, so no fixture can ever construct this state without fabricating an
+  // impossible one, which the finding explicitly forbids.
+});
+
+test("§10.10 REAL concurrency: add_series() vs createDefinitionVersion(), BOTH lock orderings, proven via two real connections and pg_stat_activity — never a sleep() heuristic; whichever wins, the resulting hint never straddles an old and a new version", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l1010");
+  const catalogModule = await import("../src/trainingLoadMetricsCatalog.js");
+  const platformAdminReq = { user: { id: coachId }, authz: { platformRoles: ["platform_admin"] } };
+
+  // --- Ordering A: createDefinitionVersion() locks the definition FIRST;
+  //     add_series()'s own `FOR SHARE OF d` must genuinely queue behind it,
+  //     then see the FULLY COMMITTED new version once unblocked.
+  {
+    const { metricDefinitionId } = await makeMetricDefinition({ clubId, adminId: coachId, valueType: "numeric" });
+    const template = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "Concurrency A", ownerScope: "club", ownerClubId: clubId, isTemplate: true } });
+    const w = await makeWidgetHttp(coachCookie, template.body.dashboard);
+
+    let releaseLock; const lockHeld = new Promise((resolve) => { releaseLock = resolve; });
+    let proceedSignal; const proceed = new Promise((resolve) => { proceedSignal = resolve; });
+    const versionPromise = catalogModule.createDefinitionVersion(platformAdminReq, metricDefinitionId, { valueType: "numeric", unit: "watts" }, {
+      onLocked: async () => { releaseLock(); await proceed; },
+    });
+    await lockHeld;
+
+    const c = await newClient();
+    let addResult;
+    try {
+      const addPromise = c.client.query(
+        `select * from training_load.add_series($1,$2,$3,$4,null,null,'primary',null,null,'all_with_conflicts',null,'session','sum','standalone_and_source_rollup','complete_and_partial',null,$5)`,
+        [w.widgetId, 1, 1, metricDefinitionId, coachId],
+      ).then((r) => ({ ok: true, row: r.rows[0] })).catch((e) => ({ error: e }));
+      const blocked = await waitUntilBlocked(c.pid);
+      assert.ok(blocked, "add_series()'s FOR SHARE OF d on the metric definition must genuinely queue behind createDefinitionVersion()'s own FOR UPDATE");
+      proceedSignal();
+      const versionResult = await versionPromise;
+      assert.ok(!versionResult.error, JSON.stringify(versionResult.error));
+      addResult = await addPromise;
+    } finally {
+      await c.client.end();
+    }
+    assert.ok(addResult.ok, JSON.stringify(addResult.error?.message));
+    const hintRow = await query(`select template_metric_key_hints from training_load.dashboard_widget_series where id=$1`, [addResult.row.series_id]);
+    assert.equal(hintRow.rows[0].template_metric_key_hints[0].unit, "watts", "add_series(), once unblocked, must see the FULLY COMMITTED new version — never a straddled old/new mix");
+  }
+
+  // --- Ordering B: add_series() locks the definition FIRST (inside its own
+  //     open transaction); createDefinitionVersion()'s own FOR UPDATE must
+  //     genuinely queue behind it, and add_series()'s already-taken snapshot
+  //     must keep the OLD version — never retroactively see a version that
+  //     committed AFTER it had already read.
+  {
+    const { metricDefinitionId } = await makeMetricDefinition({ clubId, adminId: coachId, valueType: "numeric" });
+    const template = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "Concurrency B", ownerScope: "club", ownerClubId: clubId, isTemplate: true } });
+    const w = await makeWidgetHttp(coachCookie, template.body.dashboard);
+
+    const c = await newClient();
+    let addResult;
+    try {
+      await c.client.query("begin");
+      addResult = await c.client.query(
+        `select * from training_load.add_series($1,$2,$3,$4,null,null,'primary',null,null,'all_with_conflicts',null,'session','sum','standalone_and_source_rollup','complete_and_partial',null,$5)`,
+        [w.widgetId, 1, 1, metricDefinitionId, coachId],
+      );
+
+      const versionPromise = catalogModule.createDefinitionVersion(platformAdminReq, metricDefinitionId, { valueType: "numeric", unit: "steps" });
+      const blockedPid = await waitForAnyLockWait();
+      assert.ok(blockedPid, "createDefinitionVersion()'s own FOR UPDATE must genuinely queue behind add_series()'s already-held FOR SHARE OF d");
+
+      await c.client.query("commit");
+      const versionResult = await versionPromise;
+      assert.ok(!versionResult.error, JSON.stringify(versionResult.error));
+    } finally {
+      await c.client.end();
+    }
+    const hintRow = await query(`select template_metric_key_hints from training_load.dashboard_widget_series where id=$1`, [addResult.rows[0].series_id]);
+    assert.equal(hintRow.rows[0].template_metric_key_hints[0].unit, "bpm", "add_series(), having already locked and read the metric BEFORE createDefinitionVersion() ever started, must keep its OWN snapshot of the OLD version — never retroactively see the version that committed AFTER it");
+  }
 });

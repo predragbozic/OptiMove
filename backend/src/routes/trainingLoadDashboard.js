@@ -34,6 +34,18 @@ const MAX_QUERY_PERIOD_DAYS = 400;
 const MAX_WIDGETS_PER_QUERY = 200;
 const MAX_ORDER_VALUE = 1_000_000;
 
+const GROUP_BY_VALUES = new Set(["day", "week", "session", "component", "athlete", "cohort"]);
+const WIDGET_STATE_VALUES = new Set(["active", "collapsed"]);
+const AXIS_VALUES = new Set(["primary", "secondary"]);
+const SOURCE_POLICY_VALUES = new Set(["all_with_conflicts", "source_connection", "manual", "api_import", "csv_import", "derived", "not_applicable"]);
+const DATA_SCOPE_LEVEL_VALUES = new Set(["day", "session", "component"]);
+const ANALYTICAL_AGGREGATION_VALUES = new Set(["sum", "avg", "max", "last", "none"]);
+const AGGREGATION_ROLE_POLICY_VALUES = new Set(["standalone_only", "standalone_and_source_rollup", "all_including_derived"]);
+const COVERAGE_POLICY_VALUES = new Set(["complete_only", "complete_and_partial", "any"]);
+const COMPARISON_PERIOD_VALUES = new Set(["previous_period", "previous_year"]);
+const HINT_VALUE_TYPE_VALUES = new Set(["numeric", "boolean", "text"]);
+const HINT_SCOPE_LEVEL_VALUES = new Set(["day", "session", "component"]);
+
 function validUuid(value) {
   return typeof value === "string" && UUID_PATTERN.test(value);
 }
@@ -46,30 +58,83 @@ function validDate(value) {
 function validUuidArray(value) {
   return Array.isArray(value) && value.length <= 500 && value.every(validUuid);
 }
-// Strict Node-side validation (merge-readiness corrective round, finding
-// #7) — this app never relies on a PostgreSQL CAST/CHECK to validate
-// ordinary client input; the DB's own constraints remain a backstop for
-// bugs in this code, not the primary input gate.
+// Strict Node-side validation (finding #4 of the final merge-readiness
+// round) — this app never relies on a PostgreSQL CHECK/FK as the PRIMARY
+// validator for ordinary client input; the DB's own constraints remain a
+// last-resort integrity backstop for bugs in this code, never the first
+// line of defense.
 function validRevision(value) {
   return Number.isSafeInteger(value) && value >= 1;
 }
-function validOrderInt(value) {
+function validNonNegInt(value) {
   return Number.isSafeInteger(value) && value >= 0 && value <= MAX_ORDER_VALUE;
+}
+function validPositiveInt(value) {
+  return Number.isSafeInteger(value) && value >= 1 && value <= MAX_ORDER_VALUE;
+}
+function validX(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 11;
+}
+function validWidth(value) {
+  return Number.isSafeInteger(value) && value >= 1 && value <= 12;
 }
 function validNonEmptyTrimmedString(value, maxLength) {
   return typeof value === "string" && value.trim().length >= 1 && value.length <= maxLength;
 }
+function validEnum(value, allowedSet) {
+  return typeof value === "string" && allowedSet.has(value);
+}
+function validDescription(value) {
+  return typeof value === "string" && value.length <= 2000;
+}
+// color/displayLabel: nullable strings — when a string, non-whitespace.
+function validNullableLabelString(value, maxLength) {
+  if (value === null) return true;
+  return typeof value === "string" && value.trim().length >= 1 && value.length <= (maxLength ?? 500);
+}
+function validDisplayConfig(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (!Object.prototype.hasOwnProperty.call(value, "schemaVersion")) return false;
+  return Number.isSafeInteger(value.schemaVersion) && value.schemaVersion >= 1;
+}
+// Mirrors the DB's own validate_template_metric_key_hints_shape trigger
+// (v16) at the Node layer — a bare string element, a missing/empty `key`,
+// or an out-of-enum valueType/scopeLevel is rejected here, before ever
+// reaching the sanctioned function.
+function validTemplateHints(value) {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const allowedHintKeys = new Set(["key", "valueType", "unit", "scopeLevel"]);
+  return value.every((hint) => {
+    if (!hint || typeof hint !== "object" || Array.isArray(hint)) return false;
+    for (const k of Object.keys(hint)) if (!allowedHintKeys.has(k)) return false;
+    if (typeof hint.key !== "string" || hint.key.trim().length === 0) return false;
+    if (Object.prototype.hasOwnProperty.call(hint, "valueType") && hint.valueType != null && !HINT_VALUE_TYPE_VALUES.has(hint.valueType)) return false;
+    if (Object.prototype.hasOwnProperty.call(hint, "scopeLevel") && hint.scopeLevel != null && !HINT_SCOPE_LEVEL_VALUES.has(hint.scopeLevel)) return false;
+    if (Object.prototype.hasOwnProperty.call(hint, "unit") && hint.unit != null && typeof hint.unit !== "string") return false;
+    return true;
+  });
+}
 // `unknown fields ... must not be silently accepted` — a field this route
 // doesn't recognize (including a now-retired one like the old
 // clearDescription/clearLocalFilterOverride/clearComparisonPeriod client
-// flags, replaced by "explicit null clears" — see the PATCH routes below)
-// is a loud 400, never a silent no-op.
+// flags, or resolutionStatus/templateResolutionCandidates, now always
+// server-derived — finding #5) is a loud 400, never a silent no-op.
 function rejectUnknownKeys(body, allowedKeys) {
   const allowed = new Set(allowedKeys);
   for (const key of Object.keys(body || {})) {
     if (!allowed.has(key)) return key;
   }
   return null;
+}
+// A PATCH body carrying ONLY its required revision token (and nothing
+// else) would be a genuine no-op write — rejected outright rather than
+// silently bumping revision for zero real change.
+function hasAnyOtherKey(body, excludeKeys) {
+  const exclude = new Set(excludeKeys);
+  return Object.keys(body || {}).some((k) => !exclude.has(k));
+}
+function hasDuplicates(values) {
+  return new Set(values).size !== values.length;
 }
 
 // Central error mapper — the ONE place a raw pg error (SQLSTATE) or an
@@ -136,15 +201,16 @@ function dataWorkspaceQueryArgs(dataWorkspace) {
   };
 }
 
-// The ROUTE-LEVEL half of the archived-dashboard gate (finding #1) — an
-// early, nice-to-have reject for every layout/widget/series write route
-// below, all of which share this helper. This is explicitly NOT the sole
-// guard: the AUTHORITATIVE check is training_load.assert_dashboard_
-// writable(), called by every sanctioned function immediately after it
-// locks the dashboard row (see v17) — that DB-level check is what closes
-// the real race (a concurrent archive landing between this read and the
-// eventual write), this route-level check only saves a wasted round trip
-// for the common, non-racing case.
+// The ROUTE-LEVEL half of the archived-dashboard gate (finding #1 of the
+// merge-readiness round) — an early, nice-to-have reject for every
+// layout/widget/series write route below, all of which share this
+// helper. This is explicitly NOT the sole guard: the AUTHORITATIVE check
+// is training_load.assert_dashboard_writable(), called by every
+// sanctioned function immediately after it locks the dashboard row (see
+// v17) — that DB-level check is what closes the real race (a concurrent
+// archive landing between this read and the eventual write), this
+// route-level check only saves a wasted round trip for the common,
+// non-racing case.
 async function requireManageableDashboard(req, res, dataWorkspace, dashboardId) {
   const r = await query(`select * from training_load.dashboards where id = $1`, [dashboardId]);
   const row = r.rows[0];
@@ -152,6 +218,34 @@ async function requireManageableDashboard(req, res, dataWorkspace, dashboardId) 
   if (!canManageDashboardRow(req, row)) { res.status(404).json({ error: "notFound", message: "Dashboard not found." }); return null; }
   if (row.status === "archived") { res.status(409).json({ error: "dashboardArchived" }); return null; }
   return row;
+}
+
+async function widgetTypeIsActive(widgetType) {
+  const r = await query(`select is_active from training_load.dashboard_widget_types where key = $1`, [widgetType]);
+  return r.rowCount > 0 && r.rows[0].is_active === true;
+}
+async function builtinSeriesKeyIsActive(key) {
+  const r = await query(`select is_active from training_load.dashboard_builtin_series where key = $1`, [key]);
+  return r.rowCount > 0 && r.rows[0].is_active === true;
+}
+
+// Contextual owner-field validation shared by POST / and POST /:id/clone
+// — an irrelevant owner field for the requested ownerScope (e.g.
+// ownerTeamId alongside ownerScope='club') is a loud 400, never silently
+// ignored (finding #4).
+function ownerFieldsError(b) {
+  const scope = b.ownerScope ?? "user";
+  if (scope === "club") {
+    if (!validUuid(b.ownerClubId)) return "ownerClubId must be a valid UUID for ownerScope=club.";
+    if (b.ownerTeamId !== undefined) return "ownerTeamId is not applicable for ownerScope=club.";
+  } else if (scope === "team") {
+    if (!validUuid(b.ownerTeamId)) return "ownerTeamId must be a valid UUID for ownerScope=team.";
+    if (b.ownerClubId !== undefined) return "ownerClubId is not applicable for ownerScope=team.";
+  } else {
+    if (b.ownerClubId !== undefined) return "ownerClubId is not applicable for this ownerScope.";
+    if (b.ownerTeamId !== undefined) return "ownerTeamId is not applicable for this ownerScope.";
+  }
+  return null;
 }
 
 // ------------------------------------------------------------
@@ -224,6 +318,11 @@ router.post("/", async (req, res, next) => {
     const b = req.body || {};
     const unknown = rejectUnknownKeys(b, CREATE_DASHBOARD_KEYS);
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown}.` });
+    if (b.description !== undefined && b.description !== null && !validDescription(b.description)) {
+      return res.status(400).json({ error: "invalidRequest", message: "description must be a string of at most 2000 characters, or null." });
+    }
+    const ownerErr = ownerFieldsError(b);
+    if (ownerErr) return res.status(400).json({ error: "invalidRequest", message: ownerErr });
     res.status(201).json(await createDashboard(req, b));
   } catch (error) {
     respondToServiceError(res, next, error);
@@ -237,6 +336,8 @@ router.post("/:dashboardId/clone", async (req, res, next) => {
     const b = req.body || {};
     const unknown = rejectUnknownKeys(b, CLONE_DASHBOARD_KEYS);
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown}.` });
+    const ownerErr = ownerFieldsError(b);
+    if (ownerErr) return res.status(400).json({ error: "invalidRequest", message: ownerErr });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     res.status(201).json(await cloneDashboard(req, dataWorkspace, req.params.dashboardId, b));
@@ -253,6 +354,10 @@ router.patch("/:dashboardId", async (req, res, next) => {
     const unknown = rejectUnknownKeys(b, UPDATE_DASHBOARD_METADATA_KEYS);
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown} (clearing a field is done by sending it as null, not a separate clear flag).` });
     if (!validRevision(b.expectedRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedRevision must be a positive integer." });
+    if (!hasAnyOtherKey(b, ["expectedRevision"])) return res.status(400).json({ error: "invalidRequest", message: "This PATCH carries no actual change." });
+    if (b.description !== undefined && b.description !== null && !validDescription(b.description)) {
+      return res.status(400).json({ error: "invalidRequest", message: "description must be a string of at most 2000 characters, or null." });
+    }
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     res.json(await updateDashboardMetadata(req, dataWorkspace, req.params.dashboardId, b));
@@ -280,12 +385,16 @@ router.post("/:dashboardId/archive", async (req, res, next) => {
 // Layout
 // ------------------------------------------------------------
 
+const LAYOUT_ENTRY_KEYS = new Set(["widgetId", "x", "y", "width", "height", "mobileOrder"]);
 function validLayoutEntry(entry) {
-  if (!entry || typeof entry !== "object") return false;
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  for (const k of Object.keys(entry)) if (!LAYOUT_ENTRY_KEYS.has(k)) return false;
   if (!validUuid(entry.widgetId)) return false;
-  for (const key of ["x", "y", "width", "height", "mobileOrder"]) {
-    if (entry[key] !== undefined && !validOrderInt(entry[key])) return false;
-  }
+  if (entry.x !== undefined && !validX(entry.x)) return false;
+  if (entry.y !== undefined && !validNonNegInt(entry.y)) return false;
+  if (entry.width !== undefined && !validWidth(entry.width)) return false;
+  if (entry.height !== undefined && !validPositiveInt(entry.height)) return false;
+  if (entry.mobileOrder !== undefined && !validNonNegInt(entry.mobileOrder)) return false;
   return true;
 }
 
@@ -296,7 +405,9 @@ router.put("/:dashboardId/layout", async (req, res, next) => {
     const unknown = rejectUnknownKeys(b, ["expectedRevision", "layout"]);
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown}.` });
     if (!validRevision(b.expectedRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedRevision must be a positive integer." });
-    if (!Array.isArray(b.layout) || !b.layout.every(validLayoutEntry)) return res.status(400).json({ error: "invalidRequest", message: "layout must be an array of {widgetId, x?, y?, width?, height?, mobileOrder?}." });
+    if (!Array.isArray(b.layout) || b.layout.length === 0) return res.status(400).json({ error: "invalidRequest", message: "layout must be a non-empty array of {widgetId, x?, y?, width?, height?, mobileOrder?}." });
+    if (!b.layout.every(validLayoutEntry)) return res.status(400).json({ error: "invalidRequest", message: "layout contains an invalid entry (bad range, or an unknown nested field)." });
+    if (hasDuplicates(b.layout.map((e) => e.widgetId))) return res.status(400).json({ error: "invalidRequest", message: "layout must not repeat the same widgetId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -313,9 +424,16 @@ router.patch("/:dashboardId/widgets/:widgetId/layout", async (req, res, next) =>
     const unknown = rejectUnknownKeys(b, ["expectedWidgetRevision", "x", "y", "width", "height", "mobileOrder"]);
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown}.` });
     if (!validRevision(b.expectedWidgetRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision must be a positive integer." });
-    for (const key of ["x", "y", "width", "height", "mobileOrder"]) {
-      if (b[key] !== undefined && !validOrderInt(b[key])) return res.status(400).json({ error: "invalidRequest", message: `${key} must be a non-negative integer.` });
+    // At least one position/size field must be present — an empty body
+    // (only the revision token) would be a no-op write (finding #2).
+    if (!hasAnyOtherKey(b, ["expectedWidgetRevision"])) {
+      return res.status(400).json({ error: "invalidRequest", message: "At least one of x/y/width/height/mobileOrder is required." });
     }
+    if (b.x !== undefined && !validX(b.x)) return res.status(400).json({ error: "invalidRequest", message: "x must be an integer 0-11." });
+    if (b.y !== undefined && !validNonNegInt(b.y)) return res.status(400).json({ error: "invalidRequest", message: "y must be a non-negative integer." });
+    if (b.width !== undefined && !validWidth(b.width)) return res.status(400).json({ error: "invalidRequest", message: "width must be an integer 1-12." });
+    if (b.height !== undefined && !validPositiveInt(b.height)) return res.status(400).json({ error: "invalidRequest", message: "height must be a positive integer." });
+    if (b.mobileOrder !== undefined && !validNonNegInt(b.mobileOrder)) return res.status(400).json({ error: "invalidRequest", message: "mobileOrder must be a non-negative integer." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -339,10 +457,16 @@ router.post("/:dashboardId/widgets", async (req, res, next) => {
     if (!validRevision(b.expectedDashboardRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedDashboardRevision must be a positive integer." });
     if (typeof b.widgetType !== "string" || !b.widgetType.length) return res.status(400).json({ error: "invalidRequest", message: "widgetType is required." });
     if (!validNonEmptyTrimmedString(b.title, 200)) return res.status(400).json({ error: "invalidRequest", message: "title is required (1-200 characters, not whitespace-only)." });
-    for (const key of ["widgetOrder", "x", "y", "width", "height", "mobileOrder"]) {
-      if (!validOrderInt(b[key])) return res.status(400).json({ error: "invalidRequest", message: `${key} is required and must be a non-negative integer.` });
-    }
+    if (!validNonNegInt(b.widgetOrder)) return res.status(400).json({ error: "invalidRequest", message: "widgetOrder is required and must be a non-negative integer." });
+    if (!validX(b.x)) return res.status(400).json({ error: "invalidRequest", message: "x is required and must be an integer 0-11." });
+    if (!validNonNegInt(b.y)) return res.status(400).json({ error: "invalidRequest", message: "y is required and must be a non-negative integer." });
+    if (!validWidth(b.width)) return res.status(400).json({ error: "invalidRequest", message: "width is required and must be an integer 1-12." });
+    if (!validPositiveInt(b.height)) return res.status(400).json({ error: "invalidRequest", message: "height is required and must be a positive integer." });
+    if (!validNonNegInt(b.mobileOrder)) return res.status(400).json({ error: "invalidRequest", message: "mobileOrder is required and must be a non-negative integer." });
+    if (b.groupBy !== undefined && !validEnum(b.groupBy, GROUP_BY_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `groupBy must be one of ${[...GROUP_BY_VALUES].join("|")}.` });
+    if (b.displayConfig !== undefined && !validDisplayConfig(b.displayConfig)) return res.status(400).json({ error: "invalidRequest", message: "displayConfig must be a plain object with a positive integer schemaVersion." });
     if (b.localFilterOverride !== undefined && !validFilterShape(b.localFilterOverride)) return res.status(400).json({ error: "invalidRequest", message: "localFilterOverride is invalid." });
+    if (!(await widgetTypeIsActive(b.widgetType))) return res.status(400).json({ error: "invalidRequest", message: "Unknown or inactive widgetType." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -360,7 +484,26 @@ router.patch("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
     const unknown = rejectUnknownKeys(b, UPDATE_WIDGET_CONTENT_KEYS);
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown} (clearing localFilterOverride is done by sending it as null, not a separate clear flag).` });
     if (!validRevision(b.expectedWidgetRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision must be a positive integer." });
-    if (b.title !== undefined && !validNonEmptyTrimmedString(b.title, 200)) return res.status(400).json({ error: "invalidRequest", message: "title must be 1-200 characters, not whitespace-only." });
+    if (!hasAnyOtherKey(b, ["expectedWidgetRevision"])) return res.status(400).json({ error: "invalidRequest", message: "This PATCH carries no actual change." });
+    // widgetType/title/groupBy/state/displayConfig are all NON-nullable —
+    // an explicit null for any of them is a controlled 400, never a
+    // silent no-op (finding #3).
+    if (Object.prototype.hasOwnProperty.call(b, "widgetType")) {
+      if (b.widgetType === null || typeof b.widgetType !== "string" || !b.widgetType.length) return res.status(400).json({ error: "invalidRequest", message: "widgetType cannot be null; it must be a non-empty string." });
+      if (!(await widgetTypeIsActive(b.widgetType))) return res.status(400).json({ error: "invalidRequest", message: "Unknown or inactive widgetType." });
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "title")) {
+      if (b.title === null || !validNonEmptyTrimmedString(b.title, 200)) return res.status(400).json({ error: "invalidRequest", message: "title cannot be null; it must be 1-200 characters, not whitespace-only." });
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "groupBy")) {
+      if (b.groupBy === null || !validEnum(b.groupBy, GROUP_BY_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `groupBy cannot be null; it must be one of ${[...GROUP_BY_VALUES].join("|")}.` });
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "state")) {
+      if (b.state === null || !validEnum(b.state, WIDGET_STATE_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `state cannot be null; it must be one of ${[...WIDGET_STATE_VALUES].join("|")}.` });
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "displayConfig")) {
+      if (b.displayConfig === null || !validDisplayConfig(b.displayConfig)) return res.status(400).json({ error: "invalidRequest", message: "displayConfig cannot be null; it must be a plain object with a positive integer schemaVersion." });
+    }
     if (b.localFilterOverride !== undefined && b.localFilterOverride !== null && !validFilterShape(b.localFilterOverride)) return res.status(400).json({ error: "invalidRequest", message: "localFilterOverride is invalid." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
@@ -391,9 +534,13 @@ router.delete("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
 // Series
 // ------------------------------------------------------------
 
+// resolutionStatus/templateResolutionCandidates are DELIBERATELY absent
+// from this allowlist — training_load.add_series() (v17) now derives
+// both authoritatively, server-side, every time; a client sending either
+// gets a plain "unknown field" 400 (finding #5).
 const ADD_SERIES_KEYS = [
   "expectedWidgetRevision", "seriesOrder", "metricDefinitionId", "builtInSeriesKey", "templateMetricKeyHints",
-  "resolutionStatus", "templateResolutionCandidates", "axis", "color", "displayLabel", "sourcePolicy",
+  "axis", "color", "displayLabel", "sourcePolicy",
   "sourceConnectionId", "dataScopeLevel", "analyticalAggregation", "aggregationRolePolicy", "coveragePolicy", "comparisonPeriod",
 ];
 router.post("/:dashboardId/widgets/:widgetId/series", async (req, res, next) => {
@@ -401,11 +548,34 @@ router.post("/:dashboardId/widgets/:widgetId/series", async (req, res, next) => 
     if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
     const b = req.body || {};
     const unknown = rejectUnknownKeys(b, ADD_SERIES_KEYS);
-    if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown}.` });
+    if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown} (resolutionStatus/templateResolutionCandidates are always server-derived and never accepted).` });
     if (!validRevision(b.expectedWidgetRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision must be a positive integer." });
-    if (!validOrderInt(b.seriesOrder)) return res.status(400).json({ error: "invalidRequest", message: "seriesOrder must be a non-negative integer." });
+    if (!validNonNegInt(b.seriesOrder)) return res.status(400).json({ error: "invalidRequest", message: "seriesOrder must be a non-negative integer." });
     if (b.metricDefinitionId !== undefined && b.metricDefinitionId !== null && !validUuid(b.metricDefinitionId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid metricDefinitionId." });
+    // Finding #5: a client may never pair a REAL metricDefinitionId with
+    // its OWN templateMetricKeyHints claim — the hint for a metric-backed
+    // template series is always the server's own snapshot of the LOCKED
+    // definition. Sending both is rejected outright, not silently
+    // overridden, so a caller can never mistake "my hint was honored" for
+    // what actually happened.
+    if (b.metricDefinitionId && b.templateMetricKeyHints !== undefined) {
+      return res.status(400).json({ error: "invalidRequest", message: "templateMetricKeyHints cannot be provided together with metricDefinitionId — it is always derived server-side." });
+    }
+    if (!b.metricDefinitionId && !b.builtInSeriesKey && !validTemplateHints(b.templateMetricKeyHints)) {
+      return res.status(400).json({ error: "invalidRequest", message: "A series with neither metricDefinitionId nor builtInSeriesKey requires templateMetricKeyHints: a non-empty array of {key, valueType?, unit?, scopeLevel?} objects." });
+    }
+    if (b.builtInSeriesKey !== undefined && (typeof b.builtInSeriesKey !== "string" || !b.builtInSeriesKey.length)) return res.status(400).json({ error: "invalidRequest", message: "Invalid builtInSeriesKey." });
+    if (b.builtInSeriesKey && !(await builtinSeriesKeyIsActive(b.builtInSeriesKey))) return res.status(400).json({ error: "invalidRequest", message: "Unknown or inactive builtInSeriesKey." });
+    if (b.axis !== undefined && !validEnum(b.axis, AXIS_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `axis must be one of ${[...AXIS_VALUES].join("|")}.` });
+    if (b.color !== undefined && !validNullableLabelString(b.color, 50)) return res.status(400).json({ error: "invalidRequest", message: "color must be a non-whitespace string, or null." });
+    if (b.displayLabel !== undefined && !validNullableLabelString(b.displayLabel, 200)) return res.status(400).json({ error: "invalidRequest", message: "displayLabel must be a non-whitespace string, or null." });
+    if (b.sourcePolicy !== undefined && !validEnum(b.sourcePolicy, SOURCE_POLICY_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `sourcePolicy must be one of ${[...SOURCE_POLICY_VALUES].join("|")}.` });
     if (b.sourceConnectionId !== undefined && b.sourceConnectionId !== null && !validUuid(b.sourceConnectionId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid sourceConnectionId." });
+    if (b.dataScopeLevel !== undefined && !validEnum(b.dataScopeLevel, DATA_SCOPE_LEVEL_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `dataScopeLevel must be one of ${[...DATA_SCOPE_LEVEL_VALUES].join("|")}.` });
+    if (b.analyticalAggregation !== undefined && !validEnum(b.analyticalAggregation, ANALYTICAL_AGGREGATION_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `analyticalAggregation must be one of ${[...ANALYTICAL_AGGREGATION_VALUES].join("|")}.` });
+    if (b.aggregationRolePolicy !== undefined && !validEnum(b.aggregationRolePolicy, AGGREGATION_ROLE_POLICY_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `aggregationRolePolicy must be one of ${[...AGGREGATION_ROLE_POLICY_VALUES].join("|")}.` });
+    if (b.coveragePolicy !== undefined && !validEnum(b.coveragePolicy, COVERAGE_POLICY_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `coveragePolicy must be one of ${[...COVERAGE_POLICY_VALUES].join("|")}.` });
+    if (b.comparisonPeriod !== undefined && b.comparisonPeriod !== null && !validEnum(b.comparisonPeriod, COMPARISON_PERIOD_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `comparisonPeriod must be one of ${[...COMPARISON_PERIOD_VALUES].join("|")}, or null.` });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
@@ -425,9 +595,47 @@ router.patch("/:dashboardId/widgets/:widgetId/series/:seriesId", async (req, res
     if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId) || !validUuid(req.params.seriesId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
     const b = req.body || {};
     const unknown = rejectUnknownKeys(b, UPDATE_SERIES_KEYS);
-    if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown} (clearing comparisonPeriod is done by sending it as null, not a separate clear flag).` });
+    if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown} (clearing color/displayLabel/comparisonPeriod is done by sending it as null, not a separate clear flag).` });
     if (!validRevision(b.expectedWidgetRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision must be a positive integer." });
-    if (b.sourceConnectionId !== undefined && b.sourceConnectionId !== null && !validUuid(b.sourceConnectionId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid sourceConnectionId." });
+    if (!hasAnyOtherKey(b, ["expectedWidgetRevision"])) return res.status(400).json({ error: "invalidRequest", message: "This PATCH carries no actual change." });
+    // axis/sourcePolicy/dataScopeLevel/analyticalAggregation/
+    // aggregationRolePolicy/coveragePolicy are all NON-nullable —
+    // explicit null is a controlled 400 (finding #3).
+    if (Object.prototype.hasOwnProperty.call(b, "axis")) {
+      if (b.axis === null || !validEnum(b.axis, AXIS_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `axis cannot be null; it must be one of ${[...AXIS_VALUES].join("|")}.` });
+    }
+    if (b.color !== undefined && !validNullableLabelString(b.color, 50)) return res.status(400).json({ error: "invalidRequest", message: "color must be a non-whitespace string, or null." });
+    if (b.displayLabel !== undefined && !validNullableLabelString(b.displayLabel, 200)) return res.status(400).json({ error: "invalidRequest", message: "displayLabel must be a non-whitespace string, or null." });
+    if (Object.prototype.hasOwnProperty.call(b, "sourcePolicy")) {
+      if (b.sourcePolicy === null || !validEnum(b.sourcePolicy, SOURCE_POLICY_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `sourcePolicy cannot be null; it must be one of ${[...SOURCE_POLICY_VALUES].join("|")}.` });
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "sourceConnectionId")) {
+      if (b.sourceConnectionId === null) {
+        // Clearing the pin while STAYING on source_policy='source_connection'
+        // (i.e. not also switching policy away in this SAME request) would
+        // leave an illegal source_policy='source_connection' + NULL
+        // connection row — refused outright rather than left to the DB's
+        // own CHECK to catch as a generic 23514 (finding #3).
+        if (b.sourcePolicy === undefined || b.sourcePolicy === "source_connection") {
+          return res.status(400).json({ error: "invalidRequest", message: "sourceConnectionId cannot be cleared while sourcePolicy stays 'source_connection' — change sourcePolicy in the same request." });
+        }
+      } else if (!validUuid(b.sourceConnectionId)) {
+        return res.status(400).json({ error: "invalidRequest", message: "Invalid sourceConnectionId." });
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "dataScopeLevel")) {
+      if (b.dataScopeLevel === null || !validEnum(b.dataScopeLevel, DATA_SCOPE_LEVEL_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `dataScopeLevel cannot be null; it must be one of ${[...DATA_SCOPE_LEVEL_VALUES].join("|")}.` });
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "analyticalAggregation")) {
+      if (b.analyticalAggregation === null || !validEnum(b.analyticalAggregation, ANALYTICAL_AGGREGATION_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `analyticalAggregation cannot be null; it must be one of ${[...ANALYTICAL_AGGREGATION_VALUES].join("|")}.` });
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "aggregationRolePolicy")) {
+      if (b.aggregationRolePolicy === null || !validEnum(b.aggregationRolePolicy, AGGREGATION_ROLE_POLICY_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `aggregationRolePolicy cannot be null; it must be one of ${[...AGGREGATION_ROLE_POLICY_VALUES].join("|")}.` });
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "coveragePolicy")) {
+      if (b.coveragePolicy === null || !validEnum(b.coveragePolicy, COVERAGE_POLICY_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `coveragePolicy cannot be null; it must be one of ${[...COVERAGE_POLICY_VALUES].join("|")}.` });
+    }
+    if (b.comparisonPeriod !== undefined && b.comparisonPeriod !== null && !validEnum(b.comparisonPeriod, COMPARISON_PERIOD_VALUES)) return res.status(400).json({ error: "invalidRequest", message: `comparisonPeriod must be one of ${[...COMPARISON_PERIOD_VALUES].join("|")}, or null.` });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
@@ -454,8 +662,11 @@ router.delete("/:dashboardId/widgets/:widgetId/series/:seriesId", async (req, re
   }
 });
 
+const REORDER_ENTRY_KEYS = new Set(["seriesId", "seriesOrder"]);
 function validReorderEntry(entry) {
-  return entry && typeof entry === "object" && validUuid(entry.seriesId) && validOrderInt(entry.seriesOrder);
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  for (const k of Object.keys(entry)) if (!REORDER_ENTRY_KEYS.has(k)) return false;
+  return validUuid(entry.seriesId) && validNonNegInt(entry.seriesOrder);
 }
 
 router.put("/:dashboardId/widgets/:widgetId/series/reorder", async (req, res, next) => {
@@ -465,7 +676,9 @@ router.put("/:dashboardId/widgets/:widgetId/series/reorder", async (req, res, ne
     const unknown = rejectUnknownKeys(b, ["expectedWidgetRevision", "order"]);
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown}.` });
     if (!validRevision(b.expectedWidgetRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision must be a positive integer." });
-    if (!Array.isArray(b.order) || !b.order.every(validReorderEntry)) return res.status(400).json({ error: "invalidRequest", message: "order must be an array of {seriesId, seriesOrder}." });
+    if (!Array.isArray(b.order) || b.order.length === 0) return res.status(400).json({ error: "invalidRequest", message: "order must be a non-empty array of {seriesId, seriesOrder}." });
+    if (!b.order.every(validReorderEntry)) return res.status(400).json({ error: "invalidRequest", message: "order contains an invalid entry (bad range, or an unknown nested field)." });
+    if (hasDuplicates(b.order.map((e) => e.seriesId))) return res.status(400).json({ error: "invalidRequest", message: "order must not repeat the same seriesId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -512,9 +725,9 @@ router.post("/:dashboardId/query", async (req, res, next) => {
     const spanDays = Math.round((new Date(`${b.dateTo}T00:00:00Z`) - new Date(`${b.dateFrom}T00:00:00Z`)) / 86400000) + 1;
     if (spanDays > MAX_QUERY_PERIOD_DAYS) return res.status(400).json({ error: "invalidRequest", message: `Period cannot exceed ${MAX_QUERY_PERIOD_DAYS} days.` });
     // athleteIds MAY be explicitly null OR an empty array — both mean
-    // "clear back to no athlete restriction" (finding #8) — only a
-    // PRESENT, non-null, non-empty value that isn't a valid UUID array is
-    // rejected.
+    // "clear back to no athlete restriction" (finding #8 of the previous
+    // round) — only a PRESENT, non-null, non-empty value that isn't a
+    // valid UUID array is rejected.
     if (b.athleteIds !== undefined && b.athleteIds !== null && !validUuidArray(b.athleteIds)) return res.status(400).json({ error: "invalidRequest", message: "athleteIds must be an array of valid UUIDs (max 500), or null/[]." });
     if (b.activityId !== undefined && b.activityId !== null && !validUuid(b.activityId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid activityId." });
     if (b.componentId !== undefined && b.componentId !== null && !validUuid(b.componentId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid componentId." });
@@ -525,7 +738,8 @@ router.post("/:dashboardId/query", async (req, res, next) => {
     const { dashboard, widgets } = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
 
     // An ARCHIVED dashboard is read-only — GET may still show it, but a
-    // query must not execute against it (finding #1).
+    // query must not execute against it (finding #1 of the previous
+    // round).
     if (dashboard.status === "archived") {
       return res.status(409).json({ error: "dashboardArchived" });
     }
@@ -533,13 +747,16 @@ router.post("/:dashboardId/query", async (req, res, next) => {
     // A dashboard's data is bound to ITS OWN data workspace — canViewDashboardRow
     // (used by getDashboardDetail) grants VISIBILITY based on manage rights
     // (e.g. a club admin who manages Club A can always SEE Club A's
-    // dashboard), which is a broader condition than "the CURRENT active
+    // dashboard, or a platform admin can always see ANY dashboard's
+    // structure), which is a broader condition than "the CURRENT active
     // workspace is the one this dashboard's data is bound to". Querying
     // must additionally require the latter — otherwise a manager of both
-    // Club A and Club B could view Club A's dashboard structure while
-    // active in Club B and have it silently execute against Club B's own
-    // data. A system template (data_workspace_type IS NULL) has no data
-    // workspace at all until cloned.
+    // Club A and Club B (or a platform admin in their OWN private_coach/
+    // athlete workspace) could view another dashboard's structure while
+    // active elsewhere and have it silently execute against the WRONG
+    // workspace's own data (finding #1 of THIS round — private_coach/
+    // athlete account-identity matching). A system template (data_
+    // workspace_type IS NULL) has no data workspace at all until cloned.
     if (dashboard.data_workspace_type === null) {
       return res.status(409).json({ error: "templateRequiresClone" });
     }

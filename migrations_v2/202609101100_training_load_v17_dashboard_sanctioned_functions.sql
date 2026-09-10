@@ -190,14 +190,21 @@ $$ language plpgsql;
 -- "first" is already too late for an UPDATE. The application layer must
 -- use THIS function (or replace_dashboard_layout for a multi-widget
 -- batch) for every layout write.
+-- p_x/p_y/p_width/p_height/p_mobile_order are all OPTIONAL (default null)
+-- as of the merge-readiness corrective round, finding #2 — the PUBLIC
+-- PATCH .../layout route accepts a PARTIAL body (e.g. `{width:8}` alone),
+-- and an omitted field must keep its CURRENT value, never fall to NULL.
+-- Each optional param is COALESCEd against the widget's own FRESH,
+-- LOCKED value (read in step 3 below), never the caller-supplied value
+-- taken at face value.
 create function training_load.update_widget_layout(
   p_widget_id uuid,
   p_expected_widget_revision integer,
-  p_x smallint,
-  p_y smallint,
-  p_width smallint,
-  p_height smallint,
-  p_mobile_order integer
+  p_x smallint default null,
+  p_y smallint default null,
+  p_width smallint default null,
+  p_height smallint default null,
+  p_mobile_order integer default null
 ) returns table (
   widget_id uuid, dashboard_id uuid, x smallint, y smallint, width smallint, height smallint,
   mobile_order integer, widget_revision integer, dashboard_revision integer
@@ -206,6 +213,11 @@ declare
   v_dashboard_id uuid;
   v_current_widget_revision integer;
   v_locked_dashboard_id uuid;
+  v_current_x smallint;
+  v_current_y smallint;
+  v_current_width smallint;
+  v_current_height smallint;
+  v_current_mobile_order integer;
 begin
   -- 1. An UNLOCKED read used ONLY to find dashboard_id (never trusted for
   --    anything else — it exists purely to know which dashboard row to
@@ -222,9 +234,12 @@ begin
   perform training_load.assert_dashboard_writable(v_dashboard_id);
 
   -- 3. NOW lock and RE-READ the widget row — this is the fresh,
-  --    trustworthy revision, taken only after the dashboard lock is
-  --    held, so nothing can have raced it undetected in between.
-  select w.dashboard_id, w.revision into v_locked_dashboard_id, v_current_widget_revision
+  --    trustworthy revision AND current position/size, taken only after
+  --    the dashboard lock is held, so nothing can have raced it
+  --    undetected in between, and an omitted field's COALESCE fallback
+  --    (step 6) is never a stale pre-lock value.
+  select w.dashboard_id, w.revision, w.x, w.y, w.width, w.height, w.mobile_order
+    into v_locked_dashboard_id, v_current_widget_revision, v_current_x, v_current_y, v_current_width, v_current_height, v_current_mobile_order
     from training_load.dashboard_widgets w where w.id = p_widget_id for update;
   if not found then
     raise exception 'update_widget_layout: widget % disappeared concurrently (deleted between lookup and lock)', p_widget_id;
@@ -242,10 +257,14 @@ begin
     raise exception 'update_widget_layout: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
   end if;
 
-  -- 6. The UPDATE itself, with an EXTRA revision guard in the WHERE
-  --    clause on top of the row lock already held.
+  -- 6. The UPDATE itself — every field COALESCEs against the widget's
+  --    OWN locked current value when the caller omitted it — with an
+  --    EXTRA revision guard in the WHERE clause on top of the row lock
+  --    already held.
   update training_load.dashboard_widgets w
-    set x = p_x, y = p_y, width = p_width, height = p_height, mobile_order = p_mobile_order
+    set x = coalesce(p_x, v_current_x), y = coalesce(p_y, v_current_y),
+        width = coalesce(p_width, v_current_width), height = coalesce(p_height, v_current_height),
+        mobile_order = coalesce(p_mobile_order, v_current_mobile_order)
     where w.id = p_widget_id and w.revision = p_expected_widget_revision;
   if not found then
     raise exception 'update_widget_layout: stale widget revision (expected %) — reload and retry', p_expected_widget_revision using errcode = '40001';
@@ -366,11 +385,36 @@ $$ language plpgsql;
 -- Series.
 -- ------------------------------------------------------------
 
+-- Merge-readiness corrective round, finding #5 — AUTHORITATIVE template-
+-- hint contract. p_resolution_status/p_template_resolution_candidates are
+-- GONE from this function's own signature entirely: they are now ALWAYS
+-- derived server-side, never accepted as a caller's assertion (a client
+-- could otherwise pair a REAL p_metric_definition_id with a FABRICATED
+-- hint pointing at a different metric — a "clone redirect" — or plant a
+-- fake 'ambiguous' status with made-up candidate UUIDs naming metrics it
+-- can't otherwise see). p_template_metric_key_hints is likewise ignored
+-- whenever p_metric_definition_id is given — a metric-backed TEMPLATE
+-- series always gets a fresh, server-computed {key,valueType,unit,
+-- scopeLevel} snapshot from the LOCKED metric definition's own CURRENT
+-- version; a metric-backed series on a non-template dashboard gets no
+-- hint at all (never needed — it's not clonable as itself). A hint-only
+-- series (neither ref set) ALWAYS starts 'unresolved' — 'ambiguous' can
+-- only ever be produced by a REAL resolution attempt (resolve_series_
+-- binding(), or cloneDashboard()'s own batch re-resolution), never
+-- asserted at add time.
+--
+-- Lock order: dashboard -> widget -> metric definition/current version.
+-- The metric lookup takes `FOR SHARE` on the definition row so a
+-- CONCURRENT createDefinitionVersion()/archiveDefinition() call (which
+-- takes `FOR UPDATE` on metric_definitions as ITS OWN first statement —
+-- see trainingLoadMetricsCatalog.js) genuinely serializes against this
+-- read: whichever of the two commits first is what this transaction
+-- sees, in full — the derived hint can never straddle an old and a new
+-- version.
 create function training_load.add_series(
   p_widget_id uuid, p_expected_widget_revision integer, p_series_order integer,
   p_metric_definition_id uuid default null, p_built_in_series_key text default null,
-  p_template_metric_key_hints jsonb default null, p_resolution_status varchar default 'resolved',
-  p_template_resolution_candidates jsonb default null,
+  p_template_metric_key_hints jsonb default null,
   p_axis varchar default 'primary', p_color text default null, p_display_label text default null,
   p_source_policy varchar default 'all_with_conflicts', p_source_connection_id uuid default null,
   p_data_scope_level varchar default 'session', p_analytical_aggregation varchar default 'sum',
@@ -379,27 +423,76 @@ create function training_load.add_series(
 ) returns table (series_id uuid, widget_revision integer) as $$
 declare
   v_dashboard_id uuid;
+  v_is_template boolean;
   v_current_widget_revision integer;
   v_series_id uuid;
+  v_resolution_status varchar;
+  v_hints jsonb;
+  v_def_key text;
+  v_def_value_type varchar;
+  v_def_unit text;
+  v_def_current_version_id uuid;
 begin
   select w.dashboard_id into v_dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
   if not found then
     raise exception 'add_series: widget % not found', p_widget_id;
   end if;
-  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  select d.is_template into v_is_template from training_load.dashboards d where d.id = v_dashboard_id for update;
   perform training_load.assert_dashboard_writable(v_dashboard_id);
   select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
   if v_current_widget_revision <> p_expected_widget_revision then
     raise exception 'add_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
   end if;
+
+  if p_metric_definition_id is not null then
+    -- Deliberately TWO statements, never a single `for share of d` JOINed
+    -- to metric_definition_versions on d.current_version_id — a real,
+    -- empirically-confirmed PostgreSQL limitation: when this row is
+    -- concurrently UPDATEd (createDefinitionVersion() changing
+    -- current_version_id) while THIS statement is blocked on the FOR
+    -- SHARE, EvalPlanQual correctly re-fetches the row's own fresh
+    -- columns once unblocked, but does NOT reliably re-run the JOIN
+    -- against the NEW current_version_id in the SAME statement — the row
+    -- silently drops out and this raises a false "not found", even though
+    -- the definition and its current version both genuinely exist. Locking
+    -- ONLY the single table first (no join) makes EvalPlanQual's re-check
+    -- reliable; the version lookup is then a plain, unlocked SELECT using
+    -- the FRESH current_version_id already returned by the locked read.
+    select d.key, d.current_version_id into v_def_key, v_def_current_version_id
+      from training_load.metric_definitions d
+      where d.id = p_metric_definition_id
+      for share;
+    if not found then
+      raise exception 'add_series: metric_definition % not found', p_metric_definition_id;
+    end if;
+    select mdv.value_type, mdv.unit into v_def_value_type, v_def_unit
+      from training_load.metric_definition_versions mdv
+      where mdv.id = v_def_current_version_id;
+    if not found then
+      raise exception 'add_series: metric_definition % has no current version', p_metric_definition_id;
+    end if;
+    v_resolution_status := 'resolved';
+    if v_is_template then
+      v_hints := jsonb_build_array(jsonb_build_object('key', v_def_key, 'valueType', v_def_value_type, 'unit', v_def_unit, 'scopeLevel', coalesce(p_data_scope_level, 'session')));
+    else
+      v_hints := null;
+    end if;
+  elsif p_built_in_series_key is not null then
+    v_resolution_status := 'resolved';
+    v_hints := null;
+  else
+    v_resolution_status := 'unresolved';
+    v_hints := p_template_metric_key_hints;
+  end if;
+
   insert into training_load.dashboard_widget_series (
     widget_id, series_order, metric_definition_id, built_in_series_key, template_metric_key_hints,
     resolution_status, template_resolution_candidates,
     axis, color, display_label, source_policy, source_connection_id, data_scope_level, analytical_aggregation,
     aggregation_role_policy, coverage_policy, comparison_period, created_by_user_id
   ) values (
-    p_widget_id, p_series_order, p_metric_definition_id, p_built_in_series_key, p_template_metric_key_hints,
-    p_resolution_status, p_template_resolution_candidates,
+    p_widget_id, p_series_order, p_metric_definition_id, p_built_in_series_key, v_hints,
+    v_resolution_status, null,
     coalesce(p_axis, 'primary'), p_color, p_display_label, coalesce(p_source_policy, 'all_with_conflicts'), p_source_connection_id,
     coalesce(p_data_scope_level, 'session'), coalesce(p_analytical_aggregation, 'sum'),
     coalesce(p_aggregation_role_policy, 'standalone_and_source_rollup'), coalesce(p_coverage_policy, 'complete_and_partial'),
@@ -409,9 +502,19 @@ begin
 end;
 $$ language plpgsql;
 
+-- p_clear_color/p_clear_display_label follow the SAME "explicit clear
+-- flag, never a bare NULL means clear" convention as p_clear_comparison_
+-- period — merge-readiness corrective round, finding #3: color and
+-- display_label are both genuinely NULLABLE columns, and a bare NULL
+-- parameter used to be indistinguishable from "not provided" (COALESCE
+-- silently kept the old value), so neither could ever be cleared once
+-- set. Both clear flags are an internal JS<->SQL contract only — never a
+-- client-facing HTTP field (the service layer derives them from
+-- hasOwnProperty+null, exactly like comparison_period already did).
 create function training_load.update_series(
   p_series_id uuid, p_widget_id uuid, p_expected_widget_revision integer,
-  p_axis varchar default null, p_color text default null, p_display_label text default null,
+  p_axis varchar default null, p_color text default null, p_clear_color boolean default false,
+  p_display_label text default null, p_clear_display_label boolean default false,
   p_source_policy varchar default null, p_source_connection_id uuid default null,
   p_data_scope_level varchar default null, p_analytical_aggregation varchar default null,
   p_aggregation_role_policy varchar default null, p_coverage_policy varchar default null,
@@ -440,8 +543,8 @@ begin
   -- naive coalesce).
   update training_load.dashboard_widget_series s set
     axis = coalesce(p_axis, s.axis),
-    color = coalesce(p_color, s.color),
-    display_label = coalesce(p_display_label, s.display_label),
+    color = case when p_clear_color then null else coalesce(p_color, s.color) end,
+    display_label = case when p_clear_display_label then null else coalesce(p_display_label, s.display_label) end,
     source_policy = coalesce(p_source_policy, s.source_policy),
     source_connection_id = case
       when p_source_policy is not null and p_source_policy <> 'source_connection' then null

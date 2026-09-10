@@ -17,7 +17,7 @@ import {
   canManageDashboardRow, canViewDashboardRow, dashboardVisibilitySql, dataWorkspaceMatches,
   resolveDashboardCreateContext,
 } from "./trainingLoadDashboardAccess.js";
-import { resolveTemplateSeriesForWorkspace } from "./trainingLoadDashboardWidgets.js";
+import { resolveTemplateSeriesBatchForWorkspace } from "./trainingLoadDashboardWidgets.js";
 import { isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
 
 function httpError(status, message, code) {
@@ -283,6 +283,17 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     }
 
     const series = await c.query(`select * from training_load.dashboard_widget_series where widget_id = any($1::uuid[]) order by series_order`, [widgets.rows.map((w) => w.id)]);
+
+    // ONE batch resolution call for EVERY hint-bearing series in this
+    // clone — not one call (and its own 1-2 internal SQL statements) PER
+    // series (finding #6). resolveTemplateSeriesBatchForWorkspace() itself
+    // issues at most 2 SQL statements total for the WHOLE batch, however
+    // many series/hints it holds.
+    const hintBearingSpecs = series.rows.filter((s) => s.template_metric_key_hints).map((s) => ({ sourceSeriesId: s.id, hints: s.template_metric_key_hints }));
+    const batchResolved = hintBearingSpecs.length
+      ? await resolveTemplateSeriesBatchForWorkspace(c, hintBearingSpecs, { dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId, ownerUserId: ctx.ownerUserId })
+      : new Map();
+
     const cloneReport = [];
     for (const s of series.rows) {
       const newWidgetId = widgetIdMap.get(s.widget_id);
@@ -315,14 +326,12 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
         // Genuine re-resolution against the NEW dashboard's own workspace
         // — the template's own (possibly stale, possibly workspace-
         // agnostic) binding is never trusted directly. A metric-backed
-        // template series ALWAYS carries hints now (addSeries()
-        // auto-snapshots them — see trainingLoadDashboardWidgets.js) so
-        // this branch is the normal path for every portable metric-backed
-        // template series, not just hint-only unresolved/ambiguous ones.
-        const resolved = await resolveTemplateSeriesForWorkspace(c, {
-          hints: s.template_metric_key_hints,
-          dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId, ownerUserId: ctx.ownerUserId,
-        });
+        // template series ALWAYS carries hints now (add_series() (v17)
+        // auto-snapshots them server-side) so this branch is the normal
+        // path for every portable metric-backed template series, not just
+        // hint-only unresolved/ambiguous ones. `resolved` came from the
+        // ONE batch call above, not a per-series resolution.
+        const resolved = batchResolved.get(s.id);
         await c.query(
           `insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, template_metric_key_hints, resolution_status, template_resolution_candidates, axis, color, display_label, source_policy, source_connection_id, data_scope_level, analytical_aggregation, aggregation_role_policy, coverage_policy, comparison_period, created_by_user_id)
            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
@@ -385,7 +394,13 @@ export async function getActiveDashboard(req, dataWorkspace) {
 export async function setActiveDashboard(req, dataWorkspace, dashboardId) {
   if (dataWorkspace.type === null) throw httpError(403, "No active workspace.");
   const row = await fetchVisibleDashboard(req, dataWorkspace, dashboardId);
-  if (!dataWorkspaceMatches(dataWorkspace, row)) throw httpError(400, "That dashboard does not belong to your current data workspace.");
+  // Info-hiding 404, never 400/403 (finding #1) — fetchVisibleDashboard's
+  // own canViewDashboardRow already lets a platform admin (or, for a
+  // club/team dashboard, anyone with manage rights) see the STRUCTURE of
+  // a dashboard whose data workspace does not match their own CURRENT
+  // one; setting it active is a further, stricter gate that must never
+  // reveal whether the mismatch was "wrong workspace" vs "doesn't exist".
+  if (!dataWorkspaceMatches(dataWorkspace, row)) throw httpError(404, "Dashboard not found.");
   try {
     const r = await query(
       `select * from training_load.set_active_dashboard($1, $2, $3, $4)`,

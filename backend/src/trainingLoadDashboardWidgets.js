@@ -65,95 +65,105 @@ async function assertSourceConnectionReferenceOk(dashboardRow, sourceConnectionI
 }
 
 // ------------------------------------------------------------
-// Real template-hint resolution against the CURRENT catalog — mirrors
-// the design proof's own resolveTemplateHint() (test-harness.mjs) byte-
-// faithfully, now against the real training_load.metric_definitions /
-// metric_definition_versions / metric_definition_scope_capabilities
-// tables. `runQuery` lets a caller pass either the pooled query() (a
-// standalone resolve call) or a transactional client's own bound query
-// (cloneDashboard, so resolution participates in the clone's own
-// atomic transaction).
+// Real BATCH template-hint resolution against the CURRENT catalog —
+// mirrors the design proof's own resolveTemplateHint() (test-harness.mjs)
+// semantics per series, but resolves EVERY hint-bearing series of a clone
+// in one pass (merge-readiness corrective round, finding #6). `runQuery`
+// lets a caller pass either the pooled query() (a standalone resolve
+// call) or a transactional client's own bound query (cloneDashboard, so
+// resolution participates in the clone's own atomic transaction).
+//
+// `seriesSpecs` — an array of `{ sourceSeriesId, hints }`, one entry per
+// hint-bearing series being cloned. Exactly TWO set-based SQL statements
+// resolve the WHOLE batch, regardless of how many series or hints it
+// holds: one candidate-definitions query covering every DISTINCT key any
+// hint in the batch names, and one scope-capabilities query covering
+// every candidate definition that query found. Everything past that is
+// pure in-memory filtering — per-series fallback order (try hint[0],
+// fall through to hint[1], ... on zero matches) is preserved exactly,
+// and a series's OWN candidate set is only ever assembled from
+// candidates that already passed the workspace-visibility predicate in
+// the first query — never a wider set than the equivalent per-series
+// resolution would have produced.
 // ------------------------------------------------------------
-export async function resolveTemplateSeriesForWorkspace(runQuery, { hints, dataWorkspaceType, dataWorkspaceScopeId, ownerUserId }) {
+export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpecs, { dataWorkspaceType, dataWorkspaceScopeId, ownerUserId }) {
   const q = runQuery.query ? runQuery.query.bind(runQuery) : runQuery;
-  for (const hint of hints) {
-    const key = typeof hint === "string" ? hint : hint.key;
-    const candidates = await q(
-      `select d.id, d.owner_scope, d.owner_club_id, d.owner_team_id, d.owner_user_id, mdv.value_type, mdv.unit
-       from training_load.metric_definitions d
-       join training_load.metric_definition_versions mdv on mdv.id = d.current_version_id
-       where d.key = $1 and d.state = 'active'
-         and (
-           d.owner_scope = 'system'
-           or (d.owner_scope = 'club' and $2 = 'club' and d.owner_club_id = $3)
-           or (d.owner_scope = 'team' and $2 = 'team' and d.owner_team_id = $3)
-           or (d.owner_scope = 'user' and d.owner_user_id = $4)
-         )`,
-      [key, dataWorkspaceType, dataWorkspaceScopeId, ownerUserId],
-    );
-    let rows = candidates.rows;
-    if (typeof hint === "object") {
-      if (hint.valueType) rows = rows.filter((r) => r.value_type === hint.valueType);
-      if (Object.prototype.hasOwnProperty.call(hint, "unit")) rows = rows.filter((r) => r.unit === hint.unit);
-      // SET-BASED scope-capability filter — ONE query for every remaining
-      // candidate's own capability rows, never one (or two) queries PER
-      // candidate. This used to be the resolver's own N+1: a template
-      // hint with scopeLevel set, matching K candidates, issued up to 2*K
-      // extra queries here; now it issues exactly one, regardless of K
-      // (merge-readiness corrective round, finding #9).
-      if (hint.scopeLevel && rows.length) {
-        const capRows = await q(
-          `select metric_definition_id, scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = any($1::uuid[])`,
-          [rows.map((r) => r.id)],
-        );
-        const capsByDefinition = new Map();
-        for (const cap of capRows.rows) {
-          if (!capsByDefinition.has(cap.metric_definition_id)) capsByDefinition.set(cap.metric_definition_id, new Set());
-          capsByDefinition.get(cap.metric_definition_id).add(cap.scope_level);
-        }
-        rows = rows.filter((r) => {
-          const caps = capsByDefinition.get(r.id);
-          if (!caps || caps.size === 0) return true; // no capability rows configured -> not blocked, same rule as the live DB trigger
-          return caps.has(hint.scopeLevel);
-        });
-      }
+  const results = new Map();
+  const allKeys = new Set();
+  for (const spec of seriesSpecs) {
+    for (const hint of spec.hints) {
+      allKeys.add(typeof hint === "string" ? hint : hint.key);
     }
-    if (rows.length === 0) continue;
-    if (rows.length === 1) return { status: "resolved", candidateIds: [rows[0].id] };
-    // 2+ equally-valid candidates — the DB's own resolution_status CHECK
-    // only allows 'resolved'/'unresolved'/'ambiguous' (dashboard_widget_
-    // widget_series, v16); this must be 'ambiguous', never a made-up
-    // fourth status, and never an auto-picked winner.
-    return { status: "ambiguous", candidateIds: rows.map((r) => r.id) };
   }
-  return { status: "unresolved", candidateIds: [] };
-}
+  if (allKeys.size === 0) {
+    for (const spec of seriesSpecs) results.set(spec.sourceSeriesId, { status: "unresolved", candidateIds: [] });
+    return results;
+  }
 
-// Portable template-series contract (merge-readiness corrective round,
-// finding #6). A metric-backed series added to a TEMPLATE dashboard
-// (system/club/team is_template=true) always carries a structured
-// template_metric_key_hints snapshot ALONGSIDE its real metric_
-// definition_id — the template keeps working immediately (the real
-// binding resolves it), but a later clone into a DIFFERENT workspace can
-// genuinely re-resolve the metric there instead of raw-copying a source
-// UUID that may not even exist in the target workspace (previously: a
-// direct metric_definition_id with no hints was copied as-is by
-// cloneDashboard() and could only ever fail with a generic, detail-
-// leaking DB trigger 400 in the target workspace). The table's own CHECK
-// on dashboard_widget_series does not forbid metric_definition_id and
-// template_metric_key_hints being set together — only the ABSENCE of
-// both requires hints (v16) — so this is a legal 'resolved' row.
-async function snapshotMetricHint(metricDefinitionId, scopeLevel) {
-  const r = await query(
-    `select d.key, mdv.value_type, mdv.unit
+  // Statement 1/2: every candidate definition for every distinct key this
+  // batch could possibly need, already filtered by workspace visibility.
+  const candidateRows = await q(
+    `select d.id, d.key, mdv.value_type, mdv.unit
      from training_load.metric_definitions d
      join training_load.metric_definition_versions mdv on mdv.id = d.current_version_id
-     where d.id = $1`,
-    [metricDefinitionId],
+     where d.key = any($1::text[]) and d.state = 'active'
+       and (
+         d.owner_scope = 'system'
+         or (d.owner_scope = 'club' and $2 = 'club' and d.owner_club_id = $3)
+         or (d.owner_scope = 'team' and $2 = 'team' and d.owner_team_id = $3)
+         or (d.owner_scope = 'user' and d.owner_user_id = $4)
+       )`,
+    [[...allKeys], dataWorkspaceType, dataWorkspaceScopeId, ownerUserId],
   );
-  const row = r.rows[0];
-  if (!row) return null;
-  return [{ key: row.key, valueType: row.value_type, unit: row.unit, scopeLevel: scopeLevel ?? "session" }];
+  const candidatesByKey = new Map();
+  for (const row of candidateRows.rows) {
+    if (!candidatesByKey.has(row.key)) candidatesByKey.set(row.key, []);
+    candidatesByKey.get(row.key).push(row);
+  }
+
+  // Statement 2/2: every scope-capability row for every candidate the
+  // first query found — one query, not one per hint or per candidate.
+  const capsByDefinition = new Map();
+  const allCandidateIds = candidateRows.rows.map((r) => r.id);
+  if (allCandidateIds.length) {
+    const capRows = await q(
+      `select metric_definition_id, scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = any($1::uuid[])`,
+      [allCandidateIds],
+    );
+    for (const cap of capRows.rows) {
+      if (!capsByDefinition.has(cap.metric_definition_id)) capsByDefinition.set(cap.metric_definition_id, new Set());
+      capsByDefinition.get(cap.metric_definition_id).add(cap.scope_level);
+    }
+  }
+
+  for (const spec of seriesSpecs) {
+    let outcome = { status: "unresolved", candidateIds: [] };
+    for (const hint of spec.hints) {
+      const key = typeof hint === "string" ? hint : hint.key;
+      let rows = candidatesByKey.get(key) || [];
+      if (typeof hint === "object") {
+        if (hint.valueType) rows = rows.filter((r) => r.value_type === hint.valueType);
+        if (Object.prototype.hasOwnProperty.call(hint, "unit")) rows = rows.filter((r) => r.unit === hint.unit);
+        if (hint.scopeLevel) {
+          rows = rows.filter((r) => {
+            const caps = capsByDefinition.get(r.id);
+            if (!caps || caps.size === 0) return true; // no capability rows configured -> not blocked, same rule as the live DB trigger
+            return caps.has(hint.scopeLevel);
+          });
+        }
+      }
+      if (rows.length === 0) continue;
+      if (rows.length === 1) { outcome = { status: "resolved", candidateIds: [rows[0].id] }; break; }
+      // 2+ equally-valid candidates — the DB's own resolution_status CHECK
+      // only allows 'resolved'/'unresolved'/'ambiguous' (dashboard_widget_
+      // series, v16); this must be 'ambiguous', never a made-up fourth
+      // status, and never an auto-picked winner.
+      outcome = { status: "ambiguous", candidateIds: rows.map((r) => r.id) };
+      break;
+    }
+    results.set(spec.sourceSeriesId, outcome);
+  }
+  return results;
 }
 
 // ------------------------------------------------------------
@@ -235,6 +245,15 @@ export async function deleteWidget(dashboardId, widgetId, { expectedWidgetRevisi
 // Series.
 // ------------------------------------------------------------
 
+// resolutionStatus/templateResolutionCandidates are no longer accepted at
+// all (see routes/trainingLoadDashboard.js's ADD_SERIES_KEYS — sending
+// either is now a plain "unknown field" 400) — training_load.add_series()
+// (v17) derives both authoritatively, server-side, every time (finding
+// #5). templateMetricKeyHints is likewise rejected by the route whenever
+// metricDefinitionId is also present — a metric-backed template series'
+// hint is ALWAYS the server's own snapshot of the locked definition, so
+// this function never even attempts to forward a client-supplied hint
+// alongside a real binding.
 export async function addSeries(dashboardId, widgetId, body, createdByUserId, dashboardRow) {
   await assertOwnsWidget(dashboardId, widgetId);
   await assertMetricReferenceOk(dashboardRow, body.metricDefinitionId);
@@ -245,18 +264,13 @@ export async function addSeries(dashboardId, widgetId, body, createdByUserId, da
   // general 'all_with_conflicts' default is wrong specifically for this
   // case and must never be applied to it.
   const defaultSourcePolicy = body.builtInSeriesKey ? "not_applicable" : "all_with_conflicts";
-  let templateMetricKeyHints = body.templateMetricKeyHints ?? null;
-  if (dashboardRow?.is_template && body.metricDefinitionId && !templateMetricKeyHints) {
-    templateMetricKeyHints = await snapshotMetricHint(body.metricDefinitionId, body.dataScopeLevel);
-  }
   try {
     const r = await query(
-      `select * from training_load.add_series($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+      `select * from training_load.add_series($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
       [
         widgetId, body.expectedWidgetRevision, body.seriesOrder,
         body.metricDefinitionId ?? null, body.builtInSeriesKey ?? null,
-        templateMetricKeyHints ? JSON.stringify(templateMetricKeyHints) : null,
-        body.resolutionStatus ?? "resolved", body.templateResolutionCandidates ? JSON.stringify(body.templateResolutionCandidates) : null,
+        body.templateMetricKeyHints ? JSON.stringify(body.templateMetricKeyHints) : null,
         body.axis ?? "primary", body.color ?? null, body.displayLabel ?? null,
         body.sourcePolicy ?? defaultSourcePolicy, body.sourceConnectionId ?? null,
         body.dataScopeLevel ?? "session", body.analyticalAggregation ?? "sum",
@@ -273,16 +287,21 @@ export async function addSeries(dashboardId, widgetId, body, createdByUserId, da
 export async function updateSeries(dashboardId, widgetId, seriesId, body, dashboardRow) {
   await assertOwnsWidget(dashboardId, widgetId);
   if (body.sourceConnectionId) await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId);
-  // Same absent/null/value PATCH semantics as updateWidgetContent above —
-  // derived, never client-facing.
+  // PATCH semantics (finding #3): absent = no change, explicit null =
+  // clear, value = replace — derived here, never a client-facing flag.
+  const hasColor = Object.prototype.hasOwnProperty.call(body, "color");
+  const clearColor = hasColor && body.color === null;
+  const hasDisplayLabel = Object.prototype.hasOwnProperty.call(body, "displayLabel");
+  const clearDisplayLabel = hasDisplayLabel && body.displayLabel === null;
   const hasComparisonPeriod = Object.prototype.hasOwnProperty.call(body, "comparisonPeriod");
   const clearComparisonPeriod = hasComparisonPeriod && body.comparisonPeriod === null;
   try {
     const r = await query(
-      `select * from training_load.update_series($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      `select * from training_load.update_series($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         seriesId, widgetId, body.expectedWidgetRevision,
-        body.axis ?? null, body.color ?? null, body.displayLabel ?? null,
+        body.axis ?? null, body.color ?? null, clearColor,
+        body.displayLabel ?? null, clearDisplayLabel,
         body.sourcePolicy ?? null, body.sourceConnectionId ?? null,
         body.dataScopeLevel ?? null, body.analyticalAggregation ?? null,
         body.aggregationRolePolicy ?? null, body.coveragePolicy ?? null,

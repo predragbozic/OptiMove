@@ -48,7 +48,14 @@ function dataWorkspaceFromActiveWorkspace(workspace, req) {
   if (workspace.type === "private_coach") return { type: "private_coach", dataWorkspaceType: "private_coach", dataWorkspaceScopeId: null, dataWorkspaceUserId: req.user.id };
   if (workspace.type === "athlete") {
     if (!req.authz.athleteId) return { type: null };
-    return { type: "athlete", dataWorkspaceType: "athlete", dataWorkspaceScopeId: null, athleteWorkspaceAthleteId: req.authz.athleteId };
+    // dataWorkspaceUserId (the ATHLETE'S OWN login account id, req.user.id
+    // — same identity dataWorkspaceMatches compares against a private
+    // dashboard's own owner_user_id) closes finding #1's account-identity
+    // gap: private_coach/athlete both carry data_workspace_scope_id=NULL,
+    // so type-matching alone previously treated EVERY private_coach (or
+    // EVERY athlete) workspace as interchangeable, regardless of whose it
+    // was.
+    return { type: "athlete", dataWorkspaceType: "athlete", dataWorkspaceScopeId: null, dataWorkspaceUserId: req.user.id, athleteWorkspaceAthleteId: req.authz.athleteId };
   }
   return { type: null };
 }
@@ -106,7 +113,19 @@ export function dataWorkspaceMatches(dataWorkspace, dashboardRow) {
   if (dataWorkspace.dataWorkspaceType === "club" || dataWorkspace.dataWorkspaceType === "team") {
     return String(dataWorkspace.dataWorkspaceScopeId) === String(dashboardRow.data_workspace_scope_id);
   }
-  return true; // platform/private_coach/athlete carry no scope_id column value to compare (ownership is separate)
+  if (dataWorkspace.dataWorkspaceType === "private_coach" || dataWorkspace.dataWorkspaceType === "athlete") {
+    // Only a 'user'-owned (private) dashboard can EVER carry this data
+    // workspace type (club/team dashboards are forced to 'club'/'team',
+    // system dashboards to null — enforced by the DB CHECK on
+    // training_load.dashboards) — so its own owner_user_id IS the account
+    // identity this workspace belongs to. Finding #1: a bare type match
+    // used to be treated as sufficient, letting one private_coach (or
+    // athlete) account's active workspace "match" ANY OTHER account's
+    // private_coach/athlete-bound dashboard — including a platform admin's
+    // own private workspace matching a coach's totally unrelated one.
+    return dashboardRow.owner_user_id != null && String(dataWorkspace.dataWorkspaceUserId) === String(dashboardRow.owner_user_id);
+  }
+  return true; // 'platform' carries no scope_id/account identity to compare — every platform-workspace viewer shares the same platform context
 }
 
 // ------------------------------------------------------------
