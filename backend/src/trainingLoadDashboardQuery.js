@@ -721,7 +721,17 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
       const data = await runOne(spec);
       return { widgetId: spec.widgetId, seriesId: spec.seriesId, status: "ok", data };
     } catch (error) {
-      return { widgetId: spec.widgetId, seriesId: spec.seriesId, status: "error", error: error.message };
+      // Merge-readiness corrective round, finding #2: the raw error
+      // (which could carry a SQLSTATE, a constraint/table name, or a
+      // SQL fragment) is logged SERVER-SIDE with widget/series context
+      // for debugging, but the public per-series result — embedded
+      // inside an otherwise-200 dashboard response — only ever carries a
+      // small, stable, generic code. 'unresolved'/'ambiguous' remain
+      // their own distinct placeholder statuses (set by queryDashboard
+      // below, never routed through this catch at all) — this branch is
+      // ONLY for a genuinely unexpected execution failure.
+      console.error(`[trainingLoadDashboardQuery] series query failed — widgetId=${spec.widgetId} seriesId=${spec.seriesId}:`, error);
+      return { widgetId: spec.widgetId, seriesId: spec.seriesId, status: "error", error: "seriesQueryFailed" };
     }
   }));
   return results;
@@ -744,7 +754,18 @@ export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dat
   const placeholders = [];
   for (const widget of widgetsWithSeries) {
     const effectiveFilter = mergeFilters(defaultFilter, requestFilter, widget.local_filter_override);
-    const athleteIds = Object.prototype.hasOwnProperty.call(effectiveFilter, "athleteIds") && effectiveFilter.athleteIds != null ? effectiveFilter.athleteIds : undefined;
+    // athleteIds:[] is DELIBERATELY normalized the SAME as null/absent —
+    // "no athlete restriction" — never "restrict to nothing" (merge-
+    // readiness corrective round, finding #8). This is the ONE place
+    // that decision is made; every downstream consumer (resolveFactsToRows,
+    // queryBuiltInSeriesFromContext, and the range-context cache key in
+    // runDashboardBatchQuery) only ever sees either a real non-empty array
+    // or `undefined` — never a distinguishable empty array — so the cache
+    // key for []  and for "not provided" collapse to the exact same
+    // filter context, never accidentally forking into two.
+    const athleteIds = Object.prototype.hasOwnProperty.call(effectiveFilter, "athleteIds")
+      && Array.isArray(effectiveFilter.athleteIds) && effectiveFilter.athleteIds.length > 0
+      ? effectiveFilter.athleteIds : undefined;
     const activityId = Object.prototype.hasOwnProperty.call(effectiveFilter, "activityId") ? (effectiveFilter.activityId ?? null) : null;
     const componentId = Object.prototype.hasOwnProperty.call(effectiveFilter, "componentId") ? (effectiveFilter.componentId ?? null) : null;
     for (const series of widget.series) {

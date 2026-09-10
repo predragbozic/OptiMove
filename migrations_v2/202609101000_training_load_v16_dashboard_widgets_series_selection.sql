@@ -832,6 +832,34 @@ create trigger dashboard_widget_series_validate_metric_active_state
   before insert or update of metric_definition_id on training_load.dashboard_widget_series
   for each row execute function training_load.dashboard_widget_series_validate_metric_active_state();
 
+-- The exact analog of the metric active-state gate above, for
+-- source_connection_id — merge-readiness corrective round. A series may
+-- only be NEWLY bound (INSERT, or a genuine UPDATE of source_connection_id
+-- e.g. via update_series()) to an ACTIVE metric_source_connections row.
+-- Scoped to `insert or update OF source_connection_id` ONLY, same
+-- new-binding-only reasoning as the metric gate: a connection later
+-- deactivated must never retroactively break an already-bound series'
+-- history. `FOR SHARE` closes the same "bind vs. concurrent deactivate"
+-- race the metric gate closes for metric_definitions.
+create function training_load.dashboard_widget_series_validate_source_connection_active_state() returns trigger as $$
+declare
+  v_state varchar;
+begin
+  if new.source_connection_id is null then
+    return new;
+  end if;
+  select state into v_state from training_load.metric_source_connections where id = new.source_connection_id for share;
+  if v_state <> 'active' then
+    raise exception 'dashboard_widget_series: source_connection % is not active (state=%) — a series may only be newly bound to an ACTIVE source connection (widget %)', new.source_connection_id, v_state, new.widget_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboard_widget_series_validate_source_connection_active_state
+  before insert or update of source_connection_id on training_load.dashboard_widget_series
+  for each row execute function training_load.dashboard_widget_series_validate_source_connection_active_state();
+
 -- A series' analytical_aggregation must stay compatible with the VALUE
 -- TYPE of whatever it is actually bound to: value_type 'numeric' supports
 -- the full sum/avg/max/last/none set; 'text'/'boolean' support ONLY

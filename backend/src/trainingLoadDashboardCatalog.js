@@ -18,6 +18,7 @@ import {
   resolveDashboardCreateContext,
 } from "./trainingLoadDashboardAccess.js";
 import { resolveTemplateSeriesForWorkspace } from "./trainingLoadDashboardWidgets.js";
+import { isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
 
 function httpError(status, message, code) {
   const e = new Error(message);
@@ -111,45 +112,74 @@ export function validFilterShape(value) {
 export async function createDashboard(req, body) {
   const ctx = await resolveDashboardCreateContext(req, body);
   if (ctx.error) throw httpError(ctx.status, ctx.error);
-  if (!body?.name || typeof body.name !== "string" || body.name.length < 1 || body.name.length > 200) {
-    throw httpError(400, "name is required (1-200 characters).");
+  if (!body?.name || typeof body.name !== "string" || body.name.trim().length < 1 || body.name.length > 200) {
+    throw httpError(400, "name is required (1-200 characters, not whitespace-only).");
+  }
+  if (body.description !== undefined && body.description !== null && typeof body.description !== "string") {
+    throw httpError(400, "description must be a string or null.");
+  }
+  // POST /dashboards previously silently ignored defaultFilter — now
+  // validated and persisted just like PATCH's own defaultFilter handling.
+  if (body.defaultFilter !== undefined && !validFilterShape(body.defaultFilter)) {
+    throw httpError(400, "defaultFilter is invalid.");
   }
   const r = await query(
-    `select * from training_load.create_dashboard($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [body.name, body.description ?? null, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId, ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, ctx.isTemplate, req.user.id],
+    `select * from training_load.create_dashboard($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [
+      body.name.trim(), body.description ?? null, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId,
+      ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, ctx.isTemplate, req.user.id,
+      body.defaultFilter ? JSON.stringify(body.defaultFilter) : null,
+    ],
   );
   return { dashboard: r.rows[0] };
 }
 
+// PATCH semantics (merge-readiness corrective round, finding #7): one
+// rule, applied consistently — an ABSENT key means no change, an
+// explicit `null` means clear, any other value means replace. There is
+// no separate client-facing clearDescription/clearDefaultFilter field
+// anymore (a request that still sends one is rejected as an unknown key
+// by the route layer) — the p_clear_* flags the SQL function takes are
+// an internal JS<->SQL contract, derived here from hasOwnProperty+null.
 export async function updateDashboardMetadata(req, dataWorkspace, dashboardId, body) {
   const row = await fetchVisibleDashboard(req, dataWorkspace, dashboardId);
   if (!canManageDashboardRow(req, row)) throw httpError(403, "Forbidden.");
-  if (typeof body?.expectedRevision !== "number") throw httpError(400, "expectedRevision is required.");
-  if (body.name !== undefined && (typeof body.name !== "string" || body.name.length < 1 || body.name.length > 200)) {
-    throw httpError(400, "name must be 1-200 characters.");
+  if (!Number.isSafeInteger(body?.expectedRevision) || body.expectedRevision < 1) {
+    throw httpError(400, "expectedRevision must be a positive integer.");
   }
+  if (body.name !== undefined && (typeof body.name !== "string" || body.name.trim().length < 1 || body.name.length > 200)) {
+    throw httpError(400, "name must be 1-200 characters, not whitespace-only.");
+  }
+  const hasDescription = Object.prototype.hasOwnProperty.call(body, "description");
+  if (hasDescription && body.description !== null && typeof body.description !== "string") {
+    throw httpError(400, "description must be a string or null.");
+  }
+  const clearDescription = hasDescription && body.description === null;
+  const hasDefaultFilter = Object.prototype.hasOwnProperty.call(body, "defaultFilter");
+  if (hasDefaultFilter && body.defaultFilter !== null && !validFilterShape(body.defaultFilter)) {
+    throw httpError(400, "defaultFilter is invalid.");
+  }
+  const clearDefaultFilter = hasDefaultFilter && body.defaultFilter === null;
   if (body.isTemplate !== undefined && typeof body.isTemplate !== "boolean") {
     throw httpError(400, "isTemplate must be a strict boolean.");
   }
   if (body.isTemplate === false && row.owner_scope === "system") {
     throw httpError(400, "A system dashboard is always a template.");
   }
-  if (body.defaultFilter !== undefined && !validFilterShape(body.defaultFilter)) {
-    throw httpError(400, "defaultFilter is invalid.");
-  }
   try {
     const r = await query(
       `select * from training_load.update_dashboard_metadata($1,$2,$3,$4,$5,$6,$7,$8)`,
       [
-        dashboardId, body.expectedRevision, body.name ?? null,
-        body.description ?? null, body.clearDescription === true,
-        body.defaultFilter ? JSON.stringify(body.defaultFilter) : null, body.clearDefaultFilter === true,
+        dashboardId, body.expectedRevision, body.name !== undefined ? body.name.trim() : null,
+        body.description ?? null, clearDescription,
+        body.defaultFilter ? JSON.stringify(body.defaultFilter) : null, clearDefaultFilter,
         body.isTemplate ?? null,
       ],
     );
     return { dashboard: r.rows[0] };
   } catch (error) {
     if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");
+    if (error?.code === "40002") throw httpError(409, "This dashboard is archived and is read-only.", "dashboardArchived");
     throw error;
   }
 }
@@ -157,9 +187,16 @@ export async function updateDashboardMetadata(req, dataWorkspace, dashboardId, b
 export async function archiveDashboard(req, dataWorkspace, dashboardId, { expectedRevision }) {
   const row = await fetchVisibleDashboard(req, dataWorkspace, dashboardId);
   if (!canManageDashboardRow(req, row)) throw httpError(403, "Forbidden.");
-  if (typeof expectedRevision !== "number") throw httpError(400, "expectedRevision is required.");
-  const r = await query(`select * from training_load.archive_dashboard($1, $2)`, [dashboardId, expectedRevision]);
-  return { dashboard: r.rows[0] };
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+    throw httpError(400, "expectedRevision must be a positive integer.");
+  }
+  try {
+    const r = await query(`select * from training_load.archive_dashboard($1, $2)`, [dashboardId, expectedRevision]);
+    return { dashboard: r.rows[0] };
+  } catch (error) {
+    if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");
+    throw error;
+  }
 }
 
 // ------------------------------------------------------------
@@ -168,55 +205,69 @@ export async function archiveDashboard(req, dataWorkspace, dashboardId, { expect
 // the new dashboard (cloned_from_dashboard_id set, firing the real
 // snapshot-semantics/lock trigger), copies every widget's layout/content,
 // and for each series either copies a workspace-agnostic binding as-is
-// (built-in, or a 'system'-scope metric) or genuinely RE-RESOLVES its
-// template_metric_key_hints against the NEW dashboard's own data
-// workspace (never trusting the template's own binding blindly) — a
-// hint resolving to zero/one/many candidates lands the new series in
-// 'unresolved'/'resolved'/'ambiguous' exactly like every other binding
-// decision in this model. The whole operation is one transaction:
-// either every widget/series lands, or none do.
+// (built-in) or genuinely RE-RESOLVES its template_metric_key_hints
+// against the NEW dashboard's own data workspace (never trusting the
+// template's own binding blindly) — a hint resolving to zero/one/many
+// candidates lands the new series in 'unresolved'/'resolved'/'ambiguous'
+// exactly like every other binding decision in this model. The whole
+// operation is one transaction: either every widget/series lands, or
+// none do.
+//
+// Merge-readiness corrective round — the transaction now opens FIRST and
+// takes an explicit `FOR SHARE` lock on the template row as its OWN first
+// statement, before reading anything else: the template's existence,
+// visibility, is_template, and status are all checked against THAT
+// locked, transaction-consistent snapshot, never a separate pre-BEGIN
+// pooled read that a concurrent template-flip/archive could invalidate
+// out from under it (finding #5). An archived template cannot be cloned
+// (finding #1). default_filter is copied along with name/description/
+// widgets/series (previously silently dropped). A pinned source
+// connection (source_policy='source_connection') that is not active and
+// visible in the TARGET workspace aborts the WHOLE clone atomically with
+// 409 sourceConnectionResolutionRequired — never a silent policy change
+// or a substituted connection (finding #6).
 // ------------------------------------------------------------
 export async function cloneDashboard(req, dataWorkspace, templateId, body) {
-  const template = await query(`select * from training_load.dashboards where id = $1`, [templateId]);
-  if (!template.rowCount) throw httpError(404, "Template not found.");
-  const templateRow = template.rows[0];
-  if (!templateRow.is_template) throw httpError(400, "That dashboard is not a template.");
-  if (!canViewDashboardRow(req, templateRow, dataWorkspace)) throw httpError(404, "Template not found.");
-
-  // Pass the ALREADY-RESOLVED dataWorkspace (the route resolved it once,
-  // for the canViewDashboardRow check just above) through to
-  // resolveDashboardCreateContext, instead of letting its own 'user'
-  // branch resolve it AGAIN — resolveActiveWorkspace() must be called
-  // exactly once per request (finding #3 of the 3B2 corrective round). A
-  // workspace-preference change racing mid-request can therefore never
-  // hand this one request two disagreeing snapshots.
-  const ctx = await resolveDashboardCreateContext(req, { ...body, ownerScope: body?.ownerScope ?? "user" }, dataWorkspace);
-  if (ctx.error) throw httpError(ctx.status, ctx.error);
-  const name = body?.name || `${templateRow.name} (copy)`;
-  if (name.length > 200) throw httpError(400, "name must be at most 200 characters.");
-
   const c = await pool.connect();
   try {
     await c.query("begin");
+    const templateResult = await c.query(`select * from training_load.dashboards where id = $1 for share`, [templateId]);
+    const templateRow = templateResult.rows[0];
+    if (!templateRow) throw httpError(404, "Template not found.");
+    if (!templateRow.is_template) throw httpError(400, "That dashboard is not a template.");
+    if (!canViewDashboardRow(req, templateRow, dataWorkspace)) throw httpError(404, "Template not found.");
+    if (templateRow.status === "archived") throw httpError(409, "That template is archived and cannot be cloned.", "dashboardArchived");
+
+    // Pass the ALREADY-RESOLVED dataWorkspace (the route resolved it once)
+    // through to resolveDashboardCreateContext, instead of letting its own
+    // 'user' branch resolve it AGAIN — resolveActiveWorkspace() must be
+    // called exactly once per request (finding #3). A workspace-preference
+    // change racing mid-request can therefore never hand this one request
+    // two disagreeing snapshots.
+    const ctx = await resolveDashboardCreateContext(req, { ...body, ownerScope: body?.ownerScope ?? "user" }, dataWorkspace);
+    if (ctx.error) throw httpError(ctx.status, ctx.error);
+    const name = body?.name || `${templateRow.name} (copy)`;
+    if (typeof name !== "string" || name.trim().length < 1 || name.length > 200) {
+      throw httpError(400, "name must be 1-200 characters, not whitespace-only.");
+    }
+
     // The dashboard/widget/series inserts below are ONE documented,
     // explicit composite-transaction exception to the "every write goes
     // through a sanctioned SQL function" rule (see v17's own header note
     // on create_dashboard/update_dashboard_metadata) — clone is
     // inherently a multi-table operation (1 dashboard + N widgets + N
     // series) with live template-binding re-resolution baked in, which
-    // cannot be expressed as a single set-based function call. Source-
-    // dashboard locking happens via dashboards_validate_clone_provenance's
-    // own `FOR SHARE` (fired by THIS insert, before any widget/series row
-    // is read below) — genuinely dashboard-first, same lock-order
-    // discipline as every sanctioned function. ctx.isTemplate (never a
-    // hardcoded false) lets a clone become a NEW template in its own
-    // target owner scope, exactly like a fresh create — already gated by
-    // the SAME manage-rights check resolveDashboardCreateContext applies
-    // to every owner scope.
+    // cannot be expressed as a single set-based function call. The
+    // template row is already locked (FOR SHARE, above) BEFORE this
+    // insert and before any widget/series is read — genuinely
+    // dashboard-first. ctx.isTemplate (never a hardcoded false) lets a
+    // clone become a NEW template in its own target owner scope, exactly
+    // like a fresh create — already gated by the SAME manage-rights check
+    // resolveDashboardCreateContext applies to every owner scope.
     const dash = await c.query(
-      `insert into training_load.dashboards (name, description, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, is_template, created_by_user_id, cloned_from_dashboard_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
-      [name, templateRow.description, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId, ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, ctx.isTemplate, req.user.id, templateId],
+      `insert into training_load.dashboards (name, description, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, is_template, default_filter, created_by_user_id, cloned_from_dashboard_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
+      [name.trim(), templateRow.description, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId, ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, ctx.isTemplate, templateRow.default_filter, req.user.id, templateId],
     );
     const newDashboard = dash.rows[0];
 
@@ -235,7 +286,22 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     const cloneReport = [];
     for (const s of series.rows) {
       const newWidgetId = widgetIdMap.get(s.widget_id);
-      const common = [newWidgetId, s.series_order, s.axis, s.color, s.display_label, s.source_policy, s.source_connection_id, s.data_scope_level, s.analytical_aggregation, s.aggregation_role_policy, s.coverage_policy, s.comparison_period];
+
+      // Portable source-connection contract (finding #6) — applies to
+      // EVERY non-built-in series path below. A pinned connection is
+      // NEVER silently dropped, re-policied, or swapped for another one:
+      // if it isn't active and visible in the TARGET workspace, the
+      // WHOLE clone aborts atomically. `newDashboard` already exists at
+      // this point (inserted above) and carries the target's own owner_
+      // scope/owner_user_id/data_workspace_*, so it can stand in directly
+      // for a "dashboard row" argument to isSourceConnectionVisibleToDashboard.
+      if (s.source_policy === "source_connection" && s.source_connection_id) {
+        const connCheck = await isSourceConnectionVisibleToDashboard(newDashboard, s.source_connection_id);
+        if (!connCheck.visible || !connCheck.conn || connCheck.conn.state !== "active") {
+          throw httpError(409, "A pinned source connection could not be resolved (active and visible) in the target workspace.", "sourceConnectionResolutionRequired");
+        }
+      }
+
       if (s.built_in_series_key) {
         await c.query(
           `insert into training_load.dashboard_widget_series (widget_id, series_order, built_in_series_key, resolution_status, axis, color, display_label, source_policy, source_connection_id, data_scope_level, analytical_aggregation, aggregation_role_policy, coverage_policy, comparison_period, created_by_user_id)
@@ -248,7 +314,11 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       if (s.template_metric_key_hints) {
         // Genuine re-resolution against the NEW dashboard's own workspace
         // — the template's own (possibly stale, possibly workspace-
-        // agnostic) binding is never trusted directly.
+        // agnostic) binding is never trusted directly. A metric-backed
+        // template series ALWAYS carries hints now (addSeries()
+        // auto-snapshots them — see trainingLoadDashboardWidgets.js) so
+        // this branch is the normal path for every portable metric-backed
+        // template series, not just hint-only unresolved/ambiguous ones.
         const resolved = await resolveTemplateSeriesForWorkspace(c, {
           hints: s.template_metric_key_hints,
           dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId, ownerUserId: ctx.ownerUserId,
@@ -263,10 +333,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
             // array by pg on the SELECT above — must be re-stringified
             // before being re-inserted as a jsonb value, or `pg` silently
             // encodes it as a Postgres ARRAY literal instead of JSON
-            // (22P02 invalid input syntax for type json). This is exactly
-            // the ambiguous/unresolved clone path the 3B2 corrective round
-            // added real coverage for — no prior passing test exercised a
-            // template_metric_key_hints-based clone.
+            // (22P02 invalid input syntax for type json).
             JSON.stringify(s.template_metric_key_hints),
             resolved.status,
             resolved.status === "ambiguous" ? JSON.stringify(resolved.candidateIds) : null,
@@ -276,9 +343,10 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
         cloneReport.push({ sourceSeriesId: s.id, resolution: resolved.status });
         continue;
       }
-      // A plain resolved series with no hints at all (e.g. bound to a
-      // 'system'-scope metric, visible everywhere) — copy the binding
-      // as-is; the metric-visibility/active-state/type-compat triggers
+      // A plain resolved series with no hints at all — defensive fallback
+      // for hint-less legacy data only (every metric-backed series
+      // added through addSeries() to a template now always carries
+      // hints). The metric-visibility/active-state/type-compat triggers
       // still re-validate it live against the NEW dashboard.
       await c.query(
         `insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, resolution_status, axis, color, display_label, source_policy, source_connection_id, data_scope_level, analytical_aggregation, aggregation_role_policy, coverage_policy, comparison_period, created_by_user_id)

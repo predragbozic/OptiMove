@@ -29,6 +29,10 @@ function httpError(status, message, code) {
 // function first).
 function toStaleOrRaise(error) {
   if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");
+  // '40002' — training_load.assert_dashboard_writable() (v17), the archived-
+  // dashboard read-only gate every dashboard-hierarchy-mutating sanctioned
+  // function now calls right after locking the dashboard row.
+  if (error?.code === "40002") throw httpError(409, "This dashboard is archived and is read-only.", "dashboardArchived");
   if (error?.code === "P0001") throw httpError(400, "Invalid request.", "invalidRequest");
   throw error;
 }
@@ -52,8 +56,12 @@ async function assertMetricReferenceOk(dashboardRow, metricDefinitionId) {
 }
 async function assertSourceConnectionReferenceOk(dashboardRow, sourceConnectionId) {
   if (!sourceConnectionId) return;
-  const { visible } = await isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId);
-  if (!visible) throw httpError(404, "Source connection not found.");
+  const { visible, conn } = await isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId);
+  // Nonexistent, foreign, AND inactive/archived all collapse to the SAME
+  // info-hiding 404 — an inactive connection's mere existence (and its
+  // active/inactive state) is not something a caller who can't otherwise
+  // see it should be able to distinguish either.
+  if (!visible || !conn || conn.state !== "active") throw httpError(404, "Source connection not found.");
 }
 
 // ------------------------------------------------------------
@@ -87,15 +95,27 @@ export async function resolveTemplateSeriesForWorkspace(runQuery, { hints, dataW
     if (typeof hint === "object") {
       if (hint.valueType) rows = rows.filter((r) => r.value_type === hint.valueType);
       if (Object.prototype.hasOwnProperty.call(hint, "unit")) rows = rows.filter((r) => r.unit === hint.unit);
-      if (hint.scopeLevel) {
-        const kept = [];
-        for (const r of rows) {
-          const hasAny = await q(`select 1 from training_load.metric_definition_scope_capabilities where metric_definition_id=$1 limit 1`, [r.id]);
-          if (hasAny.rowCount === 0) { kept.push(r); continue; }
-          const matches = await q(`select 1 from training_load.metric_definition_scope_capabilities where metric_definition_id=$1 and scope_level=$2`, [r.id, hint.scopeLevel]);
-          if (matches.rowCount > 0) kept.push(r);
+      // SET-BASED scope-capability filter — ONE query for every remaining
+      // candidate's own capability rows, never one (or two) queries PER
+      // candidate. This used to be the resolver's own N+1: a template
+      // hint with scopeLevel set, matching K candidates, issued up to 2*K
+      // extra queries here; now it issues exactly one, regardless of K
+      // (merge-readiness corrective round, finding #9).
+      if (hint.scopeLevel && rows.length) {
+        const capRows = await q(
+          `select metric_definition_id, scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = any($1::uuid[])`,
+          [rows.map((r) => r.id)],
+        );
+        const capsByDefinition = new Map();
+        for (const cap of capRows.rows) {
+          if (!capsByDefinition.has(cap.metric_definition_id)) capsByDefinition.set(cap.metric_definition_id, new Set());
+          capsByDefinition.get(cap.metric_definition_id).add(cap.scope_level);
         }
-        rows = kept;
+        rows = rows.filter((r) => {
+          const caps = capsByDefinition.get(r.id);
+          if (!caps || caps.size === 0) return true; // no capability rows configured -> not blocked, same rule as the live DB trigger
+          return caps.has(hint.scopeLevel);
+        });
       }
     }
     if (rows.length === 0) continue;
@@ -107,6 +127,33 @@ export async function resolveTemplateSeriesForWorkspace(runQuery, { hints, dataW
     return { status: "ambiguous", candidateIds: rows.map((r) => r.id) };
   }
   return { status: "unresolved", candidateIds: [] };
+}
+
+// Portable template-series contract (merge-readiness corrective round,
+// finding #6). A metric-backed series added to a TEMPLATE dashboard
+// (system/club/team is_template=true) always carries a structured
+// template_metric_key_hints snapshot ALONGSIDE its real metric_
+// definition_id — the template keeps working immediately (the real
+// binding resolves it), but a later clone into a DIFFERENT workspace can
+// genuinely re-resolve the metric there instead of raw-copying a source
+// UUID that may not even exist in the target workspace (previously: a
+// direct metric_definition_id with no hints was copied as-is by
+// cloneDashboard() and could only ever fail with a generic, detail-
+// leaking DB trigger 400 in the target workspace). The table's own CHECK
+// on dashboard_widget_series does not forbid metric_definition_id and
+// template_metric_key_hints being set together — only the ABSENCE of
+// both requires hints (v16) — so this is a legal 'resolved' row.
+async function snapshotMetricHint(metricDefinitionId, scopeLevel) {
+  const r = await query(
+    `select d.key, mdv.value_type, mdv.unit
+     from training_load.metric_definitions d
+     join training_load.metric_definition_versions mdv on mdv.id = d.current_version_id
+     where d.id = $1`,
+    [metricDefinitionId],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return [{ key: row.key, valueType: row.value_type, unit: row.unit, scopeLevel: scopeLevel ?? "session" }];
 }
 
 // ------------------------------------------------------------
@@ -150,13 +197,22 @@ export async function createWidget(dashboardId, { expectedDashboardRevision, wid
 
 export async function updateWidgetContent(dashboardId, widgetId, body) {
   await assertOwnsWidget(dashboardId, widgetId);
+  // PATCH semantics (merge-readiness corrective round, finding #7) —
+  // exactly one rule, no client-facing clear flag: an ABSENT key means no
+  // change; an explicit `null` means clear; any other value means
+  // replace. The SQL function's own p_clear_local_filter_override
+  // parameter stays (an internal JS<->SQL contract, not a client-facing
+  // field) — it is DERIVED here from hasOwnProperty+null, never read
+  // directly off the request body.
+  const hasLocalFilterOverride = Object.prototype.hasOwnProperty.call(body, "localFilterOverride");
+  const clearLocalFilterOverride = hasLocalFilterOverride && body.localFilterOverride === null;
   try {
     const r = await query(
       `select * from training_load.update_widget_content($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
         widgetId, body.expectedWidgetRevision, body.widgetType ?? null, body.title ?? null, body.groupBy ?? null,
         body.state ?? null, body.displayConfig ? JSON.stringify(body.displayConfig) : null,
-        body.localFilterOverride ? JSON.stringify(body.localFilterOverride) : null, body.clearLocalFilterOverride === true,
+        body.localFilterOverride ? JSON.stringify(body.localFilterOverride) : null, clearLocalFilterOverride,
       ],
     );
     return { widget: r.rows[0] };
@@ -189,13 +245,17 @@ export async function addSeries(dashboardId, widgetId, body, createdByUserId, da
   // general 'all_with_conflicts' default is wrong specifically for this
   // case and must never be applied to it.
   const defaultSourcePolicy = body.builtInSeriesKey ? "not_applicable" : "all_with_conflicts";
+  let templateMetricKeyHints = body.templateMetricKeyHints ?? null;
+  if (dashboardRow?.is_template && body.metricDefinitionId && !templateMetricKeyHints) {
+    templateMetricKeyHints = await snapshotMetricHint(body.metricDefinitionId, body.dataScopeLevel);
+  }
   try {
     const r = await query(
       `select * from training_load.add_series($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [
         widgetId, body.expectedWidgetRevision, body.seriesOrder,
         body.metricDefinitionId ?? null, body.builtInSeriesKey ?? null,
-        body.templateMetricKeyHints ? JSON.stringify(body.templateMetricKeyHints) : null,
+        templateMetricKeyHints ? JSON.stringify(templateMetricKeyHints) : null,
         body.resolutionStatus ?? "resolved", body.templateResolutionCandidates ? JSON.stringify(body.templateResolutionCandidates) : null,
         body.axis ?? "primary", body.color ?? null, body.displayLabel ?? null,
         body.sourcePolicy ?? defaultSourcePolicy, body.sourceConnectionId ?? null,
@@ -213,6 +273,10 @@ export async function addSeries(dashboardId, widgetId, body, createdByUserId, da
 export async function updateSeries(dashboardId, widgetId, seriesId, body, dashboardRow) {
   await assertOwnsWidget(dashboardId, widgetId);
   if (body.sourceConnectionId) await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId);
+  // Same absent/null/value PATCH semantics as updateWidgetContent above —
+  // derived, never client-facing.
+  const hasComparisonPeriod = Object.prototype.hasOwnProperty.call(body, "comparisonPeriod");
+  const clearComparisonPeriod = hasComparisonPeriod && body.comparisonPeriod === null;
   try {
     const r = await query(
       `select * from training_load.update_series($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
@@ -222,7 +286,7 @@ export async function updateSeries(dashboardId, widgetId, seriesId, body, dashbo
         body.sourcePolicy ?? null, body.sourceConnectionId ?? null,
         body.dataScopeLevel ?? null, body.analyticalAggregation ?? null,
         body.aggregationRolePolicy ?? null, body.coveragePolicy ?? null,
-        body.comparisonPeriod ?? null, body.clearComparisonPeriod === true,
+        body.comparisonPeriod ?? null, clearComparisonPeriod,
       ],
     );
     return { seriesId: r.rows[0].series_id, widgetRevision: r.rows[0].widget_revision };

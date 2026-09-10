@@ -34,15 +34,42 @@
 -- inside one transaction, exactly as documented in trainingLoadDashboardCatalog.js.
 -- ------------------------------------------------------------
 
+-- Merge-readiness corrective round: an ARCHIVED dashboard is read-only.
+-- Every sanctioned function below that mutates the dashboard hierarchy
+-- calls this immediately after locking the dashboard row `FOR UPDATE`
+-- (never before — a route-level pre-check alone cannot close the race
+-- where a concurrent archive_dashboard() commits between the check and
+-- the write; this function only ever runs against the FRESH, locked
+-- value). archive_dashboard() itself is deliberately exempt (archiving
+-- must remain reachable from 'active', and re-archiving an already-
+-- archived dashboard stays a legal no-op — see its own header comment).
+-- set_active_dashboard() is exempt too: it already rejects a non-'active'
+-- dashboard via dashboard_active_selection_validate_visibility (v16).
+-- errcode '40002' is this feature's own second custom business-rule
+-- code (see '40001' for stale-revision) — routes/trainingLoadDashboard.js
+-- and trainingLoadDashboardWidgets.js/Catalog.js map it to a stable
+-- 409 {error:"dashboardArchived"}, never a raw message.
+create function training_load.assert_dashboard_writable(p_dashboard_id uuid) returns void as $$
+declare
+  v_status varchar;
+begin
+  select status into v_status from training_load.dashboards where id = p_dashboard_id;
+  if v_status = 'archived' then
+    raise exception 'dashboard % is archived — read-only (query/clone/metadata/layout/widget/series writes are all refused)', p_dashboard_id using errcode = '40002';
+  end if;
+end;
+$$ language plpgsql;
+
 create function training_load.create_dashboard(
   p_name text, p_description text, p_owner_scope varchar, p_owner_user_id uuid, p_owner_club_id uuid, p_owner_team_id uuid,
-  p_data_workspace_type varchar, p_data_workspace_scope_id uuid, p_is_template boolean, p_created_by_user_id uuid
+  p_data_workspace_type varchar, p_data_workspace_scope_id uuid, p_is_template boolean, p_created_by_user_id uuid,
+  p_default_filter jsonb default null
 ) returns setof training_load.dashboards as $$
 declare
   v_id uuid;
 begin
-  insert into training_load.dashboards (name, description, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, is_template, created_by_user_id)
-    values (p_name, p_description, p_owner_scope, p_owner_user_id, p_owner_club_id, p_owner_team_id, p_data_workspace_type, p_data_workspace_scope_id, coalesce(p_is_template, false), p_created_by_user_id)
+  insert into training_load.dashboards (name, description, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, is_template, created_by_user_id, default_filter)
+    values (p_name, p_description, p_owner_scope, p_owner_user_id, p_owner_club_id, p_owner_team_id, p_data_workspace_type, p_data_workspace_scope_id, coalesce(p_is_template, false), p_created_by_user_id, p_default_filter)
     returning id into v_id;
   return query select * from training_load.dashboards where id = v_id;
 end;
@@ -68,6 +95,7 @@ begin
   if not found then
     raise exception 'update_dashboard_metadata: dashboard % not found', p_dashboard_id;
   end if;
+  perform training_load.assert_dashboard_writable(p_dashboard_id);
   if v_current_revision <> p_expected_revision then
     raise exception 'update_dashboard_metadata: stale revision (expected %, dashboard is at %) — reload and retry', p_expected_revision, v_current_revision using errcode = '40001';
   end if;
@@ -106,6 +134,7 @@ begin
   if not found then
     raise exception 'replace_dashboard_layout: dashboard % not found', p_dashboard_id;
   end if;
+  perform training_load.assert_dashboard_writable(p_dashboard_id);
   if v_current_revision <> p_expected_revision then
     raise exception 'replace_dashboard_layout: stale revision (expected %, dashboard is at %) — reload and retry', p_expected_revision, v_current_revision using errcode = '40001';
   end if;
@@ -190,6 +219,7 @@ begin
   -- 2. Lock the DASHBOARD row first — genuinely first, before this
   --    function has touched dashboard_widgets at all.
   perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  perform training_load.assert_dashboard_writable(v_dashboard_id);
 
   -- 3. NOW lock and RE-READ the widget row — this is the fresh,
   --    trustworthy revision, taken only after the dashboard lock is
@@ -251,6 +281,7 @@ begin
   if not found then
     raise exception 'create_widget: dashboard % not found', p_dashboard_id;
   end if;
+  perform training_load.assert_dashboard_writable(p_dashboard_id);
   if v_current_revision <> p_expected_dashboard_revision then
     raise exception 'create_widget: stale dashboard revision (expected %, dashboard is at %) — reload and retry', p_expected_dashboard_revision, v_current_revision using errcode = '40001';
   end if;
@@ -277,6 +308,7 @@ begin
     raise exception 'update_widget_content: widget % not found', p_widget_id;
   end if;
   perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  perform training_load.assert_dashboard_writable(v_dashboard_id);
   select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
   if not found then
     raise exception 'update_widget_content: widget % disappeared concurrently', p_widget_id;
@@ -317,6 +349,7 @@ begin
     raise exception 'delete_widget: widget % not found', p_widget_id;
   end if;
   perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  perform training_load.assert_dashboard_writable(v_dashboard_id);
   select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
   if not found then
     raise exception 'delete_widget: widget % disappeared concurrently', p_widget_id;
@@ -354,6 +387,7 @@ begin
     raise exception 'add_series: widget % not found', p_widget_id;
   end if;
   perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  perform training_load.assert_dashboard_writable(v_dashboard_id);
   select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
   if v_current_widget_revision <> p_expected_widget_revision then
     raise exception 'add_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
@@ -392,6 +426,7 @@ begin
     raise exception 'update_series: widget % not found', p_widget_id;
   end if;
   perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  perform training_load.assert_dashboard_writable(v_dashboard_id);
   select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
   if v_current_widget_revision <> p_expected_widget_revision then
     raise exception 'update_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
@@ -451,6 +486,7 @@ begin
     raise exception 'resolve_series_binding: widget % not found', p_widget_id;
   end if;
   perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  perform training_load.assert_dashboard_writable(v_dashboard_id);
   select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
   if v_current_widget_revision <> p_expected_widget_revision then
     raise exception 'resolve_series_binding: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
@@ -486,6 +522,7 @@ begin
     raise exception 'delete_series: widget % not found', p_widget_id;
   end if;
   perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  perform training_load.assert_dashboard_writable(v_dashboard_id);
   select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
   if v_current_widget_revision <> p_expected_widget_revision then
     raise exception 'delete_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
@@ -514,6 +551,7 @@ begin
     raise exception 'reorder_series: widget % not found', p_widget_id;
   end if;
   perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  perform training_load.assert_dashboard_writable(v_dashboard_id);
   select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
   if v_current_widget_revision <> p_expected_widget_revision then
     raise exception 'reorder_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
@@ -535,6 +573,14 @@ $$ language plpgsql;
 -- Lifecycle.
 -- ------------------------------------------------------------
 
+-- Deliberately exempt from assert_dashboard_writable() — archiving must
+-- remain reachable from 'active' by definition, and re-archiving an
+-- ALREADY-archived dashboard is a legal, idempotent no-op: dashboards_
+-- bump_revision (v15) only bumps revision when status actually CHANGES,
+-- so a second archive_dashboard() call with the SAME (unchanged) revision
+-- succeeds again and returns the same status — never a spurious stale-
+-- revision error, never a duplicate side effect. Proven by training-load-
+-- dashboard.test.mjs's own "archive is idempotent" test.
 create function training_load.archive_dashboard(p_dashboard_id uuid, p_expected_revision integer)
 returns table (dashboard_id uuid, status varchar, revision integer) as $$
 declare

@@ -58,24 +58,35 @@ function dataWorkspaceFromActiveWorkspace(workspace, req) {
 // reachable right now, and (via resolveDataWorkspaceForCreate below) to
 // decide what a NEW private dashboard binds to.
 //
-// MEMOIZED ON THE REQUEST OBJECT — resolveActiveWorkspace() itself reads
-// (and can opportunistically WRITE) public.user_workspace_preferences, so
+// MEMOIZED ON THE REQUEST OBJECT, via the IN-FLIGHT PROMISE itself — not
+// merely the resolved value. resolveActiveWorkspace() itself reads (and
+// can opportunistically WRITE) public.user_workspace_preferences, so
 // calling it more than once per HTTP request is both wasteful and, worse,
-// a real correctness risk: the clone route used to resolve it once for
-// its own authorization check and AGAIN inside resolveDashboardCreateContext
-// for the 'user' branch, and a workspace-preference change racing in
-// between the two reads could hand the same request two different
-// snapshots, producing a dashboard whose owner/data-workspace/binding
-// scope don't agree with each other. Caching the resolved value on `req`
-// (a fresh object per request, same convention as req.authz) makes
-// "resolved exactly once per request" a structural guarantee regardless
-// of how many call sites in this request ask for it.
-export async function resolveActiveDataWorkspace(req) {
-  if (req._resolvedDataWorkspace) return req._resolvedDataWorkspace;
-  const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-  const resolved = dataWorkspaceFromActiveWorkspace(workspace, req);
-  req._resolvedDataWorkspace = resolved;
-  return resolved;
+// a real correctness risk. A value-only cache (`if (req._resolved) return
+// req._resolved;`) still has a genuine race: two calls that both start
+// before EITHER has finished its own `await resolveActiveWorkspace(...)`
+// will both see the cache as empty and both trigger a real, independent
+// resolution — the check only helps once the FIRST call has fully
+// settled. Caching the PROMISE synchronously, before any `await` runs,
+// closes this precisely: the second (or Nth) concurrent call, however soon
+// it arrives, always sees the first call's own in-flight promise already
+// installed on `req` and just awaits that SAME promise — one real
+// resolveActiveWorkspace() execution per request, guaranteed, not merely
+// "usually, once the first call happens to finish first." A rejection is
+// never left cached — the next caller (later in this same request, e.g.
+// after some other recoverable condition) gets a fresh attempt rather
+// than being permanently stuck behind a stale failure.
+export function resolveActiveDataWorkspace(req) {
+  if (!req._resolvedDataWorkspacePromise) {
+    req._resolvedDataWorkspacePromise = (async () => {
+      const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+      return dataWorkspaceFromActiveWorkspace(workspace, req);
+    })();
+    req._resolvedDataWorkspacePromise.catch(() => {
+      req._resolvedDataWorkspacePromise = null;
+    });
+  }
+  return req._resolvedDataWorkspacePromise;
 }
 
 // Synchronous variant for a caller that already resolved the active
@@ -231,7 +242,7 @@ export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionI
 
 export async function isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId) {
   const r = await query(
-    `select owner_scope, owner_user_id, owner_club_id, owner_team_id from training_load.metric_source_connections where id = $1`,
+    `select owner_scope, owner_user_id, owner_club_id, owner_team_id, state from training_load.metric_source_connections where id = $1`,
     [sourceConnectionId],
   );
   const conn = r.rows[0];

@@ -828,7 +828,7 @@ test("§6.1 an explicit activityId filter narrows a session-scope series to EXAC
   await addMetricValue({ eventParticipantId: act2.eventParticipantId, metricDefinitionId, versionId, value: 200, aggregationRole: "standalone", coverage: "not_applicable" });
 
   const dashboard = await makeDashboardHttp(coachCookie);
-  const w = await makeWidgetHttp(coachCookie, dashboard, { group_by: "session" });
+  const w = await makeWidgetHttp(coachCookie, dashboard, {});
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
     method: "POST", cookie: coachCookie,
     body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" },
@@ -919,7 +919,7 @@ test("§6.4 a historical unit change stays two separate groups, and a genuine tw
   const act3conn2occ = await addMetricValue({ eventParticipantId: act1.eventParticipantId, metricDefinitionId, versionId: v1, value: 5000, unit: "m", aggregationRole: "standalone", coverage: "not_applicable" });
 
   const dashboard = await makeDashboardHttp(coachCookie);
-  const w = await makeWidgetHttp(coachCookie, dashboard, { group_by: "session" });
+  const w = await makeWidgetHttp(coachCookie, dashboard, {});
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
     method: "POST", cookie: coachCookie,
     body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" },
@@ -945,7 +945,7 @@ test("§6.5 comparison_period='previous_period' computes a real shifted range an
   await addMetricValue({ eventParticipantId: prev.eventParticipantId, metricDefinitionId, versionId, value: 60, aggregationRole: "standalone", coverage: "not_applicable" });
 
   const dashboard = await makeDashboardHttp(coachCookie);
-  const w = await makeWidgetHttp(coachCookie, dashboard, { widgetType: "kpi", width: 3, height: 2, group_by: "athlete" });
+  const w = await makeWidgetHttp(coachCookie, dashboard, { widgetType: "kpi", width: 3, height: 2 });
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
     method: "POST", cookie: coachCookie,
     body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", comparisonPeriod: "previous_period" },
@@ -1183,12 +1183,12 @@ test("§8.5 default filter -> runtime override -> per-widget local override merg
   const patched = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: dashboard.revision, defaultFilter: { athleteIds: [athleteA] } } });
   assert.equal(patched.status, 200);
 
-  const w1 = await makeWidgetHttp(coachCookie, patched.body.dashboard, { group_by: "session" });
+  const w1 = await makeWidgetHttp(coachCookie, patched.body.dashboard, {});
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w1.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" } });
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w1.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 2, groupBy: "session" } });
 
   const dAfter1 = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
-  const w2 = await makeWidgetHttp(coachCookie, dAfter1.body.dashboard, { x: 6, group_by: "session", localFilterOverride: { athleteIds: [athleteB] } });
+  const w2 = await makeWidgetHttp(coachCookie, dAfter1.body.dashboard, { x: 6, localFilterOverride: { athleteIds: [athleteB] } });
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w2.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" } });
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w2.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 2, groupBy: "session" } });
 
@@ -1218,7 +1218,7 @@ test("§8.6 a widget's local_filter_override can never WIDEN past the authorized
   await addMetricValue({ eventParticipantId: act.eventParticipantId, metricDefinitionId, versionId, value: 500, aggregationRole: "standalone", coverage: "not_applicable" });
 
   const dashboard = await makeDashboardHttp(coachCookie);
-  const w = await makeWidgetHttp(coachCookie, dashboard, { group_by: "session", localFilterOverride: { athleteIds: [foreignAthleteId] } });
+  const w = await makeWidgetHttp(coachCookie, dashboard, { localFilterOverride: { athleteIds: [foreignAthleteId] } });
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" } });
   await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 2, groupBy: "session" } });
 
@@ -1369,4 +1369,728 @@ test("§8.12 NO N+1 across distinct filter contexts: 12 widgets split across 3 d
   for (const w of result.body.widgets) assert.equal(w.series[0].status, "ok");
   assert.ok(statementsForThisQuery < 30, `expected a small statement count scaling with the 3 distinct filter contexts, not the 12-widget count — got ${statementsForThisQuery}`);
   console.log(`[§8.12] 12 widgets / 3 distinct filter contexts -> ${statementsForThisQuery} DB statements`);
+});
+
+// ============================================================
+// §9 — MERGE-READINESS CORRECTIVE ROUND: the 10 further acceptance
+// findings closed on top of commit 22de90a.
+// ============================================================
+
+// Generalizes makeActivityWithEvent above to a real TEAM-scoped activity
+// (that helper hardcodes owner_scope='club') — needed only for the
+// Team A/B isolation test below.
+async function makeActivityWithEventScoped({ ownerScope, scopeId, coachId, athleteId, connectionId, date, startedAt }) {
+  const dateStr = date || "2026-09-09";
+  const startStr = startedAt || `${dateStr}T09:00:00Z`;
+  const ownerCol = ownerScope === "team" ? "owner_team_id" : "owner_club_id";
+  const activity = await query(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, ${ownerCol}, origin, lifecycle_state, created_by_user_id)
+     values ('training_session','Test Session',$1,$2,'Europe/Belgrade',$3,$4,'manual','confirmed',$5) returning id`,
+    [dateStr, startStr, ownerScope, scopeId, coachId],
+  );
+  const participant = await query(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1,$2,$3,'Europe/Belgrade','participated') returning id`,
+    [activity.rows[0].id, athleteId, dateStr],
+  );
+  const event = await query(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, ${ownerCol}, source_connection_id, created_by_user_id)
+     values ('Test Session',$1,$2,'session',$3,$4,$5,$6) returning id`,
+    [dateStr, startStr, ownerScope, scopeId, connectionId, coachId],
+  );
+  const eventParticipant = await query(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [event.rows[0].id, athleteId]);
+  await query(`insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [activity.rows[0].id, event.rows[0].id]);
+  await query(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [participant.rows[0].id, eventParticipant.rows[0].id]);
+  return { activityId: activity.rows[0].id, participantId: participant.rows[0].id, eventId: event.rows[0].id, eventParticipantId: eventParticipant.rows[0].id, dateStr };
+}
+
+// --- Finding #1: archived dashboard is fully read-only ---
+
+test("§9.1 an archived dashboard is fully read-only: GET stays visible, query/clone/metadata/layout/widget/series writes all reject with 409 dashboardArchived, and archive itself is idempotent", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("l91");
+  const created = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "To Archive", ownerScope: "club", ownerClubId: clubId, isTemplate: true } });
+  const dashboard = created.body.dashboard;
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "rpe", dataScopeLevel: "session", analyticalAggregation: "avg" } });
+  const dAfterSeries = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  const seriesId = dAfterSeries.body.widgets[0].series[0].id;
+
+  const archived = await api(`/api/training-load/dashboards/${dashboard.id}/archive`, { method: "POST", cookie: coachCookie, body: { expectedRevision: dAfterSeries.body.dashboard.revision } });
+  assert.equal(archived.status, 200);
+  assert.equal(archived.body.dashboard.status, "archived");
+  const revisionAfterArchive = archived.body.dashboard.revision;
+
+  const got = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  assert.equal(got.status, 200, "GET must still show an archived dashboard for historical review");
+  assert.equal(got.body.dashboard.status, "archived");
+
+  const queried = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-01-01", dateTo: "2026-01-02" } });
+  assert.equal(queried.status, 409);
+  assert.equal(queried.body.error, "dashboardArchived");
+
+  const cloned = await api(`/api/training-load/dashboards/${dashboard.id}/clone`, { method: "POST", cookie: coachCookie, body: {} });
+  assert.equal(cloned.status, 409);
+  assert.equal(cloned.body.error, "dashboardArchived");
+
+  const metaPatch = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: revisionAfterArchive, name: "New Name" } });
+  assert.equal(metaPatch.status, 409);
+  assert.equal(metaPatch.body.error, "dashboardArchived");
+
+  const layoutPatch = await api(`/api/training-load/dashboards/${dashboard.id}/layout`, { method: "PUT", cookie: coachCookie, body: { expectedRevision: revisionAfterArchive, layout: [] } });
+  assert.equal(layoutPatch.status, 409);
+  assert.equal(layoutPatch.body.error, "dashboardArchived");
+
+  const widgetPatch = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 1, title: "New" } });
+  assert.equal(widgetPatch.status, 409);
+  assert.equal(widgetPatch.body.error, "dashboardArchived");
+
+  const seriesPatch = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/${seriesId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 1, axis: "secondary" } });
+  assert.equal(seriesPatch.status, 409);
+  assert.equal(seriesPatch.body.error, "dashboardArchived");
+
+  // Idempotent archive: re-archiving with the SAME (unchanged) revision
+  // succeeds again — status didn't actually change, so no revision bump.
+  const reArchived = await api(`/api/training-load/dashboards/${dashboard.id}/archive`, { method: "POST", cookie: coachCookie, body: { expectedRevision: revisionAfterArchive } });
+  assert.equal(reArchived.status, 200);
+  assert.equal(reArchived.body.dashboard.status, "archived");
+  assert.equal(reArchived.body.dashboard.revision, revisionAfterArchive);
+});
+
+// --- Finding #2: no raw per-series error leakage ---
+
+test("§9.3 an unexpected internal per-series query failure surfaces as a stable 'seriesQueryFailed', never the raw internal error message", async () => {
+  // Note: a genuinely INVALID spec (e.g. an out-of-enum source_policy)
+  // can never reach the query engine through the real HTTP/DB layer —
+  // every field reduceTyped()/resolveFactsToRows() branch on is itself
+  // DB-CHECK-constrained on dashboard_widget_series, and a per-BUCKET
+  // reduceTyped() failure (e.g. a value_type/aggregation mismatch) is
+  // ALREADY caught internally by reduceRows()'s own finalizeStage2 (a
+  // separate, legitimate "this bucket has a conflict" reporting path,
+  // not what this finding targets) — so it never reaches the OUTER catch
+  // in runDashboardBatchQuery() either. This test instead unit-tests
+  // THAT outer catch directly, with a hand-built spec resolveFactsToRows()
+  // itself would reject outright (source_policy='not_applicable' paired
+  // with a real metricDefinitionId — illegal on any real persisted row,
+  // but exactly the "truly unanticipated internal state" finding #2
+  // exists to guard even when the DB's own constraints already prevent
+  // it via every real write path).
+  const { clubId, coachId } = await makeClubCoach("l93");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const connectionId = await makeSourceConnection(clubId);
+  const { metricDefinitionId, versionId } = await makeMetricDefinition({ clubId, adminId: coachId });
+  const act = await makeActivityWithEvent({ clubId, coachId, athleteId, connectionId, date: "2026-09-09" });
+  await addMetricValue({ eventParticipantId: act.eventParticipantId, metricDefinitionId, versionId, value: 42, aggregationRole: "standalone", coverage: "not_applicable" });
+
+  const queryModule = await import("../src/trainingLoadDashboardQuery.js");
+  const results = await queryModule.runDashboardBatchQuery(
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: clubId, dataWorkspaceUserId: null, athleteWorkspaceAthleteId: null, dateFrom: "2026-09-09", dateTo: "2026-09-09" },
+    [{
+      widgetId: "w1", seriesId: "s1", metricDefinitionId, builtInSeriesKey: null,
+      dataScopeLevel: "session", aggregationRolePolicy: "standalone_only", coveragePolicy: "any",
+      sourcePolicy: "not_applicable", sourceConnectionId: null,
+      groupBy: "day", analyticalAggregation: "sum", comparisonPeriod: null,
+      athleteIds: undefined, activityId: null, componentId: null,
+    }],
+  );
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, "error");
+  assert.equal(results[0].error, "seriesQueryFailed", "the public per-series error must be the stable code, never resolveFactsToRows()'s own raw exception message");
+  assert.ok(!JSON.stringify(results).includes("resolveFactsToRows"), "no internal function/identifier name may leak into the response body");
+  assert.ok(!JSON.stringify(results).includes("source_policy"), "no raw internal exception message fragment may leak");
+});
+
+// --- Finding #3: source-connection active-state contract ---
+
+test("§9.4 foreign, nonexistent, and inactive source connections all return the SAME info-hiding 404 via add_series()", async () => {
+  const { clubId: ownClubId, coachCookie } = await makeClubCoach("l94a");
+  const { clubId: otherClubId } = await makeClubCoach("l94b");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+
+  const foreignConnectionId = await makeSourceConnection(otherClubId);
+  const nonexistentConnectionId = crypto.randomUUID();
+  const inactiveConnectionId = await makeSourceConnection(ownClubId);
+  await query(`update training_load.metric_source_connections set state='inactive' where id=$1`, [inactiveConnectionId]);
+
+  for (const [label, connId] of [["foreign", foreignConnectionId], ["nonexistent", nonexistentConnectionId], ["inactive", inactiveConnectionId]]) {
+    const r = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
+      method: "POST", cookie: coachCookie,
+      body: { expectedWidgetRevision: 1, seriesOrder: 1, sourcePolicy: "source_connection", sourceConnectionId: connId, dataScopeLevel: "session", analyticalAggregation: "sum", templateMetricKeyHints: [{ key: "irrelevant-never-reached" }] },
+    });
+    assert.equal(r.status, 404, `[${label}]`);
+    assert.equal(r.body.error, "notFound", `[${label}]`);
+  }
+});
+
+test("§9.4b update_series() also rejects an inactive source connection with the same 404", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l94c");
+  const { metricDefinitionId } = await makeMetricDefinition({ clubId, adminId: coachId });
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum" } });
+  const detail = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  const seriesId = detail.body.widgets[0].series[0].id;
+  const inactiveConnectionId = await makeSourceConnection(clubId);
+  await query(`update training_load.metric_source_connections set state='inactive' where id=$1`, [inactiveConnectionId]);
+  const r = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/${seriesId}`, {
+    method: "PATCH", cookie: coachCookie,
+    body: { expectedWidgetRevision: detail.body.widgets[0].revision, sourcePolicy: "source_connection", sourceConnectionId: inactiveConnectionId },
+  });
+  assert.equal(r.status, 404);
+  assert.equal(r.body.error, "notFound");
+});
+
+// --- Finding #4: workspace snapshot is Promise-memoized (concurrency-safe) ---
+
+test("§9.5 resolveActiveDataWorkspace() memoizes the IN-FLIGHT PROMISE — two truly concurrent calls on the same req share exactly ONE resolveActiveWorkspace() execution", async () => {
+  const dashAccess = await import("../src/trainingLoadDashboardAccess.js");
+  const authzModule = await import("../src/authz.js");
+  const { coachId, clubId } = await makeClubCoach("l95");
+  await setActiveWorkspace(coachId, "club", clubId);
+
+  // Baseline: real DB-statement cost of ONE resolveActiveDataWorkspace()
+  // call on a FRESH req.
+  const authzA = await authzModule.loadAuthorizationContext({ id: coachId });
+  const reqA = { user: { id: coachId }, authz: authzA };
+  const original = pool.query.bind(pool);
+  let counted = 0;
+  pool.query = (...args) => { counted += 1; return original(...args); };
+  try {
+    await dashAccess.resolveActiveDataWorkspace(reqA);
+  } finally {
+    pool.query = original;
+  }
+  const baseline = counted;
+  assert.ok(baseline > 0, "sanity: resolving a workspace does real DB work");
+
+  // Race: two CONCURRENT calls (via Promise.all — both function bodies
+  // start executing before either has awaited anything) on the SAME
+  // fresh req.
+  const authzB = await authzModule.loadAuthorizationContext({ id: coachId });
+  const reqB = { user: { id: coachId }, authz: authzB };
+  counted = 0;
+  pool.query = (...args) => { counted += 1; return original(...args); };
+  let a, b;
+  try {
+    [a, b] = await Promise.all([dashAccess.resolveActiveDataWorkspace(reqB), dashAccess.resolveActiveDataWorkspace(reqB)]);
+  } finally {
+    pool.query = original;
+  }
+  assert.deepEqual(a, b, "both concurrent calls must resolve to the identical snapshot");
+  assert.equal(counted, baseline, `two truly concurrent calls on the same req must cost EXACTLY the same number of DB statements as one call (got ${counted}, expected ${baseline}) — proves the in-flight PROMISE is shared, not just the resolved value`);
+});
+
+// --- Finding #5 + #6 + fail-fast #11: clone snapshot consistency, default_filter copy, portable source-connection contract, and atomic rollback ---
+
+test("§9.6 clone reads a locked template snapshot, copies default_filter, and rolls back ATOMICALLY (zero new rows) when a pinned source connection cannot be resolved in the target workspace", async () => {
+  const clubAId = await makeClub("L96 Club A");
+  const clubBId = await makeClub("L96 Club B");
+  const coachId = await makeUser({ email: `l96-coach-${uid()}@test.local` });
+  await grantClubAdmin(coachId, clubAId);
+  await grantClubAdmin(coachId, clubBId);
+  await setActiveWorkspace(coachId, "club", clubAId);
+  const cookie = await loginCookie(coachId);
+
+  const { athleteId } = await makeAthleteInClub(clubAId);
+  const connectionId = await makeSourceConnection(clubAId); // active, visible ONLY to club A
+  const template = await api("/api/training-load/dashboards", { method: "POST", cookie, body: { name: "Portable Template", ownerScope: "club", ownerClubId: clubAId, isTemplate: true, defaultFilter: { athleteIds: [athleteId] } } });
+  assert.equal(template.status, 201);
+  const templateId = template.body.dashboard.id;
+
+  const w1 = await makeWidgetHttp(cookie, template.body.dashboard);
+  await api(`/api/training-load/dashboards/${templateId}/widgets/${w1.widgetId}/series`, { method: "POST", cookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "rpe", dataScopeLevel: "session", analyticalAggregation: "avg" } });
+
+  const { metricDefinitionId } = await makeMetricDefinition({ clubId: clubAId, adminId: coachId });
+  const dAfterW1 = await api(`/api/training-load/dashboards/${templateId}`, { cookie });
+  const w2 = await makeWidgetHttp(cookie, dAfterW1.body.dashboard, { x: 6 });
+  const addSeriesRes = await api(`/api/training-load/dashboards/${templateId}/widgets/${w2.widgetId}/series`, {
+    method: "POST", cookie,
+    body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, sourcePolicy: "source_connection", sourceConnectionId: connectionId, dataScopeLevel: "session", analyticalAggregation: "sum" },
+  });
+  assert.equal(addSeriesRes.status, 201);
+
+  // Attempt clone into Club B — connectionId is not visible there.
+  await setActiveWorkspace(coachId, "club", clubBId);
+  const beforeDash = (await query(`select count(*)::int as n from training_load.dashboards`)).rows[0].n;
+  const beforeWidgets = (await query(`select count(*)::int as n from training_load.dashboard_widgets`)).rows[0].n;
+  const beforeSeries = (await query(`select count(*)::int as n from training_load.dashboard_widget_series`)).rows[0].n;
+
+  const failedClone = await api(`/api/training-load/dashboards/${templateId}/clone`, { method: "POST", cookie, body: { ownerScope: "club", ownerClubId: clubBId } });
+  assert.equal(failedClone.status, 409);
+  assert.equal(failedClone.body.error, "sourceConnectionResolutionRequired");
+
+  const afterDash = (await query(`select count(*)::int as n from training_load.dashboards`)).rows[0].n;
+  const afterWidgets = (await query(`select count(*)::int as n from training_load.dashboard_widgets`)).rows[0].n;
+  const afterSeries = (await query(`select count(*)::int as n from training_load.dashboard_widget_series`)).rows[0].n;
+  assert.equal(afterDash, beforeDash, "zero new dashboards after the rollback — even though widget 1's built-in series would have succeeded on its own");
+  assert.equal(afterWidgets, beforeWidgets, "zero new widgets");
+  assert.equal(afterSeries, beforeSeries, "zero new series rows");
+
+  // A successful clone (same club, connection IS visible) proves the
+  // FOR-SHARE-locked snapshot is read correctly and default_filter is
+  // copied — previously silently dropped.
+  await setActiveWorkspace(coachId, "club", clubAId);
+  const okClone = await api(`/api/training-load/dashboards/${templateId}/clone`, { method: "POST", cookie, body: { ownerScope: "club", ownerClubId: clubAId } });
+  assert.equal(okClone.status, 201);
+  assert.deepEqual(okClone.body.dashboard.default_filter, { athleteIds: [athleteId] }, "default_filter must be copied from the template, not silently dropped");
+  const detail = await api(`/api/training-load/dashboards/${okClone.body.dashboard.id}`, { cookie });
+  assert.equal(detail.body.widgets.length, 2);
+});
+
+// --- Finding #6: portable template-series contract ---
+
+test("§9.8 a template series bound directly to a real metric (auto-snapshotted hints) re-resolves per target workspace: resolved / unresolved / ambiguous", async () => {
+  const { adminId } = await makePlatformAdmin("l98admin");
+  // A club-owned template is visible ONLY within its own club (unlike a
+  // system template, visible everywhere) — so exercising it from a
+  // DIFFERENT target club needs the SAME coach to manage both clubs
+  // (same pattern as §9.6), never an unrelated coach who could never
+  // legitimately see it in the first place.
+  const sourceClubId = await makeClub("L98 Source Club");
+  const otherClubId = await makeClub("L98 Other Club");
+  const coachId = await makeUser({ email: `l98-coach-${uid()}@test.local` });
+  await grantClubAdmin(coachId, sourceClubId);
+  await grantClubAdmin(coachId, otherClubId);
+  await setActiveWorkspace(coachId, "club", sourceClubId);
+  const cookie = await loginCookie(coachId);
+
+  const sharedKey = `direct-key-${uid()}`;
+  const { metricDefinitionId: sourceMetricId } = await makeMetricDefinition({ clubId: sourceClubId, adminId: coachId, key: sharedKey });
+
+  const template = await makeDashboardHttp(cookie, { ownerScope: "club", ownerClubId: sourceClubId, isTemplate: true });
+  const tw = await makeWidgetHttp(cookie, template);
+  const addRes = await api(`/api/training-load/dashboards/${template.id}/widgets/${tw.widgetId}/series`, {
+    method: "POST", cookie,
+    body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId: sourceMetricId, dataScopeLevel: "session", analyticalAggregation: "sum" },
+  });
+  assert.equal(addRes.status, 201);
+
+  // RESOLVED: clone into the SAME club — exactly 1 visible candidate.
+  const clonedResolved = await api(`/api/training-load/dashboards/${template.id}/clone`, { method: "POST", cookie, body: { ownerScope: "club", ownerClubId: sourceClubId } });
+  assert.equal(clonedResolved.status, 201);
+  const detailResolved = await api(`/api/training-load/dashboards/${clonedResolved.body.dashboard.id}`, { cookie });
+  assert.equal(detailResolved.body.widgets[0].series[0].resolution_status, "resolved");
+  assert.equal(detailResolved.body.widgets[0].series[0].metric_definition_id, sourceMetricId);
+
+  // UNRESOLVED: clone into the OTHER club (same coach, no matching key
+  // there) — must switch the active workspace first, since clone
+  // visibility of a club-owned template requires the caller's CURRENT
+  // active workspace to actually match its own club.
+  await setActiveWorkspace(coachId, "club", otherClubId);
+  const clonedUnresolved = await api(`/api/training-load/dashboards/${template.id}/clone`, { method: "POST", cookie, body: { ownerScope: "club", ownerClubId: otherClubId } });
+  assert.equal(clonedUnresolved.status, 201);
+  const detailUnresolved = await api(`/api/training-load/dashboards/${clonedUnresolved.body.dashboard.id}`, { cookie });
+  assert.equal(detailUnresolved.body.widgets[0].series[0].resolution_status, "unresolved");
+  assert.equal(detailUnresolved.body.widgets[0].series[0].metric_definition_id, null);
+
+  // AMBIGUOUS: add a SECOND, system-scope metric sharing the SAME key —
+  // now visible from the SOURCE club too — then clone there again.
+  await setActiveWorkspace(coachId, "club", sourceClubId);
+  const sysDef = await query(`insert into training_load.metric_definitions (key, label, owner_scope, state, created_by_user_id) values ($1,'Sys Dup','system','active',$2) returning id`, [sharedKey, adminId]);
+  const sysVer = await query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id) values ($1,1,'bpm','numeric','sum',$2) returning id`, [sysDef.rows[0].id, adminId]);
+  await query(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [sysVer.rows[0].id, sysDef.rows[0].id]);
+  const clonedAmbiguous = await api(`/api/training-load/dashboards/${template.id}/clone`, { method: "POST", cookie, body: { ownerScope: "club", ownerClubId: sourceClubId } });
+  assert.equal(clonedAmbiguous.status, 201);
+  const detailAmbiguous = await api(`/api/training-load/dashboards/${clonedAmbiguous.body.dashboard.id}`, { cookie });
+  const s = detailAmbiguous.body.widgets[0].series[0];
+  assert.equal(s.resolution_status, "ambiguous");
+  assert.equal(s.metric_definition_id, null);
+  assert.equal(s.template_resolution_candidates.length, 2);
+  assert.ok(s.template_resolution_candidates.includes(sourceMetricId));
+  assert.ok(s.template_resolution_candidates.includes(sysDef.rows[0].id));
+});
+
+// --- Finding #7: strict Node-side validation ---
+
+test("§9.10 strict Node-side validation: revision/order type+range, name/title trim+whitespace, description type, unknown fields, defaultFilter saved on create", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("l910");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+
+  const cases = [
+    ["revision as float", () => api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: 1.5, name: "X" } })],
+    ["revision zero", () => api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: 0, name: "X" } })],
+    ["revision negative", () => api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: -1, name: "X" } })],
+    ["revision as string", () => api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: "1", name: "X" } })],
+    ["whitespace-only name", () => api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: dashboard.revision, name: "   " } })],
+    ["description wrong type", () => api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: dashboard.revision, description: 123 } })],
+    ["unknown field on metadata PATCH (retired clearDescription contract)", () => api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: dashboard.revision, clearDescription: true } })],
+    ["whitespace-only widget title", () => api(`/api/training-load/dashboards/${dashboard.id}/widgets`, { method: "POST", cookie: coachCookie, body: { expectedDashboardRevision: dashboard.revision, widgetType: "table", title: "   ", widgetOrder: 500, x: 0, y: 0, width: 6, height: 4, mobileOrder: 500 } })],
+    ["negative order field", () => api(`/api/training-load/dashboards/${dashboard.id}/widgets`, { method: "POST", cookie: coachCookie, body: { expectedDashboardRevision: dashboard.revision, widgetType: "table", title: "W", widgetOrder: -1, x: 0, y: 0, width: 6, height: 4, mobileOrder: 500 } })],
+    ["non-integer order field", () => api(`/api/training-load/dashboards/${dashboard.id}/widgets`, { method: "POST", cookie: coachCookie, body: { expectedDashboardRevision: dashboard.revision, widgetType: "table", title: "W", widgetOrder: 1.5, x: 0, y: 0, width: 6, height: 4, mobileOrder: 500 } })],
+    ["missing required order field", () => api(`/api/training-load/dashboards/${dashboard.id}/widgets`, { method: "POST", cookie: coachCookie, body: { expectedDashboardRevision: dashboard.revision, widgetType: "table", title: "W", x: 0, y: 0, width: 6, height: 4, mobileOrder: 500 } })],
+    ["unknown field on widget PATCH (retired clearLocalFilterOverride contract)", () => api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 1, clearLocalFilterOverride: true } })],
+    ["unknown field on series PATCH (retired clearComparisonPeriod contract)", () => api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series/${crypto.randomUUID()}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 1, clearComparisonPeriod: true } })],
+    ["unknown field on dashboard create", () => api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "X", bogusField: 1 } })],
+  ];
+  for (const [label, run] of cases) {
+    const r = await run();
+    assert.equal(r.status, 400, `[${label}] expected 400, got ${r.status}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.error, "invalidRequest", `[${label}]`);
+  }
+
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const createdWithFilter = await api("/api/training-load/dashboards", { method: "POST", cookie: coachCookie, body: { name: "With Filter", defaultFilter: { athleteIds: [athleteId] } } });
+  assert.equal(createdWithFilter.status, 201);
+  assert.deepEqual(createdWithFilter.body.dashboard.default_filter, { athleteIds: [athleteId] }, "POST /dashboards previously ignored defaultFilter entirely — it must now be validated and persisted");
+});
+
+// --- Fail-fast #1/#2: shared athlete across two real workspaces ---
+
+test("§9.11 a shared athlete real in BOTH Club A and Club B: Club A's dashboard sees only Club A's own activity data, never Club B's", async () => {
+  const { adminId } = await makePlatformAdmin("l911admin");
+  const { clubId: clubAId, coachId: coachAId, coachCookie: coachACookie } = await makeClubCoach("l911a");
+  const { clubId: clubBId, coachId: coachBId } = await makeClubCoach("l911b");
+  const { athleteId } = await makeAthleteInClub(clubAId);
+  await query(`insert into public.athlete_memberships (athlete_id, club_id, membership_type, status) values ($1,$2,'club','active')`, [athleteId, clubBId]);
+
+  // ONE system-scope metric, visible/bindable everywhere — the SAME
+  // metric is used for both clubs' activities so the isolation this test
+  // proves comes purely from ACTIVITY-level owner_club_id scoping, never
+  // incidentally from the metric binding itself narrowing things.
+  const sysDef = await query(`insert into training_load.metric_definitions (key, label, owner_scope, state, created_by_user_id) values ($1,'Shared Metric','system','active',$2) returning id`, [`shared-${uid()}`, adminId]);
+  const sysVer = await query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id) values ($1,1,'bpm','numeric','sum',$2) returning id`, [sysDef.rows[0].id, adminId]);
+  await query(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [sysVer.rows[0].id, sysDef.rows[0].id]);
+  await query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'session')`, [sysDef.rows[0].id]);
+  const metricDefinitionId = sysDef.rows[0].id;
+  const versionId = sysVer.rows[0].id;
+
+  const connA = await makeSourceConnection(clubAId);
+  const connB = await makeSourceConnection(clubBId);
+  const actA = await makeActivityWithEvent({ clubId: clubAId, coachId: coachAId, athleteId, connectionId: connA, date: "2026-09-09" });
+  await addMetricValue({ eventParticipantId: actA.eventParticipantId, metricDefinitionId, versionId, value: 111, aggregationRole: "standalone", coverage: "not_applicable" });
+  const actB = await makeActivityWithEvent({ clubId: clubBId, coachId: coachBId, athleteId, connectionId: connB, date: "2026-09-09" });
+  await addMetricValue({ eventParticipantId: actB.eventParticipantId, metricDefinitionId, versionId, value: 222, aggregationRole: "standalone", coverage: "not_applicable" });
+
+  const dashboard = await makeDashboardHttp(coachACookie, { ownerScope: "club", ownerClubId: clubAId });
+  const w = await makeWidgetHttp(coachACookie, dashboard);
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
+    method: "POST", cookie: coachACookie,
+    body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" },
+  });
+  const result = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachACookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.equal(result.status, 200);
+  const values = result.body.widgets[0].series[0].data.current.map((r) => Number(r.value));
+  assert.deepEqual(values, [111], "only Club A's own activity value for the shared athlete — Club B's value for the SAME athlete/metric must never leak in");
+});
+
+test("§9.12 a shared athlete real in BOTH Team A and Team B: Team A's dashboard sees only Team A's own activity data, never Team B's", async () => {
+  const { adminId } = await makePlatformAdmin("l912admin");
+  const { clubId, teamId: teamAId, coachId, coachCookie: coachACookie } = await makeTeamCoach("l912a");
+  const teamBRes = await query(`insert into public.teams (club_id, name) values ($1,'Team B L912') returning id`, [clubId]);
+  const teamBId = teamBRes.rows[0].id;
+  await query(`insert into public.user_team_roles (user_id, team_id, role) values ($1,$2,'team_coach')`, [coachId, teamBId]);
+
+  const athleteId = await makeAthlete({});
+  await query(`insert into public.athlete_memberships (athlete_id, team_id, membership_type, status) values ($1,$2,'team','active')`, [athleteId, teamAId]);
+  await query(`insert into public.athlete_memberships (athlete_id, team_id, membership_type, status) values ($1,$2,'team','active')`, [athleteId, teamBId]);
+
+  const sysDef = await query(`insert into training_load.metric_definitions (key, label, owner_scope, state, created_by_user_id) values ($1,'Shared Team Metric','system','active',$2) returning id`, [`shared-team-${uid()}`, adminId]);
+  const sysVer = await query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id) values ($1,1,'bpm','numeric','sum',$2) returning id`, [sysDef.rows[0].id, adminId]);
+  await query(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [sysVer.rows[0].id, sysDef.rows[0].id]);
+  await query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'session')`, [sysDef.rows[0].id]);
+  const metricDefinitionId = sysDef.rows[0].id;
+  const versionId = sysVer.rows[0].id;
+
+  // A team-scoped event requires a team-scoped source connection (the DB
+  // trigger requires the event's own owner_scope to match its
+  // connection's owner_scope) — makeSourceConnection only makes club-
+  // scoped ones, so each team gets its own real team-scoped connection.
+  const connA = (await query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1) returning id`, [teamAId])).rows[0].id;
+  const connB = (await query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1) returning id`, [teamBId])).rows[0].id;
+  const actA = await makeActivityWithEventScoped({ ownerScope: "team", scopeId: teamAId, coachId, athleteId, connectionId: connA, date: "2026-09-09" });
+  await addMetricValue({ eventParticipantId: actA.eventParticipantId, metricDefinitionId, versionId, value: 111, aggregationRole: "standalone", coverage: "not_applicable" });
+  const actB = await makeActivityWithEventScoped({ ownerScope: "team", scopeId: teamBId, coachId, athleteId, connectionId: connB, date: "2026-09-09", startedAt: "2026-09-09T15:00:00Z" });
+  await addMetricValue({ eventParticipantId: actB.eventParticipantId, metricDefinitionId, versionId, value: 222, aggregationRole: "standalone", coverage: "not_applicable" });
+
+  const dashboard = await makeDashboardHttp(coachACookie, { ownerScope: "team", ownerTeamId: teamAId });
+  const w = await makeWidgetHttp(coachACookie, dashboard);
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
+    method: "POST", cookie: coachACookie,
+    body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" },
+  });
+  const result = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachACookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.equal(result.status, 200);
+  const values = result.body.widgets[0].series[0].data.current.map((r) => Number(r.value));
+  assert.deepEqual(values, [111], "only Team A's own activity value for the shared athlete — Team B's value for the SAME athlete/metric must never leak in");
+});
+
+// --- Fail-fast #4/#5/#6: default/runtime/widget-override clearing for activityId/componentId ---
+
+test("§9.13 dashboard default activityId is cleared by an explicit runtime activityId:null", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l913");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const connectionId = await makeSourceConnection(clubId);
+  const { metricDefinitionId, versionId } = await makeMetricDefinition({ clubId, adminId: coachId });
+  const act1 = await makeActivityWithEvent({ clubId, coachId, athleteId, connectionId, date: "2026-09-09" });
+  await addMetricValue({ eventParticipantId: act1.eventParticipantId, metricDefinitionId, versionId, value: 100, aggregationRole: "standalone", coverage: "not_applicable" });
+  const act2 = await makeActivityWithEvent({ clubId, coachId, athleteId, connectionId, date: "2026-09-09", startedAt: "2026-09-09T15:00:00Z" });
+  await addMetricValue({ eventParticipantId: act2.eventParticipantId, metricDefinitionId, versionId, value: 200, aggregationRole: "standalone", coverage: "not_applicable" });
+
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const patched = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: dashboard.revision, defaultFilter: { activityId: act1.activityId } } });
+  assert.equal(patched.status, 200);
+  const w = await makeWidgetHttp(coachCookie, patched.body.dashboard);
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" } });
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 2, groupBy: "session" } });
+
+  const withDefault = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.deepEqual(withDefault.body.widgets[0].series[0].data.current.map((r) => Number(r.value)), [100], "the default activityId narrows to act1 only");
+
+  const cleared = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09", activityId: null } });
+  const values = cleared.body.widgets[0].series[0].data.current.map((r) => Number(r.value)).sort();
+  assert.deepEqual(values, [100, 200], "an explicit runtime activityId:null clears the dashboard default — both activities show");
+});
+
+test("§9.14 dashboard default componentId is cleared by an explicit runtime componentId:null", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l914");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const connectionId = await makeSourceConnection(clubId);
+  const { metricDefinitionId, versionId } = await makeMetricDefinition({ clubId, adminId: coachId });
+  const act = await makeActivityWithEvent({ clubId, coachId, athleteId, connectionId, date: "2026-09-09" });
+  await addMetricValue({ eventParticipantId: act.eventParticipantId, metricDefinitionId, versionId, value: 100, aggregationRole: "standalone", coverage: "not_applicable" });
+
+  const dashboard = await makeDashboardHttp(coachCookie);
+  // A default componentId that resolves to NO owning activity structurally
+  // zeroes out the authorized activity set (buildRangeContext's own
+  // componentId-intersection rule) — a deterministic, real way to prove
+  // the CLEAR mechanism without needing the full component_types/segment-
+  // link fixture graph a real component grain needs (already exercised,
+  // via activityId, by §6.1/§6.2 from the original round; that shared
+  // code path is what actually narrows by componentId too).
+  const bogusComponentId = crypto.randomUUID();
+  const patched = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: dashboard.revision, defaultFilter: { componentId: bogusComponentId } } });
+  assert.equal(patched.status, 200);
+  const w = await makeWidgetHttp(coachCookie, patched.body.dashboard);
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" } });
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 2, groupBy: "session" } });
+
+  const withDefault = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  assert.equal(withDefault.body.widgets[0].series[0].data.current.length, 0, "the (unmatched) default componentId narrows to zero rows");
+
+  const cleared = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09", componentId: null } });
+  assert.deepEqual(cleared.body.widgets[0].series[0].data.current.map((r) => Number(r.value)), [100], "an explicit runtime componentId:null clears the dashboard default — the real activity shows again");
+});
+
+test("§9.15 a widget local override of activityId:null/componentId:null correctly overrides a real dashboard default for THAT widget only", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l915");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const connectionId = await makeSourceConnection(clubId);
+  const { metricDefinitionId, versionId } = await makeMetricDefinition({ clubId, adminId: coachId });
+  const act1 = await makeActivityWithEvent({ clubId, coachId, athleteId, connectionId, date: "2026-09-09" });
+  await addMetricValue({ eventParticipantId: act1.eventParticipantId, metricDefinitionId, versionId, value: 100, aggregationRole: "standalone", coverage: "not_applicable" });
+  const act2 = await makeActivityWithEvent({ clubId, coachId, athleteId, connectionId, date: "2026-09-09", startedAt: "2026-09-09T15:00:00Z" });
+  await addMetricValue({ eventParticipantId: act2.eventParticipantId, metricDefinitionId, versionId, value: 200, aggregationRole: "standalone", coverage: "not_applicable" });
+
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const patched = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: dashboard.revision, defaultFilter: { activityId: act1.activityId } } });
+  const w1 = await makeWidgetHttp(coachCookie, patched.body.dashboard);
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w1.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" } });
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w1.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 2, groupBy: "session" } });
+
+  const dAfter1 = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  const w2 = await makeWidgetHttp(coachCookie, dAfter1.body.dashboard, { x: 6, localFilterOverride: { activityId: null, componentId: null } });
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w2.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" } });
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w2.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 2, groupBy: "session" } });
+
+  const result = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  const byWidget = Object.fromEntries(result.body.widgets.map((w) => [w.widgetId, w.series[0]]));
+  assert.deepEqual(byWidget[w1.widgetId].data.current.map((r) => Number(r.value)), [100], "widget 1 inherits the real dashboard default (act1 only)");
+  assert.deepEqual(byWidget[w2.widgetId].data.current.map((r) => Number(r.value)).sort(), [100, 200], "widget 2's own {activityId:null, componentId:null} override clears the default for THIS widget only — both activities show");
+});
+
+// --- Fail-fast #7: athleteIds:[] locked semantics ---
+
+test("§9.16 athleteIds:[] means 'no athlete restriction', identically to null/absent — including sharing the SAME range-context cache key", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l916");
+  const { athleteId: athleteA } = await makeAthleteInClub(clubId);
+  const { athleteId: athleteB } = await makeAthleteInClub(clubId);
+  const connectionId = await makeSourceConnection(clubId);
+  const { metricDefinitionId, versionId } = await makeMetricDefinition({ clubId, adminId: coachId });
+  const actA = await makeActivityWithEvent({ clubId, coachId, athleteId: athleteA, connectionId, date: "2026-09-09" });
+  await addMetricValue({ eventParticipantId: actA.eventParticipantId, metricDefinitionId, versionId, value: 11, aggregationRole: "standalone", coverage: "not_applicable" });
+  const actB = await makeActivityWithEvent({ clubId, coachId, athleteId: athleteB, connectionId, date: "2026-09-09", startedAt: "2026-09-09T15:00:00Z" });
+  await addMetricValue({ eventParticipantId: actB.eventParticipantId, metricDefinitionId, versionId, value: 22, aggregationRole: "standalone", coverage: "not_applicable" });
+
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w1 = await makeWidgetHttp(coachCookie, dashboard);
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w1.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" } });
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w1.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 2, groupBy: "session" } });
+  const dAfter1 = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  const w2 = await makeWidgetHttp(coachCookie, dAfter1.body.dashboard, { x: 6, localFilterOverride: { athleteIds: [] } });
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w2.widgetId}/series`, { method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" } });
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w2.widgetId}`, { method: "PATCH", cookie: coachCookie, body: { expectedWidgetRevision: 2, groupBy: "session" } });
+
+  const original = pool.query.bind(pool);
+
+  // Baseline: cost of querying widget 1 ALONE (its own one range context).
+  let before = queryCount;
+  pool.query = (...args) => { queryCount += 1; return original(...args); };
+  let onlyW1;
+  try {
+    onlyW1 = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09", widgetIds: [w1.widgetId] } });
+  } finally {
+    pool.query = original;
+  }
+  const singleWidgetCost = queryCount - before;
+  assert.equal(onlyW1.status, 200);
+
+  // Both widgets together — if athleteIds:[] genuinely normalizes to the
+  // SAME cache key as widget 1's "no filter at all", this must cost only
+  // a small per-series increment over the single-widget baseline (one
+  // extra series to read/reduce), never a SECOND range-context fetch
+  // (which would add many more statements — activity ids, canonical
+  // facts, occasion context, version info, participant rows, ...).
+  before = queryCount;
+  pool.query = (...args) => { queryCount += 1; return original(...args); };
+  let result;
+  try {
+    result = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  } finally {
+    pool.query = original;
+  }
+  const bothWidgetsCost = queryCount - before;
+  assert.equal(result.status, 200);
+  const byWidget = Object.fromEntries(result.body.widgets.map((w) => [w.widgetId, w.series[0]]));
+  assert.deepEqual(byWidget[w1.widgetId].data.current.map((r) => Number(r.value)).sort(), [11, 22], "widget 1 (no filter at all) sees both athletes");
+  assert.deepEqual(byWidget[w2.widgetId].data.current.map((r) => Number(r.value)).sort(), [11, 22], "widget 2's athleteIds:[] override must behave identically — 'no restriction', never 'restrict to nobody'");
+  assert.ok(bothWidgetsCost <= singleWidgetCost + 3, `adding widget 2 (whose athleteIds:[] must share widget 1's range context) must cost only a tiny increment over the single-widget baseline, not a whole second context fetch — single-widget=${singleWidgetCost}, both=${bothWidgetsCost}`);
+});
+
+// --- Fail-fast #8: 100+ widgets across 3 contexts, bounded query count ---
+
+test("§9.17 NO N+1 at real scale: 100 widgets split across 3 distinct filter contexts still cost a small, bounded (<=30) statement count", { timeout: 120000 }, async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("l917");
+  const { athleteId: athleteA } = await makeAthleteInClub(clubId);
+  const { athleteId: athleteB } = await makeAthleteInClub(clubId);
+  const connectionId = await makeSourceConnection(clubId);
+  const { metricDefinitionId, versionId } = await makeMetricDefinition({ clubId, adminId: coachId });
+  for (const athleteId of [athleteA, athleteB]) {
+    const act = await makeActivityWithEvent({ clubId, coachId, athleteId, connectionId, date: "2026-09-09" });
+    await addMetricValue({ eventParticipantId: act.eventParticipantId, metricDefinitionId, versionId, value: 42, aggregationRole: "standalone", coverage: "not_applicable" });
+  }
+  const dashboard = await makeDashboardHttp(coachCookie);
+  let currentDashboard = dashboard;
+  const contexts = [{ athleteIds: [athleteA] }, { athleteIds: [athleteB] }, null];
+  for (let i = 0; i < 100; i += 1) {
+    const override = contexts[i % 3];
+    const w = await makeWidgetHttp(coachCookie, currentDashboard, { widgetType: "kpi", x: (i % 4) * 3, y: Math.floor(i / 4) * 2, width: 3, height: 2, ...(override ? { localFilterOverride: override } : {}) });
+    await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
+      method: "POST", cookie: coachCookie,
+      body: { expectedWidgetRevision: 1, seriesOrder: 1, metricDefinitionId, dataScopeLevel: "session", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" },
+    });
+    currentDashboard = (await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie })).body.dashboard;
+  }
+  const before = queryCount;
+  const original = pool.query.bind(pool);
+  pool.query = (...args) => { queryCount += 1; return original(...args); };
+  let result;
+  try {
+    result = await api(`/api/training-load/dashboards/${dashboard.id}/query`, { method: "POST", cookie: coachCookie, body: { dateFrom: "2026-09-09", dateTo: "2026-09-09" } });
+  } finally {
+    pool.query = original;
+  }
+  const statementsForThisQuery = queryCount - before;
+  assert.equal(result.status, 200);
+  for (const w of result.body.widgets) assert.equal(w.series[0].status, "ok");
+  assert.ok(statementsForThisQuery <= 30, `expected <=30 DB statements for 100 widgets across 3 distinct filter contexts (was 26 for 12 widgets/3 contexts) — got ${statementsForThisQuery}`);
+  console.log(`[§9.17] 100 widgets / 3 distinct filter contexts -> ${statementsForThisQuery} DB statements`);
+});
+
+// --- Finding #9: resolveTemplateSeriesForWorkspace() scalability ---
+
+test("§9.18 resolveTemplateSeriesForWorkspace() stays set-based at real scale: 1000 metric definitions, many shared keys/owner scopes/capabilities, many resolved hints", async () => {
+  const { adminId } = await makePlatformAdmin("l918admin");
+  const { clubId, coachId } = await makeClubCoach("l918");
+  const keyPrefix = `stress-${uid()}`;
+  const HINT_COUNT = 100;
+
+  // Structural note: training_load.metric_definitions has a real UNIQUE
+  // constraint on (owner_scope, owner_user_id, owner_club_id, owner_team_id,
+  // key) — so within ONE owner scope+id, a key can appear at most once.
+  // The realistic "many equal keys, many candidates" shape this schema
+  // actually supports is: many DISTINCT keys, each with a SMALL, bounded
+  // number of owner-scope variants (here: 1 system + 1 club per key) —
+  // 1000 total definitions (500 keys x 2 owner scopes), each key resolving
+  // to exactly 2 real candidates when queried from the target club. This
+  // is what "different owner scopes and capabilities" genuinely means at
+  // this scale, not one hint impossibly matching hundreds of duplicate
+  // rows under a single owner scope.
+  // NOTE: a single WITH-clause statement whose primary UPDATE targets the
+  // SAME table an earlier CTE just INSERTed into does not reliably see
+  // those brand-new rows (the primary statement's own row lookups use
+  // the pre-statement snapshot) — confirmed empirically. So each block
+  // below is genuinely TWO round trips (one combined insert-of-
+  // definitions+versions, one bulk update wiring current_version_id via
+  // array parameters) rather than one, but still nowhere near 1000
+  // individual round trips.
+  async function bulkCreateStressDefinitions(ownerScope, ownerClubId, count) {
+    const ownerCol = ownerScope === "club" ? "owner_club_id" : null;
+    const defs = ownerCol
+      ? await query(
+          `insert into training_load.metric_definitions (key, label, owner_scope, ${ownerCol}, state, created_by_user_id)
+           select $1 || '-' || i, 'Stress ' || $3 || ' ' || i, $3, $4, 'active', $5
+           from generate_series(1, $2) as i
+           returning id`,
+          [keyPrefix, count, ownerScope, ownerClubId, adminId],
+        )
+      : await query(
+          `insert into training_load.metric_definitions (key, label, owner_scope, state, created_by_user_id)
+           select $1 || '-' || i, 'Stress ' || $3 || ' ' || i, $3, 'active', $4
+           from generate_series(1, $2) as i
+           returning id`,
+          [keyPrefix, count, ownerScope, adminId],
+        );
+    const defIds = defs.rows.map((r) => r.id);
+    const vers = await query(
+      `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id)
+       select id, 1, 'bpm', 'numeric', 'sum', $2 from unnest($1::uuid[]) as id
+       returning id, metric_definition_id`,
+      [defIds, adminId],
+    );
+    await query(
+      `update training_load.metric_definitions d set current_version_id = v.ver_id
+       from (select unnest($1::uuid[]) as def_id, unnest($2::uuid[]) as ver_id) v
+       where v.def_id = d.id`,
+      [vers.rows.map((r) => r.metric_definition_id), vers.rows.map((r) => r.id)],
+    );
+  }
+  await bulkCreateStressDefinitions("system", null, 500);
+  await bulkCreateStressDefinitions("club", clubId, 500);
+  await query(
+    `insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level)
+     select id, 'session' from training_load.metric_definitions where key like $1 || '-%'`,
+    [keyPrefix],
+  );
+  const totalDefs = (await query(`select count(*)::int as n from training_load.metric_definitions where key like $1 || '-%'`, [keyPrefix])).rows[0].n;
+  assert.equal(totalDefs, 1000, "sanity: exactly 1000 stress-fixture definitions were created");
+
+  const widgetsModule = await import("../src/trainingLoadDashboardWidgets.js");
+  const original = pool.query.bind(pool);
+  let statementsUsed = 0;
+  pool.query = (...args) => { statementsUsed += 1; return original(...args); };
+  const start = Date.now();
+  let ambiguousCount = 0;
+  try {
+    for (let i = 1; i <= HINT_COUNT; i += 1) {
+      const resolved = await widgetsModule.resolveTemplateSeriesForWorkspace(query, {
+        hints: [{ key: `${keyPrefix}-${i}`, scopeLevel: "session" }],
+        dataWorkspaceType: "club", dataWorkspaceScopeId: clubId, ownerUserId: null,
+      });
+      if (resolved.status === "ambiguous") {
+        assert.equal(resolved.candidateIds.length, 2, `hint ${i} must resolve to exactly the 2 real candidates (1 system + 1 club) — never more, never fewer`);
+        ambiguousCount += 1;
+      }
+    }
+  } finally {
+    pool.query = original;
+  }
+  const elapsedMs = Date.now() - start;
+  assert.equal(ambiguousCount, HINT_COUNT, "every one of the 100 resolved hints must genuinely see both its system and club candidate");
+  // 2 queries per hint (1 for candidates, 1 for the set-based capability
+  // check) is the real, current per-hint cost — bounded well clear of
+  // any per-CANDIDATE blowup (the bug this finding fixed): a per-candidate
+  // N+1 would have cost ~4-6 queries per hint here (2 candidates x 2 each
+  // + 1), i.e. approaching 500-600 total, not ~200.
+  assert.ok(statementsUsed <= HINT_COUNT * 3, `resolveTemplateSeriesForWorkspace must cost a small, PER-HINT-bounded query count, not scale with candidate count or the 1000-definition pool size — got ${statementsUsed} statements for ${HINT_COUNT} hints`);
+  console.log(`[§9.18] 1000 metric definitions (500 keys x 2 owner scopes), ${HINT_COUNT} resolved hints -> ${statementsUsed} DB statements, ${elapsedMs}ms`);
 });
