@@ -1,11 +1,12 @@
 // Training Load Analysis Dashboard — widgets, series, and layout. Every
-// WRITE below calls exactly one of the 13 sanctioned SQL functions
+// WRITE below calls exactly one of the 15 sanctioned SQL functions
 // (migrations_v2 v17) — never a raw INSERT/UPDATE/DELETE against
 // dashboard_widgets/dashboard_widget_series. Pure service functions
 // taking an already-resolved dashboard row (the caller — routes/
 // trainingLoadDashboard.js — has already authorized it via
 // canManageDashboardRow before any of these are reached).
 import { query } from "./db.js";
+import { isMetricVisibleToDashboard, isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
 
 function httpError(status, message, code) {
   const e = new Error(message);
@@ -19,15 +20,40 @@ function httpError(status, message, code) {
 // deliberately distinct from the generic 'P0001' (plain RAISE EXCEPTION)
 // every OTHER business-rule violation in this schema uses, so the two
 // can be told apart here without any string matching on the message.
+// Deliberately NEVER forwards the raw DB message to the caller — every
+// trigger/function message in this schema can name internal ids, table
+// names, or another workspace's owner_scope/club/team, none of which may
+// ever reach an HTTP client (see routes/trainingLoadDashboard.js's
+// respondToServiceError, which applies the same rule to every OTHER raw
+// pg error that reaches the route layer without having gone through this
+// function first).
 function toStaleOrRaise(error) {
-  if (error?.code === "40001") throw httpError(409, error.message, "STALE_REVISION");
-  if (error?.code === "P0001") throw httpError(400, error.message);
+  if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");
+  if (error?.code === "P0001") throw httpError(400, "Invalid request.", "invalidRequest");
   throw error;
 }
 
 async function assertOwnsWidget(dashboardId, widgetId) {
   const r = await query(`select 1 from training_load.dashboard_widgets where id = $1 and dashboard_id = $2`, [widgetId, dashboardId]);
   if (!r.rowCount) throw httpError(404, "Widget not found on this dashboard.");
+}
+
+// Application-layer pre-checks (finding #7 of the 3B2 corrective round) —
+// mirror the exact DB trigger visibility predicate so a foreign or
+// nonexistent metric/source-connection reference maps to a clean,
+// info-hiding 404 HERE, before ever reaching the trigger (whose own
+// message must never reach the client). A metric must also be ACTIVE —
+// same "may only be NEWLY bound to an active metric" rule the trigger
+// itself enforces.
+async function assertMetricReferenceOk(dashboardRow, metricDefinitionId) {
+  if (!metricDefinitionId) return;
+  const { visible, def } = await isMetricVisibleToDashboard(dashboardRow, metricDefinitionId);
+  if (!visible || !def || def.state !== "active") throw httpError(404, "Metric not found.");
+}
+async function assertSourceConnectionReferenceOk(dashboardRow, sourceConnectionId) {
+  if (!sourceConnectionId) return;
+  const { visible } = await isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId);
+  if (!visible) throw httpError(404, "Source connection not found.");
 }
 
 // ------------------------------------------------------------
@@ -74,7 +100,11 @@ export async function resolveTemplateSeriesForWorkspace(runQuery, { hints, dataW
     }
     if (rows.length === 0) continue;
     if (rows.length === 1) return { status: "resolved", candidateIds: [rows[0].id] };
-    return { status: "needs_resolution", candidateIds: rows.map((r) => r.id) };
+    // 2+ equally-valid candidates — the DB's own resolution_status CHECK
+    // only allows 'resolved'/'unresolved'/'ambiguous' (dashboard_widget_
+    // widget_series, v16); this must be 'ambiguous', never a made-up
+    // fourth status, and never an auto-picked winner.
+    return { status: "ambiguous", candidateIds: rows.map((r) => r.id) };
   }
   return { status: "unresolved", candidateIds: [] };
 }
@@ -149,8 +179,10 @@ export async function deleteWidget(dashboardId, widgetId, { expectedWidgetRevisi
 // Series.
 // ------------------------------------------------------------
 
-export async function addSeries(dashboardId, widgetId, body, createdByUserId) {
+export async function addSeries(dashboardId, widgetId, body, createdByUserId, dashboardRow) {
   await assertOwnsWidget(dashboardId, widgetId);
+  await assertMetricReferenceOk(dashboardRow, body.metricDefinitionId);
+  await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId);
   // A built-in series has no Metrics-Core provenance concept at all — the
   // table's own CHECK requires source_policy='not_applicable' (and no
   // source_connection_id) whenever built_in_series_key is set, so the
@@ -178,8 +210,9 @@ export async function addSeries(dashboardId, widgetId, body, createdByUserId) {
   }
 }
 
-export async function updateSeries(dashboardId, widgetId, seriesId, body) {
+export async function updateSeries(dashboardId, widgetId, seriesId, body, dashboardRow) {
   await assertOwnsWidget(dashboardId, widgetId);
+  if (body.sourceConnectionId) await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId);
   try {
     const r = await query(
       `select * from training_load.update_series($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
@@ -218,8 +251,9 @@ export async function reorderSeries(dashboardId, widgetId, { expectedWidgetRevis
   }
 }
 
-export async function resolveSeriesBinding(dashboardId, widgetId, seriesId, { expectedWidgetRevision, metricDefinitionId }) {
+export async function resolveSeriesBinding(dashboardId, widgetId, seriesId, { expectedWidgetRevision, metricDefinitionId }, dashboardRow) {
   await assertOwnsWidget(dashboardId, widgetId);
+  await assertMetricReferenceOk(dashboardRow, metricDefinitionId);
   try {
     const r = await query(`select * from training_load.resolve_series_binding($1, $2, $3, $4)`, [seriesId, widgetId, expectedWidgetRevision, metricDefinitionId]);
     return { seriesId: r.rows[0].series_id, widgetRevision: r.rows[0].widget_revision };

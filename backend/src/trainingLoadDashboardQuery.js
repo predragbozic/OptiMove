@@ -84,6 +84,17 @@ async function resolveComponentOwningActivityId(componentId) {
   return r.rows[0]?.activity_id ?? null;
 }
 
+// Built-in series metadata — read from the catalog (training_load.
+// dashboard_builtin_series, v15/v18), never hardcoded in JS. One query
+// per batch call (not per widget/series) — the whole catalog is tiny (5
+// rows today) and every filter-context in this batch shares the SAME
+// result, fetched once by runDashboardBatchQuery and threaded through
+// every buildRangeContext call.
+async function fetchBuiltinSeriesCatalog() {
+  const r = await query(`select key, value_type, unit from training_load.dashboard_builtin_series`);
+  return Object.fromEntries(r.rows.map((row) => [row.key, { valueType: row.value_type, unit: row.unit }]));
+}
+
 // ONE query for the WHOLE activity set: activity local date/start instant
 // LATERAL-joined with every canonical fact training.canonical_activity_
 // results() would produce per activity. This is the single fetch that
@@ -216,7 +227,7 @@ async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, data
 // what makes the batch endpoint genuinely set-based: N widgets against
 // the SAME range never cost more DB round trips than 1 widget would.
 // ------------------------------------------------------------
-async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId }, dayScopeMetricIds) {
+async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId }, dayScopeMetricIds, builtinCatalog) {
   const workspaceArgs = { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds };
   let authorizedActivityIds = await fetchAuthorizedActivityIds(workspaceArgs);
 
@@ -281,14 +292,17 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     });
   }
 
+  // unit/value_type come from the builtin catalog (training_load.
+  // dashboard_builtin_series), never a hardcoded literal — so a catalog
+  // change (e.g. srpe's unit) is reflected here without a JS code change.
   const rpeFacts = { rpe: [], srpe: [], duration_minutes: [] };
   for (const row of rpeRows) {
     const d = row.detail;
     const dt = activityDT[row.activity_id] || {};
-    const common = { grain: "session", grainKey: row.activity_id, activityId: row.activity_id, date: dt.localDate, startedAt: dt.startedAt, occasionId: null };
-    if (d.rpe != null) rpeFacts.rpe.push({ athleteId: row.athlete_id, value: d.rpe, unit: null, valueType: "numeric", dailyAggregationMethod: null, ...common });
-    if (d.srpe != null) rpeFacts.srpe.push({ athleteId: row.athlete_id, value: d.srpe, unit: null, valueType: "numeric", dailyAggregationMethod: null, ...common });
-    if (d.durationMinutes != null) rpeFacts.duration_minutes.push({ athleteId: row.athlete_id, value: d.durationMinutes, unit: null, valueType: "numeric", dailyAggregationMethod: null, ...common });
+    const common = { grain: "session", grainKey: row.activity_id, activityId: row.activity_id, date: dt.localDate, startedAt: dt.startedAt, occasionId: null, dailyAggregationMethod: null };
+    if (d.rpe != null) { const meta = builtinCatalog.rpe || {}; rpeFacts.rpe.push({ athleteId: row.athlete_id, value: d.rpe, unit: meta.unit ?? null, valueType: meta.valueType ?? "numeric", ...common }); }
+    if (d.srpe != null) { const meta = builtinCatalog.srpe || {}; rpeFacts.srpe.push({ athleteId: row.athlete_id, value: d.srpe, unit: meta.unit ?? null, valueType: meta.valueType ?? "numeric", ...common }); }
+    if (d.durationMinutes != null) { const meta = builtinCatalog.duration_minutes || {}; rpeFacts.duration_minutes.push({ athleteId: row.athlete_id, value: d.durationMinutes, unit: meta.unit ?? null, valueType: meta.valueType ?? "numeric", ...common }); }
   }
 
   const participantRows = await fetchActivityParticipantRows(authorizedActivityIds);
@@ -307,7 +321,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     }
   }
 
-  return { authorizedActivityIds, metricFactsByDefinition, rpeFacts, participantRows, dayLevelFactsByDefinition };
+  return { authorizedActivityIds, metricFactsByDefinition, rpeFacts, participantRows, dayLevelFactsByDefinition, builtinCatalog };
 }
 
 // ------------------------------------------------------------
@@ -570,13 +584,14 @@ function queryMetricSeriesFromContext(ctx, { metricDefinitionId, dataScopeLevel,
 
 function queryBuiltInSeriesFromContext(ctx, { key, athleteIds }) {
   if (key === "session_count" || key === "last_session_date") {
+    const meta = ctx.builtinCatalog[key] || {};
     const byAthlete = new Map();
     for (const row of ctx.participantRows) {
       if (athleteIds && !athleteIds.includes(row.athlete_id)) continue;
       if (!byAthlete.has(row.athlete_id)) byAthlete.set(row.athlete_id, { athleteId: row.athlete_id, values: [], targetConflicts: [] });
       byAthlete.get(row.athlete_id).values.push({
         value: key === "session_count" ? 1 : row.local_date,
-        unit: null, valueType: key === "session_count" ? "numeric" : "text",
+        unit: meta.unit ?? null, valueType: meta.valueType ?? (key === "session_count" ? "numeric" : "text"),
         dailyAggregationMethod: null, grain: "session", grainKey: row.activity_id,
         activityId: row.activity_id, date: row.local_date, startedAt: null, occasionId: null,
       });
@@ -595,25 +610,77 @@ function queryBuiltInSeriesFromContext(ctx, { key, athleteIds }) {
 }
 
 // ------------------------------------------------------------
+// Effective filter — dashboard.default_filter, then the REQUEST's own
+// runtime filter (key-by-key), then the WIDGET's own local_filter_override
+// (key-by-key) — each higher-precedence layer overrides only the keys it
+// actually carries (checked via hasOwnProperty, never `!== undefined`, so
+// an explicit `null` genuinely clears a lower layer's value, while an
+// ABSENT key leaves the lower layer's value untouched — these are
+// deliberately different things). Only three keys are recognized:
+// athleteIds/activityId/componentId — the date period is a query-level
+// concept, not a per-widget filter.
+// ------------------------------------------------------------
+function mergeFilters(...layers) {
+  const result = {};
+  for (const layer of layers) {
+    if (!layer || typeof layer !== "object") continue;
+    for (const key of ["athleteIds", "activityId", "componentId"]) {
+      if (Object.prototype.hasOwnProperty.call(layer, key)) result[key] = layer[key];
+    }
+  }
+  return result;
+}
+
+// ------------------------------------------------------------
 // The batch entry point. `specs` is an array of resolved series specs
 // (one per widget-series the caller wants queried), each already
-// authorized (the route layer resolves data workspace ONCE and passes it
-// in — this function does no authorization of its own beyond the
-// activityId/componentId intersection, which is a QUERY-shape guarantee,
-// not an authorization decision). Ranges are memoized by their own
-// (dateFrom,dateTo) key so N series/widgets sharing the same range cost
-// exactly one set of fetches — the actual "no N+1" property.
+// authorized AND already carrying its own EFFECTIVE filter (athleteIds/
+// activityId/componentId — see mergeFilters/queryDashboard below). This
+// function does no authorization of its own beyond the activityId/
+// componentId intersection, which is a QUERY-shape guarantee, not an
+// authorization decision.
+//
+// Ranges are memoized by (dateFrom, dateTo, effective-filter) — NOT just
+// (dateFrom, dateTo) — so widgets sharing the SAME effective filter still
+// share one set of fetches (the actual "no N+1" property, now scaling
+// with the number of DISTINCT filter contexts in the batch, never with
+// the number of widgets), while two widgets with genuinely different
+// local_filter_override values never leak each other's rows.
 // ------------------------------------------------------------
-export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId }, specs) {
+export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs) {
   const rangeCache = new Map();
-  const dayScopeMetricIds = [...new Set(specs.filter((s) => !s.builtInSeriesKey && s.dataScopeLevel === "day").map((s) => s.metricDefinitionId))];
 
-  async function contextFor(rDateFrom, rDateTo) {
-    const cacheKey = `${rDateFrom}|${rDateTo}`;
+  function athleteIdsKey(athleteIds) {
+    return athleteIds ? [...athleteIds].sort().join(",") : "";
+  }
+  function filterKeyFor(athleteIds, activityId, componentId) {
+    return `${athleteIdsKey(athleteIds)}|${activityId ?? ""}|${componentId ?? ""}`;
+  }
+
+  // The day-scope metric id set a filter context needs is scoped to THAT
+  // context only — never a single global set — so two widgets with
+  // different activityId/componentId/athleteIds overrides never bleed
+  // their own day-level fetches into each other's context.
+  const dayScopeMetricIdsByFilterKey = new Map();
+  for (const spec of specs) {
+    if (!spec.builtInSeriesKey && spec.dataScopeLevel === "day") {
+      const fk = filterKeyFor(spec.athleteIds, spec.activityId, spec.componentId);
+      if (!dayScopeMetricIdsByFilterKey.has(fk)) dayScopeMetricIdsByFilterKey.set(fk, new Set());
+      dayScopeMetricIdsByFilterKey.get(fk).add(spec.metricDefinitionId);
+    }
+  }
+
+  const builtinCatalog = specs.some((s) => s.builtInSeriesKey) ? await fetchBuiltinSeriesCatalog() : {};
+
+  async function contextFor(rDateFrom, rDateTo, athleteIds, activityId, componentId) {
+    const fk = filterKeyFor(athleteIds, activityId, componentId);
+    const cacheKey = `${rDateFrom}|${rDateTo}|${fk}`;
     if (!rangeCache.has(cacheKey)) {
+      const dayScopeMetricIds = [...(dayScopeMetricIdsByFilterKey.get(fk) || [])];
       rangeCache.set(cacheKey, buildRangeContext(
         { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom: rDateFrom, dateTo: rDateTo, activityId, componentId },
         dayScopeMetricIds,
+        builtinCatalog,
       ));
     }
     return rangeCache.get(cacheKey);
@@ -622,10 +689,13 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
   async function runOne(spec) {
     const groupBy = spec.groupBy || "day";
     const analyticalAggregation = spec.analyticalAggregation || "sum";
-    const effectiveAthleteIds = dataWorkspaceType === "athlete" ? [athleteWorkspaceAthleteId] : athleteIds;
+    // The 'athlete' data workspace ALWAYS narrows to that one athlete,
+    // regardless of any athleteIds filter (default/runtime/override can
+    // never WIDEN past the workspace's own authorized set).
+    const effectiveAthleteIds = dataWorkspaceType === "athlete" ? [athleteWorkspaceAthleteId] : spec.athleteIds;
 
     async function runForRange(rDateFrom, rDateTo) {
-      const ctx = await contextFor(rDateFrom, rDateTo);
+      const ctx = await contextFor(rDateFrom, rDateTo, spec.athleteIds, spec.activityId, spec.componentId);
       const rows = spec.builtInSeriesKey
         ? queryBuiltInSeriesFromContext(ctx, { key: spec.builtInSeriesKey, athleteIds: effectiveAthleteIds })
         : queryMetricSeriesFromContext(ctx, {
@@ -660,17 +730,23 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
 // ------------------------------------------------------------
 // Dashboard-level entry point — the ONE batch endpoint the route layer
 // calls: reads every widget (or a requested subset) + their series once,
-// skips unresolved/ambiguous series structurally (never queried — they
-// come back as a fixed placeholder result, matching the model's own
-// "never query a non-resolved series" rule), and groups the results back
-// by widget. This is what makes "load the whole dashboard" cost a small,
-// range-bounded number of queries regardless of how many widgets/series
-// it holds.
+// resolves each widget's OWN effective filter (dashboard default ->
+// request runtime filter -> this widget's local_filter_override, see
+// mergeFilters above), skips unresolved/ambiguous series structurally
+// (never queried — they come back as a fixed placeholder result, matching
+// the model's own "never query a non-resolved series" rule), and groups
+// the results back by widget. This is what makes "load the whole
+// dashboard" cost a small, range-and-filter-bounded number of queries
+// regardless of how many widgets/series it holds.
 // ------------------------------------------------------------
-export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dateFrom, dateTo, athleteIds, activityId, componentId }) {
+export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dateFrom, dateTo }, { defaultFilter, requestFilter } = {}) {
   const specs = [];
   const placeholders = [];
   for (const widget of widgetsWithSeries) {
+    const effectiveFilter = mergeFilters(defaultFilter, requestFilter, widget.local_filter_override);
+    const athleteIds = Object.prototype.hasOwnProperty.call(effectiveFilter, "athleteIds") && effectiveFilter.athleteIds != null ? effectiveFilter.athleteIds : undefined;
+    const activityId = Object.prototype.hasOwnProperty.call(effectiveFilter, "activityId") ? (effectiveFilter.activityId ?? null) : null;
+    const componentId = Object.prototype.hasOwnProperty.call(effectiveFilter, "componentId") ? (effectiveFilter.componentId ?? null) : null;
     for (const series of widget.series) {
       if (series.resolution_status !== "resolved") {
         placeholders.push({ widgetId: widget.id, seriesId: series.id, status: series.resolution_status, data: null });
@@ -682,10 +758,11 @@ export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dat
         dataScopeLevel: series.data_scope_level, aggregationRolePolicy: series.aggregation_role_policy,
         coveragePolicy: series.coverage_policy, sourcePolicy: series.source_policy, sourceConnectionId: series.source_connection_id,
         groupBy: widget.group_by, analyticalAggregation: series.analytical_aggregation, comparisonPeriod: series.comparison_period,
+        athleteIds, activityId, componentId,
       });
     }
   }
-  const results = await runDashboardBatchQuery({ ...dataWorkspaceArgs, athleteIds, dateFrom, dateTo, activityId, componentId }, specs);
+  const results = await runDashboardBatchQuery({ ...dataWorkspaceArgs, dateFrom, dateTo }, specs);
   const byWidget = new Map();
   for (const item of [...results, ...placeholders]) {
     if (!byWidget.has(item.widgetId)) byWidget.set(item.widgetId, []);

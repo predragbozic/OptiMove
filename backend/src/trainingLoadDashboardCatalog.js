@@ -1,12 +1,17 @@
 // Training Load Analysis Dashboard — dashboard lifecycle: list, detail,
 // create, update metadata, clone, archive, and active-selection
-// get/set/clear. Every WRITE below calls exactly one of the 13 sanctioned
+// get/set/clear. Every WRITE below calls exactly one of the 15 sanctioned
 // SQL functions from migrations_v2's v17 migration — never a raw INSERT/
 // UPDATE/DELETE against training_load.dashboards/dashboard_active_
-// selection. Pure service functions taking an already-resolved
-// req/scope/context — routes/trainingLoadDashboard.js resolves workspace
-// exactly once per request and threads the SAME snapshot through
-// authorization, read, and write.
+// selection — with ONE documented exception: cloneDashboard() below, a
+// genuine multi-table composite transaction (1 dashboard + N widgets + N
+// series, with live template-binding re-resolution) that cannot be
+// expressed as a single set-based function call; see its own header
+// comment for the guarantees it upholds in place of a sanctioned function.
+// Pure service functions taking an already-resolved req/scope/context —
+// routes/trainingLoadDashboard.js resolves workspace exactly once per
+// request and threads the SAME snapshot through authorization, read, and
+// write.
 import { query, pool } from "./db.js";
 import {
   canManageDashboardRow, canViewDashboardRow, dashboardVisibilitySql, dataWorkspaceMatches,
@@ -83,6 +88,26 @@ export async function getDashboardDetail(req, dataWorkspace, dashboardId) {
 // Create / update / archive
 // ------------------------------------------------------------
 
+// The filter shape both dashboards.default_filter and dashboard_widgets.
+// local_filter_override carry — three optional, independently-clearable
+// keys. Validated the same way at every write site (dashboard metadata
+// PATCH, widget create/update) so an invalid filter is always a clean 400,
+// never a value that silently corrupts the query engine's own effective-
+// filter merge (trainingLoadDashboardQuery.js's mergeFilters).
+const FILTER_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function validFilterShape(value) {
+  if (value === null || value === undefined) return true;
+  if (typeof value !== "object" || Array.isArray(value)) return false;
+  const allowed = new Set(["athleteIds", "activityId", "componentId"]);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) return false;
+  }
+  if ("athleteIds" in value && value.athleteIds !== null && !(Array.isArray(value.athleteIds) && value.athleteIds.length <= 500 && value.athleteIds.every((v) => typeof v === "string" && FILTER_UUID_RE.test(v)))) return false;
+  if ("activityId" in value && value.activityId !== null && !FILTER_UUID_RE.test(value.activityId)) return false;
+  if ("componentId" in value && value.componentId !== null && !FILTER_UUID_RE.test(value.componentId)) return false;
+  return true;
+}
+
 export async function createDashboard(req, body) {
   const ctx = await resolveDashboardCreateContext(req, body);
   if (ctx.error) throw httpError(ctx.status, ctx.error);
@@ -90,8 +115,7 @@ export async function createDashboard(req, body) {
     throw httpError(400, "name is required (1-200 characters).");
   }
   const r = await query(
-    `insert into training_load.dashboards (name, description, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, is_template, created_by_user_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
+    `select * from training_load.create_dashboard($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [body.name, body.description ?? null, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId, ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, ctx.isTemplate, req.user.id],
   );
   return { dashboard: r.rows[0] };
@@ -104,19 +128,30 @@ export async function updateDashboardMetadata(req, dataWorkspace, dashboardId, b
   if (body.name !== undefined && (typeof body.name !== "string" || body.name.length < 1 || body.name.length > 200)) {
     throw httpError(400, "name must be 1-200 characters.");
   }
-  const r = await query(
-    `update training_load.dashboards set
-       name = coalesce($1, name),
-       description = case when $2 then null else coalesce($3, description) end,
-       default_filter = case when $4 then null else coalesce($5, default_filter) end
-     where id = $6 and revision = $7 returning *`,
-    [body.name ?? null, body.clearDescription === true, body.description ?? null, body.clearDefaultFilter === true, body.defaultFilter ? JSON.stringify(body.defaultFilter) : null, dashboardId, body.expectedRevision],
-  );
-  if (!r.rowCount) {
-    const current = await query(`select revision from training_load.dashboards where id = $1`, [dashboardId]);
-    throw httpError(409, `Stale revision (expected ${body.expectedRevision}, dashboard is at ${current.rows[0]?.revision}) — reload and retry.`, "STALE_REVISION");
+  if (body.isTemplate !== undefined && typeof body.isTemplate !== "boolean") {
+    throw httpError(400, "isTemplate must be a strict boolean.");
   }
-  return { dashboard: r.rows[0] };
+  if (body.isTemplate === false && row.owner_scope === "system") {
+    throw httpError(400, "A system dashboard is always a template.");
+  }
+  if (body.defaultFilter !== undefined && !validFilterShape(body.defaultFilter)) {
+    throw httpError(400, "defaultFilter is invalid.");
+  }
+  try {
+    const r = await query(
+      `select * from training_load.update_dashboard_metadata($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        dashboardId, body.expectedRevision, body.name ?? null,
+        body.description ?? null, body.clearDescription === true,
+        body.defaultFilter ? JSON.stringify(body.defaultFilter) : null, body.clearDefaultFilter === true,
+        body.isTemplate ?? null,
+      ],
+    );
+    return { dashboard: r.rows[0] };
+  } catch (error) {
+    if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");
+    throw error;
+  }
 }
 
 export async function archiveDashboard(req, dataWorkspace, dashboardId, { expectedRevision }) {
@@ -148,7 +183,14 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
   if (!templateRow.is_template) throw httpError(400, "That dashboard is not a template.");
   if (!canViewDashboardRow(req, templateRow, dataWorkspace)) throw httpError(404, "Template not found.");
 
-  const ctx = await resolveDashboardCreateContext(req, { ...body, ownerScope: body?.ownerScope ?? "user" });
+  // Pass the ALREADY-RESOLVED dataWorkspace (the route resolved it once,
+  // for the canViewDashboardRow check just above) through to
+  // resolveDashboardCreateContext, instead of letting its own 'user'
+  // branch resolve it AGAIN — resolveActiveWorkspace() must be called
+  // exactly once per request (finding #3 of the 3B2 corrective round). A
+  // workspace-preference change racing mid-request can therefore never
+  // hand this one request two disagreeing snapshots.
+  const ctx = await resolveDashboardCreateContext(req, { ...body, ownerScope: body?.ownerScope ?? "user" }, dataWorkspace);
   if (ctx.error) throw httpError(ctx.status, ctx.error);
   const name = body?.name || `${templateRow.name} (copy)`;
   if (name.length > 200) throw httpError(400, "name must be at most 200 characters.");
@@ -156,10 +198,25 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
   const c = await pool.connect();
   try {
     await c.query("begin");
+    // The dashboard/widget/series inserts below are ONE documented,
+    // explicit composite-transaction exception to the "every write goes
+    // through a sanctioned SQL function" rule (see v17's own header note
+    // on create_dashboard/update_dashboard_metadata) — clone is
+    // inherently a multi-table operation (1 dashboard + N widgets + N
+    // series) with live template-binding re-resolution baked in, which
+    // cannot be expressed as a single set-based function call. Source-
+    // dashboard locking happens via dashboards_validate_clone_provenance's
+    // own `FOR SHARE` (fired by THIS insert, before any widget/series row
+    // is read below) — genuinely dashboard-first, same lock-order
+    // discipline as every sanctioned function. ctx.isTemplate (never a
+    // hardcoded false) lets a clone become a NEW template in its own
+    // target owner scope, exactly like a fresh create — already gated by
+    // the SAME manage-rights check resolveDashboardCreateContext applies
+    // to every owner scope.
     const dash = await c.query(
       `insert into training_load.dashboards (name, description, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, is_template, created_by_user_id, cloned_from_dashboard_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,false,$9,$10) returning *`,
-      [name, templateRow.description, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId, ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, req.user.id, templateId],
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
+      [name, templateRow.description, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId, ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, ctx.isTemplate, req.user.id, templateId],
     );
     const newDashboard = dash.rows[0];
 
@@ -202,7 +259,15 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
           [
             newWidgetId, s.series_order,
             resolved.status === "resolved" ? resolved.candidateIds[0] : null,
-            s.template_metric_key_hints,
+            // s.template_metric_key_hints was deserialized to a real JS
+            // array by pg on the SELECT above — must be re-stringified
+            // before being re-inserted as a jsonb value, or `pg` silently
+            // encodes it as a Postgres ARRAY literal instead of JSON
+            // (22P02 invalid input syntax for type json). This is exactly
+            // the ambiguous/unresolved clone path the 3B2 corrective round
+            // added real coverage for — no prior passing test exercised a
+            // template_metric_key_hints-based clone.
+            JSON.stringify(s.template_metric_key_hints),
             resolved.status,
             resolved.status === "ambiguous" ? JSON.stringify(resolved.candidateIds) : null,
             s.axis, s.color, s.display_label, s.source_policy, s.source_connection_id, s.data_scope_level, s.analytical_aggregation, s.aggregation_role_policy, s.coverage_policy, s.comparison_period, req.user.id,
@@ -260,7 +325,7 @@ export async function setActiveDashboard(req, dataWorkspace, dashboardId) {
     );
     return { selection: r.rows[0] };
   } catch (error) {
-    if (error?.code === "P0001") throw httpError(409, error.message, "SELECTION_REJECTED");
+    if (error?.code === "P0001") throw httpError(409, "That dashboard cannot be selected as active for this workspace.", "selectionRejected");
     throw error;
   }
 }

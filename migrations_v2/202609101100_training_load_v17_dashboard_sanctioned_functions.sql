@@ -1,6 +1,8 @@
 -- ============================================================
--- OPTIMOVE — Training Load 3B2: Analysis Dashboard v17 — the 13
--- sanctioned write functions. Migration 3 of 4 — depends on v15/v16.
+-- OPTIMOVE — Training Load 3B2: Analysis Dashboard v17 — the 15
+-- sanctioned write functions (13 original + create_dashboard/update_
+-- dashboard_metadata, added in the 3B2 corrective round — see their own
+-- header comment below). Migration 3 of 4 — depends on v15/v16.
 --
 -- The project uses no SECURITY DEFINER / DB-role trick to make raw SQL
 -- against these tables physically impossible — nothing below claims
@@ -13,6 +15,74 @@
 -- dashboard_id when needed), then the widget, then performs its own
 -- table's operation — the same order, every time.
 -- ============================================================
+
+-- ------------------------------------------------------------
+-- Lifecycle: create / update metadata. Added in the 3B2 corrective round
+-- — createDashboard()/updateDashboardMetadata() (backend/src/
+-- trainingLoadDashboardCatalog.js) previously ran raw INSERT/UPDATE
+-- against training_load.dashboards directly, which was out of contract
+-- with this file's own header (every write must go through a sanctioned
+-- function). These two bring the sanctioned-function count to 15 —
+-- cloneDashboard() remains the one documented, explicit exception (a
+-- genuine multi-table composite transaction: dashboard + N widgets + N
+-- series, with live template-binding re-resolution, that cannot be
+-- expressed as a single set-based function call) and is NOT required to
+-- route through create_dashboard() — it locks the source dashboard (via
+-- the existing dashboards_validate_clone_provenance FOR SHARE trigger,
+-- which fires on the INSERT below, before any widget/series is read) and
+-- performs its own dashboard/widget/series inserts directly, atomically,
+-- inside one transaction, exactly as documented in trainingLoadDashboardCatalog.js.
+-- ------------------------------------------------------------
+
+create function training_load.create_dashboard(
+  p_name text, p_description text, p_owner_scope varchar, p_owner_user_id uuid, p_owner_club_id uuid, p_owner_team_id uuid,
+  p_data_workspace_type varchar, p_data_workspace_scope_id uuid, p_is_template boolean, p_created_by_user_id uuid
+) returns setof training_load.dashboards as $$
+declare
+  v_id uuid;
+begin
+  insert into training_load.dashboards (name, description, owner_scope, owner_user_id, owner_club_id, owner_team_id, data_workspace_type, data_workspace_scope_id, is_template, created_by_user_id)
+    values (p_name, p_description, p_owner_scope, p_owner_user_id, p_owner_club_id, p_owner_team_id, p_data_workspace_type, p_data_workspace_scope_id, coalesce(p_is_template, false), p_created_by_user_id)
+    returning id into v_id;
+  return query select * from training_load.dashboards where id = v_id;
+end;
+$$ language plpgsql;
+
+-- p_clear_description/p_clear_default_filter follow the same "explicit
+-- clear flag, never a bare NULL means clear" convention as update_
+-- widget_content()/update_series() above — a bare NULL parameter always
+-- means "leave unchanged" (coalesce), never "clear". is_template is free
+-- to flip in either direction (see v15's own comment on dashboards_bump_
+-- revision — no unresolved-series protection is needed for a template
+-- flip in this model).
+create function training_load.update_dashboard_metadata(
+  p_dashboard_id uuid, p_expected_revision integer,
+  p_name text default null, p_description text default null, p_clear_description boolean default false,
+  p_default_filter jsonb default null, p_clear_default_filter boolean default false,
+  p_is_template boolean default null
+) returns setof training_load.dashboards as $$
+declare
+  v_current_revision integer;
+begin
+  select d.revision into v_current_revision from training_load.dashboards d where d.id = p_dashboard_id for update;
+  if not found then
+    raise exception 'update_dashboard_metadata: dashboard % not found', p_dashboard_id;
+  end if;
+  if v_current_revision <> p_expected_revision then
+    raise exception 'update_dashboard_metadata: stale revision (expected %, dashboard is at %) — reload and retry', p_expected_revision, v_current_revision using errcode = '40001';
+  end if;
+  update training_load.dashboards d set
+    name = coalesce(p_name, d.name),
+    description = case when p_clear_description then null else coalesce(p_description, d.description) end,
+    default_filter = case when p_clear_default_filter then null else coalesce(p_default_filter, d.default_filter) end,
+    is_template = coalesce(p_is_template, d.is_template)
+  where d.id = p_dashboard_id and d.revision = p_expected_revision;
+  if not found then
+    raise exception 'update_dashboard_metadata: stale revision (expected %) — reload and retry', p_expected_revision using errcode = '40001';
+  end if;
+  return query select * from training_load.dashboards where id = p_dashboard_id;
+end;
+$$ language plpgsql;
 
 -- ------------------------------------------------------------
 -- Layout.

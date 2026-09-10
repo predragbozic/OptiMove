@@ -32,6 +32,7 @@
 import { canManageClub, canManageTeamById, isPlatformAdministrator } from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
 import { isAthleteInWorkspaceScope } from "./trainingLoadAccess.js";
+import { query } from "./db.js";
 
 export { isAthleteInWorkspaceScope };
 
@@ -56,9 +57,25 @@ function dataWorkspaceFromActiveWorkspace(workspace, req) {
 // workspace descriptor — used both to authorize which dashboards are
 // reachable right now, and (via resolveDataWorkspaceForCreate below) to
 // decide what a NEW private dashboard binds to.
+//
+// MEMOIZED ON THE REQUEST OBJECT — resolveActiveWorkspace() itself reads
+// (and can opportunistically WRITE) public.user_workspace_preferences, so
+// calling it more than once per HTTP request is both wasteful and, worse,
+// a real correctness risk: the clone route used to resolve it once for
+// its own authorization check and AGAIN inside resolveDashboardCreateContext
+// for the 'user' branch, and a workspace-preference change racing in
+// between the two reads could hand the same request two different
+// snapshots, producing a dashboard whose owner/data-workspace/binding
+// scope don't agree with each other. Caching the resolved value on `req`
+// (a fresh object per request, same convention as req.authz) makes
+// "resolved exactly once per request" a structural guarantee regardless
+// of how many call sites in this request ask for it.
 export async function resolveActiveDataWorkspace(req) {
+  if (req._resolvedDataWorkspace) return req._resolvedDataWorkspace;
   const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-  return dataWorkspaceFromActiveWorkspace(workspace, req);
+  const resolved = dataWorkspaceFromActiveWorkspace(workspace, req);
+  req._resolvedDataWorkspace = resolved;
+  return resolved;
 }
 
 // Synchronous variant for a caller that already resolved the active
@@ -96,15 +113,31 @@ const VALID_OWNER_SCOPES = new Set(["system", "club", "team", "user"]);
 // user=the caller's own CURRENTLY ACTIVE workspace, resolved via
 // resolveActiveWorkspace so it can never be a client-chosen arbitrary
 // value).
-export async function resolveDashboardCreateContext(req, body) {
+// `dataWorkspace` (optional) — a caller that already resolved the active
+// workspace itself THIS request (e.g. the clone route, which needs it for
+// its own authorization check before ever reaching here) passes the SAME
+// snapshot in, so the 'user' branch below never triggers a second
+// resolveActiveWorkspace() call. When omitted, the 'user' branch resolves
+// it itself (still exactly once, thanks to resolveActiveDataWorkspace's
+// own per-request memoization above).
+export async function resolveDashboardCreateContext(req, body, dataWorkspace) {
   if (body?.ownerScope !== undefined && body?.ownerScope !== null && !VALID_OWNER_SCOPES.has(body.ownerScope)) {
     return { error: `ownerScope must be one of ${[...VALID_OWNER_SCOPES].join(", ")}.`, status: 400 };
   }
+  if (body?.isTemplate !== undefined && typeof body.isTemplate !== "boolean") {
+    return { error: "isTemplate must be a strict boolean.", status: 400 };
+  }
   const requested = body?.ownerScope ?? "user";
+  // A strict boolean, never silently forced to false for club/team/user —
+  // only 'system' has a fixed, non-optional value (always true).
+  const requestedIsTemplate = body?.isTemplate === true;
 
   if (requested === "system") {
     if (!isPlatformAdministrator(req.authz)) {
       return { error: "Only a platform administrator can create a shared system template.", status: 403 };
+    }
+    if (body?.isTemplate === false) {
+      return { error: "A system dashboard is always a template.", status: 400 };
     }
     return {
       ownerScope: "system", ownerUserId: null, ownerClubId: null, ownerTeamId: null,
@@ -117,7 +150,7 @@ export async function resolveDashboardCreateContext(req, body) {
     if (!canManageClub(req.authz, clubId)) return { error: "That club is outside your access.", status: 403 };
     return {
       ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null,
-      dataWorkspaceType: "club", dataWorkspaceScopeId: clubId, isTemplate: false,
+      dataWorkspaceType: "club", dataWorkspaceScopeId: clubId, isTemplate: requestedIsTemplate,
     };
   }
   if (requested === "team") {
@@ -126,21 +159,22 @@ export async function resolveDashboardCreateContext(req, body) {
     if (!canManageTeamById(req.authz, teamId)) return { error: "That team is outside your access.", status: 403 };
     return {
       ownerScope: "team", ownerUserId: null, ownerClubId: null, ownerTeamId: teamId,
-      dataWorkspaceType: "team", dataWorkspaceScopeId: teamId, isTemplate: false,
+      dataWorkspaceType: "team", dataWorkspaceScopeId: teamId, isTemplate: requestedIsTemplate,
     };
   }
   // 'user' (private) — always bound to the CALLER's own currently active
-  // workspace, resolved fresh, right now, from the SAME source of truth
-  // every other "what workspace am I acting in" decision in this app
-  // uses. Never a client-supplied data workspace.
-  const dataWorkspace = await resolveActiveDataWorkspace(req);
-  if (dataWorkspace.type === null) {
+  // workspace, resolved fresh (or reused from an ALREADY-resolved
+  // snapshot this same request took, see `dataWorkspace` above), from the
+  // SAME source of truth every other "what workspace am I acting in"
+  // decision in this app uses. Never a client-supplied data workspace.
+  const resolvedDataWorkspace = dataWorkspace ?? await resolveActiveDataWorkspace(req);
+  if (resolvedDataWorkspace.type === null) {
     return { error: "You have no active workspace to bind a private dashboard to — switch to a real workspace first.", status: 403 };
   }
   return {
     ownerScope: "user", ownerUserId: req.user.id, ownerClubId: null, ownerTeamId: null,
-    dataWorkspaceType: dataWorkspace.dataWorkspaceType, dataWorkspaceScopeId: dataWorkspace.dataWorkspaceScopeId ?? null,
-    isTemplate: false,
+    dataWorkspaceType: resolvedDataWorkspace.dataWorkspaceType, dataWorkspaceScopeId: resolvedDataWorkspace.dataWorkspaceScopeId ?? null,
+    isTemplate: requestedIsTemplate,
   };
 }
 
@@ -166,6 +200,47 @@ export function canViewDashboardRow(req, row, dataWorkspace) {
   if (canManageDashboardRow(req, row)) return true;
   if (row.owner_scope === "user") return false; // a private dashboard is visible ONLY to its own owner (or a platform admin, above)
   return dataWorkspaceMatches(dataWorkspace, row);
+}
+
+// ------------------------------------------------------------
+// Metric / source-connection reference pre-checks — mirror the exact
+// visibility predicate the real DB triggers (dashboard_widget_series_
+// validate_metric_visibility / _validate_source_connection_visibility,
+// v16) enforce at write time, so a foreign or nonexistent reference can be
+// rejected HERE, at the application layer, with a clean, info-hiding 404
+// — BEFORE the write ever reaches the trigger, whose own detailed P0001
+// message names owner_scope/club/team ids and must never reach an HTTP
+// client (see routes/trainingLoadDashboard.js's respondToServiceError).
+// The DB trigger remains the authoritative backstop for every other write
+// path (a raw SQL statement, a future caller) — this is a pre-check, not
+// a replacement.
+// ------------------------------------------------------------
+export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionId) {
+  const r = await query(
+    `select owner_scope, owner_user_id, owner_club_id, owner_team_id, state from training_load.metric_definitions where id = $1`,
+    [metricDefinitionId],
+  );
+  const def = r.rows[0];
+  if (!def) return { visible: false, def: null };
+  if (def.owner_scope === "system") return { visible: true, def };
+  if (dashboardRow.owner_scope === "user" && def.owner_scope === "user" && String(def.owner_user_id) === String(dashboardRow.owner_user_id)) return { visible: true, def };
+  if (def.owner_scope === "club" && dashboardRow.data_workspace_type === "club" && String(def.owner_club_id) === String(dashboardRow.data_workspace_scope_id)) return { visible: true, def };
+  if (def.owner_scope === "team" && dashboardRow.data_workspace_type === "team" && String(def.owner_team_id) === String(dashboardRow.data_workspace_scope_id)) return { visible: true, def };
+  return { visible: false, def };
+}
+
+export async function isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId) {
+  const r = await query(
+    `select owner_scope, owner_user_id, owner_club_id, owner_team_id from training_load.metric_source_connections where id = $1`,
+    [sourceConnectionId],
+  );
+  const conn = r.rows[0];
+  if (!conn) return { visible: false, conn: null };
+  if (conn.owner_scope === "system") return { visible: true, conn };
+  if (dashboardRow.owner_scope === "user" && conn.owner_scope === "user" && String(conn.owner_user_id) === String(dashboardRow.owner_user_id)) return { visible: true, conn };
+  if (conn.owner_scope === "club" && dashboardRow.data_workspace_type === "club" && String(conn.owner_club_id) === String(dashboardRow.data_workspace_scope_id)) return { visible: true, conn };
+  if (conn.owner_scope === "team" && dashboardRow.data_workspace_type === "team" && String(conn.owner_team_id) === String(dashboardRow.data_workspace_scope_id)) return { visible: true, conn };
+  return { visible: false, conn };
 }
 
 // SQL fragment: "which dashboards may this account currently LIST/browse"

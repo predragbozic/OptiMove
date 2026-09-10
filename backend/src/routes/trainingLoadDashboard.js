@@ -14,10 +14,10 @@
 // AC/CH, no ML — this router is the backend surface only, per this
 // delivery's own explicit scope boundary.
 import { Router } from "express";
-import { resolveActiveDataWorkspace, canManageDashboardRow } from "../trainingLoadDashboardAccess.js";
+import { resolveActiveDataWorkspace, canManageDashboardRow, dataWorkspaceMatches } from "../trainingLoadDashboardAccess.js";
 import {
   listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, cloneDashboard,
-  getActiveDashboard, setActiveDashboard, clearActiveDashboard, httpError,
+  getActiveDashboard, setActiveDashboard, clearActiveDashboard, httpError, validFilterShape,
 } from "../trainingLoadDashboardCatalog.js";
 import {
   replaceLayout, updateWidgetLayout, createWidget, updateWidgetContent, deleteWidget,
@@ -46,10 +46,42 @@ function validUuidArray(value) {
   return Array.isArray(value) && value.length <= 500 && value.every(validUuid);
 }
 
+// Central error mapper — the ONE place a raw pg error (SQLSTATE) or an
+// explicit service-layer httpError() becomes an HTTP response. An
+// httpError() has ALREADY been vetted safe by whoever threw it (a
+// hand-written, client-safe message) — everything else below is a RAW pg
+// error that must never leak its own message (constraint/table names,
+// owner_scope/club/team ids, SQLSTATEs) to the client; only a small,
+// stable, generic {error: code} body is returned for those.
+const SAFE_CLIENT_INPUT_SQLSTATES = new Set(["23502", "23503", "23514", "22P02", "22003"]);
+// A default STABLE code per HTTP status, used whenever an httpError() call
+// site didn't pass an explicit one — this is what lets every EXISTING
+// httpError(404, "human text") / httpError(403, "...") call across access/
+// catalog/widgets automatically get a stable `error` code (notFound/
+// forbidden/invalidRequest/conflict) without having to touch every call
+// site individually. `message` carries the hand-authored, already-vetted-
+// safe human text for debugging/UX — never a raw DB message (only
+// httpError()-origin errors ever reach this branch; a raw pg error is
+// handled by the SQLSTATE branches below and never carries a `message`
+// field to the client at all).
+const DEFAULT_CODE_FOR_STATUS = { 400: "invalidRequest", 403: "forbidden", 404: "notFound", 409: "conflict" };
 function respondToServiceError(res, next, error) {
-  if (error?.httpStatus) return res.status(error.httpStatus).json({ error: error.message, code: error.code });
-  if (error?.code === "P0001") return res.status(400).json({ error: error.message });
-  if (error?.code === "23505") return res.status(409).json({ error: "This was already submitted." });
+  if (error?.httpStatus) {
+    const code = error.code || DEFAULT_CODE_FOR_STATUS[error.httpStatus] || "requestFailed";
+    return res.status(error.httpStatus).json({ error: code, message: error.message });
+  }
+  if (error?.code === "40001") return res.status(409).json({ error: "staleRevision" });
+  if (error?.code === "23505") return res.status(409).json({ error: "conflict" });
+  if (SAFE_CLIENT_INPUT_SQLSTATES.has(error?.code)) return res.status(400).json({ error: "invalidRequest" });
+  // A P0001 (plain RAISE EXCEPTION) is always a business-rule violation
+  // the caller can plausibly fix by changing their request (not a stale
+  // revision, which is 40001) — but its own message can name internal
+  // ids/scopes, so it is NEVER forwarded raw. Genuinely known cases (e.g.
+  // metric-not-visible) are pre-checked at the application layer BEFORE
+  // reaching the trigger (see trainingLoadDashboardWidgets.js's
+  // assertMetricReferenceOk) and surface as a clean 404 via httpError
+  // instead of ever reaching this branch.
+  if (error?.code === "P0001") return res.status(400).json({ error: "invalidRequest" });
   return next(error);
 }
 
@@ -57,7 +89,7 @@ function respondToServiceError(res, next, error) {
 async function requireDataWorkspace(req, res) {
   const dataWorkspace = await resolveActiveDataWorkspace(req);
   if (dataWorkspace.type === null) {
-    res.status(403).json({ error: "No active workspace." });
+    res.status(403).json({ error: "forbidden", message: "No active workspace." });
     return null;
   }
   return dataWorkspace;
@@ -75,8 +107,8 @@ function dataWorkspaceQueryArgs(dataWorkspace) {
 async function requireManageableDashboard(req, res, dataWorkspace, dashboardId) {
   const r = await query(`select * from training_load.dashboards where id = $1`, [dashboardId]);
   const row = r.rows[0];
-  if (!row) { res.status(404).json({ error: "Dashboard not found." }); return null; }
-  if (!canManageDashboardRow(req, row)) { res.status(404).json({ error: "Dashboard not found." }); return null; }
+  if (!row) { res.status(404).json({ error: "notFound", message: "Dashboard not found." }); return null; }
+  if (!canManageDashboardRow(req, row)) { res.status(404).json({ error: "notFound", message: "Dashboard not found." }); return null; }
   return row;
 }
 
@@ -108,7 +140,7 @@ router.get("/active", async (req, res, next) => {
 
 router.post("/active", async (req, res, next) => {
   try {
-    if (!validUuid(req.body?.dashboardId)) return res.status(400).json({ error: "dashboardId is required." });
+    if (!validUuid(req.body?.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "dashboardId is required." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     res.json(await setActiveDashboard(req, dataWorkspace, req.body.dashboardId));
@@ -129,7 +161,7 @@ router.delete("/active", async (req, res, next) => {
 
 router.get("/:dashboardId", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "Invalid dashboardId." });
+    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     res.json(await getDashboardDetail(req, dataWorkspace, req.params.dashboardId));
@@ -148,7 +180,7 @@ router.post("/", async (req, res, next) => {
 
 router.post("/:dashboardId/clone", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "Invalid dashboardId." });
+    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     res.status(201).json(await cloneDashboard(req, dataWorkspace, req.params.dashboardId, req.body || {}));
@@ -159,7 +191,7 @@ router.post("/:dashboardId/clone", async (req, res, next) => {
 
 router.patch("/:dashboardId", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "Invalid dashboardId." });
+    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     res.json(await updateDashboardMetadata(req, dataWorkspace, req.params.dashboardId, req.body || {}));
@@ -170,7 +202,7 @@ router.patch("/:dashboardId", async (req, res, next) => {
 
 router.post("/:dashboardId/archive", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "Invalid dashboardId." });
+    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     res.json(await archiveDashboard(req, dataWorkspace, req.params.dashboardId, { expectedRevision: req.body?.expectedRevision }));
@@ -185,9 +217,9 @@ router.post("/:dashboardId/archive", async (req, res, next) => {
 
 router.put("/:dashboardId/layout", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "Invalid dashboardId." });
-    if (typeof req.body?.expectedRevision !== "number") return res.status(400).json({ error: "expectedRevision is required." });
-    if (!Array.isArray(req.body?.layout)) return res.status(400).json({ error: "layout must be an array." });
+    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
+    if (typeof req.body?.expectedRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedRevision is required." });
+    if (!Array.isArray(req.body?.layout)) return res.status(400).json({ error: "invalidRequest", message: "layout must be an array." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -199,9 +231,9 @@ router.put("/:dashboardId/layout", async (req, res, next) => {
 
 router.patch("/:dashboardId/widgets/:widgetId/layout", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "Invalid id." });
+    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
     const b = req.body || {};
-    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "expectedWidgetRevision is required." });
+    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision is required." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -217,11 +249,12 @@ router.patch("/:dashboardId/widgets/:widgetId/layout", async (req, res, next) =>
 
 router.post("/:dashboardId/widgets", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "Invalid dashboardId." });
+    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const b = req.body || {};
-    if (typeof b.expectedDashboardRevision !== "number") return res.status(400).json({ error: "expectedDashboardRevision is required." });
-    if (typeof b.widgetType !== "string") return res.status(400).json({ error: "widgetType is required." });
-    if (typeof b.title !== "string" || !b.title.length) return res.status(400).json({ error: "title is required." });
+    if (typeof b.expectedDashboardRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedDashboardRevision is required." });
+    if (typeof b.widgetType !== "string") return res.status(400).json({ error: "invalidRequest", message: "widgetType is required." });
+    if (typeof b.title !== "string" || !b.title.length) return res.status(400).json({ error: "invalidRequest", message: "title is required." });
+    if (b.localFilterOverride !== undefined && !validFilterShape(b.localFilterOverride)) return res.status(400).json({ error: "invalidRequest", message: "localFilterOverride is invalid." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -233,9 +266,10 @@ router.post("/:dashboardId/widgets", async (req, res, next) => {
 
 router.patch("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "Invalid id." });
+    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
     const b = req.body || {};
-    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "expectedWidgetRevision is required." });
+    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision is required." });
+    if (b.localFilterOverride !== undefined && !validFilterShape(b.localFilterOverride)) return res.status(400).json({ error: "invalidRequest", message: "localFilterOverride is invalid." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -247,8 +281,8 @@ router.patch("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
 
 router.delete("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "Invalid id." });
-    if (typeof req.body?.expectedWidgetRevision !== "number") return res.status(400).json({ error: "expectedWidgetRevision is required." });
+    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
+    if (typeof req.body?.expectedWidgetRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision is required." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -264,14 +298,15 @@ router.delete("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
 
 router.post("/:dashboardId/widgets/:widgetId/series", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "Invalid id." });
+    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
     const b = req.body || {};
-    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "expectedWidgetRevision is required." });
-    if (typeof b.seriesOrder !== "number") return res.status(400).json({ error: "seriesOrder is required." });
+    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision is required." });
+    if (typeof b.seriesOrder !== "number") return res.status(400).json({ error: "invalidRequest", message: "seriesOrder is required." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
-    if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
-    res.status(201).json(await addSeries(req.params.dashboardId, req.params.widgetId, b, req.user.id));
+    const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
+    if (!dashboardRow) return;
+    res.status(201).json(await addSeries(req.params.dashboardId, req.params.widgetId, b, req.user.id, dashboardRow));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -279,13 +314,14 @@ router.post("/:dashboardId/widgets/:widgetId/series", async (req, res, next) => 
 
 router.patch("/:dashboardId/widgets/:widgetId/series/:seriesId", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId) || !validUuid(req.params.seriesId)) return res.status(400).json({ error: "Invalid id." });
+    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId) || !validUuid(req.params.seriesId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
     const b = req.body || {};
-    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "expectedWidgetRevision is required." });
+    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision is required." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
-    if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
-    res.json(await updateSeries(req.params.dashboardId, req.params.widgetId, req.params.seriesId, b));
+    const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
+    if (!dashboardRow) return;
+    res.json(await updateSeries(req.params.dashboardId, req.params.widgetId, req.params.seriesId, b, dashboardRow));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -293,8 +329,8 @@ router.patch("/:dashboardId/widgets/:widgetId/series/:seriesId", async (req, res
 
 router.delete("/:dashboardId/widgets/:widgetId/series/:seriesId", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId) || !validUuid(req.params.seriesId)) return res.status(400).json({ error: "Invalid id." });
-    if (typeof req.body?.expectedWidgetRevision !== "number") return res.status(400).json({ error: "expectedWidgetRevision is required." });
+    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId) || !validUuid(req.params.seriesId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
+    if (typeof req.body?.expectedWidgetRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision is required." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -306,10 +342,10 @@ router.delete("/:dashboardId/widgets/:widgetId/series/:seriesId", async (req, re
 
 router.put("/:dashboardId/widgets/:widgetId/series/reorder", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "Invalid id." });
+    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
     const b = req.body || {};
-    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "expectedWidgetRevision is required." });
-    if (!Array.isArray(b.order)) return res.status(400).json({ error: "order must be an array." });
+    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision is required." });
+    if (!Array.isArray(b.order)) return res.status(400).json({ error: "invalidRequest", message: "order must be an array." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
@@ -321,14 +357,15 @@ router.put("/:dashboardId/widgets/:widgetId/series/reorder", async (req, res, ne
 
 router.post("/:dashboardId/widgets/:widgetId/series/:seriesId/resolve", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId) || !validUuid(req.params.seriesId)) return res.status(400).json({ error: "Invalid id." });
+    if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId) || !validUuid(req.params.seriesId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
     const b = req.body || {};
-    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "expectedWidgetRevision is required." });
-    if (!validUuid(b.metricDefinitionId)) return res.status(400).json({ error: "metricDefinitionId is required." });
+    if (typeof b.expectedWidgetRevision !== "number") return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision is required." });
+    if (!validUuid(b.metricDefinitionId)) return res.status(400).json({ error: "invalidRequest", message: "metricDefinitionId is required." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
-    if (!(await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId))) return;
-    res.json(await resolveSeriesBinding(req.params.dashboardId, req.params.widgetId, req.params.seriesId, { expectedWidgetRevision: b.expectedWidgetRevision, metricDefinitionId: b.metricDefinitionId }));
+    const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
+    if (!dashboardRow) return;
+    res.json(await resolveSeriesBinding(req.params.dashboardId, req.params.widgetId, req.params.seriesId, { expectedWidgetRevision: b.expectedWidgetRevision, metricDefinitionId: b.metricDefinitionId }, dashboardRow));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -342,27 +379,56 @@ router.post("/:dashboardId/widgets/:widgetId/series/:seriesId/resolve", async (r
 
 router.post("/:dashboardId/query", async (req, res, next) => {
   try {
-    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "Invalid dashboardId." });
+    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const b = req.body || {};
-    if (!validDate(b.dateFrom)) return res.status(400).json({ error: "dateFrom is required (YYYY-MM-DD)." });
-    if (!validDate(b.dateTo)) return res.status(400).json({ error: "dateTo is required (YYYY-MM-DD)." });
-    if (new Date(`${b.dateTo}T00:00:00Z`) < new Date(`${b.dateFrom}T00:00:00Z`)) return res.status(400).json({ error: "dateTo cannot be before dateFrom." });
+    if (!validDate(b.dateFrom)) return res.status(400).json({ error: "invalidRequest", message: "dateFrom is required (YYYY-MM-DD)." });
+    if (!validDate(b.dateTo)) return res.status(400).json({ error: "invalidRequest", message: "dateTo is required (YYYY-MM-DD)." });
+    if (new Date(`${b.dateTo}T00:00:00Z`) < new Date(`${b.dateFrom}T00:00:00Z`)) return res.status(400).json({ error: "invalidRequest", message: "dateTo cannot be before dateFrom." });
     const spanDays = Math.round((new Date(`${b.dateTo}T00:00:00Z`) - new Date(`${b.dateFrom}T00:00:00Z`)) / 86400000) + 1;
-    if (spanDays > MAX_QUERY_PERIOD_DAYS) return res.status(400).json({ error: `Period cannot exceed ${MAX_QUERY_PERIOD_DAYS} days.` });
-    if (b.athleteIds !== undefined && !validUuidArray(b.athleteIds)) return res.status(400).json({ error: "athleteIds must be an array of valid UUIDs (max 500)." });
-    if (b.activityId !== undefined && b.activityId !== null && !validUuid(b.activityId)) return res.status(400).json({ error: "Invalid activityId." });
-    if (b.componentId !== undefined && b.componentId !== null && !validUuid(b.componentId)) return res.status(400).json({ error: "Invalid componentId." });
-    if (b.widgetIds !== undefined && !validUuidArray(b.widgetIds)) return res.status(400).json({ error: "widgetIds must be an array of valid UUIDs (max 500)." });
+    if (spanDays > MAX_QUERY_PERIOD_DAYS) return res.status(400).json({ error: "invalidRequest", message: `Period cannot exceed ${MAX_QUERY_PERIOD_DAYS} days.` });
+    // athleteIds MAY be explicitly null (clears a dashboard default_filter/
+    // local_filter_override athleteIds key back to "no restriction") —
+    // only a PRESENT-and-not-null-and-not-a-valid-UUID-array value is
+    // rejected.
+    if (b.athleteIds !== undefined && b.athleteIds !== null && !validUuidArray(b.athleteIds)) return res.status(400).json({ error: "invalidRequest", message: "athleteIds must be an array of valid UUIDs (max 500), or null." });
+    if (b.activityId !== undefined && b.activityId !== null && !validUuid(b.activityId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid activityId." });
+    if (b.componentId !== undefined && b.componentId !== null && !validUuid(b.componentId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid componentId." });
+    if (b.widgetIds !== undefined && !validUuidArray(b.widgetIds)) return res.status(400).json({ error: "invalidRequest", message: "widgetIds must be an array of valid UUIDs (max 500)." });
 
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     const { dashboard, widgets } = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
-    const targetWidgets = b.widgetIds ? widgets.filter((w) => b.widgetIds.includes(w.id)) : widgets;
-    if (targetWidgets.length > MAX_WIDGETS_PER_QUERY) return res.status(400).json({ error: `Cannot query more than ${MAX_WIDGETS_PER_QUERY} widgets at once.` });
 
-    const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, {
-      dateFrom: b.dateFrom, dateTo: b.dateTo, athleteIds: b.athleteIds, activityId: b.activityId ?? null, componentId: b.componentId ?? null,
-    });
+    // A dashboard's data is bound to ITS OWN data workspace — canViewDashboardRow
+    // (used by getDashboardDetail) grants VISIBILITY based on manage rights
+    // (e.g. a club admin who manages Club A can always SEE Club A's
+    // dashboard), which is a broader condition than "the CURRENT active
+    // workspace is the one this dashboard's data is bound to". Querying
+    // must additionally require the latter — otherwise a manager of both
+    // Club A and Club B could view Club A's dashboard structure while
+    // active in Club B and have it silently execute against Club B's own
+    // data. A system template (data_workspace_type IS NULL) has no data
+    // workspace at all until cloned.
+    if (dashboard.data_workspace_type === null) {
+      return res.status(409).json({ error: "templateRequiresClone" });
+    }
+    if (!dataWorkspaceMatches(dataWorkspace, dashboard)) {
+      return res.status(404).json({ error: "notFound" });
+    }
+
+    const targetWidgets = b.widgetIds ? widgets.filter((w) => b.widgetIds.includes(w.id)) : widgets;
+    if (targetWidgets.length > MAX_WIDGETS_PER_QUERY) return res.status(400).json({ error: "invalidRequest", message: `Cannot query more than ${MAX_WIDGETS_PER_QUERY} widgets at once.` });
+
+    // The runtime filter carries ONLY the keys the request body actually
+    // set (hasOwnProperty, not `!== undefined`) — an ABSENT key inherits
+    // the dashboard's own default_filter; an EXPLICIT null overrides
+    // (clears) it. See trainingLoadDashboardQuery.js's mergeFilters.
+    const requestFilter = {};
+    if (Object.prototype.hasOwnProperty.call(b, "athleteIds")) requestFilter.athleteIds = b.athleteIds;
+    if (Object.prototype.hasOwnProperty.call(b, "activityId")) requestFilter.activityId = b.activityId;
+    if (Object.prototype.hasOwnProperty.call(b, "componentId")) requestFilter.componentId = b.componentId;
+
+    const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter });
     res.json({ dashboardRevision: dashboard.revision, widgets: result });
   } catch (error) {
     respondToServiceError(res, next, error);
