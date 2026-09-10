@@ -54,6 +54,28 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL must be set (point it at a local/disposable Postgres server — never OPTIMOVE/monitoring2/staging/production) to run this PoC.");
 }
 const baseUrl = new URL(process.env.DATABASE_URL);
+
+function refuseForbidden(name, url) {
+  if (name.toLowerCase() === "optimove" || /monitoring2|staging|supabase|production/i.test(url) || /monitoring2|staging|production/i.test(name)) {
+    throw new Error(`SAFETY: refusing to run against a forbidden database name/url (name=${name})`);
+  }
+}
+
+// Round 4 SAFETY FIX: the guard below only ever checked the GENERATED
+// temp-database name/url (e.g. "optimove_poc_dashboard_run_<hex>") —
+// which can structurally never equal a forbidden name (it always carries
+// a random suffix) — it never checked the caller's OWN DATABASE_URL. A
+// real gap found and closed this round: running this harness with
+// DATABASE_URL pointed directly at a database literally named "OPTIMOVE"
+// (or monitoring2/staging/Supabase/production) was silently ALLOWED to
+// proceed — it never actually wrote to that database's own tables (every
+// real operation targets a freshly created, separately named disposable
+// database on the SAME server), but the guard's own documented purpose is
+// to refuse this outright, by name, before ANY connection is attempted —
+// not merely to avoid touching it. Checked immediately, before any
+// connection is ever opened.
+refuseForbidden(baseUrl.pathname.replace(/^\//, ""), baseUrl.toString());
+
 const adminUrl = new URL(baseUrl);
 adminUrl.pathname = "/postgres";
 const ADMIN_URL = adminUrl.toString();
@@ -62,11 +84,6 @@ function dbUrlFor(name) {
   const u = new URL(baseUrl);
   u.pathname = `/${name}`;
   return u.toString();
-}
-function refuseForbidden(name, url) {
-  if (name.toLowerCase() === "optimove" || /monitoring2|staging|supabase|production/i.test(url) || /monitoring2|staging|production/i.test(name)) {
-    throw new Error(`SAFETY: refusing to run against a forbidden database name/url (name=${name})`);
-  }
 }
 
 const LEGACY_FIXTURE_SQL = `
@@ -617,6 +634,104 @@ async function seed() {
   await q(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [hintOnlyVer.id, hintOnlyDef.id]);
   await q(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'component')`, [hintOnlyDef.id]);
 
+  // --- Round 4 fixture additions ---
+
+  // #17: the SAME athlete (Ana) with a real activity in BOTH Club A
+  // (already exists: `activity`) and Club B — proves session_count is
+  // genuinely workspace-scoped per real club, not just "per athlete".
+  const activityAnaClubB = await one(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
+     values ('training_session','PoC Ana Club B Session','2026-09-12','2026-09-12T09:00:00Z','Europe/Belgrade','club',$1,'manual','confirmed',$2) returning id`,
+    [clubB.id, coachB.id],
+  );
+  await q(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1,$2,'2026-09-12','Europe/Belgrade','participated')`,
+    [activityAnaClubB.id, ana.id],
+  );
+
+  // #3: a real DAY-SCOPE metric event (scope_level='day', no segment) —
+  // must be recognized as grain='day', never defaulted to 'session' just
+  // because it has no segment.
+  const dayScopeMetric = await makeDefinition({ key: "poc-day-scope", label: "Day Scope Metric", ownerScope: "club", ownerClubId: clubA.id, unit: "au" });
+  await q(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'day')`, [dayScopeMetric.id]);
+  const dayEvent = await one(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
+     values ('PoC Day Scope','2026-09-13','2026-09-13T12:00:00Z','day','club',$1,$2,$3) returning id`,
+    [clubA.id, connClubA.id, coachA.id],
+  );
+  const dayEventActivity = await one(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
+     values ('training_session','PoC Day Scope Session','2026-09-13','2026-09-13T09:00:00Z','Europe/Belgrade','club',$1,'manual','confirmed',$2) returning id`,
+    [clubA.id, coachA.id],
+  );
+  const dayEventParticipantRow = await one(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1,$2,'2026-09-13','Europe/Belgrade','participated') returning id`,
+    [dayEventActivity.id, ana.id],
+  );
+  const dayEventParticipant = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [dayEvent.id, ana.id]);
+  await q(`insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [dayEventActivity.id, dayEvent.id]);
+  await q(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [dayEventParticipantRow.id, dayEventParticipant.id]);
+  const dayOcc = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [dayEventParticipant.id]);
+  await q(
+    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
+     values ($1,$2,$3,777,'au','source_rollup','complete')`,
+    [dayOcc.id, dayScopeMetric.id, dayScopeMetric.versionId],
+  );
+
+  // #12: two real historical VERSIONS with DIFFERENT daily_aggregation_
+  // method (v1='sum', v2='max') — one fact under each, on the SAME real
+  // calendar day, so a day/week/athlete/cohort bucket has to decide
+  // whether to guess (forbidden) or report a real semantic conflict.
+  const methodConflictMetric = await makeDefinition({ key: "poc-method-conflict", label: "Method Conflict Metric", ownerScope: "club", ownerClubId: clubA.id, unit: "au", dailyAggregationMethod: "sum" });
+  const methodConflictV2 = await one(
+    `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id, superseded_reason)
+     values ($1,2,'au','numeric','max',$2,'switched daily reduction to max') returning id`,
+    [methodConflictMetric.id, platformAdmin.id],
+  );
+  await q(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [methodConflictV2.id, methodConflictMetric.id]);
+
+  // #13: two real historical VERSIONS with DIFFERENT value_type (v1
+  // numeric, v2 text) — a day/week/athlete/cohort bucket spanning both
+  // must report a real type conflict, never coerce one into the other.
+  const typeConflictMetric = await makeDefinition({ key: "poc-type-conflict", label: "Type Conflict Metric", ownerScope: "club", ownerClubId: clubA.id, unit: "au" });
+  const typeConflictV2 = await one(
+    `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id, superseded_reason)
+     values ($1,2,'au','text','last',$2,'switched to a qualitative text scale') returning id`,
+    [typeConflictMetric.id, platformAdmin.id],
+  );
+  await q(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [typeConflictV2.id, typeConflictMetric.id]);
+
+  async function makeSameDayFact(metricId, versionId, dateStr, valueColumn, value, athleteId = ana.id) {
+    const act = await one(
+      `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
+       values ('training_session','PoC Version Fact','${dateStr}','${dateStr}T0${valueColumn === "value_text" ? 8 : 9}:00:00Z','Europe/Belgrade','club',$1,'manual','confirmed',$2) returning id`,
+      [clubA.id, coachA.id],
+    );
+    const part = await one(
+      `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1,$2,$3,'Europe/Belgrade','participated') returning id`,
+      [act.id, athleteId, dateStr],
+    );
+    const ev = await one(
+      `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
+       values ('PoC Version Fact','${dateStr}','${dateStr}T0${valueColumn === "value_text" ? 8 : 9}:00:00Z','session','club',$1,$2,$3) returning id`,
+      [clubA.id, connClubA.id, coachA.id],
+    );
+    const evp = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [ev.id, athleteId]);
+    await q(`insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [act.id, ev.id]);
+    await q(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [part.id, evp.id]);
+    const occ = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [evp.id]);
+    await q(
+      `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, ${valueColumn}, unit_at_capture, aggregation_role, coverage)
+       values ($1,$2,$3,$4,'au','standalone','not_applicable')`,
+      [occ.id, metricId, versionId, value],
+    );
+    return act.id;
+  }
+  const methodConflictActV1 = await makeSameDayFact(methodConflictMetric.id, methodConflictMetric.versionId, "2026-09-20", "value_numeric", 40);
+  const methodConflictActV2 = await makeSameDayFact(methodConflictMetric.id, methodConflictV2.id, "2026-09-20", "value_numeric", 70);
+  const typeConflictActV1 = await makeSameDayFact(typeConflictMetric.id, typeConflictMetric.versionId, "2026-09-21", "value_numeric", 40);
+  const typeConflictActV2 = await makeSameDayFact(typeConflictMetric.id, typeConflictV2.id, "2026-09-21", "value_text", "high");
+
   return {
     clubA: clubA.id, clubB: clubB.id, teamA: teamA.id,
     platformAdmin: platformAdmin.id, coachA: coachA.id, coachB: coachB.id, privateCoach: privateCoach.id,
@@ -631,6 +746,10 @@ async function seed() {
     pipelineActivityMarko, pipelineActivityPrevPeriod,
     sourcePolicyMetric: sourcePolicyMetric.id, activityConnA2: activityConnA2.id,
     hintOnlyDef: hintOnlyDef.id, hintOnlyKey: "poc-hint-component-only",
+    activityAnaClubB: activityAnaClubB.id,
+    dayScopeMetric: dayScopeMetric.id, dayEventActivity: dayEventActivity.id,
+    methodConflictMetric: methodConflictMetric.id, methodConflictActV1, methodConflictActV2,
+    typeConflictMetric: typeConflictMetric.id, typeConflictActV1, typeConflictActV2,
   };
 }
 
@@ -674,6 +793,7 @@ async function addSeries(widgetId, fields = {}) {
   const vals = [widgetId, fields.seriesOrder ?? 1];
   const map = {
     metricDefinitionId: "metric_definition_id", builtInSeriesKey: "built_in_series_key", templateHints: "template_metric_key_hints",
+    resolutionStatus: "resolution_status", templateResolutionCandidates: "template_resolution_candidates",
     axis: "axis", sourcePolicy: "source_policy", sourceConnectionId: "source_connection_id", dataScopeLevel: "data_scope_level",
     analyticalAggregation: "analytical_aggregation", aggregationRolePolicy: "aggregation_role_policy", coveragePolicy: "coverage_policy", comparisonPeriod: "comparison_period",
   };
@@ -924,14 +1044,25 @@ test("§3.5 two edits to the SAME widget with the same stale revision give exact
 // §4 — Reverse invariants.
 // ============================================================
 
-test("§4.1 is_template cannot flip to false while an unresolved (hints-only) series still exists", async () => {
-  const tmpl = await makeDashboard({ ownerScope: "system", isTemplate: true, createdBy: ids.platformAdmin });
-  const widget = await makeWidget(tmpl.id);
-  await addSeries(widget.id, { templateHints: JSON.stringify(["distance_total_m"]) });
-  await assert.rejects(
-    q(`update training_load.dashboards set is_template=false where id=$1`, [tmpl.id]),
-    /cannot flip is_template to false while unresolved/,
-  );
+test("§4.1 [Round 4, §9 CORRECTION] an unresolved (hints-only) series is now allowed on a REAL (non-template) dashboard too — is_template no longer gates this at all, since a clone must PRESERVE (never drop) an unresolved series so it stays fixable", async () => {
+  // The Round 2/3 trigger this test used to exercise (dashboards_guard_
+  // template_flip) is removed in Round 4 — its premise (a real dashboard
+  // can never legitimately hold an unresolved series) is now false. This
+  // test instead proves the REPLACEMENT contract directly.
+  const real = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA, isTemplate: false });
+  const widget = await makeWidget(real.id);
+  const series = await addSeries(widget.id, {
+    templateHints: JSON.stringify([{ key: "distance_total_m" }]),
+    resolutionStatus: "unresolved",
+  });
+  assert.equal(series.resolution_status, "unresolved");
+  assert.equal(series.metric_definition_id, null);
+  assert.equal(series.built_in_series_key, null);
+  // is_template is completely free to flip in either direction regardless.
+  await q(`update training_load.dashboards set is_template=true where id=$1`, [real.id]);
+  await q(`update training_load.dashboards set is_template=false where id=$1`, [real.id]);
+  const stillThere = await one(`select resolution_status from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  assert.equal(stillThere.resolution_status, "unresolved", "the unresolved series must never be silently dropped by an is_template flip");
 });
 
 test("§4.2 switching Table -> KPI re-checks the max-series cap against EXISTING series", async () => {
@@ -1348,8 +1479,18 @@ test("§9.7 two effective sources for the same athlete/metric produce a conflict
   await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 65, 'bpm' from training_load.metric_definitions where id=$2`, [occ2.id, metricId]);
   const rows = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "session", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", sourcePolicy: "all_with_conflicts", activityIds: [ids.activity], athleteIds: [ids.ana] });
   const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  // Round 4, §2: both values land on the exact SAME measurement target
+  // (same athlete, same session, same metric, same unit) — a real
+  // conflict, never summed/averaged/silently picked. The candidates
+  // themselves (both real values, with provenance) are returned in
+  // targetConflicts; `values` correctly stays EMPTY for this target —
+  // nothing here is safe to treat as "the" reading.
   assert.equal(anaRow.conflict, true);
-  assert.equal(anaRow.values.length, 2);
+  assert.equal(anaRow.values.length, 0, "an unresolved target contributes NO value — never a silently-picked or summed number");
+  assert.equal(anaRow.targetConflicts.length, 1);
+  assert.equal(anaRow.targetConflicts[0].candidates.length, 2);
+  const conflictValues = anaRow.targetConflicts[0].candidates.map((c) => Number(c.value)).sort((a, b) => a - b);
+  assert.deepEqual(conflictValues, [60, 65]);
 });
 
 test("§9.8 the canonical alias chain does not duplicate a result after a real merge", async () => {
@@ -1388,16 +1529,39 @@ test("§9.8 the canonical alias chain does not duplicate a result after a real m
 });
 
 test("§9.9 coverage_policy and aggregation_role_policy actually change the result set, not just accepted config", async () => {
-  const partialOcc = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [ids.eventParticipant]);
+  // The new partial-coverage rollup goes on a genuinely SEPARATE session
+  // (its own activity/event/participant) — Round 4, §2 correctly treats
+  // two values on the exact SAME session-target as a conflict, so this
+  // fixture must give coverage_policy something real to include/exclude
+  // ACROSS two different targets, not accidentally create a same-target
+  // conflict the strict/permissive comparison was never meant to probe.
+  const partialActivity = await one(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
+     values ('training_session','PoC 9.9 Partial','2026-09-11','2026-09-11T09:00:00Z','Europe/Belgrade','club',$1,'manual','confirmed',$2) returning id`,
+    [ids.clubA, ids.coachA],
+  );
+  const partialParticipant = await one(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1,$2,'2026-09-11','Europe/Belgrade','participated') returning id`,
+    [partialActivity.id, ids.ana],
+  );
+  const partialEvent = await one(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
+     values ('PoC 9.9 Partial','2026-09-11','2026-09-11T09:00:00Z','session','club',$1,$2,$3) returning id`,
+    [ids.clubA, ids.connClubA, ids.coachA],
+  );
+  const partialEventParticipant = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [partialEvent.id, ids.ana]);
+  await q(`insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [partialActivity.id, partialEvent.id]);
+  await q(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [partialParticipant.id, partialEventParticipant.id]);
+  const partialOcc = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [partialEventParticipant.id]);
   await q(
     `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
      values ($1,$2,$3,4500,'m','source_rollup','partial')`,
     [partialOcc.id, ids.distanceClubA, (await one(`select current_version_id from training_load.metric_definitions where id=$1`, [ids.distanceClubA])).current_version_id],
   );
-  const strict = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "complete_only", activityIds: [ids.activity], athleteIds: [ids.ana] });
-  const permissive = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
-  assert.equal(strict[0].values.length, 1, "complete_only excludes the new PARTIAL-coverage rollup");
-  assert.equal(permissive[0].values.length, 2, "'any' coverage includes it — the policy genuinely changes the result");
+  const strict = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "complete_only", activityIds: [ids.activity, partialActivity.id], athleteIds: [ids.ana] });
+  const permissive = await queryMetricSeries({ metricDefinitionId: ids.distanceClubA, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.activity, partialActivity.id], athleteIds: [ids.ana] });
+  assert.equal(strict[0].values.length, 1, "complete_only excludes the new PARTIAL-coverage rollup's own target");
+  assert.equal(permissive[0].values.length, 2, "'any' coverage includes it as a second, genuinely different target — the policy changes the result without creating a false conflict");
 });
 
 test("§9.10 mixed historical units within one query period return a controlled unitConflict (same as §7.2, re-asserted under the §9 adapter umbrella)", async () => {
@@ -1476,19 +1640,19 @@ test("§10.5 [Query results #5] analytical_aggregation='none' returns every (day
   assert.deepEqual(current[0].value.map(Number).sort((a, b) => a - b), [80, 150]);
 });
 
-test("§10.6 [Query results #6] group_by='team' genuinely merges ACROSS athletes (Ana 150+80, Marko 20) into one bucket: 250 — never silently degraded to a per-athlete bucket", async () => {
+test("§10.6 [Query results #6] group_by='cohort' [Round 4: renamed from 'team' — see schema.sql, it never represented a real team_id] genuinely merges ACROSS athletes (Ana 150+80, Marko 20) into one bucket: 250 — never silently degraded to a per-athlete bucket", async () => {
   const { current } = await runSeriesPipeline(
-    { metricDefinitionId: ids.pipelineMetric, dataScopeLevel: "session", groupBy: "team", analyticalAggregation: "sum" },
+    { metricDefinitionId: ids.pipelineMetric, dataScopeLevel: "session", groupBy: "cohort", analyticalAggregation: "sum" },
     { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana, ids.marko], dateFrom: "2026-09-15", dateTo: "2026-09-16" },
   );
   assert.equal(current.length, 1);
-  assert.equal(current[0].athleteId, null, "a team bucket has no single owning athlete");
+  assert.equal(current[0].athleteId, null, "a cohort bucket has no single owning athlete");
   assert.equal(Number(current[0].value), 250);
 });
 
-test("§10.7 [Query results #7] group_by='team' with analytical_aggregation='avg' is the average across ALL underlying day-reduced values from every athlete: avg([150,80,20])=83.33...", async () => {
+test("§10.7 [Query results #7] group_by='cohort' with analytical_aggregation='avg' is the average across ALL underlying day-reduced values from every athlete: avg([150,80,20])=83.33...", async () => {
   const { current } = await runSeriesPipeline(
-    { metricDefinitionId: ids.pipelineMetric, dataScopeLevel: "session", groupBy: "team", analyticalAggregation: "avg" },
+    { metricDefinitionId: ids.pipelineMetric, dataScopeLevel: "session", groupBy: "cohort", analyticalAggregation: "avg" },
     { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana, ids.marko], dateFrom: "2026-09-15", dateTo: "2026-09-16" },
   );
   assert.ok(Math.abs(Number(current[0].value) - 250 / 3) < 1e-9);
@@ -1798,11 +1962,22 @@ test("§10.32 [Binding/source #32] source_policy='derived' (with aggregation_rol
   assert.deepEqual(values, [99]);
 });
 
-test("§10.33 [Binding/source #33] source_policy='source_connection' pinned to two DIFFERENT real connections returns two disjoint real result sets", async () => {
+test("§10.33 [Binding/source #33] source_policy='source_connection' pinned to two DIFFERENT real connections behaves correctly in BOTH directions: a connection that still has 3 candidates for the SAME target stays a real conflict (never silently listed as 3 clean values), while the other connection's own single, genuinely different target resolves cleanly", async () => {
   const bothActivities = [ids.activity, ids.activityConnA2];
   const viaConnA = await queryMetricSeries({ metricDefinitionId: ids.sourcePolicyMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", sourcePolicy: "source_connection", sourceConnectionId: ids.connClubA, activityIds: bothActivities, athleteIds: [ids.ana] });
   const viaConnA2 = await queryMetricSeries({ metricDefinitionId: ids.sourcePolicyMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", sourcePolicy: "source_connection", sourceConnectionId: ids.connClubA2, activityIds: bothActivities, athleteIds: [ids.ana] });
-  assert.deepEqual(viaConnA[0].values.map((v) => Number(v.value)).sort((a, b) => a - b), [10, 20, 30]);
+  // connClubA's own manual/api_import/csv_import facts (10/20/30) are ALL
+  // on the exact SAME session target (same athlete, same session, same
+  // metric, same unit) — Round 4, §2's real target-conflict rule
+  // correctly refuses to list them as 3 independently-valid values just
+  // because they share one connection; pinning the CONNECTION alone does
+  // not resolve which of the 3 actual readings is correct.
+  const anaConnA = viaConnA.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaConnA.values.length, 0);
+  assert.equal(anaConnA.targetConflicts.length, 1);
+  assert.deepEqual(anaConnA.targetConflicts[0].candidates.map((c) => Number(c.value)).sort((a, b) => a - b), [10, 20, 30]);
+  // connClubA2's own fact is alone on ITS OWN different target (a
+  // different session) — pinning to it genuinely resolves cleanly.
   assert.deepEqual(viaConnA2[0].values.map((v) => Number(v.value)), [50]);
 });
 
@@ -1829,31 +2004,531 @@ test("§10.36 [Binding/source #36] a richer hint's scopeLevel mismatch excludes 
 });
 
 // ============================================================
-// The PoC query adapter itself — a real, working layer over the REAL
-// training.canonical_activity_results() (never metric_values/session_
-// feedback queried directly and independently re-joined), proving Round 2
-// §9's required behaviors. This is explicitly a PoC-level adapter — the
-// real backend implementation will formalize this as actual service code
-// later; nothing here is application code being added this round.
-//
-// Round 3, §1/§2: this adapter now ACTUALLY executes the full 9-step
-// pipeline the task requires, and ACTUALLY applies every declared column
-// on dashboard_widget_series (data_scope_level, source_policy,
-// source_connection_id, aggregation_role_policy, coverage_policy,
-// group_by, analytical_aggregation, comparison_period) plus real 5-type
-// workspace filtering — see runSeriesPipeline / reduceRows / fetchActivitiesInRange
-// below. Per the task's own explicit instruction, nothing here is a
-// declared-but-ignored option: anything not genuinely executable this
-// round was REMOVED from the schema/contract instead (see report).
+// §11 — Round 4, final blocker-correction pass: the 30 newly required
+// regression tests, numbered exactly per the task's own list.
 // ============================================================
 
-// Round 3, §2: fetchActivitiesInRange now requires an EXPLICIT, recognized
-// dataWorkspaceType — there is no silent "unrestricted" fallback anymore.
-// 'platform' IS allowed to mean genuinely unrestricted (matching
-// resolveActiveWorkspace's own real 'platform' semantics: a platform-wide
-// aggregate view), but it must be asked for by name, never reached by
-// omission — this is the direct fix for "platform semantics moraju biti
-// precizno dokumentovane, ne slučajni fallback".
+test("§11.1 [req #1] two sessions of the SAME athlete on the SAME real day remain TWO separate session buckets — never collapsed into one daily sum", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.pipelineMetric, dataScopeLevel: "session", groupBy: "session", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-15", dateTo: "2026-09-15" },
+  );
+  assert.equal(current.length, 2, "day1a (100) and day1b (50) must stay two distinct session buckets, not one day-sum of 150");
+  const values = current.map((r) => Number(r.value)).sort((a, b) => a - b);
+  assert.deepEqual(values, [50, 100]);
+});
+
+test("§11.2 [req #2] two components of the SAME session remain TWO separate component buckets", async () => {
+  const eventId = (await one(`select event_id from training_load.metric_event_segments where id=$1`, [ids.segment])).event_id;
+  const segment2 = await one(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'Second Component',2) returning id`, [eventId]);
+  const component2 = await one(`insert into training.activity_components (activity_id, component_type_key, name_snapshot, origin, sort_order) values ($1,'block','Second Block','manual',2) returning id`, [ids.activity]);
+  await q(`insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [component2.id, segment2.id]);
+  const occ2 = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [ids.eventParticipant, segment2.id]);
+  await q(
+    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
+     values ($1,$2,$3,1500,'m','standalone','not_applicable')`,
+    [occ2.id, ids.distanceClubA, (await one(`select current_version_id from training_load.metric_definitions where id=$1`, [ids.distanceClubA])).current_version_id],
+  );
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.distanceClubA, dataScopeLevel: "component", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", groupBy: "component", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-09" },
+  );
+  assert.equal(current.length, 2, "the original component (3200) and the new second component (1500) must stay two distinct buckets");
+  const values = current.map((r) => Number(r.value)).sort((a, b) => a - b);
+  assert.deepEqual(values, [1500, 3200]);
+});
+
+test("§11.3 [req #3] a DAY-SCOPE Metrics Core event is recognized as grain='day' — visible ONLY under data_scope_level='day', never defaulted to 'session' merely for lacking a segment", async () => {
+  const asDay = await queryMetricSeries({ metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.dayEventActivity], athleteIds: [ids.ana] });
+  const asSession = await queryMetricSeries({ metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.dayEventActivity], athleteIds: [ids.ana] });
+  assert.equal(asDay.length, 1);
+  assert.equal(Number(asDay[0].values[0].value), 777);
+  assert.equal(asSession.length, 0, "the SAME fact must NEVER also appear under data_scope_level='session' just because it has no segment");
+});
+
+test("§11.4 [req #4] group_by='week' buckets by the real Monday-Sunday ISO week — Ana's two same-week activities (2026-09-15 Tue, 2026-09-16 Wed) sum into ONE weekly bucket", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.pipelineMetric, dataScopeLevel: "session", groupBy: "week", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-15", dateTo: "2026-09-16" },
+  );
+  assert.equal(current.length, 1, "both real dates fall in the same Monday-Sunday week — one bucket");
+  assert.equal(Number(current[0].value), 230);
+  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(current[0].bucketKey));
+  assert.ok(current[0].bucketKey <= "2026-09-15", "the week bucket key is the week's own MONDAY, never later than any date inside that week");
+});
+
+test("§11.5 [req #5] two normal readings on two DIFFERENT real days are never flagged as a conflict", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.pipelineMetric, dataScopeLevel: "session", groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-15", dateTo: "2026-09-16" },
+  );
+  for (const bucket of current) {
+    assert.notEqual(bucket.conflict, true, `bucket ${bucket.bucketKey} must not be flagged conflict just because more than one bucket exists overall`);
+    assert.ok(bucket.value != null);
+  }
+});
+
+test("§11.6 [req #6] two effective values for the exact SAME measurement target ARE a real conflict", async () => {
+  const rows = await queryMetricSeries({ metricDefinitionId: ids.sourcePolicyMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", sourcePolicy: "all_with_conflicts", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaRow.conflict, true);
+  assert.ok(anaRow.targetConflicts.length >= 1);
+});
+
+test("§11.7 [req #7] a conflicted target propagates all the way to the FINAL bucket as null+conflict — never a silently-dropped or falsely-summed number", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.sourcePolicyMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", sourcePolicy: "all_with_conflicts", groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-09" },
+  );
+  const bucket = current.find((b) => b.athleteId === ids.ana);
+  assert.ok(bucket, "the conflicted day must still produce a bucket, not silently vanish");
+  assert.equal(bucket.conflict, true);
+  assert.equal(bucket.value, null, "a bucket depending on an unresolved conflict must be null, never a partial/false sum");
+});
+
+test("§11.8 [req #8] pinning ONE source connection resolves the conflict into a real, clean bucket value", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.sourcePolicyMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", sourcePolicy: "source_connection", sourceConnectionId: ids.connClubA2, groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-01-01", dateTo: "2026-12-31" },
+  );
+  const bucket = current.find((b) => b.value != null);
+  assert.ok(bucket, "pinning connClubA2 must resolve to a real, non-null value");
+  assert.equal(Number(bucket.value), 50);
+  assert.notEqual(bucket.conflict, true);
+});
+
+test("§11.9 [req #9] standalone + source_rollup on the SAME target are never both summed — they are a real conflict", async () => {
+  const metricId = await makeQuickMetric("Quick 11.9");
+  const occStandalone = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [ids.eventParticipant]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage) select $1, id, current_version_id, 70, 'bpm', 'standalone', 'not_applicable' from training_load.metric_definitions where id=$2`, [occStandalone.id, metricId]);
+  const occRollup = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'api_import') returning id`, [ids.eventParticipant]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage) select $1, id, current_version_id, 75, 'bpm', 'source_rollup', 'complete' from training_load.metric_definitions where id=$2`, [occRollup.id, metricId]);
+  const rows = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaRow.values.length, 0, "never silently included as 2 summable values");
+  assert.equal(anaRow.targetConflicts.length, 1);
+  assert.deepEqual(anaRow.targetConflicts[0].candidates.map((c) => Number(c.value)).sort((a, b) => a - b), [70, 75]);
+});
+
+test("§11.10 [req #10] raw (standalone) + derived on the SAME target are never both summed — a real conflict, not silently combined", async () => {
+  const metricId = await makeQuickMetric("Quick 11.10");
+  const occRaw = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [ids.eventParticipant]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage) select $1, id, current_version_id, 30, 'bpm', 'standalone', 'not_applicable' from training_load.metric_definitions where id=$2`, [occRaw.id, metricId]);
+  const occDerived = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'api_import') returning id`, [ids.eventParticipant]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage, is_derived, computed_by_ref) select $1, id, current_version_id, 33, 'bpm', 'derived_rollup', 'complete', true, '{"formula":"poc"}'::jsonb from training_load.metric_definitions where id=$2`, [occDerived.id, metricId]);
+  const rows = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "session", aggregationRolePolicy: "all_including_derived", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaRow.values.length, 0);
+  assert.equal(anaRow.targetConflicts.length, 1);
+  assert.deepEqual(anaRow.targetConflicts[0].candidates.map((c) => Number(c.value)).sort((a, b) => a - b), [30, 33]);
+});
+
+test("§11.11 [req #11] a real unit conflict stays structurally separate through the FULL pipeline — never a falsely-blended aggregate", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.distanceSystem, dataScopeLevel: "session", aggregationRolePolicy: "standalone_only", coveragePolicy: "any", groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-10" },
+  );
+  const units = new Set(current.map((b) => b.unit));
+  assert.equal(units.size, 2, "the m-history and km-history stay in two structurally separate buckets");
+  const byUnit = Object.fromEntries(current.map((b) => [b.unit, Number(b.value)]));
+  assert.equal(byUnit.m, 4800);
+  assert.equal(byUnit.km, 4.9);
+  assert.notEqual(current.some((b) => Math.abs(b.value - (4800 + 4.9)) < 1e-6), true, "never a blended cross-unit sum");
+});
+
+test("§11.12 [req #12] two historical versions with DIFFERENT daily_aggregation_method landing on the SAME real day never guess — a real semantic conflict", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.methodConflictMetric, dataScopeLevel: "session", groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-20", dateTo: "2026-09-20" },
+  );
+  assert.equal(current.length, 1);
+  assert.equal(current[0].value, null);
+  assert.equal(current[0].semanticConflict, true);
+  assert.deepEqual([...current[0].conflictingMethods].sort(), ["max", "sum"]);
+});
+
+test("§11.13 [req #13] two historical versions with DIFFERENT value_type landing on the SAME real day produce a real type conflict, never a coerced number", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.typeConflictMetric, dataScopeLevel: "session", groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-21", dateTo: "2026-09-21" },
+  );
+  assert.equal(current.length, 1);
+  assert.equal(current[0].value, null);
+  assert.equal(current[0].typeConflict, true);
+});
+
+test("§11.14 [req #14] a text last_session_date returns a real date string through the full pipeline — never NaN", async () => {
+  const { current } = await runSeriesPipeline(
+    { builtInSeriesKey: "last_session_date", groupBy: "athlete", analyticalAggregation: "last" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-01", dateTo: "2026-09-30" },
+  );
+  assert.equal(current.length, 1);
+  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(current[0].value), `expected a real date string, got ${current[0].value}`);
+  assert.notEqual(Number.isNaN(Number(current[0].value)), undefined); // sanity: never even attempt Number() coercion in the real code path
+});
+
+test("§11.15 ['last' determinism, req #15] 'last' at an identical instant is deterministic — the SAME stable id tiebreaker wins every time, never row order", () => {
+  const items = [
+    { value: "A", instant: "2026-09-09T09:00:00.000Z", tiebreakId: "bbbbbbbb-0000-0000-0000-000000000000" },
+    { value: "B", instant: "2026-09-09T09:00:00.000Z", tiebreakId: "aaaaaaaa-0000-0000-0000-000000000000" },
+  ];
+  const first = reduceTyped(items, "last", "text");
+  for (let i = 0; i < 5; i++) {
+    // re-run against a freshly re-ordered copy each time — a real
+    // Postgres row-order-driven bug would sometimes flip the answer.
+    const shuffled = i % 2 === 0 ? items : [...items].reverse();
+    assert.equal(reduceTyped(shuffled, "last", "text"), first, "the result must never depend on input array order");
+  }
+  assert.equal(first, "A", "at an identical instant, the LEXICALLY GREATER tiebreak id wins — 'bbbbbbbb...' > 'aaaaaaaa...'");
+});
+
+test("§11.16 [req #16] an invalid aggregation/value-type combination is rejected, not silently coerced (e.g. 'sum' on a text series)", async () => {
+  assert.throws(() => reduceTyped([{ value: "x", instant: "2026-01-01", tiebreakId: "a" }], "sum", "text"), /not supported for value_type 'text'/);
+  assert.throws(() => reduceTyped([{ value: true, instant: "2026-01-01", tiebreakId: "a" }], "avg", "boolean"), /not supported for value_type 'boolean'/);
+  // Through the real pipeline, this surfaces as a real per-bucket error
+  // field (value:null, error set) — never a thrown NaN or a crash of the
+  // whole batch.
+  const { current } = await runSeriesPipeline(
+    { builtInSeriesKey: "last_session_date", groupBy: "athlete", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-01", dateTo: "2026-09-30" },
+  );
+  assert.equal(current[0].value, null);
+  assert.ok(current[0].error, "a real, surfaced error message, not a silent NaN");
+});
+
+test("§11.17 [req #17] the SAME athlete (Ana) gets a genuinely DIFFERENT session_count in Club A vs Club B workspaces", async () => {
+  const inClubA = await fetchActivitiesInRange({ dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-01-01", dateTo: "2026-12-31" });
+  const inClubB = await fetchActivitiesInRange({ dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubB, athleteIds: [ids.ana], dateFrom: "2026-01-01", dateTo: "2026-12-31" });
+  const countA = await queryBuiltInSeries({ key: "session_count", activityIds: inClubA, athleteIds: [ids.ana] });
+  const countB = await queryBuiltInSeries({ key: "session_count", activityIds: inClubB, athleteIds: [ids.ana] });
+  const totalA = countA.find((r) => r.athleteId === ids.ana)?.values.length ?? 0;
+  const totalB = countB.find((r) => r.athleteId === ids.ana)?.values.length ?? 0;
+  assert.ok(totalA > 0, "Ana has real Club A activities");
+  assert.ok(totalB > 0, "Ana has a real Club B activity too (activityAnaClubB)");
+  assert.notEqual(totalA, totalB, "the two workspaces must NOT report the same count for the same athlete");
+});
+
+test("§11.18 [req #18] a built-in series (RPE) genuinely respects workspace scoping end-to-end, not just Metrics-Core series — querying it under Club B returns nothing for Ana's Club-A-only RPE fact", async () => {
+  const { current: inClubA } = await runSeriesPipeline(
+    { builtInSeriesKey: "rpe", groupBy: "day", analyticalAggregation: "avg" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-09" },
+  );
+  const { current: inClubB } = await runSeriesPipeline(
+    { builtInSeriesKey: "rpe", groupBy: "day", analyticalAggregation: "avg" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubB, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-09" },
+  );
+  assert.equal(inClubA.length, 1);
+  assert.equal(Number(inClubA[0].value), 7);
+  assert.equal(inClubB.length, 0, "Ana's RPE fact is tied to a Club A activity — it must never leak into a Club B query");
+});
+
+test("§11.19 [req #19] 'athlete' workspace cannot be widened by a caller-supplied athleteIds override, through the FULL pipeline (not just fetchActivitiesInRange alone)", async () => {
+  const { current: forAna } = await runSeriesPipeline(
+    { builtInSeriesKey: "rpe", groupBy: "day", analyticalAggregation: "avg" },
+    { dataWorkspaceType: "athlete", athleteWorkspaceAthleteId: ids.ana, athleteIds: [ids.marko], dateFrom: "2026-09-09", dateTo: "2026-09-09" },
+  );
+  assert.equal(forAna.length, 1, "the pipeline must still return ANA's own data — athleteIds:[marko] must be completely ignored under an athlete workspace");
+  assert.equal(Number(forAna[0].value), 7);
+});
+
+test("§11.20 [req #20] update_widget_layout()'s TOCTOU fix: a widget change that lands WHILE this call is queued behind the dashboard lock is still caught — the caller's now-stale expected revision is rejected, never silently overwritten", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { x: 0, y: 0 });
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await b.client.query("begin");
+    await b.client.query("select 1 from training_load.dashboards where id=$1 for update", [dash.id]);
+    const aPromise = a.client.query(
+      `select * from training_load.update_widget_layout($1,$2,$3,$4,$5,$6,$7)`,
+      [widget.id, widget.revision, 5, 0, widget.width, widget.height, widget.mobile_order],
+    );
+    const blocked = await waitUntilBlocked(a.pid);
+    assert.ok(blocked, "A genuinely queued behind B's dashboard lock");
+    await b.client.query("update training_load.dashboard_widgets set title='changed by B' where id=$1", [widget.id]);
+    await b.client.query("commit");
+    await assert.rejects(aPromise, /stale widget revision/);
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const final = await one(`select title, x from training_load.dashboard_widgets where id=$1`, [widget.id]);
+  assert.equal(final.title, "changed by B");
+  assert.notEqual(final.x, 5, "A's stale, unrechecked update must never have applied");
+});
+
+test("§11.21 [req #21] delete_widget() and replace_dashboard_layout() on the same dashboard never deadlock", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const w1 = await makeWidget(dash.id, { x: 0, y: 0, mobileOrder: 1, order: 1 });
+  const w2 = await makeWidget(dash.id, { x: 4, y: 0, mobileOrder: 2, order: 2 });
+  const rev = (await one(`select revision from training_load.dashboards where id=$1`, [dash.id])).revision;
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(`select * from training_load.replace_dashboard_layout($1,$2,$3::jsonb)`, [dash.id, rev, JSON.stringify([{ widgetId: w1.id, y: 1 }])]);
+    const bPromise = b.client.query(`select * from training_load.delete_widget($1,$2)`, [w2.id, w2.revision]);
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "B genuinely queued behind A's dashboard lock");
+    await a.client.query("commit");
+    await bPromise; // must resolve cleanly, no deadlock
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const remaining = await one(`select count(*)::int as n from training_load.dashboard_widgets where dashboard_id=$1`, [dash.id]);
+  assert.equal(remaining.n, 1);
+});
+
+test("§11.22 [req #22] series mutation (update_series, then delete_series) and a widget type-change (update_widget_content) on DIFFERENT widgets of the same dashboard never deadlock", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const w1 = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4, x: 0, y: 0, mobileOrder: 1, order: 1 });
+  // width=3/height=3 deliberately satisfies KPI (2-4 x 2-3), table (3-12
+  // x 3-12), AND bar_chart (3-12 x 3-8) bounds at once — this widget's
+  // own type changes twice below (kpi -> table -> bar_chart) and must
+  // stay valid at every step without needing its own size to also change.
+  const w2 = await makeWidget(dash.id, { widgetType: "kpi", width: 3, height: 3, x: 6, y: 0, mobileOrder: 2, order: 2 });
+  const series = await one(
+    `select * from training_load.add_series($1,$2,1,$3,null,null,'resolved',null,'primary',null,null,'all_with_conflicts',null,'session','sum','standalone_and_source_rollup','complete_and_partial',null,$4)`,
+    [w1.id, w1.revision, ids.distanceClubA, ids.coachA],
+  );
+  let w2Revision = w2.revision;
+  {
+    // Round 1: update_series (w1) concurrently with update_widget_content
+    // (widget type change, w2).
+    const a = await newClient();
+    const b = await newClient();
+    try {
+      await a.client.query("begin");
+      await a.client.query(`select * from training_load.update_series($1,$2,$3,$4)`, [series.series_id, w1.id, series.widget_revision, "secondary"]);
+      const bPromise = b.client.query(`select * from training_load.update_widget_content($1,$2,$3)`, [w2.id, w2Revision, "table"]);
+      const blocked = await waitUntilBlocked(b.pid);
+      assert.ok(blocked, "B genuinely queued behind A's dashboard lock — both go through the SAME sanctioned dashboard-first order even though they touch different widgets");
+      await a.client.query("commit");
+      const bResult = await bPromise;
+      w2Revision = bResult.rows[0].widget_revision;
+    } finally {
+      await a.client.end();
+      await b.client.end();
+    }
+  }
+  const afterSeriesUpdate = await one(`select axis, widget_id from training_load.dashboard_widget_series where id=$1`, [series.series_id]);
+  assert.equal(afterSeriesUpdate.axis, "secondary");
+  const w2AfterRound1 = await one(`select widget_type, revision from training_load.dashboard_widgets where id=$1`, [w2.id]);
+  assert.equal(w2AfterRound1.widget_type, "table");
+  w2Revision = w2AfterRound1.revision;
+  const w1Revision = (await one(`select revision from training_load.dashboard_widgets where id=$1`, [w1.id])).revision;
+  {
+    // Round 2: delete_series (w1) concurrently with another widget-content
+    // change (w2) — same lock-order proof for the delete path.
+    const a = await newClient();
+    const b = await newClient();
+    try {
+      await a.client.query("begin");
+      await a.client.query(`select * from training_load.delete_series($1,$2,$3)`, [series.series_id, w1.id, w1Revision]);
+      const bPromise = b.client.query(`select * from training_load.update_widget_content($1,$2,$3)`, [w2.id, w2Revision, "bar_chart"]);
+      const blocked = await waitUntilBlocked(b.pid);
+      assert.ok(blocked, "B again genuinely queued behind A's dashboard lock, this time for a delete_series call");
+      await a.client.query("commit");
+      await bPromise;
+    } finally {
+      await a.client.end();
+      await b.client.end();
+    }
+  }
+  const remaining = await one(`select count(*)::int as n from training_load.dashboard_widget_series where widget_id=$1`, [w1.id]);
+  assert.equal(remaining.n, 0);
+});
+
+test("§11.23 [req #23] an owner_scope/data_workspace change is rejected EVEN on a completely empty, brand-new dashboard — write-once from creation, not just 'once in use'", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const noWidgets = await one(`select count(*)::int as n from training_load.dashboard_widgets where dashboard_id=$1`, [dash.id]);
+  assert.equal(noWidgets.n, 0, "sanity: genuinely zero widgets, zero selections, zero clones — nothing 'in use'");
+  await assert.rejects(
+    q(`update training_load.dashboards set data_workspace_type='team', data_workspace_scope_id=$1 where id=$2`, [ids.teamA, dash.id]),
+    /owner_scope and data_workspace are immutable/,
+  );
+});
+
+test("§11.24 [req #24] archiving a dashboard atomically invalidates (removes) its existing active selection — never leaves a valid-looking 'active dashboard' pointing at an archived one", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  // ON CONFLICT upsert — a user has exactly one active dashboard PER
+  // workspace at a time (the table's own unique constraint), so
+  // "select active" realistically REPLACES any earlier selection for
+  // this same (user, workspace) pair, exactly like a real "switch active
+  // dashboard" action — coachA/Club A may already have one from an
+  // earlier test in this shared-fixture suite.
+  await q(
+    `insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'club',$2,$3)
+     on conflict (user_id, workspace_type, scope_id) do update set dashboard_id = excluded.dashboard_id`,
+    [ids.coachA, ids.clubA, dash.id],
+  );
+  const before = await one(`select count(*)::int as n from training_load.dashboard_active_selection where dashboard_id=$1`, [dash.id]);
+  assert.equal(before.n, 1);
+  await q(`update training_load.dashboards set status='archived' where id=$1`, [dash.id]);
+  const after = await one(`select count(*)::int as n from training_load.dashboard_active_selection where dashboard_id=$1`, [dash.id]);
+  assert.equal(after.n, 0, "the active selection row must be gone the instant the dashboard is archived");
+});
+
+test("§11.25 [req #25] a bare-string template_metric_key_hints element is rejected outright — only real objects are accepted", async () => {
+  const dash = await makeDashboard({ ownerScope: "system", isTemplate: true, createdBy: ids.platformAdmin });
+  const widget = await makeWidget(dash.id);
+  await assert.rejects(
+    addSeries(widget.id, { templateHints: JSON.stringify(["distance_total_m"]), resolutionStatus: "unresolved" }),
+    /must be objects, not a bare string\/scalar/,
+  );
+  const ok = await addSeries(widget.id, { templateHints: JSON.stringify([{ key: "distance_total_m" }]), resolutionStatus: "unresolved" });
+  assert.equal(ok.resolution_status, "unresolved");
+});
+
+test("§11.26 [req #26] a scope-level hint against a definition WITHOUT that capability configured stays unresolved — never auto-bound", async () => {
+  const result = await resolveTemplateHint({ hints: [{ key: ids.hintOnlyKey, scopeLevel: "session" }], dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, ownerUserId: null });
+  assert.equal(result.status, "unresolved", "hintOnlyDef is configured ONLY for scope_level='component' — a 'session' hint must never guess a bind");
+});
+
+test("§11.27 [req #27] an ambiguous template binding survives a (simulated) clone onto a REAL dashboard, stays visible with its real candidates, and is never auto-picked", async () => {
+  const template = await makeDashboard({ ownerScope: "system", isTemplate: true, createdBy: ids.platformAdmin });
+  const templateWidget = await makeWidget(template.id);
+  const ambiguous = await resolveTemplateHint({ hints: [{ key: ids.ambiguousHintKey }], dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, ownerUserId: null });
+  assert.equal(ambiguous.status, "needs_resolution");
+  const templateSeries = await addSeries(templateWidget.id, {
+    templateHints: JSON.stringify([{ key: ids.ambiguousHintKey }]),
+    resolutionStatus: "ambiguous",
+    templateResolutionCandidates: JSON.stringify(ambiguous.candidateIds),
+  });
+  // Simulate the clone: a REAL (non-template) dashboard/widget, with the
+  // unresolved state copied over VERBATIM — never dropped, never guessed.
+  const real = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA, isTemplate: false });
+  const realWidget = await makeWidget(real.id);
+  const cloned = await addSeries(realWidget.id, {
+    // template_metric_key_hints/template_resolution_candidates come back
+    // from `one()` already PARSED (pg parses jsonb columns automatically)
+    // — re-stringify before sending them back down as query parameters,
+    // the same way every other jsonb-bearing field is passed in this file.
+    templateHints: JSON.stringify(templateSeries.template_metric_key_hints),
+    resolutionStatus: "ambiguous",
+    templateResolutionCandidates: JSON.stringify(templateSeries.template_resolution_candidates),
+  });
+  assert.equal(cloned.resolution_status, "ambiguous");
+  assert.equal(cloned.metric_definition_id, null, "never auto-picked");
+  assert.deepEqual([...cloned.template_resolution_candidates].sort(), [...ambiguous.candidateIds].sort());
+  const stillThere = await one(`select resolution_status from training_load.dashboard_widget_series where id=$1`, [cloned.id]);
+  assert.equal(stillThere.resolution_status, "ambiguous", "must still be there, fixable, after the clone — never silently dropped");
+});
+
+test("§11.28 [req #28] the widget-type catalog's first-use lock genuinely blocks a concurrent semantic change until the first widget's own insert commits, giving a CONSISTENT final outcome", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(
+      `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order) values ($1,'bar_chart','Race Widget',20,0,20,4,4,20)`,
+      [dash.id],
+    );
+    const bPromise = b.client.query(`update training_load.dashboard_widget_types set max_series=1 where key='bar_chart'`).catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "B genuinely queued behind A's FOR SHARE lock on the bar_chart catalog row");
+    await a.client.query("commit");
+    const bResult = await bPromise;
+    assert.ok(bResult.error, "B must now see the type as 'in use' and be rejected — never silently succeed against a state it raced past");
+    assert.match(bResult.error.message, /already referenced by a widget/);
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const restore = await one(`select max_series from training_load.dashboard_widget_types where key='bar_chart'`);
+  assert.equal(restore.max_series, 8, "B's rejected change must have left the real value completely untouched");
+});
+
+test("§11.29 [req #29] comparison_period='previous_year' has a defined, deterministic leap-day policy — Feb 29 shifted into a non-leap year rolls forward to Mar 1, never a silently wrong Feb 28", () => {
+  const shifted = shiftDateRange("2028-02-29", "2028-02-29", "previous_year");
+  assert.equal(shifted.dateFrom, "2027-03-01");
+  assert.equal(shifted.dateTo, "2027-03-01");
+});
+
+test("§11.30 [req #30] the canonical activity alias chain is never double-counted through the FULL pipeline (not just a raw canonical_activity_results count)", async () => {
+  const metricId = await makeQuickMetric("Quick 11.30");
+  const aliasActivity = await one(
+    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
+     values ('training_session','PoC 11.30 dup','2026-09-09','2026-09-09T09:10:00Z','Europe/Belgrade','club',$1,'manual','confirmed',$2) returning id`,
+    [ids.clubA, ids.coachA],
+  );
+  const aliasParticipant = await one(
+    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1,$2,'2026-09-09','Europe/Belgrade','participated') returning id`,
+    [aliasActivity.id, ids.ana],
+  );
+  const aliasEvent = await one(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
+     values ('11.30 dup','2026-09-09','2026-09-09T09:10:00Z','session','club',$1,$2,$3) returning id`,
+    [ids.clubA, ids.connClubA, ids.coachA],
+  );
+  const aliasEventParticipant = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [aliasEvent.id, ids.ana]);
+  await q(`insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [aliasActivity.id, aliasEvent.id]);
+  await q(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [aliasParticipant.id, aliasEventParticipant.id]);
+  const aliasOcc = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [aliasEventParticipant.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 55, 'bpm' from training_load.metric_definitions where id=$2`, [aliasOcc.id, metricId]);
+  await q(`select training.merge_activity_participants($1,$2,$3,'PoC 11.30 dedup')`, [aliasParticipant.id, (await one(`select id from training.activity_participants where activity_id=$1 and athlete_id=$2`, [ids.activity, ids.ana])).id, ids.coachA]);
+
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: metricId, dataScopeLevel: "session", groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-09" },
+  );
+  assert.equal(current.length, 1);
+  assert.equal(Number(current[0].value), 55, "the merged alias's own value counted exactly once through the real pipeline, never duplicated");
+});
+
+// ============================================================
+// The PoC query adapter itself — a real, working layer over the REAL
+// training.canonical_activity_results() (never metric_values/session_
+// feedback queried directly and independently re-joined).
+//
+// Round 4, §1/§2/§3/§4 — this is a STRUCTURAL rewrite, not a patch:
+//   - every raw fact now carries its own REAL identity (canonical
+//     activity/participant/athlete id, local date, start instant,
+//     component/segment id when it exists, occasion id, metric_definition_
+//     VERSION id, event scope_level, source connection, unit/value_type AT
+//     CAPTURE, aggregation role, coverage) — see queryMetricSeries below;
+//   - "grain" (session/component/day) is now derived from the metric
+//     EVENT's own real scope_level, never merely "no segment present"
+//     (Round 2/3's bug — a day-level event with no segment was silently
+//     treated as session-level);
+//   - group_by='session'/'component' now bucket by that REAL identity
+//     (one bucket per real session/component), never collapsed through a
+//     date-only bucket the way Round 3's reduceRows did;
+//   - group_by='week' is real (Monday-Sunday); the old 'team' value is
+//     renamed 'cohort' (it never represented a real team_id — see
+//     schema.sql's own comment on dashboard_widgets.group_by);
+//   - conflict detection is now a real MEASUREMENT TARGET state machine
+//     (queryMetricSeries' own target-resolution step), never "more than
+//     one value present" — two normal readings on two different days are
+//     simply two different targets, not a conflict;
+//   - typed, version-correct two-stage aggregation (reduceTyped) — a
+//     'text'/'boolean' series can only use last/none, 'last' is a real
+//     deterministic sort (instant, then a stable id tiebreaker), and
+//     Stage 1 always uses each historical fact's OWN metric_definition_
+//     version's daily_aggregation_method, never the metric's CURRENT
+//     version's.
+// This remains explicitly a PoC-level adapter with per-activity N+1
+// queries — the real backend implementation MUST use a real set-based,
+// time-bounded query plan; nothing here is a production query plan (see
+// report §0-R4.11).
+// ============================================================
+
+// Round 3, §2: fetchActivitiesInRange requires an EXPLICIT, recognized
+// dataWorkspaceType — no silent "unrestricted" fallback. 'platform' IS
+// allowed to mean genuinely unrestricted (an explicit, documented opt-in,
+// matching resolveActiveWorkspace's own real 'platform' semantic), but it
+// must be asked for by name, never reached by omission.
+//
+// Round 4, §11: this function (and every query function built on it)
+// NEVER treats a caller-supplied activityIds/athleteIds as an
+// AUTHORIZATION boundary on its own — activityIds passed directly into
+// queryMetricSeries/queryBuiltInSeries only ever NARROWS an already-
+// workspace-resolved set (see runSeriesPipeline, the only place that
+// legitimately calls fetchActivitiesInRange and then hands the result
+// down) — it can never WIDEN access beyond what fetchActivitiesInRange
+// itself would have authorized for that workspace.
 const RECOGNIZED_DATA_WORKSPACE_TYPES = ["platform", "club", "team", "private_coach", "athlete"];
 
 async function fetchActivitiesInRange({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds }) {
@@ -1861,11 +2536,6 @@ async function fetchActivitiesInRange({ dataWorkspaceType, dataWorkspaceScopeId,
     throw new Error(`fetchActivitiesInRange: dataWorkspaceType must be one of ${RECOGNIZED_DATA_WORKSPACE_TYPES.join("/")} (got ${dataWorkspaceType}) — an unrestricted query must explicitly pass 'platform', never rely on an accidental default`);
   }
   const params = [dateFrom, dateTo];
-  // owner-scope-based filtering (matches training.activities.owner_scope's
-  // OWN 4-way shape: system/club/team/user — never the 5-value workspace
-  // shape). 'platform' deliberately stays scopeSql='true' — see the
-  // function comment above for why that is a real, documented meaning
-  // here, not a fallback.
   let scopeSql = "true";
   if (dataWorkspaceType === "club") {
     params.push(dataWorkspaceScopeId);
@@ -1878,16 +2548,6 @@ async function fetchActivitiesInRange({ dataWorkspaceType, dataWorkspaceScopeId,
     params.push(dataWorkspaceUserId);
     scopeSql = `a.owner_scope='user' and a.owner_user_id=$${params.length}`;
   }
-  // Round 3, §2: 'athlete' workspace is fundamentally PARTICIPANT-based,
-  // not OWNER-based — training.activities has no owner_scope='athlete'
-  // value at all (matches dashboards' own data_workspace_scope_id being
-  // NULL for 'athlete' — it is resolved from the CURRENT viewing athlete
-  // at query time, never baked into a dashboard row). An athlete's own
-  // workspace shows THEIR training regardless of which club/team owns the
-  // underlying activity — scopeSql intentionally stays 'true' here;
-  // athleteWorkspaceAthleteId narrows via the participant join below
-  // instead, exactly like the explicit athleteIds parameter does for
-  // every other workspace type.
   if (dataWorkspaceType === "athlete" && !athleteWorkspaceAthleteId) {
     throw new Error("fetchActivitiesInRange: dataWorkspaceType='athlete' requires athleteWorkspaceAthleteId");
   }
@@ -1898,25 +2558,22 @@ async function fetchActivitiesInRange({ dataWorkspaceType, dataWorkspaceScopeId,
     athleteSql = `exists (select 1 from training.activity_participants p where p.activity_id=a.id and p.athlete_id = any($${params.length}::uuid[]) and p.merge_status='canonical')`;
   }
   const r = await pool.query(
-    `select a.id, a.occurred_local_date from training.activities a where a.occurred_local_date between $1 and $2 and a.lifecycle_state <> 'superseded' and (${scopeSql}) and (${athleteSql})`,
+    `select a.id from training.activities a where a.occurred_local_date between $1 and $2 and a.lifecycle_state <> 'superseded' and (${scopeSql}) and (${athleteSql})`,
     params,
   );
   return r.rows.map((row) => row.id);
 }
 
-// Round 3: a small helper mirroring fetchActivitiesInRange's OWN query,
-// used wherever the pipeline needs each activity's date alongside its id
-// (daily reduction, below, needs to know which raw facts share a
-// calendar day) without running two separate queries against the same
-// table.
-async function fetchActivityDates(activityIds) {
+// Round 4: each real activity's own local date AND start instant — the
+// instant (timestamptz, no calendar-day ambiguity) is what real
+// deterministic 'last' tie-breaking sorts by; the date (cast to text IN
+// SQL, never round-tripped through a JS Date — that round-trip is exactly
+// the bug that silently shifted last_session_date by a day in Round 3)
+// is what day/week bucketing groups by.
+async function fetchActivityDateTimes(activityIds) {
   if (!activityIds.length) return {};
-  // Cast to text IN SQL, never through a JS Date — node-pg's default DATE
-  // parser constructs a JS Date that a non-UTC local timezone can then
-  // shift by a day on .toISOString(); a plain text cast has no such
-  // round-trip at all.
-  const r = await pool.query(`select id, occurred_local_date::text as d from training.activities where id = any($1::uuid[])`, [activityIds]);
-  return Object.fromEntries(r.rows.map((row) => [row.id, row.d]));
+  const r = await pool.query(`select id, occurred_local_date::text as local_date, started_at from training.activities where id = any($1::uuid[])`, [activityIds]);
+  return Object.fromEntries(r.rows.map((row) => [row.id, { localDate: row.local_date, startedAt: row.started_at ? row.started_at.toISOString() : null }]));
 }
 
 async function fetchCanonicalFacts(activityId) {
@@ -1924,78 +2581,103 @@ async function fetchCanonicalFacts(activityId) {
   return r.rows;
 }
 
-async function fetchDailyAggregationMethod(metricDefinitionId) {
-  const r = await pool.query(
-    `select mdv.daily_aggregation_method from training_load.metric_definitions d
-     join training_load.metric_definition_versions mdv on mdv.id = d.current_version_id
-     where d.id = $1`,
-    [metricDefinitionId],
-  );
-  if (r.rowCount === 0) throw new Error(`fetchDailyAggregationMethod: metric_definition ${metricDefinitionId} does not exist`);
-  return r.rows[0].daily_aggregation_method;
-}
-
-// Round 3, §1: source_policy='source_connection' needs the ACTUAL
-// connection each occasion's value came through — that lives on
-// metric_events (session-level), not on the occasion itself, so this is
-// one real extra join on top of canonical_activity_results' own JSON
-// (which does not expose it) — never a reimplementation of that
-// function's own effective-value resolution, only an additional,
-// independent lookup for a field it does not carry.
-async function fetchSourceConnectionByOccasion(occasionIds) {
+// Round 4, §1: the real grain identity needs the metric EVENT's own
+// scope_level ('session'|'day') — canonical_activity_results()' own JSON
+// does not expose it (nor source_connection_id), so this is one real
+// extra join per occasion, on top of — never reimplementing — that
+// function's own effective-value resolution.
+async function fetchOccasionContext(occasionIds) {
   if (!occasionIds.length) return {};
   const r = await pool.query(
-    `select o.id as occasion_id, e.source_connection_id
+    `select o.id as occasion_id, e.source_connection_id, e.scope_level as event_scope_level,
+            e.occurred_instant as event_instant
      from training_load.metric_measurement_occasions o
      join training_load.metric_event_participants ep on ep.id = o.event_participant_id
      join training_load.metric_events e on e.id = ep.event_id
      where o.id = any($1::uuid[])`,
     [occasionIds],
   );
-  return Object.fromEntries(r.rows.map((row) => [row.occasion_id, row.source_connection_id]));
+  return Object.fromEntries(r.rows.map((row) => [row.occasion_id, {
+    sourceConnectionId: row.source_connection_id,
+    eventScopeLevel: row.event_scope_level,
+    eventInstant: row.event_instant ? row.event_instant.toISOString() : null,
+  }]));
 }
 
-async function queryBuiltInSeries({ key, activityIds, athleteIds, dateFrom, dateTo }) {
+// Round 4, §3: each historical fact uses ITS OWN metric_definition_
+// version's daily_aggregation_method/value_type — never the metric's
+// CURRENT version's (which would silently reinterpret history).
+async function fetchVersionInfo(versionIds) {
+  const uniq = [...new Set(versionIds)];
+  if (!uniq.length) return {};
+  const r = await pool.query(`select id, daily_aggregation_method, value_type from training_load.metric_definition_versions where id = any($1::uuid[])`, [uniq]);
+  return Object.fromEntries(r.rows.map((row) => [row.id, { dailyAggregationMethod: row.daily_aggregation_method, valueType: row.value_type }]));
+}
+
+// Round 4, §4: built-ins must use the SAME already-workspace-scoped
+// activity set every other series uses — activityIds is now REQUIRED,
+// never optionally re-derived via the built-in's own platform-wide
+// refetch (Round 3's real bug: session_count/last_session_date silently
+// bypassed whatever club/team/private_coach/athlete scope the CALLER had
+// actually resolved).
+async function queryBuiltInSeries({ key, activityIds, athleteIds }) {
   const def = (await pool.query(`select * from training_load.dashboard_builtin_series where key=$1`, [key])).rows[0];
   if (!def) throw new Error(`unknown built-in series ${key}`);
+  if (!activityIds) {
+    throw new Error("queryBuiltInSeries: activityIds is required — built-ins must reuse the caller's already workspace-scoped activity set, never refetch their own");
+  }
   const byAthlete = new Map();
   if (key === "session_count" || key === "last_session_date") {
-    const ids2 = await fetchActivitiesInRange({ dataWorkspaceType: "platform", dateFrom, dateTo, athleteIds });
+    if (!activityIds.length) return [];
     const r = await pool.query(
-      `select p.athlete_id, count(distinct a.id)::int as n, max(a.occurred_local_date)::text as last_date
+      `select p.athlete_id, a.id as activity_id, a.occurred_local_date::text as local_date
        from training.activity_participants p join training.activities a on a.id=p.activity_id
-       where a.id = any($1::uuid[]) and a.lifecycle_state <> 'superseded' and p.merge_status='canonical'
-       group by p.athlete_id`,
-      [ids2],
+       where a.id = any($1::uuid[]) and a.lifecycle_state <> 'superseded' and p.merge_status='canonical'`,
+      [activityIds],
     );
     for (const row of r.rows) {
-      byAthlete.set(row.athlete_id, { athleteId: row.athlete_id, values: [{ value: key === "session_count" ? row.n : row.last_date }] });
+      if (athleteIds && !athleteIds.includes(row.athlete_id)) continue;
+      if (!byAthlete.has(row.athlete_id)) byAthlete.set(row.athlete_id, { athleteId: row.athlete_id, values: [], targetConflicts: [] });
+      // One real fact PER canonical activity — the PIPELINE (not this
+      // function) decides how to bucket/reduce them per session/day/
+      // week/period: session_count is the COUNT of these within a
+      // bucket (analytical_aggregation='sum' over value=1 entries),
+      // last_session_date is the MAX date among them ('last').
+      byAthlete.get(row.athlete_id).values.push({
+        value: key === "session_count" ? 1 : row.local_date,
+        unit: null, valueType: key === "session_count" ? "numeric" : "text",
+        dailyAggregationMethod: null, grain: "session", grainKey: row.activity_id,
+        activityId: row.activity_id, date: row.local_date, startedAt: null, occasionId: null,
+      });
     }
+    for (const row of byAthlete.values()) row.groups = [{ unit: null, values: row.values, conflict: false }];
     return [...byAthlete.values()];
   }
-  const factKind = "rpe";
-  const activityDates = await fetchActivityDates(activityIds ?? []);
+  const activityDT = await fetchActivityDateTimes(activityIds);
   for (const activityId of activityIds) {
-    const facts = (await fetchCanonicalFacts(activityId)).filter((f) => f.fact_kind === factKind);
+    const facts = (await fetchCanonicalFacts(activityId)).filter((f) => f.fact_kind === "rpe");
     for (const f of facts) {
       if (athleteIds && !athleteIds.includes(f.athlete_id)) continue;
       const value = key === "rpe" ? f.detail.rpe : key === "srpe" ? f.detail.srpe : f.detail.durationMinutes;
       if (value == null) continue;
-      if (!byAthlete.has(f.athlete_id)) byAthlete.set(f.athlete_id, { athleteId: f.athlete_id, values: [] });
-      byAthlete.get(f.athlete_id).values.push({ value, activityId, date: activityDates[activityId] });
+      if (!byAthlete.has(f.athlete_id)) byAthlete.set(f.athlete_id, { athleteId: f.athlete_id, values: [], targetConflicts: [] });
+      const dt = activityDT[activityId] || {};
+      byAthlete.get(f.athlete_id).values.push({
+        value, unit: null, valueType: "numeric", dailyAggregationMethod: null,
+        grain: "session", grainKey: activityId, activityId, date: dt.localDate, startedAt: dt.startedAt, occasionId: null,
+      });
     }
   }
+  for (const row of byAthlete.values()) row.groups = [{ unit: null, values: row.values, conflict: false }];
   return [...byAthlete.values()];
 }
 
-// Round 3, §1: source_policy is now REALLY executed, not merely accepted
-// config — each named policy maps to a genuinely distinct filter:
-//   all_with_conflicts — every effective value, conflict surfaced if >1 remain for the same athlete+unit
-//   manual/api_import/csv_import — entry_method equality (real occasion column)
-//   source_connection — occasion's OWN event.source_connection_id equals the series' pinned connection (real join, see fetchSourceConnectionByOccasion)
-//   derived — metric_values.is_derived = true only
-//   not_applicable — REJECTED here outright (queryMetricSeries is the Metrics-Core path; 'not_applicable' has meaning only for a built-in series — see schema.sql column comment)
-async function queryMetricSeries({ metricDefinitionId, dataScopeLevel, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId, activityIds, athleteIds, dateFrom, dateTo, dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId }) {
+// Round 4, §2/§3: the REAL 9-step pipeline's steps 1-4, rebuilt around
+// genuine measurement-TARGET identity and per-version typed facts.
+async function queryMetricSeries({
+  metricDefinitionId, dataScopeLevel, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId,
+  activityIds, athleteIds, dateFrom, dateTo, dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId,
+}) {
   const roleSets = {
     standalone_only: ["standalone"],
     standalone_and_source_rollup: ["standalone", "source_rollup"],
@@ -2011,7 +2693,6 @@ async function queryMetricSeries({ metricDefinitionId, dataScopeLevel, aggregati
   if (effectiveSourcePolicy === "source_connection" && !sourceConnectionId) {
     throw new Error("queryMetricSeries: source_policy 'source_connection' requires sourceConnectionId");
   }
-
   const defExists = await pool.query(`select 1 from training_load.metric_definitions where id=$1`, [metricDefinitionId]);
   if (defExists.rowCount === 0) {
     throw new Error(`queryMetricSeries: metric_definition ${metricDefinitionId} does not exist`);
@@ -2019,87 +2700,111 @@ async function queryMetricSeries({ metricDefinitionId, dataScopeLevel, aggregati
 
   let resolvedActivityIds = activityIds;
   if (!resolvedActivityIds) resolvedActivityIds = await fetchActivitiesInRange({ dataWorkspaceType: dataWorkspaceType || "platform", dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds });
-  const activityDates = await fetchActivityDates(resolvedActivityIds);
 
-  // Gather every candidate fact first (scope/role/coverage filters only —
-  // cheap, in-memory) so a single batched query can resolve
-  // source_connection_id for exactly the occasions that need it.
-  const candidates = [];
+  // Step 1/2 — gather every raw metric_value fact for this metric across
+  // the (already workspace-authorized) activity set.
+  const rawFacts = [];
   for (const activityId of resolvedActivityIds) {
     const facts = (await fetchCanonicalFacts(activityId)).filter((f) => f.fact_kind === "metric_value" && f.detail.metricDefinitionId === metricDefinitionId);
-    for (const f of facts) {
-      if (athleteIds && !athleteIds.includes(f.athlete_id)) continue;
-      // Step 3 — prevent double-count: a component-scope standalone value
-      // and its own session-scope rollup are NEVER both returned — the
-      // caller picks exactly one scope level, structurally.
-      const isComponent = f.detail.segmentId != null;
-      const factScope = isComponent ? "component" : "session";
-      if (factScope !== dataScopeLevel) continue;
-      if (!allowedRoles.includes(f.detail.aggregationRole)) continue;
-      if (!allowedCoverage.includes(f.detail.coverage)) continue;
-      candidates.push({ activityId, f });
-    }
+    for (const f of facts) rawFacts.push({ activityId, f });
   }
-  let occasionConnMap = {};
-  if (effectiveSourcePolicy === "source_connection") {
-    occasionConnMap = await fetchSourceConnectionByOccasion(candidates.map((c) => c.f.detail.occasionId));
+  if (!rawFacts.length) return [];
+
+  const activityDT = await fetchActivityDateTimes(resolvedActivityIds);
+  const occContext = await fetchOccasionContext(rawFacts.map((r) => r.f.detail.occasionId));
+  const versionInfo = await fetchVersionInfo(rawFacts.map((r) => r.f.detail.metricDefinitionVersionId));
+
+  // Step 3 (part 1) — real grain identity. A day-level event is
+  // recognized via its OWN event.scope_level, never merely "no segment
+  // present" — this is the literal fix for the task's own example.
+  const facts = rawFacts.map(({ activityId, f }) => {
+    const occ = occContext[f.detail.occasionId] || {};
+    const dt = activityDT[activityId] || {};
+    const ver = versionInfo[f.detail.metricDefinitionVersionId] || {};
+    const grain = occ.eventScopeLevel === "day" ? "day" : (f.detail.segmentId != null ? "component" : "session");
+    return {
+      athleteId: f.athlete_id, canonicalActivityId: f.canonical_activity_id, canonicalParticipantId: f.canonical_participant_id,
+      activityId, componentKey: f.detail.segmentId ?? null,
+      grain, grainKey: grain === "component" ? f.detail.segmentId : grain === "day" ? dt.localDate : activityId,
+      date: dt.localDate, startedAt: dt.startedAt ?? occ.eventInstant ?? null,
+      occasionId: f.detail.occasionId, versionId: f.detail.metricDefinitionVersionId,
+      dailyAggregationMethod: ver.dailyAggregationMethod ?? null, valueType: ver.valueType ?? "numeric",
+      unit: f.detail.unitAtCapture,
+      aggregationRole: f.detail.aggregationRole, coverage: f.detail.coverage,
+      entryMethod: f.detail.entryMethod, isDerived: f.detail.isDerived,
+      sourceConnectionId: occ.sourceConnectionId ?? null,
+      value: f.detail.valueNumeric ?? f.detail.valueText ?? f.detail.valueBoolean,
+    };
+  });
+
+  // Step 3 (part 2) — scope selection = double-count prevention: only
+  // facts whose REAL grain matches this series' own declared scope.
+  let candidates = facts.filter((f) => f.grain === dataScopeLevel);
+  if (athleteIds) candidates = candidates.filter((f) => athleteIds.includes(f.athleteId));
+  candidates = candidates.filter((f) => allowedRoles.includes(f.aggregationRole) && allowedCoverage.includes(f.coverage));
+  if (effectiveSourcePolicy === "derived") candidates = candidates.filter((f) => f.isDerived);
+  else if (effectiveSourcePolicy === "source_connection") candidates = candidates.filter((f) => f.sourceConnectionId === sourceConnectionId);
+  else if (["manual", "api_import", "csv_import"].includes(effectiveSourcePolicy)) candidates = candidates.filter((f) => f.entryMethod === effectiveSourcePolicy);
+  else if (effectiveSourcePolicy !== "all_with_conflicts") throw new Error(`queryMetricSeries: unknown source_policy ${effectiveSourcePolicy}`);
+
+  // Round 4, §2 — the real no-double-count / conflict state machine: a
+  // MEASUREMENT TARGET = canonical participant + this metric (implicit,
+  // already filtered to one) + grain + grain identity + unit. Two normal
+  // readings on two DIFFERENT sessions/days are simply two DIFFERENT
+  // targets — never a conflict just because more than one exists overall.
+  // A conflict is ONLY >1 surviving candidate on the SAME target, after
+  // every filter above — this uniformly covers "standalone + source_
+  // rollup for the same target", "raw + derived for the same target",
+  // "complete + partial for the same target", and a genuine multi-source
+  // duplicate, without needing a separate rule for each.
+  const targets = new Map();
+  for (const f of candidates) {
+    const key = `${f.athleteId}|${f.grain}|${f.grainKey}|${f.unit ?? "__none__"}`;
+    if (!targets.has(key)) targets.set(key, []);
+    targets.get(key).push(f);
   }
 
   const byAthlete = new Map();
-  for (const { activityId, f } of candidates) {
-    if (effectiveSourcePolicy === "derived") {
-      if (!f.detail.isDerived) continue;
-    } else if (effectiveSourcePolicy === "source_connection") {
-      if (occasionConnMap[f.detail.occasionId] !== sourceConnectionId) continue;
-    } else if (["manual", "api_import", "csv_import"].includes(effectiveSourcePolicy)) {
-      if (f.detail.entryMethod !== effectiveSourcePolicy) continue;
-    } else if (effectiveSourcePolicy !== "all_with_conflicts") {
-      throw new Error(`queryMetricSeries: unknown source_policy ${effectiveSourcePolicy}`);
+  for (const group of targets.values()) {
+    const athleteId = group[0].athleteId;
+    if (!byAthlete.has(athleteId)) byAthlete.set(athleteId, { athleteId, values: [], targetConflicts: [] });
+    const bucket = byAthlete.get(athleteId);
+    if (group.length === 1) {
+      bucket.values.push(group[0]);
+    } else {
+      // Pinning to one source_connection (or manual/api_import/csv_import,
+      // or derived) already narrowed `candidates` BEFORE targets were
+      // built above — so a target that still has >1 candidate here is a
+      // GENUINE, real source conflict; picking a specific policy earlier
+      // is exactly what resolves it, by construction, not a special case.
+      bucket.targetConflicts.push({ grain: group[0].grain, grainKey: group[0].grainKey, unit: group[0].unit, candidates: group });
     }
-    if (!byAthlete.has(f.athlete_id)) byAthlete.set(f.athlete_id, { athleteId: f.athlete_id, values: [] });
-    byAthlete.get(f.athlete_id).values.push({
-      value: f.detail.valueNumeric, unit: f.detail.unitAtCapture, entryMethod: f.detail.entryMethod,
-      isDerived: f.detail.isDerived, occasionId: f.detail.occasionId, activityId, date: activityDates[activityId],
-    });
   }
+
   for (const row of byAthlete.values()) {
-    // Step 4 — group by unit (real, structural separation, not just a
-    // flag): `groups` below never mixes two different units in one
-    // reduction. `values`/`unitConflict`/`conflict` are kept as an
-    // ADDITIVE, unchanged top-level convenience (same shape every
-    // existing §7/§9 test already asserts on) — the two are consistent
-    // views of the same underlying facts, never disagreeing data.
     const byUnit = new Map();
     for (const v of row.values) {
-      const key = v.unit ?? "__none__";
-      if (!byUnit.has(key)) byUnit.set(key, []);
-      byUnit.get(key).push(v);
+      const k = v.unit ?? "__none__";
+      if (!byUnit.has(k)) byUnit.set(k, []);
+      byUnit.get(k).push(v);
     }
-    row.groups = [...byUnit.entries()].map(([unit, values]) => ({
-      unit: unit === "__none__" ? null : unit,
-      values,
-      conflict: values.length > 1,
-    }));
+    row.groups = [...byUnit.entries()].map(([unit, values]) => ({ unit: unit === "__none__" ? null : unit, values, conflict: false }));
+    for (const tc of row.targetConflicts) {
+      const g = row.groups.find((g) => g.unit === (tc.unit ?? null));
+      if (g) g.conflict = true; else row.groups.push({ unit: tc.unit ?? null, values: [], conflict: true });
+    }
     const distinctUnits = new Set(row.values.map((v) => v.unit));
     row.unitConflict = distinctUnits.size > 1;
-    row.conflict = effectiveSourcePolicy === "all_with_conflicts" && row.values.length > 1 && !row.unitConflict;
+    row.conflict = row.targetConflicts.length > 0;
   }
   return [...byAthlete.values()];
 }
 
-// Round 3, §5: hints are now a RICHER shape — { key, valueType?, unit?,
-// scopeLevel? } — not just a bare key string (a plain string is still
-// accepted for backward compatibility; every candidate simply passes the
-// extra filters trivially when they are absent). A candidate must match
-// EVERY hint field that is actually present, not just the key — this is
-// the literal fix for "binding hints moraju kodirati tip vrednosti,
-// očekivanu jedinicu, traženi scope capability" instead of matching on
-// key alone. Visibility filtering (system / same-data-workspace club or
-// team / the resolving user's OWN private catalog) is unchanged from
-// Round 2 and is what already guarantees another user's private metric
-// UUID can never leak through a template — enriching the match criteria
-// only ever NARROWS the candidate set further, it can never widen it
-// past what visibility already allows.
+// Round 4, §5/§9: hints are a RICHER shape — { key, valueType?, unit?,
+// scopeLevel? } — enforced as objects by schema.sql's own shape trigger,
+// so a bare string is never accepted from here on (this function still
+// tolerates one defensively, but nothing in the schema/fixtures produces
+// one anymore). A candidate must match EVERY hint field actually present.
 async function resolveTemplateHint({ hints, dataWorkspaceType, dataWorkspaceScopeId, ownerUserId }) {
   for (const hint of hints) {
     const key = typeof hint === "string" ? hint : hint.key;
@@ -2119,7 +2824,7 @@ async function resolveTemplateHint({ hints, dataWorkspaceType, dataWorkspaceScop
     let rows = candidates.rows;
     if (typeof hint === "object") {
       if (hint.valueType) rows = rows.filter((r) => r.value_type === hint.valueType);
-      if (hint.unit) rows = rows.filter((r) => r.unit === hint.unit);
+      if ("unit" in hint) rows = rows.filter((r) => r.unit === hint.unit); // hint.unit may legitimately be null ("must have NO unit")
       if (hint.scopeLevel) {
         const kept = [];
         for (const r of rows) {
@@ -2131,7 +2836,7 @@ async function resolveTemplateHint({ hints, dataWorkspaceType, dataWorkspaceScop
         rows = kept;
       }
     }
-    if (rows.length === 0) continue; // try next hint
+    if (rows.length === 0) continue;
     if (rows.length === 1) return { status: "resolved", candidateIds: [rows[0].id] };
     return { status: "needs_resolution", candidateIds: rows.map((r) => r.id) };
   }
@@ -2152,110 +2857,50 @@ async function runBatchQuery(specs) {
 }
 
 // ============================================================
-// Round 3, §1: the REAL 9-step pipeline, steps 5-9 — daily reduction
-// (Stage 1), dashboard grouping, analytical aggregation (Stage 2),
-// comparison period, and final conflict metadata — built ON TOP of
-// queryBuiltInSeries/queryMetricSeries (steps 1-4) above, never
-// reimplementing their fact resolution.
+// Round 4, §3: typed, deterministic two-stage aggregation.
 // ============================================================
 
-const REDUCE_FN = {
-  sum: (nums) => nums.reduce((a, b) => a + b, 0),
-  avg: (nums) => nums.reduce((a, b) => a + b, 0) / nums.length,
-  max: (nums) => Math.max(...nums),
-  last: (nums) => nums[nums.length - 1],
-};
-function reduceNumbers(nums, method) {
-  if (!nums.length) return null;
-  if (!method || method === "none") return nums.length === 1 ? nums[0] : nums; // "none" = no reduction, keep every value
-  const fn = REDUCE_FN[method];
-  if (!fn) throw new Error(`reduceNumbers: unknown aggregation method ${method}`);
-  return fn(nums);
+function compareForLast(a, b) {
+  if (a.instant !== b.instant) return a.instant < b.instant ? -1 : 1;
+  return a.tiebreakId < b.tiebreakId ? -1 : (a.tiebreakId > b.tiebreakId ? 1 : 0);
 }
 
-// Step 5 (daily reduction) + Step 6 (dashboard grouping) + Step 7
-// (analytical aggregation). Two different units are NEVER combined into
-// one number, at any groupBy — every code path below groups by unit
-// FIRST, always.
-function reduceRows(rows, { dailyAggMethod, groupBy, analyticalAggregation }) {
-  // Step 5 — Stage 1 daily reduction (per athlete, per unit): collapse
-  // same CALENDAR DAY raw facts (e.g. two separate activities the same
-  // athlete had on one date) into ONE per-day value using the METRIC's
-  // own fixed daily_aggregation_method. Built-in series (dailyAggMethod
-  // null) skip this — session_feedback/session-level built-ins are
-  // already one-per-session, and session_count/last_session_date are
-  // already pre-aggregated rollups, so there is nothing to collapse.
-  const perAthleteUnit = [];
-  for (const row of rows) {
-    const byUnit = new Map();
-    for (const v of row.values) {
-      const key = v.unit ?? "__none__";
-      if (!byUnit.has(key)) byUnit.set(key, []);
-      byUnit.get(key).push(v);
-    }
-    for (const [unitKey, values] of byUnit) {
-      const unit = unitKey === "__none__" ? null : unitKey;
-      let perDay;
-      if (dailyAggMethod) {
-        const byDate = new Map();
-        for (const v of values) {
-          const d = v.date ?? "unknown";
-          if (!byDate.has(d)) byDate.set(d, []);
-          byDate.get(d).push(Number(v.value));
-        }
-        perDay = [...byDate.entries()].map(([date, nums]) => ({ date, value: reduceNumbers(nums, dailyAggMethod) }));
-      } else {
-        perDay = values.map((v) => ({ date: v.date, value: Number(v.value) }));
-      }
-      perAthleteUnit.push({ athleteId: row.athleteId, unit, perDay, unitConflict: row.unitConflict, conflict: row.conflict });
-    }
+// items: [{value, instant, tiebreakId}]. Never coerces through Number()
+// blindly (Round 3's real bug — it silently turned last_session_date
+// into NaN); 'last' is deterministic (sort by real instant, then a
+// stable id, NEVER Postgres row order).
+function reduceTyped(items, method, valueType) {
+  if (!items.length) return null;
+  const effectiveMethod = method || "none";
+  if ((valueType === "text" || valueType === "boolean") && !["last", "none"].includes(effectiveMethod)) {
+    throw new Error(`reduceTyped: aggregation '${effectiveMethod}' is not supported for value_type '${valueType}' — only 'last'/'none' are implemented this round`);
   }
-
-  // Step 6 — dashboard grouping, and Step 7 — Stage 2 analytical
-  // aggregation (independent of dailyAggMethod — Round 3's whole point).
-  // 'day'/'session' bucket per calendar date (a 'session' bucket differs
-  // from 'day' only when data_scope_level='component' spreads several
-  // components across the SAME session — out of scope for this
-  // adapter's fixture, documented as such in the report); 'athlete'
-  // collapses the WHOLE queried range into one bucket PER ATHLETE.
-  // 'team' is handled as a genuinely SEPARATE branch below — it must
-  // actually merge ACROSS athletes into one bucket, not just relabel an
-  // athlete-shaped bucket; every declared group_by value is really
-  // executed here, never silently degraded to a neighbor's behavior.
-  const out = [];
-  if (groupBy === "team") {
-    const byUnit = new Map();
-    for (const entry of perAthleteUnit) {
-      const key = entry.unit ?? "__none__";
-      if (!byUnit.has(key)) byUnit.set(key, []);
-      for (const d of entry.perDay) byUnit.get(key).push(d.value);
-    }
-    for (const [unitKey, nums] of byUnit) {
-      out.push({ athleteId: null, unit: unitKey === "__none__" ? null : unitKey, bucketKey: "team", value: reduceNumbers(nums, analyticalAggregation), rawCount: nums.length });
-    }
-    return out;
+  if (effectiveMethod === "none") {
+    return items.length === 1 ? items[0].value : items.map((i) => i.value);
   }
-  for (const entry of perAthleteUnit) {
-    const buckets = new Map();
-    for (const d of entry.perDay) {
-      const bucketKey = groupBy === "athlete" ? "all" : (d.date ?? "unknown");
-      if (!buckets.has(bucketKey)) buckets.set(bucketKey, []);
-      buckets.get(bucketKey).push(d.value);
-    }
-    for (const [bucketKey, nums] of buckets) {
-      out.push({
-        athleteId: entry.athleteId, unit: entry.unit, bucketKey,
-        value: reduceNumbers(nums, analyticalAggregation),
-        rawCount: nums.length,
-        unitConflict: entry.unitConflict, conflict: entry.conflict,
-      });
-    }
+  if (effectiveMethod === "last") {
+    const sorted = [...items].sort(compareForLast);
+    return sorted[sorted.length - 1].value;
   }
-  return out;
+  if (valueType !== "numeric") {
+    throw new Error(`reduceTyped: aggregation '${effectiveMethod}' requires value_type 'numeric' (got '${valueType}')`);
+  }
+  const nums = items.map((i) => Number(i.value));
+  if (effectiveMethod === "sum") return nums.reduce((a, b) => a + b, 0);
+  if (effectiveMethod === "avg") return nums.reduce((a, b) => a + b, 0) / nums.length;
+  if (effectiveMethod === "max") return Math.max(...nums);
+  throw new Error(`reduceTyped: unknown aggregation method ${effectiveMethod}`);
 }
 
-// Step 8 — comparison period: shift the SAME query window back one
-// period-length or one calendar year, never a fixed/guessed offset.
+// Real Monday-Sunday ISO week bucket key (the Monday's own date string).
+function isoWeekKey(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const dayIndex = (d.getUTCDay() + 6) % 7; // 0 = Monday
+  const monday = new Date(d);
+  monday.setUTCDate(d.getUTCDate() - dayIndex);
+  return monday.toISOString().slice(0, 10);
+}
+
 function shiftDateRange(dateFrom, dateTo, comparisonPeriod) {
   const from = new Date(`${dateFrom}T00:00:00Z`);
   const to = new Date(`${dateTo}T00:00:00Z`);
@@ -2266,6 +2911,14 @@ function shiftDateRange(dateFrom, dateTo, comparisonPeriod) {
     return { dateFrom: newFrom.toISOString().slice(0, 10), dateTo: newTo.toISOString().slice(0, 10) };
   }
   if (comparisonPeriod === "previous_year") {
+    // Round 4, §11 leap-day policy: shifting a calendar date back exactly
+    // one YEAR (via setUTCFullYear) is well-defined for every real date
+    // except Feb 29 shifted into a non-leap year, where JS Date rolls
+    // forward into March — e.g. 2028-02-29 -> 2027-03-01, never a
+    // silently wrong Feb 28. This is a deliberate, documented policy
+    // ("roll forward to the nearest real date"), not an accident — a
+    // comparison window that starts one real day later than a naive
+    // subtraction is preferable to inventing a date that never existed.
     const newFrom = new Date(from); newFrom.setUTCFullYear(newFrom.getUTCFullYear() - 1);
     const newTo = new Date(to); newTo.setUTCFullYear(newTo.getUTCFullYear() - 1);
     return { dateFrom: newFrom.toISOString().slice(0, 10), dateTo: newTo.toISOString().slice(0, 10) };
@@ -2273,16 +2926,195 @@ function shiftDateRange(dateFrom, dateTo, comparisonPeriod) {
   throw new Error(`shiftDateRange: unknown comparisonPeriod ${comparisonPeriod}`);
 }
 
-// The full pipeline entry point a widget's own query call actually uses —
-// `series` mirrors a real dashboard_widget_series row's query-affecting
-// columns; `ctx` carries the request-level workspace/date/athlete
-// parameters a real route would resolve from the session.
+// Round 4, §1 CENTRAL FIX — steps 5 (Stage 1 daily reduction), 6
+// (dashboard grouping: day/week/session/component/athlete/cohort, each
+// REALLY distinct), 7 (Stage 2 analytical aggregation), and conflict
+// propagation to the bucket level.
+//
+// The crux this round's own review caught in an early draft: Stage 1
+// must ALWAYS operate per real CALENDAR DATE first — never directly
+// against whatever the FINAL requested bucket is. Collapsing straight to
+// an 'athlete'/'cohort'/'week' bucket using daily_aggregation_method
+// would silently apply Stage 1 across MULTIPLE distinct days at once
+// (e.g. summing three raw activities from two different days into one
+// number BEFORE Stage 2 ever runs), which both double-reduces the data
+// and makes Stage 2's own choice of aggregation meaningless (an 'avg'
+// requested at the athlete level would then average a single already-
+// summed number instead of averaging the real per-day values). So this
+// function runs in two real phases: PHASE 1 always reduces same-real-date
+// items (Metrics-Core facts only — built-ins have no daily_aggregation_
+// method and pass through untouched); PHASE 2 then re-buckets that
+// (now-one-per-real-date) output into whatever groupBy actually asked
+// for, and Stage 2's analytical_aggregation runs ACROSS those real dates.
+function reduceRows(rows, { groupBy, analyticalAggregation }) {
+  const out = [];
+
+  function finalizeStage2(g) {
+    const items = g.items;
+    const valueType = items[0]?.valueType ?? "numeric";
+    if (new Set(items.map((i) => i.valueType)).size > 1) {
+      return { athleteId: g.athleteId, unit: g.unit, bucketKey: g.bucketKey, value: null, typeConflict: true, rawCount: items.length };
+    }
+    try {
+      const value = reduceTyped(items.map((i) => ({ value: i.value, instant: i.startedAt || i.date || "", tiebreakId: i.occasionId || i.activityId || "" })), analyticalAggregation, valueType);
+      return { athleteId: g.athleteId, unit: g.unit, bucketKey: g.bucketKey, value, rawCount: items.length };
+    } catch (err) {
+      return { athleteId: g.athleteId, unit: g.unit, bucketKey: g.bucketKey, value: null, error: err.message, rawCount: items.length };
+    }
+  }
+
+  if (groupBy === "session" || groupBy === "component") {
+    // No Stage 1 at all — bucket directly by each target's OWN real
+    // session/component identity. Each target already contributed at
+    // most one resolved value (queryMetricSeries' own target-resolution
+    // guarantees this), so a bucket here is normally a single item —
+    // still routed through the same typed reduceTyped path for a
+    // uniform, type-safe code path.
+    const buckets = new Map();
+    for (const row of rows) {
+      for (const v of row.values) {
+        let bucketKey;
+        if (groupBy === "session") bucketKey = (v.grain === "session" || v.grain === "component") ? (v.grain === "session" ? v.grainKey : v.activityId) : null;
+        else bucketKey = v.grain === "component" ? v.grainKey : null;
+        if (bucketKey == null) continue;
+        const key = `${row.athleteId}|${v.unit ?? "__none__"}|${bucketKey}`;
+        if (!buckets.has(key)) buckets.set(key, { athleteId: row.athleteId, unit: v.unit ?? null, bucketKey, items: [] });
+        buckets.get(key).items.push(v);
+      }
+    }
+    for (const b of buckets.values()) out.push(finalizeStage2(b));
+
+    // Conflict propagation, session/component variant: a conflicted
+    // target maps 1:1 onto its own session/component bucket.
+    for (const row of rows) {
+      for (const tc of row.targetConflicts || []) {
+        if (groupBy === "session" && tc.grain !== "session" && tc.grain !== "component") continue;
+        if (groupBy === "component" && tc.grain !== "component") continue;
+        const bucketKey = tc.grain === "session" ? tc.grainKey : (groupBy === "session" ? tc.candidates[0]?.activityId : tc.grainKey);
+        pushConflict(out, row.athleteId, tc, bucketKey);
+      }
+    }
+    return out;
+  }
+
+  // day/week/athlete/cohort — PHASE 1: reduce same-real-date items first.
+  const perDate = new Map();
+  for (const row of rows) {
+    for (const v of row.values) {
+      const date = v.date ?? "unknown";
+      const key = `${row.athleteId}|${v.unit ?? "__none__"}|${date}`;
+      if (!perDate.has(key)) perDate.set(key, { athleteId: row.athleteId, unit: v.unit ?? null, date, items: [] });
+      perDate.get(key).items.push(v);
+    }
+  }
+  const phase1 = []; // {athleteId, unit, date, value, valueType, startedAt, occasionId, activityId}
+  for (const g of perDate.values()) {
+    const items = g.items;
+    // Stage 1 fires ONLY when at least one item carries a REAL per-
+    // version daily_aggregation_method (a Metrics-Core fact) AND more
+    // than one item genuinely shares this date — a built-in's items
+    // (dailyAggregationMethod always null) or a lone single-item date
+    // pass straight through unchanged, each still tagged with its own
+    // real date, for PHASE 2 to bucket on its own terms.
+    if (items.length > 1 && items.some((i) => i.dailyAggregationMethod != null)) {
+      const types = new Set(items.map((i) => i.valueType));
+      if (types.size > 1) {
+        phase1.push({ athleteId: g.athleteId, unit: g.unit, date: g.date, value: null, valueType: "numeric", typeConflict: true, rawCount: items.length });
+        continue;
+      }
+      const methods = new Set(items.map((i) => i.dailyAggregationMethod).filter((m) => m != null));
+      if (methods.size > 1) {
+        phase1.push({ athleteId: g.athleteId, unit: g.unit, date: g.date, value: null, valueType: [...types][0], semanticConflict: true, conflictingMethods: [...methods], rawCount: items.length });
+        continue;
+      }
+      const method = [...methods][0];
+      const valueType = [...types][0];
+      try {
+        const reduced = reduceTyped(items.map((i) => ({ value: i.value, instant: i.startedAt || i.date || "", tiebreakId: i.occasionId || i.activityId || "" })), method, valueType);
+        phase1.push({ athleteId: g.athleteId, unit: g.unit, date: g.date, value: reduced, valueType, startedAt: items[items.length - 1].startedAt, occasionId: null, activityId: null, rawCount: items.length });
+      } catch (err) {
+        phase1.push({ athleteId: g.athleteId, unit: g.unit, date: g.date, value: null, valueType, error: err.message, rawCount: items.length });
+      }
+    } else {
+      for (const i of items) phase1.push({ athleteId: g.athleteId, unit: g.unit, date: g.date, value: i.value, valueType: i.valueType, startedAt: i.startedAt, occasionId: i.occasionId, activityId: i.activityId, rawCount: 1 });
+    }
+  }
+  // Phase-1 entries that already carry their own terminal state
+  // (typeConflict/semanticConflict/error) pass straight through to the
+  // output — they never enter Stage 2 (there is nothing valid to reduce).
+  const carryThrough = phase1.filter((p) => p.typeConflict || p.semanticConflict || p.error);
+  const clean = phase1.filter((p) => !p.typeConflict && !p.semanticConflict && !p.error);
+
+  function bucketKeyForDate(date) {
+    if (groupBy === "day") return date ?? "unknown";
+    if (groupBy === "week") return date ? isoWeekKey(date) : "unknown";
+    return "all"; // 'athlete' / 'cohort'
+  }
+
+  for (const p of carryThrough) {
+    const athleteKey = groupBy === "cohort" ? null : p.athleteId;
+    out.push({ athleteId: athleteKey, unit: p.unit, bucketKey: bucketKeyForDate(p.date), value: null, typeConflict: p.typeConflict, semanticConflict: p.semanticConflict, conflictingMethods: p.conflictingMethods, error: p.error, rawCount: p.rawCount });
+  }
+
+  // PHASE 2 — re-bucket the (now one-real-date-per-entry) clean output
+  // into the ACTUAL requested grain, then Stage 2 aggregates ACROSS
+  // whatever real dates land together — this is what makes Stage 2's own
+  // choice genuinely independent of Stage 1 (§10.3/§10.4's own proof).
+  const buckets = new Map();
+  for (const p of clean) {
+    const athleteKey = groupBy === "cohort" ? null : p.athleteId;
+    const bucketKey = bucketKeyForDate(p.date);
+    const key = `${athleteKey}|${p.unit ?? "__none__"}|${bucketKey}`;
+    if (!buckets.has(key)) buckets.set(key, { athleteId: athleteKey, unit: p.unit ?? null, bucketKey, items: [] });
+    buckets.get(key).items.push(p);
+  }
+  for (const b of buckets.values()) out.push(finalizeStage2(b));
+
+  // Conflict propagation, day/week/athlete/cohort variant.
+  for (const row of rows) {
+    for (const tc of row.targetConflicts || []) {
+      const sample = tc.candidates[0];
+      const bucketKey = bucketKeyForDate(sample.date);
+      const athleteKey = groupBy === "cohort" ? null : row.athleteId;
+      pushConflict(out, athleteKey, tc, bucketKey);
+    }
+  }
+  return out;
+}
+
+// Round 4, §2: shared conflict-propagation helper — a bucket that would
+// include ANY still-unresolved measurement target is not "missing a data
+// point", its own number is genuinely UNKNOWN until that target's
+// conflict is resolved (e.g. by pinning a source_connection) — marked
+// null + conflict:true, never silently dropped (which would let the
+// OTHER resolved targets in that same bucket sum as if nothing were
+// missing).
+function pushConflict(out, athleteKey, tc, bucketKey) {
+  if (bucketKey == null) return;
+  const existing = out.find((o) => o.bucketKey === bucketKey && o.unit === (tc.unit ?? null) && o.athleteId === athleteKey);
+  if (existing) {
+    existing.value = null;
+    existing.conflict = true;
+    existing.conflictCandidates = tc.candidates;
+  } else {
+    out.push({ athleteId: athleteKey, unit: tc.unit ?? null, bucketKey, value: null, conflict: true, conflictCandidates: tc.candidates, rawCount: 0 });
+  }
+}
+
+// The full pipeline entry point a widget's own query call actually uses.
 async function runSeriesPipeline(series, ctx) {
   const groupBy = series.groupBy || "day";
-  const analyticalAggregation = series.builtInSeriesKey
-    ? (series.analyticalAggregation || "sum")
-    : (series.analyticalAggregation || "sum");
-  const dailyAggMethod = series.metricDefinitionId ? await fetchDailyAggregationMethod(series.metricDefinitionId) : null;
+  const analyticalAggregation = series.analyticalAggregation || "sum";
+
+  // Round 4, §19 FIX: 'athlete' workspace must override athleteIds at
+  // EVERY stage of the pipeline, not just fetchActivitiesInRange — the
+  // original wiring here scoped the ACTIVITY set correctly but then
+  // still passed the caller's own (unoverridden) ctx.athleteIds down to
+  // the fact-level query functions, which would then filter OUT the real
+  // viewing athlete's own facts whenever ctx.athleteIds pointed elsewhere
+  // entirely. The effective athlete filter is computed ONCE, identically
+  // to fetchActivitiesInRange's own internal rule, and reused everywhere.
+  const effectiveAthleteIds = ctx.dataWorkspaceType === "athlete" ? [ctx.athleteWorkspaceAthleteId] : ctx.athleteIds;
 
   async function runForRange(dateFrom, dateTo) {
     const activityIds = await fetchActivitiesInRange({
@@ -2291,21 +3123,25 @@ async function runSeriesPipeline(series, ctx) {
       dateFrom, dateTo, athleteIds: ctx.athleteIds,
     });
     const rows = series.builtInSeriesKey
-      ? await queryBuiltInSeries({ key: series.builtInSeriesKey, activityIds, athleteIds: ctx.athleteIds, dateFrom, dateTo })
+      ? await queryBuiltInSeries({ key: series.builtInSeriesKey, activityIds, athleteIds: effectiveAthleteIds })
       : await queryMetricSeries({
           metricDefinitionId: series.metricDefinitionId, dataScopeLevel: series.dataScopeLevel,
           aggregationRolePolicy: series.aggregationRolePolicy, coveragePolicy: series.coveragePolicy,
           sourcePolicy: series.sourcePolicy, sourceConnectionId: series.sourceConnectionId,
-          activityIds, athleteIds: ctx.athleteIds, dateFrom, dateTo,
+          activityIds, athleteIds: effectiveAthleteIds, dateFrom, dateTo,
         });
-    return reduceRows(rows, { dailyAggMethod, groupBy, analyticalAggregation });
+    return reduceRows(rows, { groupBy, analyticalAggregation });
   }
 
   const current = await runForRange(ctx.dateFrom, ctx.dateTo);
   let comparison = null;
+  let comparisonRange = null;
   if (series.comparisonPeriod) {
-    const shifted = shiftDateRange(ctx.dateFrom, ctx.dateTo, series.comparisonPeriod);
-    comparison = await runForRange(shifted.dateFrom, shifted.dateTo);
+    // Round 4, §11: the comparison result now returns the CONCRETE date
+    // range it actually computed against, never leaving the caller to
+    // reverse-engineer it.
+    comparisonRange = shiftDateRange(ctx.dateFrom, ctx.dateTo, series.comparisonPeriod);
+    comparison = await runForRange(comparisonRange.dateFrom, comparisonRange.dateTo);
   }
-  return { current, comparison };
+  return { current, comparison, comparisonRange };
 }

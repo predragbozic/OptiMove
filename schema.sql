@@ -265,32 +265,30 @@ create index dashboards_owner_status_idx on training_load.dashboards (owner_scop
 create index dashboards_template_idx on training_load.dashboards (owner_scope, is_template) where is_template = true;
 create index dashboards_data_workspace_idx on training_load.dashboards (data_workspace_type, data_workspace_scope_id);
 
--- Round 2, §1: owner_scope AND the new data-workspace binding are now
--- BOTH governed by this one "protect once used" trigger — a dashboard's
+-- Round 2, §1 / Round 4, §7 CORRECTION: owner_scope AND the data-workspace
+-- binding are governed by this one write-once trigger — a dashboard's
 -- data workspace is exactly as security-sensitive as its owner_scope
 -- (silently rebinding a private dashboard from Club A's data to Club B's
 -- data after the fact is precisely the cross-workspace leak this whole
--- round exists to close), so it gets the identical write-once-after-use
--- protection, never a separate, weaker rule.
+-- model exists to close). Round 2/3 only enforced this "once IN USE"
+-- (a widget/selection/clone exists) — the task explicitly rejects that
+-- framing: the report already CLAIMED write-once, but the code let a
+-- completely empty, brand-new dashboard's workspace be silently rebound.
+-- Fixed to be genuinely, unconditionally immutable from the moment the
+-- row exists, whether or not anything yet references it — identical in
+-- spirit to how dashboards_protect_identity_once_created already treats
+-- created_by_user_id/cloned_from_dashboard_id. Changing a dashboard's
+-- workspace now always means creating (or cloning) a NEW dashboard, never
+-- updating this one — even for a dashboard with zero widgets.
 create function training_load.protect_dashboard_ownership_once_used() returns trigger as $$
-declare
-  in_use boolean;
 begin
-  if new.owner_scope is not distinct from old.owner_scope
-     and new.owner_user_id is not distinct from old.owner_user_id
-     and new.owner_club_id is not distinct from old.owner_club_id
-     and new.owner_team_id is not distinct from old.owner_team_id
-     and new.data_workspace_type is not distinct from old.data_workspace_type
-     and new.data_workspace_scope_id is not distinct from old.data_workspace_scope_id then
-    return new;
-  end if;
-  select
-       exists (select 1 from training_load.dashboard_widgets where dashboard_id = old.id)
-    or exists (select 1 from training_load.dashboard_active_selection where dashboard_id = old.id)
-    or exists (select 1 from training_load.dashboards where cloned_from_dashboard_id = old.id)
-    into in_use;
-  if in_use then
-    raise exception 'training_load.dashboards (id=%): already in use — owner_scope and data_workspace are immutable', old.id;
+  if new.owner_scope is distinct from old.owner_scope
+     or new.owner_user_id is distinct from old.owner_user_id
+     or new.owner_club_id is distinct from old.owner_club_id
+     or new.owner_team_id is distinct from old.owner_team_id
+     or new.data_workspace_type is distinct from old.data_workspace_type
+     or new.data_workspace_scope_id is distinct from old.data_workspace_scope_id then
+    raise exception 'training_load.dashboards (id=%): owner_scope and data_workspace are immutable from creation — create or clone a new dashboard instead', old.id;
   end if;
   return new;
 end;
@@ -373,34 +371,18 @@ create trigger dashboards_validate_clone_provenance
   before insert on training_load.dashboards
   for each row execute function training_load.dashboards_validate_clone_provenance();
 
--- Round 2, §4: is_template may not flip true->false while any of this
--- dashboard's widgets still carries an UNRESOLVED (hints-only) series —
--- that combination (is_template=false + unresolved series) is exactly
--- what dashboard_widget_series_validate_resolution below already forbids
--- at INSERT time; this closes the same gap from the PARENT side (flip the
--- flag instead of touching the series row).
-create function training_load.dashboards_guard_template_flip() returns trigger as $$
-declare
-  v_unresolved boolean;
-begin
-  if new.is_template is not distinct from old.is_template or new.is_template = true then
-    return new;
-  end if;
-  select exists (
-    select 1 from training_load.dashboard_widget_series s
-    join training_load.dashboard_widgets w on w.id = s.widget_id
-    where w.dashboard_id = old.id and s.metric_definition_id is null and s.built_in_series_key is null
-  ) into v_unresolved;
-  if v_unresolved then
-    raise exception 'training_load.dashboards (id=%): cannot flip is_template to false while unresolved (hints-only) series still exist', old.id;
-  end if;
-  return new;
-end;
-$$ language plpgsql;
-
-create trigger dashboards_guard_template_flip
-  before update of is_template on training_load.dashboards
-  for each row execute function training_load.dashboards_guard_template_flip();
+-- Round 2, §4 trigger REMOVED in Round 4, §9. It used to block is_template
+-- flipping true->false while any widget still carried an unresolved
+-- (hints-only) series, on the premise that a real (non-template)
+-- dashboard could never legitimately hold one. That premise is no longer
+-- true: Round 4 makes cloning PRESERVE unresolved/ambiguous series onto
+-- the new, real dashboard on purpose (see dashboard_widget_series_
+-- validate_resolution's own updated comment and report §0-R4.9) — a real
+-- dashboard holding an unresolved series is now an intentional, safe,
+-- fixable state (the query adapter refuses to ever query a non-'resolved'
+-- series), not a bug to prevent. Nothing replaces this trigger; is_template
+-- is free to flip in either direction regardless of any series'
+-- resolution_status.
 
 create function training_load.dashboards_bump_revision() returns trigger as $$
 begin
@@ -465,7 +447,21 @@ create table training_load.dashboard_widgets (
   height smallint not null check (height >= 1),
   check (x + width <= 12),
   mobile_order integer not null,
-  group_by varchar(20) not null default 'day' check (group_by in ('day', 'session', 'component', 'athlete', 'team')),
+  -- Round 4, §1 CORRECTION: 'week' was claimed as supported but never
+  -- implemented (the adapter silently fell through to 'day' bucketing);
+  -- now real (Monday-Sunday, derived from each fact's own local date —
+  -- see the adapter's own week-bucket helper). 'team' was renamed to
+  -- 'cohort': it never represented a real team_id — it only ever meant
+  -- "merge together whichever athletes this query's own athleteIds filter
+  -- currently selects," which is a query-time SELECTION, not a team
+  -- identity. Calling it 'team' implied a guarantee (a real
+  -- public.teams row) this column structurally cannot provide (a widget
+  -- has no team_id column of its own) — 'cohort' names what it actually
+  -- is. A genuine "one bucket per real team" grouping is a different,
+  -- NOT-YET-implemented feature (it would need to join athletes to their
+  -- OWN team membership, not just merge the caller's selection) and is
+  -- deliberately not offered here — see report §0-R4.1.
+  group_by varchar(20) not null default 'day' check (group_by in ('day', 'week', 'session', 'component', 'athlete', 'cohort')),
   state varchar(20) not null default 'active' check (state in ('active', 'collapsed')),
   display_config jsonb not null default '{"schemaVersion": 1}'::jsonb,
   local_filter_override jsonb,
@@ -518,6 +514,20 @@ create trigger dashboard_widgets_protect_dashboard_id
 -- resize of an existing widget whose type may since have been
 -- deactivated (report §4 "deaktivacija ne sme pokvariti ... dozvoljene
 -- izmene postojećeg dashboarda").
+-- Round 4, §10: a FOR SHARE lock on the referenced widget_types row closes
+-- the "first widget of a type vs. a concurrent semantic change to that
+-- type" race. protect_dashboard_widget_types_once_used's own EXISTS
+-- check for "is this type in use" only sees COMMITTED rows — without this
+-- lock, a concurrent first-INSERT and a concurrent catalog UPDATE could
+-- each read a state that becomes stale the instant the other commits (the
+-- INSERT sees "not in use yet" and proceeds while the UPDATE, running at
+-- the same instant, also sees "not in use yet" and changes the bounds the
+-- INSERT is about to violate). An UPDATE already holds Postgres's own
+-- implicit exclusive lock on the row it targets for the trigger's whole
+-- duration — so a FOR SHARE lock taken here genuinely blocks until that
+-- concurrent UPDATE commits (or rolls back), at which point this trigger's
+-- own bounds-check below reads the REAL, final, post-update semantics —
+-- never a stale mid-flight read. See PoC's catalog-concurrency tests.
 create function training_load.dashboard_widgets_validate_layout() returns trigger as $$
 declare
   v_min_w smallint; v_max_w smallint; v_min_h smallint; v_max_h smallint; v_active boolean;
@@ -525,7 +535,7 @@ declare
 begin
   select min_width, max_width, min_height, max_height, is_active
     into v_min_w, v_max_w, v_min_h, v_max_h, v_active
-    from training_load.dashboard_widget_types where key = new.widget_type;
+    from training_load.dashboard_widget_types where key = new.widget_type for share;
   if not found then
     raise exception 'dashboard_widgets: unknown widget_type %', new.widget_type;
   end if;
@@ -754,7 +764,41 @@ create table training_load.dashboard_widget_series (
   series_order integer not null,
   metric_definition_id uuid references training_load.metric_definitions(id) on delete restrict,
   built_in_series_key text references training_load.dashboard_builtin_series(key) on delete restrict,
+  -- Round 4, §9: template_metric_key_hints must now be a validated JSON
+  -- ARRAY OF OBJECTS (see dashboard_widget_series_validate_template_hints_
+  -- shape below) — a bare string element is refused outright, since this
+  -- schema has never been deployed and there is no legacy shape to stay
+  -- compatible with. Each object carries at least {"key": "..."}, plus
+  -- optional "valueType"/"unit"/"scopeLevel"/"domain"/"category" narrowing
+  -- hints — see the shape-validation trigger for the exact contract,
+  -- including how an explicit `"unit": null` (means "must have NO unit")
+  -- is distinguished from unit simply being absent (means "unit not a
+  -- criterion").
   template_metric_key_hints jsonb,
+  -- Round 4, §9: an unresolved/ambiguous template series is no longer
+  -- silently DROPPED on clone (Round 2/3's report claimed this, but that
+  -- throws away exactly the state a coach needs to see and fix). It is
+  -- preserved with a real status: 'resolved' (metric_definition_id or
+  -- built_in_series_key is set, normal series), 'unresolved' (zero
+  -- visible candidates matched any hint), 'ambiguous' (2+ equally-valid
+  -- candidates matched — never auto-picked). See the CHECK below tying
+  -- this to which of metric_definition_id/built_in_series_key may be set,
+  -- and dashboard_widget_series_validate_resolution's own is_template
+  -- gate (unchanged: only a TEMPLATE dashboard may carry a non-'resolved'
+  -- series at all — a real, live, cloned dashboard's own series must
+  -- either be resolved or not exist... except see the clone contract in
+  -- the report: cloning now PRESERVES unresolved/ambiguous state onto the
+  -- new, real dashboard specifically so it stays fixable — is_template
+  -- gating is therefore relaxed for this one case, see report §0-R4.9 for
+  -- the full state machine and why this is safe: an unresolved series can
+  -- never be QUERIED (the adapter refuses it outright), so it carries no
+  -- data-visibility risk, only a "needs attention" UI state).
+  resolution_status varchar(20) not null default 'resolved' check (resolution_status in ('resolved', 'unresolved', 'ambiguous')),
+  -- Round 4, §9: for an 'ambiguous' series, the real candidate metric_
+  -- definition_ids found at the last resolution attempt — so the UI can
+  -- render "pick one of these" without re-querying visibility itself.
+  -- NULL for 'resolved'/'unresolved' (nothing to pick from either way).
+  template_resolution_candidates jsonb,
   axis varchar(10) not null default 'primary' check (axis in ('primary', 'secondary')),
   color text,
   display_label text,
@@ -809,6 +853,19 @@ create table training_load.dashboard_widget_series (
     (metric_definition_id is null and built_in_series_key is not null) or
     (metric_definition_id is null and built_in_series_key is null and template_metric_key_hints is not null)
   ),
+  -- Round 4, §9: resolution_status must agree with which reference
+  -- columns are actually set — 'resolved' requires a real reference (one
+  -- of the two FKs); 'unresolved'/'ambiguous' require NEITHER FK to be
+  -- set (nothing to query yet) and MUST still carry the original hints so
+  -- a later retry has something to re-resolve against.
+  check (
+    (resolution_status = 'resolved' and (metric_definition_id is not null or built_in_series_key is not null)) or
+    (resolution_status in ('unresolved', 'ambiguous') and metric_definition_id is null and built_in_series_key is null and template_metric_key_hints is not null)
+  ),
+  -- Round 4, §9: candidates are only ever meaningful for 'ambiguous' — a
+  -- 'resolved' series has no candidates left to choose from, and an
+  -- 'unresolved' one has none that matched at all.
+  check (resolution_status = 'ambiguous' or template_resolution_candidates is null),
   -- Round 2, §4: a built-in series (RPE/sRPE/duration/...) has no
   -- Metrics-Core provenance at all — 'source_connection'/'api_import'/
   -- 'csv_import' are meaningless for it (report §4 "built-in RPE ne sme
@@ -859,20 +916,21 @@ begin
 end;
 $$ language plpgsql;
 
+-- Round 4, §9 CORRECTION: Round 2/3 restricted an unresolved (hints-only)
+-- series to TEMPLATE dashboards only, and the report claimed cloning
+-- simply DROPS whatever doesn't resolve. The task rejects that: a clone
+-- must PRESERVE an unresolved/ambiguous series onto the new, real (non-
+-- template) dashboard so a coach can fix it later ("Choose a metric").
+-- The is_template restriction is therefore removed — resolution_status +
+-- the query adapter's own hard refusal to ever query a non-'resolved'
+-- series (see report §0-R4.9) is what makes this safe now, not which KIND
+-- of dashboard the series happens to live on. This function's only
+-- remaining job is locking the widget row (unchanged, still needed for
+-- the lock-order contract) — resolution_status/candidate shape itself is
+-- enforced by the CHECK constraints and the hints-shape trigger below.
 create function training_load.dashboard_widget_series_validate_resolution() returns trigger as $$
-declare
-  v_is_template boolean;
 begin
   perform training_load.lock_widget_for_series_write(new.widget_id);
-  if new.metric_definition_id is not null or new.built_in_series_key is not null then
-    return new;
-  end if;
-  select d.is_template into v_is_template
-    from training_load.dashboard_widgets w join training_load.dashboards d on d.id = w.dashboard_id
-    where w.id = new.widget_id;
-  if not v_is_template then
-    raise exception 'dashboard_widget_series: an unresolved (hints-only) series is only allowed on a TEMPLATE dashboard (widget %)', new.widget_id;
-  end if;
   return new;
 end;
 $$ language plpgsql;
@@ -881,6 +939,48 @@ create trigger dashboard_widget_series_validate_resolution
   before insert or update of metric_definition_id, built_in_series_key, template_metric_key_hints, widget_id
   on training_load.dashboard_widget_series
   for each row execute function training_load.dashboard_widget_series_validate_resolution();
+
+-- Round 4, §9: template_metric_key_hints must be a real JSON array of
+-- OBJECTS — a bare string element is refused, and every element must at
+-- least carry a non-empty string "key". Optional narrowing fields
+-- ("valueType"/"unit"/"scopeLevel") are shape-checked when present;
+-- "unit" being present-with-null-value ("must have no unit") is
+-- deliberately distinguished from absent ("unit not a hint criterion at
+-- all") via jsonb's own `?` key-existence operator — never conflated.
+create function training_load.validate_template_metric_key_hints_shape() returns trigger as $$
+declare
+  v_elem jsonb;
+begin
+  if new.template_metric_key_hints is null then
+    return new;
+  end if;
+  if jsonb_typeof(new.template_metric_key_hints) <> 'array' then
+    raise exception 'dashboard_widget_series: template_metric_key_hints must be a JSON array of objects (widget %)', new.widget_id;
+  end if;
+  for v_elem in select * from jsonb_array_elements(new.template_metric_key_hints) loop
+    if jsonb_typeof(v_elem) <> 'object' then
+      raise exception 'dashboard_widget_series: template_metric_key_hints elements must be objects, not a bare string/scalar (got %, widget %) — every hint must carry at least {"key": "..."}', v_elem, new.widget_id;
+    end if;
+    if not (v_elem ? 'key') or jsonb_typeof(v_elem -> 'key') <> 'string' or length(v_elem ->> 'key') = 0 then
+      raise exception 'dashboard_widget_series: each template_metric_key_hints element requires a non-empty string "key" (got %, widget %)', v_elem, new.widget_id;
+    end if;
+    if (v_elem ? 'valueType') and v_elem -> 'valueType' is not null and (v_elem ->> 'valueType') not in ('numeric', 'boolean', 'text') then
+      raise exception 'dashboard_widget_series: template_metric_key_hints "valueType" must be numeric/boolean/text (got %, widget %)', v_elem -> 'valueType', new.widget_id;
+    end if;
+    if (v_elem ? 'scopeLevel') and v_elem -> 'scopeLevel' is not null and (v_elem ->> 'scopeLevel') not in ('day', 'session', 'component') then
+      raise exception 'dashboard_widget_series: template_metric_key_hints "scopeLevel" must be day/session/component (got %, widget %)', v_elem -> 'scopeLevel', new.widget_id;
+    end if;
+    if (v_elem ? 'unit') and v_elem -> 'unit' is not null and jsonb_typeof(v_elem -> 'unit') <> 'string' then
+      raise exception 'dashboard_widget_series: template_metric_key_hints "unit" must be a string or explicit null (got %, widget %)', v_elem -> 'unit', new.widget_id;
+    end if;
+  end loop;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboard_widget_series_validate_template_hints_shape
+  before insert or update of template_metric_key_hints on training_load.dashboard_widget_series
+  for each row execute function training_load.validate_template_metric_key_hints_shape();
 
 create function training_load.dashboard_widget_series_enforce_cap() returns trigger as $$
 declare
@@ -1000,6 +1100,11 @@ create trigger dashboard_widget_series_validate_comparison_period
 -- (RPE/sRPE/duration are always session-level facts; session_count/
 -- last_session_date are always day-level rollups) — never a per-widget
 -- choice for these.
+-- Round 4, §10: same reasoning as the widget-type lock above — a FOR
+-- SHARE lock on the referenced dashboard_builtin_series row closes the
+-- "first series referencing this built-in vs. a concurrent semantic
+-- change to it" race, blocking on a concurrent UPDATE's own implicit
+-- exclusive lock until it resolves.
 create function training_load.dashboard_widget_series_validate_builtin_scope() returns trigger as $$
 declare
   v_fixed varchar;
@@ -1007,7 +1112,7 @@ begin
   if new.built_in_series_key is null then
     return new;
   end if;
-  select fixed_data_scope_level into v_fixed from training_load.dashboard_builtin_series where key = new.built_in_series_key;
+  select fixed_data_scope_level into v_fixed from training_load.dashboard_builtin_series where key = new.built_in_series_key for share;
   if new.data_scope_level <> v_fixed then
     raise exception 'dashboard_widget_series: built-in series % is always scope_level=% (got %)', new.built_in_series_key, v_fixed, new.data_scope_level;
   end if;
@@ -1075,9 +1180,22 @@ begin
     into v_data_type, v_data_scope, v_dash_owner_scope, v_dash_owner_user
     from training_load.dashboard_widgets w join training_load.dashboards d on d.id = w.dashboard_id
     where w.id = new.widget_id;
+  -- Round 4, §10: FOR SHARE closes "series insert vs. a concurrent
+  -- ownership/current_version change on this metric_definition" — a
+  -- concurrent UPDATE (ownership or a legitimate current_version_id bump,
+  -- both real Metrics Core operations) holds an implicit row lock that
+  -- conflicts with this share lock, so our visibility check below is
+  -- guaranteed to run against either the fully-pre-update or fully-post-
+  -- update row, never a value caught mid-flight. Documented tradeoff: a
+  -- long-running series-insert transaction can delay a legitimate,
+  -- unrelated version bump on the SAME metric_definition until it
+  -- commits — acceptable, since this critical section is normally a
+  -- single fast INSERT, and correctness (never validating against a
+  -- half-applied ownership change) is worth more here than that narrow
+  -- concurrency cost. See report §0-R4.10.
   select owner_scope, owner_user_id, owner_club_id, owner_team_id
     into v_def_scope, v_def_user, v_def_club, v_def_team
-    from training_load.metric_definitions where id = new.metric_definition_id;
+    from training_load.metric_definitions where id = new.metric_definition_id for share;
 
   if v_def_scope = 'system' then
     return new;
@@ -1119,9 +1237,11 @@ begin
     into v_data_type, v_data_scope, v_dash_owner_scope, v_dash_owner_user
     from training_load.dashboard_widgets w join training_load.dashboards d on d.id = w.dashboard_id
     where w.id = new.widget_id;
+  -- Round 4, §10: same FOR SHARE reasoning as the metric-visibility
+  -- trigger above, applied to the source connection's own ownership.
   select owner_scope, owner_club_id, owner_team_id, owner_user_id
     into v_conn_scope, v_conn_club, v_conn_team, v_conn_user
-    from training_load.metric_source_connections where id = new.source_connection_id;
+    from training_load.metric_source_connections where id = new.source_connection_id for share;
   if v_conn_scope = 'system' then
     return new;
   end if;
@@ -1292,35 +1412,344 @@ create function training_load.update_widget_layout(
 declare
   v_dashboard_id uuid;
   v_current_widget_revision integer;
+  v_locked_dashboard_id uuid;
 begin
-  select w.dashboard_id, w.revision into v_dashboard_id, v_current_widget_revision
-    from training_load.dashboard_widgets w where w.id = p_widget_id;
+  -- Round 4, §5 TOCTOU FIX. The previous shape read+checked the widget's
+  -- revision BEFORE locking the dashboard, then locked the dashboard, then
+  -- updated with no re-check — a genuine race: another writer could change
+  -- this widget between the unlocked read and the dashboard lock, and this
+  -- function would go on to accept an already-stale p_expected_widget_revision
+  -- because it never looked again. Corrected order:
+  --   1. an UNLOCKED read used ONLY to find dashboard_id (never trusted
+  --      for anything else — it exists purely to know which dashboard row
+  --      to lock first, since dashboard_id is immutable so this can never
+  --      itself go stale in a way that matters).
+  select w.dashboard_id into v_dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
   if not found then
     raise exception 'update_widget_layout: widget % not found', p_widget_id;
   end if;
+
+  --   2. lock the DASHBOARD row first — genuinely first, before this
+  --      function has touched dashboard_widgets at all.
+  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+
+  --   3. NOW lock and RE-READ the widget row — this is the fresh,
+  --      trustworthy revision, taken only after the dashboard lock is
+  --      held, so nothing can have raced it undetected in between.
+  select w.dashboard_id, w.revision into v_locked_dashboard_id, v_current_widget_revision
+    from training_load.dashboard_widgets w where w.id = p_widget_id for update;
+  if not found then
+    raise exception 'update_widget_layout: widget % disappeared concurrently (deleted between lookup and lock)', p_widget_id;
+  end if;
+
+  --   4. confirm the widget still belongs to the SAME dashboard we locked
+  --      (defense-in-depth — dashboard_id is immutable by trigger, so this
+  --      can only ever be a no-op today, but the function's own safety
+  --      does not have to depend on that OTHER trigger never changing).
+  if v_locked_dashboard_id is distinct from v_dashboard_id then
+    raise exception 'update_widget_layout: widget % dashboard_id changed between lookup and lock (% -> %)', p_widget_id, v_dashboard_id, v_locked_dashboard_id;
+  end if;
+
+  --   5. ONLY NOW check the caller's expected revision, against the FRESH,
+  --      locked value from step 3 — never the stale step-1 read.
   if v_current_widget_revision <> p_expected_widget_revision then
     raise exception 'update_widget_layout: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
   end if;
 
-  -- Lock the DASHBOARD first, before this function ever touches the
-  -- dashboard_widgets row — the entire reason this function exists
-  -- instead of a raw UPDATE (see the function comment above).
-  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
-
+  --   6. the UPDATE itself, with an EXTRA revision guard in the WHERE
+  --      clause on top of the row lock already held — belt-and-suspenders:
+  --      the lock alone is sufficient, but the guard makes the statement's
+  --      own correctness independent of the lock being held correctly.
   update training_load.dashboard_widgets w
     set x = p_x, y = p_y, width = p_width, height = p_height, mobile_order = p_mobile_order
-    where w.id = p_widget_id;
+    where w.id = p_widget_id and w.revision = p_expected_widget_revision;
+  if not found then
+    raise exception 'update_widget_layout: stale widget revision (expected %) — reload and retry', p_expected_widget_revision using errcode = '40001';
+  end if;
 
   -- Same reasoning as replace_dashboard_layout: force the deferred
   -- overlap/order checks to run inside THIS function's own transaction
   -- scope rather than silently deferring to the caller's outer commit.
   set constraints training_load.dashboard_widgets_check_no_overlap, training_load.dashboard_widgets_order_unique, training_load.dashboard_widgets_mobile_order_unique immediate;
 
+  --   7. return the REAL, fresh widget AND dashboard revision tokens.
   return query
     select w.id, w.dashboard_id, w.x, w.y, w.width, w.height, w.mobile_order, w.revision, d.revision
     from training_load.dashboard_widgets w
     join training_load.dashboards d on d.id = w.dashboard_id
     where w.id = p_widget_id;
+end;
+$$ language plpgsql;
+
+-- ------------------------------------------------------------
+-- 6b. Round 4, §6 — the full set of SANCTIONED write functions. The
+-- project uses no SECURITY DEFINER / DB-role trick to make raw SQL
+-- against these tables physically impossible — nothing below claims
+-- otherwise. What these functions ARE: the one documented, proven-safe
+-- dashboard->widget->series lock order for every write this subsystem
+-- needs, which the real backend's route layer MUST use exclusively (a
+-- hard implementation requirement, stated plainly — see report
+-- §0-R4.6). A raw INSERT/UPDATE/DELETE against these tables from a
+-- superuser/migration/raw-SQL context stays outside this contract by
+-- definition — that boundary is real and is not being hidden.
+--
+-- Why series writes need their OWN dashboard-first lock, not just the
+-- widget lock they already had: lock_widget_for_series_write (Round 2)
+-- only ever locked the WIDGET row, never the dashboard — meaning a series
+-- write and a whole-dashboard batch operation (replace_dashboard_layout,
+-- delete_widget, a future archive/clone step) had NO shared lock at all
+-- to serialize behind, a real, if narrow, gap in the "dashboard -> widget
+-- -> series, always" claim. Every function below locks the dashboard
+-- FIRST (via the widget's own, immutable dashboard_id), then the widget,
+-- then performs its own table's operation — genuinely the same order,
+-- every time, for every one of: create/update-content/delete widget,
+-- add/update/delete/reorder series, update-single-widget-layout (above),
+-- replace-whole-layout (above), archive (above).
+-- ------------------------------------------------------------
+
+create function training_load.create_widget(
+  p_dashboard_id uuid, p_expected_dashboard_revision integer,
+  p_widget_type text, p_title text, p_widget_order integer,
+  p_x smallint, p_y smallint, p_width smallint, p_height smallint, p_mobile_order integer,
+  p_group_by varchar default 'day', p_display_config jsonb default '{"schemaVersion": 1}'::jsonb,
+  p_local_filter_override jsonb default null
+) returns table (widget_id uuid, dashboard_revision integer) as $$
+declare
+  v_current_revision integer;
+  v_widget_id uuid;
+begin
+  -- INSERT is the one operation where the EXISTING dashboard_widgets_lock_
+  -- dashboard_before_layout_write trigger already achieves genuine
+  -- dashboard-first ordering on its own (no widget row exists yet to
+  -- compete for) — this function's own explicit lock below is therefore
+  -- somewhat redundant with that trigger, but is kept anyway so the
+  -- revision check happens BEFORE the insert is attempted (a cleaner
+  -- failure than letting the insert run and only then discovering the
+  -- caller's expected_revision was stale), and so every sanctioned
+  -- function in this section follows the identical, easy-to-audit shape.
+  select d.revision into v_current_revision from training_load.dashboards d where d.id = p_dashboard_id for update;
+  if not found then
+    raise exception 'create_widget: dashboard % not found', p_dashboard_id;
+  end if;
+  if v_current_revision <> p_expected_dashboard_revision then
+    raise exception 'create_widget: stale dashboard revision (expected %, dashboard is at %) — reload and retry', p_expected_dashboard_revision, v_current_revision using errcode = '40001';
+  end if;
+  insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, display_config, local_filter_override)
+    values (p_dashboard_id, p_widget_type, p_title, p_widget_order, p_x, p_y, p_width, p_height, p_mobile_order, coalesce(p_group_by, 'day'), coalesce(p_display_config, '{"schemaVersion": 1}'::jsonb), p_local_filter_override)
+    returning id into v_widget_id;
+  set constraints training_load.dashboard_widgets_check_no_overlap, training_load.dashboard_widgets_order_unique, training_load.dashboard_widgets_mobile_order_unique immediate;
+  return query select v_widget_id, d.revision from training_load.dashboards d where d.id = p_dashboard_id;
+end;
+$$ language plpgsql;
+
+create function training_load.update_widget_content(
+  p_widget_id uuid, p_expected_widget_revision integer,
+  p_widget_type text default null, p_title text default null, p_group_by varchar default null,
+  p_state varchar default null, p_display_config jsonb default null,
+  p_local_filter_override jsonb default null, p_clear_local_filter_override boolean default false
+) returns table (widget_id uuid, widget_revision integer, dashboard_id uuid) as $$
+declare
+  v_dashboard_id uuid;
+  v_current_widget_revision integer;
+begin
+  select w.dashboard_id into v_dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
+  if not found then
+    raise exception 'update_widget_content: widget % not found', p_widget_id;
+  end if;
+  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
+  if not found then
+    raise exception 'update_widget_content: widget % disappeared concurrently', p_widget_id;
+  end if;
+  if v_current_widget_revision <> p_expected_widget_revision then
+    raise exception 'update_widget_content: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
+  end if;
+  update training_load.dashboard_widgets w set
+    widget_type = coalesce(p_widget_type, w.widget_type),
+    title = coalesce(p_title, w.title),
+    group_by = coalesce(p_group_by, w.group_by),
+    state = coalesce(p_state, w.state),
+    display_config = coalesce(p_display_config, w.display_config),
+    local_filter_override = case when p_clear_local_filter_override then null else coalesce(p_local_filter_override, w.local_filter_override) end
+  where w.id = p_widget_id and w.revision = p_expected_widget_revision;
+  if not found then
+    raise exception 'update_widget_content: stale widget revision (expected %) — reload and retry', p_expected_widget_revision using errcode = '40001';
+  end if;
+  return query select w.id, w.revision, w.dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
+end;
+$$ language plpgsql;
+
+-- Round 4, §6: the sanctioned single-widget delete — closes the AB-BA
+-- risk a raw `DELETE FROM dashboard_widgets WHERE id=...` carries (the
+-- DELETE's own implicit row lock is acquired on the WIDGET first, then
+-- dashboard_widgets_bump_parent_on_delete's AFTER trigger locks the
+-- dashboard second — the reverse of every other sanctioned function's
+-- order, and a genuine deadlock risk against replace_dashboard_layout()/
+-- update_widget_layout() running concurrently on the same dashboard).
+create function training_load.delete_widget(p_widget_id uuid, p_expected_widget_revision integer)
+returns table (dashboard_id uuid, dashboard_revision integer) as $$
+declare
+  v_dashboard_id uuid;
+  v_current_widget_revision integer;
+begin
+  select w.dashboard_id into v_dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
+  if not found then
+    raise exception 'delete_widget: widget % not found', p_widget_id;
+  end if;
+  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
+  if not found then
+    raise exception 'delete_widget: widget % disappeared concurrently', p_widget_id;
+  end if;
+  if v_current_widget_revision <> p_expected_widget_revision then
+    raise exception 'delete_widget: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
+  end if;
+  delete from training_load.dashboard_widgets where id = p_widget_id;
+  return query select v_dashboard_id, d.revision from training_load.dashboards d where d.id = v_dashboard_id;
+end;
+$$ language plpgsql;
+
+-- Round 4, §6: sanctioned series writes — each locks dashboard, then
+-- widget, before touching dashboard_widget_series, closing the gap where
+-- Round 2's lock_widget_for_series_write locked ONLY the widget, never
+-- the dashboard, leaving series writes with no shared lock against a
+-- whole-dashboard operation at all.
+create function training_load.add_series(
+  p_widget_id uuid, p_expected_widget_revision integer, p_series_order integer,
+  p_metric_definition_id uuid default null, p_built_in_series_key text default null,
+  p_template_metric_key_hints jsonb default null, p_resolution_status varchar default 'resolved',
+  p_template_resolution_candidates jsonb default null,
+  p_axis varchar default 'primary', p_color text default null, p_display_label text default null,
+  p_source_policy varchar default 'all_with_conflicts', p_source_connection_id uuid default null,
+  p_data_scope_level varchar default 'session', p_analytical_aggregation varchar default 'sum',
+  p_aggregation_role_policy varchar default 'standalone_and_source_rollup', p_coverage_policy varchar default 'complete_and_partial',
+  p_comparison_period varchar default null, p_created_by_user_id uuid default null
+) returns table (series_id uuid, widget_revision integer) as $$
+declare
+  v_dashboard_id uuid;
+  v_current_widget_revision integer;
+  v_series_id uuid;
+begin
+  select w.dashboard_id into v_dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
+  if not found then
+    raise exception 'add_series: widget % not found', p_widget_id;
+  end if;
+  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
+  if v_current_widget_revision <> p_expected_widget_revision then
+    raise exception 'add_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
+  end if;
+  insert into training_load.dashboard_widget_series (
+    widget_id, series_order, metric_definition_id, built_in_series_key, template_metric_key_hints,
+    resolution_status, template_resolution_candidates,
+    axis, color, display_label, source_policy, source_connection_id, data_scope_level, analytical_aggregation,
+    aggregation_role_policy, coverage_policy, comparison_period, created_by_user_id
+  ) values (
+    p_widget_id, p_series_order, p_metric_definition_id, p_built_in_series_key, p_template_metric_key_hints,
+    p_resolution_status, p_template_resolution_candidates,
+    coalesce(p_axis, 'primary'), p_color, p_display_label, coalesce(p_source_policy, 'all_with_conflicts'), p_source_connection_id,
+    coalesce(p_data_scope_level, 'session'), coalesce(p_analytical_aggregation, 'sum'),
+    coalesce(p_aggregation_role_policy, 'standalone_and_source_rollup'), coalesce(p_coverage_policy, 'complete_and_partial'),
+    p_comparison_period, p_created_by_user_id
+  ) returning id into v_series_id;
+  return query select v_series_id, w.revision from training_load.dashboard_widgets w where w.id = p_widget_id;
+end;
+$$ language plpgsql;
+
+create function training_load.update_series(
+  p_series_id uuid, p_widget_id uuid, p_expected_widget_revision integer,
+  p_axis varchar default null, p_color text default null, p_display_label text default null,
+  p_source_policy varchar default null, p_source_connection_id uuid default null,
+  p_data_scope_level varchar default null, p_analytical_aggregation varchar default null,
+  p_aggregation_role_policy varchar default null, p_coverage_policy varchar default null,
+  p_comparison_period varchar default null, p_clear_comparison_period boolean default false
+) returns table (series_id uuid, widget_revision integer) as $$
+declare
+  v_dashboard_id uuid;
+  v_current_widget_revision integer;
+begin
+  select w.dashboard_id into v_dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
+  if not found then
+    raise exception 'update_series: widget % not found', p_widget_id;
+  end if;
+  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
+  if v_current_widget_revision <> p_expected_widget_revision then
+    raise exception 'update_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
+  end if;
+  update training_load.dashboard_widget_series s set
+    axis = coalesce(p_axis, s.axis),
+    color = coalesce(p_color, s.color),
+    display_label = coalesce(p_display_label, s.display_label),
+    source_policy = coalesce(p_source_policy, s.source_policy),
+    source_connection_id = coalesce(p_source_connection_id, s.source_connection_id),
+    data_scope_level = coalesce(p_data_scope_level, s.data_scope_level),
+    analytical_aggregation = coalesce(p_analytical_aggregation, s.analytical_aggregation),
+    aggregation_role_policy = coalesce(p_aggregation_role_policy, s.aggregation_role_policy),
+    coverage_policy = coalesce(p_coverage_policy, s.coverage_policy),
+    comparison_period = case when p_clear_comparison_period then null else coalesce(p_comparison_period, s.comparison_period) end
+  where s.id = p_series_id and s.widget_id = p_widget_id;
+  if not found then
+    raise exception 'update_series: series % not found under widget %', p_series_id, p_widget_id;
+  end if;
+  return query select p_series_id, w.revision from training_load.dashboard_widgets w where w.id = p_widget_id;
+end;
+$$ language plpgsql;
+
+create function training_load.delete_series(p_series_id uuid, p_widget_id uuid, p_expected_widget_revision integer)
+returns table (widget_revision integer) as $$
+declare
+  v_dashboard_id uuid;
+  v_current_widget_revision integer;
+  v_deleted uuid;
+begin
+  select w.dashboard_id into v_dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
+  if not found then
+    raise exception 'delete_series: widget % not found', p_widget_id;
+  end if;
+  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
+  if v_current_widget_revision <> p_expected_widget_revision then
+    raise exception 'delete_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
+  end if;
+  delete from training_load.dashboard_widget_series where id = p_series_id and widget_id = p_widget_id returning id into v_deleted;
+  if v_deleted is null then
+    raise exception 'delete_series: series % not found under widget %', p_series_id, p_widget_id;
+  end if;
+  return query select w.revision from training_load.dashboard_widgets w where w.id = p_widget_id;
+end;
+$$ language plpgsql;
+
+-- Round 4, §6/§12: batch series reorder — the series-level analog of
+-- replace_dashboard_layout(), same dashboard-first lock order, one
+-- atomic all-or-nothing call for a drag-reorder of a widget's own series.
+create function training_load.reorder_series(p_widget_id uuid, p_expected_widget_revision integer, p_order jsonb)
+returns table (widget_revision integer) as $$
+declare
+  v_dashboard_id uuid;
+  v_current_widget_revision integer;
+  v_entry jsonb;
+  v_updated uuid;
+begin
+  select w.dashboard_id into v_dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
+  if not found then
+    raise exception 'reorder_series: widget % not found', p_widget_id;
+  end if;
+  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
+  if v_current_widget_revision <> p_expected_widget_revision then
+    raise exception 'reorder_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
+  end if;
+  for v_entry in select * from jsonb_array_elements(p_order) loop
+    update training_load.dashboard_widget_series s set series_order = (v_entry ->> 'seriesOrder')::integer
+      where s.id = (v_entry ->> 'seriesId')::uuid and s.widget_id = p_widget_id
+      returning s.id into v_updated;
+    if v_updated is null then
+      raise exception 'reorder_series: series % does not belong to widget %', v_entry ->> 'seriesId', p_widget_id;
+    end if;
+  end loop;
+  set constraints training_load.dashboard_widget_series_order_unique immediate;
+  return query select w.revision from training_load.dashboard_widgets w where w.id = p_widget_id;
 end;
 $$ language plpgsql;
 
@@ -1393,3 +1822,51 @@ $$ language plpgsql;
 create trigger dashboard_active_selection_touch_updated_at
   before update on training_load.dashboard_active_selection
   for each row execute function training_load.dashboard_active_selection_touch();
+
+-- Round 4, §8 FIX: the trigger above already prevents a NEW selection of
+-- an archived dashboard, but a dashboard that gets archived WHILE it is
+-- CURRENTLY someone's active selection left that selection row untouched
+-- — a real "validand-looking active dashboard that is actually archived"
+-- state, exactly what the task calls out. Declared as a TRIGGER on
+-- dashboards itself (not only as app-level function logic) so the
+-- guarantee holds no matter HOW a dashboard becomes archived — a raw
+-- UPDATE, a future admin tool, or the sanctioned archive_dashboard()
+-- function below all go through this same AFTER trigger, atomically, in
+-- the SAME transaction as the status change. Kept in this section
+-- (rather than next to dashboards_bump_revision) because it is
+-- conceptually an active-selection invariant, even though it fires on
+-- training_load.dashboards.
+create function training_load.dashboards_archive_clears_active_selection() returns trigger as $$
+begin
+  if new.status = 'archived' and old.status is distinct from 'archived' then
+    delete from training_load.dashboard_active_selection where dashboard_id = new.id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboards_archive_clears_active_selection
+  after update of status on training_load.dashboards
+  for each row execute function training_load.dashboards_archive_clears_active_selection();
+
+-- Round 4, §8: the sanctioned application entry point for archiving — not
+-- strictly required for the CORRECTNESS guarantee above (the trigger
+-- enforces it regardless of caller), but kept consistent with every other
+-- sanctioned write function in §6: locks the dashboard, checks the
+-- caller's expected revision, and returns the fresh state in one call.
+create function training_load.archive_dashboard(p_dashboard_id uuid, p_expected_revision integer)
+returns table (dashboard_id uuid, status varchar, revision integer) as $$
+declare
+  v_current_revision integer;
+begin
+  select d.revision into v_current_revision from training_load.dashboards d where d.id = p_dashboard_id for update;
+  if not found then
+    raise exception 'archive_dashboard: dashboard % not found', p_dashboard_id;
+  end if;
+  if v_current_revision <> p_expected_revision then
+    raise exception 'archive_dashboard: stale revision (expected %, dashboard is at %) — reload and retry', p_expected_revision, v_current_revision using errcode = '40001';
+  end if;
+  update training_load.dashboards set status = 'archived' where id = p_dashboard_id;
+  return query select d.id, d.status, d.revision from training_load.dashboards d where d.id = p_dashboard_id;
+end;
+$$ language plpgsql;
