@@ -331,6 +331,27 @@ create trigger dashboards_protect_identity_once_created
 -- back to this row. BEFORE INSERT only — cloned_from_dashboard_id can
 -- never change after insert anyway (see the write-once trigger above), so
 -- there is nothing to re-validate on UPDATE.
+--
+-- Round 5, §8 — SNAPSHOT SEMANTICS, made explicit and race-proof.
+-- `cloned_from_dashboard_id` means "this dashboard WAS a template at the
+-- moment it was cloned" — a historical provenance fact, never a live
+-- constraint the source must keep satisfying forever. Once this INSERT
+-- commits, nothing about the SOURCE dashboard's own later is_template
+-- flips can retroactively invalidate this clone's already-recorded
+-- lineage (this trigger only ever fires on the CLONE's own insert, never
+-- re-runs against a source that changes afterward) — that half of
+-- snapshot semantics falls out for free from the design already being
+-- INSERT-only. The half that needed a real fix: the read of the SOURCE's
+-- own is_template was UNLOCKED, so a concurrent template-flip on the
+-- source and this clone-insert could interleave — this clone reading
+-- is_template=true a moment before the flip commits, and recording
+-- lineage from a dashboard that (from the flip's own perspective) was
+-- simultaneously being demoted. Fixed: `FOR SHARE` on the source
+-- dashboard row BEFORE reading is_template — genuinely serializes
+-- against a concurrent flip. Whichever happens first wins outright: a
+-- flip that commits BEFORE this lock is acquired is correctly seen and
+-- rejects the clone; a clone whose lock (and is_template read) commits
+-- BEFORE a later flip is unaffected by that later flip, by construction.
 create function training_load.dashboards_validate_clone_provenance() returns trigger as $$
 declare
   v_current uuid;
@@ -340,6 +361,7 @@ begin
   if new.cloned_from_dashboard_id is null then
     return new;
   end if;
+  perform 1 from training_load.dashboards where id = new.cloned_from_dashboard_id for share;
   select is_template into v_is_template from training_load.dashboards where id = new.cloned_from_dashboard_id;
   if not found then
     raise exception 'training_load.dashboards: cloned_from_dashboard_id % does not exist', new.cloned_from_dashboard_id;
@@ -794,10 +816,31 @@ create table training_load.dashboard_widget_series (
   -- never be QUERIED (the adapter refuses it outright), so it carries no
   -- data-visibility risk, only a "needs attention" UI state).
   resolution_status varchar(20) not null default 'resolved' check (resolution_status in ('resolved', 'unresolved', 'ambiguous')),
-  -- Round 4, §9: for an 'ambiguous' series, the real candidate metric_
-  -- definition_ids found at the last resolution attempt — so the UI can
-  -- render "pick one of these" without re-querying visibility itself.
-  -- NULL for 'resolved'/'unresolved' (nothing to pick from either way).
+  -- Round 4, §9 / Round 5, §3: for an 'ambiguous' series, the real
+  -- candidate metric_definition_ids found at the last resolution attempt
+  -- — so the UI can render "pick one of these" without re-querying
+  -- visibility itself. NULL for 'resolved'/'unresolved' (nothing to pick
+  -- from either way). Shape-validated below (a real array of >=2 DISTINCT
+  -- valid UUIDs whenever resolution_status='ambiguous', never a bare
+  -- string/scalar/empty/duplicate list) by validate_template_resolution_
+  -- candidates_shape.
+  --
+  -- Why JSONB here rather than a normalized child table (asked for
+  -- explicitly this round): these candidates are a POINT-IN-TIME SNAPSHOT
+  -- of one resolution attempt, never independently queried, filtered,
+  -- joined, or paginated — the UI always reads the WHOLE list at once (to
+  -- render "pick one of these") and the sanctioned resolve_series_binding()
+  -- function below always REPLACES the whole list atomically (never
+  -- appends/removes one candidate at a time). A child table would need
+  -- its own FK+cascade+ordering machinery for exactly zero of the access
+  -- patterns a normalized table earns its keep for. Critically, this
+  -- snapshot is NEVER trusted as the live authorization source — see
+  -- resolve_series_binding()'s own comment: the metric this column
+  -- eventually binds to is re-validated live, against the metric's
+  -- CURRENT visibility, by the SAME dashboard_widget_series_validate_
+  -- metric_visibility trigger every other metric_definition_id write
+  -- already goes through — this column is UI convenience data, never an
+  -- authorization record.
   template_resolution_candidates jsonb,
   axis varchar(10) not null default 'primary' check (axis in ('primary', 'secondary')),
   color text,
@@ -862,10 +905,21 @@ create table training_load.dashboard_widget_series (
     (resolution_status = 'resolved' and (metric_definition_id is not null or built_in_series_key is not null)) or
     (resolution_status in ('unresolved', 'ambiguous') and metric_definition_id is null and built_in_series_key is null and template_metric_key_hints is not null)
   ),
-  -- Round 4, §9: candidates are only ever meaningful for 'ambiguous' — a
-  -- 'resolved' series has no candidates left to choose from, and an
-  -- 'unresolved' one has none that matched at all.
-  check (resolution_status = 'ambiguous' or template_resolution_candidates is null),
+  -- Round 4, §9 / Round 5, §3: candidates are only ever meaningful for
+  -- 'ambiguous' — a 'resolved' series has no candidates left to choose
+  -- from, and an 'unresolved' one has none that matched at all. Round 5
+  -- tightens this to a real two-way requirement (both directions
+  -- enforced, matching every other such pair in this file): 'ambiguous'
+  -- REQUIRES a real candidates value (a genuinely empty/absent list is
+  -- not "ambiguous", it is "unresolved" and must be labelled as such);
+  -- the actual ARRAY SHAPE (>=2 distinct valid UUIDs) is enforced by the
+  -- validate_template_resolution_candidates_shape trigger below, since a
+  -- plain CHECK cannot inspect JSONB array contents element-by-element
+  -- as clearly as a trigger can.
+  check (
+    (resolution_status = 'ambiguous' and template_resolution_candidates is not null) or
+    (resolution_status <> 'ambiguous' and template_resolution_candidates is null)
+  ),
   -- Round 2, §4: a built-in series (RPE/sRPE/duration/...) has no
   -- Metrics-Core provenance at all — 'source_connection'/'api_import'/
   -- 'csv_import' are meaningless for it (report §4 "built-in RPE ne sme
@@ -982,6 +1036,52 @@ create trigger dashboard_widget_series_validate_template_hints_shape
   before insert or update of template_metric_key_hints on training_load.dashboard_widget_series
   for each row execute function training_load.validate_template_metric_key_hints_shape();
 
+-- Round 5, §3: template_resolution_candidates must be a real JSON array
+-- of >=2 DISTINCT valid UUID strings whenever it is set (the CHECK above
+-- already guarantees it is set if and only if resolution_status=
+-- 'ambiguous', and null otherwise) — never a bare scalar, never a
+-- single-element "ambiguous" list (that is just 'resolved' or a bug),
+-- never a list with a malformed or duplicated entry.
+create function training_load.validate_template_resolution_candidates_shape() returns trigger as $$
+declare
+  v_elem jsonb;
+  v_count integer := 0;
+  v_seen text[] := '{}';
+  v_text text;
+begin
+  if new.template_resolution_candidates is null then
+    return new;
+  end if;
+  if jsonb_typeof(new.template_resolution_candidates) <> 'array' then
+    raise exception 'dashboard_widget_series: template_resolution_candidates must be a JSON array of UUID strings (widget %)', new.widget_id;
+  end if;
+  for v_elem in select * from jsonb_array_elements(new.template_resolution_candidates) loop
+    if jsonb_typeof(v_elem) <> 'string' then
+      raise exception 'dashboard_widget_series: template_resolution_candidates elements must be UUID strings (got %, widget %)', v_elem, new.widget_id;
+    end if;
+    v_text := v_elem #>> '{}';
+    begin
+      perform v_text::uuid;
+    exception when invalid_text_representation then
+      raise exception 'dashboard_widget_series: template_resolution_candidates element % is not a valid UUID (widget %)', v_text, new.widget_id;
+    end;
+    if v_text = any(v_seen) then
+      raise exception 'dashboard_widget_series: template_resolution_candidates contains a duplicate id % (widget %)', v_text, new.widget_id;
+    end if;
+    v_seen := v_seen || v_text;
+    v_count := v_count + 1;
+  end loop;
+  if v_count < 2 then
+    raise exception 'dashboard_widget_series: template_resolution_candidates must have at least 2 DISTINCT candidates for resolution_status=ambiguous (got %, widget %)', v_count, new.widget_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboard_widget_series_validate_template_resolution_candidates_shape
+  before insert or update of template_resolution_candidates on training_load.dashboard_widget_series
+  for each row execute function training_load.validate_template_resolution_candidates_shape();
+
 create function training_load.dashboard_widget_series_enforce_cap() returns trigger as $$
 declare
   v_widget_type text;
@@ -1021,12 +1121,24 @@ begin
   if not v_has_axis then
     return new;
   end if;
+  -- Round 5, §6 FIX: same reasoning as dashboard_widget_series_validate_
+  -- scope_capability's own fix above — this trigger's read of the
+  -- referenced metric_definition's/built-in's own unit was unlocked, and
+  -- relied on "validate_metric_visibility"/"validate_builtin_scope"
+  -- (which DO take their own locks) happening to have ALREADY fired —
+  -- but "validate_axis_unit" sorts alphabetically BEFORE both of those,
+  -- so at the moment THIS trigger reads the unit, neither lock has been
+  -- taken yet. Fixed: lock the exact row this trigger itself is about to
+  -- read, as its own first statement, independent of any other trigger's
+  -- firing order.
   if new.metric_definition_id is not null then
+    perform 1 from training_load.metric_definitions where id = new.metric_definition_id for share;
     select mdv.unit into v_new_unit
       from training_load.metric_definitions md
       join training_load.metric_definition_versions mdv on mdv.id = md.current_version_id
       where md.id = new.metric_definition_id;
   elsif new.built_in_series_key is not null then
+    perform 1 from training_load.dashboard_builtin_series where key = new.built_in_series_key for share;
     select unit into v_new_unit from training_load.dashboard_builtin_series where key = new.built_in_series_key;
   else
     return new;
@@ -1133,6 +1245,25 @@ create trigger dashboard_widget_series_validate_builtin_scope
 -- ZERO capability rows (nothing configured yet) is NOT blocked — there is
 -- nothing yet to validate against, matching v3's own "backfill only from
 -- real observed history, never guess" reasoning.
+-- Round 5, §6 FIX: this trigger's own read of metric_definition_scope_
+-- capabilities was completely UNLOCKED, and PL/pgSQL BEFORE-ROW triggers
+-- on the same table+event fire in ALPHABETICAL ORDER BY TRIGGER NAME —
+-- "validate_metric_visibility" (which DOES take a `FOR SHARE` lock on
+-- metric_definitions) happens to sort before "validate_scope_capability"
+-- today, but relying on that ordering accident is exactly the fragility
+-- the task calls out: nothing another table (metric_definition_scope_
+-- capabilities is a CHILD table, its OWN rows are never protected by a
+-- lock on the parent metric_definitions row taken somewhere else) or a
+-- future trigger rename would keep safe. Every trigger that reads
+-- catalog/definition state relevant to metric_definition_id now takes
+-- its OWN `FOR SHARE` lock on that metric_definitions row as its FIRST
+-- statement — genuinely correct regardless of firing order, never
+-- depending on a DIFFERENT trigger having already locked anything. This
+-- also documents the discipline any FUTURE Metrics Core code adding/
+-- removing a scope_capability row must itself follow (lock the PARENT
+-- metric_definitions row first) for the "capability removal vs
+-- add_series" race to be genuinely closed on both sides — this PoC only
+-- owns the dashboard-side half of that contract.
 create function training_load.dashboard_widget_series_validate_scope_capability() returns trigger as $$
 declare
   v_has_any boolean;
@@ -1141,6 +1272,7 @@ begin
   if new.metric_definition_id is null then
     return new;
   end if;
+  perform 1 from training_load.metric_definitions where id = new.metric_definition_id for share;
   select exists (select 1 from training_load.metric_definition_scope_capabilities where metric_definition_id = new.metric_definition_id) into v_has_any;
   if not v_has_any then
     return new;
@@ -1677,12 +1809,29 @@ begin
   if v_current_widget_revision <> p_expected_widget_revision then
     raise exception 'update_series: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
   end if;
+  -- Round 5, §4 FIX: the old shape (`coalesce(p_source_connection_id,
+  -- s.source_connection_id)`) could never CLEAR a pinned connection — a
+  -- caller moving source_policy away from 'source_connection' (to
+  -- 'all_with_conflicts'/'manual'/'api_import'/'csv_import'/'derived')
+  -- without ALSO explicitly re-passing a null connection would keep the
+  -- OLD connection id, immediately failing the table's own CHECK
+  -- (source_connection_id is null or source_policy='source_connection').
+  -- The only sanctioned function for this column therefore CANNOT
+  -- express a legal transition away from 'source_connection' at all,
+  -- forcing a raw UPDATE bypass. Fixed: whenever the CALLER explicitly
+  -- changes source_policy to anything other than 'source_connection', the
+  -- connection pin is cleared automatically — no separate p_clear flag
+  -- needed, since a non-'source_connection' policy can never legally
+  -- carry a connection id in the first place.
   update training_load.dashboard_widget_series s set
     axis = coalesce(p_axis, s.axis),
     color = coalesce(p_color, s.color),
     display_label = coalesce(p_display_label, s.display_label),
     source_policy = coalesce(p_source_policy, s.source_policy),
-    source_connection_id = coalesce(p_source_connection_id, s.source_connection_id),
+    source_connection_id = case
+      when p_source_policy is not null and p_source_policy <> 'source_connection' then null
+      else coalesce(p_source_connection_id, s.source_connection_id)
+    end,
     data_scope_level = coalesce(p_data_scope_level, s.data_scope_level),
     analytical_aggregation = coalesce(p_analytical_aggregation, s.analytical_aggregation),
     aggregation_role_policy = coalesce(p_aggregation_role_policy, s.aggregation_role_policy),
@@ -1692,6 +1841,71 @@ begin
   if not found then
     raise exception 'update_series: series % not found under widget %', p_series_id, p_widget_id;
   end if;
+  return query select p_series_id, w.revision from training_load.dashboard_widgets w where w.id = p_widget_id;
+end;
+$$ language plpgsql;
+
+-- Round 5, §3: the sanctioned resolve/bind function — the ONE write path
+-- allowed to move a series out of 'unresolved'/'ambiguous' into
+-- 'resolved'. Before this round, NONE of the sanctioned functions could
+-- touch resolution_status/metric_definition_id/template_resolution_
+-- candidates at all (update_series's own coalesce-based SET list never
+-- assigns these three columns), meaning the model's own claim — "an
+-- unresolved/ambiguous series stays fixable" — had no real, sanctioned
+-- way to actually BE fixed; the only working path was a raw UPDATE
+-- bypassing the entire sanctioned-write contract this file otherwise
+-- insists on.
+--
+-- Same dashboard->widget->series lock order as every other sanctioned
+-- series function. The critical property: this function does NOT trust
+-- the row's own STORED template_resolution_candidates as an
+-- authorization source (that JSONB snapshot can be stale — visibility
+-- can change between clone time and pick time, see the test proving
+-- exactly this) — it re-validates the CALLER's chosen p_metric_definition_id
+-- LIVE, for real, by performing a genuine UPDATE of metric_definition_id,
+-- which fires the SAME dashboard_widget_series_validate_metric_visibility
+-- (and _validate_scope_capability, _validate_axis_unit) triggers every
+-- other metric_definition_id write already goes through — no bespoke,
+-- possibly-weaker re-implementation of that check here, the real trigger
+-- IS the authorization.
+create function training_load.resolve_series_binding(
+  p_series_id uuid, p_widget_id uuid, p_expected_widget_revision integer, p_metric_definition_id uuid
+) returns table (series_id uuid, widget_revision integer) as $$
+declare
+  v_dashboard_id uuid;
+  v_current_widget_revision integer;
+  v_current_status varchar;
+begin
+  select w.dashboard_id into v_dashboard_id from training_load.dashboard_widgets w where w.id = p_widget_id;
+  if not found then
+    raise exception 'resolve_series_binding: widget % not found', p_widget_id;
+  end if;
+  perform 1 from training_load.dashboards d where d.id = v_dashboard_id for update;
+  select w.revision into v_current_widget_revision from training_load.dashboard_widgets w where w.id = p_widget_id for update;
+  if v_current_widget_revision <> p_expected_widget_revision then
+    raise exception 'resolve_series_binding: stale widget revision (expected %, widget is at %) — reload and retry', p_expected_widget_revision, v_current_widget_revision using errcode = '40001';
+  end if;
+  select resolution_status into v_current_status from training_load.dashboard_widget_series where id = p_series_id and widget_id = p_widget_id;
+  if not found then
+    raise exception 'resolve_series_binding: series % not found under widget %', p_series_id, p_widget_id;
+  end if;
+  if v_current_status = 'resolved' then
+    raise exception 'resolve_series_binding: series % is already resolved — nothing to bind', p_series_id;
+  end if;
+  if p_metric_definition_id is null then
+    raise exception 'resolve_series_binding: p_metric_definition_id is required';
+  end if;
+  -- The UPDATE itself: setting metric_definition_id fires the real
+  -- visibility/scope-capability/axis-unit triggers (unchanged, doing
+  -- their OWN live re-check) — a metric that is no longer visible to
+  -- this dashboard's data workspace is rejected right here, by the SAME
+  -- mechanism that protects every other metric binding in this file,
+  -- never by this function re-deriving that logic.
+  update training_load.dashboard_widget_series s set
+    metric_definition_id = p_metric_definition_id,
+    resolution_status = 'resolved',
+    template_resolution_candidates = null
+  where s.id = p_series_id and s.widget_id = p_widget_id;
   return query select p_series_id, w.revision from training_load.dashboard_widgets w where w.id = p_widget_id;
 end;
 $$ language plpgsql;
@@ -1784,18 +1998,37 @@ create table training_load.dashboard_active_selection (
 
 create index dashboard_active_selection_dashboard_idx on training_load.dashboard_active_selection (dashboard_id);
 
--- Round 3, §7: an ARCHIVED dashboard must never become (or remain
--- selectable as) a user's active dashboard for a workspace — status is
--- read fresh on every insert/update of this row, same as the data-
--- workspace equality check below, so archiving a dashboard that is
--- CURRENTLY someone's active selection is still caught on their next
--- explicit re-selection (this trigger does not retroactively clear an
--- existing selection row on archive — see report for that documented gap
--- versus a real-time push-based invalidation, out of scope for this PoC).
+-- Round 3, §7 / Round 4, §8 / Round 5, §5: an ARCHIVED dashboard must
+-- never become (or remain selectable as) a user's active dashboard for a
+-- workspace. Since Round 4, archiving a dashboard that IS currently
+-- someone's active selection is no longer merely "caught on next
+-- re-selection" — dashboards_archive_clears_active_selection (below the
+-- dashboard_active_selection table's own definition) atomically deletes
+-- any existing selection row the INSTANT a dashboard's status becomes
+-- 'archived', regardless of how (a raw UPDATE, or archive_dashboard()).
+--
+-- Round 5, §5 FIX: this trigger's own status/workspace read was UNLOCKED
+-- — a real race: a concurrent SELECT (this trigger) and a concurrent
+-- ARCHIVE could each read the dashboard's pre-change state, both
+-- "succeed" from their own point of view, and interleave into a final
+-- state where a brand-new selection row survives an archive that had
+-- already committed (selection reads status='active' before archive
+-- commits, inserts after archive's own AFTER-trigger delete already ran).
+-- Fixed: this trigger now takes the SAME `FOR UPDATE` lock on the
+-- dashboard row that archive_dashboard() takes, BEFORE reading
+-- status/workspace — genuinely serializing against a concurrent archive,
+-- in the same dashboard-first order every other sanctioned writer uses.
+-- Whichever of the two (this INSERT, or an archive) reaches the lock
+-- first fully completes (including, for an archive, its own AFTER
+-- delete-selection trigger, which runs within the SAME transaction and
+-- is visible to anyone who only proceeds once that transaction commits)
+-- before the other is ever unblocked — see the report's lock-order
+-- section for the full two-connection proof.
 create function training_load.dashboard_active_selection_validate_visibility() returns trigger as $$
 declare
   v_data_type varchar; v_data_scope uuid; v_status varchar;
 begin
+  perform 1 from training_load.dashboards where id = new.dashboard_id for update;
   select data_workspace_type, data_workspace_scope_id, status into v_data_type, v_data_scope, v_status
     from training_load.dashboards where id = new.dashboard_id;
   if v_status is distinct from 'active' then

@@ -1,10 +1,117 @@
 # Training Load 3B1 — Analysis Dashboard: model, ownership, data semantics, API contract, and disposable-DB PoC results
 
-**Status: design phase only — Round 4 (final blocker-correction pass before real migrations).** Nothing in this round touches `migrations_v2`, the backend app, or the frontend app. `schema.sql` is a standalone, additive proposal validated only against a disposable, throwaway database created and dropped by `test-harness.mjs`. Waiting for a NEW confirmation of this corrected model before any real migration or application code is written.
+**Status: design phase only — Round 5 (final corrective pass before real migrations).** Nothing in this round touches `migrations_v2`, the backend app, or the frontend app. `schema.sql` is a standalone, additive proposal validated only against a disposable, throwaway database created and dropped by `test-harness.mjs`. Waiting for a NEW confirmation of this corrected model before any real migration or application code is written.
 
-Every claim below is labeled **[confirmed]** (read directly from `origin/main`'s real code/schema), **[decision]** (a choice made for this proposal, with rejected alternatives), or **[PoC-proven]** (demonstrated by `test-harness.mjs` against real, unmodified `migrations_v2` files + this proposal's `schema.sql`, on a disposable database, **three consecutive runs, 116/116 passing each time**, database confirmed dropped after each, zero leftovers). Round 1 had 24 proof points, Round 2 added 26 (50 total), Round 3 added 36 (86 total), Round 4 adds the final **30** required by this pass — see "PoC results" below for the full breakdown, **§0-R4's own req→test→function traceability table**, and **§0-R4.9 for an honest, unflinching readiness assessment** (the task's own explicit instruction: green tests alone do not mean "ready").
+Every claim below is labeled **[confirmed]** (read directly from `origin/main`'s real code/schema), **[decision]** (a choice made for this proposal, with rejected alternatives), or **[PoC-proven]** (demonstrated by `test-harness.mjs` against real, unmodified `migrations_v2` files + this proposal's `schema.sql`, on a disposable database, **three consecutive runs, 137/137 passing each time**, database confirmed dropped after each, zero leftovers). Round 1 had 24 proof points, Round 2 added 26 (50 total), Round 3 added 36 (86 total), Round 4 added 30 (116 total), Round 5 adds the final **21** required by this pass — see "PoC results" below for the full breakdown, **§0-R5's own req→test→function traceability table**, and **§0-R5.9 for an honest, unflinching readiness assessment** (the task's own explicit instruction: green tests alone do not mean "ready").
 
-**Read this first — jump straight to what changed:** §0-R4 immediately below is the complete Round-4 changelog — grain/grouping identity, the typed two-stage aggregation contract, the real conflict/no-double-count state machine, the sanctioned-write/lock-order contract, and the template binding/clone state machine. §0-R3, §0 (Round 2), and the rest of the report are kept as historical context beneath it, amended in place wherever a later round changed something (each amendment marked with its own round).
+**Read this first — jump straight to what changed:** §0-R5 immediately below is the complete Round-5 changelog — the day-level Metrics Core/Training Activity decoupling, canonical component identity, the sanctioned resolution-binding function, `update_series()`'s source-pin clearing, and the four closed TOCTOU-style races. §0-R4, §0-R3, §0 (Round 2), and the rest of the report are kept as historical context beneath it, amended in place wherever a later round changed something (each amendment marked with its own round).
+
+---
+
+## §0-R5. Round 5 (final corrective pass) — what changed, and why
+
+This round's task was again explicit that this is the LAST corrective pass before real migrations. All 8 items were findings against the ALREADY-EXISTING Round 4 model, not new feature requests — each is a genuine correctness/completeness gap, closed strictly within `schema.sql`/`test-harness.mjs`/the two doc files, no real migrations/backend/frontend, no OPTIMOVE/monitoring2/production access.
+
+### §0-R5.1 Day-level Metrics Core facts no longer have a fake Training Activity anchor
+
+**The finding.** §11.3's `dayEventActivity` fixture linked a `scope_level='day'` metric event to a real `training.activities` row via `activity_metric_event_links` — but day-level facts (sleep, recovery, resting HR) are never recorded against a training session in the real system; they are read directly off `metric_events → participants → occasions → values`, exactly like the real, already-deployed `GET /results` route (`queryResults()` in `backend/src/trainingLoadMetricsMeasurements.js`) does. The old fixture invented a link that cannot exist for a real day fact and would have let the PoC silently validate the wrong pipeline shape.
+
+**The fix.** Two real, independent fact-sourcing paths now exist in `queryMetricSeries()`:
+- **Activity-backed facts** (RPE/sRPE/duration, session-level, component-level) — unchanged, still driven by `training.canonical_activity_results(activityId)`.
+- **Standalone day-level facts** (new) — `fetchDayLevelMetricFacts()` reads `metric_events(scope_level='day') → metric_event_participants → metric_measurement_occasions → metric_values` directly, workspace-filtered on `ev.owner_scope/owner_club_id/owner_team_id/owner_user_id` exactly like the real `metricEventScopeSqlForWorkspace()` — including the real special case that an `athlete` self-view skips the owner-scope predicate entirely and filters on `p.athlete_id` only. Day facts never touch `activity_metric_event_links`, `training.activities`, or activity-participant rows anywhere in this path.
+
+A single shared `resolveFactsToRows()` was extracted from the old monolithic query function so the role/coverage/source-policy filtering and the measurement-target conflict logic is the SAME code for both paths — the two fact sources can never silently diverge in how a conflict is detected.
+
+**Runtime filter behavior, now explicit:** a date/range filter includes day facts; an explicit `activityId`/`componentId` filter never auto-claims a day fact for that session/component (day facts have no activity to match against — §12.4 proves an activity-filtered query returns zero day rows even when a day fact exists on the exact same date).
+
+**[PoC-proven]** §12.1 (zero Activity rows, workspace isolation Club A vs Club B), §12.2/§12.2b (athlete self-view breadth vs a genuine same-day multi-club conflict), §12.3 (real ISO-week aggregation), §12.4 (activity/component filter exclusion), §11.3 rewritten to assert zero `training.activities` rows for a day fact.
+
+### §0-R5.2 Component identity is now the canonical Training Activity component, not a raw source segment
+
+**The finding.** `queryMetricSeries()` used `metric_event_segments.id` — a raw, source-specific segment row — as the component-scope bucket/target identity. Two different sources (e.g. two different GPEXE-style imports) can each produce their own segment for the SAME real training-activity component; keying on the segment meant the same real component could silently appear as two unrelated buckets, or worse, never be recognized as a genuine conflict when it should be.
+
+**The fix.** `fetchCanonicalFacts()` already calls `training.canonical_activity_results()`, which returns `component_metric_segment_link` facts (`{componentId, metricEventSegmentId, linkStatus}`, confirmed links only) — this data was already being fetched and simply wasn't being used for identity. A `segmentToComponentId` map is now built from those facts (no extra DB round trip), and every component-grain fact's `grainKey`/target identity is the real `activity_component_id`, never the segment id. A component fact with no confirmed canonical link is filtered out rather than silently bucketed under its own segment id.
+
+**[PoC-proven]** §12.5 (two source segments confirmed-linked to ONE real component collapse to one target), §12.6 (differing values on that one target correctly conflict), §12.7 (pinning one source connection resolves it to that connection's own value), §12.8 (segments on two genuinely different components stay two separate buckets).
+
+### §0-R5.3 A real sanctioned function now exists to resolve an unresolved/ambiguous series
+
+**The finding.** None of the 10 sanctioned write functions could ever change `resolution_status`/`metric_definition_id`/`template_resolution_candidates` — the only way to "fix" a stuck placeholder series was a raw `UPDATE`, bypassing every sanctioned-write guarantee (lock order, revision bump, live re-authorization). This was a genuine completeness gap: the model could create an unresolved/ambiguous series but never actually resolve one.
+
+**The fix.** `training_load.resolve_series_binding(p_series_id, p_widget_id, p_expected_widget_revision, p_metric_definition_id)` — locks dashboard then widget (the same order every other sanctioned function uses), checks the caller's expected widget revision (stale-revision rejection, same contract as every other write), confirms the series exists, belongs to that widget, and isn't already `resolved`, then performs a REAL `UPDATE` of `metric_definition_id` — deliberately a real column write, not a bespoke re-implementation, so the EXISTING `dashboard_widget_series_validate_scope_capability`/`..._validate_source_connection_visibility`/`..._validate_axis_unit` triggers re-fire and do the live authorization check. **The chosen metric is never trusted from the stale candidate JSON** — it is re-validated for CURRENT visibility at the moment of selection, exactly because a candidate that was visible when the template was cloned may no longer be visible now (workspace/role/archival changes in between). `resolution_status` is set to `'resolved'` and `template_resolution_candidates` is atomically cleared in the same statement.
+
+A CHECK constraint was tightened to require the correct shape in BOTH directions (`resolution_status='ambiguous'` ⟺ `template_resolution_candidates is not null`, previously only checked one way), and a new trigger `validate_template_resolution_candidates_shape()` enforces: a real JSON array (never a scalar), every element a syntactically valid UUID, no duplicates, and at least 2 DISTINCT candidates whenever `resolution_status='ambiguous'`.
+
+**Why JSONB, not a normalized child table (as required to justify):** `template_resolution_candidates` is a point-in-time snapshot taken once at clone time — it is never independently queried, filtered, joined, or paginated; it is always read as a whole and replaced as a whole (exactly once, by `resolve_series_binding()`); and critically, it is NEVER used as a live authorization source — `resolve_series_binding()` always re-derives current visibility through the real trigger, never by trusting what the snapshot says. A normalized child table would add join/write overhead for a value that is only ever read-as-a-blob and re-validated live regardless of its own contents.
+
+**[PoC-proven]** §12.9 (clean resolve), §12.10 (live re-validation rejects a stale-but-now-invisible candidate while accepting the dashboard's own real currently-visible metric — the specific case the "never trust stale JSON" rule exists for), §12.11 (stale widget revision rejected), §12.12 (shape validation rejects a too-short/duplicate/non-UUID candidate array).
+
+### §0-R5.4 `update_series()` can now actually clear a pinned source connection
+
+**The finding.** `source_connection_id = coalesce(p_source_connection_id, s.source_connection_id)` can never move a series FROM `source_policy='source_connection'` TO any other policy — the old connection id survives every update that doesn't explicitly overwrite it, and the CHECK constraint (`source_connection_id is not null` requires `source_policy='source_connection'`, and vice versa) then rejects the very policy change the coach asked for. The only way around it was raw SQL, outside the sanctioned-write contract.
+
+**The fix.** The SET clause now clears the column whenever the caller supplies a new, non-`source_connection` policy: `source_connection_id = case when p_source_policy is not null and p_source_policy <> 'source_connection' then null else coalesce(p_source_connection_id, s.source_connection_id) end`. Both directions are real, sanctioned-function-only transitions now.
+
+**[PoC-proven]** §12.13 (`source_connection` → `all_with_conflicts`, pin genuinely cleared), §12.14 (`all_with_conflicts` → `source_connection`, pin genuinely set) — both exclusively through `update_series()`, no raw SQL.
+
+### §0-R5.5 Active-selection vs archive race closed with a real row lock
+
+**The finding.** `dashboard_active_selection_validate_visibility()` read the dashboard's status without locking it — a concurrent `archive_dashboard()` could interleave such that a new active-selection row ends up referencing a dashboard that is (or is about to be) archived, since the archive path's own trigger-based delete-selection step could run either before or after the read, with no ordering guarantee between them.
+
+**The fix.** The validation trigger now takes `perform 1 from training_load.dashboards where id = new.dashboard_id for update` as its FIRST statement, before reading status/workspace — the same lock `archive_dashboard()` itself takes on the dashboard, so whichever transaction gets there first genuinely serializes the other behind it; there is no interleaving where both can proceed on stale state.
+
+**[PoC-proven]** §12.15 (selection-first: archive genuinely queues behind the in-flight selection, confirmed via `pg_stat_activity.wait_event_type='Lock'` polling on the archiver's own real backend pid — no `sleep`; after the selection commits, the archive proceeds and removes it) and §12.16 (archive-first: the selection queues, then correctly sees the archived state and is rejected) — both proving the final state never contains an active selection pointing at an archived dashboard, regardless of ordering.
+
+### §0-R5.6 Catalog-row locks no longer depend on trigger firing-order luck
+
+**The finding.** PL/pgSQL BEFORE-ROW triggers on the same table+event fire in alphabetical order BY TRIGGER NAME. `dashboard_widget_series_validate_scope_capability()` read capability rows before the alphabetically-later metric-visibility trigger took its own `FOR SHARE` lock on the definition — meaning the capability read's safety depended entirely on incidental trigger naming, not on anything it itself guaranteed. The same pattern existed in `dashboard_widget_series_validate_axis_unit()` against the built-in-scope trigger.
+
+**The fix.** Both triggers now take their own lock as the first thing they do, before reading anything: `dashboard_widget_series_validate_scope_capability()` takes `for share` on the metric definition before reading capability rows; `dashboard_widget_series_validate_axis_unit()` takes `for share` on the metric definition (or the built-in series row, whichever branch applies) immediately before reading its unit. Neither trigger's correctness depends on any other trigger's name or firing position anymore.
+
+**Honest scope limit, stated plainly:** this PoC only owns the dashboard-side half of the "capability removal" race — a real, future Metrics Core capability-removal code path must adopt the same "lock the parent row as your own first statement" discipline for the end-to-end guarantee to hold; this round proves the dashboard side is now correct and provable, not that the whole system is.
+
+**[PoC-proven]** §12.17 (axis-unit's own lock genuinely blocks a concurrent semantic change to a built-in, both orderings resolve to one consistent final outcome), §12.18 (scope-capability's own lock genuinely serializes against a simulated, equally-disciplined concurrent capability removal).
+
+### §0-R5.7 Clone provenance — snapshot semantics adopted explicitly, and made race-proof
+
+**The decision.** `cloned_from_dashboard_id` means "this dashboard WAS a template at the moment it was cloned" — a historical fact, never a live constraint that could later be invalidated by the source dashboard's own template flag changing. This was already the model's *de facto* behavior (the validation only ever ran once, at INSERT time) but was never explicitly decided or race-proofed.
+
+**The fix.** `dashboards_validate_clone_provenance()` now takes `perform 1 from training_load.dashboards where id = new.cloned_from_dashboard_id for share` before checking `is_template`, so a concurrent template-flip and a concurrent clone genuinely serialize against each other rather than racing on an unlocked read. Because the validation is INSERT-only by construction, a later template flip on the source dashboard can never retroactively invalidate a clone's already-recorded provenance — that is the snapshot guarantee, now backed by a real lock instead of an implicit assumption.
+
+**[PoC-proven]** §12.19 (template-flip-first: the flip commits before the clone's own lock is acquired → the clone is correctly rejected) and §12.20 (clone-first: the clone's own lock+read commits before a later flip → the clone is completely unaffected by that later flip) — both proving the historical-fact guarantee holds under real concurrency, not just in the happy path.
+
+### §0-R5.8 Documents reconciled — one semantics for the unresolved/ambiguous clone-review state
+
+**The finding.** `DASHBOARD_UX_SPEC.md` still said a series with zero matching candidates during clone review was "simply omitted from the created dashboard unless the coach explicitly picks a replacement right there" — directly contradicting the model (§0-R5.3 above, and the underlying contract since Round 3) where an unresolved/ambiguous row is always preserved, never dropped, specifically so it stays fixable later.
+
+**The fix.** `DASHBOARD_UX_SPEC.md`'s "Template cloning and the unresolved/ambiguous-metric state" section is rewritten to adopt ONE semantics: the row is always preserved; the new dashboard can be created with it as-is; the widget shows a neutral "Choose a metric" (ambiguous) or "Metric not available" (zero-candidate) placeholder; the coach resolves it later via `resolve_series_binding()` (§0-R5.3) or deletes it outright via the normal per-widget Remove action. A stale comment claiming archiving doesn't retroactively clear an active selection was checked for — none survives; the comment block on `dashboard_active_selection_validate_visibility()` was already rewritten in §0-R5.5 above to describe the current (correct) trigger-based behavior.
+
+### §0-R5.9 Req → test → function traceability, and the honest readiness assessment
+
+Every one of the 8 findings this round specified, the exact test(s) that prove it, and the real function actually exercised:
+
+| # | Finding | Correction | Test(s) | Function(s) actually executed |
+|---|---|---|---|---|
+| 1 | Day metrics had a fake Training Activity anchor | Standalone day-level fact path, decoupled from `training.activities` | §11.3 (rewritten), §12.1, §12.2, §12.2b, §12.3, §12.4 | `fetchDayLevelMetricFacts()` + `resolveFactsToRows()` |
+| 2 | Component identity used raw source segment id | Canonical `activity_component_id` via `component_metric_segment_link` | §12.5, §12.6, §12.7, §12.8 | `fetchCanonicalFacts()` (`segmentToComponentId` map) + `queryMetricSeries()` |
+| 3 | No sanctioned way to resolve unresolved/ambiguous series | New `resolve_series_binding()` with live re-authorization + candidate shape validation | §12.9, §12.10, §12.11, §12.12 | `training_load.resolve_series_binding()` + `validate_template_resolution_candidates_shape()` (SQL) |
+| 4 | `update_series()` could never clear a source pin | Explicit clear-on-policy-change in the SET clause | §12.13, §12.14 | `training_load.update_series()` (SQL) |
+| 5 | Active-selection vs archive race (unlocked read) | `FOR UPDATE` on the dashboard as the trigger's first statement | §12.15, §12.16 | `dashboard_active_selection_validate_visibility()` trigger (SQL) |
+| 6 | Catalog reads relied on another trigger's alphabetical firing order | Each trigger takes its own `FOR SHARE` lock first | §12.17, §12.18 | `dashboard_widget_series_validate_axis_unit()` + `..._validate_scope_capability()` triggers (SQL) |
+| 7 | UX_SPEC contradicted the model's preserved-placeholder contract | UX_SPEC rewritten to one adopted semantics | manual doc review (no test — doc-only change) | n/a |
+| 8 | Clone provenance race undecided/unlocked | Snapshot semantics explicitly adopted + `FOR SHARE` lock | §12.19, §12.20 | `dashboards_validate_clone_provenance()` trigger (SQL) |
+
+**All 137 tests pass, three consecutive runs, disposable database confirmed dropped every time, zero leftovers (`select datname from pg_database where datname like 'optimove_poc_dashboard_%'` → zero rows after all three), no hardcoded credentials in either `schema.sql` or `test-harness.mjs`.**
+
+**Explicitly NOT ready, stated plainly rather than papered over — carried forward from Round 4, still true, plus what this round adds:**
+- Route-level authorization still does not exist (unchanged from every prior round).
+- The 11 sanctioned write functions (10 from Round 4 + `resolve_series_binding()` this round) are the ONLY proven-safe entry points — the real backend's route layer must call exclusively these; this is a hard requirement, not a suggestion.
+- The "capability removal" race is only half-closed (§0-R5.6): this PoC proves the dashboard-side lock discipline is correct; a real, future Metrics Core capability-removal code path must independently adopt the same "lock the parent row as your own first statement" pattern for the end-to-end guarantee to actually hold in production. This is a genuine, named, currently-open risk, not a resolved one.
+- This adapter's per-activity/per-day N+1 query pattern remains explicitly not a production query plan (restated from Round 3/4, still true) — a real backend service must replace it with a set-based query, now across BOTH the activity-backed and the new standalone day-level fact paths.
+- Boolean built-in aggregation (`any`/`all`/`count_true`), real team grouping (vs `cohort`), and unit conversion remain explicitly out of scope this round too, exactly as instructed.
+- A true production route/API implementation of any of this round's SQL-only functions (`resolve_series_binding()` especially) does not exist yet — only the sanctioned function itself is proven; the route that calls it, with its own authorization check, is future work.
+
+This section's purpose, restated from Round 3/4: everything above the "Explicitly NOT ready" line is safe to build real migrations and routes on top of; everything below it is a known, named gap to close during implementation, not a surprise to discover later.
 
 ---
 
@@ -525,25 +632,28 @@ Other routes (list/create/get/update/archive dashboard; clone; add/update/remove
 
 ---
 
-## PoC results (Round 4 — final)
+## PoC results (Round 5 — final)
 
-`test-harness.mjs`, run three consecutive times against a fresh disposable database each time (`optimove_poc_dashboard_run_<random>`, created via `CREATE DATABASE` and dropped via `DROP DATABASE` by the script itself — never `OPTIMOVE`, never `monitoring2`, never staging/Supabase/production; a hardcoded name/URL guard refuses any of those — **fixed this round to also check the caller's own `DATABASE_URL`, see below**):
+`test-harness.mjs`, run three consecutive times against a fresh disposable database each time (`optimove_poc_dashboard_run_<random>`, created via `CREATE DATABASE` and dropped via `DROP DATABASE` by the script itself — never `OPTIMOVE`, never `monitoring2`, never staging/Supabase/production; the hardcoded name/URL guard, including the Round 4 fix that also checks the caller's own `DATABASE_URL`, is unchanged this round):
 
 | Run | Result | DB confirmed dropped |
 |---|---|---|
-| 1 | 116/116 pass | yes |
-| 2 | 116/116 pass | yes |
-| 3 | 116/116 pass | yes |
+| 1 | 137/137 pass | yes |
+| 2 | 137/137 pass | yes |
+| 3 | 137/137 pass | yes |
 
-A 4th, deliberate run this round forced a real mid-`seed()` failure (a fixture insert violating a real Metrics Core trigger) specifically to verify the failure-path cleanup guard, not just the success path — `after()` ran, `teardown()`'s guards all fired correctly, and the disposable database was confirmed dropped even though every test in that run failed. The deliberate change was then reverted.
+116 tests are the original Round 1/2/3/4 suite (§1.x–§11.x), unchanged this round except §11.3 (rewritten — see §0-R5.1). The 21 new Round 5 tests are §12.1–§12.20 (including §12.2b), one per the task's own numbered finding list — see §0-R5.9's finding→correction→test→function table above for the full traceability.
 
-86 tests are the original Round 1/2/3 suite (§1.x–§10.x) — updated in place wherever Round 4 changed a field/behavior (`group_by='team'`→`'cohort'`, the real conflict shape in §9.7/§9.9, §10.33's source-connection case). The 30 new Round 4 tests are §11.1–§11.30, one per the task's own numbered requirement list — see §0-R4.9's req→test→function table above for the full traceability, mapped so nothing is a renamed test claiming to prove something it doesn't.
+Every concurrency claim (§3.4, §5.1, §5.2, §5.3, §6.1, §6.6, §10.28, §11.20/§11.21/§11.22/§11.28, and Round 5's own §12.15/§12.16/§12.17/§12.18/§12.19/§12.20) uses **two real `pg` connections and a deterministic barrier** — a second connection's write is confirmed genuinely blocked by polling `pg_stat_activity.wait_event_type = 'Lock'` for its own real backend pid, never a `sleep`/timing guess. §12.15/§12.16 and §12.19/§12.20 are this round's most important new proofs — each is tested in BOTH possible orderings, not just the "expected" one, so the final state is verified regardless of which side wins the race.
 
-Every concurrency claim (§3.4, §5.1, §5.2, §5.3, §6.1, §6.6, §10.28, and Round 4's own §11.20/§11.21/§11.22/§11.28) uses **two real `pg` connections and a deterministic barrier** — a second connection's write is confirmed genuinely blocked by polling `pg_stat_activity.wait_event_type = 'Lock'` for its own real backend pid, never a `sleep`/timing guess. §11.20 is this round's most important new proof: `update_widget_layout()`'s rebuilt TOCTOU-safe order genuinely catches a widget change landing while the call is queued behind the dashboard lock.
-
-Final leftover check after all three (and the deliberate 4th, failure-path) runs: `select datname from pg_database where datname like 'optimove_poc_dashboard_%'` → **zero rows**. No real database (OPTIMOVE, monitoring2, staging, Supabase, production) was ever touched — every connection this harness opens is either the disposable database itself or the `postgres` maintenance database, used only to create/drop it. No hardcoded credentials anywhere in `schema.sql` or `test-harness.mjs` — `DATABASE_URL` is read from the environment only. The safety guard was itself live-verified this round: pointing `DATABASE_URL` directly at a database named `OPTIMOVE` now fails immediately with `SAFETY: refusing to run against a forbidden database name/url`, before any connection is opened (see §0-R4.9 for the real gap this closes).
+Final leftover check after all three runs: `select datname from pg_database where datname like 'optimove_poc_dashboard_%'` → **zero rows**. No real database (OPTIMOVE, monitoring2, staging, Supabase, production) was ever touched — every connection this harness opens is either the disposable database itself or the `postgres` maintenance database, used only to create/drop it. No hardcoded credentials anywhere in `schema.sql` or `test-harness.mjs` — `DATABASE_URL` is read from the environment only (re-checked this round via a direct grep for embedded credential strings — none found).
 
 **Real bugs THIS round's PoC caught before they could ever reach a real migration:**
+- §12.2's own first draft expected Club A's and Club B's SAME real day (2026-09-13) to appear as two clean, separate values in an athlete's combined self-view — the actual, correct behavior is that this collides into the same measurement target and is correctly a real conflict, per the already-established target-resolution model (§0-R4.3). This was a wrong test expectation, not an implementation bug — caught before it could ship a test that would have silently required weakening the conflict rule to pass. Fixed by splitting into §12.2 (workspace breadth, genuinely non-colliding dates) and §12.2b (explicitly proving the same-day multi-club case IS a real conflict).
+- §12.7's fixture referenced a non-existent `ids.participant`, silently resolving to `undefined`/null and tripping a real `training.activity_participant_metric_participant_links` trigger check (metric participant athlete not matching the activity participant) — caught immediately by the trigger itself refusing the insert, not by a silently-wrong result. Fixed by looking up the real `activity_participants` row instead of assuming a shortcut identifier existed.
+- §12.8 initially reused a shared metric/component fixture that, by the time this sequentially-run test executed, had accumulated extra component-scope facts from earlier tests in the same suite (the same shared-fixture-pollution class of bug `makeQuickMetric()` already exists to avoid elsewhere in this file) — caught by an assertion on the exact bucket COUNT, not just presence. Fixed by rewriting §12.8 to use `makeQuickMetric()` for full isolation.
+
+**Real bugs prior rounds' PoC caught before they could ever reach a real migration** (kept for a complete history, Round 4's own list below unchanged):
 - `reduceRows`' own first draft collapsed straight to the FINAL requested bucket (e.g. `athlete`) using `daily_aggregation_method` directly — meaning Stage 1 would silently combine facts from MULTIPLE distinct real days into one number before Stage 2 ever ran, making Stage 2's own aggregation choice meaningless. Caught by §10.3 (`avg` at the athlete level returned the already-summed 230, not the real day-value average 115) before this report was written. Fixed by splitting into two real phases: Phase 1 always reduces per real calendar date first; Phase 2 re-buckets that output into whatever `group_by` actually asked for.
 - `runSeriesPipeline` correctly scoped the ACTIVITY set for an `athlete` workspace via `fetchActivitiesInRange`, but then still passed the caller's own, unoverridden `athleteIds` down to the fact-level query functions — meaning a caller-supplied `athleteIds` pointing at a DIFFERENT athlete would filter OUT the real viewing athlete's own data. Caught by §11.19. Fixed by computing the effective athlete filter once, identically to `fetchActivitiesInRange`'s own internal rule, and reusing it everywhere in the pipeline.
 - The forbidden-database safety guard (see above) only ever checked the GENERATED disposable database's own name, never the caller's own `DATABASE_URL` — found by directly testing the guard's actual behavior against `DATABASE_URL` pointed at `OPTIMOVE`, not merely reading the code. Fixed as described above.
@@ -563,22 +673,23 @@ Final leftover check after all three (and the deliberate 4th, failure-path) runs
 
 ## What this PoC does NOT prove — real application-authorization work still required
 
-Being explicit about the boundary, as asked — unchanged in spirit from Round 1, restated precisely for the corrected model. **See §0-R4.9 above for the current, final, required, unflinching readiness assessment** — this section is the durable/general boundary statement; §0-R4.9 is the specific, current audit.
+Being explicit about the boundary, as asked — unchanged in spirit from Round 1, restated precisely for the corrected model. **See §0-R5.9 above for the current, final, required, unflinching readiness assessment** — this section is the durable/general boundary statement; §0-R5.9 is the specific, current audit.
 
 - **Route-level authorization** (who is *currently* a platform admin / club admin / team coach / has an active role in a given club or team) is entirely outside this schema, exactly like every other `owner_scope`-based feature in this codebase (`resolveActiveWorkspace`, `req.authz`). §1.6 documents this narrowly: revoking a coach's club role does not change what the *storage layer* would accept, because the storage layer was never the thing checking it, in either round — a real implementation's routes must call the same `resolveActiveWorkspace`/scope-check pattern `trainingActivityAccess.js` already uses, on **every** selection/query/edit request, never a cached grant. This is the single largest remaining gap between "PoC-proven" and "safe to ship" — the schema-level guarantees (§0.1) close the DATA-leak risk; only a real route layer closes the AUTHORIZATION-recency risk.
 - **Per-request metric/source-connection visibility beyond exact-scope-match** (e.g., "any metric visible to any club this coach also happens to administer") is real, but is a membership *query*, not a static trigger — left to the application layer, matching `isAthleteInWorkspaceScope` precedent, for both metrics (§0.1) and source connections (§0.6).
-- **The template-clone metric-key resolution step** — `resolveTemplateHint()` is a genuine, tested PoC function, but the REAL clone service (which INSERTs the resolved series row, snapshots a `needs_resolution` UI state for the coach to pick manually, etc.) is application logic not written this round.
-- **Frontend code** (drag/resize interaction, mobile single-column stacking with the atomic Move-up/down flow, the metric-picker UI, the batch-query client, unit-conflict/needs-resolution UI states) — none of this exists yet; `DASHBOARD_UX_SPEC.md` (updated this round) is a contract for that future work, not a test of it.
+- **The template-clone metric-key resolution step** — `resolveTemplateHint()` is a genuine, tested PoC function, but the REAL clone service (which INSERTs the resolved series row, snapshots a `needs_resolution` UI state for the coach to pick manually, etc.) is application logic not written this round. `resolve_series_binding()` (§0-R5.3) is the sanctioned function that same future service must call to let the coach fix it later — the route around it is still future work.
+- **Frontend code** (drag/resize interaction, mobile single-column stacking with the atomic Move-up/down flow, the metric-picker UI, the batch-query client, unit-conflict/needs-resolution UI states, the "Choose a metric"/"Metric not available" placeholder widgets described in §0-R5.8) — none of this exists yet; `DASHBOARD_UX_SPEC.md` (updated this round) is a contract for that future work, not a test of it.
 - **Real system-template seed migration** — Section 7's three templates (and the two new built-in series' real query-adapter service code) are described/PoC'd here, not written as an actual seed-data migration or real backend service this round (explicitly out of scope).
 - **A real `unit_policy`/conversion engine** — deliberately not built, and deliberately not even added as an unused schema column (§0.7), so nothing here implies a capability that does not exist.
+- **The capability-removal race's non-dashboard half** (§0-R5.6) — this PoC proves the dashboard-side lock discipline is correct; a real Metrics Core capability-removal code path adopting the matching discipline is still required and still unwritten.
 
 ---
 
 ## Deliverables
 
-- `schema.sql` — the corrected, additive schema (Round 4, final), applied on top of real `migrations_v2` in the PoC. This round adds the real grain/resolution-status columns, the shape-validation trigger for template hints, the archive-clears-selection trigger, the `FOR SHARE` catalog-concurrency locks, the unconditional write-once trigger, and the 8 new sanctioned write functions (10 total).
-- `test-harness.mjs` — the disposable-DB PoC, 116 tests (86 original + 30 new this round), run 3× (plus one deliberate failure-path run), 116/116 each time, including the rebuilt two-phase grain-aware pipeline and the real conflict/no-double-count state machine.
-- `DASHBOARD_UX_SPEC.md` — desktop/tablet/mobile UX contract, updated this round for the real `week`/`session`/`component` group-by semantics, the `cohort` rename, the new measurement-conflict UI state, and the corrected aggregation-picker default-hint wording.
-- this report — see §0-R4 for the full Round 4 changelog, the req→test→function traceability table, and the honest readiness assessment.
+- `schema.sql` — the corrected, additive schema (Round 5, final), applied on top of real `migrations_v2` in the PoC. This round adds the standalone day-level fact query path, canonical-component identity resolution, the new `resolve_series_binding()` sanctioned function (11 total) with its candidate-shape validation trigger, the `update_series()` source-pin-clear fix, and first-statement `FOR SHARE`/`FOR UPDATE` locks in four triggers to close the active-selection/archive, scope-capability, axis-unit, and clone-provenance races.
+- `test-harness.mjs` — the disposable-DB PoC, 137 tests (116 original + 21 new this round), run 3×, 137/137 each time, including the extracted shared `resolveFactsToRows()` filter/conflict logic reused by both the activity-backed and the new standalone day-level fact paths.
+- `DASHBOARD_UX_SPEC.md` — desktop/tablet/mobile UX contract, updated this round to reconcile the clone-review unresolved/ambiguous-metric section with the model's actual preserved-placeholder contract (§0-R5.8) — no other UX behavior changed.
+- this report — see §0-R5 for the full Round 5 changelog, the finding→correction→test→function traceability table, and the honest readiness assessment.
 
 Waiting for confirmation of this model before writing any real `migrations_v2` file or application code.

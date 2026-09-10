@@ -652,31 +652,49 @@ async function seed() {
   // #3: a real DAY-SCOPE metric event (scope_level='day', no segment) —
   // must be recognized as grain='day', never defaulted to 'session' just
   // because it has no segment.
+  // Round 5, §1 CORRECTION: a real day-level Metrics Core fact (sleep,
+  // recovery, resting HR, ...) is NEVER activity-backed — the earlier
+  // fixture here wrongly linked the day-scope event to a real
+  // training.activities row via activity_metric_event_links, which
+  // migrations_v2's OWN insert-time trigger (202609071200) would in fact
+  // reject for a genuinely day-scope event carrying a segment, and which
+  // in any case falsely implied Training Activity involvement a day-level
+  // metric structurally does not have. This fixture is now a genuinely
+  // STANDALONE day-level event: metric_event -> metric_event_participant
+  // -> occasion -> value, with NO training.activities row, NO
+  // activity_metric_event_links, NO activity_participant row at all.
   const dayScopeMetric = await makeDefinition({ key: "poc-day-scope", label: "Day Scope Metric", ownerScope: "club", ownerClubId: clubA.id, unit: "au" });
   await q(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'day')`, [dayScopeMetric.id]);
-  const dayEvent = await one(
-    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
-     values ('PoC Day Scope','2026-09-13','2026-09-13T12:00:00Z','day','club',$1,$2,$3) returning id`,
-    [clubA.id, connClubA.id, coachA.id],
-  );
-  const dayEventActivity = await one(
-    `insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
-     values ('training_session','PoC Day Scope Session','2026-09-13','2026-09-13T09:00:00Z','Europe/Belgrade','club',$1,'manual','confirmed',$2) returning id`,
-    [clubA.id, coachA.id],
-  );
-  const dayEventParticipantRow = await one(
-    `insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1,$2,'2026-09-13','Europe/Belgrade','participated') returning id`,
-    [dayEventActivity.id, ana.id],
-  );
-  const dayEventParticipant = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [dayEvent.id, ana.id]);
-  await q(`insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [dayEventActivity.id, dayEvent.id]);
-  await q(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [dayEventParticipantRow.id, dayEventParticipant.id]);
-  const dayOcc = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [dayEventParticipant.id]);
-  await q(
-    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
-     values ($1,$2,$3,777,'au','source_rollup','complete')`,
-    [dayOcc.id, dayScopeMetric.id, dayScopeMetric.versionId],
-  );
+  async function makeStandaloneDayFact(dateStr, value, ownerClubIdArg, athleteId = ana.id) {
+    // A real Metrics Core trigger requires the event's own owner_scope to
+    // match its source_connection's owner_scope — the connection must
+    // belong to the SAME club the event itself is recorded under.
+    const connForClub = ownerClubIdArg === clubB.id ? connClubB.id : connClubA.id;
+    const ev = await one(
+      `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
+       values ('PoC Day Scope','${dateStr}','${dateStr}T12:00:00Z','day','club',$1,$2,$3) returning id`,
+      [ownerClubIdArg, connForClub, coachA.id],
+    );
+    const evp = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [ev.id, athleteId]);
+    const occ = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [evp.id]);
+    await q(
+      `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage)
+       values ($1,$2,$3,$4,'au','source_rollup','complete')`,
+      [occ.id, dayScopeMetric.id, dayScopeMetric.versionId, value],
+    );
+    return ev.id;
+  }
+  // 2026-09-13 is a Sunday (week of 09-07..09-13); 2026-09-14/09-15 are
+  // Monday/Tuesday of the NEXT week (09-14..09-20) — real, verified
+  // weekdays, used deliberately so §12's tests can prove BOTH a real
+  // same-week merge (14+15) and a real cross-week separation (13 vs 14).
+  const dayEventClubA1 = await makeStandaloneDayFact("2026-09-13", 777, clubA.id);
+  const dayEventClubA2 = await makeStandaloneDayFact("2026-09-14", 333, clubA.id);
+  const dayEventClubA3 = await makeStandaloneDayFact("2026-09-15", 111, clubA.id);
+  // A Club B day-scope fact for the SAME athlete — real workspace
+  // isolation proof (Ana's day data is club-recorded, e.g. via a club's
+  // own wearable integration, so it genuinely differs per club).
+  const dayEventClubB = await makeStandaloneDayFact("2026-09-13", 555, clubB.id);
 
   // #12: two real historical VERSIONS with DIFFERENT daily_aggregation_
   // method (v1='sum', v2='max') — one fact under each, on the SAME real
@@ -747,7 +765,8 @@ async function seed() {
     sourcePolicyMetric: sourcePolicyMetric.id, activityConnA2: activityConnA2.id,
     hintOnlyDef: hintOnlyDef.id, hintOnlyKey: "poc-hint-component-only",
     activityAnaClubB: activityAnaClubB.id,
-    dayScopeMetric: dayScopeMetric.id, dayEventActivity: dayEventActivity.id,
+    dayScopeMetric: dayScopeMetric.id,
+    dayEventClubA1, dayEventClubA2, dayEventClubA3, dayEventClubB,
     methodConflictMetric: methodConflictMetric.id, methodConflictActV1, methodConflictActV2,
     typeConflictMetric: typeConflictMetric.id, typeConflictActV1, typeConflictActV2,
   };
@@ -2038,12 +2057,24 @@ test("§11.2 [req #2] two components of the SAME session remain TWO separate com
   assert.deepEqual(values, [1500, 3200]);
 });
 
-test("§11.3 [req #3] a DAY-SCOPE Metrics Core event is recognized as grain='day' — visible ONLY under data_scope_level='day', never defaulted to 'session' merely for lacking a segment", async () => {
-  const asDay = await queryMetricSeries({ metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.dayEventActivity], athleteIds: [ids.ana] });
-  const asSession = await queryMetricSeries({ metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.dayEventActivity], athleteIds: [ids.ana] });
+test("§11.3 [Round 5, §1 CORRECTION, req #3] a DAY-SCOPE Metrics Core fact is NEVER activity-backed — resolved entirely via the standalone metric_events path, with zero training.activities rows involved, and never reachable through a session-scope activity query", async () => {
+  const asDay = await queryMetricSeries({
+    metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any",
+    dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-13", dateTo: "2026-09-13",
+  });
   assert.equal(asDay.length, 1);
   assert.equal(Number(asDay[0].values[0].value), 777);
-  assert.equal(asSession.length, 0, "the SAME fact must NEVER also appear under data_scope_level='session' just because it has no segment");
+  // Sanity: genuinely zero training.activities rows exist for this fact —
+  // proving the standalone path never silently created one either.
+  const noActivity = await one(`select count(*)::int as n from training.activities where occurred_local_date='2026-09-13' and owner_club_id=$1 and name='PoC Day Scope Session'`, [ids.clubA]);
+  assert.equal(noActivity.n, 0);
+  // A session-scope query across every REAL Club A activity in this
+  // period must never surface the day-scope fact — it is structurally
+  // unreachable via canonical_activity_results() (no activity link
+  // exists to find it through), not merely filtered out by a scope check.
+  const clubAActivityIds = await fetchActivitiesInRange({ dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, dateFrom: "2026-01-01", dateTo: "2026-12-31" });
+  const asSession = await queryMetricSeries({ metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: clubAActivityIds, athleteIds: [ids.ana] });
+  assert.equal(asSession.length, 0, "the day-scope fact must never surface through the activity-based session path — it has no activity link to be found through");
 });
 
 test("§11.4 [req #4] group_by='week' buckets by the real Monday-Sunday ISO week — Ana's two same-week activities (2026-09-15 Tue, 2026-09-16 Wed) sum into ONE weekly bucket", async () => {
@@ -2479,6 +2510,487 @@ test("§11.30 [req #30] the canonical activity alias chain is never double-count
 });
 
 // ============================================================
+// §12 — Round 5, final blocker-correction pass over the existing PoC:
+// day-metric/Activity decoupling, canonical component identity, a real
+// sanctioned resolution-binding function, update_series source-pin
+// clearing, the active-selection/archive race, catalog lock ordering,
+// and clone-provenance concurrency.
+// ============================================================
+
+// --- §1: day metrics are NEVER activity-backed ---
+
+test("§12.1 [§1] a day-level metric fact is fully workspace-isolated per real club, exactly like every other Metrics Core fact — Club A never sees Club B's day data", async () => {
+  const inClubA = await queryMetricSeries({ metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-13", dateTo: "2026-09-13" });
+  const inClubB = await queryMetricSeries({ metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubB, athleteIds: [ids.ana], dateFrom: "2026-09-13", dateTo: "2026-09-13" });
+  assert.equal(Number(inClubA[0].values[0].value), 777);
+  assert.equal(Number(inClubB[0].values[0].value), 555);
+  assert.notEqual(inClubA[0].values[0].value, inClubB[0].values[0].value);
+});
+
+test("§12.2 [§1] 'athlete' workspace for a day-level series mirrors the REAL queryResults() self-view: it sees the athlete's OWN day data across every club that recorded it, never restricted to one club's own connection (and — correctly — TWO clubs recording the SAME real day still lands on one real target, a genuine conflict like any other two-source case)", async () => {
+  // A Club B day fact on a genuinely DIFFERENT real date (never colliding
+  // with dayEventClubA1's own 2026-09-13) — the honest way to prove
+  // "sees data recorded by every club" without conflating it with the
+  // ALSO-real, ALSO-correct "same real day, two clubs -> one real target,
+  // a genuine conflict" case (proven separately below).
+  const dayEventClubBOtherDate = await one(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
+     values ('PoC Day Scope 12.2','2026-09-16','2026-09-16T12:00:00Z','day','club',$1,$2,$3) returning id`,
+    [ids.clubB, ids.connClubB, ids.coachA],
+  );
+  const evp = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [dayEventClubBOtherDate.id, ids.ana]);
+  const occ = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method) values ($1,'manual') returning id`, [evp.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage) select $1, id, current_version_id, 222, 'au', 'source_rollup', 'complete' from training_load.metric_definitions where id=$2`, [occ.id, ids.dayScopeMetric]);
+
+  const selfView = await queryMetricSeries({
+    // Deliberately starting from 09-14, NOT 09-13 — dayEventClubA1
+    // (Club A, 09-13) and dayEventClubB (Club B, ALSO 09-13, from the
+    // global fixture) already collide on that exact date (a real,
+    // correctly-detected conflict — see §12.2b) and would otherwise make
+    // THIS test's own "each resolves cleanly" assertion fail for the
+    // wrong reason.
+    metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", dataWorkspaceType: "athlete", athleteWorkspaceAthleteId: ids.ana,
+    dateFrom: "2026-09-14", dateTo: "2026-09-16",
+  });
+  const anaRow = selfView.find((r) => r.athleteId === ids.ana);
+  // Club A's own 2026-09-15 (111, dayEventClubA3) resolves cleanly (no
+  // other club recorded THAT specific day); Club B's own 2026-09-16
+  // (222) resolves cleanly too — both reachable through the SAME
+  // athlete's own self-view, never restricted to one club's own
+  // connection.
+  const values = anaRow.values.map((v) => Number(v.value)).sort((a, b) => a - b);
+  assert.ok(values.includes(111), "Club A's own recording must be visible in the athlete's self-view");
+  assert.ok(values.includes(222), "Club B's own recording (a different real day) must ALSO be visible in the SAME athlete self-view");
+});
+
+test("§12.2b [§1] the SAME real day recorded by TWO different clubs is correctly a real conflict in the athlete's own self-view — never two silently-combined values", async () => {
+  // dayEventClubA1 and dayEventClubB are both real, genuine 2026-09-13
+  // recordings for Ana from DIFFERENT clubs — the athlete's own combined
+  // self-view must treat this exactly like any other two-source
+  // conflict (§11.6/§11.9), never silently show both as if unrelated.
+  const rows = await queryMetricSeries({
+    metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", dataWorkspaceType: "athlete", athleteWorkspaceAthleteId: ids.ana,
+    dateFrom: "2026-09-13", dateTo: "2026-09-13",
+  });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaRow.values.length, 0);
+  assert.equal(anaRow.targetConflicts.length, 1);
+  assert.deepEqual(anaRow.targetConflicts[0].candidates.map((c) => Number(c.value)).sort((a, b) => a - b), [555, 777]);
+});
+
+test("§12.3 [§1] real date/week aggregation for a standalone day-level series: two real different dates in the SAME ISO week merge (Stage 2), a date in the PREVIOUS week stays separate", async () => {
+  const { current: weekly } = await runSeriesPipeline(
+    { metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", groupBy: "week", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-13", dateTo: "2026-09-15" },
+  );
+  // 2026-09-13 (Sun) is the LAST day of one week; 2026-09-14 (Mon) and
+  // 2026-09-15 (Tue) are the first two days of the NEXT week — two real,
+  // verified, genuinely different week buckets.
+  assert.equal(weekly.length, 2, "the Sunday fact and the Monday+Tuesday facts must land in two DIFFERENT week buckets");
+  const byBucket = Object.fromEntries(weekly.map((w) => [w.bucketKey, Number(w.value)]));
+  const values = Object.values(byBucket).sort((a, b) => a - b);
+  assert.deepEqual(values, [444, 777], "the week containing 09-13 alone is 777; the week containing 09-14+09-15 sums to 333+111=444");
+});
+
+test("§12.4 [§1] an explicit activityId/componentId filter (a session/component-scope query) NEVER auto-claims an unrelated day-level fact — a day-scope series has no activity identity to be narrowed by in the first place", async () => {
+  // A real, unrelated Club A activity/component-scope query, explicitly
+  // scoped to ONE specific activity (as a coach viewing one session would
+  // do) — the day-scope metric must never appear here, structurally,
+  // regardless of how the activity filter is built.
+  const sessionScoped = await queryMetricSeries({
+    metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any",
+    activityIds: [ids.activity], athleteIds: [ids.ana],
+  });
+  assert.equal(sessionScoped.length, 0);
+  const componentScoped = await queryMetricSeries({
+    metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "component", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any",
+    activityIds: [ids.activity], athleteIds: [ids.ana],
+  });
+  assert.equal(componentScoped.length, 0);
+});
+
+// --- §2: component identity must be the CANONICAL training.activity_components.id ---
+
+test("§12.5 [§2] two DIFFERENT source segments confirmed-linked to the SAME canonical component resolve to ONE component target (never two)", async () => {
+  const eventId = (await one(`select event_id from training_load.metric_event_segments where id=$1`, [ids.segment])).event_id;
+  const metricId = await makeQuickMetric("Quick 12.5");
+  // A SECOND source segment (e.g. a different provider's own
+  // segmentation of the SAME real component) confirmed-linked to the
+  // SAME canonical training.activity_components row as ids.segment/
+  // ids.component already are.
+  const segmentB = await one(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'Alt-source segment',9) returning id`, [eventId]);
+  await q(`insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [ids.component, segmentB.id]);
+  const occA = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [ids.eventParticipant, ids.segment]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 42, 'bpm' from training_load.metric_definitions where id=$2`, [occA.id, metricId]);
+  const rows = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "component", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaRow.values.length, 1);
+  assert.equal(Number(anaRow.values[0].value), 42);
+  // The bucket/target identity is the CANONICAL component, not the raw
+  // source segment id — proven directly against the real table.
+  assert.equal(anaRow.values[0].grainKey, ids.component, "the target's own grainKey must be the real training.activity_components.id, never the raw metric_event_segment_id");
+});
+
+test("§12.6 [§2] two DIFFERENT source segments linked to the SAME canonical component, each with its OWN effective value, produce a real controlled conflict under all_with_conflicts", async () => {
+  const eventId = (await one(`select event_id from training_load.metric_event_segments where id=$1`, [ids.segment])).event_id;
+  const metricId = await makeQuickMetric("Quick 12.6");
+  const segmentB = await one(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'Alt-source segment 12.6',9) returning id`, [eventId]);
+  await q(`insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [ids.component, segmentB.id]);
+  const occA = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [ids.eventParticipant, ids.segment]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 10, 'bpm' from training_load.metric_definitions where id=$2`, [occA.id, metricId]);
+  const occB = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'api_import') returning id`, [ids.eventParticipant, segmentB.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 20, 'bpm' from training_load.metric_definitions where id=$2`, [occB.id, metricId]);
+  const rows = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "component", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", sourcePolicy: "all_with_conflicts", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaRow.values.length, 0, "never silently listed as 2 independent values");
+  assert.equal(anaRow.targetConflicts.length, 1, "ONE conflict, on the ONE real canonical component target — not two separate per-segment results");
+  assert.deepEqual(anaRow.targetConflicts[0].candidates.map((c) => Number(c.value)).sort((a, b) => a - b), [10, 20]);
+});
+
+test("§12.7 [§2] pinning ONE source connection resolves the two-segments-one-component conflict to that connection's own value", async () => {
+  const eventId = (await one(`select event_id from training_load.metric_event_segments where id=$1`, [ids.segment])).event_id;
+  const metricId = await makeQuickMetric("Quick 12.7");
+  // A second event (its own source_connection_id=connClubA2), whose
+  // segment is ALSO confirmed-linked to the SAME canonical component.
+  const eventB = await one(
+    `insert into training_load.metric_events (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_club_id, source_connection_id, created_by_user_id)
+     values ('PoC 12.7 Alt Source','2026-09-09','2026-09-09T09:00:00Z','session','club',$1,$2,$3) returning id`,
+    [ids.clubA, ids.connClubA2, ids.coachA],
+  );
+  const eventBParticipant = await one(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,'Europe/Belgrade') returning id`, [eventB.id, ids.ana]);
+  await q(`insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [ids.activity, eventB.id]);
+  const anaActivityParticipant = await one(`select id from training.activity_participants where activity_id=$1 and athlete_id=$2`, [ids.activity, ids.ana]);
+  await q(`insert into training.activity_participant_metric_participant_links (activity_participant_id, metric_event_participant_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [anaActivityParticipant.id, eventBParticipant.id]);
+  const segmentB = await one(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'Conn A2 segment',9) returning id`, [eventB.id]);
+  await q(`insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [ids.component, segmentB.id]);
+  const occA = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [ids.eventParticipant, ids.segment]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 10, 'bpm' from training_load.metric_definitions where id=$2`, [occA.id, metricId]);
+  const occB = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [eventBParticipant.id, segmentB.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 20, 'bpm' from training_load.metric_definitions where id=$2`, [occB.id, metricId]);
+  const viaConnA2 = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "component", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", sourcePolicy: "source_connection", sourceConnectionId: ids.connClubA2, activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const anaRow = viaConnA2.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaRow.values.length, 1);
+  assert.equal(Number(anaRow.values[0].value), 20, "pinning connClubA2 must resolve to exactly that connection's own reading for the SAME canonical component");
+});
+
+test("§12.8 [§2] segments confirmed-linked to TWO DIFFERENT canonical components remain two genuinely different buckets — the base case, re-confirmed under the new canonical-identity logic", async () => {
+  // A fresh, never-shared metric — ids.distanceClubA already accumulates
+  // component-scope facts (on ids.component and others) from several
+  // EARLIER tests in this same sequential, shared-fixture suite (§11.2
+  // among them); reusing it here would count facts this test never
+  // created. Same isolation reasoning makeQuickMetric already exists for.
+  const metricId = await makeQuickMetric("Quick 12.8");
+  const eventId = (await one(`select event_id from training_load.metric_event_segments where id=$1`, [ids.segment])).event_id;
+  const segment1 = await one(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'12.8 First segment',8) returning id`, [eventId]);
+  const component1 = await one(`insert into training.activity_components (activity_id, component_type_key, name_snapshot, origin, sort_order) values ($1,'block','12.8 First Block','manual',8) returning id`, [ids.activity]);
+  await q(`insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [component1.id, segment1.id]);
+  const occ1 = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [ids.eventParticipant, segment1.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 400, 'bpm' from training_load.metric_definitions where id=$2`, [occ1.id, metricId]);
+
+  const segment2 = await one(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'12.8 Second segment',9) returning id`, [eventId]);
+  const component2 = await one(`insert into training.activity_components (activity_id, component_type_key, name_snapshot, origin, sort_order) values ($1,'block','12.8 Second Block','manual',9) returning id`, [ids.activity]);
+  await q(`insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [component2.id, segment2.id]);
+  const occ2 = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [ids.eventParticipant, segment2.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 900, 'bpm' from training_load.metric_definitions where id=$2`, [occ2.id, metricId]);
+
+  const rows = await queryMetricSeries({ metricDefinitionId: metricId, dataScopeLevel: "component", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any", activityIds: [ids.activity], athleteIds: [ids.ana] });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  const grainKeys = new Set(anaRow.values.map((v) => v.grainKey));
+  assert.ok(grainKeys.has(component1.id) && grainKeys.has(component2.id));
+  assert.equal(grainKeys.size, 2);
+});
+
+// --- §3: a real sanctioned resolution/binding function ---
+
+test("§12.9 [§3] resolve_series_binding() resolves an unresolved series to a currently-visible metric, atomically clearing candidates and bumping revision", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widget.id, { templateHints: JSON.stringify([{ key: "distance_total_m" }]), resolutionStatus: "unresolved" });
+  const widgetRevision = (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision;
+  const result = await one(`select * from training_load.resolve_series_binding($1,$2,$3,$4)`, [series.id, widget.id, widgetRevision, ids.distanceClubA]);
+  const after = await one(`select resolution_status, metric_definition_id, template_resolution_candidates from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  assert.equal(after.resolution_status, "resolved");
+  assert.equal(after.metric_definition_id, ids.distanceClubA);
+  assert.equal(after.template_resolution_candidates, null);
+  assert.ok(result.widget_revision > 1, "the widget's own revision must have bumped");
+});
+
+test("§12.10 [§3] resolve_series_binding() re-validates visibility LIVE — a candidate that was visible when the ambiguous state was recorded, but is no longer visible by pick time, is rejected, never trusted from the stale stored JSON", async () => {
+  // A dashboard bound to Club B's workspace, holding an ambiguous series
+  // whose STORED candidates include Club A's own metric (as if a clone
+  // happened while some visibility rule briefly differed, or a
+  // workspace re-check simply was never re-run before this pick) — the
+  // function must not trust that stale snapshot; it must re-check the
+  // CURRENT dashboard's real data workspace.
+  const dashB = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubB, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubB, createdBy: ids.coachB });
+  const widgetB = await makeWidget(dashB.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widgetB.id, {
+    templateHints: JSON.stringify([{ key: "poc-distance" }]),
+    resolutionStatus: "ambiguous",
+    templateResolutionCandidates: JSON.stringify([ids.distanceClubA, ids.distanceClubB]),
+  });
+  await assert.rejects(
+    q(`select * from training_load.resolve_series_binding($1,$2,$3,$4)`, [series.id, widgetB.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widgetB.id])).revision, ids.distanceClubA]),
+    /not visible to this dashboard's data workspace/,
+    "Club A's metric must be rejected on a Club-B-bound dashboard even though it was listed as a stored candidate",
+  );
+  // The SAME dashboard's own real candidate (Club B's own metric) is correctly accepted.
+  const ok = await one(`select * from training_load.resolve_series_binding($1,$2,$3,$4)`, [series.id, widgetB.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widgetB.id])).revision, ids.distanceClubB]);
+  const after = await one(`select resolution_status, metric_definition_id from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  assert.equal(after.resolution_status, "resolved");
+  assert.equal(after.metric_definition_id, ids.distanceClubB);
+});
+
+test("§12.11 [§3] resolve_series_binding() rejects a stale widget revision, exactly like every other sanctioned series function", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widget.id, { templateHints: JSON.stringify([{ key: "distance_total_m" }]), resolutionStatus: "unresolved" });
+  await assert.rejects(
+    q(`select * from training_load.resolve_series_binding($1,$2,$3,$4)`, [series.id, widget.id, 999, ids.distanceClubA]),
+    /stale widget revision/,
+  );
+});
+
+test("§12.12 [§3] template_resolution_candidates shape is validated for real: a bare scalar, a single-candidate 'ambiguous' list, and a duplicate id are all rejected", async () => {
+  const dash = await makeDashboard({ ownerScope: "system", isTemplate: true, createdBy: ids.platformAdmin });
+  const widget = await makeWidget(dash.id);
+  await assert.rejects(
+    addSeries(widget.id, { templateHints: JSON.stringify([{ key: "distance_total_m" }]), resolutionStatus: "ambiguous", templateResolutionCandidates: JSON.stringify("not-an-array") }),
+    /must be a JSON array of UUID strings/,
+  );
+  await assert.rejects(
+    addSeries(widget.id, { templateHints: JSON.stringify([{ key: "distance_total_m" }]), resolutionStatus: "ambiguous", templateResolutionCandidates: JSON.stringify([ids.distanceClubA]) }),
+    /at least 2 DISTINCT candidates/,
+  );
+  await assert.rejects(
+    addSeries(widget.id, { templateHints: JSON.stringify([{ key: "distance_total_m" }]), resolutionStatus: "ambiguous", templateResolutionCandidates: JSON.stringify([ids.distanceClubA, ids.distanceClubA]) }),
+    /duplicate id/,
+  );
+  const ok = await addSeries(widget.id, { templateHints: JSON.stringify([{ key: "distance_total_m" }]), resolutionStatus: "ambiguous", templateResolutionCandidates: JSON.stringify([ids.distanceClubA, ids.distanceClubB]) });
+  assert.equal(ok.resolution_status, "ambiguous");
+});
+
+// --- §4: update_series() must be able to CLEAR a source_connection pin ---
+
+test("§12.13 [§4] update_series() moves source_connection -> all_with_conflicts and genuinely clears the pinned connection, no raw SQL needed", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widget.id, { metricDefinitionId: ids.distanceClubA, sourcePolicy: "source_connection", sourceConnectionId: ids.connClubA });
+  assert.equal(series.source_connection_id, ids.connClubA);
+  const result = await one(
+    `select * from training_load.update_series($1,$2,$3,null,null,null,'all_with_conflicts')`,
+    [series.id, widget.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision],
+  );
+  const after = await one(`select source_policy, source_connection_id from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  assert.equal(after.source_policy, "all_with_conflicts");
+  assert.equal(after.source_connection_id, null, "the pinned connection must be genuinely cleared, or the row would violate its own CHECK constraint");
+});
+
+test("§12.14 [§4] update_series() moves all_with_conflicts -> source_connection and sets the new pin correctly", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widget.id, { metricDefinitionId: ids.distanceClubA });
+  assert.equal(series.source_connection_id, null);
+  await one(
+    `select * from training_load.update_series($1,$2,$3,null,null,null,'source_connection',$4)`,
+    [series.id, widget.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision, ids.connClubA],
+  );
+  const after = await one(`select source_policy, source_connection_id from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  assert.equal(after.source_policy, "source_connection");
+  assert.equal(after.source_connection_id, ids.connClubA);
+});
+
+// --- §5: active-selection vs archive race ---
+
+test("§12.15 [§5] selection-first: a concurrent archive genuinely queues behind an in-flight selection insert, then removes it the instant it commits — never leaving a selection pointing at an archived dashboard", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const rev = (await one(`select revision from training_load.dashboards where id=$1`, [dash.id])).revision;
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(
+      `insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'club',$2,$3)
+       on conflict (user_id, workspace_type, scope_id) do update set dashboard_id = excluded.dashboard_id`,
+      [ids.coachB, ids.clubA, dash.id],
+    );
+    const bPromise = b.client.query(`select * from training_load.archive_dashboard($1,$2)`, [dash.id, rev]);
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "archive genuinely queued behind the in-flight selection's own dashboard lock");
+    await a.client.query("commit");
+    await bPromise;
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const remaining = await one(`select count(*)::int as n from training_load.dashboard_active_selection where dashboard_id=$1`, [dash.id]);
+  assert.equal(remaining.n, 0, "the selection that committed FIRST must still be atomically removed once the archive that was queued behind it proceeds");
+});
+
+test("§12.16 [§5] archive-first: a concurrent selection genuinely queues behind an in-flight archive, then correctly sees the archived state and is rejected", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const rev = (await one(`select revision from training_load.dashboards where id=$1`, [dash.id])).revision;
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(`select * from training_load.archive_dashboard($1,$2)`, [dash.id, rev]);
+    const bPromise = b.client.query(
+      `insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1,'club',$2,$3)
+       on conflict (user_id, workspace_type, scope_id) do update set dashboard_id = excluded.dashboard_id`,
+      [ids.coachB, ids.clubA, dash.id],
+    ).catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "the selection insert genuinely queued behind the in-flight archive's own dashboard lock");
+    await a.client.query("commit");
+    const bResult = await bPromise;
+    assert.ok(bResult.error, "the selection must be rejected once it can finally see the now-archived status");
+    assert.match(bResult.error.message, /is not active/);
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const remaining = await one(`select count(*)::int as n from training_load.dashboard_active_selection where dashboard_id=$1`, [dash.id]);
+  assert.equal(remaining.n, 0, "final state: never a selection pointing at this archived dashboard");
+});
+
+// --- §6: catalog lock ordering — one clear, first lock phase ---
+
+test("§12.17 [§6] axis-unit validation's own first-reference lock on a built-in now genuinely blocks a concurrent semantic change to it, giving a consistent final outcome", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "line_chart", width: 6, height: 4 }); // has_shared_axis=true — the exact path that reads a built-in's own unit
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(`insert into training_load.dashboard_widget_series (widget_id, series_order, built_in_series_key, source_policy, data_scope_level, analytical_aggregation) values ($1,1,'duration_minutes','not_applicable','session','sum')`, [widget.id]);
+    const bPromise = b.client.query(`update training_load.dashboard_builtin_series set unit='hours' where key='duration_minutes'`).catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "B genuinely queued behind A's FOR SHARE lock on the built-in catalog row, taken by axis-unit validation itself — not merely by a DIFFERENT trigger that happened to fire first");
+    await a.client.query("commit");
+    const bResult = await bPromise;
+    assert.ok(bResult.error, "B must now correctly see the built-in as 'in use' and be rejected");
+    assert.match(bResult.error.message, /already referenced by a widget/);
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const restore = await one(`select unit from training_load.dashboard_builtin_series where key='duration_minutes'`);
+  assert.equal(restore.unit, "min", "B's rejected change must have left the real value completely untouched");
+});
+
+test("§12.18 [§6] scope-capability validation's own first-reference lock on the parent metric_definition genuinely serializes against a (simulated, equally-disciplined) concurrent capability removal", async () => {
+  // This models the REAL discipline any future Metrics Core capability-
+  // management code must itself follow for this race to be closed
+  // end-to-end (schema.sql's own comment states this explicitly: this
+  // PoC only owns the dashboard-side half) — the "removal" transaction
+  // below deliberately takes the SAME FOR UPDATE lock on the parent
+  // metric_definitions row FIRST, exactly mirroring what
+  // dashboard_widget_series_validate_scope_capability's own FOR SHARE
+  // does on the add_series side.
+  // makeQuickMetric already configures real session+component scope
+  // capability rows — reused directly, never re-inserted.
+  const metricId = await makeQuickMetric("Quick 12.18");
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query("select 1 from training_load.metric_definitions where id=$1 for update", [metricId]);
+    const bPromise = b.client.query(
+      `insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, data_scope_level) values ($1,1,$2,'component')`,
+      [widget.id, metricId],
+    );
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "the add_series attempt genuinely queued behind the (disciplined) capability-removal transaction's own lock on the parent metric_definitions row");
+    await a.client.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id=$1 and scope_level='component'`, [metricId]);
+    await a.client.query("commit");
+    await assert.rejects(bPromise, /has never been configured for scope_level=component/, "B must see the REAL, final state (capability removed), never a stale mid-flight read");
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+});
+
+// --- §8: clone-provenance concurrency (snapshot semantics) ---
+
+test("§12.19 [§8] template-flip-first: a source dashboard's is_template flip that commits BEFORE a concurrent clone's own lock is acquired correctly rejects that clone", async () => {
+  const template = await makeDashboard({ ownerScope: "system", isTemplate: true, createdBy: ids.platformAdmin });
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query("select 1 from training_load.dashboards where id=$1 for update", [template.id]);
+    const bPromise = b.client.query(
+      `insert into training_load.dashboards (name, owner_scope, owner_club_id, data_workspace_type, data_workspace_scope_id, created_by_user_id, cloned_from_dashboard_id)
+       values ('12.19 clone attempt','club',$1,'club',$1,$2,$3)`,
+      [ids.clubA, ids.coachA, template.id],
+    ).catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "the clone insert genuinely queued behind the flip transaction's own lock on the source dashboard");
+    // NOTE: system dashboards are always is_template=true by CHECK, so we
+    // model "the flip" on a non-system dashboard instead, for a real,
+    // legal is_template=true -> false transition to race against.
+    await a.client.query("rollback");
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  // Re-run the real scenario against a legally-flippable club template.
+  const clubTemplate = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA, isTemplate: true });
+  const c = await newClient();
+  const d = await newClient();
+  try {
+    await c.client.query("begin");
+    await c.client.query("select 1 from training_load.dashboards where id=$1 for update", [clubTemplate.id]);
+    const dPromise = d.client.query(
+      `insert into training_load.dashboards (name, owner_scope, owner_club_id, data_workspace_type, data_workspace_scope_id, created_by_user_id, cloned_from_dashboard_id)
+       values ('12.19 real clone attempt','club',$1,'club',$1,$2,$3)`,
+      [ids.clubA, ids.coachA, clubTemplate.id],
+    ).catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(d.pid);
+    assert.ok(blocked, "the real clone attempt genuinely queued behind the flip's own lock");
+    await c.client.query(`update training_load.dashboards set is_template=false where id=$1`, [clubTemplate.id]);
+    await c.client.query("commit");
+    const dResult = await dPromise;
+    assert.ok(dResult.error, "a clone attempt whose source flipped to is_template=false BEFORE the clone's own lock was acquired must be rejected");
+    assert.match(dResult.error.message, /is not a template/);
+  } finally {
+    await c.client.end();
+    await d.client.end();
+  }
+});
+
+test("§12.20 [§8] clone-first: a clone whose own lock+read commits BEFORE a later template-flip is completely unaffected by that later flip — snapshot semantics, proven concurrently", async () => {
+  const clubTemplate = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA, isTemplate: true });
+  const a = await newClient();
+  const b = await newClient();
+  let cloneId;
+  try {
+    await a.client.query("begin");
+    const cloneResult = await a.client.query(
+      `insert into training_load.dashboards (name, owner_scope, owner_club_id, data_workspace_type, data_workspace_scope_id, created_by_user_id, cloned_from_dashboard_id)
+       values ('12.20 clone','club',$1,'club',$1,$2,$3) returning id`,
+      [ids.clubA, ids.coachA, clubTemplate.id],
+    );
+    cloneId = cloneResult.rows[0].id;
+    const bPromise = b.client.query(`update training_load.dashboards set is_template=false where id=$1`, [clubTemplate.id]);
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "the LATER flip genuinely queues behind the clone's own already-held lock on the source dashboard");
+    await a.client.query("commit");
+    await bPromise; // the flip succeeds once the clone's own transaction (which already committed its lineage) releases the lock
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const clone = await one(`select cloned_from_dashboard_id from training_load.dashboards where id=$1`, [cloneId]);
+  assert.equal(clone.cloned_from_dashboard_id, clubTemplate.id, "the clone's own recorded lineage must be completely unaffected by the source's LATER flip — a historical, immutable snapshot fact");
+  const source = await one(`select is_template from training_load.dashboards where id=$1`, [clubTemplate.id]);
+  assert.equal(source.is_template, false, "the source itself really did flip — the clone's provenance simply does not depend on it staying a template forever");
+});
+
+// ============================================================
 // The PoC query adapter itself — a real, working layer over the REAL
 // training.canonical_activity_results() (never metric_values/session_
 // feedback queried directly and independently re-joined).
@@ -2672,12 +3184,14 @@ async function queryBuiltInSeries({ key, activityIds, athleteIds }) {
   return [...byAthlete.values()];
 }
 
-// Round 4, §2/§3: the REAL 9-step pipeline's steps 1-4, rebuilt around
-// genuine measurement-TARGET identity and per-version typed facts.
-async function queryMetricSeries({
-  metricDefinitionId, dataScopeLevel, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId,
-  activityIds, athleteIds, dateFrom, dateTo, dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId,
-}) {
+// Round 5, §2/§3: shared by BOTH the activity-backed path and the
+// standalone day-level path below — role/coverage/source_policy
+// filtering, THEN the real measurement-TARGET conflict/no-double-count
+// state machine (Round 4, §2). Extracted so the two genuinely different
+// fact-SOURCING paths (one via canonical_activity_results(), one via a
+// direct Metrics Core read) never duplicate this logic, which must stay
+// identical for both.
+function resolveFactsToRows(facts, { dataScopeLevel, athleteIds, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId }) {
   const roleSets = {
     standalone_only: ["standalone"],
     standalone_and_source_rollup: ["standalone", "source_rollup"],
@@ -2687,65 +3201,16 @@ async function queryMetricSeries({
   const coverageSets = { complete_only: ["complete", "not_applicable"], complete_and_partial: ["complete", "partial", "not_applicable"], any: ["complete", "partial", "unknown", "not_applicable"] };
   const allowedCoverage = coverageSets[coveragePolicy || "complete_and_partial"];
   const effectiveSourcePolicy = sourcePolicy || "all_with_conflicts";
-  if (effectiveSourcePolicy === "not_applicable") {
-    throw new Error("queryMetricSeries: source_policy 'not_applicable' is only meaningful for a built-in series (queryBuiltInSeries) — never a Metrics-Core-backed one");
-  }
-  if (effectiveSourcePolicy === "source_connection" && !sourceConnectionId) {
-    throw new Error("queryMetricSeries: source_policy 'source_connection' requires sourceConnectionId");
-  }
-  const defExists = await pool.query(`select 1 from training_load.metric_definitions where id=$1`, [metricDefinitionId]);
-  if (defExists.rowCount === 0) {
-    throw new Error(`queryMetricSeries: metric_definition ${metricDefinitionId} does not exist`);
-  }
 
-  let resolvedActivityIds = activityIds;
-  if (!resolvedActivityIds) resolvedActivityIds = await fetchActivitiesInRange({ dataWorkspaceType: dataWorkspaceType || "platform", dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds });
-
-  // Step 1/2 — gather every raw metric_value fact for this metric across
-  // the (already workspace-authorized) activity set.
-  const rawFacts = [];
-  for (const activityId of resolvedActivityIds) {
-    const facts = (await fetchCanonicalFacts(activityId)).filter((f) => f.fact_kind === "metric_value" && f.detail.metricDefinitionId === metricDefinitionId);
-    for (const f of facts) rawFacts.push({ activityId, f });
-  }
-  if (!rawFacts.length) return [];
-
-  const activityDT = await fetchActivityDateTimes(resolvedActivityIds);
-  const occContext = await fetchOccasionContext(rawFacts.map((r) => r.f.detail.occasionId));
-  const versionInfo = await fetchVersionInfo(rawFacts.map((r) => r.f.detail.metricDefinitionVersionId));
-
-  // Step 3 (part 1) — real grain identity. A day-level event is
-  // recognized via its OWN event.scope_level, never merely "no segment
-  // present" — this is the literal fix for the task's own example.
-  const facts = rawFacts.map(({ activityId, f }) => {
-    const occ = occContext[f.detail.occasionId] || {};
-    const dt = activityDT[activityId] || {};
-    const ver = versionInfo[f.detail.metricDefinitionVersionId] || {};
-    const grain = occ.eventScopeLevel === "day" ? "day" : (f.detail.segmentId != null ? "component" : "session");
-    return {
-      athleteId: f.athlete_id, canonicalActivityId: f.canonical_activity_id, canonicalParticipantId: f.canonical_participant_id,
-      activityId, componentKey: f.detail.segmentId ?? null,
-      grain, grainKey: grain === "component" ? f.detail.segmentId : grain === "day" ? dt.localDate : activityId,
-      date: dt.localDate, startedAt: dt.startedAt ?? occ.eventInstant ?? null,
-      occasionId: f.detail.occasionId, versionId: f.detail.metricDefinitionVersionId,
-      dailyAggregationMethod: ver.dailyAggregationMethod ?? null, valueType: ver.valueType ?? "numeric",
-      unit: f.detail.unitAtCapture,
-      aggregationRole: f.detail.aggregationRole, coverage: f.detail.coverage,
-      entryMethod: f.detail.entryMethod, isDerived: f.detail.isDerived,
-      sourceConnectionId: occ.sourceConnectionId ?? null,
-      value: f.detail.valueNumeric ?? f.detail.valueText ?? f.detail.valueBoolean,
-    };
-  });
-
-  // Step 3 (part 2) — scope selection = double-count prevention: only
-  // facts whose REAL grain matches this series' own declared scope.
+  // Scope selection = double-count prevention: only facts whose REAL
+  // grain matches this series' own declared scope.
   let candidates = facts.filter((f) => f.grain === dataScopeLevel);
   if (athleteIds) candidates = candidates.filter((f) => athleteIds.includes(f.athleteId));
   candidates = candidates.filter((f) => allowedRoles.includes(f.aggregationRole) && allowedCoverage.includes(f.coverage));
   if (effectiveSourcePolicy === "derived") candidates = candidates.filter((f) => f.isDerived);
   else if (effectiveSourcePolicy === "source_connection") candidates = candidates.filter((f) => f.sourceConnectionId === sourceConnectionId);
   else if (["manual", "api_import", "csv_import"].includes(effectiveSourcePolicy)) candidates = candidates.filter((f) => f.entryMethod === effectiveSourcePolicy);
-  else if (effectiveSourcePolicy !== "all_with_conflicts") throw new Error(`queryMetricSeries: unknown source_policy ${effectiveSourcePolicy}`);
+  else if (effectiveSourcePolicy !== "all_with_conflicts") throw new Error(`resolveFactsToRows: unknown source_policy ${effectiveSourcePolicy}`);
 
   // Round 4, §2 — the real no-double-count / conflict state machine: a
   // MEASUREMENT TARGET = canonical participant + this metric (implicit,
@@ -2798,6 +3263,186 @@ async function queryMetricSeries({
     row.conflict = row.targetConflicts.length > 0;
   }
   return [...byAthlete.values()];
+}
+
+// Round 5, §1: a REAL day-level Metrics Core fact (sleep, recovery,
+// resting HR, ...) is NEVER activity-backed — migrations_v2's own
+// 202609071200 migration enforces at INSERT time that a scope_level='day'
+// metric_event can never carry a segment_id, and the already-deployed
+// `backend/src/trainingLoadMetricsMeasurements.js`'s own `queryResults()`
+// (the REAL Metrics Core Results endpoint, `GET /api/training-load-
+// metrics/results`) reads metric_events -> metric_event_participants ->
+// effective occasions -> values DIRECTLY, with `training.activity_*_
+// links` only ever an OPTIONAL enrichment LEFT JOIN, never required. This
+// function mirrors that REAL, already-shipped contract exactly — never
+// inventing new semantics — including its own real workspace-filter
+// pattern (`trainingLoadMetricsAccess.js`'s `metricEventScopeSqlForWorkspace`):
+// the filter is DIRECTLY on metric_events.owner_scope/owner_*, never via
+// participant -> athlete -> membership; and for a self-viewing 'athlete'
+// workspace, the REAL queryResults() skips the owner-scope filter
+// entirely and constrains by participant only — mirrored here identically.
+async function fetchDayLevelMetricFacts({ metricDefinitionId, dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }) {
+  if (!RECOGNIZED_DATA_WORKSPACE_TYPES.includes(dataWorkspaceType)) {
+    throw new Error(`fetchDayLevelMetricFacts: dataWorkspaceType must be one of ${RECOGNIZED_DATA_WORKSPACE_TYPES.join("/")} (got ${dataWorkspaceType}) — an unrestricted query must explicitly pass 'platform'`);
+  }
+  const params = [metricDefinitionId, dateFrom, dateTo];
+  let scopeSql = "true";
+  let athleteSql = "true";
+  if (dataWorkspaceType === "athlete") {
+    if (!athleteWorkspaceAthleteId) throw new Error("fetchDayLevelMetricFacts: dataWorkspaceType='athlete' requires athleteWorkspaceAthleteId");
+    params.push(athleteWorkspaceAthleteId);
+    athleteSql = `p.athlete_id = $${params.length}`;
+  } else if (dataWorkspaceType === "club") {
+    params.push(dataWorkspaceScopeId);
+    scopeSql = `ev.owner_scope='club' and ev.owner_club_id=$${params.length}`;
+  } else if (dataWorkspaceType === "team") {
+    params.push(dataWorkspaceScopeId);
+    scopeSql = `ev.owner_scope='team' and ev.owner_team_id=$${params.length}`;
+  } else if (dataWorkspaceType === "private_coach") {
+    if (!dataWorkspaceUserId) throw new Error("fetchDayLevelMetricFacts: dataWorkspaceType='private_coach' requires dataWorkspaceUserId");
+    params.push(dataWorkspaceUserId);
+    scopeSql = `ev.owner_scope='user' and ev.owner_user_id=$${params.length}`;
+  } // 'platform' stays scopeSql='true' — an explicit, documented opt-in, same convention as fetchActivitiesInRange.
+
+  const r = await pool.query(
+    `select p.athlete_id, ev.occurred_date::text as local_date, ev.occurred_instant as event_instant,
+            ev.source_connection_id, o.id as occasion_id, o.entry_method,
+            v.metric_definition_version_id, v.value_numeric, v.value_boolean, v.value_text, v.unit_at_capture,
+            v.aggregation_role, v.coverage, v.is_derived
+     from training_load.metric_events ev
+     join training_load.metric_event_participants p on p.event_id = ev.id
+     join training_load.metric_measurement_occasions o on o.event_participant_id = p.id
+     join training_load.metric_values v on v.occasion_id = o.id
+     where ev.scope_level = 'day'
+       and v.metric_definition_id = $1
+       and ev.occurred_date between $2 and $3
+       and (${scopeSql})
+       and (${athleteSql})
+       and o.superseded_by_occasion_id is null
+       and o.import_conflict_status is null
+       and (o.source_identity_id is null or exists (
+         select 1 from training_load.metric_source_identities si where si.id = o.source_identity_id and si.current_occasion_id = o.id
+       ))`,
+    params,
+  );
+  const versionInfo = await fetchVersionInfo(r.rows.map((row) => row.metric_definition_version_id));
+  return r.rows.map((row) => {
+    const ver = versionInfo[row.metric_definition_version_id] || {};
+    return {
+      athleteId: row.athlete_id, canonicalActivityId: null, canonicalParticipantId: null,
+      activityId: null, componentKey: null,
+      // A day-level fact's grain is ALWAYS 'day' — no derivation needed,
+      // it is structurally the only grain this query can ever return.
+      grain: "day", grainKey: row.local_date,
+      date: row.local_date, startedAt: row.event_instant ? row.event_instant.toISOString() : null,
+      occasionId: row.occasion_id, versionId: row.metric_definition_version_id,
+      dailyAggregationMethod: ver.dailyAggregationMethod ?? null, valueType: ver.valueType ?? "numeric",
+      unit: row.unit_at_capture,
+      aggregationRole: row.aggregation_role, coverage: row.coverage,
+      entryMethod: row.entry_method, isDerived: row.is_derived,
+      sourceConnectionId: row.source_connection_id ?? null,
+      value: row.value_numeric ?? row.value_text ?? row.value_boolean,
+    };
+  });
+}
+
+// Round 4, §2/§3 / Round 5, §1: the REAL 9-step pipeline's steps 1-4.
+async function queryMetricSeries({
+  metricDefinitionId, dataScopeLevel, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId,
+  activityIds, athleteIds, dateFrom, dateTo, dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId,
+}) {
+  const effectiveSourcePolicy = sourcePolicy || "all_with_conflicts";
+  if (effectiveSourcePolicy === "not_applicable") {
+    throw new Error("queryMetricSeries: source_policy 'not_applicable' is only meaningful for a built-in series (queryBuiltInSeries) — never a Metrics-Core-backed one");
+  }
+  if (effectiveSourcePolicy === "source_connection" && !sourceConnectionId) {
+    throw new Error("queryMetricSeries: source_policy 'source_connection' requires sourceConnectionId");
+  }
+  const defExists = await pool.query(`select 1 from training_load.metric_definitions where id=$1`, [metricDefinitionId]);
+  if (defExists.rowCount === 0) {
+    throw new Error(`queryMetricSeries: metric_definition ${metricDefinitionId} does not exist`);
+  }
+
+  // Round 5, §1: data_scope_level='day' is NEVER activity-backed — routed
+  // entirely through the standalone Metrics Core path. A caller-supplied
+  // `activityIds` is NEVER consulted for a day-scope series (it has no
+  // activity identity to filter by at all) — this is the literal fix for
+  // "eksplicitni activityId/componentId filter ne sme automatski
+  // prisvojiti day činjenicu toj sesiji/komponenti": an activity/component
+  // filter only ever narrows a session/component-scope query, and simply
+  // has nothing to say about a day-scope one.
+  if (dataScopeLevel === "day") {
+    if (!dateFrom || !dateTo) {
+      throw new Error("queryMetricSeries: a data_scope_level='day' series requires dateFrom/dateTo — it is never resolved via activityIds");
+    }
+    const dayFacts = await fetchDayLevelMetricFacts({
+      metricDefinitionId, dataWorkspaceType: dataWorkspaceType || "platform", dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo,
+    });
+    return resolveFactsToRows(dayFacts, { dataScopeLevel, athleteIds, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId });
+  }
+
+  let resolvedActivityIds = activityIds;
+  if (!resolvedActivityIds) resolvedActivityIds = await fetchActivitiesInRange({ dataWorkspaceType: dataWorkspaceType || "platform", dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds });
+
+  // Step 1/2 — gather every raw metric_value fact for this metric across
+  // the (already workspace-authorized) activity set. Round 5, §2: the
+  // SAME canonical_activity_results() call per activity ALREADY returns
+  // 'component_metric_segment_link' facts (detail: {componentId,
+  // metricEventSegmentId, linkStatus} — link_status='confirmed' only,
+  // per that function's own real, unmodified SQL) — reused here directly
+  // to build a real metricEventSegmentId -> activity_component_id map,
+  // never a second DB round trip and never a re-derivation of that
+  // function's own link-resolution logic.
+  const rawFacts = [];
+  const segmentToComponentId = new Map();
+  for (const activityId of resolvedActivityIds) {
+    const allFacts = await fetchCanonicalFacts(activityId);
+    for (const f of allFacts) {
+      if (f.fact_kind === "metric_value" && f.detail.metricDefinitionId === metricDefinitionId) rawFacts.push({ activityId, f });
+      else if (f.fact_kind === "component_metric_segment_link") segmentToComponentId.set(f.detail.metricEventSegmentId, f.detail.componentId);
+    }
+  }
+  if (!rawFacts.length) return [];
+
+  const activityDT = await fetchActivityDateTimes(resolvedActivityIds);
+  const occContext = await fetchOccasionContext(rawFacts.map((r) => r.f.detail.occasionId));
+  const versionInfo = await fetchVersionInfo(rawFacts.map((r) => r.f.detail.metricDefinitionVersionId));
+
+  // Step 3 (part 1) — real grain + component identity.
+  const facts = rawFacts.map(({ activityId, f }) => {
+    const occ = occContext[f.detail.occasionId] || {};
+    const dt = activityDT[activityId] || {};
+    const ver = versionInfo[f.detail.metricDefinitionVersionId] || {};
+    // Round 5, §1: session/component grain is derived here as before
+    // (event scope_level='day' can never even reach this branch — see
+    // the dedicated day-level path above — so this is only ever
+    // 'component' or 'session').
+    const grain = f.detail.segmentId != null ? "component" : "session";
+    // Round 5, §2: the public bucket/target identity for a component is
+    // the CANONICAL training.activity_components.id — never the raw
+    // source metric_event_segment_id, which is only one PROVIDER's own
+    // segmentation and can differ per source for the exact same real
+    // component. If a segment has no CONFIRMED component link at all
+    // (canonicalComponentId stays null/undefined), the fact is later
+    // filtered out entirely (see the .filter below) — it cannot be
+    // safely bucketed as "this real component" without one.
+    const canonicalComponentId = grain === "component" ? (segmentToComponentId.get(f.detail.segmentId) ?? null) : null;
+    return {
+      athleteId: f.athlete_id, canonicalActivityId: f.canonical_activity_id, canonicalParticipantId: f.canonical_participant_id,
+      activityId, componentKey: f.detail.segmentId ?? null, canonicalComponentId,
+      grain, grainKey: grain === "component" ? canonicalComponentId : activityId,
+      date: dt.localDate, startedAt: dt.startedAt ?? occ.eventInstant ?? null,
+      occasionId: f.detail.occasionId, versionId: f.detail.metricDefinitionVersionId,
+      dailyAggregationMethod: ver.dailyAggregationMethod ?? null, valueType: ver.valueType ?? "numeric",
+      unit: f.detail.unitAtCapture,
+      aggregationRole: f.detail.aggregationRole, coverage: f.detail.coverage,
+      entryMethod: f.detail.entryMethod, isDerived: f.detail.isDerived,
+      sourceConnectionId: occ.sourceConnectionId ?? null,
+      value: f.detail.valueNumeric ?? f.detail.valueText ?? f.detail.valueBoolean,
+    };
+  }).filter((f) => f.grain !== "component" || f.grainKey != null); // a component fact whose segment has no CONFIRMED canonical link cannot be safely bucketed at all — see fetchCanonicalComponentIdByOccasion's own comment.
+
+  return resolveFactsToRows(facts, { dataScopeLevel, athleteIds, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId });
 }
 
 // Round 4, §5/§9: hints are a RICHER shape — { key, valueType?, unit?,
@@ -3116,8 +3761,16 @@ async function runSeriesPipeline(series, ctx) {
   // to fetchActivitiesInRange's own internal rule, and reused everywhere.
   const effectiveAthleteIds = ctx.dataWorkspaceType === "athlete" ? [ctx.athleteWorkspaceAthleteId] : ctx.athleteIds;
 
+  // Round 5, §1: a standalone (non-built-in) day-scope Metrics Core
+  // series is NEVER activity-backed — resolving an activity set for it
+  // via fetchActivitiesInRange would be pure waste (queryMetricSeries's
+  // own day-scope branch never looks at activityIds at all), AND the
+  // workspace/athlete context must instead be passed straight through so
+  // that branch can run its own direct metric_events-based resolution.
+  const isStandaloneDayMetric = !series.builtInSeriesKey && series.dataScopeLevel === "day";
+
   async function runForRange(dateFrom, dateTo) {
-    const activityIds = await fetchActivitiesInRange({
+    const activityIds = isStandaloneDayMetric ? null : await fetchActivitiesInRange({
       dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId,
       dataWorkspaceUserId: ctx.dataWorkspaceUserId, athleteWorkspaceAthleteId: ctx.athleteWorkspaceAthleteId,
       dateFrom, dateTo, athleteIds: ctx.athleteIds,
@@ -3129,6 +3782,8 @@ async function runSeriesPipeline(series, ctx) {
           aggregationRolePolicy: series.aggregationRolePolicy, coveragePolicy: series.coveragePolicy,
           sourcePolicy: series.sourcePolicy, sourceConnectionId: series.sourceConnectionId,
           activityIds, athleteIds: effectiveAthleteIds, dateFrom, dateTo,
+          dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId,
+          dataWorkspaceUserId: ctx.dataWorkspaceUserId, athleteWorkspaceAthleteId: ctx.athleteWorkspaceAthleteId,
         });
     return reduceRows(rows, { groupBy, analyticalAggregation });
   }
