@@ -265,6 +265,12 @@ async function setup() {
 }
 
 async function teardown() {
+  // Round 6, §5: closes the REAL backend/src/db.js pool §13.22 opened via
+  // its dynamic import (see loadRealMetricsCatalogModule's own comment) —
+  // must happen BEFORE the disposable database is dropped below, or that
+  // pool's own live connections throw an unhandled async error once the
+  // database they're connected to disappears out from under them.
+  if (realBackendDbPool) await realBackendDbPool.end().catch(() => {});
   if (pool) await pool.end();
   if (migrationsDir) await fsp.rm(migrationsDir, { recursive: true, force: true });
   if (db) teardownVerifiedGone = await dropTempDb(db);
@@ -663,7 +669,24 @@ async function seed() {
   // STANDALONE day-level event: metric_event -> metric_event_participant
   // -> occasion -> value, with NO training.activities row, NO
   // activity_metric_event_links, NO activity_participant row at all.
-  const dayScopeMetric = await makeDefinition({ key: "poc-day-scope", label: "Day Scope Metric", ownerScope: "club", ownerClubId: clubA.id, unit: "au" });
+  // Round 6, §2 FIX: this was previously ownerScope='club'/ownerClubId=
+  // clubA.id — meaning the dayEventClubB fixture below (real Club B data)
+  // was, every round until now, a value written against a metric
+  // definition Club B could never actually SEE through the real app: the
+  // real resolveValueEntries() (backend/src/trainingLoadMetricsMeasurements.js)
+  // gates every value write behind catalogVisibilitySql() (backend/src/
+  // trainingLoadMetricsAccess.js), which only ever admits owner_scope=
+  // 'system', the caller's OWN 'user'-scope metrics, or a 'club'/'team'
+  // scope the caller actually administers — a Club-A-owned definition is
+  // never visible to Club B, full stop, so the OLD fixture proved a state
+  // the real application could never legitimately create. A genuinely
+  // SHARED metric (owner_scope='system', visible to every club per that
+  // same real SQL) is what a coach could actually pick when configuring a
+  // wearable/manual day-level integration for EITHER club — the metric
+  // EVENTS and SOURCE CONNECTIONS below still stay correctly separate,
+  // real Club-A-owned and Club-B-owned rows; only the shared CATALOG
+  // definition itself is system-scope, exactly like distanceSystem above.
+  const dayScopeMetric = await makeDefinition({ key: "poc-day-scope", label: "Day Scope Metric", ownerScope: "system", unit: "au" });
   await q(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'day')`, [dayScopeMetric.id]);
   async function makeStandaloneDayFact(dateStr, value, ownerClubIdArg, athleteId = ana.id) {
     // A real Metrics Core trigger requires the event's own owner_scope to
@@ -840,6 +863,56 @@ async function makeQuickMetric(label) {
   await q(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [ver.id, def.id]);
   await q(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'session'),($1,'component')`, [def.id]);
   return def.id;
+}
+
+// Round 6, §3: a minimal, freshly-isolated metric fixture for one exact
+// value_type — used to prove the value_type/analytical_aggregation
+// compatibility trigger without disturbing any shared fixture (the same
+// isolation reasoning makeQuickMetric already exists for).
+async function makeSimpleValueTypeMetric(label, valueType) {
+  const def = await one(
+    `insert into training_load.metric_definitions (key, label, owner_scope, owner_club_id, state, created_by_user_id) values ($1,$2,'club',$3,'active',$4) returning id`,
+    [`poc-r6-${crypto.randomBytes(4).toString("hex")}`, label, ids.clubA, ids.coachA],
+  );
+  const ver = await one(
+    `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, created_by_user_id) values ($1,1,null,$2,'last',$3) returning id`,
+    [def.id, valueType, ids.coachA],
+  );
+  await q(`update training_load.metric_definitions set current_version_id=$1 where id=$2`, [ver.id, def.id]);
+  await q(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'session'),($1,'component')`, [def.id]);
+  return def.id;
+}
+
+// Round 6, §5: dynamically imports the REAL, unmodified backend service
+// module (backend/src/trainingLoadMetricsCatalog.js) so §13.22 proves the
+// ACTUAL production lock discipline, never a raw-SQL stand-in pretending
+// to be it — the exact same "import real backend code, run it against
+// this run's own disposable database" precedent already established for
+// backend/src/migrate.js at the top of this file. backend/src/db.js
+// builds its own `Pool` from `process.env.DATABASE_URL` AT MODULE IMPORT
+// TIME (once, never re-read afterward) — so DATABASE_URL is pointed at
+// THIS run's own disposable database, then the module is imported for the
+// very first time, so its own pool can only ever connect to the
+// disposable database, never anything else. Cached (module-level, this
+// harness's own top-level `let`) since a second dynamic import of the
+// same resolved URL would just return Node's already-cached module
+// instance anyway — this just makes that explicit.
+let cachedMetricsCatalogModule = null;
+// The real module's own `pool` (backend/src/db.js) is a SEPARATE pg.Pool
+// from this harness's own `pool` — teardown() (below) must close THIS one
+// too, or dropping the disposable database leaves it holding dead
+// connections that throw an unhandled "terminating connection due to
+// administrator command" asynchronously, after the test that opened it
+// has already finished (caught live by this harness's own 3x-run
+// verification requirement — exactly what that requirement is for).
+let realBackendDbPool = null;
+async function loadRealMetricsCatalogModule() {
+  if (cachedMetricsCatalogModule) return cachedMetricsCatalogModule;
+  process.env.DATABASE_URL = db.url;
+  const dbModule = await import("./backend/src/db.js");
+  realBackendDbPool = dbModule.pool;
+  cachedMetricsCatalogModule = await import("./backend/src/trainingLoadMetricsCatalog.js");
+  return cachedMetricsCatalogModule;
 }
 
 // ============================================================
@@ -2592,21 +2665,25 @@ test("§12.3 [§1] real date/week aggregation for a standalone day-level series:
   assert.deepEqual(values, [444, 777], "the week containing 09-13 alone is 777; the week containing 09-14+09-15 sums to 333+111=444");
 });
 
-test("§12.4 [§1] an explicit activityId/componentId filter (a session/component-scope query) NEVER auto-claims an unrelated day-level fact — a day-scope series has no activity identity to be narrowed by in the first place", async () => {
-  // A real, unrelated Club A activity/component-scope query, explicitly
-  // scoped to ONE specific activity (as a coach viewing one session would
-  // do) — the day-scope metric must never appear here, structurally,
-  // regardless of how the activity filter is built.
-  const sessionScoped = await queryMetricSeries({
-    metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "session", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any",
-    activityIds: [ids.activity], athleteIds: [ids.ana],
-  });
-  assert.equal(sessionScoped.length, 0);
-  const componentScoped = await queryMetricSeries({
-    metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "component", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any",
-    activityIds: [ids.activity], athleteIds: [ids.ana],
-  });
-  assert.equal(componentScoped.length, 0);
+test("§12.4 [Round 6 CORRECTION, §1] a REAL day-scope series (dataScopeLevel='day'), run through the REAL runSeriesPipeline() with a REAL ctx.activityId/ctx.componentId runtime filter set, returns ZERO rows — never simulated by swapping data_scope_level to session/component (that proves a different, unrelated claim: see §13.1/§13.2 for the actual activityId/componentId narrowing behavior this test used to be mislabeled as covering)", async () => {
+  const withActivityFilter = await runSeriesPipeline(
+    { metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-13", dateTo: "2026-09-15", activityId: ids.activity },
+  );
+  assert.equal(withActivityFilter.current.length, 0, "a real day-scope series under a real ctx.activityId filter must return zero rows — it has no activity identity to be narrowed by at all");
+  const withComponentFilter = await runSeriesPipeline(
+    { metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-13", dateTo: "2026-09-15", componentId: ids.component },
+  );
+  assert.equal(withComponentFilter.current.length, 0, "same claim, ctx.componentId this time");
+  // Sanity: the SAME day-scope series, SAME date range, with NEITHER
+  // filter set, genuinely DOES return real rows — proving the zero above
+  // is caused by the filter, not by an unrelated fixture/date mistake.
+  const withoutFilter = await runSeriesPipeline(
+    { metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", groupBy: "day", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-13", dateTo: "2026-09-15" },
+  );
+  assert.ok(withoutFilter.current.length > 0, "sanity check: the same query with no activity/component filter at all must genuinely see real day facts");
 });
 
 // --- §2: component identity must be the CANONICAL training.activity_components.id ---
@@ -2991,6 +3068,424 @@ test("§12.20 [§8] clone-first: a clone whose own lock+read commits BEFORE a la
 });
 
 // ============================================================
+// §13 — Round 6, final corrective pass over the existing PoC: a real
+// runtime activityId/componentId filter, a realistic (system-scope)
+// cross-club day fixture, binding-time state/type compatibility on
+// resolve_series_binding()/update_series(), a sanctioned active-selection
+// write path, and a real audit of the Metrics Core capability-removal
+// lock discipline against the ACTUAL production service function.
+// ============================================================
+
+// --- §1: a real runtime activityId/componentId filter, enforced through the authorized pipeline ---
+
+test("§13.1 [§1] a real runtime ctx.activityId narrows a session-scope query to EXACTLY that one activity — other real activities in the SAME date range, even the SAME athlete's own, are excluded", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.pipelineMetric, dataScopeLevel: "session", groupBy: "session", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-15", dateTo: "2026-09-16", activityId: ids.pipelineActivityDay1a },
+  );
+  assert.equal(current.length, 1, "only pipelineActivityDay1a's own bucket must survive — day1b (same real date) and day2 (a different date) are both excluded");
+  assert.equal(Number(current[0].value), 100);
+});
+
+test("§13.1b [§1] the SAME ctx.activityId narrowing applies identically to a built-in series (RPE) — built-ins share the SAME authorized activityIds resolution as any Metrics-Core series, never a separate, looser path", async () => {
+  const { current: onOwnActivity } = await runSeriesPipeline(
+    { builtInSeriesKey: "rpe", groupBy: "day", analyticalAggregation: "avg" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-10", activityId: ids.activity },
+  );
+  assert.equal(onOwnActivity.length, 1);
+  assert.equal(Number(onOwnActivity[0].value), 7);
+  const { current: onOtherActivity } = await runSeriesPipeline(
+    { builtInSeriesKey: "rpe", groupBy: "day", analyticalAggregation: "avg" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-10", activityId: ids.activity2 },
+  );
+  assert.equal(onOtherActivity.length, 0, "RPE was only ever recorded against ids.activity in this fixture — narrowing to a DIFFERENT real activity must show nothing");
+});
+
+test("§13.2 [§1] a real runtime ctx.componentId narrows a component-scope query to that ONE canonical component, while session-level RPE for the SAME parent activity stays fully visible — 'session-level RPE/metrika može ostati vidljiva kao rezultat roditeljske aktivnosti'", async () => {
+  const metricId = await makeQuickMetric("Quick 13.2");
+  const eventId = (await one(`select event_id from training_load.metric_event_segments where id=$1`, [ids.segment])).event_id;
+  const segmentX = await one(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'13.2 Segment X',30) returning id`, [eventId]);
+  const componentX = await one(`insert into training.activity_components (activity_id, component_type_key, name_snapshot, origin, sort_order) values ($1,'block','13.2 Component X','manual',30) returning id`, [ids.activity]);
+  await q(`insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [componentX.id, segmentX.id]);
+  const occX = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [ids.eventParticipant, segmentX.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 77, 'bpm' from training_load.metric_definitions where id=$2`, [occX.id, metricId]);
+
+  const segmentY = await one(`insert into training_load.metric_event_segments (event_id, label, segment_order) values ($1,'13.2 Segment Y',31) returning id`, [eventId]);
+  const componentY = await one(`insert into training.activity_components (activity_id, component_type_key, name_snapshot, origin, sort_order) values ($1,'block','13.2 Component Y','manual',31) returning id`, [ids.activity]);
+  await q(`insert into training.activity_component_metric_segment_links (activity_component_id, metric_event_segment_id, link_method, link_status) values ($1,$2,'manual','confirmed')`, [componentY.id, segmentY.id]);
+  const occY = await one(`insert into training_load.metric_measurement_occasions (event_participant_id, segment_id, entry_method) values ($1,$2,'manual') returning id`, [ids.eventParticipant, segmentY.id]);
+  await q(`insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture) select $1, id, current_version_id, 88, 'bpm' from training_load.metric_definitions where id=$2`, [occY.id, metricId]);
+
+  const { current: componentScoped } = await runSeriesPipeline(
+    { metricDefinitionId: metricId, dataScopeLevel: "component", groupBy: "component", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "any" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-09", componentId: componentX.id },
+  );
+  assert.equal(componentScoped.length, 1, "narrowed to ONLY componentX's own bucket — componentY's 88 must not appear");
+  assert.equal(Number(componentScoped[0].value), 77);
+
+  const { current: sessionRpe } = await runSeriesPipeline(
+    { builtInSeriesKey: "rpe", groupBy: "day", analyticalAggregation: "avg" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-09-09", dateTo: "2026-09-09", componentId: componentX.id },
+  );
+  assert.equal(sessionRpe.length, 1, "the SAME parent activity's session-level RPE must stay visible even while zoomed into ONE of its components");
+  assert.equal(Number(sessionRpe[0].value), 7);
+});
+
+test("§13.3 [§1] NEGATIVE: a ctx.activityId belonging to a DIFFERENT real workspace never widens the result — it narrows to EMPTY, never silently falls back to the unnarrowed full workspace set", async () => {
+  const { current } = await runSeriesPipeline(
+    { builtInSeriesKey: "session_count", groupBy: "athlete", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-01-01", dateTo: "2026-12-31", activityId: ids.activityAnaClubB },
+  );
+  assert.equal(current.length, 0, "activityAnaClubB is a REAL Club B activity — a Club A workspace query narrowed to it must see nothing, never the full Club A activity set");
+  const { current: unfiltered } = await runSeriesPipeline(
+    { builtInSeriesKey: "session_count", groupBy: "athlete", analyticalAggregation: "sum" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-01-01", dateTo: "2026-12-31" },
+  );
+  assert.ok(Number(unfiltered[0].value) > 0, "sanity: the SAME query with no activity filter genuinely does see Ana's real Club A session_count");
+});
+
+test("§13.4 [§1] NEGATIVE: a REAL componentId with REAL data, queried from a DIFFERENT workspace than the one that owns its parent activity, never leaks that data in — the componentId mirror of §13.3's activityId case", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.distanceClubA, dataScopeLevel: "component", groupBy: "component", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubB, athleteIds: [ids.ana], dateFrom: "2026-01-01", dateTo: "2026-12-31", componentId: ids.component },
+  );
+  assert.equal(current.length, 0, "ids.component (and its real 3200 value) belongs to Club A's own activity — a Club B workspace query narrowed to it must see nothing");
+});
+
+test("§13.5 [§1] a ctx.componentId belonging to an activity OTHER than the explicit ctx.activityId is rejected outright — never silently reinterpreted as 'switch to the component's own activity instead'", async () => {
+  const { current } = await runSeriesPipeline(
+    { metricDefinitionId: ids.distanceClubA, dataScopeLevel: "component", groupBy: "component", analyticalAggregation: "sum", aggregationRolePolicy: "standalone_only", coveragePolicy: "any" },
+    { dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, athleteIds: [ids.ana], dateFrom: "2026-01-01", dateTo: "2026-12-31", activityId: ids.activity2, componentId: ids.component },
+  );
+  assert.equal(current.length, 0, "ids.component belongs to ids.activity, not ids.activity2 — the mismatch must produce zero rows, not a silent activity switch");
+});
+
+// --- §2: a realistic (system-scope) cross-club day fixture ---
+
+test("§13.6 [§2] pinning a source connection resolves the athlete self-view's real day-level conflict (§12.2b) to EXACTLY that connection's own value — the SAME resolution mechanism as every other source conflict in this file, now proven for the corrected system-scope shared metric", async () => {
+  const rows = await queryMetricSeries({
+    metricDefinitionId: ids.dayScopeMetric, dataScopeLevel: "day", dataWorkspaceType: "athlete", athleteWorkspaceAthleteId: ids.ana,
+    dateFrom: "2026-09-13", dateTo: "2026-09-13", sourcePolicy: "source_connection", sourceConnectionId: ids.connClubA,
+  });
+  const anaRow = rows.find((r) => r.athleteId === ids.ana);
+  assert.equal(anaRow.conflict, false, "pinning to Club A's own connection must resolve the conflict entirely — no lingering targetConflicts");
+  assert.equal(anaRow.values.length, 1);
+  assert.equal(Number(anaRow.values[0].value), 777, "Club A's own recorded value, never Club B's 555");
+});
+
+// --- §3: binding-time state/type compatibility ---
+
+test("§13.7 [§3] resolve_series_binding() rejects binding an unresolved series to an ARCHIVED metric_definition — a NEW binding must land on an ACTIVE metric", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widget.id, { templateHints: JSON.stringify([{ key: "poc-archived" }]), resolutionStatus: "unresolved" });
+  await assert.rejects(
+    q(`select * from training_load.resolve_series_binding($1,$2,$3,$4)`, [series.id, widget.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision, ids.archivedDef]),
+    /is not active/,
+  );
+  const after = await one(`select resolution_status from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  assert.equal(after.resolution_status, "unresolved", "the rejected bind must leave the series exactly as it was");
+});
+
+test("§13.8 [§3] add_series() rejects binding a TEXT-valued metric to a series whose analytical_aggregation is 'sum' — value_type/aggregation compatibility is enforced at config time, never merely discovered later inside the query adapter's own reduceTyped()", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  await assert.rejects(
+    q(
+      `select * from training_load.add_series($1,$2,1,$3,null,null,'resolved',null,'primary',null,null,'all_with_conflicts',null,'session','sum','standalone_and_source_rollup','complete_and_partial',null,$4)`,
+      [widget.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision, ids.typeConflictMetric, ids.coachA],
+    ),
+    /only supports analytical_aggregation last\/none/,
+  );
+});
+
+test("§13.9 [§3] add_series() rejects binding a BOOLEAN-valued metric to a series whose analytical_aggregation is 'avg'", async () => {
+  const boolMetricId = await makeSimpleValueTypeMetric("R6 Boolean Metric", "boolean");
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  await assert.rejects(
+    q(
+      `select * from training_load.add_series($1,$2,1,$3,null,null,'resolved',null,'primary',null,null,'all_with_conflicts',null,'session','avg','standalone_and_source_rollup','complete_and_partial',null,$4)`,
+      [widget.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision, boolMetricId, ids.coachA],
+    ),
+    /only supports analytical_aggregation last\/none/,
+  );
+});
+
+test("§13.10 [§3] add_series() correctly ACCEPTS a text-valued metric under analytical_aggregation='last' — the compatibility check narrows what's forbidden, it never blocks a legal combination", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const result = await one(
+    `select * from training_load.add_series($1,$2,1,$3,null,null,'resolved',null,'primary',null,null,'all_with_conflicts',null,'session','last','standalone_and_source_rollup','complete_and_partial',null,$4)`,
+    [widget.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision, ids.typeConflictMetric, ids.coachA],
+  );
+  const after = await one(`select analytical_aggregation from training_load.dashboard_widget_series where id=$1`, [result.series_id]);
+  assert.equal(after.analytical_aggregation, "last");
+});
+
+test("§13.11 [§3] update_series() re-checks type compatibility on EVERY analytical_aggregation change, even with NO binding change at all — an already-validly-bound text series can never be moved to 'sum' later through the sanctioned path", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widget.id, { metricDefinitionId: ids.typeConflictMetric, analyticalAggregation: "last" });
+  await assert.rejects(
+    q(`select * from training_load.update_series($1,$2,$3,null,null,null,null,null,null,'sum')`, [series.id, widget.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision]),
+    /only supports analytical_aggregation last\/none/,
+  );
+  const after = await one(`select analytical_aggregation from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  assert.equal(after.analytical_aggregation, "last", "the rejected update must leave the series completely untouched");
+});
+
+test("§13.12a [§3] archive-vs-resolve race, archive-first: a REAL two-connection archive genuinely queues a concurrent resolve_series_binding() behind its own exclusive lock, which then correctly rejects once it sees the now-archived state", async () => {
+  const metricId = await makeQuickMetric("Quick 13.12a");
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widget.id, { templateHints: JSON.stringify([{ key: "distance_total_m" }]), resolutionStatus: "unresolved" });
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query("update training_load.metric_definitions set state='archived' where id=$1", [metricId]);
+    const bPromise = b.client.query(`select * from training_load.resolve_series_binding($1,$2,$3,$4)`, [series.id, widget.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision, metricId]).catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "resolve_series_binding's own FOR SHARE lock on metric_definitions genuinely queues behind the in-flight archive's exclusive row lock");
+    await a.client.query("commit");
+    const bResult = await bPromise;
+    assert.ok(bResult.error, "resolve_series_binding must see the REAL, final (archived) state, never a stale pre-archive read");
+    assert.match(bResult.error.message, /is not active/);
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const after = await one(`select resolution_status from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  assert.equal(after.resolution_status, "unresolved");
+});
+
+test("§13.12b [§3] archive-vs-resolve race, resolve-first: resolve_series_binding()'s own FOR SHARE lock wins, binds cleanly while the metric is still active, and a concurrent archive genuinely queues behind it — the newly-bound series is completely unaffected by the archive that follows afterward", async () => {
+  const metricId = await makeQuickMetric("Quick 13.12b");
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+  const series = await addSeries(widget.id, { templateHints: JSON.stringify([{ key: "distance_total_m" }]), resolutionStatus: "unresolved" });
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    // Deliberately pre-take the SAME lock resolve_series_binding's own
+    // trigger would take, as its own first statement — the exact same
+    // deterministic-race-winning pattern already established by §12.18.
+    await a.client.query("select 1 from training_load.metric_definitions where id=$1 for share", [metricId]);
+    const bPromise = b.client.query("update training_load.metric_definitions set state='archived' where id=$1", [metricId]);
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "the archive attempt genuinely queues behind resolve's own already-held FOR SHARE lock");
+    await a.client.query(`select * from training_load.resolve_series_binding($1,$2,$3,$4)`, [series.id, widget.id, (await one(`select revision from training_load.dashboard_widgets where id=$1`, [widget.id])).revision, metricId]);
+    await a.client.query("commit");
+    await bPromise;
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const after = await one(`select resolution_status, metric_definition_id from training_load.dashboard_widget_series where id=$1`, [series.id]);
+  assert.equal(after.resolution_status, "resolved");
+  assert.equal(after.metric_definition_id, metricId);
+  const metricState = await one(`select state from training_load.metric_definitions where id=$1`, [metricId]);
+  assert.equal(metricState.state, "archived", "the archive DID eventually succeed too, just AFTER — never blocked forever");
+});
+
+// --- §4: a sanctioned active-selection write path ---
+
+test("§13.13 [§4] set_active_dashboard(): a user's FIRST selection for a workspace context inserts cleanly", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const result = await one(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, dash.id]);
+  assert.equal(result.out_dashboard_id, dash.id);
+  const row = await one(`select dashboard_id from training_load.dashboard_active_selection where user_id=$1 and workspace_type='club' and scope_id=$2`, [ids.coachA, ids.clubA]);
+  assert.equal(row.dashboard_id, dash.id);
+});
+
+test("§13.14 [§4] set_active_dashboard(): switching to a DIFFERENT dashboard in the SAME workspace context updates the SAME row in place — never a second, duplicate selection row", async () => {
+  const dashX = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const dashY = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const first = await one(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachB, ids.clubA, dashX.id]);
+  const second = await one(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachB, ids.clubA, dashY.id]);
+  assert.equal(first.out_selection_id, second.out_selection_id, "the SAME selection row, updated in place");
+  const rows = await q(`select dashboard_id from training_load.dashboard_active_selection where user_id=$1 and workspace_type='club' and scope_id=$2`, [ids.coachB, ids.clubA]);
+  assert.equal(rows.rowCount, 1, "never a second row for the same (user, workspace) context");
+  assert.equal(rows.rows[0].dashboard_id, dashY.id);
+});
+
+test("§13.15 [§4] set_active_dashboard(): selecting a dashboard whose OWN data workspace does not match the requested context is rejected — the sanctioned function adds no separate, looser path than a raw write would have gone through", async () => {
+  const dashClubA = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  await assert.rejects(
+    q(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubB, dashClubA.id]),
+    /does not match the exact selection context/,
+  );
+});
+
+test("§13.16 [§4] set_active_dashboard() vs archive_dashboard(), selection-first: archive genuinely queues behind the in-flight selection, then removes the just-committed selection the instant it proceeds", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const rev = (await one(`select revision from training_load.dashboards where id=$1`, [dash.id])).revision;
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, dash.id]);
+    const bPromise = b.client.query(`select * from training_load.archive_dashboard($1,$2)`, [dash.id, rev]);
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "archive genuinely queues behind set_active_dashboard()'s own dashboard lock");
+    await a.client.query("commit");
+    await bPromise;
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const remaining = await one(`select count(*)::int as n from training_load.dashboard_active_selection where dashboard_id=$1`, [dash.id]);
+  assert.equal(remaining.n, 0);
+});
+
+test("§13.17 [§4] set_active_dashboard() vs archive_dashboard(), archive-first: set_active_dashboard() genuinely queues behind the in-flight archive, then correctly rejects once it sees the archived state", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const rev = (await one(`select revision from training_load.dashboards where id=$1`, [dash.id])).revision;
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(`select * from training_load.archive_dashboard($1,$2)`, [dash.id, rev]);
+    const bPromise = b.client.query(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, dash.id]).catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "set_active_dashboard() genuinely queues behind the in-flight archive");
+    await a.client.query("commit");
+    const bResult = await bPromise;
+    assert.ok(bResult.error);
+    assert.match(bResult.error.message, /is not active/);
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const remaining = await one(`select count(*)::int as n from training_load.dashboard_active_selection where dashboard_id=$1`, [dash.id]);
+  assert.equal(remaining.n, 0);
+});
+
+test("§13.18 [§4] switching from an OLD to a NEW active dashboard while the OLD one is archived concurrently is unaffected — they touch different dashboard rows, no lock contention, and the final selection correctly still points at the NEW dashboard", async () => {
+  const oldDash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const newDash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  await one(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, oldDash.id]);
+  const oldRev = (await one(`select revision from training_load.dashboards where id=$1`, [oldDash.id])).revision;
+  await Promise.all([
+    q(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, newDash.id]),
+    q(`select * from training_load.archive_dashboard($1,$2)`, [oldDash.id, oldRev]),
+  ]);
+  const selection = await one(`select dashboard_id from training_load.dashboard_active_selection where user_id=$1 and workspace_type='club' and scope_id=$2`, [ids.coachA, ids.clubA]);
+  assert.equal(selection.dashboard_id, newDash.id, "the switch to the NEW dashboard must succeed regardless of the OLD one being archived at the same time — they never contend for the same lock");
+  const oldStatus = await one(`select status from training_load.dashboards where id=$1`, [oldDash.id]);
+  assert.equal(oldStatus.status, "archived");
+});
+
+test("§13.19 [§4] switching to a NEW dashboard while that SAME new dashboard is archived concurrently, switch-first: set_active_dashboard() wins the lock and succeeds; the concurrent archive genuinely queues behind it, then correctly clears the just-created selection once it proceeds", async () => {
+  const oldDash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const newDash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  await one(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, oldDash.id]);
+  const newRev = (await one(`select revision from training_load.dashboards where id=$1`, [newDash.id])).revision;
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, newDash.id]);
+    const bPromise = b.client.query(`select * from training_load.archive_dashboard($1,$2)`, [newDash.id, newRev]);
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "the archive of the NEW dashboard genuinely queues behind the in-flight switch's own lock on that SAME dashboard");
+    await a.client.query("commit");
+    await bPromise;
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const remaining = await one(`select count(*)::int as n from training_load.dashboard_active_selection where dashboard_id=$1`, [newDash.id]);
+  assert.equal(remaining.n, 0, "the switch DID succeed, but the archive that followed correctly clears it — final state: no selection pointing at the now-archived new dashboard");
+});
+
+test("§13.20 [§4] switching to a NEW dashboard while that SAME new dashboard is archived concurrently, archive-first: the archive wins the lock; the concurrent switch genuinely queues behind it, then correctly rejects — the OLD dashboard stays the active selection, never a switch onto an archived target", async () => {
+  const oldDash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const newDash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  await one(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, oldDash.id]);
+  const newRev = (await one(`select revision from training_load.dashboards where id=$1`, [newDash.id])).revision;
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.client.query("begin");
+    await a.client.query(`select * from training_load.archive_dashboard($1,$2)`, [newDash.id, newRev]);
+    const bPromise = b.client.query(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, newDash.id]).catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(b.pid);
+    assert.ok(blocked, "the switch genuinely queues behind the in-flight archive of its own target dashboard");
+    await a.client.query("commit");
+    const bResult = await bPromise;
+    assert.ok(bResult.error, "the switch must be rejected once it sees the now-archived target");
+    assert.match(bResult.error.message, /is not active/);
+  } finally {
+    await a.client.end();
+    await b.client.end();
+  }
+  const selection = await one(`select dashboard_id from training_load.dashboard_active_selection where user_id=$1 and workspace_type='club' and scope_id=$2`, [ids.coachA, ids.clubA]);
+  assert.equal(selection.dashboard_id, oldDash.id, "the rejected switch must leave the OLD dashboard as the still-active selection, completely unchanged");
+});
+
+test("§13.21 [§4] clear_active_dashboard() removes an existing selection cleanly, and is a genuine no-op (never an error) when nothing was selected", async () => {
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  await one(`select * from training_load.set_active_dashboard($1,'club',$2,$3)`, [ids.coachA, ids.clubA, dash.id]);
+  const first = await one(`select * from training_load.clear_active_dashboard($1,'club',$2)`, [ids.coachA, ids.clubA]);
+  assert.equal(first.cleared, true);
+  const remaining = await one(`select count(*)::int as n from training_load.dashboard_active_selection where user_id=$1 and workspace_type='club' and scope_id=$2`, [ids.coachA, ids.clubA]);
+  assert.equal(remaining.n, 0);
+  const second = await one(`select * from training_load.clear_active_dashboard($1,'club',$2)`, [ids.coachA, ids.clubA]);
+  assert.equal(second.cleared, false, "clearing an ALREADY-empty selection is a genuine no-op, never an error");
+});
+
+// --- §5: the real Metrics Core capability-removal lock discipline, audited against the REAL production function ---
+
+test("§13.22 [§5] REAL end-to-end proof: the ALREADY-SHIPPED backend/src/trainingLoadMetricsCatalog.js's setDefinitionScopeCapabilities() genuinely serializes against a dashboard-side series insert through the SAME metric_definitions row — audited from the real, unmodified source (line ~279: `for update` is its own FIRST statement), never a raw-SQL stand-in pretending to be it", async () => {
+  const { setDefinitionScopeCapabilities } = await loadRealMetricsCatalogModule();
+  const metricId = await makeQuickMetric("Quick 13.22");
+  const platformAdminReq = { user: { id: ids.platformAdmin }, authz: { platformRoles: ["platform_admin"] } };
+  const dash = await makeDashboard({ ownerScope: "club", ownerClubId: ids.clubA, dataWorkspaceType: "club", dataWorkspaceScopeId: ids.clubA, createdBy: ids.coachA });
+  const widget = await makeWidget(dash.id, { widgetType: "table", width: 6, height: 4 });
+
+  let releaseLock;
+  const lockHeld = new Promise((resolve) => { releaseLock = resolve; });
+  let proceedSignal;
+  const proceed = new Promise((resolve) => { proceedSignal = resolve; });
+
+  // The REAL function's own `onLocked` test hook (already documented in
+  // its own source as "same convention as this app's other deterministic-
+  // concurrency-tested functions") — it runs WHILE the function's real
+  // transaction still holds `FOR UPDATE` on metric_definitions, exactly
+  // the same mechanism this file's own PL/pgSQL functions expose via test-
+  // only sync points elsewhere.
+  const removalPromise = setDefinitionScopeCapabilities(platformAdminReq, metricId, ["session"], {
+    onLocked: async () => {
+      releaseLock();
+      await proceed;
+    },
+  });
+  await lockHeld;
+
+  const c = await newClient();
+  let insertResult;
+  try {
+    const insertPromise = c.client.query(
+      `insert into training_load.dashboard_widget_series (widget_id, series_order, metric_definition_id, data_scope_level) values ($1,1,$2,'component')`,
+      [widget.id, metricId],
+    ).then(() => ({ ok: true })).catch((e) => ({ error: e }));
+    const blocked = await waitUntilBlocked(c.pid);
+    assert.ok(blocked, "the dashboard-side insert genuinely queues behind the REAL setDefinitionScopeCapabilities()'s own FOR UPDATE lock on metric_definitions — real production code, not a simulated proxy");
+    proceedSignal();
+    const removalResult = await removalPromise;
+    assert.ok(!removalResult.error, "the real removal itself must succeed — no historical component-scope VALUES exist yet to block it via the function's own history-check");
+    insertResult = await insertPromise;
+  } finally {
+    await c.client.end();
+  }
+  assert.ok(insertResult.error, "the dashboard-side insert must see the REAL, final state (capability removed), never a stale mid-flight read");
+  assert.match(insertResult.error.message, /has never been configured for scope_level=component/);
+});
+
+// ============================================================
 // The PoC query adapter itself — a real, working layer over the REAL
 // training.canonical_activity_results() (never metric_values/session_
 // feedback queried directly and independently re-joined).
@@ -3091,6 +3586,20 @@ async function fetchActivityDateTimes(activityIds) {
 async function fetchCanonicalFacts(activityId) {
   const r = await pool.query(`select canonical_activity_id, canonical_participant_id, athlete_id, fact_kind, detail from training.canonical_activity_results($1)`, [activityId]);
   return r.rows;
+}
+
+// Round 6, §1: resolves a real CANONICAL component id to the real
+// activity it belongs to — the SINGLE real fact needed to decide whether
+// a caller-supplied componentId is even reachable through the caller's
+// own already-workspace-authorized activity set at all (see
+// runSeriesPipeline's own ctx.componentId handling below). Returns null
+// for an unknown component id — the caller treats that identically to
+// "not authorized", never a distinct error path (same "unknown vs. not
+// yours must not be distinguishable" precedent this file already follows
+// elsewhere).
+async function resolveComponentOwningActivityId(componentId) {
+  const r = await pool.query(`select activity_id from training.activity_components where id = $1`, [componentId]);
+  return r.rows[0]?.activity_id ?? null;
 }
 
 // Round 4, §1: the real grain identity needs the metric EVENT's own
@@ -3350,6 +3859,15 @@ async function fetchDayLevelMetricFacts({ metricDefinitionId, dataWorkspaceType,
 async function queryMetricSeries({
   metricDefinitionId, dataScopeLevel, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId,
   activityIds, athleteIds, dateFrom, dateTo, dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId,
+  // Round 6, §1: an OPTIONAL narrowing to one real canonical component —
+  // meaningful ONLY for a component-scope query (a session-scope or day-
+  // scope series has no component identity to narrow by at all, so it is
+  // silently ignored there — see the dedicated day-scope branch below and
+  // the "no-op for session grain" comment further down). This is a raw
+  // facts-level filter, applied to the SAME already-canonicalized
+  // grainKey the rest of §2's component-identity fix already produces —
+  // never the raw source segment id.
+  componentId,
 }) {
   const effectiveSourcePolicy = sourcePolicy || "all_with_conflicts";
   if (effectiveSourcePolicy === "not_applicable") {
@@ -3440,7 +3958,19 @@ async function queryMetricSeries({
       sourceConnectionId: occ.sourceConnectionId ?? null,
       value: f.detail.valueNumeric ?? f.detail.valueText ?? f.detail.valueBoolean,
     };
-  }).filter((f) => f.grain !== "component" || f.grainKey != null); // a component fact whose segment has no CONFIRMED canonical link cannot be safely bucketed at all — see fetchCanonicalComponentIdByOccasion's own comment.
+  }).filter((f) => f.grain !== "component" || f.grainKey != null) // a component fact whose segment has no CONFIRMED canonical link cannot be safely bucketed at all — see fetchCanonicalComponentIdByOccasion's own comment.
+    // Round 6, §1: componentId narrows a COMPONENT-scope query to that one
+    // real canonical component only — session-grain facts (RPE, session-
+    // scope Metrics-Core values) are NEVER touched by this filter, exactly
+    // the "session-level RPE/metrika može ostati vidljiva kao rezultat
+    // roditeljske aktivnosti" requirement: a coach zoomed into one
+    // component of a session must still see that session's own RPE, not a
+    // blanked-out widget. runSeriesPipeline (below) is what already
+    // guarantees componentId, when present, genuinely belongs to the
+    // caller's own authorized activity BEFORE it ever reaches this
+    // function — this filter only ever narrows an already-authorized set,
+    // never widens one.
+    .filter((f) => f.grain !== "component" || componentId == null || f.grainKey === componentId);
 
   return resolveFactsToRows(facts, { dataScopeLevel, athleteIds, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId });
 }
@@ -3770,11 +4300,47 @@ async function runSeriesPipeline(series, ctx) {
   const isStandaloneDayMetric = !series.builtInSeriesKey && series.dataScopeLevel === "day";
 
   async function runForRange(dateFrom, dateTo) {
-    const activityIds = isStandaloneDayMetric ? null : await fetchActivitiesInRange({
+    // Round 6, §1: a real runtime activityId/componentId filter (e.g. the
+    // Calendar's own "from Calendar" activity deep-link context —
+    // DASHBOARD_UX_SPEC.md's own "Global filter" control). A standalone
+    // (non-built-in) day-scope series NEVER has an activity identity to
+    // be narrowed by — the day-level fetch is never even attempted, a
+    // REAL empty result, not a scope-level substitution trick.
+    if (isStandaloneDayMetric && (ctx.activityId || ctx.componentId)) {
+      return reduceRows([], { groupBy, analyticalAggregation });
+    }
+
+    let activityIds = isStandaloneDayMetric ? null : await fetchActivitiesInRange({
       dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId,
       dataWorkspaceUserId: ctx.dataWorkspaceUserId, athleteWorkspaceAthleteId: ctx.athleteWorkspaceAthleteId,
       dateFrom, dateTo, athleteIds: ctx.athleteIds,
     });
+
+    // Round 6, §1: activityId/componentId ALWAYS intersect with the
+    // already workspace-authorized set fetchActivitiesInRange just
+    // produced — never trusted outright. An id from another workspace (or
+    // a component belonging to an activity this workspace was never
+    // authorized to see) narrows the set to EMPTY, never silently falls
+    // back to the unnarrowed full set — the negative proof this round
+    // requires. componentId additionally resolves its OWN owning activity
+    // (training.activity_components.activity_id) and, when an activityId
+    // was ALSO supplied, must belong to that exact same activity — a
+    // componentId from a DIFFERENT activity than the explicit activityId
+    // is never silently reinterpreted as "switch to the component's own
+    // activity instead".
+    let resolvedComponentId = null;
+    if (!isStandaloneDayMetric && ctx.componentId) {
+      const owningActivityId = await resolveComponentOwningActivityId(ctx.componentId);
+      if (owningActivityId && activityIds.includes(owningActivityId) && (!ctx.activityId || owningActivityId === ctx.activityId)) {
+        activityIds = [owningActivityId];
+        resolvedComponentId = ctx.componentId;
+      } else {
+        activityIds = [];
+      }
+    } else if (!isStandaloneDayMetric && ctx.activityId) {
+      activityIds = activityIds.includes(ctx.activityId) ? [ctx.activityId] : [];
+    }
+
     const rows = series.builtInSeriesKey
       ? await queryBuiltInSeries({ key: series.builtInSeriesKey, activityIds, athleteIds: effectiveAthleteIds })
       : await queryMetricSeries({
@@ -3784,6 +4350,11 @@ async function runSeriesPipeline(series, ctx) {
           activityIds, athleteIds: effectiveAthleteIds, dateFrom, dateTo,
           dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId,
           dataWorkspaceUserId: ctx.dataWorkspaceUserId, athleteWorkspaceAthleteId: ctx.athleteWorkspaceAthleteId,
+          // component-scope facts only — a no-op filter for session grain,
+          // see queryMetricSeries' own comment (requirement: session-level
+          // RPE/metrics for the parent activity stay visible even under a
+          // componentId filter).
+          componentId: resolvedComponentId,
         });
     return reduceRows(rows, { groupBy, analyticalAggregation });
   }

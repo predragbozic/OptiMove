@@ -1401,6 +1401,99 @@ create trigger dashboard_widget_series_validate_source_connection_visibility
   before insert or update of source_connection_id, widget_id on training_load.dashboard_widget_series
   for each row execute function training_load.dashboard_widget_series_validate_source_connection_visibility();
 
+-- Round 6, §3: a series may only be NEWLY bound (INSERT, or resolve_
+-- series_binding()'s own UPDATE of metric_definition_id) to an ACTIVE
+-- metric_definition — the finding this closes: resolve_series_binding()
+-- (Round 5, §3) re-validated OWNER/workspace visibility live via the
+-- existing metric-visibility trigger, but nothing anywhere ever checked
+-- state='active', so a coach could bind a fresh or repaired series
+-- straight onto an ARCHIVED (retired) metric — a metric explicitly marked
+-- "no longer in use" — and the query adapter would still happily query it
+-- forever after. Deliberately scoped to `insert or update OF
+-- metric_definition_id` ONLY, never `state` and never any other column:
+-- an existing, already-validly-bound series must NEVER be broken by its
+-- metric being archived LATER — archiving is a state change on
+-- metric_definitions, not a write to dashboard_widget_series, so it never
+-- fires this trigger at all, and the series keeps working and keeps its
+-- history, exactly as the task requires ("arhiviranje metrike... ne briše
+-- seriju niti istoriju"). This is a NEW-BINDING gate, not a continuous
+-- invariant. Takes its OWN `FOR SHARE` lock as its first statement, same
+-- Round 5 discipline as every sibling trigger on this table — genuinely
+-- correct regardless of firing order relative to the other triggers on
+-- this same insert/update-of-metric_definition_id event.
+create function training_load.dashboard_widget_series_validate_metric_active_state() returns trigger as $$
+declare
+  v_state varchar;
+begin
+  if new.metric_definition_id is null then
+    return new;
+  end if;
+  select state into v_state from training_load.metric_definitions where id = new.metric_definition_id for share;
+  if v_state <> 'active' then
+    raise exception 'dashboard_widget_series: metric_definition % is not active (state=%) — a series may only be newly bound to an ACTIVE metric (widget %)', new.metric_definition_id, v_state, new.widget_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboard_widget_series_validate_metric_active_state
+  before insert or update of metric_definition_id on training_load.dashboard_widget_series
+  for each row execute function training_load.dashboard_widget_series_validate_metric_active_state();
+
+-- Round 6, §3: a series' analytical_aggregation must stay compatible with
+-- the VALUE TYPE of whatever it is actually bound to — the finding this
+-- closes: nothing enforced this, so a series could be bound to a text/
+-- boolean metric (or built-in, e.g. last_session_date) while carrying
+-- analytical_aggregation='sum', and every real query would then throw
+-- deep inside the adapter's own reduceTyped() (test-harness.mjs) instead
+-- of being refused up front, at config time, where a coach could actually
+-- fix it. The rule mirrors reduceTyped()'s own real, already-implemented
+-- contract exactly (never inventing a richer one — boolean any/all/
+-- count_true stays explicitly out of scope, per the task): value_type
+-- 'numeric' supports the full sum/avg/max/last/none set; 'text'/'boolean'
+-- support ONLY 'last'/'none' this round. Fires on EITHER a (re)binding
+-- (metric_definition_id/built_in_series_key) OR a bare analytical_
+-- aggregation change with NO binding change at all — the second case is
+-- required precisely because update_series() can change analytical_
+-- aggregation without touching the binding (e.g. an already-validly-bound
+-- text metric's widget moved from 'last' to 'sum' via update_series()
+-- alone) and that transition must be refused exactly as surely as binding
+-- a fresh text metric under 'sum' in the first place ("promena analytical_
+-- aggregation kroz update_series() mora ponovo proveriti trenutni tip").
+-- Takes its own lock first, same Round 5 discipline as every sibling
+-- trigger here.
+create function training_load.dashboard_widget_series_validate_aggregation_type_compat() returns trigger as $$
+declare
+  v_value_type varchar;
+begin
+  if new.metric_definition_id is not null then
+    perform 1 from training_load.metric_definitions where id = new.metric_definition_id for share;
+    select mdv.value_type into v_value_type
+      from training_load.metric_definitions md
+      join training_load.metric_definition_versions mdv on mdv.id = md.current_version_id
+      where md.id = new.metric_definition_id;
+  elsif new.built_in_series_key is not null then
+    perform 1 from training_load.dashboard_builtin_series where key = new.built_in_series_key for share;
+    select value_type into v_value_type from training_load.dashboard_builtin_series where key = new.built_in_series_key;
+  else
+    -- unresolved/ambiguous: nothing bound yet, nothing to check —
+    -- resolve_series_binding() is the only path that can later set a
+    -- binding, and it does so via a real UPDATE of metric_definition_id,
+    -- which re-enters this SAME trigger.
+    return new;
+  end if;
+  if v_value_type in ('text', 'boolean') and new.analytical_aggregation not in ('last', 'none') then
+    raise exception 'dashboard_widget_series: value_type % only supports analytical_aggregation last/none this round (got %, widget %)', v_value_type, new.analytical_aggregation, new.widget_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger dashboard_widget_series_validate_aggregation_type_compat
+  before insert or update of metric_definition_id, built_in_series_key, analytical_aggregation
+  on training_load.dashboard_widget_series
+  for each row execute function training_load.dashboard_widget_series_validate_aggregation_type_compat();
+
 -- Round 2, §3: series add/update/delete/reorder is a query/render-
 -- relevant change to the PARENT WIDGET — bump ITS revision, not just log
 -- the series row's own existence. AFTER trigger (fires once the row is
@@ -1868,6 +1961,15 @@ $$ language plpgsql;
 -- other metric_definition_id write already goes through — no bespoke,
 -- possibly-weaker re-implementation of that check here, the real trigger
 -- IS the authorization.
+--
+-- Round 6, §3 ADDITION: the SAME real UPDATE now ALSO fires dashboard_
+-- widget_series_validate_metric_active_state (rejects binding to an
+-- ARCHIVED metric) and dashboard_widget_series_validate_aggregation_
+-- type_compat (rejects binding a text/boolean metric to a series whose
+-- analytical_aggregation isn't last/none) — this function still performs
+-- no bespoke re-implementation of EITHER check; both are genuine trigger-
+-- level authorization on the same UPDATE statement, exactly like the
+-- visibility check above.
 create function training_load.resolve_series_binding(
   p_series_id uuid, p_widget_id uuid, p_expected_widget_revision integer, p_metric_definition_id uuid
 ) returns table (series_id uuid, widget_revision integer) as $$
@@ -2101,5 +2203,102 @@ begin
   end if;
   update training_load.dashboards set status = 'archived' where id = p_dashboard_id;
   return query select d.id, d.status, d.revision from training_load.dashboards d where d.id = p_dashboard_id;
+end;
+$$ language plpgsql;
+
+-- Round 6, §4: the sanctioned application entry point for choosing (or
+-- switching) a user's active dashboard for one workspace context — the
+-- finding this closes: dashboard_active_selection_validate_visibility
+-- (Round 2/Round 5, §5) already enforces every real invariant (status=
+-- 'active', exact workspace match, and — since Round 5 — a genuine
+-- dashboard-row lock closing the selection-vs-archive race) but NO
+-- sanctioned FUNCTION ever existed to reach that trigger through — the
+-- only working write path was a raw INSERT/UPDATE against
+-- dashboard_active_selection directly, bypassing this file's own
+-- sanctioned-write convention (every other mutation in this schema goes
+-- through a dedicated function, never a bare INSERT/UPDATE from the
+-- application layer). A future route implementation MUST call this
+-- function exclusively — never a raw INSERT/UPDATE against
+-- dashboard_active_selection.
+--
+-- Lock order: dashboard -> active-selection, explicitly, as this
+-- function's own first statement — the SAME order archive_dashboard()
+-- locks the dashboard in, and the SAME row the validate_visibility
+-- trigger below will (redundantly but harmlessly, same session already
+-- holds it) re-lock as ITS OWN first statement per the Round 5 lock-
+-- discipline. Whichever of a concurrent set_active_dashboard() and a
+-- concurrent archive_dashboard() targeting the SAME dashboard reaches
+-- this lock first fully completes (commits) before the other is ever
+-- unblocked — see the report's concurrency section for the two-connection
+-- proof, both orderings.
+--
+-- The actual write is a real UPSERT keyed on the table's own `unique
+-- nulls not distinct (user_id, workspace_type, scope_id)` constraint —
+-- "first selection" (no existing row) INSERTs; "switch to a different
+-- dashboard in the SAME workspace" (a row already exists) UPDATEs that
+-- SAME row's dashboard_id in place, never leaving a stale second row
+-- behind. Either path fires dashboard_active_selection_validate_
+-- visibility (it is declared `before insert OR update of dashboard_id,
+-- ...`), so a switch is validated exactly as strictly as a first
+-- selection — an attempt to switch to a dashboard whose workspace doesn't
+-- match, or that is archived, is rejected identically either way.
+-- Out-parameter names below are deliberately PREFIXED (out_...) rather
+-- than reusing the table's own column names (dashboard_id/workspace_type/
+-- scope_id/updated_at, all real columns of dashboard_active_selection) —
+-- the exact "ambiguous column: could be a PL/pgSQL variable OR a table
+-- column" class of bug this file's own history already documents (Round
+-- 2's report: "several PL/pgSQL 'ambiguous column' bugs against RETURNS
+-- TABLE out-parameters"), caught again live this round by the harness
+-- itself the moment `on conflict (user_id, workspace_type, scope_id)`
+-- tried to resolve `workspace_type` against BOTH the table column and an
+-- identically-named out-parameter. Renaming the out-parameters (not
+-- qualifying the ON CONFLICT target list, which SQL grammar requires to
+-- be bare column names — it cannot be table-prefixed) is the only fix.
+create function training_load.set_active_dashboard(
+  p_user_id uuid, p_workspace_type varchar, p_scope_id uuid, p_dashboard_id uuid
+) returns table (out_selection_id uuid, out_dashboard_id uuid, out_workspace_type varchar, out_scope_id uuid, out_updated_at timestamptz) as $$
+declare
+  v_selection_id uuid;
+begin
+  perform 1 from training_load.dashboards where id = p_dashboard_id for update;
+  insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id)
+  values (p_user_id, p_workspace_type, p_scope_id, p_dashboard_id)
+  on conflict (user_id, workspace_type, scope_id)
+  do update set dashboard_id = excluded.dashboard_id
+  returning id into v_selection_id;
+  return query
+    select s.id, s.dashboard_id, s.workspace_type, s.scope_id, s.updated_at
+    from training_load.dashboard_active_selection s where s.id = v_selection_id;
+end;
+$$ language plpgsql;
+
+-- Round 6, §4: the sanctioned counterpart to set_active_dashboard() for
+-- explicitly clearing a user's active selection for one workspace context
+-- (e.g. "no dashboard chosen yet" after their last one was archived and
+-- they haven't picked a replacement) — a plain DELETE with no invariant
+-- left to violate (an ABSENT selection is always a legal state, unlike an
+-- active one), but still exposed as a real sanctioned function rather
+-- than a raw DELETE, for the same "one write path per mutation" reason
+-- every other function in this file exists. Locks the CURRENTLY-selected
+-- dashboard (if any) first, for the same reason every other function
+-- here locks its parent row first — purely defensive here (nothing this
+-- function does can violate an invariant either way), kept for
+-- consistency with the rest of the file's own lock-order convention.
+create function training_load.clear_active_dashboard(
+  p_user_id uuid, p_workspace_type varchar, p_scope_id uuid
+) returns table (cleared boolean) as $$
+declare
+  v_dashboard_id uuid;
+  v_deleted_id uuid;
+begin
+  select dashboard_id into v_dashboard_id from training_load.dashboard_active_selection
+    where user_id = p_user_id and workspace_type = p_workspace_type and scope_id is not distinct from p_scope_id;
+  if v_dashboard_id is not null then
+    perform 1 from training_load.dashboards where id = v_dashboard_id for update;
+  end if;
+  delete from training_load.dashboard_active_selection
+    where user_id = p_user_id and workspace_type = p_workspace_type and scope_id is not distinct from p_scope_id
+    returning id into v_deleted_id;
+  return query select (v_deleted_id is not null);
 end;
 $$ language plpgsql;
