@@ -62,6 +62,7 @@ import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
+import { loadTrainingLoadAnalysis } from "./training-load-analysis-data.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
@@ -962,6 +963,9 @@ function handleContentInput(event) {
   // handleTrainingLoadAction reads the live value straight off it.
   const trainingLoadInput = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadInput && trainingLoadInput.matches("input, textarea")) {
+    // Analysis text filters apply on change/blur. Re-rendering on every
+    // keystroke would replace the input node and interrupt typing.
+    if (trainingLoadInput.dataset.action.startsWith("training-load-analysis-")) return;
     void handleTrainingLoadAction(trainingLoadInput, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });
     return;
   }
@@ -974,6 +978,11 @@ function handleContentInput(event) {
 
 async function handleContentChange(event) {
   if (await handleTestsContentChange(event)) return;
+  const trainingLoadControl = event.target.closest("[data-action^='training-load-']");
+  if (trainingLoadControl && trainingLoadControl.matches("select, input")) {
+    void handleTrainingLoadAction(trainingLoadControl, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });
+    return;
+  }
   // Mirror the create-form's color-palette hidden input into state, same
   // reasoning as createNameInput above - fires for both a swatch pick and a
   // custom-color pick, since both end up setting this hidden input's value
@@ -1870,7 +1879,9 @@ async function loadTrainingLoad() {
   await Promise.all([
     state.trainingLoad.section === "today"
       ? loadTrainingLoadCalendarWeek(renderTrainingLoad)
-      : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+      : state.trainingLoad.section === "analysis"
+        ? loadTrainingLoadAnalysis(renderTrainingLoad)
+        : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
     state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
   ]);
   renderTrainingLoad();
