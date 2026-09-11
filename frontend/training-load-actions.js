@@ -1,4 +1,4 @@
-import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyRpeForm, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
+import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
   captureTrainingLoadAthleteWeeklyMutationContext,
@@ -25,6 +25,31 @@ import {
   trainingLoadMutationContextIsCurrentWorkspace,
   updateExternalSchedule,
 } from "./training-load-data.js";
+import {
+  addAnalysisSeries,
+  archiveAnalysisDashboard,
+  cancelAnalysisLayoutDraft,
+  cloneAnalysisDashboard,
+  createAnalysisDashboard,
+  createAnalysisWidget,
+  deleteAnalysisSeries,
+  deleteAnalysisWidget,
+  invalidateTrainingLoadAnalysis,
+  loadAnalysisMetricDefinitions,
+  loadDashboardDetail,
+  loadTrainingLoadAnalysis,
+  moveAnalysisWidgetMobile,
+  nudgeAnalysisWidget,
+  queryAnalysisDashboard,
+  reorderAnalysisSeries,
+  resizeAnalysisWidget,
+  resolveAnalysisSeries,
+  saveAnalysisLayout,
+  setActiveAnalysisDashboard,
+  updateAnalysisDashboardMetadata,
+  updateAnalysisSeries,
+  updateAnalysisWidget,
+} from "./training-load-analysis-data.js";
 import {
   captureTrainingLoadCalendarMutationContext,
   invalidateAllTrainingLoadCalendarGenerations,
@@ -329,9 +354,252 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     await Promise.all([
       state.trainingLoad.section === "today"
         ? loadTrainingLoadCalendarWeek(renderTrainingLoad)
-        : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+        : state.trainingLoad.section === "analysis"
+          ? loadTrainingLoadAnalysis(renderTrainingLoad)
+          : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
       state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
     ]);
+    renderTrainingLoad();
+    return true;
+  }
+
+  // -------------------- Training Load 3B3: Analysis dashboards --------------------
+
+  if (type === "training-load-analysis-select-dashboard") {
+    const dashboardId = action.value ?? action.dataset.dashboardId ?? "";
+    const a = state.trainingLoad.analysis;
+    a.selectedDashboardId = dashboardId;
+    a.dashboard = null;
+    a.widgets = [];
+    a.queryResult = null;
+    a.editMode = false;
+    a.layoutDraft = null;
+    renderTrainingLoad();
+    if (dashboardId) {
+      await loadDashboardDetail(dashboardId, renderTrainingLoad, { force: true });
+      await queryAnalysisDashboard(renderTrainingLoad, { force: true });
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-focus-selector") {
+    document.querySelector("[data-action='training-load-analysis-select-dashboard']")?.focus();
+    return true;
+  }
+  if (type === "training-load-analysis-create") {
+    const name = window.prompt("Dashboard name", "Training Load Analysis");
+    if (!name || !name.trim()) return true;
+    await createAnalysisDashboard({ name: name.trim() }, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-clone-template") {
+    const templateId = action.value || action.dataset.templateId;
+    if (!templateId) return true;
+    await cloneAnalysisDashboard(templateId, renderTrainingLoad);
+    action.value = "";
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-toggle-edit") {
+    const a = state.trainingLoad.analysis;
+    a.editMode = !a.editMode;
+    if (!a.editMode) {
+      a.addWidgetOpen = false;
+      a.editor = { open: false, widgetId: "", seriesId: "" };
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-set-active") {
+    const dashboardId = state.trainingLoad.analysis.dashboard?.id || state.trainingLoad.analysis.selectedDashboardId;
+    if (!dashboardId) return true;
+    await setActiveAnalysisDashboard(dashboardId, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-period-from" || type === "training-load-analysis-period-to") {
+    const a = state.trainingLoad.analysis;
+    if (type.endsWith("from")) a.period.dateFrom = action.value || a.period.dateFrom;
+    else a.period.dateTo = action.value || a.period.dateTo;
+    renderTrainingLoad();
+    await queryAnalysisDashboard(renderTrainingLoad, { force: true });
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-runtime-activity" || type === "training-load-analysis-runtime-component") {
+    const a = state.trainingLoad.analysis;
+    const value = (action.value || "").trim();
+    if (type.endsWith("activity")) a.runtimeFilter.activityId = value || null;
+    else a.runtimeFilter.componentId = value || null;
+    renderTrainingLoad();
+    if (value && value.length < 36) return true;
+    await queryAnalysisDashboard(renderTrainingLoad, { force: true });
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-add-widget") {
+    state.trainingLoad.analysis.addWidgetOpen = true;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-close-add-widget") {
+    state.trainingLoad.analysis.addWidgetOpen = false;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-create-widget") {
+    state.trainingLoad.analysis.addWidgetOpen = false;
+    await createAnalysisWidget(action.dataset.widgetType, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-save-layout") {
+    await saveAnalysisLayout(renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-cancel-layout") {
+    cancelAnalysisLayoutDraft();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-widget-left" || type === "training-load-analysis-widget-right" || type === "training-load-analysis-widget-up" || type === "training-load-analysis-widget-down") {
+    const dx = type.endsWith("left") ? -1 : type.endsWith("right") ? 1 : 0;
+    const dy = type.endsWith("up") ? -1 : type.endsWith("down") ? 1 : 0;
+    nudgeAnalysisWidget(action.dataset.widgetId, dx, dy);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-widget-wider" || type === "training-load-analysis-widget-narrower") {
+    resizeAnalysisWidget(action.dataset.widgetId, type.endsWith("wider") ? 1 : -1, 0);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-widget-mobile-up" || type === "training-load-analysis-widget-mobile-down") {
+    moveAnalysisWidgetMobile(action.dataset.widgetId, type.endsWith("up") ? -1 : 1);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-edit-dashboard") {
+    const current = state.trainingLoad.analysis.dashboard;
+    const name = window.prompt("Dashboard name", current?.name || "");
+    if (!name || !name.trim() || name.trim() === current?.name) return true;
+    await updateAnalysisDashboardMetadata({ name: name.trim() }, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-archive") {
+    if (!window.confirm("Archive this dashboard? It will become read-only.")) return true;
+    await archiveAnalysisDashboard(renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-edit-widget") {
+    const widget = state.trainingLoad.analysis.widgets.find((w) => w.id === action.dataset.widgetId);
+    state.trainingLoad.analysis.editor = { open: true, widgetId: action.dataset.widgetId, seriesId: widget?.series?.[0]?.id || "" };
+    renderTrainingLoad();
+    void loadAnalysisMetricDefinitions().then(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-analysis-close-editor") {
+    state.trainingLoad.analysis.editor = { open: false, widgetId: "", seriesId: "" };
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-widget-title") {
+    const title = (action.value || "").trim();
+    if (title) await updateAnalysisWidget(action.dataset.widgetId, { title }, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-widget-type") {
+    await updateAnalysisWidget(action.dataset.widgetId, { widgetType: action.value }, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-widget-group") {
+    await updateAnalysisWidget(action.dataset.widgetId, { groupBy: action.value }, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-widget-activity-filter" || type === "training-load-analysis-widget-component-filter") {
+    const widget = state.trainingLoad.analysis.widgets.find((w) => w.id === action.dataset.widgetId);
+    const current = { ...(widget?.local_filter_override || {}) };
+    if (type.endsWith("activity-filter")) current.activityId = action.value || null;
+    else current.componentId = action.value || null;
+    for (const key of Object.keys(current)) if (current[key] === "" || current[key] === null) delete current[key];
+    await updateAnalysisWidget(action.dataset.widgetId, { localFilterOverride: Object.keys(current).length ? current : null }, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-delete-widget") {
+    if (!window.confirm("Delete this widget?")) return true;
+    await deleteAnalysisWidget(action.dataset.widgetId, renderTrainingLoad);
+    state.trainingLoad.analysis.editor = { open: false, widgetId: "", seriesId: "" };
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-add-series") {
+    await addAnalysisSeries(action.dataset.widgetId, { builtInSeriesKey: "rpe", dataScopeLevel: "session", analyticalAggregation: "avg" }, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-select-series") {
+    state.trainingLoad.analysis.editor.seriesId = action.dataset.seriesId;
+    state.trainingLoad.analysis.selectedSeriesId = action.dataset.seriesId;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-series-bind-builtin") {
+    if (action.dataset.seriesId) {
+      await deleteAnalysisSeries(action.dataset.widgetId, action.dataset.seriesId, renderTrainingLoad);
+    }
+    await addAnalysisSeries(action.dataset.widgetId, { builtInSeriesKey: action.dataset.builtInKey }, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-series-bind-metric") {
+    if (action.dataset.seriesId) {
+      await resolveAnalysisSeries(action.dataset.widgetId, action.dataset.seriesId, action.dataset.metricId, renderTrainingLoad);
+    } else {
+      await addAnalysisSeries(action.dataset.widgetId, { metricDefinitionId: action.dataset.metricId }, renderTrainingLoad);
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-series-up" || type === "training-load-analysis-series-down") {
+    state.trainingLoad.analysis.selectedSeriesId = action.dataset.seriesId;
+    await reorderAnalysisSeries(action.dataset.widgetId, type.endsWith("up") ? -1 : 1, renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-delete-series") {
+    await deleteAnalysisSeries(action.dataset.widgetId, action.dataset.seriesId, renderTrainingLoad);
+    state.trainingLoad.analysis.editor.seriesId = "";
+    renderTrainingLoad();
+    return true;
+  }
+  if (type?.startsWith("training-load-analysis-series-")) {
+    const map = {
+      "training-load-analysis-series-label": { key: "displayLabel", value: action.value || null },
+      "training-load-analysis-series-axis": { key: "axis", value: action.value },
+      "training-load-analysis-series-color": { key: "color", value: action.value || null },
+      "training-load-analysis-series-scope": { key: "dataScopeLevel", value: action.value },
+      "training-load-analysis-series-aggregation": { key: "analyticalAggregation", value: action.value },
+      "training-load-analysis-series-source": { key: "sourcePolicy", value: action.value },
+      "training-load-analysis-series-role": { key: "aggregationRolePolicy", value: action.value },
+      "training-load-analysis-series-coverage": { key: "coveragePolicy", value: action.value },
+      "training-load-analysis-series-comparison": { key: "comparisonPeriod", value: action.value || null },
+    }[type];
+    if (map) {
+      await updateAnalysisSeries(action.dataset.widgetId, action.dataset.seriesId, { [map.key]: map.value }, renderTrainingLoad);
+      renderTrainingLoad();
+      return true;
+    }
+  }
+  if (type === "training-load-analysis-metric-search") {
+    state.trainingLoad.analysis.metricPicker.search = action.value ?? "";
     renderTrainingLoad();
     return true;
   }
@@ -686,6 +954,13 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // section is refetched immediately for instant visible feedback.
     for (const key of Object.keys(state.trainingLoad.weekly)) state.trainingLoad.weekly[key].data = null;
     renderTrainingLoad();
+    if (state.trainingLoad.section === "analysis") {
+      invalidateTrainingLoadAnalysis();
+      state.trainingLoad.analysis.queryResult = null;
+      await loadTrainingLoadAnalysis(renderTrainingLoad);
+      renderTrainingLoad();
+      return true;
+    }
     await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
     // Calendar (item 2's own "workspace and athlete/team filters"
     // requirement): the Calendar tab shares this exact Filter control but
@@ -1515,6 +1790,8 @@ export function resetTrainingLoadForWorkspaceChange() {
   cal.selectedActivityId = null; cal.selectedComponentId = null; cal.selectedResultsAthleteId = null;
   cal.activityDetail = { activityId: null, data: null, loading: false, error: "" };
   cal.metricPicker = { open: false, search: "", selectedIds: null, definitions: null, loading: false, error: "" };
+  invalidateTrainingLoadAnalysis();
+  state.trainingLoad.analysis = emptyTrainingLoadAnalysisState();
   state.trainingLoad.athleteWeekly.data = null;
   state.trainingLoad.athleteWeekly.error = "";
   state.trainingLoad.athleteWeekly.loading = false;

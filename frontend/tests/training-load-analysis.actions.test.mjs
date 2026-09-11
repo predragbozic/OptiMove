@@ -115,6 +115,7 @@ test("Analysis load selects active dashboard and queries it through the single b
       return { status: 200, body: { activeDashboard: { dashboard_id: dashboardId } } };
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}`) {
+      assert.equal(call.method, "GET");
       return { status: 200, body: detail() };
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) {
@@ -139,6 +140,41 @@ test("Analysis load selects active dashboard and queries it through the single b
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/query")).length, 1);
   assert.equal(fetchCalls.some((c) => c.url.includes("/widgets/") && c.url.endsWith("/query")), false);
   assert.deepEqual(fetchCalls.find((c) => c.url.endsWith("/query")).body.athleteIds, undefined);
+});
+
+test("Analysis renders real KPI and table results from the batch response", () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.widgets = [
+    widget(),
+    widget({
+      id: secondWidgetId,
+      widget_type: "table",
+      title: "Session load",
+      mobile_order: 2,
+      series: [{ ...widget().series[0], id: "99999999-9999-4999-8999-999999999999", display_label: "sRPE", built_in_series_key: "srpe" }],
+    }),
+  ];
+  state.trainingLoad.analysis.queryResult = {
+    dashboardRevision: 3,
+    widgets: [{
+      widgetId,
+      series: [{ seriesId, status: "ok", data: { current: [{ bucketKey: "2026-09-01", value: 7.5, unit: "RPE" }], comparison: [] } }],
+    }, {
+      widgetId: secondWidgetId,
+      series: [{
+        seriesId: "99999999-9999-4999-8999-999999999999",
+        status: "ok",
+        data: { current: [{ bucketKey: "2026-09-01", value: 420, unit: "AU", conflict: true, unitConflict: true }], comparison: [] },
+      }],
+    }],
+  };
+
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, />7\.5</);
+  assert.match(html, /Session load/);
+  assert.match(html, /420/);
+  assert.match(html, /Conflict \/ Unit conflict/);
 });
 
 test("Analysis actions save active dashboard, runtime filters, widgets, series and atomic layout", async () => {
