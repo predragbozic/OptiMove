@@ -321,7 +321,7 @@ function renderMetricPickerHtml(widget, series) {
   const definitions = (picker.definitions || []).filter((d) => !search || `${d.label} ${d.key} ${d.unit || ""} ${d.domainLabel || ""}`.toLowerCase().includes(search));
   const groups = new Map();
   for (const d of definitions) {
-    const key = d.domainLabel || "Other";
+    const key = d.domainLabel || d.categoryLabel || "Other";
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(d);
   }
@@ -339,7 +339,7 @@ function renderMetricPickerHtml(widget, series) {
           <p class="eyebrow">${escapeHtml(group)}</p>
           ${rows.map((d) => `<button type="button" class="tl-analysis-metric-option" data-action="training-load-analysis-series-bind-metric" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series?.id || "")}" data-metric-id="${escapeAttr(d.id)}">
             ${d.iconUrl ? `<img src="${escapeAttr(d.iconUrl)}" alt="">` : `<span class="tl-metric-icon-fallback">${escapeHtml((d.shortLabel || d.label || "?").slice(0, 1))}</span>`}
-            <span><strong>${escapeHtml(d.label)}</strong><small>${escapeHtml([d.unit, d.valueType, (d.scopeCapabilities || []).join("/")].filter(Boolean).join(" · "))}</small></span>
+            <span><strong>${escapeHtml(d.label)}</strong><small>${escapeHtml([d.unit, d.valueType, d.domainLabel, d.categoryLabel, (d.scopeCapabilities || []).join("/")].filter(Boolean).join(" · "))}</small></span>
           </button>`).join("")}
         </div>
       `).join("")}

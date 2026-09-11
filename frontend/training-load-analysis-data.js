@@ -423,11 +423,13 @@ export async function loadAnalysisMetricDefinitions() {
     ]);
     const domainNameById = new Map((domains.rows || []).map((d) => [d.id, d.name]));
     const categoryNameById = new Map((categories.rows || []).map((c) => [c.id, c.name]));
-    const groupByDefId = new Map();
+    const structureByDefId = new Map();
     for (const link of links.rows || []) {
-      if (groupByDefId.has(link.metric_definition_id)) continue;
-      const label = (link.domain_id && domainNameById.get(link.domain_id)) || (link.category_id && categoryNameById.get(link.category_id)) || null;
-      if (label) groupByDefId.set(link.metric_definition_id, label);
+      if (structureByDefId.has(link.metric_definition_id)) continue;
+      structureByDefId.set(link.metric_definition_id, {
+        domainLabel: link.domain_id ? domainNameById.get(link.domain_id) || null : null,
+        categoryLabel: link.category_id ? categoryNameById.get(link.category_id) || null : null,
+      });
     }
     picker.definitions = rows.map((d) => ({
       id: d.id,
@@ -438,7 +440,7 @@ export async function loadAnalysisMetricDefinitions() {
       iconUrl: d.icon_url,
       valueType: d.value_type,
       scopeCapabilities: d.scope_capabilities || [],
-      domainLabel: groupByDefId.get(d.id) || null,
+      ...(structureByDefId.get(d.id) || {}),
     }));
     metricDefinitionsWorkspaceKey = contextKey;
     picker.loading = false;

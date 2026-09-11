@@ -25,7 +25,7 @@ function installFetchMock(responder) {
 }
 
 const { handleTrainingLoadAction } = await import("../training-load-actions.js");
-const { loadTrainingLoadAnalysis } = await import("../training-load-analysis-data.js");
+const { loadTrainingLoadAnalysis, loadAnalysisMetricDefinitions } = await import("../training-load-analysis-data.js");
 const { renderTrainingLoadAnalysisHtml } = await import("../training-load-analysis-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
@@ -269,6 +269,87 @@ test("Analysis dashboard selection and runtime filters use the selected dashboar
   assert.equal(state.trainingLoad.analysis.selectedDashboardId, secondWidgetId);
   assert.equal(state.trainingLoad.analysis.runtimeFilter.activityId, activityId);
   assert.equal(state.trainingLoad.analysis.runtimeFilter.componentId, componentId);
+});
+
+test("Analysis widget and series configuration uses revision-guarded endpoints", async () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget(), widget({ id: secondWidgetId, mobile_order: 2 })];
+  installFetchMock(async (call) => {
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets`) {
+      assert.equal(call.method, "POST");
+      assert.equal(call.body.widgetType, "line_chart");
+      return { status: 201, body: detail({ dashboard: { revision: 4 } }) };
+    }
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}` && call.method === "PATCH") {
+      assert.equal(call.body.expectedWidgetRevision, 4);
+      assert.equal(call.body.title, "Readiness");
+      return { status: 200, body: detail({ dashboard: { revision: 5 } }) };
+    }
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${secondWidgetId}` && call.method === "DELETE") {
+      assert.equal(call.body.expectedWidgetRevision, 4);
+      return { status: 200, body: detail({ dashboard: { revision: 6 } }) };
+    }
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`) {
+      assert.equal(call.method, "POST");
+      assert.equal(call.body.builtInSeriesKey, "srpe");
+      return { status: 201, body: detail({ dashboard: { revision: 7 } }) };
+    }
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series/${seriesId}` && call.method === "DELETE") {
+      return { status: 200, body: detail({ dashboard: { revision: 8 } }) };
+    }
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series/reorder`) {
+      assert.equal(call.method, "PUT");
+      assert.deepEqual(call.body.order, [{ seriesId, seriesOrder: 1 }]);
+      return { status: 200, body: detail({ dashboard: { revision: 9 } }) };
+    }
+    if (call.url === `/api/training-load/dashboards/${dashboardId}` && call.method === "GET") return { status: 200, body: detail({ dashboard: { revision: 9 } }) };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) return { status: 200, body: { dashboardRevision: 9, widgets: [] } };
+    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { dashboards: [dashboard()] } };
+    return { status: 404, body: { error: "unexpected" } };
+  });
+
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-create-widget", widgetType: "line_chart" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-title", widgetId }, "Readiness"), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-add-series", widgetId }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-series", widgetId, seriesId }), { renderTrainingLoad });
+  state.trainingLoad.analysis.selectedSeriesId = seriesId;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-series-up", widgetId, seriesId }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-widget", widgetId: secondWidgetId }), { renderTrainingLoad });
+  assert.equal(fetchCalls.filter((call) => call.url.endsWith("/query")).length, 3);
+  assert.equal(fetchCalls.some((call) => call.url.includes("/widgets/") && call.url.endsWith("/query")), false);
+});
+
+test("Analysis metric picker filters catalog metadata and supports built-in binding", async () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.widgets = [widget()];
+  installFetchMock(async (call) => {
+    if (call.url.startsWith("/api/training-load/metrics/definitions")) return { status: 200, body: { rows: [{ id: metricId, key: "jump_height", label: "Jump height", short_label: "JH", unit: "cm", value_type: "number", scope_capabilities: ["session"] }], nextCursor: null } };
+    if (call.url === "/api/training-load/metrics/domains") return { status: 200, body: { rows: [{ id: "domain-1", name: "Testing" }] } };
+    if (call.url === "/api/training-load/metrics/categories") return { status: 200, body: { rows: [{ id: "category-1", name: "Jumping" }] } };
+    if (call.url === "/api/training-load/metrics/structure-links") return { status: 200, body: { rows: [{ metric_definition_id: metricId, domain_id: "domain-1", category_id: "category-1" }] } };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`) return { status: 201, body: detail({ dashboard: { revision: 4 } }) };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series/${seriesId}` && call.method === "DELETE") return { status: 200, body: detail({ dashboard: { revision: 5 } }) };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}` && call.method === "GET") return { status: 200, body: detail({ dashboard: { revision: 5 } }) };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) return { status: 200, body: { dashboardRevision: 5, widgets: [] } };
+    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { dashboards: [dashboard()] } };
+    return { status: 404, body: { error: "unexpected" } };
+  });
+
+  await loadAnalysisMetricDefinitions();
+  assert.equal(state.trainingLoad.analysis.metricPicker.definitions[0].domainLabel, "Testing");
+  assert.equal(state.trainingLoad.analysis.metricPicker.definitions[0].categoryLabel, "Jumping");
+  state.trainingLoad.analysis.editor = { open: true, widgetId, seriesId };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-metric-search" }, "jump"), { renderTrainingLoad });
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /Jump height/);
+  assert.match(html, /Testing/);
+  assert.match(html, /Jumping/);
+  assert.doesNotMatch(html, /Sprint speed/);
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-series-bind-builtin", widgetId, seriesId, builtInKey: "srpe" }), { renderTrainingLoad });
+  assert.equal(fetchCalls.some((call) => call.url.endsWith("/series") && call.body?.builtInSeriesKey === "srpe"), true);
 });
 
 test("Analysis reloads stale revisions and renders explicit status states", async () => {
