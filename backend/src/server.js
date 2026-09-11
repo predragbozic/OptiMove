@@ -23,6 +23,7 @@ import testsCheckInRouter from "./routes/testsCheckIn.js";
 import trainingLoadRouter from "./routes/trainingLoad.js";
 import trainingLoadMetricsRouter from "./routes/trainingLoadMetrics.js";
 import trainingActivityRouter from "./routes/trainingActivity.js";
+import trainingLoadDashboardRouter from "./routes/trainingLoadDashboard.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
@@ -97,6 +98,12 @@ app.use("/api/training-load/metrics", requireAuth, trainingLoadMetricsRouter);
 // activity results the same way; coach-only routes check via
 // requireActivityWorkspace inside the router.
 app.use("/api/training-activity", requireAuth, trainingActivityRouter);
+// requireAuth only (no requireCoach) — an athlete's own 'athlete' data
+// workspace is a real, supported data workspace for this feature
+// (self-view); coach-only lifecycle/write routes are gated by
+// canManageDashboardRow inside the router itself, same pattern as every
+// other training_load router above.
+app.use("/api/training-load/dashboards", requireAuth, trainingLoadDashboardRouter);
 app.get("/api/realtime", requireAuth, realtimeRouter);
 
 // Dev/test: this is a plain ES-modules frontend with no build step - script
