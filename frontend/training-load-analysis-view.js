@@ -249,8 +249,8 @@ function renderWidgetHtml(widget) {
   const layout = layoutFor(widget);
   const results = resultByWidgetId(widget.id);
   return `
-    <article class="panel tl-analysis-widget tl-analysis-widget-${escapeAttr(widget.widget_type)}" style="--tl-x:${Number(layout.x || 0)};--tl-y:${Number(layout.y || 0)};--tl-w:${Number(layout.width || 4)};--tl-h:${Number(layout.height || 4)};--tl-mobile:${Number(layout.mobileOrder || 0)}">
-      <header class="tl-analysis-widget-head">
+    <article class="panel tl-analysis-widget tl-analysis-widget-${escapeAttr(widget.widget_type)}" data-analysis-widget-id="${escapeAttr(widget.id)}" style="--tl-x:${Number(layout.x || 0)};--tl-y:${Number(layout.y || 0)};--tl-w:${Number(layout.width || 4)};--tl-h:${Number(layout.height || 4)};--tl-mobile:${Number(layout.mobileOrder || 0)}">
+      <header class="tl-analysis-widget-head ${state.trainingLoad.analysis.editMode && canEdit() ? "is-draggable" : ""}" data-analysis-drag-handle="${state.trainingLoad.analysis.editMode && canEdit() ? "true" : "false"}">
         <div>
           <p class="eyebrow">${escapeHtml(widget.widget_type.replace("_", " "))}</p>
           <h3>${escapeHtml(widget.title)}</h3>
@@ -259,6 +259,7 @@ function renderWidgetHtml(widget) {
       </header>
       ${renderWidgetBodyHtml(widget, results)}
       ${renderWidgetToolbarHtml(widget, layout)}
+      ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-resize-handle" data-analysis-resize-handle aria-label="Resize widget" title="Resize widget"></button>` : ""}
     </article>
   `;
 }

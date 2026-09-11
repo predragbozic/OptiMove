@@ -13047,6 +13047,7 @@ button.tests-assignment-card {
 .tl-analysis-widget {
   grid-column: calc(var(--tl-x) + 1) / span min(var(--tl-w), 12);
   min-height: calc(var(--tl-h) * 46px);
+  position: relative;
   display: grid;
   align-content: start;
   gap: 10px;
@@ -13058,6 +13059,31 @@ button.tests-assignment-card {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+}
+
+.tl-analysis-widget-head.is-draggable {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.tl-analysis-widget-head.is-draggable:active {
+  cursor: grabbing;
+}
+
+.tl-analysis-resize-handle {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  background: transparent;
+  cursor: nwse-resize;
+  touch-action: none;
 }
 
 .tl-analysis-widget-tools {

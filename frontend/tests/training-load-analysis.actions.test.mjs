@@ -24,7 +24,7 @@ function installFetchMock(responder) {
   };
 }
 
-const { handleTrainingLoadAction } = await import("../training-load-actions.js");
+const { handleTrainingLoadAction, handleTrainingLoadAnalysisPointerDown, handleTrainingLoadAnalysisPointerEnd, handleTrainingLoadAnalysisPointerMove } = await import("../training-load-actions.js");
 const { loadTrainingLoadAnalysis, loadAnalysisMetricDefinitions } = await import("../training-load-analysis-data.js");
 const { renderTrainingLoadAnalysisHtml } = await import("../training-load-analysis-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
@@ -104,6 +104,18 @@ function detail(overrides = {}) {
 }
 
 function renderTrainingLoad() {}
+
+function pointerEvent(widgetId, mode, pointerId, clientX, clientY) {
+  const handle = {
+    matches: (selector) => mode === "resize" && selector.includes("resize"),
+    closest: (selector) => selector.includes("data-analysis-widget-id") ? { dataset: { widgetId } } : null,
+  };
+  return {
+    pointerId, clientX, clientY,
+    target: { closest: () => handle },
+    preventDefault() {},
+  };
+}
 
 test("Analysis load selects active dashboard and queries it through the single batch endpoint", async () => {
   resetState();
@@ -269,6 +281,70 @@ test("Analysis dashboard selection and runtime filters use the selected dashboar
   assert.equal(state.trainingLoad.analysis.selectedDashboardId, secondWidgetId);
   assert.equal(state.trainingLoad.analysis.runtimeFilter.activityId, activityId);
   assert.equal(state.trainingLoad.analysis.runtimeFilter.componentId, componentId);
+});
+
+test("Analysis drag and resize stay local until one atomic layout save; cancel is local", async () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget()];
+  queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
+  installFetchMock(async (call) => {
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/layout`) {
+      assert.equal(call.method, "PUT");
+      assert.deepEqual(call.body, {
+        expectedRevision: 3,
+        layout: [{ widgetId, x: 1, y: 1, width: 4, height: 4, mobileOrder: 1 }],
+      });
+      return { status: 200, body: detail({ dashboard: { revision: 4 } }) };
+    }
+    if (call.url === `/api/training-load/dashboards/${dashboardId}`) return { status: 200, body: detail({ dashboard: { revision: 4 } }) };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) return { status: 200, body: { dashboardRevision: 4, widgets: [] } };
+    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { dashboards: [dashboard()] } };
+    return { status: 404, body: { error: "unexpected" } };
+  });
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "drag", 1, 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(pointerEvent(widgetId, "drag", 1, 100, 56));
+  assert.deepEqual(state.trainingLoad.analysis.layoutDraft[0], { widgetId, x: 1, y: 1, width: 3, height: 3, mobileOrder: 1 });
+  handleTrainingLoadAnalysisPointerEnd({ pointerId: 1 });
+  assert.equal(fetchCalls.length, 0);
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "resize", 2, 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(pointerEvent(widgetId, "resize", 2, 100, 56));
+  assert.deepEqual(state.trainingLoad.analysis.layoutDraft[0], { widgetId, x: 1, y: 1, width: 4, height: 4, mobileOrder: 1 });
+  handleTrainingLoadAnalysisPointerEnd({ pointerId: 2 });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-save-layout" }), { renderTrainingLoad });
+  assert.equal(fetchCalls.filter((call) => call.url.endsWith("/layout")).length, 1);
+
+  state.trainingLoad.analysis.layoutDraft = [{ widgetId, x: 9, y: 9, width: 1, height: 1, mobileOrder: 1 }];
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-cancel-layout" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.analysis.layoutDraft, null);
+  assert.equal(fetchCalls.filter((call) => call.url.endsWith("/layout")).length, 1);
+});
+
+test("Analysis mobile ordering uses the local draft and stale layout revisions reload", async () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget(), widget({ id: secondWidgetId, mobile_order: 2 })];
+  installFetchMock(async (call) => {
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/layout`) return { status: 409, body: { error: "staleRevision" } };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}`) return { status: 200, body: detail({ dashboard: { revision: 10 } }) };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) return { status: 200, body: { dashboardRevision: 10, widgets: [] } };
+    return { status: 404, body: { error: "unexpected" } };
+  });
+
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-mobile-down", widgetId }), { renderTrainingLoad });
+  assert.deepEqual(state.trainingLoad.analysis.layoutDraft.map((entry) => entry.widgetId), [secondWidgetId, widgetId]);
+  assert.deepEqual(state.trainingLoad.analysis.layoutDraft.map((entry) => entry.mobileOrder), [1, 2]);
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-save-layout" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.analysis.notice, "Dashboard changed on the server. Reloaded the latest version.");
+  assert.equal(state.trainingLoad.analysis.dashboard.revision, 10);
 });
 
 test("Analysis widget and series configuration uses revision-guarded endpoints", async () => {

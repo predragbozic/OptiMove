@@ -369,9 +369,7 @@ export async function resolveAnalysisSeries(widgetId, seriesId, metricDefinition
 }
 
 export function moveAnalysisWidgetMobile(widgetId, direction) {
-  const widgets = [...(state.trainingLoad.analysis.layoutDraft || state.trainingLoad.analysis.widgets.map((w) => ({
-    widgetId: w.id, x: w.x, y: w.y, width: w.width, height: w.height, mobileOrder: w.mobile_order,
-  })))].sort((a, b) => Number(a.mobileOrder || 0) - Number(b.mobileOrder || 0));
+  const widgets = [...ensureAnalysisLayoutDraft()].sort((a, b) => Number(a.mobileOrder || 0) - Number(b.mobileOrder || 0));
   const index = widgets.findIndex((w) => w.widgetId === widgetId);
   const next = index + direction;
   if (index < 0 || next < 0 || next >= widgets.length) return;
@@ -380,18 +378,35 @@ export function moveAnalysisWidgetMobile(widgetId, direction) {
 }
 
 export function resizeAnalysisWidget(widgetId, deltaWidth, deltaHeight) {
-  const a = state.trainingLoad.analysis;
-  const source = a.layoutDraft || a.widgets.map((w) => ({ widgetId: w.id, x: w.x, y: w.y, width: w.width, height: w.height, mobileOrder: w.mobile_order }));
-  a.layoutDraft = source.map((entry) => entry.widgetId === widgetId
-    ? { ...entry, width: Math.max(1, Math.min(12, Number(entry.width || 1) + deltaWidth)), height: Math.max(1, Number(entry.height || 1) + deltaHeight) }
-    : entry);
+  updateAnalysisLayoutDraft(widgetId, (entry) => ({
+    ...entry,
+    width: Math.max(1, Math.min(12, Number(entry.width || 1) + deltaWidth)),
+    height: Math.max(1, Number(entry.height || 1) + deltaHeight),
+  }));
 }
 
 export function nudgeAnalysisWidget(widgetId, dx, dy) {
+  updateAnalysisLayoutDraft(widgetId, (entry) => ({
+    ...entry,
+    x: Math.max(0, Math.min(11, Number(entry.x || 0) + dx)),
+    y: Math.max(0, Number(entry.y || 0) + dy),
+  }));
+}
+
+export function ensureAnalysisLayoutDraft() {
   const a = state.trainingLoad.analysis;
-  const source = a.layoutDraft || a.widgets.map((w) => ({ widgetId: w.id, x: w.x, y: w.y, width: w.width, height: w.height, mobileOrder: w.mobile_order }));
-  a.layoutDraft = source.map((entry) => entry.widgetId === widgetId
-    ? { ...entry, x: Math.max(0, Math.min(11, Number(entry.x || 0) + dx)), y: Math.max(0, Number(entry.y || 0) + dy) }
+  if (!a.layoutDraft) {
+    a.layoutDraft = a.widgets.map((w) => ({
+      widgetId: w.id, x: w.x, y: w.y, width: w.width, height: w.height, mobileOrder: w.mobile_order,
+    }));
+  }
+  return a.layoutDraft;
+}
+
+export function updateAnalysisLayoutDraft(widgetId, update) {
+  const a = state.trainingLoad.analysis;
+  a.layoutDraft = ensureAnalysisLayoutDraft().map((entry) => entry.widgetId === widgetId
+    ? (typeof update === "function" ? update(entry) : { ...entry, ...update })
     : entry);
 }
 

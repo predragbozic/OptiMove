@@ -34,6 +34,7 @@ import {
   createAnalysisWidget,
   deleteAnalysisSeries,
   deleteAnalysisWidget,
+  ensureAnalysisLayoutDraft,
   invalidateTrainingLoadAnalysis,
   loadAnalysisMetricDefinitions,
   loadDashboardDetail,
@@ -47,6 +48,7 @@ import {
   saveAnalysisLayout,
   setActiveAnalysisDashboard,
   updateAnalysisDashboardMetadata,
+  updateAnalysisLayoutDraft,
   updateAnalysisSeries,
   updateAnalysisWidget,
 } from "./training-load-analysis-data.js";
@@ -60,6 +62,68 @@ import {
   loadTrainingLoadCalendarWeek,
 } from "./training-load-calendar-data.js";
 import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
+
+let analysisLayoutPointer = null;
+
+function analysisLayoutCanEdit() {
+  const a = state.trainingLoad.analysis;
+  return state.trainingLoad.section === "analysis" && a.editMode && a.dashboard && a.dashboard.status !== "archived" && !a.dashboard.is_template && !a.saving;
+}
+
+function analysisLayoutMetrics() {
+  const grid = document.querySelector(".tl-analysis-grid");
+  const rect = grid?.getBoundingClientRect?.();
+  const width = Number(rect?.width) || 960;
+  return { column: Math.max(1, (width - 110) / 12), row: 56 };
+}
+
+export function handleTrainingLoadAnalysisPointerDown(event, renderTrainingLoad) {
+  if (!analysisLayoutCanEdit()) return false;
+  const target = event.target.closest?.("[data-analysis-drag-handle], [data-analysis-resize-handle]");
+  const widgetId = target?.closest?.("[data-analysis-widget-id]")?.dataset.widgetId;
+  if (!target || !widgetId) return false;
+  const entry = ensureAnalysisLayoutDraft().find((item) => item.widgetId === widgetId);
+  if (!entry) return false;
+  analysisLayoutPointer = {
+    pointerId: event.pointerId,
+    mode: target.matches("[data-analysis-resize-handle]") ? "resize" : "drag",
+    widgetId,
+    startX: event.clientX,
+    startY: event.clientY,
+    initial: { ...entry },
+    renderTrainingLoad,
+  };
+  event.preventDefault();
+  return true;
+}
+
+export function handleTrainingLoadAnalysisPointerMove(event) {
+  const pointer = analysisLayoutPointer;
+  if (!pointer || pointer.pointerId !== event.pointerId) return false;
+  const metrics = analysisLayoutMetrics();
+  const dx = Math.round((event.clientX - pointer.startX) / metrics.column);
+  const dy = Math.round((event.clientY - pointer.startY) / metrics.row);
+  if (pointer.mode === "resize") {
+    updateAnalysisLayoutDraft(pointer.widgetId, {
+      width: Math.max(1, Math.min(12, Number(pointer.initial.width || 1) + dx)),
+      height: Math.max(1, Number(pointer.initial.height || 1) + dy),
+    });
+  } else {
+    updateAnalysisLayoutDraft(pointer.widgetId, {
+      x: Math.max(0, Math.min(11, Number(pointer.initial.x || 0) + dx)),
+      y: Math.max(0, Number(pointer.initial.y || 0) + dy),
+    });
+  }
+  pointer.renderTrainingLoad?.();
+  event.preventDefault();
+  return true;
+}
+
+export function handleTrainingLoadAnalysisPointerEnd(event) {
+  if (!analysisLayoutPointer || (event?.pointerId != null && analysisLayoutPointer.pointerId !== event.pointerId)) return false;
+  analysisLayoutPointer = null;
+  return true;
+}
 
 // Every data-action="training-load-*" click/input in the Athlete Home card/
 // RPE form/weekly overlay and the coach Training Load tab routes through
