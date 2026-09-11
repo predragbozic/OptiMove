@@ -325,6 +325,39 @@ test("Analysis drag and resize stay local until one atomic layout save; cancel i
   assert.equal(fetchCalls.filter((call) => call.url.endsWith("/layout")).length, 1);
 });
 
+test("Analysis pointer layout clamps widget type limits and the 12-column grid", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [
+    widget({ x: 10, width: 3, height: 3 }),
+    widget({ id: secondWidgetId, widget_type: "table", x: 0, width: 12, height: 12, mobile_order: 2 }),
+  ];
+  queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "drag", 3, 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(pointerEvent(widgetId, "drag", 3, 9999, 0));
+  handleTrainingLoadAnalysisPointerEnd({ pointerId: 3 });
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].x, 9);
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "resize", 4, 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(pointerEvent(widgetId, "resize", 4, 9999, 9999));
+  handleTrainingLoadAnalysisPointerEnd({ pointerId: 4 });
+  assert.deepEqual(state.trainingLoad.analysis.layoutDraft[0], {
+    widgetId, x: 6, y: 0, width: 6, height: 6, mobileOrder: 1,
+  });
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(secondWidgetId, "resize", 5, 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(pointerEvent(secondWidgetId, "resize", 5, -9999, -9999));
+  handleTrainingLoadAnalysisPointerEnd({ pointerId: 5 });
+  assert.equal(state.trainingLoad.analysis.layoutDraft[1].width, 2);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[1].height, 3);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[1].x, 0);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[1].y, 0);
+});
+
 test("Analysis mobile ordering uses the local draft and stale layout revisions reload", async () => {
   resetState();
   state.trainingLoad.section = "analysis";

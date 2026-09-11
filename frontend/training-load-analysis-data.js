@@ -9,6 +9,13 @@ const DASHBOARD_DETAIL_NAMESPACE = "training-load-analysis-dashboard";
 const DASHBOARD_QUERY_NAMESPACE = "training-load-analysis-query";
 const METRIC_DEFINITIONS_NAMESPACE = "training-load-analysis-metrics";
 
+const ANALYSIS_LAYOUT_LIMITS = {
+  kpi: { minWidth: 1, maxWidth: 6, minHeight: 2, maxHeight: 6 },
+  table: { minWidth: 2, maxWidth: 12, minHeight: 3, maxHeight: 12 },
+  line_chart: { minWidth: 2, maxWidth: 12, minHeight: 3, maxHeight: 12 },
+  bar_chart: { minWidth: 2, maxWidth: 12, minHeight: 3, maxHeight: 12 },
+};
+
 let dashboardsGeneration = 0;
 let detailGeneration = 0;
 let queryGeneration = 0;
@@ -380,15 +387,15 @@ export function moveAnalysisWidgetMobile(widgetId, direction) {
 export function resizeAnalysisWidget(widgetId, deltaWidth, deltaHeight) {
   updateAnalysisLayoutDraft(widgetId, (entry) => ({
     ...entry,
-    width: Math.max(1, Math.min(12, Number(entry.width || 1) + deltaWidth)),
-    height: Math.max(1, Number(entry.height || 1) + deltaHeight),
+    width: Number(entry.width || 1) + deltaWidth,
+    height: Number(entry.height || 1) + deltaHeight,
   }));
 }
 
 export function nudgeAnalysisWidget(widgetId, dx, dy) {
   updateAnalysisLayoutDraft(widgetId, (entry) => ({
     ...entry,
-    x: Math.max(0, Math.min(11, Number(entry.x || 0) + dx)),
+    x: Number(entry.x || 0) + dx,
     y: Math.max(0, Number(entry.y || 0) + dy),
   }));
 }
@@ -396,18 +403,31 @@ export function nudgeAnalysisWidget(widgetId, dx, dy) {
 export function ensureAnalysisLayoutDraft() {
   const a = state.trainingLoad.analysis;
   if (!a.layoutDraft) {
-    a.layoutDraft = a.widgets.map((w) => ({
+    a.layoutDraft = a.widgets.map((w) => clampAnalysisLayoutEntry({
       widgetId: w.id, x: w.x, y: w.y, width: w.width, height: w.height, mobileOrder: w.mobile_order,
-    }));
+    }, w.widget_type));
   }
   return a.layoutDraft;
 }
 
 export function updateAnalysisLayoutDraft(widgetId, update) {
   const a = state.trainingLoad.analysis;
+  const widget = a.widgets.find((item) => item.id === widgetId);
   a.layoutDraft = ensureAnalysisLayoutDraft().map((entry) => entry.widgetId === widgetId
-    ? (typeof update === "function" ? update(entry) : { ...entry, ...update })
+    ? clampAnalysisLayoutEntry(typeof update === "function" ? update(entry) : { ...entry, ...update }, widget?.widget_type)
     : entry);
+}
+
+export function clampAnalysisLayoutEntry(entry, widgetType) {
+  const limits = ANALYSIS_LAYOUT_LIMITS[widgetType] || { minWidth: 1, maxWidth: 12, minHeight: 1, maxHeight: 24 };
+  const width = Math.max(limits.minWidth, Math.min(limits.maxWidth, Number(entry.width || limits.minWidth)));
+  return {
+    ...entry,
+    x: Math.max(0, Math.min(12 - width, Number(entry.x || 0))),
+    y: Math.max(0, Number(entry.y || 0)),
+    width,
+    height: Math.max(limits.minHeight, Math.min(limits.maxHeight, Number(entry.height || limits.minHeight))),
+  };
 }
 
 export function cancelAnalysisLayoutDraft() {

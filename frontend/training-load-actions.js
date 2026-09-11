@@ -91,8 +91,14 @@ export function handleTrainingLoadAnalysisPointerDown(event, renderTrainingLoad)
     startX: event.clientX,
     startY: event.clientY,
     initial: { ...entry },
+    captureTarget: target,
     renderTrainingLoad,
   };
+  try {
+    target.setPointerCapture?.(event.pointerId);
+  } catch {
+    // A detached target can reject capture during a fast rerender; document listeners still finish the gesture.
+  }
   event.preventDefault();
   return true;
 }
@@ -121,6 +127,11 @@ export function handleTrainingLoadAnalysisPointerMove(event) {
 
 export function handleTrainingLoadAnalysisPointerEnd(event) {
   if (!analysisLayoutPointer || (event?.pointerId != null && analysisLayoutPointer.pointerId !== event.pointerId)) return false;
+  try {
+    analysisLayoutPointer.captureTarget?.releasePointerCapture?.(analysisLayoutPointer.pointerId);
+  } catch {
+    // The pointer may already have been released by the browser.
+  }
   analysisLayoutPointer = null;
   return true;
 }
