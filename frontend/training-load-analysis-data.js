@@ -10,10 +10,10 @@ const DASHBOARD_QUERY_NAMESPACE = "training-load-analysis-query";
 const METRIC_DEFINITIONS_NAMESPACE = "training-load-analysis-metrics";
 
 const ANALYSIS_LAYOUT_LIMITS = {
-  kpi: { minWidth: 1, maxWidth: 6, minHeight: 2, maxHeight: 6 },
-  table: { minWidth: 2, maxWidth: 12, minHeight: 3, maxHeight: 12 },
-  line_chart: { minWidth: 2, maxWidth: 12, minHeight: 3, maxHeight: 12 },
-  bar_chart: { minWidth: 2, maxWidth: 12, minHeight: 3, maxHeight: 12 },
+  kpi: { minWidth: 2, maxWidth: 4, minHeight: 2, maxHeight: 3 },
+  table: { minWidth: 3, maxWidth: 12, minHeight: 3, maxHeight: 12 },
+  line_chart: { minWidth: 3, maxWidth: 12, minHeight: 3, maxHeight: 8 },
+  bar_chart: { minWidth: 3, maxWidth: 12, minHeight: 3, maxHeight: 8 },
 };
 
 let dashboardsGeneration = 0;
@@ -413,9 +413,10 @@ export function ensureAnalysisLayoutDraft() {
 export function updateAnalysisLayoutDraft(widgetId, update) {
   const a = state.trainingLoad.analysis;
   const widget = a.widgets.find((item) => item.id === widgetId);
-  a.layoutDraft = ensureAnalysisLayoutDraft().map((entry) => entry.widgetId === widgetId
+  const nextDraft = ensureAnalysisLayoutDraft().map((entry) => entry.widgetId === widgetId
     ? clampAnalysisLayoutEntry(typeof update === "function" ? update(entry) : { ...entry, ...update }, widget?.widget_type)
     : entry);
+  a.layoutDraft = resolveAnalysisLayoutCollision(nextDraft, widgetId);
 }
 
 export function clampAnalysisLayoutEntry(entry, widgetType) {
@@ -428,6 +429,30 @@ export function clampAnalysisLayoutEntry(entry, widgetType) {
     width,
     height: Math.max(limits.minHeight, Math.min(limits.maxHeight, Number(entry.height || limits.minHeight))),
   };
+}
+
+function analysisLayoutEntriesOverlap(left, right) {
+  const leftX = Number(left.x || 0);
+  const leftY = Number(left.y || 0);
+  const rightX = Number(right.x || 0);
+  const rightY = Number(right.y || 0);
+  return leftX < rightX + Number(right.width || 1)
+    && leftX + Number(left.width || 1) > rightX
+    && leftY < rightY + Number(right.height || 1)
+    && leftY + Number(left.height || 1) > rightY;
+}
+
+function resolveAnalysisLayoutCollision(entries, movedWidgetId) {
+  const movedIndex = entries.findIndex((entry) => entry.widgetId === movedWidgetId);
+  if (movedIndex < 0) return entries;
+  const moved = { ...entries[movedIndex] };
+  const others = entries.filter((entry) => entry.widgetId !== movedWidgetId);
+  while (others.some((entry) => analysisLayoutEntriesOverlap(moved, entry))) {
+    moved.y = Math.max(...others
+      .filter((entry) => analysisLayoutEntriesOverlap({ ...moved, y: Number(moved.y || 0) }, entry))
+      .map((entry) => Number(entry.y || 0) + Number(entry.height || 1)), Number(moved.y || 0) + 1);
+  }
+  return entries.map((entry) => entry.widgetId === movedWidgetId ? moved : entry);
 }
 
 export function cancelAnalysisLayoutDraft() {

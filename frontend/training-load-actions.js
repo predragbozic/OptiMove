@@ -64,6 +64,17 @@ import {
 import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 let analysisLayoutPointer = null;
+let analysisLayoutWindowCleanup = null;
+
+function analysisEventPointerId(event) {
+  return event?.pointerId ?? event?.pointerIdFallback ?? "mouse";
+}
+
+function analysisPointerEventMatches(pointer, event) {
+  const eventPointerId = analysisEventPointerId(event);
+  if (pointer.pointerId === eventPointerId) return true;
+  return eventPointerId === "mouse" && pointer.pointerId !== "touch";
+}
 
 function analysisLayoutCanEdit() {
   const a = state.trainingLoad.analysis;
@@ -77,15 +88,97 @@ function analysisLayoutMetrics() {
   return { column: Math.max(1, (width - 110) / 12), row: 56 };
 }
 
+function analysisLayoutDraftEntry(widgetId) {
+  return state.trainingLoad.analysis.layoutDraft?.find((entry) => entry.widgetId === widgetId) || null;
+}
+
+function patchAnalysisWidgetLayout(widgetId) {
+  const entry = analysisLayoutDraftEntry(widgetId);
+  if (!entry) return;
+  const widget = [...document.querySelectorAll("[data-analysis-widget-id]")]
+    .find((candidate) => candidate.dataset.analysisWidgetId === widgetId);
+  if (!widget) return;
+  widget.style.setProperty("--tl-x", String(entry.x));
+  widget.style.setProperty("--tl-y", String(entry.y));
+  widget.style.setProperty("--tl-w", String(entry.width));
+  widget.style.setProperty("--tl-h", String(entry.height));
+  widget.style.setProperty("--tl-mobile", String(entry.mobileOrder || 1));
+}
+
+function cleanupAnalysisLayoutWindowListeners() {
+  analysisLayoutWindowCleanup?.();
+  analysisLayoutWindowCleanup = null;
+}
+
+function analysisWindowPointerMove(event) {
+  if (event.type?.startsWith("touch")) {
+    const proxy = analysisTouchProxyEvent(event, analysisLayoutPointer?.captureTarget || event.target);
+    if (proxy) handleTrainingLoadAnalysisPointerMove(proxy);
+    return;
+  }
+  handleTrainingLoadAnalysisPointerMove(analysisMouseProxyEvent(event, analysisLayoutPointer?.captureTarget || event.target));
+}
+
+function analysisWindowPointerEnd(event) {
+  if (event.type?.startsWith("touch")) {
+    handleTrainingLoadAnalysisPointerEnd({ pointerIdFallback: "touch" });
+    return;
+  }
+  handleTrainingLoadAnalysisPointerEnd(analysisMouseProxyEvent(event, analysisLayoutPointer?.captureTarget || event.target));
+}
+
+function installAnalysisLayoutWindowListeners() {
+  cleanupAnalysisLayoutWindowListeners();
+  const targetWindow = globalThis.window;
+  const targetDocument = globalThis.document;
+  const moveTargets = [targetWindow, targetDocument].filter((target) => target?.addEventListener);
+  if (!moveTargets.length) return;
+  moveTargets.forEach((target) => {
+    target.addEventListener("pointermove", analysisWindowPointerMove, true);
+    target.addEventListener("mousemove", analysisWindowPointerMove, true);
+    target.addEventListener("touchmove", analysisWindowPointerMove, { passive: false, capture: true });
+    target.addEventListener("pointerup", analysisWindowPointerEnd, true);
+    target.addEventListener("pointercancel", analysisWindowPointerEnd, true);
+    target.addEventListener("mouseup", analysisWindowPointerEnd, true);
+    target.addEventListener("touchend", analysisWindowPointerEnd, { passive: true, capture: true });
+    target.addEventListener("touchcancel", analysisWindowPointerEnd, { passive: true, capture: true });
+  });
+  analysisLayoutWindowCleanup = () => {
+    moveTargets.forEach((target) => {
+      target.removeEventListener("pointermove", analysisWindowPointerMove, true);
+      target.removeEventListener("mousemove", analysisWindowPointerMove, true);
+      target.removeEventListener("touchmove", analysisWindowPointerMove, true);
+      target.removeEventListener("pointerup", analysisWindowPointerEnd, true);
+      target.removeEventListener("pointercancel", analysisWindowPointerEnd, true);
+      target.removeEventListener("mouseup", analysisWindowPointerEnd, true);
+      target.removeEventListener("touchend", analysisWindowPointerEnd, true);
+      target.removeEventListener("touchcancel", analysisWindowPointerEnd, true);
+    });
+  };
+}
+
+function analysisPointerTarget(event) {
+  const explicitTarget = event.target.closest?.("[data-analysis-drag-handle], [data-analysis-resize-handle]");
+  if (explicitTarget) return explicitTarget;
+  const widget = event.target.closest?.("[data-analysis-widget-id]");
+  if (!widget) return null;
+  const interactiveTarget = event.target.closest?.("button, input, select, textarea, a, [role='button'], [data-action]");
+  if (interactiveTarget) return null;
+  return widget.querySelector?.("[data-analysis-drag-handle='true']") || null;
+}
+
 export function handleTrainingLoadAnalysisPointerDown(event, renderTrainingLoad) {
+  if (analysisLayoutPointer) return true;
   if (!analysisLayoutCanEdit()) return false;
-  const target = event.target.closest?.("[data-analysis-drag-handle], [data-analysis-resize-handle]");
-  const widgetId = target?.closest?.("[data-analysis-widget-id]")?.dataset.widgetId;
+  const target = analysisPointerTarget(event);
+  const widgetElement = target?.closest?.("[data-analysis-widget-id]");
+  const widgetId = widgetElement?.dataset.analysisWidgetId;
   if (!target || !widgetId) return false;
   const entry = ensureAnalysisLayoutDraft().find((item) => item.widgetId === widgetId);
   if (!entry) return false;
+  const pointerId = analysisEventPointerId(event);
   analysisLayoutPointer = {
-    pointerId: event.pointerId,
+    pointerId,
     mode: target.matches("[data-analysis-resize-handle]") ? "resize" : "drag",
     widgetId,
     startX: event.clientX,
@@ -95,17 +188,19 @@ export function handleTrainingLoadAnalysisPointerDown(event, renderTrainingLoad)
     renderTrainingLoad,
   };
   try {
-    target.setPointerCapture?.(event.pointerId);
+    if (event.pointerId != null) target.setPointerCapture?.(event.pointerId);
   } catch {
     // A detached target can reject capture during a fast rerender; document listeners still finish the gesture.
   }
+  installAnalysisLayoutWindowListeners();
   event.preventDefault();
+  event.stopPropagation?.();
   return true;
 }
 
 export function handleTrainingLoadAnalysisPointerMove(event) {
   const pointer = analysisLayoutPointer;
-  if (!pointer || pointer.pointerId !== event.pointerId) return false;
+  if (!pointer || !analysisPointerEventMatches(pointer, event)) return false;
   const metrics = analysisLayoutMetrics();
   const dx = Math.round((event.clientX - pointer.startX) / metrics.column);
   const dy = Math.round((event.clientY - pointer.startY) / metrics.row);
@@ -120,20 +215,94 @@ export function handleTrainingLoadAnalysisPointerMove(event) {
       y: Math.max(0, Number(pointer.initial.y || 0) + dy),
     });
   }
-  pointer.renderTrainingLoad?.();
+  patchAnalysisWidgetLayout(pointer.widgetId);
   event.preventDefault();
+  event.stopPropagation?.();
   return true;
 }
 
 export function handleTrainingLoadAnalysisPointerEnd(event) {
-  if (!analysisLayoutPointer || (event?.pointerId != null && analysisLayoutPointer.pointerId !== event.pointerId)) return false;
+  if (!analysisLayoutPointer || ((event?.pointerId != null || event?.pointerIdFallback != null) && !analysisPointerEventMatches(analysisLayoutPointer, event))) return false;
+  const pointer = analysisLayoutPointer;
   try {
-    analysisLayoutPointer.captureTarget?.releasePointerCapture?.(analysisLayoutPointer.pointerId);
+    if (event?.pointerId != null) pointer.captureTarget?.releasePointerCapture?.(event.pointerId);
   } catch {
     // The pointer may already have been released by the browser.
   }
   analysisLayoutPointer = null;
+  cleanupAnalysisLayoutWindowListeners();
+  pointer.renderTrainingLoad?.();
   return true;
+}
+
+function analysisTouchProxyEvent(event, target) {
+  const touch = event.touches?.[0] || event.changedTouches?.[0];
+  if (!touch) return null;
+  return {
+    pointerIdFallback: "touch",
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    target,
+    preventDefault: () => {
+      if (event.cancelable) event.preventDefault();
+    },
+  };
+}
+
+function analysisMouseProxyEvent(event, target) {
+  return {
+    pointerId: event.pointerId,
+    pointerIdFallback: event.pointerId == null ? "mouse" : undefined,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    target,
+    preventDefault: () => event.preventDefault(),
+  };
+}
+
+function analysisDirectStart(event, target, renderTrainingLoad) {
+  if (event.type?.startsWith("touch")) {
+    const proxy = analysisTouchProxyEvent(event, target);
+    const started = proxy ? handleTrainingLoadAnalysisPointerDown(proxy, renderTrainingLoad) : false;
+    if (started) event.stopImmediatePropagation?.();
+    return started;
+  }
+  const started = handleTrainingLoadAnalysisPointerDown(analysisMouseProxyEvent(event, target), renderTrainingLoad);
+  if (started) event.stopImmediatePropagation?.();
+  return started;
+}
+
+function analysisIsInteractiveTarget(target) {
+  return Boolean(target.closest?.("button, input, select, textarea, a, [role='button'], [data-action]"));
+}
+
+export function bindTrainingLoadAnalysisLayoutInteractions(root = document, renderTrainingLoad) {
+  const widgets = root.querySelectorAll?.("[data-analysis-widget-id]") || [];
+  widgets.forEach((widget) => {
+    const dragHandle = widget.querySelector("[data-analysis-drag-handle='true']");
+    const resizeHandle = widget.querySelector("[data-analysis-resize-handle]");
+    if (dragHandle) {
+      dragHandle.removeAttribute?.("draggable");
+      ["pointerdown", "mousedown"].forEach((type) => {
+        dragHandle.addEventListener(type, (event) => analysisDirectStart(event, dragHandle, renderTrainingLoad));
+      });
+      dragHandle.addEventListener("touchstart", (event) => analysisDirectStart(event, dragHandle, renderTrainingLoad), { passive: false });
+    }
+    if (resizeHandle) {
+      ["pointerdown", "mousedown"].forEach((type) => {
+        resizeHandle.addEventListener(type, (event) => analysisDirectStart(event, resizeHandle, renderTrainingLoad));
+      });
+      resizeHandle.addEventListener("touchstart", (event) => analysisDirectStart(event, resizeHandle, renderTrainingLoad), { passive: false });
+    }
+    ["pointerdown", "mousedown"].forEach((type) => widget.addEventListener(type, (event) => {
+      if (!dragHandle || analysisIsInteractiveTarget(event.target)) return;
+      analysisDirectStart(event, dragHandle, renderTrainingLoad);
+    }));
+    widget.addEventListener("touchstart", (event) => {
+      if (!dragHandle || analysisIsInteractiveTarget(event.target)) return;
+      analysisDirectStart(event, dragHandle, renderTrainingLoad);
+    }, { passive: false });
+  });
 }
 
 // Every data-action="training-load-*" click/input in the Athlete Home card/

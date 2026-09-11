@@ -78,7 +78,7 @@ function renderTopBarHtml() {
       <label class="tl-analysis-control tl-analysis-id-control"><span>Activity</span><input type="text" data-action="training-load-analysis-runtime-activity" value="${escapeAttr(runtime.activityId || "")}" placeholder="Optional ID" aria-label="Analysis activity filter"></label>
       <label class="tl-analysis-control tl-analysis-id-control"><span>Component</span><input type="text" data-action="training-load-analysis-runtime-component" value="${escapeAttr(runtime.componentId || "")}" placeholder="Optional ID" aria-label="Analysis component filter"></label>
       <button type="button" class="plain-button compact-button" data-action="training-load-filter-open">Filter${filterCountLabel()}</button>
-      ${a.editMode ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-add-widget">Add widget</button>` : ""}
+      ${a.editMode ? `<button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add widget</span></button>` : ""}
     </div>
   `;
 }
@@ -116,6 +116,7 @@ function renderWidgetToolbarHtml(widget, layout) {
       <button type="button" class="plain-button icon-button" data-action="training-load-analysis-widget-wider" data-widget-id="${escapeAttr(widget.id)}" aria-label="Wider" title="Wider">+</button>
       <button type="button" class="plain-button icon-button" data-action="training-load-analysis-widget-narrower" data-widget-id="${escapeAttr(widget.id)}" aria-label="Narrower" title="Narrower">-</button>
       <button type="button" class="plain-button compact-button" data-action="training-load-analysis-edit-widget" data-widget-id="${escapeAttr(widget.id)}">Settings</button>
+      <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-widget" data-widget-id="${escapeAttr(widget.id)}">Delete</button>
       <button type="button" class="plain-button compact-button" data-action="training-load-analysis-widget-mobile-up" data-widget-id="${escapeAttr(widget.id)}">Move up</button>
       <button type="button" class="plain-button compact-button" data-action="training-load-analysis-widget-mobile-down" data-widget-id="${escapeAttr(widget.id)}">Move down</button>
       <span class="muted">${Number(layout.width || 0)}x${Number(layout.height || 0)}</span>
@@ -250,6 +251,8 @@ function renderWidgetHtml(widget) {
   const results = resultByWidgetId(widget.id);
   return `
     <article class="panel tl-analysis-widget tl-analysis-widget-${escapeAttr(widget.widget_type)}" data-analysis-widget-id="${escapeAttr(widget.id)}" style="--tl-x:${Number(layout.x || 0)};--tl-y:${Number(layout.y || 0)};--tl-w:${Number(layout.width || 4)};--tl-h:${Number(layout.height || 4)};--tl-mobile:${Number(layout.mobileOrder || 0)}">
+      ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-widget-move" data-analysis-drag-handle="true" aria-label="Move widget" title="Move widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M8 7l4-4 4 4M16 17l-4 4-4-4M7 8l-4 4 4 4M17 16l4-4-4-4"/></svg></button>` : ""}
+      ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-widget-delete" data-action="training-load-analysis-delete-widget" data-widget-id="${escapeAttr(widget.id)}" aria-label="Delete widget" title="Delete widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14"/></svg></button>` : ""}
       <header class="tl-analysis-widget-head ${state.trainingLoad.analysis.editMode && canEdit() ? "is-draggable" : ""}" data-analysis-drag-handle="${state.trainingLoad.analysis.editMode && canEdit() ? "true" : "false"}">
         <div>
           <p class="eyebrow">${escapeHtml(widget.widget_type.replace("_", " "))}</p>
@@ -259,7 +262,7 @@ function renderWidgetHtml(widget) {
       </header>
       ${renderWidgetBodyHtml(widget, results)}
       ${renderWidgetToolbarHtml(widget, layout)}
-      ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-resize-handle" data-analysis-resize-handle aria-label="Resize widget" title="Resize widget"></button>` : ""}
+      ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-resize-handle" data-analysis-resize-handle aria-label="Resize widget" title="Resize widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20h12V8M13 20l7-7M18 20l2-2"/></svg></button>` : ""}
     </article>
   `;
 }

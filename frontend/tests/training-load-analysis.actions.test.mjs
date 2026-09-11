@@ -1,19 +1,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 let queried = {};
+let queriedAll = {};
+let browserListeners = {};
+function addBrowserListener(type, handler) {
+  browserListeners[type] = browserListeners[type] || new Set();
+  browserListeners[type].add(handler);
+}
+function removeBrowserListener(type, handler) {
+  browserListeners[type]?.delete(handler);
+}
+function dispatchBrowserEvent(type, event) {
+  for (const handler of browserListeners[type] || []) handler(event);
+}
 globalThis.document = {
   querySelector: (sel) => queried[sel] || null,
-  querySelectorAll: () => [],
+  querySelectorAll: (sel) => queriedAll[sel] || [],
+  addEventListener: addBrowserListener,
+  removeEventListener: removeBrowserListener,
   body: { classList: { contains: () => false } },
 };
 globalThis.window = {
   confirm: () => true,
   prompt: (_message, fallback) => fallback,
   matchMedia: () => ({ matches: false }),
+  addEventListener: addBrowserListener,
+  removeEventListener: removeBrowserListener,
 };
 
 let fetchCalls;
+let pointerCaptureLog = [];
 function installFetchMock(responder) {
   fetchCalls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -24,7 +42,7 @@ function installFetchMock(responder) {
   };
 }
 
-const { handleTrainingLoadAction, handleTrainingLoadAnalysisPointerDown, handleTrainingLoadAnalysisPointerEnd, handleTrainingLoadAnalysisPointerMove } = await import("../training-load-actions.js");
+const { bindTrainingLoadAnalysisLayoutInteractions, handleTrainingLoadAction, handleTrainingLoadAnalysisPointerDown, handleTrainingLoadAnalysisPointerEnd, handleTrainingLoadAnalysisPointerMove } = await import("../training-load-actions.js");
 const { loadTrainingLoadAnalysis, loadAnalysisMetricDefinitions } = await import("../training-load-analysis-data.js");
 const { renderTrainingLoadAnalysisHtml } = await import("../training-load-analysis-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
@@ -41,10 +59,13 @@ const componentId = "88888888-8888-4888-8888-888888888888";
 
 function resetState() {
   clearAllViewCache();
+  pointerCaptureLog = [];
   state.currentUser = { id: "coach-1", activeWorkspace: { type: "private_coach", scopeId: "coach-1" } };
   state.trainingLoad = emptyTrainingLoadState();
   state.athletes = [];
   queried = {};
+  queriedAll = {};
+  browserListeners = {};
 }
 
 function fakeAction(dataset, value = "") {
@@ -105,15 +126,171 @@ function detail(overrides = {}) {
 
 function renderTrainingLoad() {}
 
+function analysisWidgetDataset(widgetId) {
+  return { analysisWidgetId: widgetId };
+}
+
 function pointerEvent(widgetId, mode, pointerId, clientX, clientY) {
   const handle = {
     matches: (selector) => mode === "resize" && selector.includes("resize"),
-    closest: (selector) => selector.includes("data-analysis-widget-id") ? { dataset: { widgetId } } : null,
+    closest: (selector) => selector.includes("data-analysis-widget-id") ? { dataset: analysisWidgetDataset(widgetId) } : null,
+    setPointerCapture: (id) => pointerCaptureLog.push(["capture", id]),
+    releasePointerCapture: (id) => pointerCaptureLog.push(["release", id]),
   };
+  const child = { closest: (selector) => handle };
   return {
     pointerId, clientX, clientY,
-    target: { closest: () => handle },
+    target: child,
     preventDefault() {},
+  };
+}
+
+function mouseEvent(widgetId, mode, clientX, clientY) {
+  const event = pointerEvent(widgetId, mode, undefined, clientX, clientY);
+  delete event.pointerId;
+  return event;
+}
+
+function widgetBodyMouseEvent(widgetId, clientX, clientY) {
+  const dragHandle = {
+    matches: () => false,
+    closest: (selector) => selector.includes("data-analysis-widget-id") ? { dataset: analysisWidgetDataset(widgetId) } : null,
+    setPointerCapture: (id) => pointerCaptureLog.push(["capture", id]),
+    releasePointerCapture: (id) => pointerCaptureLog.push(["release", id]),
+  };
+  const widgetEl = {
+    dataset: analysisWidgetDataset(widgetId),
+    querySelector: (selector) => selector.includes("data-analysis-drag-handle") ? dragHandle : null,
+  };
+  return {
+    clientX,
+    clientY,
+    target: {
+      closest: (selector) => {
+        if (selector.includes("data-analysis-widget-id")) return widgetEl;
+        if (selector.includes("button") || selector.includes("data-action")) return null;
+        return null;
+      },
+    },
+    preventDefault() {},
+  };
+}
+
+function eventTargetStub({ interactive = false } = {}) {
+  return {
+    closest: (selector) => {
+      if (interactive && (selector.includes("button") || selector.includes("data-action"))) return {};
+      return null;
+    },
+  };
+}
+
+function analysisElementStub(widgetId) {
+  const listeners = new Map();
+  const dragHandle = {
+    matches: (selector) => !selector.includes("resize"),
+    closest: (selector) => {
+      if (selector.includes("data-analysis-drag-handle")) return dragHandle;
+      if (selector.includes("data-analysis-widget-id")) return widgetEl;
+      return null;
+    },
+    setPointerCapture: (id) => pointerCaptureLog.push(["capture", id]),
+    releasePointerCapture: (id) => pointerCaptureLog.push(["release", id]),
+    addEventListener: (type, handler) => listeners.set(`drag:${type}`, handler),
+  };
+  const resizeHandle = {
+    matches: (selector) => selector.includes("resize"),
+    closest: (selector) => {
+      if (selector.includes("data-analysis-resize-handle")) return resizeHandle;
+      if (selector.includes("data-analysis-widget-id")) return widgetEl;
+      return null;
+    },
+    setPointerCapture: (id) => pointerCaptureLog.push(["capture", id]),
+    releasePointerCapture: (id) => pointerCaptureLog.push(["release", id]),
+    addEventListener: (type, handler) => listeners.set(`resize:${type}`, handler),
+  };
+  const widgetEl = {
+    dataset: analysisWidgetDataset(widgetId),
+    querySelector: (selector) => selector.includes("resize") ? resizeHandle : dragHandle,
+    addEventListener: (type, handler) => listeners.set(`widget:${type}`, handler),
+  };
+  return { dragHandle, resizeHandle, widgetEl, listeners };
+}
+
+function analysisDomTreeStub(widgetId) {
+  const listeners = new Map();
+  const styleValues = new Map();
+  const widgetEl = {
+    tagName: "ARTICLE",
+    dataset: analysisWidgetDataset(widgetId),
+    style: { setProperty: (name, value) => styleValues.set(name, value) },
+    querySelector: (selector) => {
+      if (selector.includes("data-analysis-resize-handle")) return resizeHandle;
+      if (selector.includes("data-analysis-drag-handle")) return dragHandle;
+      return null;
+    },
+    addEventListener: (type, handler) => {
+      listeners.set(`widget:${type}`, handler);
+    },
+    dispatchEvent: (event) => {
+      event.target = event.target || widgetEl;
+      listeners.get(`widget:${event.type}`)?.(event);
+      return true;
+    },
+  };
+  const dragHandle = {
+    tagName: "BUTTON",
+    dataset: {},
+    matches: (selector) => selector.includes("data-analysis-drag-handle") && !selector.includes("resize"),
+    closest: (selector) => {
+      if (selector.includes("data-analysis-drag-handle")) return dragHandle;
+      if (selector.includes("data-analysis-widget-id")) return widgetEl;
+      return null;
+    },
+    setPointerCapture: (id) => pointerCaptureLog.push(["capture", id]),
+    releasePointerCapture: (id) => pointerCaptureLog.push(["release", id]),
+    addEventListener: (type, handler) => {
+      listeners.set(`drag:${type}`, handler);
+    },
+    removeAttribute() {},
+    dispatchEvent: (event) => {
+      event.target = dragHandle;
+      listeners.get(`drag:${event.type}`)?.(event);
+      return true;
+    },
+  };
+  const resizeHandle = {
+    tagName: "BUTTON",
+    dataset: {},
+    matches: (selector) => selector.includes("data-analysis-resize-handle"),
+    closest: (selector) => {
+      if (selector.includes("data-analysis-resize-handle")) return resizeHandle;
+      if (selector.includes("data-analysis-widget-id")) return widgetEl;
+      return null;
+    },
+    setPointerCapture: (id) => pointerCaptureLog.push(["capture", id]),
+    releasePointerCapture: (id) => pointerCaptureLog.push(["release", id]),
+    addEventListener: (type, handler) => {
+      listeners.set(`resize:${type}`, handler);
+    },
+    dispatchEvent: (event) => {
+      event.target = resizeHandle;
+      listeners.get(`resize:${event.type}`)?.(event);
+      return true;
+    },
+  };
+  return { widgetEl, dragHandle, resizeHandle, styleValues };
+}
+
+function dispatchedPointerEvent(type, pointerId, clientX, clientY) {
+  return {
+    type,
+    pointerId,
+    clientX,
+    clientY,
+    preventDefault() {},
+    stopPropagation() {},
+    stopImmediatePropagation() {},
   };
 }
 
@@ -187,6 +364,30 @@ test("Analysis renders real KPI and table results from the batch response", () =
   assert.match(html, /Session load/);
   assert.match(html, /420/);
   assert.match(html, /Conflict \/ Unit conflict/);
+});
+
+test("Analysis edit layout markup exposes direct delete and CSS applies saved grid rows", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget({ y: 2, height: 3 })];
+
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /data-action="training-load-analysis-delete-widget"/);
+  assert.match(html, /class="tl-analysis-widget-delete"/);
+  assert.match(html, /class="tl-analysis-widget-move"/);
+  assert.match(html, /data-analysis-drag-handle="true"/);
+  assert.doesNotMatch(html, /draggable="true"/);
+  assert.match(html, /data-analysis-resize-handle/);
+
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.tl-analysis-widget\s*\{[\s\S]*grid-row:\s*calc\(var\(--tl-y\) \+ 1\) \/ span var\(--tl-h\);/);
+  assert.match(css, /\.tl-analysis-grid\s*\{[\s\S]*grid-auto-rows:\s*46px;/);
+  assert.match(css, /\.tl-analysis-resize-handle\s*\{[\s\S]*width:\s*42px;[\s\S]*height:\s*42px;/);
+  assert.match(css, /\.tl-analysis-widget-delete\s*\{/);
+  assert.match(css, /\.tl-analysis-widget-move\s*\{/);
 });
 
 test("Analysis actions save active dashboard, runtime filters, widgets, series and atomic layout", async () => {
@@ -291,12 +492,17 @@ test("Analysis drag and resize stay local until one atomic layout save; cancel i
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget()];
   queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
+  const styleUpdates = [];
+  queriedAll["[data-analysis-widget-id]"] = [{
+    dataset: analysisWidgetDataset(widgetId),
+    style: { setProperty: (name, value) => styleUpdates.push([name, value]) },
+  }];
   installFetchMock(async (call) => {
     if (call.url === `/api/training-load/dashboards/${dashboardId}/layout`) {
       assert.equal(call.method, "PUT");
       assert.deepEqual(call.body, {
         expectedRevision: 3,
-        layout: [{ widgetId, x: 1, y: 1, width: 4, height: 4, mobileOrder: 1 }],
+        layout: [{ widgetId, x: 1, y: 1, width: 4, height: 3, mobileOrder: 1 }],
       });
       return { status: 200, body: detail({ dashboard: { revision: 4 } }) };
     }
@@ -306,15 +512,30 @@ test("Analysis drag and resize stay local until one atomic layout save; cancel i
     return { status: 404, body: { error: "unexpected" } };
   });
 
-  assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "drag", 1, 0, 0), renderTrainingLoad), true);
+  let renderCount = 0;
+  const renderDuringPointer = () => { renderCount += 1; };
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "drag", 1, 0, 0), renderDuringPointer), true);
+  assert.deepEqual(pointerCaptureLog, [["capture", 1]]);
   handleTrainingLoadAnalysisPointerMove(pointerEvent(widgetId, "drag", 1, 100, 56));
+  handleTrainingLoadAnalysisPointerMove(pointerEvent(widgetId, "drag", 1, 110, 60));
   assert.deepEqual(state.trainingLoad.analysis.layoutDraft[0], { widgetId, x: 1, y: 1, width: 3, height: 3, mobileOrder: 1 });
+  assert.deepEqual(styleUpdates.slice(-5), [
+    ["--tl-x", "1"],
+    ["--tl-y", "1"],
+    ["--tl-w", "3"],
+    ["--tl-h", "3"],
+    ["--tl-mobile", "1"],
+  ]);
+  assert.equal(renderCount, 0);
   handleTrainingLoadAnalysisPointerEnd({ pointerId: 1 });
+  assert.equal(renderCount, 1);
+  assert.deepEqual(pointerCaptureLog, [["capture", 1], ["release", 1]]);
   assert.equal(fetchCalls.length, 0);
 
   assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "resize", 2, 0, 0), renderTrainingLoad), true);
   handleTrainingLoadAnalysisPointerMove(pointerEvent(widgetId, "resize", 2, 100, 56));
-  assert.deepEqual(state.trainingLoad.analysis.layoutDraft[0], { widgetId, x: 1, y: 1, width: 4, height: 4, mobileOrder: 1 });
+  assert.deepEqual(state.trainingLoad.analysis.layoutDraft[0], { widgetId, x: 1, y: 1, width: 4, height: 3, mobileOrder: 1 });
   handleTrainingLoadAnalysisPointerEnd({ pointerId: 2 });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-save-layout" }), { renderTrainingLoad });
   assert.equal(fetchCalls.filter((call) => call.url.endsWith("/layout")).length, 1);
@@ -333,7 +554,7 @@ test("Analysis pointer layout clamps widget type limits and the 12-column grid",
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [
     widget({ x: 10, width: 3, height: 3 }),
-    widget({ id: secondWidgetId, widget_type: "table", x: 0, width: 12, height: 12, mobile_order: 2 }),
+    widget({ id: secondWidgetId, widget_type: "table", x: 0, y: 20, width: 12, height: 12, mobile_order: 2 }),
   ];
   queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
 
@@ -346,16 +567,157 @@ test("Analysis pointer layout clamps widget type limits and the 12-column grid",
   handleTrainingLoadAnalysisPointerMove(pointerEvent(widgetId, "resize", 4, 9999, 9999));
   handleTrainingLoadAnalysisPointerEnd({ pointerId: 4 });
   assert.deepEqual(state.trainingLoad.analysis.layoutDraft[0], {
-    widgetId, x: 6, y: 0, width: 6, height: 6, mobileOrder: 1,
+    widgetId, x: 8, y: 0, width: 4, height: 3, mobileOrder: 1,
   });
 
   assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(secondWidgetId, "resize", 5, 0, 0), renderTrainingLoad), true);
   handleTrainingLoadAnalysisPointerMove(pointerEvent(secondWidgetId, "resize", 5, -9999, -9999));
   handleTrainingLoadAnalysisPointerEnd({ pointerId: 5 });
-  assert.equal(state.trainingLoad.analysis.layoutDraft[1].width, 2);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[1].width, 3);
   assert.equal(state.trainingLoad.analysis.layoutDraft[1].height, 3);
   assert.equal(state.trainingLoad.analysis.layoutDraft[1].x, 0);
-  assert.equal(state.trainingLoad.analysis.layoutDraft[1].y, 0);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[1].y, 20);
+});
+
+test("Analysis layout nudges overlapping widgets to the next free row", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [
+    widget({ x: 0, y: 0, width: 4, height: 3 }),
+    widget({ id: secondWidgetId, widget_type: "table", x: 0, y: 3, width: 6, height: 4, mobile_order: 2 }),
+  ];
+  queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "drag", 6, 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(pointerEvent(widgetId, "drag", 6, 0, 168));
+  handleTrainingLoadAnalysisPointerEnd({ pointerId: 6 });
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].y, 7);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[1].y, 3);
+});
+
+test("Analysis drag and resize also accept mouse fallback events without pointerId", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget()];
+  queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(mouseEvent(widgetId, "drag", 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(mouseEvent(widgetId, "drag", 110, 60));
+  handleTrainingLoadAnalysisPointerEnd({});
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].x, 1);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].y, 1);
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(mouseEvent(widgetId, "resize", 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(mouseEvent(widgetId, "resize", 110, 60));
+  handleTrainingLoadAnalysisPointerEnd({});
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].width, 4);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].height, 3);
+});
+
+test("Analysis drag can start from non-interactive widget body in edit mode", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget()];
+  queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(widgetBodyMouseEvent(widgetId, 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(widgetBodyMouseEvent(widgetId, 110, 60));
+  handleTrainingLoadAnalysisPointerEnd({});
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].x, 1);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].y, 1);
+});
+
+test("Analysis direct widget bindings start drag from the rendered card but ignore buttons", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget()];
+  queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
+  const { widgetEl, listeners } = analysisElementStub(widgetId);
+  const root = { querySelectorAll: () => [widgetEl] };
+
+  bindTrainingLoadAnalysisLayoutInteractions(root, renderTrainingLoad);
+  listeners.get("widget:mousedown")({
+    type: "mousedown",
+    clientX: 0,
+    clientY: 0,
+    target: eventTargetStub({ interactive: true }),
+    preventDefault() {},
+  });
+  assert.equal(state.trainingLoad.analysis.layoutDraft, null);
+
+  listeners.get("widget:mousedown")({
+    type: "mousedown",
+    clientX: 0,
+    clientY: 0,
+    target: eventTargetStub(),
+    preventDefault() {},
+  });
+  handleTrainingLoadAnalysisPointerMove(mouseEvent(widgetId, "drag", 110, 60));
+  handleTrainingLoadAnalysisPointerEnd({});
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].x, 1);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].y, 1);
+});
+
+test("Analysis delegated DOM pointer flow changes local drag and resize draft without PUT", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget({ id: "widget-1", widget_type: "table", x: 0, y: 0, width: 3, height: 3 })];
+  queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
+  const { widgetEl, dragHandle, resizeHandle, styleValues } = analysisDomTreeStub("widget-1");
+  queriedAll["[data-analysis-widget-id]"] = [widgetEl];
+  installFetchMock(async () => {
+    throw new Error("Drag/resize must not send requests");
+  });
+
+  bindTrainingLoadAnalysisLayoutInteractions({ querySelectorAll: () => [widgetEl] }, renderTrainingLoad);
+  dragHandle.dispatchEvent(dispatchedPointerEvent("pointerdown", 41, 0, 0));
+  dispatchBrowserEvent("pointermove", dispatchedPointerEvent("pointermove", 41, 110, 60));
+  dispatchBrowserEvent("pointerup", dispatchedPointerEvent("pointerup", 41, 110, 60));
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].x, 1);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].y, 1);
+  assert.equal(styleValues.get("--tl-x"), "1");
+  assert.equal(styleValues.get("--tl-y"), "1");
+
+  resizeHandle.dispatchEvent(dispatchedPointerEvent("pointerdown", 42, 0, 0));
+  dispatchBrowserEvent("pointermove", dispatchedPointerEvent("pointermove", 42, 220, 120));
+  dispatchBrowserEvent("pointerup", dispatchedPointerEvent("pointerup", 42, 220, 120));
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].width, 5);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].height, 5);
+  assert.equal(styleValues.get("--tl-w"), "5");
+  assert.equal(styleValues.get("--tl-h"), "5");
+  assert.equal(fetchCalls.length, 0);
+});
+
+test("Analysis mouse fallback continues a pointer gesture without resetting it", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget()];
+  queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
+
+  assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "drag", 19, 0, 0), renderTrainingLoad), true);
+  assert.equal(handleTrainingLoadAnalysisPointerDown(mouseEvent(widgetId, "drag", 0, 0), renderTrainingLoad), true);
+  handleTrainingLoadAnalysisPointerMove(mouseEvent(widgetId, "drag", 110, 60));
+  handleTrainingLoadAnalysisPointerEnd({});
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].x, 1);
+  assert.equal(state.trainingLoad.analysis.layoutDraft[0].y, 1);
 });
 
 test("Analysis mobile ordering uses the local draft and stale layout revisions reload", async () => {

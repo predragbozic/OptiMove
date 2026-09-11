@@ -13039,19 +13039,81 @@ button.tests-assignment-card {
 .tl-analysis-grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-auto-rows: minmax(46px, auto);
+  grid-auto-rows: 46px;
   gap: 10px;
   align-items: stretch;
 }
 
 .tl-analysis-widget {
   grid-column: calc(var(--tl-x) + 1) / span min(var(--tl-w), 12);
+  grid-row: calc(var(--tl-y) + 1) / span var(--tl-h);
   min-height: calc(var(--tl-h) * 46px);
   position: relative;
   display: grid;
   align-content: start;
   gap: 10px;
-  overflow: hidden;
+  overflow: visible;
+}
+
+.tl-analysis-widget-move,
+.tl-analysis-widget-delete {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tl-analysis-widget-move {
+  right: 42px;
+  border: 1px solid #99d5c9;
+  border-radius: 999px;
+  background: #effaf7;
+  color: #0f766e;
+  cursor: grab;
+  touch-action: none;
+}
+
+.tl-analysis-widget-delete {
+  right: 8px;
+  border: 1px solid #fecaca;
+  border-radius: 999px;
+  background: #fff5f5;
+  color: #b91c1c;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.tl-analysis-widget-move svg,
+.tl-analysis-widget-delete svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tl-analysis-widget-move:hover,
+.tl-analysis-widget-move:focus-visible {
+  background: #dff1ee;
+  border-color: #72c8bb;
+}
+
+.tl-analysis-widget-delete:hover,
+.tl-analysis-widget-delete:focus-visible {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.tl-analysis-widget:has([data-analysis-drag-handle='true']) {
+  touch-action: none;
 }
 
 .tl-analysis-widget-head {
@@ -13062,8 +13124,14 @@ button.tests-assignment-card {
 }
 
 .tl-analysis-widget-head.is-draggable {
+  position: relative;
+  z-index: 2;
+  padding-right: 32px;
   cursor: grab;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: auto;
   touch-action: none;
 }
 
@@ -13073,17 +13141,37 @@ button.tests-assignment-card {
 
 .tl-analysis-resize-handle {
   position: absolute;
-  right: 7px;
-  bottom: 7px;
-  width: 16px;
-  height: 16px;
+  z-index: 3;
+  right: 0;
+  bottom: 0;
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
   padding: 0;
-  border: 0;
-  border-right: 2px solid var(--muted);
-  border-bottom: 2px solid var(--muted);
-  background: transparent;
+  border: 1px solid #99d5c9;
+  pointer-events: auto;
+  background: #effaf7;
+  border-bottom-right-radius: var(--radius);
+  color: #0f766e;
   cursor: nwse-resize;
   touch-action: none;
+}
+
+.tl-analysis-resize-handle svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tl-analysis-resize-handle:hover,
+.tl-analysis-resize-handle:focus-visible {
+  background: #dff1ee;
+  border-color: #72c8bb;
 }
 
 .tl-analysis-widget-tools {
@@ -13199,12 +13287,30 @@ button.tests-assignment-card {
   cursor: not-allowed;
 }
 
+.tl-analysis-add-widget-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.tl-analysis-button-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
 .tl-analysis-chart.is-line .tl-analysis-chart-track span {
   height: 3px;
   margin-top: 3px;
 }
 
 .tl-analysis-modal {
+  position: relative;
+  z-index: 1;
   width: min(760px, calc(100vw - 28px));
   max-height: min(820px, calc(100vh - 28px));
   overflow: auto;

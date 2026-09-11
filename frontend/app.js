@@ -61,7 +61,7 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { handleTrainingLoadAction, handleTrainingLoadAnalysisPointerDown, handleTrainingLoadAnalysisPointerEnd, handleTrainingLoadAnalysisPointerMove, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
 import { loadTrainingLoadAnalysis } from "./training-load-analysis-data.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
@@ -413,12 +413,22 @@ function bindEvents() {
   // always end it. See tests-actions.js's start/extend/endTestsCalendarDrag.
   els.content.addEventListener("pointerdown", handleContentPointerDown);
   document.addEventListener("pointermove", handleContentPointerMove);
+  document.addEventListener("touchstart", (event) => {
+    const normalized = normalizeTouchPointerEvent(event);
+    if (normalized) handleContentPointerDown(normalized);
+  }, { passive: false, capture: true });
+  document.addEventListener("touchmove", (event) => {
+    const normalized = normalizeTouchPointerEvent(event);
+    if (normalized) handleContentPointerMove(normalized);
+  }, { passive: false, capture: true });
   // Item 2 (Daily auto-close): endTestsCalendarDrag() returns true exactly
   // when it just auto-closed the calendar on a genuinely completed range -
   // that's a structural show/hide the lightweight patchTestsCalendarDom()
   // can't express, so only THAT case gets a full renderTests().
-  document.addEventListener("pointerup", (event) => { handleTrainingLoadAnalysisPointerEnd(event); if (endTestsCalendarDrag()) renderTests(); });
-  document.addEventListener("pointercancel", (event) => { handleTrainingLoadAnalysisPointerEnd(event); if (endTestsCalendarDrag()) renderTests(); });
+  document.addEventListener("pointerup", () => { if (endTestsCalendarDrag()) renderTests(); });
+  document.addEventListener("pointercancel", () => { if (endTestsCalendarDrag()) renderTests(); });
+  document.addEventListener("touchend", () => { if (endTestsCalendarDrag()) renderTests(); }, { passive: true, capture: true });
+  document.addEventListener("touchcancel", () => { if (endTestsCalendarDrag()) renderTests(); }, { passive: true, capture: true });
   document.addEventListener("click", handleGlobalClick);
   document.addEventListener("submit", handleGlobalSubmit);
   document.addEventListener("error", handleImageError, true);
@@ -827,12 +837,13 @@ function handleContentFocusIn(event) {
 }
 
 function handleContentPointerDown(event) {
-  if (handleTrainingLoadAnalysisPointerDown(event, renderActiveTrainingLoadSurface)) return;
   const dayEl = event.target.closest('[data-action="tests-calendar-day-mousedown"]');
-  if (!dayEl) return;
+  if (!dayEl) return false;
   if (startTestsCalendarDrag(dayEl)) {
     event.preventDefault(); // stops the browser's own text-selection/touch-scroll from fighting the calendar drag
+    return true;
   }
+  return false;
 }
 
 // Pointer Events don't give touch drags the mouse's own "mouseover fires on
@@ -846,13 +857,28 @@ function handleContentPointerDown(event) {
 // cheap to run on every pointermove across the whole app) to only the
 // moments a calendar drag is actually in progress.
 function handleContentPointerMove(event) {
-  if (handleTrainingLoadAnalysisPointerMove(event)) return;
-  if (!isTestsCalendarDragging()) return;
+  if (!isTestsCalendarDragging()) return false;
   const dayEl = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-action="tests-calendar-day-mousedown"]');
-  if (!dayEl) return;
+  if (!dayEl) return false;
   if (extendTestsCalendarDrag(dayEl)) {
     event.preventDefault(); // stops the page/panel from scrolling under an in-progress touch drag
+    return true;
   }
+  return false;
+}
+
+function normalizeTouchPointerEvent(event) {
+  const touch = event.touches?.[0] || event.changedTouches?.[0];
+  if (!touch) return null;
+  return {
+    pointerIdFallback: "touch",
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    target: event.target,
+    preventDefault: () => {
+      if (event.cancelable) event.preventDefault();
+    },
+  };
 }
 
 function handleContentInput(event) {
@@ -1891,6 +1917,9 @@ async function loadTrainingLoad() {
 
 function renderTrainingLoad() {
   els.content.innerHTML = renderTrainingLoadCoachHtml();
+  if (state.trainingLoad.section === "analysis") {
+    bindTrainingLoadAnalysisLayoutInteractions(els.content, renderActiveTrainingLoadSurface);
+  }
 }
 
 // Every training-load-* action can fire from either surface it appears on
