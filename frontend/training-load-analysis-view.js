@@ -50,11 +50,43 @@ function canEdit() {
   return Boolean(d) && d.status !== "archived" && !d.is_template;
 }
 
-function renderTopBarHtml() {
+// 3B3 UX slice: the "Choose activity" chip replaces the old raw Activity/
+// Component ID text inputs - it always shows the activity's real name and
+// date (never its UUID), and the Component select only appears once an
+// activity is chosen, populated from that activity's own components (see
+// training-load-analysis-open-in-analysis in training-load-actions.js,
+// which is the only place selectedActivity/componentOptions get filled in,
+// from the existing Calendar -> activity detail hand-off).
+function renderActivityPickerHtml() {
   const a = state.trainingLoad.analysis;
   const runtime = a.runtimeFilter || {};
+  if (!runtime.activityId) {
+    return `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-choose-activity">Choose activity</button>`;
+  }
+  const activity = a.selectedActivity;
+  return `
+    <div class="tl-analysis-activity-picker">
+      <span class="tl-analysis-activity-chip">
+        <strong>${escapeHtml(activity?.name || "Activity")}</strong>
+        <small>${activity?.date ? escapeHtml(formatDate(activity.date)) : ""}</small>
+      </span>
+      <button type="button" class="plain-button icon-button" data-action="training-load-analysis-clear-activity" aria-label="Clear activity" title="Clear activity">&times;</button>
+      ${(a.componentOptions || []).length ? `
+        <label class="tl-analysis-control">
+          <span>Component</span>
+          <select data-action="training-load-analysis-runtime-component-select" aria-label="Analysis component filter">
+            <option value="">Whole session</option>
+            ${a.componentOptions.map((c) => optionHtml(c.id, c.name, runtime.componentId || "")).join("")}
+          </select>
+        </label>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderTopBarHtml() {
+  const a = state.trainingLoad.analysis;
   const dashboards = a.dashboards || [];
-  const templates = dashboards.filter((d) => d.is_template && d.status !== "archived");
   return `
     <div class="tl-analysis-topbar">
       <label class="tl-analysis-control">
@@ -65,20 +97,11 @@ function renderTopBarHtml() {
         </select>
       </label>
       <button type="button" class="plain-button compact-button" data-action="training-load-analysis-create">Create</button>
-      <label class="tl-analysis-control">
-        <span>Template</span>
-        <select data-action="training-load-analysis-clone-template">
-          <option value="">Clone template</option>
-          ${templates.map((d) => optionHtml(d.id, d.name, "")).join("")}
-        </select>
-      </label>
       <button type="button" class="plain-button compact-button ${a.editMode ? "is-active" : ""}" data-action="training-load-analysis-toggle-edit" ${canEdit() ? "" : "disabled"}>${a.editMode ? "Done" : "Edit"}</button>
       <label class="tl-analysis-control tl-analysis-date-control"><span>From</span><input type="date" data-action="training-load-analysis-period-from" value="${escapeAttr(a.period.dateFrom)}"></label>
       <label class="tl-analysis-control tl-analysis-date-control"><span>To</span><input type="date" data-action="training-load-analysis-period-to" value="${escapeAttr(a.period.dateTo)}"></label>
-      <label class="tl-analysis-control tl-analysis-id-control"><span>Activity</span><input type="text" data-action="training-load-analysis-runtime-activity" value="${escapeAttr(runtime.activityId || "")}" placeholder="Optional ID" aria-label="Analysis activity filter"></label>
-      <label class="tl-analysis-control tl-analysis-id-control"><span>Component</span><input type="text" data-action="training-load-analysis-runtime-component" value="${escapeAttr(runtime.componentId || "")}" placeholder="Optional ID" aria-label="Analysis component filter"></label>
+      ${renderActivityPickerHtml()}
       <button type="button" class="plain-button compact-button" data-action="training-load-filter-open">Filter${filterCountLabel()}</button>
-      ${a.editMode ? `<button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add widget</span></button>` : ""}
     </div>
   `;
 }
@@ -280,22 +303,25 @@ function renderGridHtml() {
         <h3>${escapeHtml(a.dashboard.name)}</h3>
         ${a.dashboard.description ? `<p class="muted">${escapeHtml(a.dashboard.description)}</p>` : ""}
       </div>
-      ${a.editMode && canEdit() ? `
+      ${canEdit() ? `
         <div class="tl-analysis-layout-actions">
-          ${a.dashboard.id !== a.activeDashboardId ? `<button type="button" class="plain-button compact-button tl-analysis-active-action" data-action="training-load-analysis-set-active">Set active</button>` : `<span class="tl-analysis-active-badge">Active dashboard</span>`}
-          <button type="button" class="plain-button compact-button" data-action="training-load-analysis-save-layout" ${a.layoutDraft && !a.saving ? "" : "disabled"}>Save layout</button>
-          <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.layoutDraft ? "" : "disabled"}>Cancel</button>
-          <button type="button" class="plain-button compact-button" data-action="training-load-analysis-edit-dashboard">Metadata</button>
-          <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-archive">Archive</button>
-        </div>
-      ` : ""}
-      ${!a.editMode && canEdit() && a.dashboard.id !== a.activeDashboardId ? `
-        <div class="tl-analysis-layout-actions">
-          <button type="button" class="plain-button compact-button tl-analysis-active-action" data-action="training-load-analysis-set-active">Set active</button>
+          <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add widget</span></button>
+          ${a.editMode ? `
+            ${a.dashboard.id !== a.activeDashboardId ? `<button type="button" class="plain-button compact-button tl-analysis-active-action" data-action="training-load-analysis-set-active">Set active</button>` : `<span class="tl-analysis-active-badge">Active dashboard</span>`}
+            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-save-layout" ${a.layoutDraft && !a.saving ? "" : "disabled"}>Save layout</button>
+            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.layoutDraft ? "" : "disabled"}>Cancel</button>
+            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-edit-dashboard">Metadata</button>
+            <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-archive">Archive</button>
+          ` : (a.dashboard.id !== a.activeDashboardId ? `<button type="button" class="plain-button compact-button tl-analysis-active-action" data-action="training-load-analysis-set-active">Set active</button>` : "")}
         </div>
       ` : ""}
     </section>
-    ${a.dashboard.is_template ? `<p class="tl-analysis-status is-unresolved">Clone this template before querying or editing it.</p>` : ""}
+    ${a.dashboard.is_template ? `
+      <div class="tl-analysis-template-banner">
+        <p class="tl-analysis-status is-unresolved">This is a template. Clone it before querying or editing it.</p>
+        <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-clone-template" data-template-id="${escapeAttr(a.dashboard.id)}">Use template</button>
+      </div>
+    ` : ""}
     ${a.dashboard.status === "archived" ? `<p class="tl-analysis-status is-unresolved">Archived dashboards are read-only.</p>` : ""}
     ${widgets.length ? `<div class="tl-analysis-grid">${widgets.map(renderWidgetHtml).join("")}</div>` : `<section class="panel tl-analysis-empty"><h3>No widgets yet</h3><p class="muted">Enter Edit mode and add a KPI, table, line chart or bar chart.</p></section>`}
   `;

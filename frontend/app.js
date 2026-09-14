@@ -2155,6 +2155,15 @@ async function handleContentClick(event) {
   if (!action) return;
 
   const type = action.dataset.action;
+  // 3B3 UX slice: clicking anywhere in the Analysis From/To field (not just
+  // the tiny native calendar-icon glyph) opens the date picker. The label
+  // wraps the input, so a click on the "From"/"To" text also lands here via
+  // the browser's own label -> control click forwarding (target becomes the
+  // input itself either way) - falls through to the existing period-from/
+  // period-to query refresh below, unchanged.
+  if (type === "training-load-analysis-period-from" || type === "training-load-analysis-period-to") {
+    action.showPicker?.();
+  }
   if (type.startsWith("builder-")) {
     void handleBuilderAction(action).catch(renderBuilderError);
     return;

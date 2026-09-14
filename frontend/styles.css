@@ -12961,6 +12961,66 @@ button.tests-assignment-card {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
+  /* item 1: stays visible while the dashboard grid scrolls underneath it -
+     the outer Training Load tab strip isn't sticky, so this simply sticks
+     to the true viewport top, same containing block .sidebar already uses. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.tl-analysis-activity-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tl-analysis-activity-chip {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 34px;
+  justify-content: center;
+  padding: 4px 10px;
+  border: 1px solid #99d5c9;
+  border-radius: var(--radius);
+  background: #effaf7;
+  color: #0f766e;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.tl-analysis-activity-chip strong {
+  font-size: 13px;
+}
+
+.tl-analysis-activity-chip small {
+  color: #0f766e;
+  opacity: 0.8;
+}
+
+.tl-analysis-template-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tl-analysis-picker-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid #99d5c9;
+  border-radius: var(--radius);
+  background: #effaf7;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .tl-analysis-control {
@@ -12997,10 +13057,6 @@ button.tests-assignment-card {
 
 .tl-analysis-date-control {
   min-width: 132px;
-}
-
-.tl-analysis-id-control {
-  min-width: 190px;
 }
 
 .tl-analysis-primary {
@@ -13404,8 +13460,17 @@ button.tests-assignment-card {
   }
   .tl-analysis-control,
   .tl-analysis-date-control,
-  .tl-analysis-id-control,
   .tl-analysis-topbar .plain-button {
+    width: 100%;
+  }
+  .tl-analysis-activity-picker,
+  .tl-analysis-template-banner,
+  .tl-analysis-picker-banner {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .tl-analysis-activity-picker .tl-analysis-control {
     width: 100%;
   }
   .tl-analysis-grid {

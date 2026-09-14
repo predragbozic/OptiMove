@@ -483,6 +483,14 @@ export const emptyTrainingLoadAnalysisState = (overrides = {}) => ({
   layoutDraft: null,
   period: { dateFrom: "", dateTo: "" },
   runtimeFilter: { athleteIds: [], activityId: "", componentId: "" },
+  // 3B3 UX slice: the runtime activity filter is now set via the Calendar
+  // handoff (Choose activity -> activity detail -> Open in Analysis), never
+  // typed as a raw UUID - selectedActivity/componentOptions are the display
+  // name/date and the chosen activity's own components, kept alongside the
+  // real runtimeFilter.activityId/componentId ids the query payload sends.
+  selectedActivity: null,
+  componentOptions: [],
+  pickingActivity: false,
   metricPicker: { search: "", definitions: null, loading: false, error: "" },
   editor: { open: false, widgetId: "", seriesId: "" },
   selectedSeriesId: "",

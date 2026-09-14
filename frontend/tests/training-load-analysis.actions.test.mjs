@@ -43,7 +43,7 @@ function installFetchMock(responder) {
 }
 
 const { bindTrainingLoadAnalysisLayoutInteractions, handleTrainingLoadAction, handleTrainingLoadAnalysisPointerDown, handleTrainingLoadAnalysisPointerEnd, handleTrainingLoadAnalysisPointerMove } = await import("../training-load-actions.js");
-const { loadTrainingLoadAnalysis, loadAnalysisMetricDefinitions } = await import("../training-load-analysis-data.js");
+const { loadTrainingLoadAnalysis, loadAnalysisMetricDefinitions, queryAnalysisDashboard } = await import("../training-load-analysis-data.js");
 const { renderTrainingLoadAnalysisHtml } = await import("../training-load-analysis-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
@@ -440,8 +440,15 @@ test("Analysis actions save active dashboard, runtime filters, widgets, series a
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-set-active" }), { renderTrainingLoad });
   assert.equal(state.trainingLoad.analysis.activeDashboardId, dashboardId);
 
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-runtime-activity" }, activityId), { renderTrainingLoad });
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-runtime-component" }, componentId), { renderTrainingLoad });
+  // 3B3 UX slice: the runtime activity/component filter is now set via the
+  // Calendar hand-off (training-load-analysis-open-in-analysis - see
+  // training-load-calendar.actions.test.mjs), never typed here - exercise
+  // the same underlying state fields + query call directly to keep proving
+  // the batch-query payload contract this test is actually about.
+  state.trainingLoad.analysis.runtimeFilter.activityId = activityId;
+  await queryAnalysisDashboard(renderTrainingLoad, { force: true });
+  state.trainingLoad.analysis.runtimeFilter.componentId = componentId;
+  await queryAnalysisDashboard(renderTrainingLoad, { force: true });
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/query")).length, 2);
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-activity-filter", widgetId }, activityId), { renderTrainingLoad });
@@ -476,8 +483,9 @@ test("Analysis dashboard selection and runtime filters use the selected dashboar
   });
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-select-dashboard" }, secondWidgetId), { renderTrainingLoad });
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-runtime-activity" }, activityId), { renderTrainingLoad });
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-runtime-component" }, componentId), { renderTrainingLoad });
+  state.trainingLoad.analysis.runtimeFilter.activityId = activityId;
+  state.trainingLoad.analysis.runtimeFilter.componentId = componentId;
+  await queryAnalysisDashboard(renderTrainingLoad, { force: true });
 
   assert.equal(state.trainingLoad.analysis.selectedDashboardId, secondWidgetId);
   assert.equal(state.trainingLoad.analysis.runtimeFilter.activityId, activityId);
@@ -884,4 +892,143 @@ test("Analysis reloads stale revisions and renders explicit status states", asyn
   assert.match(html, /Conflict/);
   assert.match(html, /Unit conflict/);
   assert.match(html, /seriesQueryFailed|Choose a metric/);
+});
+
+// ------------------------------------------------------------
+// 3B3 UX slice: sticky toolbar, Use template, date-field click-to-open,
+// Choose activity (replacing raw ID inputs), Add widget placement.
+// ------------------------------------------------------------
+
+test("the Analysis toolbar is sticky so it stays visible while the dashboard grid scrolls", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.tl-analysis-topbar\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;[^}]*\}/, "position:sticky and top:0 must both be declared INSIDE .tl-analysis-topbar's own rule");
+});
+
+test("clicking the From/To date field opens the native picker (app.js showPicker hook)", () => {
+  const appJsSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(
+    appJsSource,
+    /type === "training-load-analysis-period-from" \|\| type === "training-load-analysis-period-to"\)\s*\{\s*\n\s*action\.showPicker\?\.\(\);/,
+    "handleContentClick must call showPicker() on the date input for a From/To click, before falling through to the existing query-refresh handling",
+  );
+});
+
+test("no raw Activity ID / Component ID text inputs remain in the Analysis toolbar", () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.widgets = [];
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, /training-load-analysis-runtime-activity/);
+  assert.doesNotMatch(html, /training-load-analysis-runtime-component"/);
+  assert.doesNotMatch(html, /Analysis activity filter/);
+  assert.match(html, /data-action="training-load-analysis-choose-activity"/);
+  assert.match(html, />Choose activity</);
+});
+
+test("once an activity is chosen, the toolbar shows its real name and date - never the UUID - and a Component select of its own components", () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.widgets = [];
+  state.trainingLoad.analysis.runtimeFilter.activityId = activityId;
+  state.trainingLoad.analysis.selectedActivity = { id: activityId, name: "Evening Recovery", date: "2026-09-09" };
+  state.trainingLoad.analysis.componentOptions = [{ id: componentId, name: "Warm-up" }];
+
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, new RegExp(activityId), "the activity's raw id must never be printed as visible text");
+  assert.match(html, /Evening Recovery/);
+  assert.match(html, /09\.09\.2026/, "date shown in the day.month.year format formatDate() already uses everywhere else");
+  assert.match(html, /data-action="training-load-analysis-runtime-component-select"/);
+  assert.match(html, /Warm-up/);
+  assert.match(html, /data-action="training-load-analysis-clear-activity"/);
+});
+
+test("Choose activity switches Training Load to the Calendar tab in picking mode", async () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  installFetchMock(async (call) => ({ status: 200, body: { rows: [], days: [] } }));
+  const handled = await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-choose-activity" }), { renderTrainingLoad });
+  assert.equal(handled, true);
+  assert.equal(state.trainingLoad.section, "today");
+  assert.equal(state.trainingLoad.analysis.pickingActivity, true);
+});
+
+test("Clear activity clears both the activity AND the component filter, then re-queries", async () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.runtimeFilter.activityId = activityId;
+  state.trainingLoad.analysis.runtimeFilter.componentId = componentId;
+  state.trainingLoad.analysis.selectedActivity = { id: activityId, name: "Evening Recovery", date: "2026-09-09" };
+  state.trainingLoad.analysis.componentOptions = [{ id: componentId, name: "Warm-up" }];
+  installFetchMock(async (call) => {
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) {
+      assert.equal(call.body.activityId, null);
+      assert.equal(call.body.componentId, null);
+      return { status: 200, body: { dashboardRevision: 3, widgets: [] } };
+    }
+    return { status: 404, body: { error: "unexpected" } };
+  });
+
+  const handled = await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-clear-activity" }), { renderTrainingLoad });
+  assert.equal(handled, true);
+  assert.equal(state.trainingLoad.analysis.runtimeFilter.activityId, "");
+  assert.equal(state.trainingLoad.analysis.runtimeFilter.componentId, "");
+  assert.equal(state.trainingLoad.analysis.selectedActivity, null);
+  assert.deepEqual(state.trainingLoad.analysis.componentOptions, []);
+  assert.ok(fetchCalls.some((c) => c.url.endsWith("/query")));
+});
+
+test("picking a component from the select re-queries with that component id", async () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.runtimeFilter.activityId = activityId;
+  installFetchMock(async (call) => {
+    if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) {
+      assert.equal(call.body.componentId, componentId);
+      return { status: 200, body: { dashboardRevision: 3, widgets: [] } };
+    }
+    return { status: 404, body: { error: "unexpected" } };
+  });
+
+  const handled = await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-runtime-component-select" }, componentId), { renderTrainingLoad });
+  assert.equal(handled, true);
+  assert.equal(state.trainingLoad.analysis.runtimeFilter.componentId, componentId);
+});
+
+test("Use template replaces Clone template and only shows while viewing a template dashboard", () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.widgets = [];
+  let html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, />Use template</, "a non-template dashboard must never show the Use-template action");
+  assert.doesNotMatch(html, /Clone template/, "the old label must be fully gone");
+
+  state.trainingLoad.analysis.dashboard = dashboard({ id: templateId, is_template: true });
+  html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, />Use template</);
+  assert.match(html, new RegExp(`data-action="training-load-analysis-clone-template" data-template-id="${templateId}"`));
+});
+
+test("+ Add widget lives in the dashboard header and shows whenever the dashboard can be edited, even outside Edit mode", () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.widgets = [];
+  state.trainingLoad.analysis.editMode = false;
+  let html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /class="tl-analysis-dashboard-head">[\s\S]*data-action="training-load-analysis-add-widget"[\s\S]*<\/section>/);
+  assert.match(html, /tl-analysis-primary tl-analysis-add-widget-button/);
+
+  state.trainingLoad.analysis.editMode = true;
+  html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /data-action="training-load-analysis-add-widget"/);
+  assert.match(html, /Save layout/);
+
+  state.trainingLoad.analysis.dashboard = dashboard({ status: "archived" });
+  html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, /data-action="training-load-analysis-add-widget"/, "an archived (read-only) dashboard must never offer Add widget");
+
+  state.trainingLoad.analysis.dashboard = dashboard({ id: templateId, is_template: true });
+  html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, /data-action="training-load-analysis-add-widget"/, "a template dashboard must never offer Add widget - clone it first");
 });

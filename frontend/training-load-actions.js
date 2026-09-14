@@ -638,10 +638,9 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-analysis-clone-template") {
-    const templateId = action.value || action.dataset.templateId;
+    const templateId = action.dataset.templateId || action.value;
     if (!templateId) return true;
     await cloneAnalysisDashboard(templateId, renderTrainingLoad);
-    action.value = "";
     renderTrainingLoad();
     return true;
   }
@@ -671,13 +670,58 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-analysis-runtime-activity" || type === "training-load-analysis-runtime-component") {
-    const a = state.trainingLoad.analysis;
-    const value = (action.value || "").trim();
-    if (type.endsWith("activity")) a.runtimeFilter.activityId = value || null;
-    else a.runtimeFilter.componentId = value || null;
+  // 3B3 UX slice: "Choose activity" hands off to the existing Calendar ->
+  // activity detail flow (training-load-calendar-view.js's context bar
+  // grows an "Open in Analysis" button, visible only while pickingActivity
+  // is true) instead of asking for a raw activity/component UUID here.
+  if (type === "training-load-analysis-choose-activity") {
+    state.trainingLoad.analysis.pickingActivity = true;
+    state.trainingLoad.section = "today";
     renderTrainingLoad();
-    if (value && value.length < 36) return true;
+    await loadTrainingLoadCalendarWeek(renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-cancel-choose-activity") {
+    state.trainingLoad.analysis.pickingActivity = false;
+    state.trainingLoad.section = "analysis";
+    renderTrainingLoad();
+    await loadTrainingLoadAnalysis(renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-open-in-analysis") {
+    const nav = state.trainingLoad.calendar;
+    const detail = nav.activityDetail?.data;
+    if (!nav.selectedActivityId || !detail || nav.activityDetail.activityId !== nav.selectedActivityId) return true;
+    const bucket = nav.data?.days.find((d) => d.date === nav.selectedDate);
+    const item = bucket?.items.find((i) => i.kind === "activity" && i.activityId === nav.selectedActivityId);
+    const a = state.trainingLoad.analysis;
+    a.runtimeFilter.activityId = nav.selectedActivityId;
+    a.runtimeFilter.componentId = "";
+    a.selectedActivity = { id: nav.selectedActivityId, name: item?.name || "Activity", date: nav.selectedDate };
+    a.componentOptions = (detail.components || []).map((c) => ({ id: c.id, name: c.name }));
+    a.pickingActivity = false;
+    state.trainingLoad.section = "analysis";
+    renderTrainingLoad();
+    await loadTrainingLoadAnalysis(renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-runtime-component-select") {
+    state.trainingLoad.analysis.runtimeFilter.componentId = action.value || "";
+    renderTrainingLoad();
+    await queryAnalysisDashboard(renderTrainingLoad, { force: true });
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-clear-activity") {
+    const a = state.trainingLoad.analysis;
+    a.runtimeFilter.activityId = "";
+    a.runtimeFilter.componentId = "";
+    a.selectedActivity = null;
+    a.componentOptions = [];
+    renderTrainingLoad();
     await queryAnalysisDashboard(renderTrainingLoad, { force: true });
     renderTrainingLoad();
     return true;
