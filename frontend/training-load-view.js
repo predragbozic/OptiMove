@@ -1,6 +1,7 @@
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, formatDayMonth, formatWeekday, initialsFor, localDateIso, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
+import { renderTrainingLoadAnalysisHtml } from "./training-load-analysis-view.js";
 import { renderTrainingLoadCalendarHtml } from "./training-load-calendar-view.js";
 
 // Training load (RPE/sRPE), first complete phase. Deliberately its own
@@ -23,6 +24,7 @@ const TRAINING_LOAD_TAB_ICONS = {
   today: `<rect x="3" y="5" width="18" height="16" rx="3"></rect><path d="M8 3v3"></path><path d="M16 3v3"></path><path d="M3 10h18"></path><rect x="7" y="13" width="4" height="4" rx="1"></rect>`,
   schedule: `<path d="M12 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4"></path><path d="M16 3v4"></path><path d="M8 3v4"></path><path d="M3 11h11"></path><circle cx="18" cy="18" r="4"></circle><path d="M18 16.5V18l1 1"></path>`,
   results: `<circle cx="4" cy="12" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="9" cy="7" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="14" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="19" cy="6" r="1.3" fill="currentColor" stroke="none"></circle><path d="M4 12l5-5 5 3 5-4"></path><path d="M4 21v-6"></path><path d="M9 21v-9"></path><path d="M14 21v-7"></path><path d="M19 21v-11"></path>`,
+  analysis: `<path d="M4 19V5"></path><path d="M4 19h16"></path><rect x="7" y="11" width="3" height="5" rx="1"></rect><rect x="12" y="8" width="3" height="8" rx="1"></rect><rect x="17" y="6" width="3" height="10" rx="1"></rect>`,
 };
 
 function renderTrainingLoadTabIcon(section) {
@@ -1535,8 +1537,8 @@ export function renderTrainingLoadCoachHtml() {
     <div class="training-load-root">
       <div class="training-load-toolbar">
         <div class="training-load-tabs" role="tablist">
-          ${["today", "schedule", "results"].map((s) => `
-            <button type="button" class="training-load-tab ${section === s ? "is-active" : ""}" role="tab" aria-selected="${section === s ? "true" : "false"}" data-action="training-load-section" data-section="${s}">${renderTrainingLoadTabIcon(s)}<span>${s === "today" ? "Calendar" : s === "schedule" ? "Schedule" : "Results"}</span></button>
+          ${["today", "schedule", "results", "analysis"].map((s) => `
+            <button type="button" class="training-load-tab ${section === s ? "is-active" : ""}" role="tab" aria-selected="${section === s ? "true" : "false"}" data-action="training-load-section" data-section="${s}">${renderTrainingLoadTabIcon(s)}<span>${s === "today" ? "Calendar" : s === "schedule" ? "Schedule" : s === "results" ? "Results" : "Analysis"}</span></button>
           `).join("")}
         </div>
         <button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>
@@ -1544,6 +1546,7 @@ export function renderTrainingLoadCoachHtml() {
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}
       ${section === "schedule" ? renderTrainingLoadScheduleHtml() : ""}
       ${section === "results" ? renderTrainingLoadResultsHtml() : ""}
+      ${section === "analysis" ? renderTrainingLoadAnalysisHtml() : ""}
       ${state.trainingLoad.filterPicker.open ? renderTrainingLoadFilterPickerHtml() : ""}
     </div>
   `;

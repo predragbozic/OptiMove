@@ -84,7 +84,12 @@ test("handleContentInput mirrors every keystroke in the create form's name input
 });
 
 test("handleContentChange mirrors the create form's color-palette hidden input into state.builder.createColor", () => {
-  const body = sliceFunction(appJsSource, "handleContentChange", 900);
+  // Window bumped past the Training Load 3B3 branch's own early-return
+  // (routing "[data-action^='training-load-']" select/input changes) - that
+  // block was added ahead of this one in app.js's handleContentChange and
+  // pushed the color-mirror line from offset ~861 to ~912, past the old
+  // 900-char slice; the function's own logic is untouched, only its length.
+  const body = sliceFunction(appJsSource, "handleContentChange", 1000);
   assert.match(body, /event\.target\.closest\(".builder-create-form input\[name='color'\]"\)/);
   assert.match(body, /state\.builder\.createColor = createColorInput\.value;/);
 });

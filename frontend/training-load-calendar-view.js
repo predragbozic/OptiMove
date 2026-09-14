@@ -144,9 +144,19 @@ function renderContextBarHtml(nav, selectedActivity) {
     parts.push(`<span class="tl-context-sep">&rsaquo;</span>`);
     parts.push(`<span class="tl-context-part">${component ? escapeHtml(component.name) : "Whole session"}</span>`);
   }
+  // 3B3 UX slice: "Open in Analysis" only appears while the Analysis tab's
+  // own "Choose activity" hand-off is in progress (state.trainingLoad.
+  // analysis.pickingActivity) and only once the activity's own detail
+  // (components included) has actually loaded - normal Calendar browsing
+  // is completely unaffected, since pickingActivity is false otherwise.
+  const canOpenInAnalysis = state.trainingLoad.analysis.pickingActivity
+    && nav.selectedActivityId
+    && nav.activityDetail.data
+    && nav.activityDetail.activityId === nav.selectedActivityId;
   return `
     <div class="tl-context-bar">
       <div class="tl-context-breadcrumb">${parts.join("")}</div>
+      ${canOpenInAnalysis ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-open-in-analysis">Open in Analysis</button>` : ""}
       ${nav.selectedActivityId ? `<button type="button" class="plain-button compact-button" data-action="training-load-calendar-clear-activity">All activities that day</button>` : ""}
     </div>
   `;
@@ -606,6 +616,12 @@ export function renderTrainingLoadCalendarHtml() {
 
   return `
     <div class="tl-calendar">
+      ${state.trainingLoad.analysis.pickingActivity ? `
+        <div class="tl-analysis-picker-banner">
+          <span>Pick an activity for Analysis, then confirm it from its detail view.</span>
+          <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-choose-activity">Cancel</button>
+        </div>
+      ` : ""}
       ${renderCalendarNavHeaderHtml(nav)}
       ${nav.monthMode ? renderCalendarMonthGridHtml(nav) : renderCalendarStripHtml(nav)}
       ${nav.monthMode && nav.monthLoading ? `<p class="muted training-load-stale-banner" role="status">Loading month&hellip;</p>` : ""}

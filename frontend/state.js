@@ -462,6 +462,41 @@ export const emptyTrainingLoadFilterPicker = (overrides = {}) => ({
   ...overrides,
 });
 
+export const emptyTrainingLoadAnalysisState = (overrides = {}) => ({
+  dashboards: [],
+  activeDashboardId: "",
+  selectedDashboardId: "",
+  dashboard: null,
+  widgets: [],
+  queryResult: null,
+  listLoading: false,
+  detailLoading: false,
+  queryLoading: false,
+  saving: false,
+  listError: "",
+  detailError: "",
+  queryError: "",
+  mutationError: "",
+  notice: "",
+  editMode: false,
+  addWidgetOpen: false,
+  layoutDraft: null,
+  period: { dateFrom: "", dateTo: "" },
+  runtimeFilter: { athleteIds: [], activityId: "", componentId: "" },
+  // 3B3 UX slice: the runtime activity filter is now set via the Calendar
+  // handoff (Choose activity -> activity detail -> Open in Analysis), never
+  // typed as a raw UUID - selectedActivity/componentOptions are the display
+  // name/date and the chosen activity's own components, kept alongside the
+  // real runtimeFilter.activityId/componentId ids the query payload sends.
+  selectedActivity: null,
+  componentOptions: [],
+  pickingActivity: false,
+  metricPicker: { search: "", definitions: null, loading: false, error: "" },
+  editor: { open: false, widgetId: "", seriesId: "" },
+  selectedSeriesId: "",
+  ...overrides,
+});
+
 // One RPE entry form at a time - opened for a specific plan_session (from
 // the Athlete Home card or a weekly-view click), populated from whatever
 // session summary is already on hand (no extra fetch needed to open it).
@@ -575,6 +610,7 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
     schedule: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
     results: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
   },
+  analysis: emptyTrainingLoadAnalysisState(),
   filter: emptyTrainingLoadFilter(),
   filterPicker: emptyTrainingLoadFilterPicker(),
   // A snapshot of `filter` taken the instant the picker opens, restored on

@@ -61,7 +61,8 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange } from "./training-load-actions.js";
+import { loadTrainingLoadAnalysis } from "./training-load-analysis-data.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
@@ -412,12 +413,22 @@ function bindEvents() {
   // always end it. See tests-actions.js's start/extend/endTestsCalendarDrag.
   els.content.addEventListener("pointerdown", handleContentPointerDown);
   document.addEventListener("pointermove", handleContentPointerMove);
+  document.addEventListener("touchstart", (event) => {
+    const normalized = normalizeTouchPointerEvent(event);
+    if (normalized) handleContentPointerDown(normalized);
+  }, { passive: false, capture: true });
+  document.addEventListener("touchmove", (event) => {
+    const normalized = normalizeTouchPointerEvent(event);
+    if (normalized) handleContentPointerMove(normalized);
+  }, { passive: false, capture: true });
   // Item 2 (Daily auto-close): endTestsCalendarDrag() returns true exactly
   // when it just auto-closed the calendar on a genuinely completed range -
   // that's a structural show/hide the lightweight patchTestsCalendarDom()
   // can't express, so only THAT case gets a full renderTests().
   document.addEventListener("pointerup", () => { if (endTestsCalendarDrag()) renderTests(); });
   document.addEventListener("pointercancel", () => { if (endTestsCalendarDrag()) renderTests(); });
+  document.addEventListener("touchend", () => { if (endTestsCalendarDrag()) renderTests(); }, { passive: true, capture: true });
+  document.addEventListener("touchcancel", () => { if (endTestsCalendarDrag()) renderTests(); }, { passive: true, capture: true });
   document.addEventListener("click", handleGlobalClick);
   document.addEventListener("submit", handleGlobalSubmit);
   document.addEventListener("error", handleImageError, true);
@@ -827,10 +838,12 @@ function handleContentFocusIn(event) {
 
 function handleContentPointerDown(event) {
   const dayEl = event.target.closest('[data-action="tests-calendar-day-mousedown"]');
-  if (!dayEl) return;
+  if (!dayEl) return false;
   if (startTestsCalendarDrag(dayEl)) {
     event.preventDefault(); // stops the browser's own text-selection/touch-scroll from fighting the calendar drag
+    return true;
   }
+  return false;
 }
 
 // Pointer Events don't give touch drags the mouse's own "mouseover fires on
@@ -844,12 +857,28 @@ function handleContentPointerDown(event) {
 // cheap to run on every pointermove across the whole app) to only the
 // moments a calendar drag is actually in progress.
 function handleContentPointerMove(event) {
-  if (!isTestsCalendarDragging()) return;
+  if (!isTestsCalendarDragging()) return false;
   const dayEl = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-action="tests-calendar-day-mousedown"]');
-  if (!dayEl) return;
+  if (!dayEl) return false;
   if (extendTestsCalendarDrag(dayEl)) {
     event.preventDefault(); // stops the page/panel from scrolling under an in-progress touch drag
+    return true;
   }
+  return false;
+}
+
+function normalizeTouchPointerEvent(event) {
+  const touch = event.touches?.[0] || event.changedTouches?.[0];
+  if (!touch) return null;
+  return {
+    pointerIdFallback: "touch",
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    target: event.target,
+    preventDefault: () => {
+      if (event.cancelable) event.preventDefault();
+    },
+  };
 }
 
 function handleContentInput(event) {
@@ -962,6 +991,9 @@ function handleContentInput(event) {
   // handleTrainingLoadAction reads the live value straight off it.
   const trainingLoadInput = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadInput && trainingLoadInput.matches("input, textarea")) {
+    // Analysis text filters apply on change/blur. Re-rendering on every
+    // keystroke would replace the input node and interrupt typing.
+    if (trainingLoadInput.dataset.action.startsWith("training-load-analysis-")) return;
     void handleTrainingLoadAction(trainingLoadInput, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });
     return;
   }
@@ -974,6 +1006,11 @@ function handleContentInput(event) {
 
 async function handleContentChange(event) {
   if (await handleTestsContentChange(event)) return;
+  const trainingLoadControl = event.target.closest("[data-action^='training-load-']");
+  if (trainingLoadControl && trainingLoadControl.matches("select, input")) {
+    void handleTrainingLoadAction(trainingLoadControl, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });
+    return;
+  }
   // Mirror the create-form's color-palette hidden input into state, same
   // reasoning as createNameInput above - fires for both a swatch pick and a
   // custom-color pick, since both end up setting this hidden input's value
@@ -1870,7 +1907,9 @@ async function loadTrainingLoad() {
   await Promise.all([
     state.trainingLoad.section === "today"
       ? loadTrainingLoadCalendarWeek(renderTrainingLoad)
-      : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+      : state.trainingLoad.section === "analysis"
+        ? loadTrainingLoadAnalysis(renderTrainingLoad)
+        : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
     state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
   ]);
   renderTrainingLoad();
@@ -1878,6 +1917,9 @@ async function loadTrainingLoad() {
 
 function renderTrainingLoad() {
   els.content.innerHTML = renderTrainingLoadCoachHtml();
+  if (state.trainingLoad.section === "analysis") {
+    bindTrainingLoadAnalysisLayoutInteractions(els.content, renderActiveTrainingLoadSurface);
+  }
 }
 
 // Every training-load-* action can fire from either surface it appears on
@@ -2113,6 +2155,22 @@ async function handleContentClick(event) {
   if (!action) return;
 
   const type = action.dataset.action;
+  // 3B3 UX slice: clicking anywhere in the Analysis From/To field (not just
+  // the tiny native calendar-icon glyph) opens the date picker. The label
+  // wraps the input, so a click on the "From"/"To" text also lands here via
+  // the browser's own label -> control click forwarding (target becomes the
+  // input itself either way). Returns immediately - the click itself never
+  // changed the field's value, so it must not fall through into the
+  // period-from/period-to query-refresh branch further down (shared with
+  // handleContentChange, which is what actually fires once the picker's own
+  // native "change" event carries a real new date) - letting it fall
+  // through fired a needless /query POST on every open, and the render it
+  // triggered replaced this very <input> mid-open, closing the picker
+  // that had just been shown.
+  if (type === "training-load-analysis-period-from" || type === "training-load-analysis-period-to") {
+    action.showPicker?.();
+    return;
+  }
   if (type.startsWith("builder-")) {
     void handleBuilderAction(action).catch(renderBuilderError);
     return;

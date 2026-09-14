@@ -795,3 +795,88 @@ test("the Components tab lists every component from the activity's own hierarchy
   assert.ok(html.includes("Main Set"));
   assert.ok(html.includes("10 min"), "a component's own duration renders when present");
 });
+
+// ------------------------------------------------------------
+// 3B3 UX slice: Analysis "Choose activity" hands off to this EXISTING
+// Calendar -> activity detail flow instead of asking for a raw activity/
+// component UUID. "Open in Analysis" (training-load-actions.js) must only
+// ever appear while that hand-off is in progress, never during ordinary
+// Calendar browsing.
+// ------------------------------------------------------------
+
+test("Open in Analysis only appears while Analysis is choosing an activity, and only once that activity's own detail has actually loaded", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  const openInAnalysisAction = 'data-action="training-load-analysis-open-in-analysis"';
+  withActivitySelected(cal, { detail: activityDetailPayload({ components: [{ id: "comp-main", name: "Main Set" }] }) });
+
+  let html = renderTrainingLoadCalendarHtml();
+  assert.ok(!html.includes(openInAnalysisAction), "normal Calendar browsing must never show the Analysis hand-off button");
+
+  state.trainingLoad.analysis.pickingActivity = true;
+  html = renderTrainingLoadCalendarHtml();
+  assert.ok(html.includes(openInAnalysisAction), "once picking an activity for Analysis, an open activity with loaded detail offers the hand-off");
+
+  cal.activityDetail = { activityId: cal.selectedActivityId, data: null, loading: true, error: "" };
+  html = renderTrainingLoadCalendarHtml();
+  assert.ok(!html.includes(openInAnalysisAction), "must not offer the hand-off before the activity's own detail (components) has actually loaded");
+});
+
+test("the picking banner with its Cancel-back-to-Analysis button only shows while pickingActivity is true", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  cal.weekStart = "2026-09-07";
+  cal.selectedDate = "2026-09-09";
+  cal.data = calendarPayload("2026-09-07");
+  let html = renderTrainingLoadCalendarHtml();
+  assert.ok(!html.includes("training-load-analysis-cancel-choose-activity"));
+
+  state.trainingLoad.analysis.pickingActivity = true;
+  html = renderTrainingLoadCalendarHtml();
+  assert.ok(html.includes("training-load-analysis-cancel-choose-activity"));
+});
+
+test("Open in Analysis captures the activity's real name/date and its components, never a raw id, and returns to the Analysis tab", async () => {
+  resetState();
+  state.trainingLoad.section = "today";
+  state.trainingLoad.analysis.pickingActivity = true;
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, {
+    item: activityItem({ activityId: "act-9", name: "Evening Recovery" }),
+    detail: activityDetailPayload({ canonicalActivityId: "act-9", components: [{ id: "comp-a", name: "Warm-up" }, { id: "comp-b", name: "Main Set" }] }),
+  });
+  installFetchMock(rulesResponder([]));
+
+  const handled = await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-in-analysis" }), { renderTrainingLoad });
+  assert.equal(handled, true);
+  assert.equal(state.trainingLoad.section, "analysis");
+  assert.equal(state.trainingLoad.analysis.pickingActivity, false);
+  assert.equal(state.trainingLoad.analysis.runtimeFilter.activityId, "act-9");
+  assert.equal(state.trainingLoad.analysis.runtimeFilter.componentId, "");
+  assert.deepEqual(state.trainingLoad.analysis.selectedActivity, { id: "act-9", name: "Evening Recovery", date: "2026-09-09" });
+  assert.deepEqual(state.trainingLoad.analysis.componentOptions, [{ id: "comp-a", name: "Warm-up" }, { id: "comp-b", name: "Main Set" }]);
+});
+
+test("Open in Analysis is a no-op if the activity's own detail has not actually loaded yet", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  cal.selectedActivityId = "act-1";
+  cal.activityDetail = { activityId: "act-1", data: null, loading: true, error: "" };
+  state.trainingLoad.analysis.pickingActivity = true;
+  const handled = await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-in-analysis" }), { renderTrainingLoad });
+  assert.equal(handled, true);
+  assert.equal(state.trainingLoad.analysis.runtimeFilter.activityId, "", "nothing to hand off yet - must never set a filter from incomplete detail");
+  assert.equal(state.trainingLoad.analysis.pickingActivity, true, "still picking, since the hand-off never completed");
+});
+
+test("Cancel choose-activity returns to Analysis without setting any activity filter", async () => {
+  resetState();
+  state.trainingLoad.section = "today";
+  state.trainingLoad.analysis.pickingActivity = true;
+  installFetchMock(rulesResponder([]));
+  const handled = await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-cancel-choose-activity" }), { renderTrainingLoad });
+  assert.equal(handled, true);
+  assert.equal(state.trainingLoad.section, "analysis");
+  assert.equal(state.trainingLoad.analysis.pickingActivity, false);
+  assert.equal(state.trainingLoad.analysis.runtimeFilter.activityId, "");
+});
