@@ -395,8 +395,18 @@ function renderEditorHtml() {
           <label>Title<input type="text" data-action="training-load-analysis-widget-title" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(widget.title)}"></label>
           <label>Type<select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}">${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, widget.widget_type)).join("")}</select></label>
           <label>Group by<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}">${GROUP_BY.map((g) => optionHtml(g, g, widget.group_by)).join("")}</select></label>
-          <label>Activity ID<input type="text" data-action="training-load-analysis-widget-activity-filter" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(widget.local_filter_override?.activityId || "")}"></label>
-          <label>Component ID<input type="text" data-action="training-load-analysis-widget-component-filter" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(widget.local_filter_override?.componentId || "")}"></label>
+          <div class="tl-analysis-control">
+            <span>Activity override</span>
+            ${widget.local_filter_override?.activityId
+              ? `<button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-activity-filter" data-widget-id="${escapeAttr(widget.id)}">Clear activity override</button>`
+              : `<span class="muted">Uses dashboard/runtime filter</span>`}
+          </div>
+          <div class="tl-analysis-control">
+            <span>Component override</span>
+            ${widget.local_filter_override?.componentId
+              ? `<button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-component-filter" data-widget-id="${escapeAttr(widget.id)}">Clear component override</button>`
+              : `<span class="muted">Uses dashboard/runtime filter</span>`}
+          </div>
         </div>
         <div class="tl-analysis-series-editor">
           <div class="tl-analysis-series-head">

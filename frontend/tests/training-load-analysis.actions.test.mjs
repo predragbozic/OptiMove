@@ -554,6 +554,24 @@ test("Analysis drag and resize stay local until one atomic layout save; cancel i
   assert.equal(fetchCalls.filter((call) => call.url.endsWith("/layout")).length, 1);
 });
 
+test("Analysis pointer drag/resize is disabled once the viewport matches the Analysis mobile breakpoint - Move up/down is the real mobile reorder path", () => {
+  resetState();
+  state.trainingLoad.section = "analysis";
+  state.trainingLoad.analysis.editMode = true;
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  state.trainingLoad.analysis.widgets = [widget()];
+  const originalMatchMedia = window.matchMedia;
+  window.matchMedia = (query) => ({ matches: query.includes("max-width: 720px") });
+  try {
+    assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "drag", 1, 0, 0), renderTrainingLoad), false, "pointer drag must not start once the viewport matches the Analysis mobile breakpoint");
+    assert.equal(handleTrainingLoadAnalysisPointerDown(pointerEvent(widgetId, "resize", 2, 0, 0), renderTrainingLoad), false, "pointer resize must not start either");
+    assert.equal(state.trainingLoad.analysis.layoutDraft, null, "no draft should exist from a gesture that never started");
+  } finally {
+    window.matchMedia = originalMatchMedia;
+  }
+});
+
 test("Analysis pointer layout clamps widget type limits and the 12-column grid", () => {
   resetState();
   state.trainingLoad.section = "analysis";
@@ -923,6 +941,23 @@ test("no raw Activity ID / Component ID text inputs remain in the Analysis toolb
   assert.doesNotMatch(html, /Analysis activity filter/);
   assert.match(html, /data-action="training-load-analysis-choose-activity"/);
   assert.match(html, />Choose activity</);
+});
+
+test("no raw Activity ID / Component ID text inputs in the widget settings editor either - only a Clear override control once one is set", () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.widgets = [widget()];
+  state.trainingLoad.analysis.editor = { open: true, widgetId, seriesId };
+
+  let html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, /<input[^>]*data-action="training-load-analysis-widget-activity-filter"/, "no free-text activity id entry in the widget editor");
+  assert.doesNotMatch(html, /<input[^>]*data-action="training-load-analysis-widget-component-filter"/, "no free-text component id entry in the widget editor");
+  assert.match(html, /Uses dashboard\/runtime filter/, "no override set yet - shown as plain text, not an empty text field");
+
+  state.trainingLoad.analysis.widgets = [widget({ local_filter_override: { activityId } })];
+  html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, new RegExp(activityId), "the override's raw id must never be printed as visible text either");
+  assert.match(html, /data-action="training-load-analysis-widget-activity-filter"[^>]*>Clear activity override</, "an active override only offers a Clear control, never a text field to edit it");
 });
 
 test("once an activity is chosen, the toolbar shows its real name and date - never the UUID - and a Component select of its own components", () => {

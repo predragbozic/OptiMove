@@ -76,9 +76,19 @@ function analysisPointerEventMatches(pointer, event) {
   return eventPointerId === "mouse" && pointer.pointerId !== "touch";
 }
 
+// Mirrors the project's own isMobileScheduleFormViewport()/isMobileViewport()
+// pattern (tests-actions.js, media-modal.js) at the same 720px cutoff the
+// Analysis grid itself switches to a stacked mobile layout at (styles.css) -
+// pointer drag/resize is a desktop-only interaction there; mobile uses the
+// Move up/down toolbar buttons instead (handleTrainingLoadAnalysisPointerDown
+// below stays the single gate, so no handler needs its own check).
+function analysisIsMobileLayoutViewport() {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 720px)").matches;
+}
+
 function analysisLayoutCanEdit() {
   const a = state.trainingLoad.analysis;
-  return state.trainingLoad.section === "analysis" && a.editMode && a.dashboard && a.dashboard.status !== "archived" && !a.dashboard.is_template && !a.saving;
+  return state.trainingLoad.section === "analysis" && a.editMode && a.dashboard && a.dashboard.status !== "archived" && !a.dashboard.is_template && !a.saving && !analysisIsMobileLayoutViewport();
 }
 
 function analysisLayoutMetrics() {
