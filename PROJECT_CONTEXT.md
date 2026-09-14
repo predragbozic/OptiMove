@@ -7,10 +7,10 @@ specific architectural decision and its evidence, see `docs/decisions/`.
 ## What OptiMove is
 
 A training-planning platform for coaches and athletes: program building (weekly plans,
-specific programs, templates), an exercise library, and — the newest domain — Training
-Load tracking (RPE/sRPE capture, calendar-based session review, and an Analysis
-dashboard system). Node/Express backend, plain-ES-module frontend (no framework/bundler
-in dev; Vite for the production build), Postgres.
+specific programs, templates), an exercise library, and Training Load tracking
+(RPE/sRPE capture, calendar-based session review, and an Analysis dashboard system).
+Node/Express backend, plain-ES-module frontend (no framework/bundler in dev; Vite for
+the production build), Postgres.
 
 Superseding an earlier version of this document: real session-based authentication now
 exists (PBKDF2, `requireAuth` middleware, hashed session tokens — see
@@ -22,8 +22,9 @@ delivery report that predates 2026-09 for either claim.
 
 Athletes, Calendar, Coaches, Builder (program/plan editor), Program Library, Exercise
 Library, Tests, Training Load (own Calendar/Schedule/Results/Analysis tabs), Settings
-(Users/Clubs/Teams/Athletes/Tags), Messages, Notifications, Account. Training Load
-Analysis is the most recently built area (see `docs/ai/CURRENT_STATE.md`).
+(Users/Clubs/Teams/Athletes/Tags), Messages, Notifications, Account. For which of these
+is currently under active development, see `docs/ai/CURRENT_STATE.md` — that changes
+per milestone, this list of domains doesn't.
 
 ## Repo structure map
 
@@ -37,21 +38,27 @@ Analysis is the most recently built area (see `docs/ai/CURRENT_STATE.md`).
   `trainingLoadDashboardWidgets.js`, `trainingLoadMetricsAccess.js`,
   `trainingLoadMetricsCatalog.js`) — check for an existing helper here before writing a
   new one.
-- `backend/tests/` — ~68 test files, `*.test.mjs`.
+- `backend/tests/` — `*.test.mjs`, one suite per backend module (exact count changes
+  per PR — measure with `ls backend/tests/*.test.mjs | wc -l` if needed).
 - `frontend/` — one domain = `{name}-view.js` (render) + `{name}-actions.js`
   (events/mutations) + `{name}-data.js` (API/cache); `app.js` is the shared
   event-delegation orchestrator, not a domain module. `state.js` holds shared client
   state shape.
-- `frontend/tests/` — ~79 test files, `*.test.mjs`.
+- `frontend/tests/` — `*.test.mjs`, one suite per frontend domain (same caveat as above —
+  measure with `ls frontend/tests/*.test.mjs | wc -l`).
 - `migrations_v2/` — flat, `YYYYMMDDHHMM_description.sql`, checksum-protected once
-  applied (see `.claude/rules/migrations.md`, ADR-005). 36 files as of 2026-09-14.
+  applied (see `.claude/rules/migrations.md`, ADR-005; exact file count changes per PR —
+  measure with `ls migrations_v2/*.sql | wc -l`).
 - `migrations/` (no `_v2`) — legacy/historical, not where new migrations go.
 - `.claude/agents/` — the four read-only review agents
   (`code-reviewer`/`db-reviewer`/`mobile-qa`/`security-reviewer`); `.claude/rules/` —
   topic-scoped operating rules `CLAUDE.md` links to instead of duplicating.
-- Repo root also holds legacy Google Apps Script reference files (`Code.gs`, several
-  `*.html` files) and old import artifacts — reference only, not deployed; don't delete
-  them without being asked.
+- `tools/`, `scripts/` — tracked utility/import scripts (e.g.
+  `scripts/verify-render-build.mjs`). The repo root and some subdirectories also
+  regularly carry untracked, session-local scratch files (imports in progress, ad-hoc
+  audit scripts, legacy reference copies) — check `git ls-files` before treating anything
+  outside `backend/`, `frontend/`, `migrations_v2/`, `.claude/`, `docs/`, `tools/`,
+  `scripts/` as actual shared project structure rather than one session's leftovers.
 
 ## Identity, ownership, and workspace
 
@@ -85,7 +92,8 @@ reasoning in `CLAUDE.md`.
   a full app check).
 - **Deployed**: Supabase Postgres is the database used in the actually-deployed
   environment — separate from local dev, data can diverge between the two. Its
-  connection uses the Supabase pooler; `db.js`'s `ssl: { rejectUnauthorized: false }` is
+  connection uses the Supabase pooler; `backend/src/db.js`'s
+  `ssl: { rejectUnauthorized: false }` is
   a deliberate, narrow workaround for that pooler's certificate, not a general pattern
   (`.claude/rules/database-safety.md`).
 - **monitoring2**: a separate reference database used for porting modules into

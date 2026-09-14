@@ -43,7 +43,7 @@ this confirmation requirement).
 
 ## Known, deliberate compromises — don't copy them to new connections unnecessarily
 
-- `db.js`'s `ssl: { rejectUnauthorized: false }` is a known, deliberate compromise for
+- `backend/src/db.js`'s `ssl: { rejectUnauthorized: false }` is a known, deliberate compromise for
   the Supabase pooler connection (its certificate isn't in Node's default trust store),
   not a general pattern. Before copying it to a new DB connection or service, check
   whether the same reason actually applies there.

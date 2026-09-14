@@ -21,7 +21,7 @@ to a single equality test.
 
 ## Exact contracts
 
-- Columns added: `migrations_v2/202609100900_..._v15_dashboard_catalog_and_dashboards.sql:165-170`.
+- Columns added: `migrations_v2/202609100900_training_load_v15_dashboard_catalog_and_dashboards.sql:165-170`.
   `owner_scope` values: `'system' | 'club' | 'team' | 'user'`.
   `data_workspace_type` values: `'platform' | 'private_coach' | 'club' | 'team' | 'athlete'`.
 - CHECK constraints tie shape to values: club/team owner_scope requires the matching

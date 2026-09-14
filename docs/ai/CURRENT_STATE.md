@@ -29,8 +29,11 @@ assert a deploy state without checking the actual hosting target first.
   Tests-module calendar click/drag day-selection (`startTestsCalendarDrag`/
   `extendTestsCalendarDrag`/`endTestsCalendarDrag` in `frontend/tests-actions.js`) fail.
   Confirmed via a clean detached `origin/main` worktree (before the 3B3 work) that this
-  predates that branch entirely — not a regression, not yet fixed. Full frontend suite
-  as of the last check: 972 pass / 5 fail (the above), 977 total.
+  predates that branch entirely — not a regression, not yet fixed. These 5 are the only
+  known failing tests in the frontend suite as of the last check; re-run
+  `node --test tests/*.test.mjs` from `frontend/` for the current actual count rather
+  than trusting a number here — pass/fail counts are transient and don't belong in this
+  file (`.claude/rules/memory-maintenance.md`).
 
 ## Open risks
 
