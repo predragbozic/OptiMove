@@ -16,8 +16,8 @@ query-ja i teško se oslanja na `!important` u novijim, širim mobile blokovima 
 `@media (max-width: 760px)`) da bi pouzdano nadjačali stariji, uži CSS. Pre nego što
 zaključiš kako se nešto trenutno ponaša na mobilnom na osnovu JEDNOG bloka, pretraži ceo
 fajl za isti selektor — možda postoji kasnije pravilo koje ga nadjačava. Ovo je već
-jednom dovelo do pogrešnog zaključka u ovom projektu (vidi CLAUDE.md, sekcija "Trenutno
-stanje i otvorene stavke" / `PROJECT_CONTEXT.md`).
+jednom dovelo do pogrešnog zaključka u ovom projektu (vidi `.claude/rules/frontend.md`,
+"CSS cascade discipline").
 
 Proveri, tim redom, na referentnim širinama **360px, 375px, 390px** (najčešći realni
 telefon viewport-i — ne pretpostavljaj samo jedan breakpoint kao "mobilni"):

@@ -17,7 +17,7 @@ pregled NIJE dokaz da je migracija production-safe NITI dokaz da je migracija st
 izvršena; stvarna provera na kopiji produkcione šeme i stvarno izvršenje su odgovornost
 glavne sesije.
 
-**Isti DB safety contract kao glavna sesija** (vidi CLAUDE.md): kad predlažeš da se nešto
+**Isti DB safety contract kao glavna sesija** (vidi `.claude/rules/database-safety.md`): kad predlažeš da se nešto
 "samo pokrene i proveri", jasno naznači da li bi to dirnulo disposable test bazu
 (u redu, glavna sesija to sme sama) ili persistent bazu (lokalna OPTIMOVE, shared dev,
 staging, produkcija — zahteva eksplicitnu korisničku potvrdu, ti to nikad ne predlažeš kao
