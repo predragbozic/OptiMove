@@ -2159,10 +2159,17 @@ async function handleContentClick(event) {
   // the tiny native calendar-icon glyph) opens the date picker. The label
   // wraps the input, so a click on the "From"/"To" text also lands here via
   // the browser's own label -> control click forwarding (target becomes the
-  // input itself either way) - falls through to the existing period-from/
-  // period-to query refresh below, unchanged.
+  // input itself either way). Returns immediately - the click itself never
+  // changed the field's value, so it must not fall through into the
+  // period-from/period-to query-refresh branch further down (shared with
+  // handleContentChange, which is what actually fires once the picker's own
+  // native "change" event carries a real new date) - letting it fall
+  // through fired a needless /query POST on every open, and the render it
+  // triggered replaced this very <input> mid-open, closing the picker
+  // that had just been shown.
   if (type === "training-load-analysis-period-from" || type === "training-load-analysis-period-to") {
     action.showPicker?.();
+    return;
   }
   if (type.startsWith("builder-")) {
     void handleBuilderAction(action).catch(renderBuilderError);

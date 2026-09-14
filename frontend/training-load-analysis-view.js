@@ -132,17 +132,17 @@ function renderWidgetToolbarHtml(widget, layout) {
   if (!state.trainingLoad.analysis.editMode || !canEdit()) return "";
   return `
     <div class="tl-analysis-widget-tools">
-      <button type="button" class="plain-button icon-button" data-action="training-load-analysis-widget-left" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move left" title="Move left">&larr;</button>
-      <button type="button" class="plain-button icon-button" data-action="training-load-analysis-widget-right" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move right" title="Move right">&rarr;</button>
-      <button type="button" class="plain-button icon-button" data-action="training-load-analysis-widget-up" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move up" title="Move up">&uarr;</button>
-      <button type="button" class="plain-button icon-button" data-action="training-load-analysis-widget-down" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move down" title="Move down">&darr;</button>
-      <button type="button" class="plain-button icon-button" data-action="training-load-analysis-widget-wider" data-widget-id="${escapeAttr(widget.id)}" aria-label="Wider" title="Wider">+</button>
-      <button type="button" class="plain-button icon-button" data-action="training-load-analysis-widget-narrower" data-widget-id="${escapeAttr(widget.id)}" aria-label="Narrower" title="Narrower">-</button>
+      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-left" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move left" title="Move left">&larr;</button>
+      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-right" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move right" title="Move right">&rarr;</button>
+      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-up" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move up" title="Move up">&uarr;</button>
+      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-down" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move down" title="Move down">&darr;</button>
+      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-wider" data-widget-id="${escapeAttr(widget.id)}" aria-label="Wider" title="Wider">+</button>
+      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-narrower" data-widget-id="${escapeAttr(widget.id)}" aria-label="Narrower" title="Narrower">-</button>
       <button type="button" class="plain-button compact-button" data-action="training-load-analysis-edit-widget" data-widget-id="${escapeAttr(widget.id)}">Settings</button>
       <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-widget" data-widget-id="${escapeAttr(widget.id)}">Delete</button>
-      <button type="button" class="plain-button compact-button" data-action="training-load-analysis-widget-mobile-up" data-widget-id="${escapeAttr(widget.id)}">Move up</button>
-      <button type="button" class="plain-button compact-button" data-action="training-load-analysis-widget-mobile-down" data-widget-id="${escapeAttr(widget.id)}">Move down</button>
-      <span class="muted">${Number(layout.width || 0)}x${Number(layout.height || 0)}</span>
+      <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-up" data-widget-id="${escapeAttr(widget.id)}">Move up</button>
+      <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-down" data-widget-id="${escapeAttr(widget.id)}">Move down</button>
+      <span class="muted tl-analysis-grid-control">${Number(layout.width || 0)}x${Number(layout.height || 0)}</span>
     </div>
   `;
 }

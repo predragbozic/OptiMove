@@ -922,12 +922,12 @@ test("the Analysis toolbar is sticky so it stays visible while the dashboard gri
   assert.match(css, /\.tl-analysis-topbar\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;[^}]*\}/, "position:sticky and top:0 must both be declared INSIDE .tl-analysis-topbar's own rule");
 });
 
-test("clicking the From/To date field opens the native picker (app.js showPicker hook)", () => {
+test("clicking the From/To date field opens the native picker (app.js showPicker hook) and returns immediately - it must NOT fall through into the query-refresh handling, or the click that merely opens the picker fires a needless /query POST (and the render it triggers replaces the very input mid-open, closing the picker)", () => {
   const appJsSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   assert.match(
     appJsSource,
-    /type === "training-load-analysis-period-from" \|\| type === "training-load-analysis-period-to"\)\s*\{\s*\n\s*action\.showPicker\?\.\(\);/,
-    "handleContentClick must call showPicker() on the date input for a From/To click, before falling through to the existing query-refresh handling",
+    /type === "training-load-analysis-period-from" \|\| type === "training-load-analysis-period-to"\)\s*\{\s*\n\s*action\.showPicker\?\.\(\);\s*\n\s*return;/,
+    "handleContentClick must call showPicker() then return - the field's own 'change' event (handleContentChange) is the sole trigger for the actual period query refresh",
   );
 });
 

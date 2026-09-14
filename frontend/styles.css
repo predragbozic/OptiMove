@@ -13468,6 +13468,10 @@ button.tests-assignment-card {
   .tl-analysis-topbar .plain-button {
     width: 100%;
   }
+  .tl-analysis-control select,
+  .tl-analysis-control input {
+    min-height: 44px;
+  }
   .tl-analysis-activity-picker,
   .tl-analysis-template-banner,
   .tl-analysis-picker-banner {
@@ -13512,5 +13516,17 @@ button.tests-assignment-card {
   .tl-analysis-widget-delete {
     width: 44px;
     height: 44px;
+  }
+  /* The x/y/width nudges these arrows and +/- send only ever show up in the
+     desktop 12-column grid's own --tl-x/--tl-y/--tl-w custom properties,
+     which the mobile flex layout above never reads (only --tl-mobile,
+     i.e. order, does) - left visible they'd be silent, confusing dead
+     controls. Move up/down (order) is the one mechanism with any visible
+     effect here, so it gets the 44px touch target instead. */
+  .tl-analysis-grid-control {
+    display: none;
+  }
+  .tl-analysis-mobile-reorder {
+    min-height: 44px;
   }
 }
