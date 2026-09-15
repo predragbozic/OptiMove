@@ -4,7 +4,9 @@ A Claude skill for building UIs with **[Carbon](https://carbondesignsystem.com)*
 open-source design system. It bundles a faithful, offline copy of Carbon's in-repo docs as
 structured references, with a concise guide on top.
 
-> Repository overview, installation, and details live in the [root README](../../README.md).
+> Repository overview, installation, and details live in the upstream
+> [root README](https://github.com/iamursky/carbon-skill/blob/efaeee25dba0dd68b8f6baa61f34311dc2218311/README.md)
+> (this is a vendored copy — see the OptiMove note under "Installation" below).
 
 ## What it does
 
@@ -21,7 +23,7 @@ Sass/styles, themes, the 2x Grid, Carbon icons, or feature flags, and answers fr
 ## Contents
 
 - [`SKILL.md`](SKILL.md) — the guide Claude loads on trigger (workflow + a map into `references/`)
-- [`references/`](references/) — 245 pages of faithful Markdown converted from the Carbon monorepo
+- [`references/`](references/) — 277 reference pages plus CONTENTS.md, faithful Markdown converted from the Carbon monorepo
   - [`references/CONTENTS.md`](references/CONTENTS.md) — full navigation by section
   - [`references/LICENSE`](references/LICENSE) — upstream documentation license (Apache-2.0, IBM Corp.)
 
@@ -43,6 +45,7 @@ Sass/styles, themes, the 2x Grid, Carbon icons, or feature flags, and answers fr
 [carbon-design-system/carbon](https://github.com/carbon-design-system/carbon) monorepo (Storybook
 MDX + package READMEs → Markdown), redistributed under the upstream **Apache-2.0** license
 ([`references/LICENSE`](references/LICENSE)); each page links back to its file on GitHub. The skill
-itself is MIT — see the [root license](../../license).
+itself is MIT — see [`LICENSE.community`](LICENSE.community) (this vendored copy's local copy of the
+upstream skill's own MIT license).
 
 > Unofficial, community-built skill. Not affiliated with or endorsed by IBM or the Carbon Design System.
