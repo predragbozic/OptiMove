@@ -18,14 +18,25 @@ back from its stdout.
 
 ```
 { "hooks": { "PreToolUse": [
-  { "matcher": "Bash",       "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/safety-guard.mjs\"" }] },
-  { "matcher": "PowerShell", "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/safety-guard.mjs\"" }] },
-  { "matcher": "mcp__.*",    "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/safety-guard.mjs\"" }] }
+  { "matcher": "Bash",       "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"] }] },
+  { "matcher": "PowerShell", "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"] }] },
+  { "matcher": "mcp__.*",    "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"] }] }
 ] } }
 ```
 
-`$CLAUDE_PROJECT_DIR` is set by Claude Code to the project root, so the hook resolves
-correctly regardless of the shell's current working directory.
+This is **exec form** — a bare executable name in `command` plus an explicit `args`
+array — not shell form (a single string handed to a shell to interpret). That distinction
+is the reason this hook works identically for both the `Bash` and `PowerShell` tools on
+Windows: a shell-form string like `"node \"$CLAUDE_PROJECT_DIR/.claude/hooks/
+safety-guard.mjs\""` has to be interpolated *by whatever shell runs it*, and a bare
+`$CLAUDE_PROJECT_DIR` is POSIX/bash syntax — PowerShell doesn't expand it that way at
+all, so the PowerShell-tool-triggered invocation of that shell-form string would
+silently fail to resolve the path and the hook would never actually run for a
+PowerShell-tool call. Exec form has no shell in the loop at all: Claude Code substitutes
+the `${CLAUDE_PROJECT_DIR}` placeholder itself (braced, not bare — the brace is what
+marks it as a placeholder Claude Code resolves directly, rather than shell syntax) and
+spawns `node` with the resolved path as a literal argument, so there is no
+interpolation step left for either shell's own rules to get wrong.
 
 **This is a project-level hook** (`.claude/settings.json`, checked into git — everyone
 on the branch gets it). It is intentionally separate from `.claude/settings.local.json`,

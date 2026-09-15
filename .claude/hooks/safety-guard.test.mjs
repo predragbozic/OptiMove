@@ -551,29 +551,65 @@ test("classification is unaffected by conflicting-case environment variables (no
 });
 
 // ------------------------------------------------------------------
-// Subprocess invocation derived from .claude/settings.json itself, not reconstructed by
-// hand — this is what actually proves the registered hook command (with real
-// $CLAUDE_PROJECT_DIR substitution) runs and produces the documented JSON contract,
-// catching drift between settings.json's command string and what the tests assume it is.
+// settings.json's exec-form registration contract — a shell-form command string
+// (`"command": "node \"$CLAUDE_PROJECT_DIR/...\""`) is unreliable on Windows because
+// PowerShell doesn't interpolate a bare `$CLAUDE_PROJECT_DIR` the way POSIX bash does.
+// Exec form (`"command": "node", "args": [...]`) bypasses the shell entirely — Claude
+// Code substitutes `${CLAUDE_PROJECT_DIR}` itself and spawns the executable directly, so
+// there is no shell-interpolation step to differ between Bash and PowerShell tool
+// invocations. This test proves the actual on-disk contract, not just the intent.
 // ------------------------------------------------------------------
 
-test("subprocess: the exact command registered in .claude/settings.json runs and emits a valid decision", () => {
+test("settings.json uses the exact exec-form contract: 3 matchers, command:'node', identical single-arg args, no shell-form, no bare $CLAUDE_PROJECT_DIR", () => {
+  const settingsPath = fileURLToPath(new URL("./settings.json", new URL("../", import.meta.url)));
+  const raw = readFileSync(settingsPath, "utf8");
+  const settings = JSON.parse(raw);
+
+  // A bare, unbraced $CLAUDE_PROJECT_DIR only ever meant anything in the old shell-form
+  // string (where a shell would interpolate it) — exec form only recognizes the braced
+  // ${CLAUDE_PROJECT_DIR} placeholder, so any surviving bare occurrence is dead shell-form
+  // wreckage, not something Claude Code will ever substitute.
+  assert.ok(!/\$CLAUDE_PROJECT_DIR(?!\})/.test(raw), `no bare (unbraced) $CLAUDE_PROJECT_DIR may remain in settings.json, found in: ${raw}`);
+  assert.ok(!/"command"\s*:\s*"node /.test(raw), "no old shell-form 'command': 'node ...' single-string entry may remain");
+
+  const expectedMatchers = ["Bash", "PowerShell", "mcp__.*"];
+  assert.equal(
+    settings.hooks.PreToolUse.length,
+    expectedMatchers.length,
+    `expected exactly ${expectedMatchers.length} PreToolUse entries, got ${settings.hooks.PreToolUse.length}: ${JSON.stringify(settings.hooks.PreToolUse.map((h) => h.matcher))}`,
+  );
+
+  let previousArgs = null;
+  for (const matcher of expectedMatchers) {
+    const entry = settings.hooks.PreToolUse.find((h) => h.matcher === matcher);
+    assert.ok(entry, `expected a PreToolUse entry with matcher "${matcher}"`);
+    assert.equal(entry.hooks.length, 1, `matcher "${matcher}" must register exactly one hook`);
+    const hook = entry.hooks[0];
+    assert.equal(hook.type, "command");
+    assert.equal(hook.command, "node", `matcher "${matcher}" must use exec-form command "node" (a bare executable name), not a shell-command string`);
+    assert.ok(Array.isArray(hook.args), `matcher "${matcher}" must have an args array (exec form)`);
+    assert.equal(hook.args.length, 1, `matcher "${matcher}" must have exactly one argument, got: ${JSON.stringify(hook.args)}`);
+    assert.equal(hook.args[0], "${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs");
+    if (previousArgs !== null) {
+      assert.deepEqual(hook.args, previousArgs, `matcher "${matcher}"'s args must be identical to the other matchers' args (no duplicated/diverging implementations)`);
+    }
+    previousArgs = hook.args;
+  }
+});
+
+test("subprocess: the exact exec-form command+args registered in .claude/settings.json runs and emits a valid decision", () => {
   const settingsPath = fileURLToPath(new URL("./settings.json", new URL("../", import.meta.url)));
   const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-  const bashHook = settings.hooks.PreToolUse.find((h) => h.matcher === "Bash");
-  const commandTemplate = bashHook.hooks[0].command;
-  assert.equal(bashHook.hooks[0].type, "command");
+  const bashHook = settings.hooks.PreToolUse.find((h) => h.matcher === "Bash").hooks[0];
+  assert.equal(bashHook.type, "command");
+  assert.equal(bashHook.command, "node");
 
   const projectDir = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]$/, "");
-  const resolvedCommand = commandTemplate.replace(/\$CLAUDE_PROJECT_DIR/g, projectDir);
+  const resolvedArgs = bashHook.args.map((a) => a.replace(/\$\{CLAUDE_PROJECT_DIR\}/g, projectDir));
 
-  // Registered as `node "<path>"` — split conservatively (a single quoted path argument)
-  // rather than a full shell parse, since that's the exact shape settings.json uses today.
-  const match = resolvedCommand.match(/^node\s+"([^"]+)"$/);
-  assert.ok(match, `expected settings.json's command to be node "<path>", got: ${resolvedCommand}`);
-  const resolvedHookPath = match[1];
-
-  const out = execFileSync("node", [resolvedHookPath], {
+  // execFileSync with an array of args (no shell: true) is the same no-shell invocation
+  // shape exec form uses — this is a faithful reproduction, not a reconstruction.
+  const out = execFileSync(bashHook.command, resolvedArgs, {
     input: JSON.stringify(bash("git reset --hard")),
     encoding: "utf8",
     timeout: 5000,
@@ -598,16 +634,18 @@ test("settings.json registers a PreToolUse matcher that actually fires for mcp__
     }
   });
   assert.ok(mcpHook, `expected a PreToolUse matcher covering mcp__* tool names, got matchers: ${JSON.stringify(settings.hooks.PreToolUse.map((h) => h.matcher))}`);
-  assert.equal(mcpHook.hooks[0].command, settings.hooks.PreToolUse.find((h) => h.matcher === "Bash").hooks[0].command, "the MCP matcher should run the same safety-guard.mjs hook as Bash/PowerShell");
+  const bashEntry = settings.hooks.PreToolUse.find((h) => h.matcher === "Bash").hooks[0];
+  assert.equal(mcpHook.hooks[0].command, bashEntry.command, "the MCP matcher should run the same node executable as Bash/PowerShell");
+  assert.deepEqual(mcpHook.hooks[0].args, bashEntry.args, "the MCP matcher should run the same safety-guard.mjs args as Bash/PowerShell");
 });
 
 // ------------------------------------------------------------------
-// Real subprocess invocation — spawns `node safety-guard.mjs` exactly the way
-// .claude/settings.json's hook command does (`node "$CLAUDE_PROJECT_DIR/.claude/hooks/
-// safety-guard.mjs"`), piping JSON in via real stdin and reading real stdout back. This
-// is the only thing that actually exercises isMainModule() and the top-level stdin-read
-// path — every other test above imports the module's pure functions directly and never
-// touches that code at all.
+// Real subprocess invocation — spawns `node safety-guard.mjs` the same no-shell way
+// settings.json's exec-form hook does (`command: "node"`, `args: ["${CLAUDE_PROJECT_DIR}/
+// .claude/hooks/safety-guard.mjs"]`), piping JSON in via real stdin and reading real
+// stdout back. This is the only thing that actually exercises isMainModule() and the
+// top-level stdin-read path — every other test above imports the module's pure functions
+// directly and never touches that code at all.
 // ------------------------------------------------------------------
 
 const hookPath = fileURLToPath(new URL("./safety-guard.mjs", import.meta.url));

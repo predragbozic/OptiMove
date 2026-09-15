@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/safety-guard.mjs\""
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"]
           }
         ]
       },
@@ -15,7 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/safety-guard.mjs\""
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"]
           }
         ]
       },
@@ -24,7 +26,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/safety-guard.mjs\""
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"]
           }
         ]
       }
