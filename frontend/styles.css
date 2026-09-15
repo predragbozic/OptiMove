@@ -12936,8 +12936,22 @@ button.tests-assignment-card {
   }
 }
 
-/* Training Load 3B3 Analysis dashboard */
+/* Training Load 3B3 Analysis dashboard
+   Carbon-informed PoC (feature/training-load-carbon-poc-v1): tokens below map
+   this feature's own hardcoded teal/red/amber shades onto the app's existing
+   --accent/--danger custom properties instead of inventing a new palette -
+   see docs/ai/CURRENT_STATE.md and the PR description for the full rationale. */
 .tl-analysis {
+  --tla-accent: var(--accent, #1f6f68);
+  --tla-accent-soft: var(--accent-soft, #e3f3f0);
+  --tla-accent-border: color-mix(in srgb, var(--tla-accent) 38%, transparent);
+  --tla-accent-ring: color-mix(in srgb, var(--tla-accent) 35%, transparent);
+  --tla-danger: var(--danger, #a23b3b);
+  --tla-danger-soft: #fdf2f2;
+  --tla-danger-border: #f0c6c6;
+  --tla-warning: #8a5a00;
+  --tla-warning-soft: #fff7e8;
+  --tla-warning-border: #f0d6a0;
   display: grid;
   gap: 14px;
 }
@@ -12957,16 +12971,41 @@ button.tests-assignment-card {
 }
 
 .tl-analysis-topbar {
-  padding: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
+  row-gap: 10px;
   /* item 1: stays visible while the dashboard grid scrolls underneath it -
      the outer Training Load tab strip isn't sticky, so this simply sticks
      to the true viewport top, same containing block .sidebar already uses. */
   position: sticky;
   top: 0;
   z-index: 5;
+}
+
+/* Groups the topbar into three logical clusters (dashboard/mode, period,
+   activity/filter) with a hairline divider between them on wide viewports -
+   purely a visual grouping wrapper, no new data-action or behavior. */
+.tl-analysis-topbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-right: 14px;
+  border-right: 1px solid var(--line);
+}
+
+.tl-analysis-topbar-group:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+@media (max-width: 960px) {
+  .tl-analysis-topbar-group {
+    padding-right: 0;
+    border-right: 0;
+  }
 }
 
 .tl-analysis-activity-picker {
@@ -12983,10 +13022,10 @@ button.tests-assignment-card {
   min-height: 34px;
   justify-content: center;
   padding: 4px 10px;
-  border: 1px solid #99d5c9;
+  border: 1px solid var(--tla-accent-border);
   border-radius: var(--radius);
-  background: #effaf7;
-  color: #0f766e;
+  background: var(--tla-accent-soft);
+  color: var(--tla-accent);
   font-size: 12px;
   line-height: 1.25;
 }
@@ -12996,7 +13035,7 @@ button.tests-assignment-card {
 }
 
 .tl-analysis-activity-chip small {
-  color: #0f766e;
+  color: var(--tla-accent);
   opacity: 0.8;
 }
 
@@ -13015,10 +13054,10 @@ button.tests-assignment-card {
   gap: 10px;
   flex-wrap: wrap;
   padding: 8px 10px;
-  border: 1px solid #99d5c9;
+  border: 1px solid var(--tla-accent-border);
   border-radius: var(--radius);
-  background: #effaf7;
-  color: #0f766e;
+  background: var(--tla-accent-soft);
+  color: var(--tla-accent);
   font-size: 12px;
   font-weight: 600;
 }
@@ -13028,6 +13067,14 @@ button.tests-assignment-card {
   gap: 4px;
   min-width: 150px;
   font-size: 12px;
+  color: var(--muted);
+}
+
+.tl-analysis-control > span:first-child {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  font-weight: 700;
   color: var(--muted);
 }
 
@@ -13055,23 +13102,33 @@ button.tests-assignment-card {
 .tl-analysis-editor-grid input:focus,
 .tl-analysis-editor-grid select:focus,
 .tl-analysis-metric-picker input:focus {
-  outline: 2px solid color-mix(in srgb, #0f766e 35%, transparent);
+  outline: 2px solid var(--tla-accent-ring);
   outline-offset: 1px;
-  border-color: #0f766e;
+  border-color: var(--tla-accent);
 }
 
 .tl-analysis-date-control {
   min-width: 132px;
 }
 
+/* Primary action (e.g. "Add widget"): filled, so it reads as the one
+   clearly-highest-hierarchy action in a row of otherwise outlined buttons -
+   Create/Filter/Edit stay outlined (secondary/tertiary) below. */
 .tl-analysis-primary {
-  border-color: #0f766e;
-  color: #0f766e;
+  border-color: var(--tla-accent);
+  background: var(--tla-accent);
+  color: #fff;
+}
+
+.tl-analysis-primary:hover,
+.tl-analysis-primary:focus-visible {
+  background: color-mix(in srgb, var(--tla-accent) 88%, black);
+  border-color: color-mix(in srgb, var(--tla-accent) 88%, black);
 }
 
 .tl-analysis-active-action {
-  border-color: #0f766e;
-  color: #0f766e;
+  border-color: var(--tla-accent);
+  color: var(--tla-accent);
 }
 
 .tl-analysis-active-badge {
@@ -13079,11 +13136,18 @@ button.tests-assignment-card {
   align-items: center;
   min-height: 30px;
   padding: 5px 9px;
-  border: 1px solid #99d5c9;
+  border: 1px solid var(--tla-accent-border);
   border-radius: var(--radius);
-  background: #effaf7;
-  color: #0f766e;
+  background: var(--tla-accent-soft);
+  color: var(--tla-accent);
   font-size: 12px;
+  font-weight: 700;
+}
+
+/* Create/Filter stay outlined (secondary weight) - Add widget above is the
+   only filled/primary control in the topbar+header action set. */
+.tl-analysis-topbar [data-action="training-load-analysis-create"],
+.tl-analysis-topbar [data-action="training-load-filter-open"] {
   font-weight: 700;
 }
 
@@ -13114,6 +13178,12 @@ button.tests-assignment-card {
   align-content: start;
   gap: 10px;
   overflow: visible;
+  /* Carbon Tile principle: a flat bordered surface, not a floating card -
+     .panel's default box-shadow reads as "card soup" once a dozen of these
+     sit in a dense analytical grid. The edit-mode left accent bar below
+     reuses the drag-handle-presence selector CSS already relies on for
+     touch-action, rather than adding a parallel "is-editing" class. */
+  box-shadow: none;
 }
 
 .tl-analysis-widget-move,
@@ -13132,20 +13202,20 @@ button.tests-assignment-card {
 
 .tl-analysis-widget-move {
   right: 42px;
-  border: 1px solid #99d5c9;
+  border: 1px solid var(--tla-accent-border);
   border-radius: 999px;
-  background: #effaf7;
-  color: #0f766e;
+  background: var(--tla-accent-soft);
+  color: var(--tla-accent);
   cursor: grab;
   touch-action: none;
 }
 
 .tl-analysis-widget-delete {
   right: 8px;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--tla-danger-border);
   border-radius: 999px;
-  background: #fff5f5;
-  color: #b91c1c;
+  background: var(--tla-danger-soft);
+  color: var(--tla-danger);
   font-size: 18px;
   font-weight: 900;
 }
@@ -13163,18 +13233,20 @@ button.tests-assignment-card {
 
 .tl-analysis-widget-move:hover,
 .tl-analysis-widget-move:focus-visible {
-  background: #dff1ee;
-  border-color: #72c8bb;
+  background: color-mix(in srgb, var(--tla-accent-soft) 60%, white);
+  border-color: var(--tla-accent);
 }
 
 .tl-analysis-widget-delete:hover,
 .tl-analysis-widget-delete:focus-visible {
-  background: #fee2e2;
-  border-color: #fca5a5;
+  background: color-mix(in srgb, var(--tla-danger-soft) 40%, white);
+  border-color: var(--tla-danger);
 }
 
 .tl-analysis-widget:has([data-analysis-drag-handle='true']) {
   touch-action: none;
+  border-color: var(--tla-accent-border);
+  box-shadow: inset 3px 0 0 var(--tla-accent);
 }
 
 .tl-analysis-widget-head {
@@ -13210,11 +13282,11 @@ button.tests-assignment-card {
   height: 42px;
   place-items: center;
   padding: 0;
-  border: 1px solid #99d5c9;
+  border: 1px solid var(--tla-accent-border);
   pointer-events: auto;
-  background: #effaf7;
+  background: var(--tla-accent-soft);
   border-bottom-right-radius: var(--radius);
-  color: #0f766e;
+  color: var(--tla-accent);
   cursor: nwse-resize;
   touch-action: none;
 }
@@ -13231,8 +13303,8 @@ button.tests-assignment-card {
 
 .tl-analysis-resize-handle:hover,
 .tl-analysis-resize-handle:focus-visible {
-  background: #dff1ee;
-  border-color: #72c8bb;
+  background: color-mix(in srgb, var(--tla-accent-soft) 60%, white);
+  border-color: var(--tla-accent);
 }
 
 .tl-analysis-widget-tools {
@@ -13257,16 +13329,16 @@ button.tests-assignment-card {
 
 .tl-analysis-status.is-unresolved,
 .tl-analysis-status.is-ambiguous {
-  border-color: #f0d6a0;
-  background: #fff7e8;
-  color: #8a5a00;
+  border-color: var(--tla-warning-border);
+  background: var(--tla-warning-soft);
+  color: var(--tla-warning);
 }
 
 .tl-analysis-status.is-error,
 .tl-analysis-status.is-conflict {
-  border-color: #f1b0b7;
-  background: #fff0f2;
-  color: #9f1239;
+  border-color: var(--tla-danger-border);
+  background: var(--tla-danger-soft);
+  color: var(--tla-danger);
 }
 
 .tl-analysis-empty {
@@ -13278,22 +13350,40 @@ button.tests-assignment-card {
 
 .tl-analysis-kpi {
   display: grid;
-  gap: 5px;
+  gap: 6px;
 }
 
 .tl-analysis-kpi-value {
   font-size: clamp(28px, 4vw, 44px);
   line-height: 1;
   font-weight: 800;
+  color: var(--text);
 }
 
-.tl-analysis-kpi-label,
-.tl-analysis-kpi-compare {
+.tl-analysis-kpi-label {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 11px;
+  font-weight: 700;
   color: var(--muted);
+}
+
+.tl-analysis-kpi-compare {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-soft, #f7f8fa);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .tl-analysis-table-wrap {
   overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 
 .tl-analysis-table {
@@ -13304,10 +13394,32 @@ button.tests-assignment-card {
 
 .tl-analysis-table th,
 .tl-analysis-table td {
-  padding: 7px 8px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
+}
+
+.tl-analysis-table thead th {
+  background: var(--surface-soft, #f7f8fa);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  border-bottom: 2px solid var(--line);
+}
+
+/* Value column: numeric, right-aligned per Carbon table guidance so a
+   column of numbers stays scannable top-to-bottom. */
+.tl-analysis-table th:nth-child(3),
+.tl-analysis-table td:nth-child(3) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-analysis-table tbody tr:hover {
+  background: var(--surface-soft, #f7f8fa);
 }
 
 .tl-analysis-chart {
@@ -13333,14 +13445,14 @@ button.tests-assignment-card {
   height: 9px;
   overflow: hidden;
   border-radius: 999px;
-  background: #e8ecef;
+  background: var(--surface-soft, #e8ecef);
 }
 
 .tl-analysis-chart-track span {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: #0f766e;
+  background: var(--tla-accent);
 }
 
 .tl-analysis-topbar .plain-button:disabled {
@@ -13424,8 +13536,10 @@ button.tests-assignment-card {
 }
 
 .tl-analysis-series-row.is-active,
-.tl-analysis-metric-option:hover {
-  border-color: #0f766e;
+.tl-analysis-metric-option:hover,
+.tl-analysis-series-row:focus-visible,
+.tl-analysis-metric-option:focus-visible {
+  border-color: var(--tla-accent);
 }
 
 .tl-analysis-metric-option {
@@ -13465,8 +13579,19 @@ button.tests-assignment-card {
   }
   .tl-analysis-control,
   .tl-analysis-date-control,
-  .tl-analysis-topbar .plain-button {
+  .tl-analysis-topbar .plain-button,
+  .tl-analysis-topbar-group {
     width: 100%;
+  }
+  .tl-analysis-topbar-group {
+    padding-right: 0;
+    padding-bottom: 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .tl-analysis-topbar-group:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
   }
   .tl-analysis-control select,
   .tl-analysis-control input {
@@ -13529,4 +13654,48 @@ button.tests-assignment-card {
   .tl-analysis-mobile-reorder {
     min-height: 44px;
   }
+}
+
+/* Loading state: a small inline spinner next to the existing "Loading..."
+   text (Carbon InlineLoading pattern) rather than color/animation alone
+   carrying the "this is busy" meaning - the text is still the primary cue. */
+.tl-analysis-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tl-analysis-loading::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid var(--line);
+  border-top-color: var(--tla-accent);
+  border-radius: 50%;
+  animation: tl-analysis-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-analysis-loading::before {
+    animation: none;
+  }
+}
+
+@keyframes tl-analysis-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Error state: scoped to this feature only (per CLAUDE.md's "no global
+   selector when it can stay under .tl-analysis" rule) - dresses the shared
+   .builder-error text up as an inline notification without touching the
+   global .builder-error rule other features still use. */
+.tl-analysis .builder-error {
+  padding: 8px 10px;
+  border: 1px solid var(--tla-danger-border);
+  border-left: 3px solid var(--tla-danger);
+  border-radius: var(--radius);
+  background: var(--tla-danger-soft);
 }
