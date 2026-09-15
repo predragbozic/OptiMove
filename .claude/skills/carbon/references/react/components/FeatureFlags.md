@@ -1,0 +1,111 @@
+> Source: https://github.com/carbon-design-system/carbon/blob/main/packages/react/src/components/FeatureFlags/overview.mdx
+
+# Feature Flags
+
+[Source code](https://github.com/carbon-design-system/carbon/tree/main/packages/react/src/components/FeatureFlags)
+
+## Table of Contents
+
+- [About feature flags](#about-feature-flags)
+- [Current feature flags](#current-feature-flags)
+- [Documentation](#documentation)
+- [IBM Products component migration](#ibm-products-component-migration)
+- [Using Codemods for Migration](#using-codemods-for-migration)
+  - [Running a Codemod](#running-a-codemod)
+- [Feature flag naming convention](#feature-flag-naming-convention)
+  - [Flags prefixed with `enable-*`](#flags-prefixed-with-enable-)
+  - [Flags prefixed with `enable-v#-*`](#flags-prefixed-with-enable-v-)
+- [Turning on feature flags in Javascript/react](#turning-on-feature-flags-in-javascriptreact)
+- [Turning on feature flags in Sass](#turning-on-feature-flags-in-sass)
+- [FeatureFlags Prop Update](#featureflags-prop-update)
+
+{FeatureFlags}
+
+## Turning on feature flags in Javascript/react
+
+Use the FeatureFlag component to turn on a feature flag for a portion of your
+application's react tree. Multiple feature flags can be configured at the same
+time.
+
+```jsx
+import { FeatureFlags } from '@carbon/react';
+
+<FeatureFlags enableV12TileDefaultIcons enableASecondFeatureFlag>
+  <Tile />
+</FeatureFlags>;
+```
+
+The `FeatureFlag` component can be placed at any point in your react tree and
+will impact all children components. You can turn on feature flags for your
+entire app, or only certain pages/routes/sections of your application.
+
+```jsx
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { FeatureFlags } from '@carbon/react';
+import App from './App';
+
+const root = createRoot(document.getElementById('root'));
+root.render(
+  <StrictMode>
+    <FeatureFlags enableV12TileDefaultIcons>
+      <App />
+    </FeatureFlags>
+  </StrictMode>
+);
+```
+
+## Turning on feature flags in Sass
+
+In Sass, you can enable feature flags in any of your stylesheets. Most often
+this is done at the root/entrypoint stylesheet.
+
+```sass
+@use '@carbon/react/scss/feature-flags' with (
+  $feature-flags: (
+    'enable-tile-contrast': true,
+  )
+);
+@use '@carbon/react';
+```
+
+Feature flags can also be enabled via the provided `enable()` mixin
+
+```sass
+@use '@carbon/react/scss/feature-flags';
+@use '@carbon/react';
+
+@include feature-flags.enable('enable-tile-contrast');
+```
+
+## FeatureFlags Prop Update
+
+The `FeatureFlags` component has been updated to improve compatibility. The
+`flags` object prop is now deprecated and is replaced with individual boolean
+props for each feature flag.
+
+The `flags` prop will be removed in a future release. Instead, use individual
+boolean props for each feature flag. A `featureflag-deprecate-flags-prop`
+codemod has been provided to help deprecate the `flags` object prop and switch
+to individual boolean props.
+
+```bash
+npx @carbon/upgrade migrate featureflag-deprecate-flags-prop --write
+```
+
+```jsx
+//Before migration
+
+ <FeatureFlags
+  flags={{
+    'enable-v12-tile-default-icons': true,
+  }}>
+    <App />
+  </FeatureFlags>
+
+//After migration
+
+  <FeatureFlags enableV12TileDefaultIcons>
+    <App />
+  </FeatureFlags>
+```
