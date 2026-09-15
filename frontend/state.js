@@ -604,7 +604,18 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // shape/behavior as tests.weekly (see frontend/tests-data.js's own
   // loadTestsWeekly for the request-generation-token race guard this
   // mirrors), its own independent instance.
+  //
+  // IA shell (Phase A): `section` stays the single source of truth for
+  // which content renders - "today"/"results"/"analysis" now additionally
+  // group under the "Data & Analysis" top-level space (see
+  // trainingLoadTopLevelSpace() in training-load-view.js), "schedule" is
+  // its own space. `lastDataAnalysisSection` remembers which of the three
+  // Data & Analysis sub-views was last active, so switching away to
+  // Schedule and back restores it instead of always resetting to
+  // "today" - see setTrainingLoadSection() in training-load-actions.js,
+  // the one place both fields are ever written together.
   section: "today",
+  lastDataAnalysisSection: "today",
   weekly: {
     today: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
     schedule: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },

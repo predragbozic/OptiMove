@@ -86,6 +86,22 @@ function analysisIsMobileLayoutViewport() {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 720px)").matches;
 }
 
+// IA shell (Phase A): the one place `state.trainingLoad.section` is ever
+// written - keeps `lastDataAnalysisSection` (state.js) in sync so switching
+// to the Schedule space and back to Data & Analysis restores whichever of
+// Activities/Athletes/Dashboards was last active, instead of always
+// resetting to Activities. Every call site that assigns
+// `state.trainingLoad.section` goes through this now, including
+// app.js's own notification-driven openTrainingLoadResults - exported
+// specifically so that (and any other future non-training-load-actions.js
+// entry point) never has to fall back to a direct assignment.
+export function setTrainingLoadSection(section) {
+  state.trainingLoad.section = section;
+  if (section === "today" || section === "results" || section === "analysis") {
+    state.trainingLoad.lastDataAnalysisSection = section;
+  }
+}
+
 function analysisLayoutCanEdit() {
   const a = state.trainingLoad.analysis;
   return state.trainingLoad.section === "analysis" && a.editMode && a.dashboard && a.dashboard.status !== "archived" && !a.dashboard.is_template && !a.saving && !analysisIsMobileLayoutViewport();
@@ -586,7 +602,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- Coach: Today/Schedule/Results tabs --------------------
 
   if (type === "training-load-section") {
-    state.trainingLoad.section = action.dataset.section;
+    setTrainingLoadSection(action.dataset.section);
     // perf: the tab strip itself (and whatever this section's own
     // nav.data already holds - real data from an earlier visit this
     // session, or nothing yet) paints INSTANTLY on the switch, never
@@ -686,7 +702,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // is true) instead of asking for a raw activity/component UUID here.
   if (type === "training-load-analysis-choose-activity") {
     state.trainingLoad.analysis.pickingActivity = true;
-    state.trainingLoad.section = "today";
+    setTrainingLoadSection("today");
     renderTrainingLoad();
     await loadTrainingLoadCalendarWeek(renderTrainingLoad);
     renderTrainingLoad();
@@ -694,7 +710,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-analysis-cancel-choose-activity") {
     state.trainingLoad.analysis.pickingActivity = false;
-    state.trainingLoad.section = "analysis";
+    setTrainingLoadSection("analysis");
     renderTrainingLoad();
     await loadTrainingLoadAnalysis(renderTrainingLoad);
     renderTrainingLoad();
@@ -712,7 +728,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     a.selectedActivity = { id: nav.selectedActivityId, name: item?.name || "Activity", date: nav.selectedDate };
     a.componentOptions = (detail.components || []).map((c) => ({ id: c.id, name: c.name }));
     a.pickingActivity = false;
-    state.trainingLoad.section = "analysis";
+    setTrainingLoadSection("analysis");
     renderTrainingLoad();
     await loadTrainingLoadAnalysis(renderTrainingLoad);
     renderTrainingLoad();
