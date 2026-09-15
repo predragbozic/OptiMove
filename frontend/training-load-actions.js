@@ -102,6 +102,57 @@ export function setTrainingLoadSection(section) {
   }
 }
 
+// Phase B (shared weekly temporal context): given a consumer's own prior
+// selectedDate/weekStart, returns the equivalent day in a NEW week -
+// preserving THAT consumer's own weekday offset (never adopting whichever
+// weekday the OTHER side happened to be on), clamped to 0-6 so a malformed
+// or missing prior date never lands outside the new week. A consumer with
+// no prior selectedDate at all (never yet visited) normalizes to the new
+// week's Monday - always a valid member of the shared week, per the
+// contract that a local selectedDate must never survive into a week it no
+// longer belongs to.
+function normalizeSelectedDateToNewWeek(oldSelectedDate, oldWeekStart, newWeekStart) {
+  if (!oldSelectedDate || !oldWeekStart) return newWeekStart;
+  const offsetDays = Math.round((new Date(`${oldSelectedDate}T00:00:00Z`) - new Date(`${oldWeekStart}T00:00:00Z`)) / 86400000);
+  const clampedOffset = Math.min(6, Math.max(0, offsetDays));
+  return addDaysIso(newWeekStart, clampedOffset);
+}
+
+// The one place `state.trainingLoad.dataAnalysisWeekStart` is ever written.
+// Called from whichever side's own week-nav control (Prev/Next/Today, or a
+// month-grid day click landing in a different week) just changed its own
+// weekStart - propagates the new week to the OTHER Data & Analysis side
+// (Activities' `calendar` nav or Athletes' `weekly.results` nav) so both
+// always agree on one shared week, normalizing that other side's own
+// selectedDate into it via normalizeSelectedDateToNewWeek above.
+//
+// Deliberately does NOT fetch the other side's data here - both
+// loadTrainingLoadCalendarWeek and loadTrainingLoadWeekly already compute
+// their own cache key from nav.weekStart, and the existing
+// "training-load-section" action already unconditionally re-fetches
+// whichever of Activities/Athletes' data the user actually switches to
+// (see that handler below) - by the time that fires, this function has
+// already left the right week/date queued in state for it to pick up. This
+// also means an as-yet-unvisited side's own weekStart stops reading as
+// empty, so its own "no weekStart yet -> bootstrap to today" branch
+// correctly never overrides the week this function just set.
+//
+// `movedSide` is "calendar" or "results" - the side that just changed,
+// which is left untouched here (it already updated itself).
+export function syncDataAnalysisSharedWeek(newWeekStart, movedSide) {
+  state.trainingLoad.dataAnalysisWeekStart = newWeekStart;
+  if (movedSide !== "calendar") {
+    const cal = state.trainingLoad.calendar;
+    cal.selectedDate = normalizeSelectedDateToNewWeek(cal.selectedDate, cal.weekStart, newWeekStart);
+    cal.weekStart = newWeekStart;
+  }
+  if (movedSide !== "results") {
+    const res = state.trainingLoad.weekly.results;
+    res.selectedDate = normalizeSelectedDateToNewWeek(res.selectedDate, res.weekStart, newWeekStart);
+    res.weekStart = newWeekStart;
+  }
+}
+
 function analysisLayoutCanEdit() {
   const a = state.trainingLoad.analysis;
   return state.trainingLoad.section === "analysis" && a.editMode && a.dashboard && a.dashboard.status !== "archived" && !a.dashboard.is_template && !a.saving && !analysisIsMobileLayoutViewport();
@@ -1017,6 +1068,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const delta = type === "training-load-weekly-prev-week" ? -7 : 7;
     nav.weekStart = addDaysIso(nav.weekStart, delta);
     if (nav.selectedDate) nav.selectedDate = addDaysIso(nav.selectedDate, delta);
+    // Phase B: only Athletes (section "results") is part of the shared
+    // Data & Analysis week - "schedule" (and the unreachable legacy
+    // "today" weekly nav slot) stay fully independent, untouched by this.
+    if (section === "results") syncDataAnalysisSharedWeek(nav.weekStart, "results");
     // perf: the week label/nav updates instantly; loadTrainingLoadWeekly
     // paints again the instant it has something to show (cached data for
     // this week if already visited, or a loading state) via onPainted.
@@ -1032,6 +1087,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const today = localDateIsoInTimeZone(timezone);
     nav.weekStart = weekMondayIso(today);
     nav.selectedDate = today;
+    if (section === "results") syncDataAnalysisSharedWeek(nav.weekStart, "results");
     renderTrainingLoad();
     await loadTrainingLoadWeekly(section, renderTrainingLoad);
     renderTrainingLoad();
@@ -1059,6 +1115,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     } else {
       cal.weekStart = addDaysIso(cal.weekStart, delta * 7);
       if (cal.selectedDate) cal.selectedDate = addDaysIso(cal.selectedDate, delta * 7);
+      // Phase B: week-mode Prev/Next is a real week change, shared with
+      // Athletes - month-mode's own branch above only ever touches
+      // monthCursor, deliberately never reaching this line or the shared
+      // week (month browsing stays a local navigator, per the contract).
+      syncDataAnalysisSharedWeek(cal.weekStart, "calendar");
       renderTrainingLoad();
       await loadTrainingLoadCalendarWeek(renderTrainingLoad);
     }
@@ -1073,6 +1134,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     cal.selectedDate = today;
     cal.selectedActivityId = null;
     cal.selectedComponentId = null;
+    syncDataAnalysisSharedWeek(cal.weekStart, "calendar");
     if (cal.monthMode) cal.monthCursor = monthStartIso(today);
     renderTrainingLoad();
     await Promise.all([
@@ -1108,6 +1170,14 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const newWeekStart = weekMondayIso(date);
     if (newWeekStart !== cal.weekStart) {
       cal.weekStart = newWeekStart;
+      // Phase B: this is the ONLY place a month-grid day click (a genuinely
+      // different week, possibly a different month) changes the shared
+      // week - a week-mode day-strip click never reaches here at all,
+      // since every day in that strip already belongs to cal.weekStart's
+      // own week, so newWeekStart === cal.weekStart there and this whole
+      // block (shared-week sync included) is skipped, exactly matching
+      // "a same-week day click must never touch weekStart."
+      syncDataAnalysisSharedWeek(newWeekStart, "calendar");
       renderTrainingLoad();
       await loadTrainingLoadCalendarWeek(renderTrainingLoad);
     }
