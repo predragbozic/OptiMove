@@ -61,7 +61,7 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadSection } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadTrainingLoadAnalysis } from "./training-load-analysis-data.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
@@ -2108,6 +2108,11 @@ async function openTrainingLoadResults(scheduledDate) {
     const nav = state.trainingLoad.weekly.results;
     nav.weekStart = weekMondayIso(scheduledDate);
     nav.selectedDate = scheduledDate;
+    // Phase B: this is a real entry point into Athletes' own week, same as
+    // any of its Prev/Next/Today controls - must keep the Data & Analysis
+    // shared week in sync too, or switching to Activities right after
+    // opening a notification would show a stale, unrelated week.
+    syncDataAnalysisSharedWeek(nav.weekStart, "results");
   }
   renderTabs();
   renderLibraryNav();

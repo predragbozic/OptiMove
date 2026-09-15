@@ -616,6 +616,20 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // the one place both fields are ever written together.
   section: "today",
   lastDataAnalysisSection: "today",
+  // Phase B (shared weekly temporal context): the ONE Monday-anchored week
+  // shared between the Data & Analysis sub-views Activities (`calendar.
+  // weekStart`) and Athletes (`weekly.results.weekStart`) - kept in sync
+  // with both of those (never the other way around; this field itself is
+  // never read directly by Activities/Athletes' own render/data-fetch
+  // code, which still read their own nav slot's weekStart exactly as
+  // before) by syncDataAnalysisSharedWeek() in training-load-actions.js,
+  // the one place this is ever written. Schedule's own week
+  // (weekly.schedule) and Dashboards' own From/To (analysis.period) are
+  // deliberately untouched by this - see that function's own header.
+  // Empty until either side's week-nav is actually used; a not-yet-touched
+  // side bootstraps to "today" independently, same as before this phase.
+  // A future Overview sub-view reads this same field as its own period.
+  dataAnalysisWeekStart: "",
   weekly: {
     today: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
     schedule: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
