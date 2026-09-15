@@ -69,10 +69,23 @@ memoriju (`.claude/rules/memory-maintenance.md`).
 Revieweri nemaju Bash — ne mogu sami da pokrenu `git log`, testove, ili bilo šta drugo.
 **Ne smeju tvrditi da su sami proverili Git istoriju ili izvršili testove** — sve što
 znaju je ono što im glavna sesija eksplicitno prosledi u pozivu. Pre pozivanja bilo kog
-reviewera, glavna sesija mu prosleđuje: cilj zadatka, relevantne strict acceptance
-criteria, tačan diff range ili listu konkretnih promena, relevantne fajlove/simbole,
-šta NIJE deo ovog pregleda, i već izvršene testove sa STVARNIM rezultatima (tačna
-komanda + tačan broj) — ako testovi nisu pokrenuti, reci to eksplicitno.
+reviewera, glavna sesija mu MORA proslediti:
+
+- originalni korisnički cilj i potvrđene produktne odluke (ne samo "pregledaj ovo");
+- relevantne strict acceptance criteria za taj zadatak;
+- base i head commit;
+- kompletan unified diff, ili čitljivu apsolutnu putanju do privremenog patch fajla;
+- spisak promenjenih fajlova;
+- relevantne ADR/code/schema/API ugovore na koje se diff oslanja;
+- šta NIJE deo ovog pregleda (out-of-scope);
+- tačne test komande i njihove STVARNE rezultate (tačan broj prolaznih/palih) — ako
+  testovi nisu pokrenuti, reci to eksplicitno, ne pretpostavljaj;
+- poznate baseline padove, ali SAMO ako je test stvarno pao i baseline stvarno proveren.
+
+Za `code-reviewer` konkretno: ako mu nedostaje cilj, acceptance criteria, ili stvaran
+diff, on vraća `BLOCKED: incomplete review packet` i ne daje READY/NOT READY/READY WITH
+NON-BLOCKING NOTES verdict — to nije reviewer greška, to je znak da poziv nije bio
+kompletan; dopuni ulaz i pozovi ponovo, ne tumači BLOCKED kao "sve je u redu".
 
 ## Orchestration matrica — kad se koji reviewer zove
 
@@ -90,6 +103,34 @@ Ne pokreći sve agente automatski na svaku izmenu — biraj po tabeli iznad. Za 
 slučaj, glavna sesija bira najmanji relevantan skup koristeći najbolju stručnu procenu —
 ne čeka se korisnik za svaku graničnu klasifikaciju. Pitaj korisnika samo ako bi izbor
 reviewera mogao da promeni produktnu odluku, bezbednosni profil, ili obim zadatka.
+
+## External-review okidači — tačno pet
+
+Interni reviewer skup (code-reviewer/db-reviewer/security-reviewer/mobile-qa) je
+dovoljan za većinu zadataka, ali NIJE dovoljan sam po sebi kad se aktivira bilo koji od
+sledećih pet okidača:
+
+1. Migracija, persistent DB write, data rewrite/reconciliation, sankcionisan SQL, ili
+   rollback.
+2. Auth, role, `owner_scope`, `data_workspace`, cross-workspace, ili info-hiding ugovor.
+3. Kanonski identitet, linking, merge/reparent, copy, ili materialization.
+4. Transakcije, lock order, concurrency, retry, ili idempotency.
+5. Nerešen BLOCKER/HIGH nalaz, neslaganje između reviewera, neobjašnjen pad testa, ili
+   samo mock dokaz za kritičan tok (auth, plaćanje, ireverzibilna operacija).
+
+Kad se aktivira bilo koji od ovih pet: glavna sesija završava sve bezbedne lokalne
+provere (interni reviewer prolazi, testovi, `git diff --check`), pripremi
+`EXTERNAL REVIEW REQUIRED` paket (isti sadržaj kao Agent input contract iznad — cilj,
+acceptance criteria, diff, testovi, poznati nalazi), ali **ne proglašava
+merge-readiness i ne radi PR, merge, ni deploy** dok se ta spoljna revizija ne obavi.
+Ovo važi bez obzira na to koliko su interni reviewer nalazi čisti.
+
+"Spoljna revizija" ovde znači: paket se preda KORISNIKU (ili osobi/procesu koju
+korisnik odredi) na pregled izvan internog agent seta — nijedan od četiri postojeća
+agenta (code-reviewer/db-reviewer/security-reviewer/mobile-qa) se ne broji kao "spoljni"
+sam po sebi, koliko god bio adversarial. Glavna sesija ne nastavlja sama dalje ka
+merge-readiness dok korisnik (ili taj određeni proces) eksplicitno ne potvrdi da je
+paket pregledan.
 
 ## Severity contract (zajednički za sve reviewere)
 
@@ -120,4 +161,5 @@ deploy-a, i persistent DB migracije, bez obzira koliko prethodni koraci deluju g
 ## Rules index
 
 `.claude/rules/`: `git-safety.md`, `database-safety.md`, `testing-evidence.md`,
-`frontend.md`, `backend-security.md`, `migrations.md`, `memory-maintenance.md`.
+`frontend.md`, `backend-security.md`, `migrations.md`, `memory-maintenance.md`,
+`review-feedback-loop.md`.
