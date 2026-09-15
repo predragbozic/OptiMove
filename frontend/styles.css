@@ -11748,6 +11748,46 @@ button.tests-assignment-card {
   color: var(--accent);
 }
 
+/* IA shell (Phase A): secondary-level nav for the Data & Analysis space's
+   own three sub-views - deliberately NOT styled like .training-load-tab
+   (icon-above-label pills in a bordered strip) so the two nav levels read
+   as distinct rather than two identical-looking tab strips stacked on top
+   of each other. */
+.training-load-subnav {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.training-load-subnav-tab {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.training-load-subnav-tab.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* mobile-qa finding: 720px, not an isolated 480px - matches .tl-analysis's
+   own mobile breakpoint (the Dashboards content this sub-nav sits directly
+   above once "Dashboards" is the active sub-view), so the sub-nav's touch
+   targets never stay desktop-sized while the content underneath has
+   already switched to its own mobile layout. */
+@media (max-width: 720px) {
+  .training-load-subnav-tab {
+    min-height: 44px;
+  }
+}
+
 .training-load-weekly {
   display: grid;
   gap: 10px;

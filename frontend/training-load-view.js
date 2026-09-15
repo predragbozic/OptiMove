@@ -1522,7 +1522,21 @@ export function renderTrainingLoadResultsHtml() {
 }
 
 // ------------------------------------------------------------
-// Coach root: tab switcher + Club/Team/Athletes filter button.
+// Coach root: top-level space switcher (Schedule / Data & Analysis) +
+// Club/Team/Athletes filter button.
+//
+// IA shell (Phase A - Training Load IA v1): two top-level spaces instead of
+// the previous four flat tabs. `state.trainingLoad.section` keeps its
+// existing four values ("today"/"schedule"/"results"/"analysis") as the
+// single source of truth for WHICH content renders - see state.js's own
+// header comment - trainingLoadTopLevelSpace() below is the one place that
+// groups "today"/"results"/"analysis" under the "Data & Analysis" space,
+// "schedule" under its own. This is a routing/shell reorganization only:
+// every render function below (renderTrainingLoadCalendarHtml/
+// renderTrainingLoadResultsHtml/renderTrainingLoadAnalysisHtml/
+// renderTrainingLoadScheduleHtml) is unchanged, just reachable from a new
+// location - their own data-fetch contracts, and everything below them,
+// are untouched.
 // ------------------------------------------------------------
 
 function trainingLoadFilterCount() {
@@ -1530,19 +1544,47 @@ function trainingLoadFilterCount() {
   return clubIds.length + teamIds.length + athleteIds.length;
 }
 
+// Pure, exported so both the render side and tests can assert space
+// membership directly instead of re-deriving it from markup.
+export function trainingLoadTopLevelSpace(section) {
+  return section === "schedule" ? "schedule" : "dataAnalysis";
+}
+
+const DATA_ANALYSIS_SUBVIEWS = [
+  { section: "today", label: "Activities" },
+  { section: "results", label: "Athletes" },
+  { section: "analysis", label: "Dashboards" },
+];
+
+function renderDataAnalysisSubNavHtml(section) {
+  return `
+    <div class="training-load-subnav" role="tablist" aria-label="Data & Analysis views">
+      ${DATA_ANALYSIS_SUBVIEWS.map((v) => `
+        <button type="button" class="training-load-subnav-tab ${section === v.section ? "is-active" : ""}" role="tab" aria-selected="${section === v.section ? "true" : "false"}" data-action="training-load-section" data-section="${v.section}">${v.label}</button>
+      `).join("")}
+    </div>
+  `;
+}
+
 export function renderTrainingLoadCoachHtml() {
   const section = state.trainingLoad.section;
+  const space = trainingLoadTopLevelSpace(section);
   const count = trainingLoadFilterCount();
+  // Clicking the "Data & Analysis" space tab itself (as opposed to one of
+  // its own sub-nav buttons) restores whichever sub-view was last active -
+  // see state.js's own header comment and setTrainingLoadSection() in
+  // training-load-actions.js, the only place that value is written.
+  const dataAnalysisTargetSection = state.trainingLoad.lastDataAnalysisSection || "today";
   return `
     <div class="training-load-root">
       <div class="training-load-toolbar">
-        <div class="training-load-tabs" role="tablist">
-          ${["today", "schedule", "results", "analysis"].map((s) => `
-            <button type="button" class="training-load-tab ${section === s ? "is-active" : ""}" role="tab" aria-selected="${section === s ? "true" : "false"}" data-action="training-load-section" data-section="${s}">${renderTrainingLoadTabIcon(s)}<span>${s === "today" ? "Calendar" : s === "schedule" ? "Schedule" : s === "results" ? "Results" : "Analysis"}</span></button>
-          `).join("")}
+        <div class="training-load-tabs" role="tablist" aria-label="Training Load spaces">
+          <button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
+          <button type="button" class="training-load-tab ${space === "dataAnalysis" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataAnalysis" ? "true" : "false"}" data-action="training-load-section" data-section="${dataAnalysisTargetSection}">${renderTrainingLoadTabIcon("analysis")}<span>Data &amp; Analysis</span></button>
         </div>
         <button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>
       </div>
+      ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section) : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}
       ${section === "schedule" ? renderTrainingLoadScheduleHtml() : ""}
       ${section === "results" ? renderTrainingLoadResultsHtml() : ""}
