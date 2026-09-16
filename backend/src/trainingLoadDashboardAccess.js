@@ -294,14 +294,25 @@ export function dashboardVisibilitySql(req, dataWorkspace, alias, params) {
     params.push([...teamIds]);
     clauses.push(`(${alias}.owner_scope = 'team' and ${alias}.owner_team_id = any($${params.length}::uuid[]))`);
   }
+  // Data-workspace READ visibility - the SQL twin of canViewDashboardRow's
+  // last branch, which only ever reaches dataWorkspaceMatches() for a
+  // SHARED (club/team-owned) dashboard: a 'user'-owned private dashboard is
+  // visible to its owner (the clause above) or a platform admin, NEVER via
+  // a workspace match. Without the owner_scope guard here this clause
+  // listed every OTHER account's private dashboard whose stored data
+  // workspace happened to equal the caller's - every private coach's
+  // (`private_coach` + null scope) board to every other private coach, and
+  // one club coach's private board to every colleague active in the same
+  // club/team. The single-row GET always re-checked via canViewDashboardRow
+  // and 404'd, so only names/descriptions leaked through the list.
   if (dataWorkspace?.dataWorkspaceType) {
     params.push(dataWorkspace.dataWorkspaceType);
     const typeIdx = params.length;
     if (dataWorkspace.dataWorkspaceScopeId != null) {
       params.push(dataWorkspace.dataWorkspaceScopeId);
-      clauses.push(`(${alias}.data_workspace_type = $${typeIdx} and ${alias}.data_workspace_scope_id = $${params.length})`);
+      clauses.push(`(${alias}.owner_scope <> 'user' and ${alias}.data_workspace_type = $${typeIdx} and ${alias}.data_workspace_scope_id = $${params.length})`);
     } else {
-      clauses.push(`(${alias}.data_workspace_type = $${typeIdx} and ${alias}.data_workspace_scope_id is null)`);
+      clauses.push(`(${alias}.owner_scope <> 'user' and ${alias}.data_workspace_type = $${typeIdx} and ${alias}.data_workspace_scope_id is null)`);
     }
   }
   return `(${clauses.join(" or ")})`;
