@@ -70,7 +70,7 @@ const TRAINING_LOAD_WEEKLY_CACHE_NAMESPACE = "training-load-weekly";
 // this one also catches "this exact nav slot moved on to a different
 // request entirely" even when dedupeRequest itself would have collapsed
 // two truly-identical concurrent calls into one anyway.
-const weeklyRequestGeneration = { today: 0, schedule: 0, results: 0, athlete: 0 };
+const weeklyRequestGeneration = { today: 0, schedule: 0, results: 0, athlete: 0, overview: 0 };
 
 function clampSelectedDateToWeek(selectedDate, data) {
   if (data.days.some((d) => d.date === selectedDate)) return selectedDate;

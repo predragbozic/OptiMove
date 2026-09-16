@@ -1,5 +1,5 @@
 import { state } from "./state.js";
-import { escapeAttr, escapeHtml, formatDate, formatDayMonth, formatWeekday, initialsFor, localDateIso, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
+import { addDaysIso, escapeAttr, escapeHtml, formatDate, formatDayMonth, formatWeekday, initialsFor, localDateIso, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { renderTrainingLoadAnalysisHtml } from "./training-load-analysis-view.js";
 import { renderTrainingLoadCalendarHtml } from "./training-load-calendar-view.js";
@@ -1608,7 +1608,93 @@ export function trainingLoadTopLevelSpace(section) {
   return section === "schedule" ? "schedule" : "dataAnalysis";
 }
 
+// Phase E: Overview is the FIRST Data & Analysis sub-view - a real
+// two-block summary, never a placeholder. Block 1 (below) reuses the
+// EXISTING computeWeeklyAggregates() against state.trainingLoad.weekly.
+// overview (its own weekly-cache nav slot, same GET /api/training-load/
+// weekly contract as Schedule/Athletes) - training load/RPE feedback:
+// avg RPE, total sRPE, total duration, daily sRPE, rated/expected. Block
+// 2 (further below) reads state.trainingLoad.overviewCoverage (its own,
+// wholly separate nav slot, same GET /api/training-load/calendar contract
+// Activities already uses) - activity & data COVERAGE: activity count,
+// RPE coverage, metric coverage, conflicts, open suggestions. These are
+// two genuinely different models (a value athletes report vs. how much
+// data coaches have actually collected) and must never be merged into
+// one KPI/aggregate, one cache entry, or one fetch - each block owns its
+// own loading/error/empty state and is labeled distinctly in the markup
+// below so neither reads as if it were the other.
+function computeOverviewCoverage(data) {
+  const activities = data.days.flatMap((day) => day.items || []).filter((item) => item.kind === "activity");
+  const withRpe = activities.filter((a) => a.rpe);
+  const withMetrics = activities.filter((a) => a.metrics);
+  return {
+    activityCount: activities.length,
+    rpeRequested: withRpe.reduce((sum, a) => sum + a.rpe.requested, 0),
+    rpeRated: withRpe.reduce((sum, a) => sum + a.rpe.rated, 0),
+    metricsTotal: withMetrics.reduce((sum, a) => sum + a.metrics.total, 0),
+    metricsWithData: withMetrics.reduce((sum, a) => sum + a.metrics.withData, 0),
+    conflictCount: activities.reduce((sum, a) => sum + (a.conflictCount || 0), 0),
+    openSuggestionCount: activities.reduce((sum, a) => sum + (a.openSuggestionCount || 0), 0),
+  };
+}
+
+function renderOverviewFeedbackBlockHtml(nav) {
+  if (nav.loading && !nav.data) return `<section class="training-load-overview-block"><p class="eyebrow">Training load &amp; RPE feedback</p><p class="muted training-load-empty tl-calendar-loading" aria-live="polite">Loading&hellip;</p></section>`;
+  if (nav.error) return `<section class="training-load-overview-block"><p class="eyebrow">Training load &amp; RPE feedback</p><p class="builder-error" role="alert">${escapeHtml(nav.error)}</p></section>`;
+  if (!nav.data) return "";
+  const agg = computeWeeklyAggregates(nav.data);
+  return `
+    <section class="training-load-overview-block">
+      <p class="eyebrow">Training load &amp; RPE feedback</p>
+      <p class="muted training-load-overview-block-note">What athletes actually reported this week - values, never a coverage count.</p>
+      <div class="training-load-summary-grid">
+        <div class="training-load-summary-tile"><span class="training-load-summary-value">${escapeHtml(formatSrpe(agg.totalSrpe))}</span><span class="training-load-summary-label">Weekly sRPE</span></div>
+        <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.avgRpe != null ? agg.avgRpe.toFixed(1) : "&ndash;"}</span><span class="training-load-summary-label">Avg RPE</span></div>
+        <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.totalDuration} min</span><span class="training-load-summary-label">Total duration</span></div>
+      </div>
+      ${renderTrainingLoadBarChartHtml(agg.dailySrpe)}
+      ${agg.plannedCount ? `<p class="training-load-collection-status">${agg.ratedCount}/${agg.plannedCount} <span class="muted">sessions rated this week</span></p>` : ""}
+    </section>
+  `;
+}
+
+function renderOverviewCoverageBlockHtml(nav) {
+  if (nav.loading && !nav.data) return `<section class="training-load-overview-block"><p class="eyebrow">Activity &amp; data coverage</p><p class="muted training-load-empty tl-calendar-loading" aria-live="polite">Loading&hellip;</p></section>`;
+  if (nav.error) return `<section class="training-load-overview-block"><p class="eyebrow">Activity &amp; data coverage</p><p class="builder-error" role="alert">${escapeHtml(nav.error)}</p></section>`;
+  if (!nav.data) return "";
+  const cov = computeOverviewCoverage(nav.data);
+  return `
+    <section class="training-load-overview-block">
+      <p class="eyebrow">Activity &amp; data coverage</p>
+      <p class="muted training-load-overview-block-note">Canonical activities recorded and how much of their data has been collected - not a training-load value.</p>
+      <div class="training-load-summary-grid">
+        <div class="training-load-summary-tile"><span class="training-load-summary-value">${cov.activityCount}</span><span class="training-load-summary-label">Activities recorded</span></div>
+        <div class="training-load-summary-tile">${cov.rpeRequested ? `<span class="training-load-summary-value">${cov.rpeRated}/${cov.rpeRequested}</span>` : `<span class="training-load-summary-value training-load-summary-value-text">Not requested</span>`}<span class="training-load-summary-label">RPE coverage</span></div>
+        <div class="training-load-summary-tile">${cov.metricsTotal ? `<span class="training-load-summary-value">${cov.metricsWithData}/${cov.metricsTotal}</span>` : `<span class="training-load-summary-value training-load-summary-value-text">No metrics linked</span>`}<span class="training-load-summary-label">Metric coverage</span></div>
+      </div>
+      ${cov.conflictCount > 0 ? `<p class="training-load-collection-status tl-overview-warn">${cov.conflictCount} conflict${cov.conflictCount === 1 ? "" : "s"} to resolve</p>` : ""}
+      ${cov.openSuggestionCount > 0 ? `<p class="training-load-collection-status tl-overview-warn">${cov.openSuggestionCount} candidate match${cov.openSuggestionCount === 1 ? "" : "es"} to review</p>` : ""}
+    </section>
+  `;
+}
+
+export function renderTrainingLoadOverviewHtml() {
+  const nav = state.trainingLoad.weekly.overview;
+  const coverageNav = state.trainingLoad.overviewCoverage;
+  const weekStart = nav.data?.weekStart || coverageNav.data?.dateFrom || nav.weekStart || coverageNav.weekStart;
+  if (!weekStart) return "";
+  const weekEnd = nav.data?.weekEnd || coverageNav.data?.dateTo || addDaysIso(weekStart, 6);
+  return `
+    <div class="training-load-overview">
+      ${renderTrainingLoadWeekNavHeaderHtml("overview", weekStart, weekEnd)}
+      ${renderOverviewFeedbackBlockHtml(nav)}
+      ${renderOverviewCoverageBlockHtml(coverageNav)}
+    </div>
+  `;
+}
+
 const DATA_ANALYSIS_SUBVIEWS = [
+  { section: "overview", label: "Overview" },
   { section: "today", label: "Activities" },
   { section: "results", label: "Athletes" },
   { section: "analysis", label: "Dashboards" },
@@ -1643,6 +1729,7 @@ export function renderTrainingLoadCoachHtml() {
         <button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>
       </div>
       ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section) : ""}
+      ${section === "overview" ? renderTrainingLoadOverviewHtml() : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}
       ${section === "schedule" ? renderTrainingLoadScheduleHtml() : ""}
       ${section === "results" ? renderTrainingLoadResultsHtml() : ""}

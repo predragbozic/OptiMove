@@ -12161,6 +12161,54 @@ button.tests-assignment-card {
   }
 }
 
+/* -------------------- Phase E: Overview (two explicitly separate blocks) -------------------- */
+
+.training-load-overview {
+  display: grid;
+  gap: 14px;
+}
+
+.training-load-overview-block {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* Left accent bar differs per block on purpose - a quiet, permanent visual
+   cue (never just the text label) that these are two different models,
+   never one merged KPI - training load/RPE feedback (a value athletes
+   report) vs. activity/data coverage (how much of it coaches collected). */
+.training-load-overview-block:nth-of-type(1) {
+  border-left: 3px solid var(--accent);
+}
+
+.training-load-overview-block:nth-of-type(2) {
+  border-left: 3px solid var(--tlc-warning-border);
+}
+
+.training-load-overview-block-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* mobile-qa finding (Phase E): a coverage tile's "nothing to count yet"
+   fallback is a short sentence, not a number - at the numeric tile's own
+   18px/800 it wraps to two lines inside a ~140px 360px-viewport tile and
+   makes that one tile visibly taller than its neighbours. Same tile,
+   same label, just text-sized. */
+.training-load-summary-value-text {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.tl-overview-warn {
+  color: var(--tlc-warning);
+}
+
 /* -------------------- Coach: Club/Team/Athletes filter picker -------------------- */
 /* Reuses .builder-athlete-overlay/-picker/-option/checkbox-toggle-all
    (Builder-style, per the feature's own requirement) - only the tab strip
