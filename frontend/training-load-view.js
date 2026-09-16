@@ -742,10 +742,24 @@ export function renderPlannedRpeMasterToggleHtml() {
   `;
 }
 
+// Phase D: the rated/expected collection-status count moved HERE from
+// Athletes (it's "how much have I collected", not a value/trend) - reuses
+// computeWeeklyAggregates unchanged against Schedule's own already-loaded
+// weekly payload (state.trainingLoad.weekly.schedule.data), never a new
+// endpoint or a second copy of that math.
+function renderScheduleCollectionStatusHtml() {
+  const nav = state.trainingLoad.weekly.schedule;
+  if (!nav.data) return "";
+  const agg = computeWeeklyAggregates(nav.data);
+  if (!agg.plannedCount) return "";
+  return `<p class="training-load-collection-status">${agg.ratedCount}/${agg.plannedCount} <span class="muted">sessions rated this week</span></p>`;
+}
+
 export function renderTrainingLoadScheduleHtml() {
   const overlayOpen = Boolean(state.trainingLoad.scheduleForm || state.trainingLoad.scheduleDetail);
   return `
     ${!overlayOpen ? renderPlannedRpeMasterToggleHtml() : ""}
+    ${!overlayOpen ? renderScheduleCollectionStatusHtml() : ""}
     <div class="training-load-schedule-toolbar">
       <button type="button" class="plain-button" data-action="training-load-open-schedule-form">New RPE session</button>
     </div>
@@ -1437,6 +1451,10 @@ function computeAthleteWeeklySummaries(data) {
     .sort((a, b) => a.athleteName.localeCompare(b.athleteName) || a.athleteId.localeCompare(b.athleteId));
 }
 
+// Phase D: the rated/expected count moved OUT of Athletes (a collection-
+// status concept, now shown in Schedule instead - see
+// renderScheduleCollectionStatusHtml) - Athletes keeps only value/trend
+// numbers: what was actually recorded, never whether enough was collected.
 function renderResultsAthleteCardHtml(summary) {
   return `
     <button type="button" class="training-load-results-athlete-card" data-action="training-load-results-open-athlete" data-athlete-id="${escapeAttr(summary.athleteId)}">
@@ -1445,7 +1463,6 @@ function renderResultsAthleteCardHtml(summary) {
         <span><strong>${escapeHtml(formatSrpe(summary.totalSrpe))}</strong><em>weekly sRPE</em></span>
         <span><strong>${summary.avgRpe != null ? summary.avgRpe.toFixed(1) : "-"}</strong><em>avg RPE</em></span>
         <span><strong>${summary.totalDuration} min</strong><em>total duration</em></span>
-        <span><strong>${summary.ratedCount}/${summary.plannedCount}</strong><em>rated / expected</em></span>
       </span>
     </button>
   `;
@@ -1472,6 +1489,47 @@ function renderResultsOverviewHtml(nav) {
 // explicitly carry their name + the week's own date range in the heading
 // (item 3's own requirement that an individual chart must never be
 // ambiguous about whose load, or which period, it shows).
+// Phase D: "canonical activities this week" - a lean list, deep-linking
+// into Activities for full raw values, rather than duplicating per-
+// activity RPE/metric coverage here (those numbers are activity-level,
+// not this-athlete-specific, in the /calendar response - showing them here
+// next to this athlete's own name would misattribute a whole-group number
+// as if it were theirs alone). One batched fetch already scoped server-
+// side to this athlete (loadResultsAthleteActivities) - never N+1.
+function renderResultsAthleteActivitiesHtml(athleteId, weekStart) {
+  const nav = state.trainingLoad.resultsAthleteActivities;
+  if (nav.athleteId !== athleteId) return "";
+  if (nav.loading && !nav.data) return `<p class="muted training-load-empty tl-calendar-loading" aria-live="polite">Loading activities&hellip;</p>`;
+  if (nav.error) return `<p class="builder-error" role="alert">${escapeHtml(nav.error)}</p>`;
+  // code-reviewer finding (Phase D): a week change (Prev/Next/Today) while
+  // this athlete's detail is open must re-fetch this section too (see the
+  // week-nav handlers in training-load-actions.js) - this is the render-
+  // side half of that fix: even if a re-fetch were ever missed, a week
+  // mismatch here hides the stale list rather than showing last week's
+  // activities under a "this week" heading.
+  if (nav.weekStart !== weekStart) return "";
+  if (!nav.data?.days) return "";
+  const activities = nav.data.days.flatMap((day) => (day.items || []).filter((i) => i.kind === "activity").map((i) => ({ ...i, date: day.date })));
+  return `
+    <div class="training-load-results-activities">
+      <p class="eyebrow">Canonical activities this week</p>
+      ${activities.length ? `
+        <div class="training-load-results-activity-list">
+          ${activities.map((item) => `
+            <button type="button" class="training-load-results-activity-row" data-action="training-load-results-view-activity-in-calendar" data-activity-id="${escapeAttr(item.activityId)}" data-date="${escapeAttr(item.date)}" aria-label="View ${escapeAttr(item.name || "Activity")} (${escapeAttr(formatDate(item.date))}) in Activities">
+              <span class="training-load-results-activity-main">
+                <span class="training-load-results-activity-name">${escapeHtml(item.name || "Activity")}</span>
+                <span class="muted">${escapeHtml(formatDate(item.date))}</span>
+              </span>
+              <span class="training-load-results-activity-cta">View &rsaquo;</span>
+            </button>
+          `).join("")}
+        </div>
+      ` : `<p class="muted">No canonical activities recorded for this athlete this week.</p>`}
+    </div>
+  `;
+}
+
 function renderResultsAthleteDetailHtml(nav, athleteId) {
   const athleteData = filterWeeklyDataToAthlete(nav.data, athleteId);
   const athleteName = findAthleteNameInWeeklyData(athleteData, athleteId);
@@ -1488,10 +1546,10 @@ function renderResultsAthleteDetailHtml(nav, athleteId) {
           <div class="training-load-summary-tile"><span class="training-load-summary-value">${escapeHtml(formatSrpe(agg.totalSrpe))}</span><span class="training-load-summary-label">Weekly sRPE</span></div>
           <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.avgRpe != null ? agg.avgRpe.toFixed(1) : "-"}</span><span class="training-load-summary-label">Avg RPE</span></div>
           <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.totalDuration} min</span><span class="training-load-summary-label">Total duration</span></div>
-          <div class="training-load-summary-tile"><span class="training-load-summary-value">${agg.ratedCount}/${agg.plannedCount}</span><span class="training-load-summary-label">Rated / expected</span></div>
         </div>
         ${renderTrainingLoadBarChartHtml(agg.dailySrpe)}
       </div>
+      ${renderResultsAthleteActivitiesHtml(athleteId, nav.data.weekStart)}
       ${renderTrainingLoadWeeklyShellHtml({
         section: "results",
         days: ratedDays,

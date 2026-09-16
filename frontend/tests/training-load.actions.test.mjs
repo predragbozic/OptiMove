@@ -533,7 +533,7 @@ test("F3. Select all / Clear all operate on the currently-visible (search-filter
 // G. Results: client-side aggregates (daily/weekly sRPE, avg RPE, rated-vs-planned)
 // ------------------------------------------------------------
 
-test("G1. Results shows the correct weekly sRPE sum, average RPE, total duration, and rated/planned count across multiple athletes and sessions", () => {
+test("G1. Results shows the correct weekly sRPE sum, average RPE, and total duration across multiple athletes and sessions", () => {
   resetState();
   const date = "2026-08-24";
   state.trainingLoad.weekly.results.data = weekPayload(date, {
@@ -548,7 +548,10 @@ test("G1. Results shows the correct weekly sRPE sum, average RPE, total duration
   assert.ok(html.includes("620 AU"), "weekly sRPE sum: 300 + 320 = 620");
   assert.ok(html.includes("7.0"), "average RPE across rated sessions: (6+8)/2 = 7.0");
   assert.ok(html.includes("90 min"), "total duration: 50 + 40 = 90");
-  assert.ok(html.includes("2/3"), "2 rated out of 3 planned");
+  // Phase D: rated/expected is a collection-status concept, moved to
+  // Schedule (see renderScheduleCollectionStatusHtml) - Athletes keeps
+  // only value/trend numbers, never shows a "2/3" count anymore.
+  assert.ok(!html.includes("2/3"), "rated/expected no longer rendered in Athletes");
 });
 
 test("G2. Results only ever lists RATED sessions in the agenda - an unrated planned session never appears there", () => {
@@ -567,49 +570,49 @@ test("G2. Results only ever lists RATED sessions in the agenda - an unrated plan
   assert.ok(!html.includes("Not rated"), "Results never shows an unrated row at all");
 });
 
-test("G3. a disabled+unrated session never counts toward the rated/planned denominator, but a disabled session that already has a result still counts (and contributes to sRPE)", () => {
+// Phase D: the rated/planned denominator moved from Athletes to Schedule
+// (renderScheduleCollectionStatusHtml, reusing computeWeeklyAggregates
+// unchanged) - these three tests now verify the same exclusion rules in
+// their new home, against Schedule's own weekly payload, instead of
+// asserting on Athletes' cards which no longer render this count at all.
+test("G3 (relocated to Schedule). a disabled+unrated session never counts toward the rated/planned denominator, but a disabled session that already has a result still counts (and contributes to sRPE)", () => {
   resetState();
   const date = "2026-08-24";
-  state.trainingLoad.weekly.results.data = weekPayload(date, {
+  state.trainingLoad.weekly.schedule.data = weekPayload(date, {
     [date]: [
       session({ sessionId: "s1", rated: true, feedback: { rpe: 6, durationMinutes: 50, srpe: 300 } }),
       session({ sessionId: "s2", rated: false, rpeEnabled: false }),
       session({ sessionId: "s3", rated: true, rpeEnabled: false, feedback: { rpe: 4, durationMinutes: 20, srpe: 80 } }),
     ],
   });
-  state.trainingLoad.weekly.results.selectedDate = date;
-  const html = renderTrainingLoadResultsHtml();
+  const html = renderTrainingLoadScheduleHtml();
   assert.ok(html.includes("2/2"), "s2 (disabled, unrated) must be excluded from the denominator entirely - 2 rated out of 2 counted, not out of 3");
-  assert.ok(html.includes("380 AU"), "s3's already-recorded result (disabled or not) must still contribute to the weekly sRPE total: 300 + 80 = 380");
 });
 
-test("G4. a paused/cancelled, never-rated OUTSIDE-PLAN row never counts toward the rated/planned denominator, mirroring the disabled-planned-session rule exactly", () => {
+test("G4 (relocated to Schedule). a paused/cancelled, never-rated OUTSIDE-PLAN row never counts toward the rated/planned denominator, mirroring the disabled-planned-session rule exactly", () => {
   resetState();
   const date = "2026-08-24";
-  state.trainingLoad.weekly.results.data = weekPayload(date, {
+  state.trainingLoad.weekly.schedule.data = weekPayload(date, {
     [date]: [
       session({ sessionId: "s1", rated: true, feedback: { rpe: 6, durationMinutes: 50, srpe: 300 } }),
       externalSession({ externalAssignmentId: "asg-paused", rated: false, actionable: false, scheduleStatus: "paused" }),
       externalSession({ externalAssignmentId: "asg-cancelled", rated: false, actionable: false, scheduleStatus: "cancelled" }),
     ],
   });
-  state.trainingLoad.weekly.results.selectedDate = date;
-  const html = renderTrainingLoadResultsHtml();
+  const html = renderTrainingLoadScheduleHtml();
   assert.ok(html.includes("1/1"), "neither never-rated external row (paused or cancelled) may count toward the denominator - 1 rated out of 1, not out of 3");
 });
 
-test("G5. a completed OUTSIDE-PLAN result still counts toward sRPE/the denominator even after its schedule was later cancelled - a completed result is never actionable again, but it always stays counted", () => {
+test("G5 (relocated to Schedule). a completed OUTSIDE-PLAN result still counts toward the denominator even after its schedule was later cancelled - a completed result is never actionable again, but it always stays counted", () => {
   resetState();
   const date = "2026-08-24";
-  state.trainingLoad.weekly.results.data = weekPayload(date, {
+  state.trainingLoad.weekly.schedule.data = weekPayload(date, {
     [date]: [
       externalSession({ externalAssignmentId: "asg-done", rated: true, actionable: false, scheduleStatus: "cancelled", feedback: { rpe: 6, durationMinutes: 40, srpe: 240 } }),
     ],
   });
-  state.trainingLoad.weekly.results.selectedDate = date;
-  const html = renderTrainingLoadResultsHtml();
+  const html = renderTrainingLoadScheduleHtml();
   assert.ok(html.includes("1/1"), "a completed result must always count, regardless of its schedule's current status");
-  assert.ok(html.includes("240 AU"));
 });
 
 test("G6. Today's grouping omits a paused/cancelled, never-rated OUTSIDE-PLAN row entirely - it never renders as a pending group at all", () => {
@@ -649,7 +652,7 @@ test("G8. the Schedule tab (management view) still shows a paused/cancelled row,
 // individual sums that never mix between athletes.
 // ------------------------------------------------------------
 
-test("G9. the Results overview lists one card per DISTINCT athleteId, each with its own correct sRPE/avg RPE/duration/rated-expected - two athletes' sums never mix, and neither total is ever presented as if it covered both", () => {
+test("G9. the Results overview lists one card per DISTINCT athleteId, each with its own correct sRPE/avg RPE/duration - two athletes' sums never mix, and neither total is ever presented as if it covered both", () => {
   resetState();
   const date = "2026-08-24";
   state.trainingLoad.weekly.results.data = weekPayload(date, {
@@ -665,8 +668,6 @@ test("G9. the Results overview lists one card per DISTINCT athleteId, each with 
   assert.ok(html.includes("300 AU"), "Ana's own sRPE (not summed with Bojan's)");
   assert.ok(html.includes("320 AU"), "Bojan's own sRPE (not summed with Ana's)");
   assert.ok(!html.includes("620 AU"), "no combined multi-athlete sum anywhere on the overview");
-  assert.ok(html.includes("1/2"), "Ana's own rated/expected: 1 rated out of 2 (her own unrated session counts toward her own denominator only)");
-  assert.ok(html.includes("1/1"), "Bojan's own rated/expected: 1 rated out of 1");
 });
 
 test("G10. two athletes sharing the exact same display name still get two separate cards - grouped by athleteId, never by name", () => {
@@ -728,7 +729,7 @@ test("G13. a drilled-into athlete who no longer has any session in a freshly-loa
   assert.ok(html.includes("Bojan"), "the overview reflects the actually-current payload");
 });
 
-test("G14. an athlete with only not-yet-rated sessions this week still gets their own card (0 rated / N expected), with avg RPE shown as '-' - never a fabricated 0", () => {
+test("G14. an athlete with only not-yet-rated sessions this week still gets their own card, with avg RPE shown as '-' - never a fabricated 0", () => {
   resetState();
   const date = "2026-08-24";
   state.trainingLoad.weekly.results.data = weekPayload(date, {
@@ -736,7 +737,6 @@ test("G14. an athlete with only not-yet-rated sessions this week still gets thei
   });
   const html = renderTrainingLoadResultsHtml();
   assert.ok(html.includes("Ana"), "Ana still appears even with zero rated sessions this week");
-  assert.ok(html.includes("0/1"), "0 rated out of 1 expected");
   assert.ok(html.includes(">-<"), "avg RPE renders as a dash, never a fabricated 0, when nothing is rated yet");
 });
 
@@ -1597,19 +1597,19 @@ test("U9. an individual planned session row shows a distinct 'Workspace automati
   assert.ok(!html.includes(">Not rated<"));
 });
 
-test("U10. the rated/planned denominator (Results) excludes an unrated session while the master switch is off, and includes it again once effectively on", () => {
+test("U10 (relocated to Schedule). the rated/planned denominator excludes an unrated session while the master switch is off, and includes it again once effectively on", () => {
   resetState();
   const offPayload = weekPayload("2026-08-24", {
     "2026-08-24": [session({ workspacePlannedRpeEnabled: false, actionable: false })],
   });
-  state.trainingLoad.weekly.results.data = offPayload;
-  const offHtml = renderTrainingLoadResultsHtml();
-  assert.ok(offHtml.includes("0/0"), "an unrated, non-actionable (master off) session must never count toward the denominator");
+  state.trainingLoad.weekly.schedule.data = offPayload;
+  const offHtml = renderTrainingLoadScheduleHtml();
+  assert.ok(!offHtml.includes("sessions rated this week"), "an unrated, non-actionable (master off) session must never count toward the denominator - 0/0 renders nothing at all");
 
-  state.trainingLoad.weekly.results.data = weekPayload("2026-08-24", {
+  state.trainingLoad.weekly.schedule.data = weekPayload("2026-08-24", {
     "2026-08-24": [session({ workspacePlannedRpeEnabled: true, actionable: true })],
   });
-  const onHtml = renderTrainingLoadResultsHtml();
+  const onHtml = renderTrainingLoadScheduleHtml();
   assert.ok(onHtml.includes("0/1"), "the same still-unrated session must count once the master switch is effectively on");
 });
 

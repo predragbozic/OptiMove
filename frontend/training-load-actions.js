@@ -58,6 +58,7 @@ import {
   invalidateTrainingLoadCalendarContext,
   loadActivityDetail,
   loadCalendarMetricDefinitions,
+  loadResultsAthleteActivities,
   loadTrainingLoadCalendarMonth,
   loadTrainingLoadCalendarWeek,
 } from "./training-load-calendar-data.js";
@@ -1076,7 +1077,19 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // paints again the instant it has something to show (cached data for
     // this week if already visited, or a loading state) via onPainted.
     renderTrainingLoad();
-    await loadTrainingLoadWeekly(section, renderTrainingLoad);
+    // code-reviewer finding (Phase D): if an athlete's own detail is open,
+    // its "canonical activities this week" section reads a SEPARATE,
+    // athlete+week-keyed fetch (loadResultsAthleteActivities) that this
+    // week-nav action must also re-trigger - otherwise the summary tiles
+    // above it (which read the live weekly payload directly) update to the
+    // new week while the activities list silently keeps showing the OLD
+    // week's data under the same heading.
+    await Promise.all([
+      loadTrainingLoadWeekly(section, renderTrainingLoad),
+      section === "results" && state.trainingLoad.resultsAthleteId
+        ? loadResultsAthleteActivities(state.trainingLoad.resultsAthleteId, nav.weekStart, renderTrainingLoad)
+        : Promise.resolve(),
+    ]);
     renderTrainingLoad();
     return true;
   }
@@ -1089,7 +1102,12 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     nav.selectedDate = today;
     if (section === "results") syncDataAnalysisSharedWeek(nav.weekStart, "results");
     renderTrainingLoad();
-    await loadTrainingLoadWeekly(section, renderTrainingLoad);
+    await Promise.all([
+      loadTrainingLoadWeekly(section, renderTrainingLoad),
+      section === "results" && state.trainingLoad.resultsAthleteId
+        ? loadResultsAthleteActivities(state.trainingLoad.resultsAthleteId, nav.weekStart, renderTrainingLoad)
+        : Promise.resolve(),
+    ]);
     renderTrainingLoad();
     return true;
   }
@@ -1683,12 +1701,42 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // load-view.js's own comment on filterWeeklyDataToAthlete for why).
 
   if (type === "training-load-results-open-athlete") {
-    state.trainingLoad.resultsAthleteId = action.dataset.athleteId;
+    const athleteId = action.dataset.athleteId;
+    state.trainingLoad.resultsAthleteId = athleteId;
     renderTrainingLoad();
+    // Phase D: one batched fetch of this athlete's own canonical activities
+    // for the shared week - never per-activity, never blocking the rest of
+    // this view's own already-loaded session_feedback data from painting.
+    await loadResultsAthleteActivities(athleteId, state.trainingLoad.weekly.results.weekStart, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-results-close-athlete") {
     state.trainingLoad.resultsAthleteId = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-results-view-activity-in-calendar") {
+    // Deep-link hand-off (Phase D): "activity-specific athlete review stays
+    // reachable as context" - jumps to Activities already on the right
+    // day/activity, where the existing per-activity raw-values UI already
+    // lives, rather than duplicating it inside Athletes.
+    const cal = state.trainingLoad.calendar;
+    // Derived directly from the target date, never trusted from cal's own
+    // possibly-stale weekStart - Activities may never have been opened
+    // yet this session, even though the shared week already has a real
+    // value from Athletes' own side (Phase B only syncs on an actual
+    // nav-button click, not on initial bootstrap).
+    cal.weekStart = weekMondayIso(action.dataset.date);
+    cal.selectedDate = action.dataset.date;
+    cal.selectedActivityId = action.dataset.activityId;
+    cal.selectedComponentId = null;
+    syncDataAnalysisSharedWeek(cal.weekStart, "calendar");
+    setTrainingLoadSection("today");
+    renderTrainingLoad();
+    await Promise.all([
+      loadTrainingLoadCalendarWeek(renderTrainingLoad),
+      loadActivityDetail(action.dataset.activityId, renderTrainingLoad),
+    ]);
     renderTrainingLoad();
     return true;
   }
@@ -2179,6 +2227,7 @@ export function resetTrainingLoadForWorkspaceChange() {
   state.trainingLoad.athleteWeekly.data = null;
   state.trainingLoad.athleteWeekly.error = "";
   state.trainingLoad.athleteWeekly.loading = false;
+  state.trainingLoad.resultsAthleteActivities = { athleteId: "", weekStart: "", data: null, loading: false, error: "" };
   state.trainingLoad.filter = emptyTrainingLoadFilter();
   state.trainingLoad.filterPicker = emptyTrainingLoadFilterPicker();
   state.trainingLoad.filterSnapshotAtOpen = null;
