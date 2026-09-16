@@ -12432,9 +12432,57 @@ button.tests-assignment-card {
    strip, modal overlay) rather than duplicating them. */
 
 .tl-calendar {
+  /* Phase C Carbon pass: local tokens for this view's own status tags
+     (agenda "needs review"/conflict badges, table conflict pill, source
+     kind chip) - previously three slightly different hardcoded warning
+     hex pairs for the same underlying "needs attention" concept; Phase F
+     is where these get reconciled with the parked Analysis PoC's own
+     --tla-* tokens, this is just this view's own internal consistency
+     pass in the meantime. */
+  --tlc-warning: #8a5a00;
+  --tlc-warning-soft: #fff4e0;
+  --tlc-warning-border: #f0d6a0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+}
+
+.tl-calendar-subtitle {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* Loading state: a small inline spinner next to the existing text, so
+   "busy" isn't carried by text alone. Scoped to this view's own class
+   name - Phase F reconciles this with the parked Analysis PoC's own
+   equivalent pattern once that work actually lands. */
+.tl-calendar-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tl-calendar-loading::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: tl-calendar-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-calendar-loading::before {
+    animation: none;
+  }
+}
+
+@keyframes tl-calendar-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .tl-calendar-expand-toggle {
@@ -12496,6 +12544,11 @@ button.tests-assignment-card {
 .tl-calendar-month-day.is-selected {
   background: var(--accent-soft);
   border-color: var(--accent);
+}
+
+.tl-calendar-month-day:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .tl-calendar-month-day-number {
@@ -12605,6 +12658,11 @@ button.tests-assignment-card {
   cursor: default;
 }
 
+.tl-agenda-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .tl-agenda-time {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
@@ -12665,24 +12723,38 @@ button.tests-assignment-card {
 }
 
 .tl-agenda-badge-warn {
-  color: #8a5a00;
-  background: #fff4e0;
-  border-color: #f0d6a0;
+  color: var(--tlc-warning);
+  background: var(--tlc-warning-soft);
+  border-color: var(--tlc-warning-border);
 }
 
+/* Phase C Carbon pass: a bounded segmented control (Carbon's own
+   ContentSwitcher visual language - one continuous container, equal
+   segments, a solid fill on the active segment) instead of an underline
+   tab row, so this third level of navigation reads as "switch within this
+   activity's own detail" rather than a third independent tab strip
+   stacked under the two Data & Analysis nav levels above it. Still a real
+   role="tablist"/"tab" pair underneath (Carbon's own ContentSwitcher does
+   the same per its accessibility notes) - only the visual treatment
+   changes here. */
 .tl-activity-detail-tabs {
   display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--line);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft, #f7f8fa);
   overflow-x: auto;
+  overflow-y: visible;
 }
 
 .tl-activity-detail-tab {
-  flex-shrink: 0;
-  padding: 8px 12px;
+  flex: 1 1 auto;
+  min-width: max-content;
+  padding: 7px 12px;
   border: none;
+  border-radius: calc(var(--radius) - 3px);
   background: transparent;
-  border-bottom: 2px solid transparent;
   color: var(--muted);
   font-weight: 600;
   font-size: 13px;
@@ -12690,8 +12762,14 @@ button.tests-assignment-card {
 }
 
 .tl-activity-detail-tab.is-active {
+  background: var(--surface);
   color: var(--text);
-  border-bottom-color: var(--accent);
+  box-shadow: 0 1px 2px rgba(22, 34, 45, 0.08);
+}
+
+.tl-activity-detail-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .tl-activity-detail-panel {
@@ -12757,6 +12835,12 @@ button.tests-assignment-card {
 .tl-component-row.is-selected {
   background: var(--accent-soft);
   border-color: var(--accent);
+}
+
+.tl-athlete-row:focus-visible,
+.tl-component-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .tl-source-row {
@@ -12849,6 +12933,11 @@ button.tests-assignment-card {
   white-space: nowrap;
 }
 
+.tl-sort-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .tl-cell-empty {
   color: var(--muted);
 }
@@ -12862,9 +12951,9 @@ button.tests-assignment-card {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  border: 1px solid #f0d6a0;
-  background: #fff4e0;
-  color: #8a5a00;
+  border: 1px solid var(--tlc-warning-border);
+  background: var(--tlc-warning-soft);
+  color: var(--tlc-warning);
   border-radius: 999px;
   padding: 2px 8px;
   font-size: 12px;
@@ -12872,10 +12961,18 @@ button.tests-assignment-card {
   cursor: pointer;
 }
 
+.tl-cell-conflict:focus-visible {
+  outline: 2px solid var(--tlc-warning);
+  outline-offset: 1px;
+}
+
 .tl-conflict-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  /* mobile-qa finding: this was never the same tone as --tlc-warning
+     (#8a5a00) - kept as its own literal, unchanged from before this pass,
+     rather than silently darkening a small always-visible dot. */
   background: #d98c00;
 }
 
@@ -12973,6 +13070,42 @@ button.tests-assignment-card {
   .tl-context-bar {
     flex-direction: column;
     align-items: flex-start;
+  }
+  /* mobile-qa finding, measured/confirmed in a real browser (not just
+     estimated from CSS): the 4-segment control's own natural content
+     width overflows its container at 360-375px with no scroll affordance,
+     risking a hidden, undiscoverable "Sources" segment. Wrapping to a 2x2
+     grid at this breakpoint guarantees every segment stays visible,
+     rather than relying on a scroll a user might never find. */
+  .tl-activity-detail-tabs {
+    flex-wrap: wrap;
+  }
+  .tl-activity-detail-tab {
+    flex: 1 1 calc(50% - 1px);
+    min-height: 44px;
+  }
+  .tl-athlete-row,
+  .tl-component-row {
+    min-height: 44px;
+  }
+  .tl-metric-picker-option {
+    min-height: 44px;
+  }
+  .tl-cell-conflict {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 6px 10px;
+  }
+  /* .tl-sort-button defaults to inline-block, wrapping only its own text -
+     on mobile that leaves the header cell's own visual padding untappable.
+     Filling the cell and giving the button itself the 44px floor (rather
+     than just the <th>) keeps the fix scoped to the control, not the
+     table's own row-height math elsewhere. */
+  .tl-sort-button {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 44px;
   }
 }
 

@@ -363,18 +363,21 @@ test("selecting a component filters results to that component, hides session-lev
   });
   let html = renderTrainingLoadCalendarHtml();
   assert.ok(html.includes(">RPE<"), "whole-session view shows session-level RPE");
-  assert.ok(html.includes("Session results"));
+  assert.ok(html.includes("Recorded metrics"), "Phase C: 'Session results' renamed to 'Recorded metrics'");
+  assert.ok(html.includes("Whole session"), "whole-session scope is named, not just implied");
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-calendar-select-component", componentId: "comp-main" }), { renderTrainingLoad });
   html = renderTrainingLoadCalendarHtml();
-  assert.ok(html.includes("Component results"));
+  assert.ok(html.includes("Recorded metrics"), "Phase C: 'Component results' also renamed to 'Recorded metrics'");
+  assert.ok(html.includes("Main Set"), "Phase C: the actual component name is shown, never just a generic 'Component results' label");
   assert.ok(!html.includes(">RPE<"), "component view must never falsely attribute session-level RPE to one component");
   assert.ok(html.includes("5000"), "the component-linked metric value still shows");
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-calendar-select-component", componentId: "" }), { renderTrainingLoad });
   assert.equal(cal.selectedComponentId, null);
   html = renderTrainingLoadCalendarHtml();
-  assert.ok(html.includes("Session results"));
+  assert.ok(html.includes("Recorded metrics"));
+  assert.ok(html.includes("Whole session"));
   assert.ok(html.includes(">RPE<"), "back to whole session restores RPE");
 });
 
@@ -879,4 +882,59 @@ test("Cancel choose-activity returns to Analysis without setting any activity fi
   assert.equal(state.trainingLoad.section, "analysis");
   assert.equal(state.trainingLoad.analysis.pickingActivity, false);
   assert.equal(state.trainingLoad.analysis.runtimeFilter.activityId, "");
+});
+
+// ------------------------------------------------------------
+// Phase C — Activities identity, detail-tabs accessibility, Carbon pass
+// ------------------------------------------------------------
+
+// code-reviewer finding: the scope label's stale/deleted-component fallback
+// (nav.selectedComponentId no longer matching anything in detail.components -
+// e.g. deleted server-side, or stale after switching activities) had no
+// regression lock, so a future refactor removing either `|| []` guard could
+// silently break it without failing any test.
+test("recordedMetricsScopeLabel falls back safely when selectedComponentId matches no component in the current detail", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: activityDetailPayload({ components: [{ id: "comp-other", name: "Other Block" }], facts: [] }) });
+  cal.selectedComponentId = "comp-deleted";
+  const html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /Recorded metrics/);
+  assert.doesNotMatch(html, /undefined/);
+});
+
+test("the Activities view identifies itself as showing canonical activities, distinct from Athletes' own RPE-based Results", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  cal.weekStart = "2026-09-07";
+  cal.selectedDate = "2026-09-09";
+  cal.data = calendarPayload(cal.weekStart, {});
+  const html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /tl-calendar-subtitle/, "a persistent, muted subtitle explains what this view shows");
+  assert.match(html, /canonical training activities/i);
+});
+
+test("the activity-detail Overview/Athletes/Components/Sources switcher carries a distinguishing aria-label and is never confused with the two Data & Analysis nav levels above it", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal);
+  const html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /class="tl-activity-detail-tabs" role="tablist" aria-label="Activity detail view"/, "own aria-label, not left to clash with the outer Schedule/Data & Analysis or Activities/Athletes/Dashboards tablists");
+  assert.match(html, /<p class="eyebrow">Activity data<\/p>/, "the whole detail area is labeled as this activity's own data, not generic 'Results'");
+});
+
+test("a loading activity shows a real loading-state marker, and an error is announced via role=alert", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  cal.weekStart = "2026-09-07";
+  cal.selectedDate = "2026-09-09";
+  cal.data = calendarPayload(cal.weekStart, { "2026-09-09": [activityItem()] });
+  cal.selectedActivityId = "act-1";
+  cal.activityDetail = { activityId: "act-1", data: null, loading: true, error: "" };
+  let html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /tl-calendar-loading/, "loading state gets the real spinner class, not a bare <p>");
+
+  cal.activityDetail = { activityId: "act-1", data: null, loading: false, error: "Could not load this activity." };
+  html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /class="builder-error" role="alert"/);
 });

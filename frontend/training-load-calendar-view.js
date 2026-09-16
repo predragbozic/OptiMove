@@ -355,7 +355,7 @@ const ACTIVITY_DETAIL_TABS = [
 
 function renderActivityDetailTabsHtml(nav) {
   return `
-    <div class="tl-activity-detail-tabs" role="tablist">
+    <div class="tl-activity-detail-tabs" role="tablist" aria-label="Activity detail view">
       ${ACTIVITY_DETAIL_TABS.map((t) => `
         <button type="button" class="tl-activity-detail-tab ${nav.activityDetailTab === t.id ? "is-active" : ""}" role="tab" aria-selected="${nav.activityDetailTab === t.id ? "true" : "false"}" data-action="training-load-calendar-select-detail-tab" data-tl-calendar-detail-tab="${t.id}">${t.label}</button>
       `).join("")}
@@ -518,7 +518,7 @@ function renderMetricPickerHtml(nav) {
           <button type="button" class="plain-button icon-button builder-athlete-picker-continue" data-action="training-load-calendar-metric-picker-close" aria-label="Done" title="Done">&#10003;</button>
         </div>
         <div class="tl-metric-picker-body">
-          ${picker.loading ? `<p class="muted">Loading metrics&hellip;</p>` : ""}
+          ${picker.loading ? `<p class="muted tl-calendar-loading" aria-live="polite">Loading metrics&hellip;</p>` : ""}
           ${!picker.loading && !definitions.length ? `<p class="muted">No metrics available.</p>` : ""}
           ${[...groups.entries()].map(([group, defs]) => `
             <div class="tl-metric-picker-group">
@@ -603,8 +603,8 @@ function renderAthleteDrawerHtml(nav, detail, athleteNamesById) {
 
 export function renderTrainingLoadCalendarHtml() {
   const nav = state.trainingLoad.calendar;
-  if (nav.loading && !nav.data) return `<p class="muted training-load-empty">Loading calendar&hellip;</p>`;
-  if (nav.error) return `<p class="builder-error">${escapeHtml(nav.error)}</p>`;
+  if (nav.loading && !nav.data) return `<p class="muted training-load-empty tl-calendar-loading" aria-live="polite">Loading calendar&hellip;</p>`;
+  if (nav.error) return `<p class="builder-error" role="alert">${escapeHtml(nav.error)}</p>`;
   if (!nav.data) return "";
 
   const bucket = nav.data.days.find((d) => d.date === nav.selectedDate);
@@ -622,9 +622,10 @@ export function renderTrainingLoadCalendarHtml() {
           <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-choose-activity">Cancel</button>
         </div>
       ` : ""}
+      <p class="tl-calendar-subtitle muted">Canonical training activities recorded each day.</p>
       ${renderCalendarNavHeaderHtml(nav)}
       ${nav.monthMode ? renderCalendarMonthGridHtml(nav) : renderCalendarStripHtml(nav)}
-      ${nav.monthMode && nav.monthLoading ? `<p class="muted training-load-stale-banner" role="status">Loading month&hellip;</p>` : ""}
+      ${nav.monthMode && nav.monthLoading ? `<p class="muted training-load-stale-banner tl-calendar-loading" role="status">Loading month&hellip;</p>` : ""}
       ${renderContextBarHtml(nav, selectedActivityItem)}
       <div class="tl-calendar-body">
         ${!nav.selectedActivityId ? renderDaySummaryHtml(nav) : renderActivitySectionHtml(nav, detail, athleteNamesById)}
@@ -655,13 +656,24 @@ function buildAthleteNameMap(nav, bucket) {
   return map;
 }
 
+// "Session results"/"Component results" renamed to "Recorded metrics" with
+// a real scope qualifier (the actual component name, once one's selected,
+// rather than the generic old label that never named it) - and the whole
+// area gets an "Activity data" eyebrow, so it reads as this activity's own
+// canonical data, distinct from the Athletes sub-view's own "Results".
+function recordedMetricsScopeLabel(nav, detail) {
+  if (!nav.selectedComponentId) return "Whole session";
+  return (detail.components || []).find((c) => c.id === nav.selectedComponentId)?.name || "Component";
+}
+
 function renderActivitySectionHtml(nav, detail, athleteNamesById) {
-  if (nav.activityDetail.loading && !detail) return `<p class="muted training-load-empty">Loading activity&hellip;</p>`;
-  if (nav.activityDetail.error) return `<p class="builder-error">${escapeHtml(nav.activityDetail.error)}</p>`;
+  if (nav.activityDetail.loading && !detail) return `<p class="muted training-load-empty tl-calendar-loading" aria-live="polite">Loading activity&hellip;</p>`;
+  if (nav.activityDetail.error) return `<p class="builder-error" role="alert">${escapeHtml(nav.activityDetail.error)}</p>`;
   if (!detail) return "";
   const activitySummary = findActivitySummary(nav) || { origin: "manual", lifecycleState: "confirmed", participantCount: 0, activityTypeKey: "", occurredLocalDate: nav.selectedDate, startedAt: null, rpe: null, metrics: null, openSuggestionCount: 0 };
   return `
     <div class="tl-activity-detail">
+      <p class="eyebrow">Activity data</p>
       ${renderActivityDetailTabsHtml(nav)}
       <div class="tl-activity-detail-panel">
         ${nav.activityDetailTab === "overview" ? renderOverviewTabHtml(nav, activitySummary, detail) : ""}
@@ -671,7 +683,7 @@ function renderActivitySectionHtml(nav, detail, athleteNamesById) {
       </div>
       <div class="tl-results-section">
         <div class="tl-results-header">
-          <h4>${nav.selectedComponentId ? "Component results" : "Session results"}</h4>
+          <h4>Recorded metrics <span class="muted">&middot; ${escapeHtml(recordedMetricsScopeLabel(nav, detail))}</span></h4>
           <button type="button" class="plain-button compact-button" data-action="training-load-calendar-metric-picker-open">Choose metrics</button>
         </div>
         ${renderResultsTableHtml(nav, detail, athleteNamesById)}
