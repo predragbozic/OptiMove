@@ -628,13 +628,27 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // deliberately untouched by this - see that function's own header.
   // Empty until either side's week-nav is actually used; a not-yet-touched
   // side bootstraps to "today" independently, same as before this phase.
-  // A future Overview sub-view reads this same field as its own period.
+  // Phase E: Overview (`weekly.overview`) is now a third side of this same
+  // sync, symmetric with Athletes (`weekly.results`) - see
+  // syncDataAnalysisSharedWeek() in training-load-actions.js.
   dataAnalysisWeekStart: "",
   weekly: {
     today: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
     schedule: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
     results: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
+    overview: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
   },
+  // Phase E: Overview's OWN second, independent data block - activity/
+  // data COVERAGE for the shared week (activity count, RPE coverage,
+  // metric coverage, conflicts, open suggestions), read from GET
+  // /api/training-load/calendar (the SAME endpoint Activities already
+  // uses) and aggregated client-side, exactly like `weekly.overview`
+  // reuses the existing computeWeeklyAggregates() for the RPE/training-
+  // load block above it. Deliberately its OWN nav slot, never merged into
+  // `weekly.overview` - the two blocks are two different models (RPE
+  // feedback vs. data-collection coverage) and must never collapse into
+  // one KPI/aggregate or one cache entry.
+  overviewCoverage: { weekStart: "", data: null, loading: false, error: "" },
   analysis: emptyTrainingLoadAnalysisState(),
   filter: emptyTrainingLoadFilter(),
   filterPicker: emptyTrainingLoadFilterPicker(),

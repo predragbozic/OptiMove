@@ -24,11 +24,20 @@ const METRIC_DEFINITIONS_NAMESPACE = "training-load-calendar-metric-defs";
 // by athleteId+week rather than reusing calendarContextKey (which has no
 // athlete dimension and would collide across different athletes).
 const RESULTS_ATHLETE_ACTIVITIES_NAMESPACE = "training-load-results-athlete-activities";
+// Phase E: Overview's "Activity & data coverage" block - the SAME
+// /calendar endpoint and the SAME (workspace, week, filter) context key
+// shape Activities' own week view already uses (calendarContextKey,
+// unchanged), just its own cache namespace/generation counter so
+// Overview's own fetch lifecycle never shares a generation with
+// Activities' - two sections reading the same underlying data
+// independently, never coupled.
+const OVERVIEW_COVERAGE_NAMESPACE = "training-load-overview-coverage";
 
 let weekGeneration = 0;
 let monthGeneration = 0;
 let activityDetailGeneration = 0;
 let resultsAthleteActivitiesGeneration = 0;
+let overviewCoverageGeneration = 0;
 
 // Item 2's own "workspace and athlete/team filters" requirement — the SAME
 // Club/Team/Athletes filter picker (state.trainingLoad.filter) the old
@@ -217,6 +226,61 @@ export async function loadResultsAthleteActivities(athleteId, weekStart, onPaint
   }
 }
 
+// Phase E: Overview's "Activity & data coverage" block - one fetch of the
+// existing /calendar endpoint for the shared week (no athleteIds filter -
+// this reads the SAME workspace/Club/Team/Athletes filter scope Activities
+// itself uses, via calendarContextKey/trainingLoadFilterQuery, never a
+// second copy of that filter contract), aggregated client-side in
+// training-load-view.js's own computeOverviewCoverage. Deliberately a
+// separate nav slot/namespace from `weekly.overview` (the RPE/training-
+// load block) - never merged, per the product requirement that Overview's
+// two blocks stay two distinct models. Same isNewWeek-clears-data guard as
+// loadResultsAthleteActivities (Phase D) - never let a stale week's
+// coverage render under what already looks like the new week's heading
+// during the in-flight window.
+export async function loadOverviewCoverage(weekStart, onPainted) {
+  const nav = state.trainingLoad.overviewCoverage;
+  const weekEnd = addDaysIso(weekStart, 6);
+  const generation = ++overviewCoverageGeneration;
+  const contextKey = calendarContextKey(weekStart, weekEnd);
+  const isNewWeek = nav.weekStart !== weekStart;
+  nav.weekStart = weekStart;
+  if (isNewWeek) nav.data = null;
+  nav.error = "";
+
+  const result = await loadCachedView({
+    namespace: OVERVIEW_COVERAGE_NAMESPACE,
+    contextKey,
+    fetcher: () => api(`/api/training-load/calendar?dateFrom=${encodeURIComponent(weekStart)}&dateTo=${encodeURIComponent(weekEnd)}${trainingLoadFilterQuery()}`),
+    showLoading: () => {
+      nav.loading = true;
+      onPainted?.();
+    },
+    applyData: (data) => {
+      if (generation !== overviewCoverageGeneration) return;
+      nav.data = data;
+      nav.loading = false;
+      onPainted?.();
+    },
+    applyError: (error) => {
+      if (generation !== overviewCoverageGeneration) return;
+      nav.loading = false;
+      nav.error = error.message || "Could not load activity & data coverage.";
+      onPainted?.();
+    },
+    getCurrentContextKey: () => calendarContextKey(weekStart, weekEnd),
+  });
+  if (generation !== overviewCoverageGeneration) return;
+  if (result?.outcome === "invalidated-stale") {
+    await loadOverviewCoverage(weekStart, onPainted);
+    return;
+  }
+  if (result?.outcome === "stale-ignored" && nav.loading) {
+    nav.loading = false;
+    onPainted?.();
+  }
+}
+
 // Activity Detail (item 7) — the canonical read contract
 // (GET /api/training-activity/:activityId), cached by activityId so
 // flipping back to an already-open activity this session repaints
@@ -369,10 +433,12 @@ export function invalidateAllTrainingLoadCalendarGenerations() {
   monthGeneration += 1;
   activityDetailGeneration += 1;
   resultsAthleteActivitiesGeneration += 1;
+  overviewCoverageGeneration += 1;
   invalidateCacheNamespace(CALENDAR_WEEK_NAMESPACE);
   invalidateCacheNamespace(CALENDAR_MONTH_NAMESPACE);
   invalidateCacheNamespace(ACTIVITY_DETAIL_NAMESPACE);
   invalidateCacheNamespace(RESULTS_ATHLETE_ACTIVITIES_NAMESPACE);
+  invalidateCacheNamespace(OVERVIEW_COVERAGE_NAMESPACE);
 }
 
 // Used after a mutation known to affect Activity Detail (a match-

@@ -58,6 +58,7 @@ import {
   invalidateTrainingLoadCalendarContext,
   loadActivityDetail,
   loadCalendarMetricDefinitions,
+  loadOverviewCoverage,
   loadResultsAthleteActivities,
   loadTrainingLoadCalendarMonth,
   loadTrainingLoadCalendarWeek,
@@ -98,7 +99,7 @@ function analysisIsMobileLayoutViewport() {
 // entry point) never has to fall back to a direct assignment.
 export function setTrainingLoadSection(section) {
   state.trainingLoad.section = section;
-  if (section === "today" || section === "results" || section === "analysis") {
+  if (section === "today" || section === "results" || section === "analysis" || section === "overview") {
     state.trainingLoad.lastDataAnalysisSection = section;
   }
 }
@@ -151,6 +152,24 @@ export function syncDataAnalysisSharedWeek(newWeekStart, movedSide) {
     const res = state.trainingLoad.weekly.results;
     res.selectedDate = normalizeSelectedDateToNewWeek(res.selectedDate, res.weekStart, newWeekStart);
     res.weekStart = newWeekStart;
+  }
+  // Phase E: Overview is a third side of this same shared week, symmetric
+  // with Athletes above - its weekly.overview nav slot just tracks this
+  // new weekStart/selectedDate, same as Athletes; it does not eagerly
+  // re-fetch here (same lazy-refetch-on-next-visit contract Activities/
+  // Athletes already established) - the "switching section always
+  // re-fetches" handler picks up the correct week once Overview is
+  // actually opened. `overviewCoverage` (Overview's OWN second nav slot,
+  // see state.js's own header comment) is deliberately NOT touched here -
+  // unlike weekly.overview, its identity/staleness is owned entirely by
+  // loadOverviewCoverage() itself (same isNewContext-clears-data guard
+  // Phase D's loadResultsAthleteActivities uses), so an external write to
+  // its weekStart here - without also clearing its data - would silently
+  // reopen that exact same class of in-flight-staleness bug.
+  if (movedSide !== "overview") {
+    const ov = state.trainingLoad.weekly.overview;
+    ov.selectedDate = normalizeSelectedDateToNewWeek(ov.selectedDate, ov.weekStart, newWeekStart);
+    ov.weekStart = newWeekStart;
   }
 }
 
@@ -673,14 +692,30 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // the RPE-session-shaped state.trainingLoad.weekly.today, which nothing
     // renders anymore for this tab. Schedule/Results are completely
     // unaffected - same loadTrainingLoadWeekly call as before.
-    await Promise.all([
-      state.trainingLoad.section === "today"
-        ? loadTrainingLoadCalendarWeek(renderTrainingLoad)
-        : state.trainingLoad.section === "analysis"
-          ? loadTrainingLoadAnalysis(renderTrainingLoad)
-          : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
-      state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
-    ]);
+    //
+    // Phase E: "overview" loads its own two, deliberately independent
+    // blocks in parallel - loadTrainingLoadWeekly("overview", ...) (the
+    // RPE/training-load block, reusing the exact same weekly cache/
+    // bootstrap-to-today contract as today/schedule/results) and
+    // loadOverviewCoverage (the activity/data-coverage block, its own
+    // separate nav slot/namespace - see state.js's own header comment on
+    // why these two never share a cache entry). loadTrainingLoadWeekly's
+    // own bootstrap-to-today runs synchronously before its first internal
+    // await, so weekly.overview.weekStart is already correct here without
+    // needing to await it first.
+    if (state.trainingLoad.section === "overview") {
+      const weeklyPromise = loadTrainingLoadWeekly("overview", renderTrainingLoad);
+      await Promise.all([weeklyPromise, loadOverviewCoverage(state.trainingLoad.weekly.overview.weekStart, renderTrainingLoad)]);
+    } else {
+      await Promise.all([
+        state.trainingLoad.section === "today"
+          ? loadTrainingLoadCalendarWeek(renderTrainingLoad)
+          : state.trainingLoad.section === "analysis"
+            ? loadTrainingLoadAnalysis(renderTrainingLoad)
+            : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+        state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
+      ]);
+    }
     renderTrainingLoad();
     return true;
   }
@@ -1069,10 +1104,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const delta = type === "training-load-weekly-prev-week" ? -7 : 7;
     nav.weekStart = addDaysIso(nav.weekStart, delta);
     if (nav.selectedDate) nav.selectedDate = addDaysIso(nav.selectedDate, delta);
-    // Phase B: only Athletes (section "results") is part of the shared
-    // Data & Analysis week - "schedule" (and the unreachable legacy
-    // "today" weekly nav slot) stay fully independent, untouched by this.
-    if (section === "results") syncDataAnalysisSharedWeek(nav.weekStart, "results");
+    // Phase B: Athletes (section "results") is part of the shared Data &
+    // Analysis week - "schedule" (and the unreachable legacy "today"
+    // weekly nav slot) stay fully independent, untouched by this. Phase E:
+    // Overview ("overview") is now a third side of that same shared week.
+    if (section === "results" || section === "overview") syncDataAnalysisSharedWeek(nav.weekStart, section);
     // perf: the week label/nav updates instantly; loadTrainingLoadWeekly
     // paints again the instant it has something to show (cached data for
     // this week if already visited, or a loading state) via onPainted.
@@ -1083,12 +1119,15 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // week-nav action must also re-trigger - otherwise the summary tiles
     // above it (which read the live weekly payload directly) update to the
     // new week while the activities list silently keeps showing the OLD
-    // week's data under the same heading.
+    // week's data under the same heading. Phase E: Overview's own coverage
+    // block (a wholly separate nav slot/fetch) needs exactly the same
+    // treatment whenever Overview's own nav moves.
     await Promise.all([
       loadTrainingLoadWeekly(section, renderTrainingLoad),
       section === "results" && state.trainingLoad.resultsAthleteId
         ? loadResultsAthleteActivities(state.trainingLoad.resultsAthleteId, nav.weekStart, renderTrainingLoad)
         : Promise.resolve(),
+      section === "overview" ? loadOverviewCoverage(nav.weekStart, renderTrainingLoad) : Promise.resolve(),
     ]);
     renderTrainingLoad();
     return true;
@@ -1100,13 +1139,14 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const today = localDateIsoInTimeZone(timezone);
     nav.weekStart = weekMondayIso(today);
     nav.selectedDate = today;
-    if (section === "results") syncDataAnalysisSharedWeek(nav.weekStart, "results");
+    if (section === "results" || section === "overview") syncDataAnalysisSharedWeek(nav.weekStart, section);
     renderTrainingLoad();
     await Promise.all([
       loadTrainingLoadWeekly(section, renderTrainingLoad),
       section === "results" && state.trainingLoad.resultsAthleteId
         ? loadResultsAthleteActivities(state.trainingLoad.resultsAthleteId, nav.weekStart, renderTrainingLoad)
         : Promise.resolve(),
+      section === "overview" ? loadOverviewCoverage(nav.weekStart, renderTrainingLoad) : Promise.resolve(),
     ]);
     renderTrainingLoad();
     return true;
@@ -1391,6 +1431,29 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
         loadTrainingLoadCalendarWeek(renderTrainingLoad),
         cal.monthMode ? loadTrainingLoadCalendarMonth(renderTrainingLoad) : Promise.resolve(),
       ]);
+    }
+    // Phase E: Overview's coverage block shares this exact Filter control
+    // too (reads the SAME calendarContextKey/trainingLoadFilterQuery
+    // scope as Activities above) but lives in its own nav slot
+    // (overviewCoverage), never state.trainingLoad.calendar - same
+    // gate/eager-refresh shape as the Calendar block just above.
+    //
+    // code-reviewer finding (Phase E): `overviewCoverage.weekStart` is
+    // NOT kept in sync by syncDataAnalysisSharedWeek (by design - see
+    // that function's own comment on why an external write to it would
+    // reopen the Phase D staleness-bug class), so it can lag behind the
+    // real shared week if the week moved via Activities/Athletes while
+    // Overview wasn't the open section. `overviewCoverage.weekStart`
+    // still gates "has Overview ever been visited this session" (a
+    // one-off historical fact, never wrong), but the week to actually
+    // reload must be the canonical, always-synced
+    // weekly.overview.weekStart - never overviewCoverage's own,
+    // possibly-stale copy.
+    const overviewCoverage = state.trainingLoad.overviewCoverage;
+    if (overviewCoverage.weekStart) {
+      overviewCoverage.data = null;
+      renderTrainingLoad();
+      await loadOverviewCoverage(state.trainingLoad.weekly.overview.weekStart, renderTrainingLoad);
     }
     renderTrainingLoad();
     return true;
@@ -2228,6 +2291,7 @@ export function resetTrainingLoadForWorkspaceChange() {
   state.trainingLoad.athleteWeekly.error = "";
   state.trainingLoad.athleteWeekly.loading = false;
   state.trainingLoad.resultsAthleteActivities = { athleteId: "", weekStart: "", data: null, loading: false, error: "" };
+  state.trainingLoad.overviewCoverage = { weekStart: "", data: null, loading: false, error: "" };
   state.trainingLoad.filter = emptyTrainingLoadFilter();
   state.trainingLoad.filterPicker = emptyTrainingLoadFilterPicker();
   state.trainingLoad.filterSnapshotAtOpen = null;
