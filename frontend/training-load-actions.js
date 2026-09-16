@@ -784,9 +784,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   // 3B3 UX slice: "Choose activity" hands off to the existing Calendar ->
-  // activity detail flow (training-load-calendar-view.js's context bar
-  // grows an "Open in Analysis" button, visible only while pickingActivity
-  // is true) instead of asking for a raw activity/component UUID here.
+  // activity detail flow instead of asking for a raw activity/component
+  // UUID here. Phase F: the context bar's "Analyze this activity" button
+  // (training-load-calendar-view.js) is an intra-space hand-off shown for
+  // ANY open activity whose detail has loaded - pickingActivity only adds
+  // the banner/Cancel affordance, it is no longer the gate for the button.
   if (type === "training-load-analysis-choose-activity") {
     state.trainingLoad.analysis.pickingActivity = true;
     setTrainingLoadSection("today");
@@ -1396,6 +1398,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // section is refetched immediately for instant visible feedback.
     for (const key of Object.keys(state.trainingLoad.weekly)) state.trainingLoad.weekly[key].data = null;
     renderTrainingLoad();
+    // Unreachable from the UI while the shell Filter is disabled on
+    // Dashboards (Phase F decision (b), see docs/ai/CURRENT_STATE.md) -
+    // kept for the follow-up that feeds state.trainingLoad.filter into the
+    // /query payload; not dead code to delete.
     if (state.trainingLoad.section === "analysis") {
       invalidateTrainingLoadAnalysis();
       state.trainingLoad.analysis.queryResult = null;

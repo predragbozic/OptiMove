@@ -144,19 +144,23 @@ function renderContextBarHtml(nav, selectedActivity) {
     parts.push(`<span class="tl-context-sep">&rsaquo;</span>`);
     parts.push(`<span class="tl-context-part">${component ? escapeHtml(component.name) : "Whole session"}</span>`);
   }
-  // 3B3 UX slice: "Open in Analysis" only appears while the Analysis tab's
-  // own "Choose activity" hand-off is in progress (state.trainingLoad.
-  // analysis.pickingActivity) and only once the activity's own detail
-  // (components included) has actually loaded - normal Calendar browsing
-  // is completely unaffected, since pickingActivity is false otherwise.
-  const canOpenInAnalysis = state.trainingLoad.analysis.pickingActivity
-    && nav.selectedActivityId
+  // Phase F: "Analyze this activity" is an intra-space hand-off - Activities
+  // and Dashboards are two sub-views of the same Data & Analysis space now,
+  // so it is available whenever an activity's own detail (components
+  // included) has actually loaded, no longer only while Dashboards' own
+  // "Choose activity" picking mode (state.trainingLoad.analysis.
+  // pickingActivity) is in progress. Picking mode still works exactly as
+  // before (its banner/Cancel stay), it just isn't a precondition anymore.
+  // The hand-off transfers ONLY the runtime activity/component filter
+  // (training-load-analysis-open-in-analysis in training-load-actions.js) -
+  // never a dashboard's persisted default_filter.
+  const canOpenInAnalysis = nav.selectedActivityId
     && nav.activityDetail.data
     && nav.activityDetail.activityId === nav.selectedActivityId;
   return `
     <div class="tl-context-bar">
       <div class="tl-context-breadcrumb">${parts.join("")}</div>
-      ${canOpenInAnalysis ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-open-in-analysis">Open in Analysis</button>` : ""}
+      ${canOpenInAnalysis ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-open-in-analysis">Analyze this activity</button>` : ""}
       ${nav.selectedActivityId ? `<button type="button" class="plain-button compact-button" data-action="training-load-calendar-clear-activity">All activities that day</button>` : ""}
     </div>
   `;

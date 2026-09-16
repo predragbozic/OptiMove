@@ -89,29 +89,26 @@ function renderTopBarHtml() {
   const dashboards = a.dashboards || [];
   return `
     <div class="tl-analysis-topbar">
-      <label class="tl-analysis-control">
-        <span>Dashboard</span>
-        <select data-action="training-load-analysis-select-dashboard" aria-label="Analysis dashboard">
-          <option value="">Choose dashboard</option>
-          ${dashboards.map((d) => optionHtml(d.id, dashboardName(d), a.selectedDashboardId)).join("")}
-        </select>
-      </label>
-      <button type="button" class="plain-button compact-button" data-action="training-load-analysis-create">Create</button>
-      <button type="button" class="plain-button compact-button ${a.editMode ? "is-active" : ""}" data-action="training-load-analysis-toggle-edit" ${canEdit() ? "" : "disabled"}>${a.editMode ? "Done" : "Edit"}</button>
-      <label class="tl-analysis-control tl-analysis-date-control"><span>From</span><input type="date" data-action="training-load-analysis-period-from" value="${escapeAttr(a.period.dateFrom)}"></label>
-      <label class="tl-analysis-control tl-analysis-date-control"><span>To</span><input type="date" data-action="training-load-analysis-period-to" value="${escapeAttr(a.period.dateTo)}"></label>
-      ${renderActivityPickerHtml()}
-      <button type="button" class="plain-button compact-button" data-action="training-load-filter-open">Filter${filterCountLabel()}</button>
+      <div class="tl-analysis-topbar-group">
+        <label class="tl-analysis-control">
+          <span>Dashboard</span>
+          <select data-action="training-load-analysis-select-dashboard" aria-label="Analysis dashboard">
+            <option value="">Choose dashboard</option>
+            ${dashboards.map((d) => optionHtml(d.id, dashboardName(d), a.selectedDashboardId)).join("")}
+          </select>
+        </label>
+        <button type="button" class="plain-button compact-button" data-action="training-load-analysis-create">Create</button>
+        <button type="button" class="plain-button compact-button ${a.editMode ? "is-active" : ""}" data-action="training-load-analysis-toggle-edit" ${canEdit() ? "" : "disabled"}>${a.editMode ? "Done" : "Edit"}</button>
+      </div>
+      <div class="tl-analysis-topbar-group">
+        <label class="tl-analysis-control tl-analysis-date-control"><span>From</span><input type="date" data-action="training-load-analysis-period-from" value="${escapeAttr(a.period.dateFrom)}"></label>
+        <label class="tl-analysis-control tl-analysis-date-control"><span>To</span><input type="date" data-action="training-load-analysis-period-to" value="${escapeAttr(a.period.dateTo)}"></label>
+      </div>
+      <div class="tl-analysis-topbar-group">
+        ${renderActivityPickerHtml()}
+      </div>
     </div>
   `;
-}
-
-function filterCountLabel() {
-  const f = state.trainingLoad.filter;
-  const count = (f.clubIds || []).length + (f.teamIds || []).length + (f.athleteIds || []).length;
-  const runtime = state.trainingLoad.analysis.runtimeFilter;
-  const runtimeCount = (runtime.athleteIds?.length || 0) + (runtime.activityId ? 1 : 0) + (runtime.componentId ? 1 : 0);
-  return count + runtimeCount ? ` (${count + runtimeCount})` : "";
 }
 
 function renderEmptyHtml() {
@@ -203,7 +200,7 @@ function renderTableHtml(widget, results) {
   return `
     <div class="tl-analysis-table-wrap">
       <table class="tl-analysis-table">
-        <thead><tr><th>Series</th><th>Bucket</th><th>Value</th><th>Unit</th><th>Status</th></tr></thead>
+        <thead><tr><th scope="col">Series</th><th scope="col">Bucket</th><th scope="col">Value</th><th scope="col">Unit</th><th scope="col">Status</th></tr></thead>
         <tbody>
           ${(widget.series || []).map((series) => {
             const result = seriesResults.find((r) => r.seriesId === series.id);
@@ -262,8 +259,8 @@ function renderChartHtml(widget, results, kind) {
 }
 
 function renderWidgetBodyHtml(widget, results) {
-  if (state.trainingLoad.analysis.queryLoading && !results) return `<p class="muted">Loading...</p>`;
-  if (state.trainingLoad.analysis.queryError) return `<p class="builder-error">${escapeHtml(state.trainingLoad.analysis.queryError)}</p>`;
+  if (state.trainingLoad.analysis.queryLoading && !results) return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
+  if (state.trainingLoad.analysis.queryError) return `<p class="builder-error" role="alert">${escapeHtml(state.trainingLoad.analysis.queryError)}</p>`;
   if (widget.widget_type === "kpi") return renderKpiHtml(widget, results);
   if (widget.widget_type === "table") return renderTableHtml(widget, results);
   return renderChartHtml(widget, results, widget.widget_type);
@@ -292,8 +289,8 @@ function renderWidgetHtml(widget) {
 
 function renderGridHtml() {
   const a = state.trainingLoad.analysis;
-  if (a.detailLoading && !a.dashboard) return `<p class="muted training-load-empty">Loading dashboard...</p>`;
-  if (a.detailError) return `<p class="builder-error">${escapeHtml(a.detailError)}</p>`;
+  if (a.detailLoading && !a.dashboard) return `<p class="muted training-load-empty tl-analysis-loading" aria-live="polite">Loading dashboard...</p>`;
+  if (a.detailError) return `<p class="builder-error" role="alert">${escapeHtml(a.detailError)}</p>`;
   if (!a.dashboard) return renderEmptyHtml();
   const widgets = [...(a.widgets || [])].sort((l, r) => Number(layoutFor(l).mobileOrder || 0) - Number(layoutFor(r).mobileOrder || 0));
   return `
@@ -362,8 +359,8 @@ function renderMetricPickerHtml(widget, series) {
         <p class="eyebrow">Built-in series</p>
         ${BUILT_IN_SERIES.map((b) => `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-bind-builtin" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series?.id || "")}" data-built-in-key="${escapeAttr(b.key)}"><span class="tl-metric-icon-fallback">${escapeHtml(b.icon)}</span>${escapeHtml(b.label)}${b.unit ? ` · ${escapeHtml(b.unit)}` : ""}</button>`).join("")}
       </div>
-      ${picker.loading ? `<p class="muted">Loading metrics...</p>` : ""}
-      ${picker.error ? `<p class="builder-error">${escapeHtml(picker.error)}</p>` : ""}
+      ${picker.loading ? `<p class="muted tl-analysis-loading" aria-live="polite">Loading metrics...</p>` : ""}
+      ${picker.error ? `<p class="builder-error" role="alert">${escapeHtml(picker.error)}</p>` : ""}
       ${[...groups.entries()].map(([group, rows]) => `
         <div class="tl-analysis-metric-group">
           <p class="eyebrow">${escapeHtml(group)}</p>
@@ -454,9 +451,9 @@ export function renderTrainingLoadAnalysisHtml() {
   return `
     <div class="tl-analysis">
       ${renderTopBarHtml()}
-      ${a.notice ? `<p class="tl-analysis-status">${escapeHtml(a.notice)}</p>` : ""}
-      ${a.mutationError ? `<p class="builder-error">${escapeHtml(a.mutationError)}</p>` : ""}
-      ${a.listError ? `<p class="builder-error">${escapeHtml(a.listError)}</p>` : ""}
+      ${a.notice ? `<p class="tl-analysis-status" aria-live="polite">${escapeHtml(a.notice)}</p>` : ""}
+      ${a.mutationError ? `<p class="builder-error" role="alert">${escapeHtml(a.mutationError)}</p>` : ""}
+      ${a.listError ? `<p class="builder-error" role="alert">${escapeHtml(a.listError)}</p>` : ""}
       ${renderGridHtml()}
       ${renderWidgetTypeMenuHtml()}
       ${renderEditorHtml()}
