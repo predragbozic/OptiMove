@@ -61,7 +61,7 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadTrainingLoadAnalysis } from "./training-load-analysis-data.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
@@ -451,6 +451,11 @@ function bindEvents() {
       state.workspaceSwitcher.open = false;
       renderWorkspaceSwitcher();
     }
+    // Dashboards UX H1: picker/menus, the dashboard dialog and the metric
+    // panel close on Escape (topmost first - see closeTrainingLoadAnalysisOverlay).
+    if (state.activeTab === "training-load" && state.trainingLoad.section === "analysis" && closeTrainingLoadAnalysisOverlay()) {
+      renderTrainingLoad();
+    }
   });
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
@@ -463,6 +468,23 @@ async function loadSession() {
 }
 
 async function handleContentSubmit(event) {
+  // Dashboards UX H1: the "New dashboard"/"Rename" dialog is a real <form>
+  // so Enter submits it - routed to the same training-load-* handler as a
+  // click would be, never a page navigation.
+  // The form deliberately carries no data-action (handleContentClick would
+  // otherwise submit it on any click inside) - the submit action is
+  // synthesized here, with querySelector so the handler can read the live
+  // inputs off the form.
+  const trainingLoadForm = event.target.closest("form[data-tl-analysis-form]");
+  if (trainingLoadForm) {
+    event.preventDefault();
+    await handleTrainingLoadAction({
+      dataset: { action: `training-load-analysis-${trainingLoadForm.dataset.tlAnalysisForm}-form-submit` },
+      querySelector: (selector) => trainingLoadForm.querySelector(selector),
+    }, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });
+    return;
+  }
+
   const inviteForm = event.target.closest("#inviteAcceptForm");
   if (inviteForm) {
     event.preventDefault();
@@ -991,7 +1013,24 @@ function handleContentInput(event) {
   // handleTrainingLoadAction reads the live value straight off it.
   const trainingLoadInput = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadInput && trainingLoadInput.matches("input, textarea")) {
-    // Analysis text filters apply on change/blur. Re-rendering on every
+    // Dashboards UX H1: the dashboard picker's and the metric panel's
+    // search boxes filter per keystroke over already-loaded lists - same
+    // re-render + focus/cursor restore as the Activities metric picker
+    // above, so typing is never interrupted.
+    const analysisSearch = trainingLoadInput.dataset.tlAnalysisSearch;
+    if (analysisSearch) {
+      setTrainingLoadAnalysisSearch(analysisSearch, trainingLoadInput.value);
+      const selectionStart = trainingLoadInput.selectionStart;
+      const selectionEnd = trainingLoadInput.selectionEnd;
+      renderTrainingLoad();
+      const restored = els.content.querySelector(`[data-tl-analysis-search='${analysisSearch}']`);
+      if (restored) {
+        restored.focus();
+        if (typeof restored.setSelectionRange === "function" && selectionStart !== null) restored.setSelectionRange(selectionStart, selectionEnd);
+      }
+      return;
+    }
+    // Other Analysis text fields apply on change/blur. Re-rendering on every
     // keystroke would replace the input node and interrupt typing.
     if (trainingLoadInput.dataset.action.startsWith("training-load-analysis-")) return;
     void handleTrainingLoadAction(trainingLoadInput, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });

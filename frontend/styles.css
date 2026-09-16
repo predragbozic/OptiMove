@@ -13784,6 +13784,607 @@ button.tests-assignment-card {
   flex-wrap: wrap;
 }
 
+/* ---------- Dashboards UX H1: picker, popover menus, dialog, metric panel ---------- */
+
+.tl-popover-anchor {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.tl-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.tl-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 240px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgba(14, 28, 37, 0.18);
+}
+
+.tl-dash-picker-trigger,
+.tl-period-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 220px;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 5px 10px 5px 12px;
+  text-align: left;
+}
+
+.tl-period-trigger {
+  min-width: 170px;
+}
+
+.tl-dash-picker-trigger.is-open,
+.tl-menu-trigger.is-open {
+  border-color: var(--tl-accent);
+  box-shadow: 0 0 0 2px var(--tl-accent-ring);
+}
+
+.tl-dash-picker-trigger-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.tl-dash-picker-trigger-text small {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tl-dash-picker-trigger-text strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 14px;
+}
+
+.tl-analysis-chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.is-open > .tl-analysis-chevron {
+  transform: rotate(180deg);
+}
+
+.tl-dash-picker {
+  width: min(380px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+}
+
+.tl-dash-picker-search input {
+  width: 100%;
+  min-height: 40px;
+  font-size: 16px;
+}
+
+.tl-dash-picker-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(420px, 55vh);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.tl-dash-picker-group {
+  display: grid;
+  gap: 4px;
+}
+
+.tl-dash-picker-group .eyebrow {
+  margin: 4px 0 2px;
+  padding: 0 6px;
+}
+
+.tl-dash-picker-empty {
+  padding: 8px 6px;
+}
+
+.tl-dash-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tl-dash-option:hover,
+.tl-dash-option:focus-visible {
+  background: var(--tl-accent-soft);
+  border-color: var(--tl-accent-border);
+}
+
+.tl-dash-option.is-selected {
+  border-color: var(--tl-accent);
+  background: var(--tl-accent-soft);
+}
+
+.tl-dash-option-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tl-dash-option-text strong {
+  font-size: 14px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tl-dash-option-text small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tl-dash-option-badges {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+}
+
+.tl-dash-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tl-dash-badge.is-active {
+  border-color: var(--tl-accent-border);
+  background: var(--surface);
+  color: var(--tl-accent);
+}
+
+.tl-popover-footer {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.tl-popover-footer .plain-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  justify-content: center;
+  min-height: 40px;
+}
+
+.tl-menu-trigger {
+  min-height: 44px;
+}
+
+.tl-menu-trigger.icon-button {
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+.tl-menu-trigger.icon-button svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.tl-menu {
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+}
+
+.tl-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tl-menu-item:hover,
+.tl-menu-item:focus-visible {
+  background: var(--tl-accent-soft);
+  color: var(--tl-accent);
+}
+
+.tl-menu-item[aria-checked="true"]::after {
+  content: "\2713";
+  font-weight: 800;
+  color: var(--tl-accent);
+}
+
+.tl-menu-item.is-danger {
+  color: var(--tl-danger);
+}
+
+.tl-menu-item.is-danger:hover,
+.tl-menu-item.is-danger:focus-visible {
+  background: var(--tl-danger-soft);
+}
+
+.tl-menu-item:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  background: transparent;
+}
+
+/* Own header for the dialog and the metric panel - deliberately NOT
+   .builder-section-panel-head, whose <=560px rule stacks the header and
+   hides its .muted subtitle (that's right for the Builder's section editor,
+   wrong here: the "nothing is saved until Save" line must stay visible). */
+.tl-overlay-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.tl-overlay-head .icon-button {
+  flex: none;
+}
+
+.tl-dash-form {
+  width: min(480px, calc(100vw - 28px));
+  display: grid;
+  gap: 14px;
+}
+
+.tl-dash-form-grid {
+  grid-template-columns: 1fr;
+}
+
+.tl-dash-form-grid label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.tl-dash-form-actions,
+.tl-metric-panel-actions {
+  justify-content: flex-end;
+}
+
+.tl-dash-form-actions .plain-button,
+.tl-metric-panel-actions .plain-button {
+  min-height: 40px;
+  padding-inline: 16px;
+}
+
+/* Metric panel: a right-hand side panel on desktop (the grid stays
+   visible behind it), a full-height sheet on phones (below). */
+.tl-metric-panel-overlay {
+  place-items: stretch end;
+  padding: 0;
+}
+
+.tl-metric-panel {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  width: min(560px, 100vw);
+  height: 100%;
+  max-height: 100dvh;
+  margin-left: auto;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: 0 22px 70px rgba(14, 28, 37, 0.28);
+}
+
+.tl-metric-panel-head {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tl-metric-panel-head p {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
+.tl-metric-panel-body {
+  display: grid;
+  gap: 18px;
+  overflow: auto;
+  padding: 14px 18px;
+}
+
+.tl-metric-panel-step {
+  display: grid;
+  gap: 10px;
+}
+
+.tl-metric-panel-step h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.tl-metric-panel-step-no {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--tl-accent-soft);
+  border: 1px solid var(--tl-accent-border);
+  color: var(--tl-accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tl-metric-panel-chosen {
+  margin: 0;
+}
+
+.tl-metric-panel .search-field input {
+  width: 100%;
+  min-height: 40px;
+  font-size: 16px;
+}
+
+.tl-metric-panel-list {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 2px;
+}
+
+.tl-analysis-metric-option.is-selected {
+  border-color: var(--tl-accent);
+  background: var(--tl-accent-soft);
+}
+
+.tl-metric-panel-types {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.tl-metric-panel-types .tl-analysis-type-button {
+  display: grid;
+  gap: 3px;
+  min-height: 64px;
+  align-content: center;
+  text-align: center;
+}
+
+.tl-metric-panel-types .tl-analysis-type-button small {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.tl-analysis-type-button.is-selected {
+  border-color: var(--tl-accent);
+  background: var(--tl-accent-soft);
+  color: var(--tl-accent);
+}
+
+.tl-metric-panel .tl-analysis-editor-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.tl-metric-panel .tl-analysis-editor-grid label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.tl-metric-panel .tl-analysis-editor-grid label:first-child {
+  grid-column: 1 / -1;
+}
+
+.tl-metric-panel-advanced {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.tl-metric-panel-preview {
+  min-height: 0;
+  grid-column: auto;
+  grid-row: auto;
+  gap: 8px;
+}
+
+.tl-preview-placeholder {
+  color: var(--muted);
+}
+
+.tl-preview-rows {
+  display: grid;
+  gap: 6px;
+}
+
+.tl-preview-rows span {
+  display: block;
+  height: 12px;
+  border-radius: 999px;
+  background: #e8ecef;
+}
+
+.tl-preview-rows span:nth-child(2) { width: 80%; }
+.tl-preview-rows span:nth-child(3) { width: 60%; }
+
+.tl-preview-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 64px;
+}
+
+.tl-preview-bars span {
+  flex: 1;
+  height: var(--h, 50%);
+  border-radius: 4px 4px 0 0;
+  background: var(--tl-accent-soft);
+  border: 1px solid var(--tl-accent-border);
+}
+
+.tl-preview-bars.is-line span {
+  height: 3px;
+  margin-bottom: calc(var(--h, 50%) - 3px);
+  border: 0;
+  background: var(--tl-accent);
+}
+
+.tl-metric-panel-preview-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.tl-metric-panel > .builder-error {
+  margin: 0 18px;
+}
+
+.tl-metric-panel-actions {
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 720px) {
+  /* H1: popovers become bottom sheets; triggers take the full row. */
+  .tl-popover-anchor {
+    position: static;
+    width: 100%;
+  }
+  .tl-popover-anchor .plain-button {
+    width: 100%;
+  }
+  .tl-menu-trigger.icon-button {
+    width: 100%;
+    display: inline-flex;
+    justify-content: center;
+  }
+  .tl-popover {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 80dvh;
+    overflow: auto;
+    border-radius: var(--radius) var(--radius) 0 0;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .tl-popover-backdrop {
+    background: rgba(13, 27, 36, 0.35);
+  }
+  .tl-dash-picker-list {
+    max-height: 50dvh;
+  }
+  .tl-menu-item {
+    min-height: 44px;
+  }
+  .tl-metric-panel-overlay {
+    place-items: stretch;
+  }
+  .tl-metric-panel {
+    width: 100vw;
+    margin-left: 0;
+  }
+  .tl-metric-panel-list {
+    max-height: 240px;
+  }
+  .tl-metric-panel .tl-analysis-editor-grid select,
+  .tl-metric-panel .tl-analysis-editor-grid input,
+  .tl-dash-form-grid input {
+    min-height: 44px;
+  }
+  .tl-metric-panel-types .tl-analysis-type-button {
+    min-height: 56px;
+  }
+  .tl-dash-form-actions .plain-button,
+  .tl-metric-panel-actions .plain-button {
+    flex: 1;
+    min-height: 44px;
+  }
+  /* mobile-qa (live 360px check): every H1 control is a real 44px target -
+     the header "Add metric", the empty-state CTA, the picker's "New
+     dashboard" and the overlay close buttons all inherit 40px otherwise. */
+  .tl-analysis-layout-actions .plain-button,
+  .tl-analysis-empty-actions .plain-button,
+  .tl-popover-footer .plain-button,
+  .tl-metric-panel-advanced .plain-button {
+    min-height: 44px;
+  }
+  /* mobile-qa: explicit floor for the dense metric list (parity with
+     .tl-dash-option / .tl-menu-item) so a shorter label can never shrink a
+     row under the target size. */
+  .tl-metric-panel-list .tl-analysis-metric-option {
+    min-height: 44px;
+  }
+  .tl-overlay-head .icon-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    display: inline-grid;
+    place-items: center;
+  }
+}
+
 @media (max-width: 720px) {
   .tl-analysis-topbar,
   .tl-analysis-dashboard-head {
