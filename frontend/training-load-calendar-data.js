@@ -44,7 +44,7 @@ let overviewCoverageGeneration = 0;
 // weekly tabs already read, applied here via the exact same
 // trainingLoadFilterQuery() helper (exported from training-load-data.js,
 // never duplicated) so the Calendar's own "Filter" control — which shares
-// one toolbar with Schedule/Results — actually narrows what the calendar
+// one toolbar with Schedule/Athletes — actually narrows what the calendar
 // shows. Folded into both the fetch URL and the cache context key, so a
 // filter change is its own distinct cache entry, exactly like the weekly
 // cache's own (week, filter) key shape.

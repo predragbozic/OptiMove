@@ -58,6 +58,21 @@ export function addDaysIso(value, amount) {
   return localDateIso(date);
 }
 
+// Monday-first month grid for a "YYYY-MM" month: leading nulls up to the
+// first day, one ISO date per day, trailing nulls to a whole number of
+// 7-cell rows. Shared by the Tests and Training Load date pickers.
+export function monthMatrixIso(monthIso) {
+  const [year, month] = monthIso.split("-").map(Number);
+  const firstOfMonth = new Date(Date.UTC(year, month - 1, 1));
+  const leadingBlanks = (firstOfMonth.getUTCDay() + 6) % 7;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const cells = [];
+  for (let i = 0; i < leadingBlanks; i++) cells.push(null);
+  for (let day = 1; day <= daysInMonth; day++) cells.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
 export function startOfWeekIso(value) {
   const date = new Date(`${value}T12:00:00`);
   const day = date.getDay() || 7;

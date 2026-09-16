@@ -3,7 +3,7 @@ import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { els } from "./dom.js";
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
-import { escapeAttr, escapeHtml, formatDayMonth, formatWeekday, initialsFor, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
+import { escapeAttr, escapeHtml, formatDayMonth, formatWeekday, initialsFor, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthMatrixIso } from "./utils.js";
 
 function renderWellnessAvatar(form) {
   if (form.athleteImageUrl) return renderImage(form.athleteImageUrl, "wellness-avatar wellness-avatar-photo", form.athleteName);
@@ -1134,21 +1134,8 @@ function testsScheduleSubmitLabel(form) {
 
 const CALENDAR_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-function monthMatrix(monthIso) {
-  const [year, month] = monthIso.split("-").map(Number);
-  const firstOfMonth = new Date(Date.UTC(year, month - 1, 1));
-  // Monday-first grid: JS getUTCDay() is 0=Sun..6=Sat; shift so Monday=0.
-  const leadingBlanks = (firstOfMonth.getUTCDay() + 6) % 7;
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const cells = [];
-  for (let i = 0; i < leadingBlanks; i++) cells.push(null);
-  for (let day = 1; day <= daysInMonth; day++) {
-    const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    cells.push(iso);
-  }
-  while (cells.length % 7 !== 0) cells.push(null);
-  return cells;
-}
+// Month grid: the shared utils.js monthMatrixIso (Phase G) - Training
+// Load's date picker uses the exact same helper.
 
 // ONE calendar component, three interaction modes driven entirely by
 // scheduleKind (never two separate calendars): "multi" (specific_dates -
@@ -1240,7 +1227,7 @@ export function renderTestsCalendarHtml(form) {
   // tests/tests-schedule-management.actions.test.mjs).
   const timezone = form.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const monthIso = form.calendarMonth || localMonthIsoInTimeZone(timezone);
-  const cells = monthMatrix(monthIso);
+  const cells = monthMatrixIso(monthIso);
   const [year, month] = monthIso.split("-").map(Number);
   const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
   const todayIso = localDateIsoInTimeZone(timezone);

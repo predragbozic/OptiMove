@@ -600,7 +600,7 @@ export const emptyExternalScheduleDetail = (overrides = {}) => ({
 });
 
 export const emptyTrainingLoadState = (overrides = {}) => ({
-  // Coach tab (Today/Schedule/Results) - same shared weekly navigator
+  // Coach sections (Schedule; Athletes/Overview in Data & Analysis) - same shared weekly navigator
   // shape/behavior as tests.weekly (see frontend/tests-data.js's own
   // loadTestsWeekly for the request-generation-token race guard this
   // mirrors), its own independent instance.
@@ -661,16 +661,7 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // while creating/editing/schedule-again is open.
   scheduleForm: null,
   scheduleDetail: null,
-  // Today tab: clicking an active OUTSIDE PLAN row opens this - grouped
-  // client-side from the already-loaded weekly payload (every athlete's own
-  // assignment for that schedule+date is already present in
-  // weekly.today.data, so this needs no extra fetch). null when closed;
-  // { scheduleId, date, eventName } while open (the per-athlete rows
-  // themselves are re-derived live from weekly.today.data on every render,
-  // never duplicated into their own copy here, so a reminder send's updated
-  // rated/pending status is reflected the instant Today re-fetches).
-  todayGroupDetail: null,
-  // Results tab (item 3 correction): null shows the primary per-athlete
+  // Athletes (section key "results", item 3 correction): null shows the primary per-athlete
   // summary list; an athleteId drills into that one athlete's own sessions/
   // daily view for the currently-loaded week. A pure UI selection, re-
   // derived live from weekly.results.data on every render (see training-
@@ -687,12 +678,6 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // training-load-calendar-data.js), never a per-activity fetch. Reset
   // whenever a different athlete is opened.
   resultsAthleteActivities: { athleteId: "", weekStart: "", data: null, loading: false, error: "" },
-  // Reminder send (mirrors tests.reminderSelection's own shape) - keyed by
-  // scheduleId, { fingerprint, ids }; remindingScheduleId guards one send in
-  // flight at a time; reminderResult is a one-time confirmation banner.
-  reminderSelection: {},
-  remindingScheduleId: "",
-  reminderResult: null,
   // Athlete: today's own weekly-plan sessions + rated/not-rated status -
   // fetched on demand (never cached - see loadTrainingLoadAthleteToday's
   // own header comment for why), independent of the coach-side `weekly`
@@ -705,7 +690,7 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // Item 4 correction: the athlete's own "This week" overlay - the Home
   // card only ever shows TODAY's sessions, so a not-yet-rated session from
   // yesterday or earlier had no UI path to reach at all. Its own single
-  // weekly nav (not the coach's Today/Schedule/Results shape - there's
+  // weekly nav (not the coach's Schedule / Data & Analysis shape - there's
   // nothing to switch between here), opened from a small, always-visible
   // link on Home regardless of today's own unrated count.
   athleteWeeklyOpen: false,

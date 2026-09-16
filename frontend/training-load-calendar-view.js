@@ -3,7 +3,7 @@ import { escapeAttr, escapeHtml, formatDate, formatWeekday, monthLabel } from ".
 import { buildWeeklyCalendarMonth } from "./weekly-plan.js";
 import { formatSrpe } from "./training-load-view.js";
 
-// Training Load Frontend 3A — Calendar → Activity → Results. Deliberately
+// Training Load Frontend 3A — Activities → activity detail → results table. Deliberately
 // its own module, imported by training-load-view.js's own coach root
 // (renderTrainingLoadCoachHtml) in place of the old renderTrainingLoadTodayHtml
 // — same neutral white/gray visual language as the rest of Training Load
