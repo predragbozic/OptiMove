@@ -666,6 +666,13 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // comment on why appending to its OR-based athleteIds would widen rather
   // than narrow what's already on screen).
   resultsAthleteId: null,
+  // Phase D: canonical activities this athlete had during the shared week,
+  // shown as a "raw values live in Activities" deep-link section inside
+  // their Athletes detail - one batched GET /calendar?athleteIds= call
+  // (existing endpoint/param, see loadResultsAthleteActivities in
+  // training-load-calendar-data.js), never a per-activity fetch. Reset
+  // whenever a different athlete is opened.
+  resultsAthleteActivities: { athleteId: "", weekStart: "", data: null, loading: false, error: "" },
   // Reminder send (mirrors tests.reminderSelection's own shape) - keyed by
   // scheduleId, { fingerprint, ids }; remindingScheduleId guards one send in
   // flight at a time; reminderResult is a one-time confirmation banner.

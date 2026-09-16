@@ -17,10 +17,18 @@ const CALENDAR_WEEK_NAMESPACE = "training-load-calendar-week";
 const CALENDAR_MONTH_NAMESPACE = "training-load-calendar-month";
 const ACTIVITY_DETAIL_NAMESPACE = "training-load-calendar-activity";
 const METRIC_DEFINITIONS_NAMESPACE = "training-load-calendar-metric-defs";
+// Phase D: Athletes' own "canonical activities this week" section - the
+// SAME /calendar endpoint the coach-wide week/month views already use,
+// filtered server-side to one athleteId (the existing athleteIds filter
+// param, never a new endpoint), so this is its own cache namespace keyed
+// by athleteId+week rather than reusing calendarContextKey (which has no
+// athlete dimension and would collide across different athletes).
+const RESULTS_ATHLETE_ACTIVITIES_NAMESPACE = "training-load-results-athlete-activities";
 
 let weekGeneration = 0;
 let monthGeneration = 0;
 let activityDetailGeneration = 0;
+let resultsAthleteActivitiesGeneration = 0;
 
 // Item 2's own "workspace and athlete/team filters" requirement — the SAME
 // Club/Team/Athletes filter picker (state.trainingLoad.filter) the old
@@ -154,6 +162,57 @@ export async function loadTrainingLoadCalendarMonth(onPainted) {
   }
   if (result?.outcome === "stale-ignored" && nav.monthLoading) {
     nav.monthLoading = false;
+    onPainted?.();
+  }
+}
+
+// Phase D: one athlete's own canonical activities for the shared week,
+// shown inside their Athletes detail as a "raw values live in Activities"
+// deep-link list - never their per-activity raw metric values themselves
+// (that stays a per-activity fetch, only ever made when Activities itself
+// opens that one activity - see loadActivityDetail below), so this is
+// exactly one request regardless of how many activities the athlete had
+// that week, never N+1.
+export async function loadResultsAthleteActivities(athleteId, weekStart, onPainted) {
+  const nav = state.trainingLoad.resultsAthleteActivities;
+  const weekEnd = addDaysIso(weekStart, 6);
+  const generation = ++resultsAthleteActivitiesGeneration;
+  const contextKey = buildContextKey([...currentUserWorkspaceContextParts(), athleteId, weekStart, weekEnd]);
+  const isNewContext = nav.athleteId !== athleteId || nav.weekStart !== weekStart;
+  nav.athleteId = athleteId;
+  nav.weekStart = weekStart;
+  if (isNewContext) nav.data = null;
+  nav.error = "";
+
+  const result = await loadCachedView({
+    namespace: RESULTS_ATHLETE_ACTIVITIES_NAMESPACE,
+    contextKey,
+    fetcher: () => api(`/api/training-load/calendar?dateFrom=${encodeURIComponent(weekStart)}&dateTo=${encodeURIComponent(weekEnd)}&athleteIds=${encodeURIComponent(athleteId)}`),
+    showLoading: () => {
+      nav.loading = true;
+      onPainted?.();
+    },
+    applyData: (data) => {
+      if (generation !== resultsAthleteActivitiesGeneration) return;
+      nav.data = data;
+      nav.loading = false;
+      onPainted?.();
+    },
+    applyError: (error) => {
+      if (generation !== resultsAthleteActivitiesGeneration) return;
+      nav.loading = false;
+      nav.error = error.message || "Could not load this athlete's activities.";
+      onPainted?.();
+    },
+    getCurrentContextKey: () => buildContextKey([...currentUserWorkspaceContextParts(), athleteId, weekStart, weekEnd]),
+  });
+  if (generation !== resultsAthleteActivitiesGeneration) return;
+  if (result?.outcome === "invalidated-stale") {
+    await loadResultsAthleteActivities(athleteId, weekStart, onPainted);
+    return;
+  }
+  if (result?.outcome === "stale-ignored" && nav.loading) {
+    nav.loading = false;
     onPainted?.();
   }
 }
@@ -309,9 +368,11 @@ export function invalidateAllTrainingLoadCalendarGenerations() {
   weekGeneration += 1;
   monthGeneration += 1;
   activityDetailGeneration += 1;
+  resultsAthleteActivitiesGeneration += 1;
   invalidateCacheNamespace(CALENDAR_WEEK_NAMESPACE);
   invalidateCacheNamespace(CALENDAR_MONTH_NAMESPACE);
   invalidateCacheNamespace(ACTIVITY_DETAIL_NAMESPACE);
+  invalidateCacheNamespace(RESULTS_ATHLETE_ACTIVITIES_NAMESPACE);
 }
 
 // Used after a mutation known to affect Activity Detail (a match-

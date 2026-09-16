@@ -12086,6 +12086,81 @@ button.tests-assignment-card {
   font-size: 16px;
 }
 
+/* Phase D: "canonical activities this week" deep-link list, and the
+   collection-status line moved into Schedule - same Carbon conventions
+   (bordered rows, focus-visible, unified spacing) established in Phase C's
+   Activities pass. */
+.training-load-results-activities {
+  display: grid;
+  gap: 6px;
+}
+
+.training-load-results-activity-list {
+  display: grid;
+  gap: 6px;
+}
+
+.training-load-results-activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+
+.training-load-results-activity-row:hover,
+.training-load-results-activity-row:focus-visible {
+  border-color: var(--accent);
+}
+
+.training-load-results-activity-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.training-load-results-activity-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.training-load-results-activity-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.training-load-results-activity-cta {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.training-load-collection-status {
+  margin: 0;
+  padding: 6px 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+@media (max-width: 480px) {
+  .training-load-results-activity-row {
+    min-height: 44px;
+  }
+}
+
 /* -------------------- Coach: Club/Team/Athletes filter picker -------------------- */
 /* Reuses .builder-athlete-overlay/-picker/-option/checkbox-toggle-all
    (Builder-style, per the feature's own requirement) - only the tab strip
