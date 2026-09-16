@@ -12557,30 +12557,6 @@ button.tests-assignment-card {
   gap: 8px;
 }
 
-.training-load-reminder-list {
-  display: grid;
-  gap: 4px;
-}
-
-.training-load-reminder-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.training-load-reminder-row .training-load-session-name {
-  min-width: 0;
-}
-
-.training-load-reminder-checkbox {
-  display: inline-flex;
-  width: 20px;
-  flex-shrink: 0;
-}
-
 /* -------------------- Training Load Frontend 3A: Calendar --------------------
    Same neutral white/gray language as the rest of Training Load (see that
    section's own header) - teal (var(--accent)) reserved for the active

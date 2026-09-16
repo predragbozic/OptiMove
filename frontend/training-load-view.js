@@ -1,5 +1,5 @@
 import { state } from "./state.js";
-import { addDaysIso, escapeAttr, escapeHtml, formatDate, formatDayMonth, formatWeekday, initialsFor, localDateIso, localDateIsoInTimeZone, localMonthIsoInTimeZone } from "./utils.js";
+import { addDaysIso, escapeAttr, escapeHtml, formatDate, formatDayMonth, formatWeekday, initialsFor, localDateIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthMatrixIso } from "./utils.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { renderTrainingLoadAnalysisHtml } from "./training-load-analysis-view.js";
 import { renderTrainingLoadCalendarHtml } from "./training-load-calendar-view.js";
@@ -12,8 +12,8 @@ import { renderTrainingLoadCalendarHtml } from "./training-load-calendar-view.js
 
 // item 2 correction: same SVG line-icon markup as Tests' own coach tabs
 // (TESTS_TAB_ICONS, tests-view.js) - reused verbatim (same path data, same
-// 24x24 viewBox, same stroke-based fill:none convention) so Today/Schedule/
-// Results read as the same icon language across both modules, above each
+// 24x24 viewBox, same stroke-based fill:none convention) so Schedule /
+// Data & Analysis read as the same icon language across both modules, above each
 // tab's own short label. A local copy, not an import, matching this file's
 // own "deliberately its own visual language, never state.tests" boundary
 // above and this codebase's established mirror-the-pattern-don't-share-the-
@@ -172,7 +172,7 @@ function renderAthleteSessionRowHtml(session) {
 
 // ------------------------------------------------------------
 // Athlete: "This week" weekly overlay (item 4 correction) - a single
-// weekly nav (no Today/Schedule/Results sub-tabs - those are coach
+// weekly nav (no Schedule / Data & Analysis sections - those are coach
 // concepts), same Prev/Next/Today/7-day-strip behavior as the coach side,
 // its own markup. Today or an earlier day's session opens the RPE form
 // (or shows its rated summary); a future day's sessions are always
@@ -366,7 +366,9 @@ export function renderRpeSliderInnerHtml(form) {
 }
 
 // ------------------------------------------------------------
-// Coach: "Training load" tab - Today / Schedule / Results, same
+// Coach: "Training load" - Schedule + Data & Analysis (Overview /
+// Activities / Athletes / Dashboards); the weekly shell below is used by
+// Schedule and Athletes (internal section keys "schedule"/"results"), same
 // organizational shape as the Tests weekly calendar (Prev/Next/Today, a
 // 7-day strip, a selected-day agenda) but its OWN markup/classes - never
 // tests-view.js's renderWeeklyShellHtml or its CSS.
@@ -380,7 +382,7 @@ function formatWeekRangeLabel(weekStart, weekEnd) {
   return `${formatDate(weekStart)} - ${formatDate(weekEnd)}`;
 }
 
-// Shared by the weekly day-strip shell below AND the Results overview's
+// Shared by the weekly day-strip shell below AND the Athletes overview's
 // own per-athlete list (item 3 correction) - both need the exact same
 // Prev/Today/Next week navigation, but the overview has no day-strip/
 // agenda of its own (it lists athletes, not a single day's sessions).
@@ -444,55 +446,6 @@ function renderTrainingLoadStripDayHtml(section, day, isSelected, todayIso) {
   `;
 }
 
-// Today groups every OUTSIDE PLAN row sharing the same scheduleId+date into
-// ONE clickable summary row (rated/total, total sRPE) - "clicking an active
-// external session opens per-athlete status + manual-reminder UI" only
-// makes sense read this way (a planned Weekly-plan session has no such
-// grouping concept - each row there is already its own one-athlete unit,
-// rendered unchanged). Grouping is computed fresh on every render straight
-// from the already-loaded weekly payload, never cached, so a reminder send
-// or a fresh rating is reflected the instant Today re-fetches.
-function groupSessionsForToday(sessions) {
-  const groups = new Map();
-  const result = [];
-  for (const s of sessions) {
-    if (s.source !== "scheduled_external") {
-      result.push(s);
-      continue;
-    }
-    // GET /weekly (coach branch) returns every external row regardless of
-    // schedule/assignment status, unfiltered - Schedule needs that for
-    // management. Today must not present a paused/cancelled row that was
-    // never rated as if it were a real pending request - explicit
-    // `actionable`/`rated` fields decide this, never row presence alone.
-    if (!s.rated && !s.actionable) continue;
-    let group = groups.get(s.scheduleId);
-    if (!group) {
-      group = { __externalGroup: true, scheduleId: s.scheduleId, eventName: s.sessionName, sessionTime: s.sessionTime, sessions: [] };
-      groups.set(s.scheduleId, group);
-      result.push(group);
-    }
-    group.sessions.push(s);
-  }
-  return result;
-}
-
-function renderExternalGroupRowHtml(group, date, stale = false) {
-  const rated = group.sessions.filter((s) => s.rated);
-  const totalSrpe = rated.reduce((sum, s) => sum + s.feedback.srpe, 0);
-  const allRated = rated.length === group.sessions.length;
-  return `
-    <button type="button" class="training-load-session-row is-clickable" data-action="training-load-open-external-group" data-schedule-id="${escapeAttr(group.scheduleId)}" data-date="${escapeAttr(date)}" ${stale ? "disabled" : ""}>
-      <span class="training-load-session-time">${escapeHtml((group.sessionTime || "").slice(0, 5))}</span>
-      <span class="training-load-session-main">
-        <span class="training-load-session-name">${escapeHtml(group.eventName)}${renderOutsidePlanTagHtml({ source: "scheduled_external" })}</span>
-        <span class="training-load-session-subtitle">${rated.length}/${group.sessions.length} rated${totalSrpe ? ` · ${escapeHtml(formatSrpe(totalSrpe))}` : ""}</span>
-      </span>
-      <span class="training-load-status-pill training-load-status-${allRated ? "rated" : "unrated"}">${rated.length}/${group.sessions.length}</span>
-    </button>
-  `;
-}
-
 // A disabled+unrated session, OR one whose governing workspace(s)
 // currently have automatic planned RPE off (v9), was never actually a
 // rating request in the first place - each of the two OFF reasons gets
@@ -520,41 +473,6 @@ function plannedStatusLabel(session) {
   if (session.status === "tracked_rpe_off") return { label: "Tracked · RPE off", cls: "off" };
   if (session.status === "workspace_off") return { label: "Workspace automatic RPE off", cls: "off" };
   return { label: "Not rated", cls: "unrated" };
-}
-
-function renderCoachSessionRowHtml(session, date, stale = false) {
-  if (session.__externalGroup) return renderExternalGroupRowHtml(session, date, stale);
-  const status = plannedStatusLabel(session);
-  return `
-    <div class="training-load-session-row ${stale ? "is-stale" : ""}">
-      <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
-      <span class="training-load-session-main">
-        <span class="training-load-session-name">${escapeHtml(session.athleteName)}${renderOutsidePlanTagHtml(session)}</span>
-        <span class="training-load-session-subtitle">${escapeHtml(sessionLabel(session))}${session.historical ? " · from a since-changed plan" : ""}</span>
-      </span>
-      <span class="training-load-status-pill training-load-status-${status.cls}">${escapeHtml(status.label)}</span>
-    </div>
-  `;
-}
-
-export function renderTrainingLoadTodayHtml() {
-  const nav = state.trainingLoad.weekly.today;
-  if (nav.loading && !nav.data) return `<p class="muted training-load-empty">Loading training load...</p>`;
-  if (nav.error) return `<p class="builder-error">${escapeHtml(nav.error)}</p>`;
-  if (!nav.data) return "";
-  if (state.trainingLoad.todayGroupDetail) return renderTodayGroupDetailHtml();
-  return renderTrainingLoadWeeklyShellHtml({
-    section: "today",
-    days: nav.data.days.map((day) => ({ ...day, sessions: groupSessionsForToday(day.sessions) })),
-    weekStart: nav.data.weekStart,
-    weekEnd: nav.data.weekEnd,
-    selectedDate: nav.selectedDate,
-    emptyAgendaText: "No training sessions this day.",
-    renderSessionRow: renderCoachSessionRowHtml,
-    // Correction round 3 (gap 4) - see renderTrainingLoadWeeklyShellHtml's
-    // own header for what this means and why.
-    stale: Boolean(nav.loading && nav.data),
-  });
 }
 
 // Schedule: a read-only projection of training sessions from active
@@ -905,18 +823,6 @@ export function externalCalendarToggleLabel(form) {
 
 const CALENDAR_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-function externalMonthMatrix(monthIso) {
-  const [year, month] = monthIso.split("-").map(Number);
-  const firstOfMonth = new Date(Date.UTC(year, month - 1, 1));
-  const leadingBlanks = (firstOfMonth.getUTCDay() + 6) % 7;
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const cells = [];
-  for (let i = 0; i < leadingBlanks; i++) cells.push(null);
-  for (let day = 1; day <= daysInMonth; day++) cells.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
-  while (cells.length % 7 !== 0) cells.push(null);
-  return cells;
-}
-
 function renderExternalCalendarSelectedHtml(form) {
   const mode = externalCalendarMode(form);
   if (mode !== "multi") {
@@ -942,7 +848,7 @@ function renderExternalCalendarSelectedHtml(form) {
 function renderExternalCalendarHtml(form) {
   const timezone = form.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const monthIso = form.calendarMonth || localMonthIsoInTimeZone(timezone);
-  const cells = externalMonthMatrix(monthIso);
+  const cells = monthMatrixIso(monthIso);
   const [year, month] = monthIso.split("-").map(Number);
   const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
   const todayIso = localDateIsoInTimeZone(timezone);
@@ -1326,7 +1232,7 @@ export function renderExternalScheduleDetailHtml() {
       <p>Targets: ${targets.map((t) => escapeHtml(t.name || t.athleteId || t.teamId || t.clubId)).join(", ") || "none"}</p>
       ${schedule.status === "cancelled"
         ? `
-        <p class="muted">Cancelled - read-only. Historical results, if any, remain available in Results.</p>
+        <p class="muted">Cancelled - read-only. Historical results, if any, remain available in Athletes.</p>
         <div class="tests-schedule-actions">
           <button type="button" class="plain-button compact-button" data-action="training-load-external-schedule-again" data-schedule-id="${escapeAttr(schedule.id)}">Schedule again</button>
         </div>
@@ -1341,70 +1247,6 @@ export function renderExternalScheduleDetailHtml() {
           <button type="button" class="plain-button compact-button training-load-cancel-button" data-action="training-load-set-external-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="cancel">Cancel</button>
         </div>
       `}
-    </section>
-  `;
-}
-
-// ------------------------------------------------------------
-// Today tab: an OUTSIDE PLAN group's per-athlete status + manual reminder.
-// Derives its rows live from the already-loaded weekly.today payload
-// (never a second fetch) - a reminder send or a fresh rating is reflected
-// the instant Today's own weekly data next re-fetches.
-// ------------------------------------------------------------
-
-function currentTodayGroupSessions() {
-  const open = state.trainingLoad.todayGroupDetail;
-  if (!open) return [];
-  const day = state.trainingLoad.weekly.today.data?.days.find((d) => d.date === open.date);
-  return (day?.sessions || []).filter((s) => s.source === "scheduled_external" && s.scheduleId === open.scheduleId);
-}
-
-// Mirrors tests-view.js's own reminderSelectedSet - falls back to "every
-// not-yet-completed athlete" whenever no explicit selection was made yet,
-// or the group's own current assignment-id set has moved on since (a
-// stale selection self-corrects on the very next render).
-function externalReminderSelectedSet(scheduleId, sessions) {
-  const pending = sessions.filter((s) => !s.rated);
-  const currentIds = pending.map((s) => s.externalAssignmentId).sort();
-  const saved = state.trainingLoad.reminderSelection[scheduleId];
-  if (saved && saved.fingerprint === currentIds.join(",")) return new Set(saved.ids);
-  return new Set(currentIds);
-}
-
-export function renderTodayGroupDetailHtml() {
-  const open = state.trainingLoad.todayGroupDetail;
-  const sessions = currentTodayGroupSessions();
-  const rated = sessions.filter((s) => s.rated);
-  const pending = sessions.filter((s) => !s.rated);
-  const selected = externalReminderSelectedSet(open.scheduleId, sessions);
-  const sending = state.trainingLoad.remindingScheduleId === open.scheduleId;
-  const result = state.trainingLoad.reminderResult && state.trainingLoad.reminderResult.scheduleId === open.scheduleId ? state.trainingLoad.reminderResult : null;
-  return `
-    <section class="panel training-load-schedule-detail">
-      <button type="button" class="plain-button compact-button" data-action="training-load-close-external-group">&larr; Back to Today</button>
-      <h3>${escapeHtml(open.eventName)}${renderOutsidePlanBadgeHtml()}</h3>
-      <p class="muted">${rated.length}/${sessions.length} rated</p>
-      ${result ? `<p class="muted">${escapeHtml(result.message)}</p>` : ""}
-      <div class="training-load-reminder-list">
-        ${sessions.map((s) => `
-          <div class="training-load-reminder-row">
-            ${!s.rated ? `
-              <label class="training-load-reminder-checkbox">
-                <input type="checkbox" data-action="training-load-external-reminder-toggle-athlete" data-assignment-id="${escapeAttr(s.externalAssignmentId)}" ${selected.has(s.externalAssignmentId) ? "checked" : ""}>
-              </label>
-            ` : `<span class="training-load-reminder-checkbox" aria-hidden="true"></span>`}
-            <span class="training-load-session-name">${escapeHtml(s.athleteName)}</span>
-            <span class="training-load-status-pill training-load-status-${s.rated ? "rated" : "unrated"}">${s.rated ? escapeHtml(formatFeedbackSummary(s.feedback)) : "Not rated"}</span>
-          </div>
-        `).join("")}
-      </div>
-      ${pending.length ? `
-        <div class="tests-schedule-actions">
-          <button type="button" class="plain-button compact-button" data-action="training-load-external-reminder-select-all">Select all</button>
-          <button type="button" class="plain-button compact-button" data-action="training-load-external-reminder-clear">Clear</button>
-          <button type="button" class="plain-button" data-action="training-load-send-external-reminder" data-schedule-id="${escapeAttr(open.scheduleId)}" ${sending || !selected.size ? "disabled" : ""}>${sending ? "Sending..." : "Send reminder"}</button>
-        </div>
-      ` : `<p class="muted">Everyone has answered.</p>`}
     </section>
   `;
 }

@@ -54,7 +54,6 @@ const {
   renderTrainingLoadHomeCardHtml,
   renderTrainingLoadResultsHtml,
   renderTrainingLoadScheduleHtml,
-  renderTrainingLoadTodayHtml,
   renderTrainingLoadSessionListHtml,
   renderTrainingLoadFilterPickerHtml,
   renderRpeFormHtml,
@@ -615,24 +614,10 @@ test("G5 (relocated to Schedule). a completed OUTSIDE-PLAN result still counts t
   assert.ok(html.includes("1/1"), "a completed result must always count, regardless of its schedule's current status");
 });
 
-test("G6. Today's grouping omits a paused/cancelled, never-rated OUTSIDE-PLAN row entirely - it never renders as a pending group at all", () => {
-  resetState();
-  state.trainingLoad.weekly.today.data = weekPayload("2026-08-24", {
-    "2026-08-24": [externalSession({ externalAssignmentId: "asg-paused", rated: false, actionable: false, scheduleStatus: "paused", sessionName: "Paused camp" })],
-  });
-  const html = renderTrainingLoadTodayHtml();
-  assert.ok(!html.includes("Paused camp"), "a paused, never-rated external row must not appear on Today at all - not even as a non-clickable/informational row");
-});
-
-test("G7. Today's grouping still shows a completed OUTSIDE-PLAN result even after its schedule is cancelled", () => {
-  resetState();
-  state.trainingLoad.weekly.today.data = weekPayload("2026-08-24", {
-    "2026-08-24": [externalSession({ externalAssignmentId: "asg-done", rated: true, actionable: false, scheduleStatus: "cancelled", sessionName: "Now-cancelled camp", feedback: { rpe: 5, durationMinutes: 30, srpe: 150 } })],
-  });
-  const html = renderTrainingLoadTodayHtml();
-  assert.ok(html.includes("Now-cancelled camp"), "a completed result must keep showing on Today even after its schedule is cancelled");
-  assert.ok(html.includes("1/1"));
-});
+// G6/G7 (the old Today tab's OUTSIDE-PLAN grouping) were removed in Phase G
+// together with renderTrainingLoadTodayHtml - the "today" section has
+// rendered the canonical-activity Calendar (training-load-calendar-view.js)
+// since Phase A, so that grouping was unreachable.
 
 test("G8. the Schedule tab (management view) still shows a paused/cancelled row, unlike Today - explicitly labeled, never omitted", () => {
   resetState();

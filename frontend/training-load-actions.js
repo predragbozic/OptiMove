@@ -16,7 +16,6 @@ import {
   resolvePlanOwnership,
   savePlannedRpeSetting,
   scheduleExternalAgain,
-  sendExternalScheduleReminder,
   setExternalScheduleStatus,
   submitRpe,
   submitExternalRpe,
@@ -581,7 +580,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       await toggleSessionRpeEnabled(sessionId, nextEnabled);
     } catch (error) {
       if (error.status === 409 && error.message === "hasExistingResults") {
-        if (!window.confirm("This session already has a recorded RPE result. Turning RPE off will stop new submissions, but the existing result stays in Results. Continue?")) {
+        if (!window.confirm("This session already has a recorded RPE result. Turning RPE off will stop new submissions, but the existing result stays in Athletes. Continue?")) {
           return true;
         }
         await toggleSessionRpeEnabled(sessionId, nextEnabled, true);
@@ -650,7 +649,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       await toggleSessionTrainingLoadEnabled(sessionId, nextEnabled);
     } catch (error) {
       if (error.status === 409 && error.message === "hasExistingResults") {
-        if (!window.confirm("This session already has a recorded RPE result. Turning tracking off will also stop new RPE submissions, but the existing result stays in Results. Continue?")) {
+        if (!window.confirm("This session already has a recorded RPE result. Turning tracking off will also stop new RPE submissions, but the existing result stays in Athletes. Continue?")) {
           return true;
         }
         await toggleSessionTrainingLoadEnabled(sessionId, nextEnabled, true);
@@ -670,7 +669,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
 
-  // -------------------- Coach: Today/Schedule/Results tabs --------------------
+  // -------------------- Coach: Schedule / Data & Analysis sections --------------------
 
   if (type === "training-load-section") {
     setTrainingLoadSection(action.dataset.section);
@@ -690,7 +689,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // stays "today", only the visible label changed) - it reads its own
     // canonical-activity-shaped data (training-load-calendar-data.js), never
     // the RPE-session-shaped state.trainingLoad.weekly.today, which nothing
-    // renders anymore for this tab. Schedule/Results are completely
+    // renders anymore for this tab. Schedule/Athletes are completely
     // unaffected - same loadTrainingLoadWeekly call as before.
     //
     // Phase E: "overview" loads its own two, deliberately independent
@@ -1419,7 +1418,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // this session) so this stays a true no-op whenever Calendar has never
     // been visited - both in production (nothing to refresh yet) and for
     // every OLDER test in this suite that only ever exercises the
-    // weekly-cache-backed Schedule/Results sections and never touches
+    // weekly-cache-backed Schedule/Athletes sections and never touches
     // state.trainingLoad.calendar at all. A previously-selected activity/
     // component may no longer be visible under the new filter, so that
     // selection is cleared exactly like a workspace switch already does
@@ -1743,7 +1742,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   if (type === "training-load-set-external-schedule-status") {
     const scheduleId = action.dataset.scheduleId;
     const statusAction = action.dataset.status; // "pause" | "resume" | "cancel"
-    if (statusAction === "cancel" && !window.confirm("Cancel this RPE session? It can no longer be edited or reactivated - existing results stay available in Results.")) {
+    if (statusAction === "cancel" && !window.confirm("Cancel this RPE session? It can no longer be edited or reactivated - existing results stay available in Athletes.")) {
       return true;
     }
     await setExternalScheduleStatus(scheduleId, statusAction);
@@ -1764,7 +1763,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
 
-  // -------------------- Results tab: per-athlete drilldown (item 3) --------------------
+  // -------------------- Athletes (section key "results"): per-athlete drilldown (item 3) --------------------
   // A pure UI selection over the already-loaded weekly.results payload -
   // never a fetch, never touches state.trainingLoad.filter (see training-
   // load-view.js's own comment on filterWeeklyDataToAthlete for why).
@@ -1807,54 +1806,6 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       loadActivityDetail(action.dataset.activityId, renderTrainingLoad),
     ]);
     renderTrainingLoad();
-    return true;
-  }
-
-  // -------------------- Today tab: OUTSIDE PLAN group detail + manual reminder --------------------
-
-  if (type === "training-load-open-external-group") {
-    const day = state.trainingLoad.weekly.today.data?.days.find((d) => d.date === action.dataset.date);
-    const session = day?.sessions.find((s) => s.source === "scheduled_external" && s.scheduleId === action.dataset.scheduleId);
-    state.trainingLoad.todayGroupDetail = { scheduleId: action.dataset.scheduleId, date: action.dataset.date, eventName: session?.sessionName || "" };
-    state.trainingLoad.reminderResult = null;
-    renderTrainingLoad();
-    return true;
-  }
-  if (type === "training-load-close-external-group") {
-    state.trainingLoad.todayGroupDetail = null;
-    renderTrainingLoad();
-    return true;
-  }
-  if (type === "training-load-external-reminder-toggle-athlete") {
-    const open = state.trainingLoad.todayGroupDetail;
-    if (!open) return true;
-    const { ids, fingerprint } = currentExternalReminderSelection(open.scheduleId);
-    const id = action.dataset.assignmentId;
-    const index = ids.indexOf(id);
-    if (index >= 0) ids.splice(index, 1);
-    else ids.push(id);
-    state.trainingLoad.reminderSelection[open.scheduleId] = { fingerprint, ids };
-    renderTrainingLoad();
-    return true;
-  }
-  if (type === "training-load-external-reminder-select-all") {
-    const open = state.trainingLoad.todayGroupDetail;
-    if (!open) return true;
-    const { fingerprint } = currentExternalReminderSelection(open.scheduleId);
-    state.trainingLoad.reminderSelection[open.scheduleId] = { fingerprint, ids: fingerprint ? fingerprint.split(",").filter(Boolean) : [] };
-    renderTrainingLoad();
-    return true;
-  }
-  if (type === "training-load-external-reminder-clear") {
-    const open = state.trainingLoad.todayGroupDetail;
-    if (!open) return true;
-    const { fingerprint } = currentExternalReminderSelection(open.scheduleId);
-    state.trainingLoad.reminderSelection[open.scheduleId] = { fingerprint, ids: [] };
-    renderTrainingLoad();
-    return true;
-  }
-  if (type === "training-load-send-external-reminder") {
-    await sendExternalReminder(action.dataset.scheduleId, renderTrainingLoad);
     return true;
   }
 
@@ -2048,50 +1999,6 @@ async function openExternalScheduleAgain(scheduleId, renderTrainingLoad) {
   state.trainingLoad.scheduleDetail = null;
   renderTrainingLoad();
   void loadTrainingLoadOrgPickerData().then(renderTrainingLoad).catch(() => {});
-}
-
-// ------------------------------------------------------------
-// Today tab: OUTSIDE PLAN group detail + manual reminder selection.
-// ------------------------------------------------------------
-
-function currentTodayGroupSessionsForActions(scheduleId) {
-  const open = state.trainingLoad.todayGroupDetail;
-  if (!open) return [];
-  const day = state.trainingLoad.weekly.today.data?.days.find((d) => d.date === open.date);
-  return (day?.sessions || []).filter((s) => s.source === "scheduled_external" && s.scheduleId === scheduleId);
-}
-
-// Same fingerprint-based self-correction as training-load-view.js's own
-// externalReminderSelectedSet - a stale selection (someone rated since, or
-// the group's own set moved on) resets to "everyone still pending" the
-// next time this is read, rather than silently keeping a dead assignment
-// id selected.
-function currentExternalReminderSelection(scheduleId) {
-  const sessions = currentTodayGroupSessionsForActions(scheduleId);
-  const pending = sessions.filter((s) => !s.rated);
-  const fingerprint = pending.map((s) => s.externalAssignmentId).sort().join(",");
-  const saved = state.trainingLoad.reminderSelection[scheduleId];
-  const ids = saved && saved.fingerprint === fingerprint ? saved.ids.slice() : pending.map((s) => s.externalAssignmentId);
-  return { ids, fingerprint };
-}
-
-async function sendExternalReminder(scheduleId, renderTrainingLoad) {
-  const { ids } = currentExternalReminderSelection(scheduleId);
-  if (!ids.length || state.trainingLoad.remindingScheduleId) return;
-  state.trainingLoad.remindingScheduleId = scheduleId;
-  renderTrainingLoad();
-  try {
-    const result = await sendExternalScheduleReminder(scheduleId, ids);
-    state.trainingLoad.reminderResult = {
-      scheduleId,
-      message: `${result.notifiedCount} notified${result.noUserCount ? `, ${result.noUserCount} skipped (no linked account)` : ""}.`,
-    };
-    delete state.trainingLoad.reminderSelection[scheduleId];
-  } catch (error) {
-    state.trainingLoad.reminderResult = { scheduleId, message: error.message || "Could not send the reminder." };
-  }
-  state.trainingLoad.remindingScheduleId = "";
-  renderTrainingLoad();
 }
 
 function filterListForKind(kind) {

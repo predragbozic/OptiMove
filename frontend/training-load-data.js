@@ -14,7 +14,7 @@ import { buildContextKey, invalidateCacheEntriesWithPrefix, invalidateCacheEntry
 // weekStart, filter) is IDENTICAL no matter which of Today/Schedule/
 // Results is asking for it - before this, each of the three coach tabs
 // (plus the athlete's own weekly overlay) fetched it completely
-// independently, so switching Today -> Schedule -> Results while looking
+// independently, so switching Schedule -> Athletes -> Overview while looking
 // at the exact same week refetched the exact same payload three times in
 // a row, every time. Routed through view-cache.js's own loadCachedView
 // (the same primitive weekly-data.js's Calendar already uses) so the SAME
@@ -31,7 +31,7 @@ import { buildContextKey, invalidateCacheEntriesWithPrefix, invalidateCacheEntry
 // This intentionally trades a little of the OLD "always-refresh" tab's
 // own guaranteed freshness (menu-cache-policy.js's prior rationale: rated/
 // not-rated status changes on nearly every visit) for real request
-// reduction on the common case (browsing Today/Schedule/Results, or
+// reduction on the common case (browsing Schedule/Athletes/Overview, or
 // re-entering the tab, within the same short visit) - but never
 // permanently: past the TTL, a re-entry paints the cached view instantly
 // AND still triggers a real background refresh (loadCachedView's own
@@ -290,7 +290,8 @@ async function loadTrainingLoadWeeklyInto(nav, generationKey, extraQuery, onPain
   }
 }
 
-// Coach Today/Schedule/Results tabs - each keeps its own independent week/
+// Coach weekly sections (Schedule; Athletes and Overview in Data & Analysis;
+// the legacy "today" slot is only used by tests) - each keeps its own independent week/
 // date, same as tests.weekly, scoped/filtered by state.trainingLoad.filter
 // + the caller's current workspace (see trainingLoad.js's own coach-side
 // scoping). `onPainted` - see loadTrainingLoadWeeklyInto's own header.
@@ -469,13 +470,4 @@ export async function setExternalScheduleStatus(scheduleId, status) {
 
 export async function scheduleExternalAgain(scheduleId, body) {
   return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}/schedule-again`, { method: "POST", body: JSON.stringify(body) });
-}
-
-// Body: { assignmentIds: [] }. Same per-item outcome-code contract as
-// WELLNESS's own manual reminder (tests-data.js's sendManualReminder).
-export async function sendExternalScheduleReminder(scheduleId, assignmentIds) {
-  return api(`/api/training-load/external-schedules/${encodeURIComponent(scheduleId)}/remind`, {
-    method: "POST",
-    body: JSON.stringify({ assignmentIds }),
-  });
 }

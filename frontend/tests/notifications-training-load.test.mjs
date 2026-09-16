@@ -88,13 +88,14 @@ test("a training_load_manual_reminder row (coach-triggered, POST /external-sched
   assert.ok(panelHtml.includes('data-assignment-id="asg-3"'));
 });
 
-test("a training_load_external_final_digest row routes to notification-open-training-load-results, carrying the occurrence's own scheduled date from metadata, with an 'Open Results' hint", () => {
+test("a training_load_external_final_digest row routes to notification-open-training-load-results, carrying the occurrence's own scheduled date from metadata, with an 'Open Athletes' hint (Phase G: the sub-view is labeled Athletes)", () => {
   resetState();
   state.notifications.rows = [baseRow({ type: "training_load_external_final_digest", entity_type: "training_load_external_occurrence", entity_id: "occ-1", metadata: { scheduleId: "sched-1", occurrenceId: "occ-1", scheduledDate: "2026-08-24" } })];
   renderNotifications();
   assert.ok(panelHtml.includes('data-action="notification-open-training-load-results"'));
   assert.ok(panelHtml.includes('data-scheduled-date="2026-08-24"'));
-  assert.ok(panelHtml.includes("Open Results"));
+  assert.ok(panelHtml.includes("Open Athletes"));
+  assert.ok(!panelHtml.includes("Open Results"), "Results no longer names a Training Load view");
 });
 
 test("an unrelated notification type is untouched by the new routing - falls through to the generic notification-read", () => {

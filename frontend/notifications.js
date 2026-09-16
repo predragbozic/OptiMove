@@ -265,7 +265,7 @@ function renderNotificationRow(row) {
           ${isCoachDigestNotification ? `<small class="notification-hint">Open Today</small>` : ""}
           ${isFinalDigestNotification ? `<small class="notification-hint">Open Results</small>` : ""}
           ${isTrainingLoadAssignmentNotification ? `<small class="notification-hint">Open RPE</small>` : ""}
-          ${isTrainingLoadFinalDigestNotification ? `<small class="notification-hint">Open Results</small>` : ""}
+          ${isTrainingLoadFinalDigestNotification ? `<small class="notification-hint">Open Athletes</small>` : ""}
           ${isWeeklyPlanAssigned ? `<small class="notification-hint">Open weekly plan</small>` : ""}
           ${isSpecificProgramAssigned ? `<small class="notification-hint">Open program</small>` : ""}
         </span>

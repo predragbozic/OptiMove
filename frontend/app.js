@@ -1867,7 +1867,7 @@ function renderAthleteHomeFromCache() {
   els.content.innerHTML = renderAthleteHomeHtml({ data: state.lastAthleteHomeData, error: "" });
 }
 
-// Coach "Training load" tab (Today/Schedule/Results) - own weekly fetch,
+// Coach "Training load" tab (Schedule / Data & Analysis) - own weekly fetch,
 // same request-generation-token guard as Tests' own weekly nav (see
 // training-load-data.js's loadTrainingLoadWeekly).
 // Correction: menu-cache-policy.js declares this tab "always-refresh" (the
@@ -1883,7 +1883,7 @@ async function loadTrainingLoad() {
   els.context.textContent = "Training load";
   els.title.textContent = "Training load";
   els.toolbar.innerHTML = "";
-  // perf: renders the tab shell (Today/Schedule/Results nav + whatever
+  // perf: renders the tab shell (Schedule / Data & Analysis nav + whatever
   // this section's own nav.data/loading already says) BEFORE awaiting
   // anything below - previously this whole function awaited the fetch
   // first, so the content area (including the nav strip itself) stayed
