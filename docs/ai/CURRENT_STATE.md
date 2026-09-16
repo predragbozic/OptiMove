@@ -43,6 +43,20 @@ assert a deploy state without checking the actual hosting target first.
   dev workspace; `window.prompt` isn't supported by the automated browser harness used).
 - `migrations/` (legacy, no `_v2` suffix) still exists alongside `migrations_v2/` —
   treat it as historical/reference only; new migrations go in `migrations_v2/`.
+- **Dashboards ignores the shell Club/Team/Athletes filter** (Training Load IA
+  Phase F, decision (b), 2026-09-16). `POST /api/training-load/dashboards/:id/query`
+  only receives the runtime activity/component filter
+  (`analysisRuntimeFilterPayload`, `frontend/training-load-analysis-data.js`);
+  `runtimeFilter.athleteIds` is never populated and the backend accepts
+  `athleteIds` only, not club/team. The shell Filter is therefore rendered
+  disabled on Dashboards with a visible note, without an active count, while
+  the coach's selection stays in `state.trainingLoad.filter` for
+  Overview/Activities/Athletes. Proposed separate task (not part of Phase F, no
+  backend change made there): let `/query` accept `clubIds`/`teamIds` and expand
+  them to member athletes server-side (same `athleteExtraFilterSql` union
+  semantics `/weekly` and `/calendar` already use), then feed
+  `state.trainingLoad.filter` into `analysisRuntimeFilterPayload()` and
+  `queryContextKey()` and re-enable the control.
 
 ## Most likely next step
 

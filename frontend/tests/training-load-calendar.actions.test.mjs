@@ -802,23 +802,27 @@ test("the Components tab lists every component from the activity's own hierarchy
 // ------------------------------------------------------------
 // 3B3 UX slice: Analysis "Choose activity" hands off to this EXISTING
 // Calendar -> activity detail flow instead of asking for a raw activity/
-// component UUID. "Open in Analysis" (training-load-actions.js) must only
-// ever appear while that hand-off is in progress, never during ordinary
-// Calendar browsing.
+// component UUID. Phase F: Activities and Dashboards are two sub-views of
+// the same Data & Analysis space, so "Analyze this activity" is now an
+// intra-space hand-off available for ANY open activity whose detail has
+// loaded - picking mode (Dashboards' own "Choose activity") still works but
+// is no longer a precondition. The button must still never appear before
+// the activity's own detail (components) has actually loaded.
 // ------------------------------------------------------------
 
-test("Open in Analysis only appears while Analysis is choosing an activity, and only once that activity's own detail has actually loaded", async () => {
+test("Analyze this activity appears for any open activity once its detail has loaded - picking mode is no longer a precondition, and unloaded detail still never offers it", async () => {
   resetState();
   const cal = state.trainingLoad.calendar;
   const openInAnalysisAction = 'data-action="training-load-analysis-open-in-analysis"';
   withActivitySelected(cal, { detail: activityDetailPayload({ components: [{ id: "comp-main", name: "Main Set" }] }) });
 
   let html = renderTrainingLoadCalendarHtml();
-  assert.ok(!html.includes(openInAnalysisAction), "normal Calendar browsing must never show the Analysis hand-off button");
+  assert.ok(html.includes(openInAnalysisAction), "Phase F: ordinary Activities browsing offers the intra-space hand-off for an open, loaded activity");
+  assert.match(html, />Analyze this activity</);
 
   state.trainingLoad.analysis.pickingActivity = true;
   html = renderTrainingLoadCalendarHtml();
-  assert.ok(html.includes(openInAnalysisAction), "once picking an activity for Analysis, an open activity with loaded detail offers the hand-off");
+  assert.ok(html.includes(openInAnalysisAction), "picking mode still offers it too");
 
   cal.activityDetail = { activityId: cal.selectedActivityId, data: null, loading: true, error: "" };
   html = renderTrainingLoadCalendarHtml();
@@ -839,7 +843,7 @@ test("the picking banner with its Cancel-back-to-Analysis button only shows whil
   assert.ok(html.includes("training-load-analysis-cancel-choose-activity"));
 });
 
-test("Open in Analysis captures the activity's real name/date and its components, never a raw id, and returns to the Analysis tab", async () => {
+test("Analyze this activity captures the activity's real name/date and its components, never a raw id, and returns to the Dashboards tab", async () => {
   resetState();
   state.trainingLoad.section = "today";
   state.trainingLoad.analysis.pickingActivity = true;
@@ -860,7 +864,7 @@ test("Open in Analysis captures the activity's real name/date and its components
   assert.deepEqual(state.trainingLoad.analysis.componentOptions, [{ id: "comp-a", name: "Warm-up" }, { id: "comp-b", name: "Main Set" }]);
 });
 
-test("Open in Analysis is a no-op if the activity's own detail has not actually loaded yet", async () => {
+test("Analyze this activity is a no-op if the activity's own detail has not actually loaded yet", async () => {
   resetState();
   const cal = state.trainingLoad.calendar;
   cal.selectedActivityId = "act-1";

@@ -1726,8 +1726,19 @@ export function renderTrainingLoadCoachHtml() {
           <button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
           <button type="button" class="training-load-tab ${space === "dataAnalysis" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataAnalysis" ? "true" : "false"}" data-action="training-load-section" data-section="${dataAnalysisTargetSection}">${renderTrainingLoadTabIcon("analysis")}<span>Data &amp; Analysis</span></button>
         </div>
-        <button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>
+        ${section === "analysis"
+          // Phase F (confirmed decision): the shell's Club/Team/Athletes
+          // filter never reaches the Dashboards query (it only ever sends
+          // the runtime activity/component filter - see
+          // analysisRuntimeFilterPayload), so on Dashboards the control is
+          // shown as unavailable, with NO active count, rather than
+          // pretending a selection applies. The selection itself is left
+          // untouched in state.trainingLoad.filter - it still applies the
+          // moment the coach returns to Overview/Activities/Athletes.
+          ? `<button type="button" class="plain-button compact-button training-load-filter-button" data-action="training-load-filter-open" disabled aria-disabled="true" aria-describedby="training-load-filter-note">Filter</button>`
+          : `<button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>`}
       </div>
+      ${section === "analysis" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">Club, team and athlete filters are not available for Dashboards yet.</p>` : ""}
       ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section) : ""}
       ${section === "overview" ? renderTrainingLoadOverviewHtml() : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}
