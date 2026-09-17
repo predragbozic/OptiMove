@@ -29,7 +29,9 @@
 // own dashboard is a real, supported case for this feature (self-view),
 // unlike the coach-only measurement-write features those other modules
 // guard.
-import { canManageClub, canManageTeamById, isPlatformAdministrator } from "./authz.js";
+import {
+  canManageClub, canManageTeamById, holdsClubAdminRole, holdsTeamCoachRole, isPlatformAdministrator, managesTeamThroughClub,
+} from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
 import { isAthleteInWorkspaceScope } from "./trainingLoadAccess.js";
 import { query } from "./db.js";
@@ -216,6 +218,27 @@ export function canManageDashboardRow(req, row) {
   if (row.owner_scope === "club") return canManageClub(req.authz, row.owner_club_id);
   if (row.owner_scope === "team") return canManageTeamById(req.authz, row.owner_team_id);
   return false; // 'system' templates are never individually "managed" by a non-admin — see canViewDashboardRow for read access
+}
+
+// On what authority may this account manage this row — for the deletion
+// log (v19). Mirrors canManageDashboardRow exactly (non-null iff it
+// returns true), but reports the most specific basis first: an admin who
+// is also the owner is 'owner'; 'platform_admin' means the admin override
+// was the ONLY reason. A club admin managing a team under their club
+// (authz.managedTeamIds) is 'club_admin'. Built from the same role
+// predicates canManageClub/canManageTeamById use (authz.js), minus their
+// platform-admin short-circuit - agreement is by construction, and pinned
+// by a matrix test.
+export function dashboardManageBasis(req, row) {
+  const authz = req.authz;
+  if (row.owner_scope === "user" && String(row.owner_user_id) === String(req.user.id)) return "owner";
+  if (row.owner_scope === "club" && holdsClubAdminRole(authz, row.owner_club_id)) return "club_admin";
+  if (row.owner_scope === "team") {
+    if (holdsTeamCoachRole(authz, row.owner_team_id)) return "team_coach";
+    if (managesTeamThroughClub(authz, row.owner_team_id)) return "club_admin";
+  }
+  if (isPlatformAdministrator(authz)) return "platform_admin";
+  return null;
 }
 
 // Per-row READ visibility — broader than canManageDashboardRow: a system

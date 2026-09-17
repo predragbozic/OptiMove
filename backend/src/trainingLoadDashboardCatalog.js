@@ -14,7 +14,7 @@
 // write.
 import { query, pool } from "./db.js";
 import {
-  canManageDashboardRow, canViewDashboardRow, dashboardVisibilitySql, dataWorkspaceMatches,
+  canManageDashboardRow, canViewDashboardRow, dashboardManageBasis, dashboardVisibilitySql, dataWorkspaceMatches,
   resolveDashboardCreateContext,
 } from "./trainingLoadDashboardAccess.js";
 import { resolveTemplateSeriesBatchForWorkspace } from "./trainingLoadDashboardWidgets.js";
@@ -208,6 +208,10 @@ export async function archiveDashboard(req, dataWorkspace, dashboardId, { expect
 // an archived dashboard can (and typically will) be the one being
 // permanently deleted; Archive stays the reversible, softer action.
 //
+// Every permanent delete is recorded in training_load.dashboard_deletion_log
+// (who, on what authority, what, when) by delete_dashboard() itself, in the
+// same transaction - a refused or rolled-back delete leaves no record.
+//
 // A system template can NEVER be deleted — checked here unconditionally,
 // for every caller including a platform admin (who otherwise passes
 // canManageDashboardRow for every row): a deliberate carve-out with no
@@ -219,11 +223,14 @@ export async function deleteDashboard(req, dataWorkspace, dashboardId, { expecte
   // everyone leaks nothing - and every caller gets one consistent reason.
   if (row.owner_scope === "system") throw httpError(409, "System templates cannot be permanently deleted.", "systemTemplateProtected");
   if (!canManageDashboardRow(req, row)) throw httpError(403, "Forbidden.");
+  const authorizedVia = dashboardManageBasis(req, row);
+  // Defensive: the two helpers must agree; never log a delete without a basis.
+  if (!authorizedVia) throw httpError(403, "Forbidden.");
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
     throw httpError(400, "expectedRevision must be a positive integer.");
   }
   try {
-    await query(`select * from training_load.delete_dashboard($1, $2)`, [dashboardId, expectedRevision]);
+    await query(`select * from training_load.delete_dashboard($1, $2, $3, $4)`, [dashboardId, expectedRevision, req.user.id, authorizedVia]);
     return { deleted: true, dashboardId };
   } catch (error) {
     if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");

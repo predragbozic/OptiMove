@@ -110,15 +110,32 @@ export function isPlatformAdministrator(authz) {
   return authz.platformRoles.length > 0;
 }
 
+// Role predicates WITHOUT the platform-admin short-circuit. canManageClub /
+// canManageTeamById below are built from exactly these, and so is any caller
+// that must know the SPECIFIC basis for a decision (e.g. the Training Load
+// dashboard deletion log, dashboardManageBasis) - one definition, so the two
+// can never drift apart.
+export function holdsClubAdminRole(authz, clubId) {
+  return authz.clubRoles.some((r) => r.role === "club_admin" && String(r.clubId) === String(clubId));
+}
+
+export function holdsTeamCoachRole(authz, teamId) {
+  return authz.teamRoles.some((r) => r.role === "team_coach" && String(r.teamId) === String(teamId));
+}
+
+// A team under a club this account administers (authz.managedTeamIds).
+export function managesTeamThroughClub(authz, teamId) {
+  return authz.managedTeamIds.some((id) => String(id) === String(teamId));
+}
+
 export function canManageClub(authz, clubId) {
   if (isPlatformAdministrator(authz)) return true;
-  return authz.clubRoles.some((r) => r.role === "club_admin" && String(r.clubId) === String(clubId));
+  return holdsClubAdminRole(authz, clubId);
 }
 
 export function canManageTeamById(authz, teamId) {
   if (isPlatformAdministrator(authz)) return true;
-  if (authz.teamRoles.some((r) => r.role === "team_coach" && String(r.teamId) === String(teamId))) return true;
-  return authz.managedTeamIds.some((id) => String(id) === String(teamId));
+  return holdsTeamCoachRole(authz, teamId) || managesTeamThroughClub(authz, teamId);
 }
 
 export function canAssignClubRole(authz, clubId) {
