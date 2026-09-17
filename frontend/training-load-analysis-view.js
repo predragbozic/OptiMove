@@ -1,4 +1,4 @@
-import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_SERIES, analysisLayoutLimits, analysisPeriodPresetKey, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 
@@ -29,9 +29,6 @@ function selectedWidget() {
   return state.trainingLoad.analysis.widgets.find((w) => w.id === state.trainingLoad.analysis.editor.widgetId) || null;
 }
 
-function selectedSeries(widget) {
-  return (widget?.series || []).find((s) => s.id === state.trainingLoad.analysis.editor.seriesId) || null;
-}
 
 function resultByWidgetId(widgetId) {
   return (state.trainingLoad.analysis.queryResult?.widgets || []).find((w) => w.widgetId === widgetId) || null;
@@ -675,7 +672,7 @@ function renderMetricPanelHtml() {
               <label>Title<input type="text" data-action="training-load-analysis-panel-title" value="${escapeAttr(panel.title)}" maxlength="200" placeholder="${escapeAttr(panel.metric?.label || "Widget title")}"></label>
               <label>Show<select data-action="training-load-analysis-panel-field" data-field="groupBy">${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g], panel.groupBy)).join("")}</select></label>
               <label>Calculate<select data-action="training-load-analysis-panel-field" data-field="aggregation">${AGGREGATIONS.map((v) => optionHtml(v, AGGREGATION_LABELS[v], panel.aggregation)).join("")}</select></label>
-              <label>Data level<select data-action="training-load-analysis-panel-field" data-field="scope">${SCOPE_LEVELS.map((v) => optionHtml(v, SCOPE_LABELS[v], panel.scope)).join("")}</select></label>
+              ${renderScopeSelectHtml({ action: "training-load-analysis-panel-field", attrs: 'data-field="scope"', value: panel.scope, metric: panel.metric, label: "Data level" })}
             </div>
             ${editing ? `<div class="tl-metric-panel-advanced"><span class="muted">Source, coverage, comparison and extra series:</span> <button type="button" class="plain-button compact-button" data-action="training-load-analysis-open-advanced" data-widget-id="${escapeAttr(panel.widgetId)}">Advanced settings</button></div>` : ""}
           </section>
@@ -695,7 +692,25 @@ function renderMetricPanelHtml() {
   `;
 }
 
-function renderMetricPickerHtml(widget, series) {
+// Dashboards UX H3: a built-in series' data level is fixed by the catalog
+// (BUILT_IN_FIXED_SCOPE) - shown, never offered as a choice the server
+// would refuse. Shared by the guided panel and the advanced editor.
+function renderScopeSelectHtml({ action, attrs = "", value, metric, label }) {
+  const fixed = metric?.kind === "builtin" ? BUILT_IN_FIXED_SCOPE[metric.key] : "";
+  if (fixed) {
+    return `<label>${escapeHtml(label)}<select data-action="${action}" ${attrs} disabled aria-describedby="tl-fixed-scope-note">${optionHtml(fixed, SCOPE_LABELS[fixed] || fixed, fixed)}</select><small class="muted" id="tl-fixed-scope-note">Fixed for this built-in metric.</small></label>`;
+  }
+  return `<label>${escapeHtml(label)}<select data-action="${action}" ${attrs}>${SCOPE_LEVELS.map((v) => optionHtml(v, SCOPE_LABELS[v], value)).join("")}</select></label>`;
+}
+
+function editorMetricLabel(metric, displayLabel = "") {
+  if (displayLabel) return displayLabel;
+  if (metric?.kind === "builtin") return BUILT_IN_SERIES.find((b) => b.key === metric.key)?.label || metric.key;
+  if (metric?.kind === "metric") return (state.trainingLoad.analysis.metricPicker.definitions || []).find((d) => d.id === metric.id)?.label || "Catalog metric";
+  return metric?.hints?.[0]?.key || "Choose a metric";
+}
+
+function renderMetricPickerHtml(entry) {
   const picker = state.trainingLoad.analysis.metricPicker;
   const search = picker.search.trim().toLowerCase();
   const definitions = (picker.definitions || []).filter((d) => !search || `${d.label} ${d.key} ${d.unit || ""} ${d.domainLabel || ""}`.toLowerCase().includes(search));
@@ -705,19 +720,22 @@ function renderMetricPickerHtml(widget, series) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(d);
   }
+  const isBuiltIn = (key) => entry.metric?.kind === "builtin" && entry.metric.key === key;
+  const isMetric = (id) => entry.metric?.kind === "metric" && entry.metric.id === id;
   return `
     <div class="tl-analysis-metric-picker">
+      <p class="eyebrow">Metric</p>
       <label class="search-field"><span>Search metrics</span><input type="search" data-action="training-load-analysis-metric-search" value="${escapeAttr(picker.search)}" placeholder="Metric name or unit"></label>
       <div class="tl-analysis-builtins">
         <p class="eyebrow">Built-in series</p>
-        ${BUILT_IN_SERIES.map((b) => `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-bind-builtin" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series?.id || "")}" data-built-in-key="${escapeAttr(b.key)}"><span class="tl-metric-icon-fallback">${escapeHtml(b.icon)}</span>${escapeHtml(b.label)}${b.unit ? ` · ${escapeHtml(b.unit)}` : ""}</button>`).join("")}
+        ${BUILT_IN_SERIES.map((b) => `<button type="button" class="plain-button compact-button ${isBuiltIn(b.key) ? "is-active" : ""}" aria-pressed="${isBuiltIn(b.key) ? "true" : "false"}" data-action="training-load-analysis-series-bind-builtin" data-series-key="${escapeAttr(entry.key)}" data-built-in-key="${escapeAttr(b.key)}"><span class="tl-metric-icon-fallback">${escapeHtml(b.icon)}</span>${escapeHtml(b.label)}${b.unit ? ` · ${escapeHtml(b.unit)}` : ""}</button>`).join("")}
       </div>
       ${picker.loading ? `<p class="muted tl-analysis-loading" aria-live="polite">Loading metrics...</p>` : ""}
       ${picker.error ? `<p class="builder-error" role="alert">${escapeHtml(picker.error)}</p>` : ""}
       ${[...groups.entries()].map(([group, rows]) => `
         <div class="tl-analysis-metric-group">
           <p class="eyebrow">${escapeHtml(group)}</p>
-          ${rows.map((d) => `<button type="button" class="tl-analysis-metric-option" data-action="training-load-analysis-series-bind-metric" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series?.id || "")}" data-metric-id="${escapeAttr(d.id)}">
+          ${rows.map((d) => `<button type="button" class="tl-analysis-metric-option ${isMetric(d.id) ? "is-active" : ""}" aria-pressed="${isMetric(d.id) ? "true" : "false"}" data-action="training-load-analysis-series-bind-metric" data-series-key="${escapeAttr(entry.key)}" data-metric-id="${escapeAttr(d.id)}">
             ${d.iconUrl ? `<img src="${escapeAttr(d.iconUrl)}" alt="">` : `<span class="tl-metric-icon-fallback">${escapeHtml((d.shortLabel || d.label || "?").slice(0, 1))}</span>`}
             <span><strong>${escapeHtml(d.label)}</strong><small>${escapeHtml([d.unit, d.valueType, d.domainLabel, d.categoryLabel, (d.scopeCapabilities || []).join("/")].filter(Boolean).join(" · "))}</small></span>
           </button>`).join("")}
@@ -727,72 +745,103 @@ function renderMetricPickerHtml(widget, series) {
   `;
 }
 
+// Dashboards UX H3: the advanced editor renders editor.draft (staged); a
+// state without a draft (not opened through openAnalysisWidgetEditor) shows
+// the widget as saved.
 function renderEditorHtml() {
-  const editor = state.trainingLoad.analysis.editor;
+  const a = state.trainingLoad.analysis;
+  const editor = a.editor;
   if (!editor.open) return "";
   const widget = selectedWidget();
   if (!widget) return "";
-  const series = selectedSeries(widget);
+  const draft = editor.draft || analysisEditorDraftFromWidget(widget);
+  const entries = draft.series;
+  const entry = entries.find((item) => item.key === editor.seriesKey) || entries[0] || null;
+  const rowsById = new Map((widget.series || []).map((row) => [row.id, row]));
+  const dirty = analysisEditorPlan(widget, draft).length > 0;
+  const problem = dirty ? analysisEditorProblem(draft) : "";
+  const cap = analysisSeriesLimit(draft.widgetType);
+  const saving = Boolean(editor.saving);
+  const off = saving ? "disabled" : "";
+  const override = draft.localFilterOverride || {};
+  const entryIndex = entry ? entries.indexOf(entry) : -1;
+  const key = entry ? `data-series-key="${escapeAttr(entry.key)}"` : "";
+  const isBuiltIn = entry?.metric?.kind === "builtin";
+  const sourceChoices = isBuiltIn
+    ? ["not_applicable"]
+    : SOURCE_POLICIES.filter((v) => v !== "not_applicable" && (v !== "source_connection" || entry?.fields.sourcePolicy === "source_connection"));
+  const status = (item) => {
+    if (!item.id || !rowsById.has(item.id)) return "New - not saved yet";
+    const row = rowsById.get(item.id);
+    return row.resolution_status && row.resolution_status !== "resolved" ? row.resolution_status : (item.fields.axis || "primary");
+  };
   return `
     <div class="builder-athlete-overlay">
-      <button class="builder-athlete-backdrop" type="button" data-action="training-load-analysis-close-editor" aria-label="Close"></button>
+      <button class="builder-athlete-backdrop" type="button" data-action="training-load-analysis-close-editor" aria-label="Close" ${off}></button>
       <section class="panel tl-analysis-modal tl-analysis-editor" role="dialog" aria-modal="true" aria-label="Widget settings">
-        <div class="builder-section-panel-head">
-          <div><strong>Widget settings</strong><p class="muted">${escapeHtml(widget.title)}</p></div>
-          <button type="button" class="plain-button icon-button" data-action="training-load-analysis-close-editor" aria-label="Close">&times;</button>
+        <div class="tl-overlay-head">
+          <div><strong>Widget settings</strong><p class="muted">Nothing is saved until you choose Save changes.</p></div>
+          <button type="button" class="plain-button icon-button" data-action="training-load-analysis-close-editor" aria-label="Close" ${off}>&times;</button>
         </div>
         <div class="tl-analysis-editor-grid">
-          <label>Title<input type="text" data-action="training-load-analysis-widget-title" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(widget.title)}"></label>
-          <label>Type<select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}">${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, widget.widget_type)).join("")}</select></label>
-          <label>Group by<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}">${GROUP_BY.map((g) => optionHtml(g, g, widget.group_by)).join("")}</select></label>
+          <label>Title<input type="text" data-action="training-load-analysis-widget-title" data-tl-editor-field="title" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(draft.title)}" maxlength="200" ${off}></label>
+          <label>Type<select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}" ${off}>${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, draft.widgetType)).join("")}</select></label>
+          <label>Show per<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
           <div class="tl-analysis-control">
             <span>Activity override</span>
-            ${widget.local_filter_override?.activityId
-              ? `<button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-activity-filter" data-widget-id="${escapeAttr(widget.id)}">Clear activity override</button>`
+            ${override.activityId
+              ? `<button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-activity-filter" data-widget-id="${escapeAttr(widget.id)}" ${off}>Clear activity override</button>`
               : `<span class="muted">Uses dashboard/runtime filter</span>`}
           </div>
           <div class="tl-analysis-control">
             <span>Component override</span>
-            ${widget.local_filter_override?.componentId
-              ? `<button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-component-filter" data-widget-id="${escapeAttr(widget.id)}">Clear component override</button>`
+            ${override.componentId
+              ? `<button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-component-filter" data-widget-id="${escapeAttr(widget.id)}" ${off}>Clear component override</button>`
               : `<span class="muted">Uses dashboard/runtime filter</span>`}
           </div>
         </div>
         <div class="tl-analysis-series-editor">
           <div class="tl-analysis-series-head">
-            <strong>Series</strong>
-            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-add-series" data-widget-id="${escapeAttr(widget.id)}">Add series</button>
+            <strong>Series <span class="muted">${entries.length} of ${cap}</span></strong>
+            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-add-series" data-widget-id="${escapeAttr(widget.id)}" ${saving || entries.length >= cap ? "disabled" : ""}>Add series</button>
           </div>
           <div class="tl-analysis-series-list">
-            ${(widget.series || []).map((s) => `
-              <button type="button" class="tl-analysis-series-row ${editor.seriesId === s.id ? "is-active" : ""}" data-action="training-load-analysis-select-series" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(s.id)}">
-                <span>${escapeHtml(seriesLabel(s))}</span>
-                <small>${escapeHtml(s.resolution_status || "resolved")} · ${escapeHtml(s.axis || "primary")}</small>
+            ${entries.map((item) => `
+              <button type="button" class="tl-analysis-series-row ${entry?.key === item.key ? "is-active" : ""}" aria-pressed="${entry?.key === item.key ? "true" : "false"}" data-action="training-load-analysis-select-series" data-series-key="${escapeAttr(item.key)}">
+                <span>${escapeHtml(editorMetricLabel(item.metric, item.fields.displayLabel || ""))}</span>
+                <small>${escapeHtml(status(item))}</small>
               </button>
             `).join("") || `<p class="muted">No series yet.</p>`}
           </div>
-          ${series ? `
+          ${entry ? `
             <div class="tl-analysis-editor-grid">
-              <label>Label<input type="text" data-action="training-load-analysis-series-label" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}" value="${escapeAttr(series.display_label || "")}"></label>
-              <label>Axis<select data-action="training-load-analysis-series-axis" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">${["primary", "secondary"].map((v) => optionHtml(v, v, series.axis)).join("")}</select></label>
-              <label>Color<input type="color" data-action="training-load-analysis-series-color" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}" value="${escapeAttr(series.color || "#0f766e")}"></label>
-              <label>Scope<select data-action="training-load-analysis-series-scope" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">${SCOPE_LEVELS.map((v) => optionHtml(v, v, series.data_scope_level)).join("")}</select></label>
-              <label>Aggregation<select data-action="training-load-analysis-series-aggregation" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">${AGGREGATIONS.map((v) => optionHtml(v, v, series.analytical_aggregation)).join("")}</select></label>
-              <label>Source<select data-action="training-load-analysis-series-source" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">${SOURCE_POLICIES.map((v) => optionHtml(v, v, series.source_policy)).join("")}</select></label>
-              <label>Role policy<select data-action="training-load-analysis-series-role" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">${ROLE_POLICIES.map((v) => optionHtml(v, v, series.aggregation_role_policy)).join("")}</select></label>
-              <label>Coverage<select data-action="training-load-analysis-series-coverage" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">${COVERAGE_POLICIES.map((v) => optionHtml(v, v, series.coverage_policy)).join("")}</select></label>
-              <label>Comparison<select data-action="training-load-analysis-series-comparison" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">${COMPARISONS.map((v) => optionHtml(v, v || "None", series.comparison_period || "")).join("")}</select></label>
+              <label>Label<input type="text" data-action="training-load-analysis-series-label" data-tl-editor-field="label" ${key} value="${escapeAttr(entry.fields.displayLabel || "")}" maxlength="200" placeholder="${escapeAttr(editorMetricLabel(entry.metric))}" ${off}></label>
+              <label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, v, entry.fields.axis || "primary")).join("")}</select></label>
+              <label>Color<input type="color" data-action="training-load-analysis-series-color" ${key} value="${escapeAttr(entry.fields.color || "#0f766e")}" ${off}></label>
+              ${saving ? `<label>Scope<select disabled>${optionHtml(entry.fields.dataScopeLevel, SCOPE_LABELS[entry.fields.dataScopeLevel] || entry.fields.dataScopeLevel, entry.fields.dataScopeLevel)}</select></label>` : renderScopeSelectHtml({ action: "training-load-analysis-series-scope", attrs: key, value: entry.fields.dataScopeLevel, metric: entry.metric, label: "Scope" })}
+              <label>Aggregation<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${AGGREGATIONS.map((v) => optionHtml(v, v, entry.fields.analyticalAggregation)).join("")}</select></label>
+              <label>Source<select data-action="training-load-analysis-series-source" ${key} ${saving || isBuiltIn ? "disabled" : ""}>${sourceChoices.map((v) => optionHtml(v, v, entry.fields.sourcePolicy)).join("")}</select></label>
+              <label>Role policy<select data-action="training-load-analysis-series-role" ${key} ${off}>${ROLE_POLICIES.map((v) => optionHtml(v, v, entry.fields.aggregationRolePolicy)).join("")}</select></label>
+              <label>Coverage<select data-action="training-load-analysis-series-coverage" ${key} ${off}>${COVERAGE_POLICIES.map((v) => optionHtml(v, v, entry.fields.coveragePolicy)).join("")}</select></label>
+              ${analysisWidgetSupportsComparison(draft.widgetType) ? `<label>Comparison<select data-action="training-load-analysis-series-comparison" ${key} ${off}>${COMPARISONS.map((v) => optionHtml(v, v || "None", entry.fields.comparisonPeriod || "")).join("")}</select></label>` : ""}
             </div>
             <div class="tl-analysis-series-actions">
-              <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-up" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">Move up</button>
-              <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-down" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">Move down</button>
-              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" data-widget-id="${escapeAttr(widget.id)}" data-series-id="${escapeAttr(series.id)}">Delete</button>
+              <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-up" ${key} ${saving || entryIndex <= 0 ? "disabled" : ""}>Move up</button>
+              <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-down" ${key} ${saving || entryIndex >= entries.length - 1 ? "disabled" : ""}>Move down</button>
+              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${off}>Remove series</button>
             </div>
-            ${renderMetricPickerHtml(widget, series)}
+            ${renderMetricPickerHtml(entry)}
           ` : ""}
         </div>
-        <div class="tl-analysis-modal-actions">
-          <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-widget" data-widget-id="${escapeAttr(widget.id)}">Delete widget</button>
+        <div class="tl-analysis-modal-actions tl-editor-footer">
+          ${editor.error ? `<p class="builder-error" role="alert">${escapeHtml(editor.error)}</p>` : problem ? `<p class="builder-error" role="alert">${escapeHtml(problem)}</p>` : ""}
+          ${editor.serverChanged ? `<p class="muted tl-editor-server-note">Some changes are already saved - closing keeps them.</p>` : ""}
+          <div class="tl-editor-footer-row">
+            <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-widget" data-widget-id="${escapeAttr(widget.id)}" ${off}>Delete widget</button>
+            <span class="tl-editor-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${saving ? "Saving..." : dirty ? "Unsaved changes" : "No changes"}</span>
+            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-close-editor" ${off}>${editor.serverChanged ? "Close" : "Cancel"}</button>
+            <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-editor-save" ${off}>${saving ? "Saving..." : "Save changes"}</button>
+          </div>
         </div>
       </section>
     </div>

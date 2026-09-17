@@ -25,16 +25,19 @@ import {
   updateExternalSchedule,
 } from "./training-load-data.js";
 import {
+  BUILT_IN_FIXED_SCOPE,
   BUILT_IN_SERIES,
-  addAnalysisSeries,
+  addEditorSeries,
+  analysisEditorIsDirty,
   applyAnalysisPeriodPreset,
   archiveAnalysisDashboard,
   deleteAnalysisDashboard,
   cancelAnalysisLayoutDraft,
   cloneAnalysisDashboard,
+  closedAnalysisWidgetEditor,
   createAnalysisDashboard,
-  deleteAnalysisSeries,
   deleteAnalysisWidget,
+  editorSeriesEntry,
   emptyAnalysisMetricPanel,
   ensureAnalysisLayoutDraft,
   invalidateTrainingLoadAnalysis,
@@ -42,19 +45,21 @@ import {
   loadDashboardDetail,
   loadTrainingLoadAnalysis,
   moveAnalysisWidgetMobile,
+  moveEditorSeries,
   nudgeAnalysisWidget,
+  openAnalysisWidgetEditor,
   queryAnalysisDashboard,
-  reorderAnalysisSeries,
+  removeEditorSeries,
   resizeAnalysisWidget,
-  resolveAnalysisSeries,
   saveAnalysisLayout,
   saveAnalysisMetricPanel,
+  saveAnalysisWidgetEditor,
   setActiveAnalysisDashboard,
+  setEditorSeriesMetric,
+  setEditorWidgetType,
   setMetricPanelMetric,
   updateAnalysisDashboardMetadata,
   updateAnalysisLayoutDraft,
-  updateAnalysisSeries,
-  updateAnalysisWidget,
 } from "./training-load-analysis-data.js";
 import {
   captureTrainingLoadCalendarMutationContext,
@@ -122,7 +127,21 @@ function exitAnalysisLayoutMode() {
   const a = state.trainingLoad.analysis;
   cancelAnalysisLayoutDraft();
   a.editMode = false;
-  a.editor = { open: false, widgetId: "", seriesId: "" };
+  // H3: the widget editor keeps its own staged changes - only a clean one
+  // closes along with layout mode.
+  if (!analysisEditorIsDirty()) a.editor = closedAnalysisWidgetEditor();
+}
+
+// H3: the advanced widget editor's staged changes get the same protection
+// as an unsaved layout. True when there is nothing to lose or the coach
+// agreed (the editor is then closed without saving).
+function releaseAnalysisEditorDraft() {
+  const a = state.trainingLoad.analysis;
+  if (!a.editor?.open) return true;
+  if (a.editor.saving) return false;
+  if (analysisEditorIsDirty() && !window.confirm("Discard your unsaved widget changes?")) return false;
+  a.editor = closedAnalysisWidgetEditor();
+  return true;
 }
 
 // H2: moved-but-unsaved widgets are never dropped silently. Every Dashboards
@@ -147,7 +166,7 @@ function releaseAnalysisLayoutDraft() {
 // the dashboard (loadActiveTab), which drops the draft just the same.
 export function confirmLeaveTrainingLoad(_nextTab) {
   if (state.activeTab !== "training-load") return true;
-  return releaseAnalysisLayoutDraft();
+  return releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft();
 }
 
 // H2: widget Settings / Advanced settings / Delete reload the dashboard on
@@ -167,7 +186,23 @@ export function closeTrainingLoadAnalysisOverlay() {
   if (closeAnalysisPopovers()) return true;
   if (a.dashboardForm && !a.dashboardForm.submitting) { a.dashboardForm = null; return true; }
   if (a.metricPanel && !a.metricPanel.saving) { a.metricPanel = null; return true; }
+  // H3: the advanced editor closes too - asking first when it holds unsaved changes.
+  if (a.editor?.open && !a.editor.saving) return releaseAnalysisEditorDraft();
   return false;
+}
+
+// H3: the editor's Title and Label text fields update the draft on every
+// keystroke WITHOUT a re-render (app.js's input handler). Re-rendering on
+// their change/blur instead would replace the "Save changes" button between
+// its mousedown and click, and the click would be lost.
+export function setTrainingLoadAnalysisEditorText(input) {
+  const editor = state.trainingLoad.analysis.editor;
+  if (!editor?.draft || editor.saving) return;
+  if (input.dataset.tlEditorField === "title") editor.draft.title = input.value ?? "";
+  if (input.dataset.tlEditorField === "label") {
+    const entry = editorSeriesEntry(editor.draft, input.dataset.seriesKey);
+    if (entry) entry.fields.displayLabel = (input.value ?? "").trim() || null;
+  }
 }
 
 // Live search inside the picker / metric panel (app.js's input handler
@@ -181,7 +216,7 @@ export function setTrainingLoadAnalysisSearch(kind, value) {
 function openAnalysisMetricPanel(widget = null) {
   const a = state.trainingLoad.analysis;
   closeAnalysisPopovers();
-  a.editor = { open: false, widgetId: "", seriesId: "" };
+  a.editor = closedAnalysisWidgetEditor();
   a.metricPanel = emptyAnalysisMetricPanel(widget);
 }
 
@@ -758,7 +793,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
 
   if (type === "training-load-section") {
     // Re-clicking the active Dashboards tab reloads it as well, so it asks too.
-    if (state.trainingLoad.section === "analysis" && !releaseAnalysisLayoutDraft()) {
+    if (state.trainingLoad.section === "analysis" && !(releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft())) {
       renderTrainingLoad();
       return true;
     }
@@ -1117,6 +1152,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const panel = state.trainingLoad.analysis.metricPanel;
     const field = action.dataset.field;
     if (!panel || panel.saving || !["groupBy", "aggregation", "scope"].includes(field)) return true;
+    // H3: a built-in series' data level is fixed by the catalog.
+    if (field === "scope" && panel.metric?.kind === "builtin" && BUILT_IN_FIXED_SCOPE[panel.metric.key]) return true;
     panel[field] = action.value || panel[field];
     renderTrainingLoad();
     return true;
@@ -1138,7 +1175,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const widget = a.widgets.find((w) => w.id === action.dataset.widgetId);
     if (!widget || analysisWidgetActionsBlocked()) { renderTrainingLoad(); return true; }
     a.metricPanel = null;
-    a.editor = { open: true, widgetId: widget.id, seriesId: widget.series?.[0]?.id || "" };
+    openAnalysisWidgetEditor(widget);
     renderTrainingLoad();
     void loadAnalysisMetricDefinitions().then(renderTrainingLoad);
     return true;
@@ -1224,34 +1261,38 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  // -------------------- Dashboards UX H3: staged advanced editor --------------------
+  // Every editor control below only changes editor.draft; "Save changes"
+  // (training-load-analysis-editor-save) is the one place that writes.
   if (type === "training-load-analysis-close-editor") {
-    state.trainingLoad.analysis.editor = { open: false, widgetId: "", seriesId: "" };
+    releaseAnalysisEditorDraft();
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-analysis-widget-title") {
-    const title = (action.value || "").trim();
-    if (title) await updateAnalysisWidget(action.dataset.widgetId, { title }, renderTrainingLoad);
+  if (type === "training-load-analysis-editor-save") {
+    await saveAnalysisWidgetEditor(renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-analysis-widget-type") {
-    await updateAnalysisWidget(action.dataset.widgetId, { widgetType: action.value }, renderTrainingLoad);
-    renderTrainingLoad();
-    return true;
-  }
-  if (type === "training-load-analysis-widget-group") {
-    await updateAnalysisWidget(action.dataset.widgetId, { groupBy: action.value }, renderTrainingLoad);
+  if (type === "training-load-analysis-widget-title" || type === "training-load-analysis-widget-type" || type === "training-load-analysis-widget-group") {
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    if (type.endsWith("title")) {
+      // already applied per keystroke (setTrainingLoadAnalysisEditorText) - no re-render on blur
+      if (editor.draft.title === (action.value ?? "")) return true;
+      editor.draft.title = action.value ?? "";
+    }
+    else if (type.endsWith("type")) setEditorWidgetType(editor.draft, action.value || editor.draft.widgetType);
+    else editor.draft.groupBy = action.value || editor.draft.groupBy;
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-analysis-widget-activity-filter" || type === "training-load-analysis-widget-component-filter") {
-    const widget = state.trainingLoad.analysis.widgets.find((w) => w.id === action.dataset.widgetId);
-    const current = { ...(widget?.local_filter_override || {}) };
-    if (type.endsWith("activity-filter")) current.activityId = action.value || null;
-    else current.componentId = action.value || null;
-    for (const key of Object.keys(current)) if (current[key] === "" || current[key] === null) delete current[key];
-    await updateAnalysisWidget(action.dataset.widgetId, { localFilterOverride: Object.keys(current).length ? current : null }, renderTrainingLoad);
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    const next = { ...(editor.draft.localFilterOverride || {}) };
+    delete next[type.endsWith("activity-filter") ? "activityId" : "componentId"];
+    editor.draft.localFilterOverride = Object.keys(next).length ? next : null;
     renderTrainingLoad();
     return true;
   }
@@ -1266,64 +1307,71 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     );
     if (!confirmed) { renderTrainingLoad(); return true; }
     await deleteAnalysisWidget(action.dataset.widgetId, renderTrainingLoad);
-    state.trainingLoad.analysis.editor = { open: false, widgetId: "", seriesId: "" };
+    state.trainingLoad.analysis.editor = closedAnalysisWidgetEditor();
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-analysis-add-series") {
-    await addAnalysisSeries(action.dataset.widgetId, { builtInSeriesKey: "rpe", dataScopeLevel: "session", analyticalAggregation: "avg" }, renderTrainingLoad);
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    editor.seriesKey = addEditorSeries(editor.draft);
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-analysis-select-series") {
-    state.trainingLoad.analysis.editor.seriesId = action.dataset.seriesId;
-    state.trainingLoad.analysis.selectedSeriesId = action.dataset.seriesId;
+    const editor = state.trainingLoad.analysis.editor;
+    if (editor?.draft && editorSeriesEntry(editor.draft, action.dataset.seriesKey)) editor.seriesKey = action.dataset.seriesKey;
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-analysis-series-bind-builtin") {
-    if (action.dataset.seriesId) {
-      await deleteAnalysisSeries(action.dataset.widgetId, action.dataset.seriesId, renderTrainingLoad);
-    }
-    await addAnalysisSeries(action.dataset.widgetId, { builtInSeriesKey: action.dataset.builtInKey }, renderTrainingLoad);
-    renderTrainingLoad();
-    return true;
-  }
-  if (type === "training-load-analysis-series-bind-metric") {
-    if (action.dataset.seriesId) {
-      await resolveAnalysisSeries(action.dataset.widgetId, action.dataset.seriesId, action.dataset.metricId, renderTrainingLoad);
-    } else {
-      await addAnalysisSeries(action.dataset.widgetId, { metricDefinitionId: action.dataset.metricId }, renderTrainingLoad);
+  if (type === "training-load-analysis-series-bind-builtin" || type === "training-load-analysis-series-bind-metric") {
+    const editor = state.trainingLoad.analysis.editor;
+    const entry = editorSeriesEntry(editor?.draft, action.dataset.seriesKey || editor?.seriesKey);
+    if (!entry || editor.saving) return true;
+    if (type.endsWith("builtin")) {
+      if (BUILT_IN_SERIES.some((b) => b.key === action.dataset.builtInKey)) setEditorSeriesMetric(entry, { kind: "builtin", key: action.dataset.builtInKey });
+    } else if (action.dataset.metricId) {
+      setEditorSeriesMetric(entry, { kind: "metric", id: action.dataset.metricId });
     }
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-analysis-series-up" || type === "training-load-analysis-series-down") {
-    state.trainingLoad.analysis.selectedSeriesId = action.dataset.seriesId;
-    await reorderAnalysisSeries(action.dataset.widgetId, type.endsWith("up") ? -1 : 1, renderTrainingLoad);
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    moveEditorSeries(editor.draft, action.dataset.seriesKey, type.endsWith("up") ? -1 : 1);
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-analysis-delete-series") {
-    await deleteAnalysisSeries(action.dataset.widgetId, action.dataset.seriesId, renderTrainingLoad);
-    state.trainingLoad.analysis.editor.seriesId = "";
+    const editor = state.trainingLoad.analysis.editor;
+    if (!editor?.draft || editor.saving) return true;
+    editor.seriesKey = removeEditorSeries(editor.draft, action.dataset.seriesKey);
     renderTrainingLoad();
     return true;
   }
   if (type?.startsWith("training-load-analysis-series-")) {
     const map = {
-      "training-load-analysis-series-label": { key: "displayLabel", value: action.value || null },
-      "training-load-analysis-series-axis": { key: "axis", value: action.value },
-      "training-load-analysis-series-color": { key: "color", value: action.value || null },
-      "training-load-analysis-series-scope": { key: "dataScopeLevel", value: action.value },
-      "training-load-analysis-series-aggregation": { key: "analyticalAggregation", value: action.value },
-      "training-load-analysis-series-source": { key: "sourcePolicy", value: action.value },
-      "training-load-analysis-series-role": { key: "aggregationRolePolicy", value: action.value },
-      "training-load-analysis-series-coverage": { key: "coveragePolicy", value: action.value },
-      "training-load-analysis-series-comparison": { key: "comparisonPeriod", value: action.value || null },
-    }[type];
-    if (map) {
-      await updateAnalysisSeries(action.dataset.widgetId, action.dataset.seriesId, { [map.key]: map.value }, renderTrainingLoad);
+      "training-load-analysis-series-label": "displayLabel",
+      "training-load-analysis-series-axis": "axis",
+      "training-load-analysis-series-color": "color",
+      "training-load-analysis-series-scope": "dataScopeLevel",
+      "training-load-analysis-series-aggregation": "analyticalAggregation",
+      "training-load-analysis-series-source": "sourcePolicy",
+      "training-load-analysis-series-role": "aggregationRolePolicy",
+      "training-load-analysis-series-coverage": "coveragePolicy",
+      "training-load-analysis-series-comparison": "comparisonPeriod",
+    };
+    const key = map[type];
+    const editor = state.trainingLoad.analysis.editor;
+    const entry = editorSeriesEntry(editor?.draft, action.dataset.seriesKey);
+    if (key && entry && !editor.saving) {
+      const raw = typeof action.value === "string" ? action.value : "";
+      // the label is applied per keystroke already - no re-render on blur
+      if (key === "displayLabel" && entry.fields.displayLabel === (raw.trim() || null)) return true;
+      const nullable = key === "displayLabel" || key === "color" || key === "comparisonPeriod";
+      const value = key === "displayLabel" ? raw.trim() : raw;
+      if (value || nullable) entry.fields[key] = value || null;
       renderTrainingLoad();
       return true;
     }

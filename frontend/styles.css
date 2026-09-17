@@ -13899,6 +13899,109 @@ button.tests-assignment-card {
   color: var(--muted);
 }
 
+/* ---------- Dashboards UX H3: staged advanced editor ---------- */
+
+.tl-analysis-series-row.is-active {
+  background: var(--tl-accent-soft);
+}
+
+/* mobile-qa (LOW): a long unbroken label must wrap, never widen the row. */
+.tl-analysis-series-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tl-analysis-metric-option.is-active,
+.tl-analysis-builtins .plain-button.is-active {
+  border-color: var(--tl-accent);
+  background: var(--tl-accent-soft);
+  color: var(--tl-accent);
+}
+
+.tl-analysis-editor-grid label small {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+/* A select sizes itself to its longest option ("complete_and_partial"),
+   which pushed past its grid column on phones (live 375px check). */
+.tl-analysis-editor .tl-analysis-editor-grid select {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* The footer stays in view while the long editor scrolls (the modal is the
+   scroll container, padded 16px). */
+.tl-analysis-modal-actions.tl-editor-footer {
+  position: sticky;
+  z-index: 2;
+  bottom: -16px;
+  display: grid;
+  gap: 8px;
+  margin: 12px -16px -16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.tl-editor-footer .builder-error,
+.tl-editor-server-note {
+  margin: 0;
+}
+
+.tl-editor-server-note {
+  font-size: 12px;
+}
+
+.tl-editor-footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.tl-editor-footer-row .danger {
+  margin-right: auto;
+}
+
+.tl-editor-status {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tl-editor-status.is-dirty {
+  color: var(--tlc-warning);
+}
+
+@media (max-width: 720px) {
+  /* mobile-qa: the Clear override buttons (compact, 30px) and the color
+     swatch were under the 44px floor in the editor. */
+  .tl-analysis-editor .tl-analysis-control .plain-button,
+  .tl-analysis-editor .tl-analysis-editor-grid input[type="color"],
+  .tl-editor-footer-row .plain-button,
+  .tl-analysis-series-head .plain-button,
+  .tl-analysis-series-actions .plain-button,
+  .tl-analysis-builtins .plain-button,
+  .tl-analysis-series-row,
+  .tl-analysis-metric-option {
+    min-height: 44px;
+  }
+  .tl-editor-footer-row .plain-button {
+    flex: 1 1 auto;
+  }
+  .tl-editor-status {
+    flex-basis: 100%;
+    order: -1;
+  }
+  .tl-editor-footer-row .danger {
+    flex-basis: 100%;
+    order: 3;
+    margin-right: 0;
+  }
+}
+
 .tl-analysis-builtins {
   display: flex;
   align-items: center;

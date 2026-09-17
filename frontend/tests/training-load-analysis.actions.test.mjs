@@ -61,7 +61,9 @@ const componentId = "88888888-8888-4888-8888-888888888888";
 // fresh batch query after its reload; series-up and delete-widget are
 // no-ops in that fixture (see the comments there). Any extra or per-widget
 // query would break this.
-const QUERIES_PER_ADVANCED_EDIT_SEQUENCE = 3;
+// Dashboards UX H3: the advanced editor saves staged changes in ONE go ->
+// one batch query after the save, never one per field.
+const QUERIES_PER_ADVANCED_EDIT_SEQUENCE = 1;
 
 function resetState() {
   clearAllViewCache();
@@ -785,9 +787,11 @@ test("Analysis widget and series configuration uses revision-guarded endpoints",
       return { status: 201, body: { widgetId, dashboardRevision: 4 } };
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}` && call.method === "PATCH") {
-      assert.equal(call.body.expectedWidgetRevision, 4);
+      // H3: the staged save removes the series first (widget 4 -> 5), then
+      // patches the title against the revision that DELETE returned.
+      assert.equal(call.body.expectedWidgetRevision, 5);
       assert.equal(call.body.title, "Readiness");
-      return { status: 200, body: detail({ dashboard: { revision: 5 } }) };
+      return { status: 200, body: { widget: { widget_id: widgetId, widget_revision: 6 } } };
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${secondWidgetId}` && call.method === "DELETE") {
       assert.equal(call.body.expectedWidgetRevision, 4);
@@ -795,15 +799,18 @@ test("Analysis widget and series configuration uses revision-guarded endpoints",
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`) {
       assert.equal(call.method, "POST");
-      // The panel save posts srpe; the advanced editor's "Add series" posts
-      // its rpe default - both are real calls this sequence makes. (A throw
-      // in here would be swallowed by mutateDashboard's catch, so the
-      // mutationError assertions below are the real guard.)
-      assert.ok(["srpe", "rpe"].includes(call.body.builtInSeriesKey), call.body.builtInSeriesKey);
+      // The advanced editor's staged "Add series" posts its rpe default
+      // against the title PATCH's revision; the guided panel posts srpe.
+      if (call.body.builtInSeriesKey === "rpe") {
+        assert.equal(call.body.expectedWidgetRevision, 6, "the new series is added against the title PATCH's revision");
+        return { status: 201, body: { seriesId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", widgetRevision: 7 } };
+      }
+      assert.equal(call.body.builtInSeriesKey, "srpe");
       return { status: 201, body: detail({ dashboard: { revision: 7 } }) };
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series/${seriesId}` && call.method === "DELETE") {
-      return { status: 200, body: detail({ dashboard: { revision: 8 } }) };
+      assert.equal(call.body.expectedWidgetRevision, 4);
+      return { status: 200, body: { widgetRevision: 5 } };
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series/reorder`) {
       assert.equal(call.method, "PUT");
@@ -833,22 +840,27 @@ test("Analysis widget and series configuration uses revision-guarded endpoints",
   assert.equal(saveCalls.filter((call) => call.url.endsWith("/query")).length, 1);
   assert.equal(state.trainingLoad.analysis.metricPanel, null, "the panel closes after a successful save");
 
+  // Dashboards UX H3: the advanced editor stages title / add series / remove
+  // series and writes nothing until Save; Save then threads the widget
+  // revision through DELETE -> PATCH widget -> POST series.
   const afterPanel = fetchCalls.length;
-  const noMutationError = (step) => assert.equal(state.trainingLoad.analysis.mutationError, "", `${step}: the mutation itself must succeed (a mock assertion thrown inside fetch lands here)`);
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-advanced", widgetId }), { renderTrainingLoad });
+  const editorDraft = () => state.trainingLoad.analysis.editor.draft;
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-title", widgetId }, "Readiness"), { renderTrainingLoad });
-  noMutationError("title");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-series", seriesKey: editorDraft().series[0].key }), { renderTrainingLoad });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-add-series", widgetId }), { renderTrainingLoad });
-  noMutationError("add-series");
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-series", widgetId, seriesId }), { renderTrainingLoad });
-  noMutationError("delete-series");
-  state.trainingLoad.analysis.selectedSeriesId = seriesId;
-  // series-up (single series -> no move) and delete-widget (secondWidgetId is
-  // not in the reloaded detail) return early without a request - kept as
-  // no-op coverage.
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-series-up", widgetId, seriesId }), { renderTrainingLoad });
+  // series-up on the only series is a no-op, and delete-widget for a widget
+  // that is not on the reloaded dashboard returns early - no-op coverage.
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-series-up", seriesKey: editorDraft().series[0].key }), { renderTrainingLoad });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-widget", widgetId: secondWidgetId }), { renderTrainingLoad });
-  // code-reviewer (LOW): one fresh batch query per SUCCESSFUL mutation
-  // (mutateDashboard invalidates the query cache before every reload).
+  assert.equal(fetchCalls.slice(afterPanel).filter((call) => call.method !== "GET" && !call.url.endsWith("/query")).length, 0, "nothing is written before Save");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-editor-save" }), { renderTrainingLoad });
+  assert.equal(state.trainingLoad.analysis.editor.error, "", "the staged save succeeds (a mock assertion thrown inside fetch surfaces here)");
+  assert.equal(state.trainingLoad.analysis.editor.open, false);
+  assert.deepEqual(
+    fetchCalls.slice(afterPanel).filter((call) => call.method !== "GET" && !call.url.endsWith("/query")).map((call) => call.method),
+    ["DELETE", "PATCH", "POST"],
+  );
   assert.equal(fetchCalls.slice(afterPanel).filter((call) => call.url.endsWith("/query")).length, QUERIES_PER_ADVANCED_EDIT_SEQUENCE);
   assert.equal(fetchCalls.some((call) => call.url.includes("/widgets/") && call.url.endsWith("/query")), false);
 });
@@ -873,15 +885,20 @@ test("Analysis metric picker filters catalog metadata and supports built-in bind
   await loadAnalysisMetricDefinitions();
   assert.equal(state.trainingLoad.analysis.metricPicker.definitions[0].domainLabel, "Testing");
   assert.equal(state.trainingLoad.analysis.metricPicker.definitions[0].categoryLabel, "Jumping");
-  state.trainingLoad.analysis.editor = { open: true, widgetId, seriesId };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-advanced", widgetId }), { renderTrainingLoad });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-metric-search" }, "jump"), { renderTrainingLoad });
-  const html = renderTrainingLoadAnalysisHtml();
+  let html = renderTrainingLoadAnalysisHtml();
   assert.match(html, /Jump height/);
   assert.match(html, /Testing/);
   assert.match(html, /Jumping/);
   assert.doesNotMatch(html, /Sprint speed/);
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-series-bind-builtin", widgetId, seriesId, builtInKey: "srpe" }), { renderTrainingLoad });
-  assert.equal(fetchCalls.some((call) => call.url.endsWith("/series") && call.body?.builtInSeriesKey === "srpe"), true);
+  const key = state.trainingLoad.analysis.editor.draft.series[0].key;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-series-bind-builtin", seriesKey: key, builtInKey: "srpe" }), { renderTrainingLoad });
+  // Dashboards UX H3: binding is staged - shown as chosen, sent only on Save.
+  assert.equal(fetchCalls.some((call) => call.url.endsWith("/series")), false);
+  assert.deepEqual(state.trainingLoad.analysis.editor.draft.series[0].metric, { kind: "builtin", key: "srpe" });
+  html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /aria-pressed="true" data-action="training-load-analysis-series-bind-builtin"[^>]*data-built-in-key="srpe"/);
 });
 
 test("Analysis reloads stale revisions and renders explicit status states", async () => {
@@ -902,10 +919,17 @@ test("Analysis reloads stale revisions and renders explicit status states", asyn
     return { status: 404, body: { error: "unexpected" } };
   });
 
+  // Dashboards UX H3: a stale revision during the staged save reloads the
+  // dashboard and keeps the editor open with the change still staged.
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-advanced", widgetId }), { renderTrainingLoad });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-title", widgetId }, "New title"), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-editor-save" }), { renderTrainingLoad });
 
-  assert.equal(state.trainingLoad.analysis.notice, "Dashboard changed on the server. Reloaded the latest version.");
+  assert.match(state.trainingLoad.analysis.editor.error, /The widget changed on the server\. Reloaded the latest version/);
+  assert.equal(state.trainingLoad.analysis.editor.open, true);
+  assert.equal(state.trainingLoad.analysis.editor.draft.title, "New title");
   assert.equal(state.trainingLoad.analysis.dashboard.revision, 10);
+  state.trainingLoad.analysis.editor = { open: false, widgetId: "", seriesKey: "", draft: null, saving: false, error: "", serverChanged: false };
 
   state.trainingLoad.analysis.widgets = [
     widget({

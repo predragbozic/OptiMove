@@ -491,8 +491,10 @@ export const emptyTrainingLoadAnalysisState = (overrides = {}) => ({
   componentOptions: [],
   pickingActivity: false,
   metricPicker: { search: "", definitions: null, loading: false, error: "" },
-  editor: { open: false, widgetId: "", seriesId: "" },
-  selectedSeriesId: "",
+  // Dashboards UX H3: the advanced widget editor. `draft` holds every staged
+  // change (nothing is sent before Save) - see the H3 section of
+  // training-load-analysis-data.js (closedAnalysisWidgetEditor has the same shape).
+  editor: { open: false, widgetId: "", seriesKey: "", draft: null, saving: false, error: "", serverChanged: false },
   // Dashboards UX H1: the dashboard picker popover (search + grouped list)
   // that replaced the bare <select>, and which single popover menu is open
   // ("dashboard" actions, "period" presets) - one at a time, closed by
