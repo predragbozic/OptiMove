@@ -7,7 +7,7 @@ variant, and the script refuses every database except a disposable
 `optimove_tests_gpexe_*` one.
 
 Script: `backend/scripts/gpexe-undo-imported-session.mjs`.
-Proof: `backend/tests/gpexe-undo-session.test.mjs` (4 tests, disposable database).
+Proof: `backend/tests/gpexe-undo-session.test.mjs` (8 tests, disposable database).
 
 ## Why a procedure is needed at all
 
