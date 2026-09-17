@@ -149,7 +149,16 @@ export async function main(argv) {
       ownerTeamId: opts.ownerTeamId, performedByUserId: opts.performedByUserId, athleteIdByGpexeId,
       batchFilename: `gpexe team_session ${plan.teamSessionId}`,
     });
-    console.log(JSON.stringify({ counts: summary.counts, eventId: summary.eventId, activityId: summary.activityId, definitionsCreated: summary.definitionsCreated }, null, 2));
+    console.log(JSON.stringify({
+      counts: summary.counts, eventId: summary.eventId, activityId: summary.activityId, definitionsCreated: summary.definitionsCreated,
+      bindingCreated: summary.bindingCreated,
+      // What the immutable binding records, plus the incoming set when the
+      // two differ in their validity window.
+      referenceSet: summary.boundReferenceSet,
+      incomingReferenceSet: summary.referenceSetWindowChanged
+        ? { externalId: plan.thresholdsUsed.id, validFrom: plan.thresholdsUsed.validityStart, validTo: plan.thresholdsUsed.validityEnd }
+        : null,
+    }, null, 2));
     return { plan, summary };
   } finally {
     await client.end();

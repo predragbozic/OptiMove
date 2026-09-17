@@ -75,6 +75,19 @@ function powerZoneSpec(lower, upper) {
   };
 }
 
+// GPEXE may report a threshold as a number or as a numeric string. The set is
+// stored and hashed as provenance, so it is normalized to numbers first: a
+// changed representation of the same set must not read as a changed set.
+function numberOrNull(raw) {
+  return finiteNumber(raw);
+}
+
+function numberArrayOrNull(raw) {
+  if (!Array.isArray(raw)) return null;
+  const numbers = raw.map(finiteNumber);
+  return numbers.some((n) => n === null) ? null : numbers;
+}
+
 function eventCount(events, prefix, expectedThreshold, expectedDuration) {
   if (!events) return { skip: "events_missing" };
   if (events[`${prefix}_threshold_value`] !== expectedThreshold) return { skip: "threshold_mismatch" };
@@ -204,6 +217,10 @@ function validateTrackTimestamps(track) {
 
 // The team threshold set must belong to the session's team and be valid at
 // the session start (GET team/:id/thresholds/?valid_on=<session day>).
+// Its id, validity window and the thresholds the import actually depends on
+// are carried through the plan so the writer can store them with the event:
+// which set was in force is a different fact from a metric's own static
+// bounds in condition_description, and GPEXE can change a set later.
 function validateTeamThresholds(thresholds, session, startInstant) {
   if (!thresholds) throw new GpexeMappingError("thresholds_missing", `team thresholds for team ${session.team} were not fetched.`);
   if (String(thresholds.team) !== String(session.team)) {
@@ -214,7 +231,28 @@ function validateTeamThresholds(thresholds, session, startInstant) {
   if (startInstant < validFrom || (validTo && startInstant >= validTo)) {
     throw new GpexeMappingError("thresholds_not_valid_for_session", `thresholds ${thresholds.id} (valid ${thresholds.validity_start} – ${thresholds.validity_end ?? "open"}) do not cover session start ${startInstant.toISOString()}.`);
   }
-  return { id: String(thresholds.id), validityStart: validFrom.toISOString(), validityEnd: validTo ? validTo.toISOString() : null };
+  // Field names verified on the real response for team 980, valid_on
+  // 2026-09-14 (set 1473). A renamed or missing field would otherwise be
+  // snapshotted as null and a later change of it would not be noticed, so an
+  // incomplete set stops the import instead.
+  const payload = {
+    power_thresholds: numberArrayOrNull(thresholds.power_thresholds),
+    speed_thresholds: numberArrayOrNull(thresholds.speed_thresholds),
+    acceleration_events_threshold: numberOrNull(thresholds.acceleration_events_threshold),
+    acceleration_events_duration: numberOrNull(thresholds.acceleration_events_duration),
+    deceleration_events_threshold: numberOrNull(thresholds.deceleration_events_threshold),
+    deceleration_events_duration: numberOrNull(thresholds.deceleration_events_duration),
+  };
+  const missing = Object.keys(payload).filter((k) => payload[k] === null);
+  if (missing.length) {
+    throw new GpexeMappingError("thresholds_payload_incomplete", `thresholds ${thresholds.id} is missing ${missing.join(", ")} — the set cannot be recorded as the provenance of this session.`);
+  }
+  return {
+    id: String(thresholds.id),
+    validityStart: validFrom.toISOString(),
+    validityEnd: validTo ? validTo.toISOString() : null,
+    payload,
+  };
 }
 
 // bundle = {
