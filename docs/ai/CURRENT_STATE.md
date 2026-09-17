@@ -1,98 +1,156 @@
 # Current state
 
-Last reviewed: 2026-09-16. Last `origin/main` commit checked: `d01187b` (merge of PR #87,
-`feature/training-load-dashboards-v1` → `main`).
+Last reviewed: 2026-09-17. Last `origin/main` commit checked: `0de6afb` (merge of PR #91,
+`feature/training-load-dashboard-delete` → `main`).
+
+## Active phase
+
+**Training Load Dashboards UX redesign (H-slices)** — one branch/PR per slice, frontend
+only unless a separate product decision says otherwise. H1 is merged (PR #89). Next, in
+this order (owner confirmed 2026-09-17 that this priority stays):
+
+- **H2** — widget "⋯" menus and layout-editing tooling cleanup.
+- **H3** — staged Save/Cancel for the advanced per-series editor (today it still saves
+  each field change immediately).
+- **H4** — states and polish.
 
 ## Last completed, merged phases
 
-- **Training Load IA/UX redesign, Phases A–F** — PRs #82–#87, one branch each, all
-  merged to `main`: A IA shell (Schedule · Data & Analysis), B shared Monday-anchored
-  week across Data & Analysis, C Activities identity + first Carbon-referenced visual
-  pass, D Athletes consolidation (canonical-activities deep-link, rated/expected moved
-  to Schedule), E Overview (two separate blocks: RPE feedback from `/weekly`,
-  activity/data coverage from `/calendar`), F Dashboards (intra-space "Analyze this
-  activity" hand-off carrying only the runtime filter, token consolidation on
-  `.training-load-root`, shell Filter shown unavailable on Dashboards — see Open
-  risks). Phase G (cleanup) is on `chore/training-load-ia-cleanup-v1`. No backend/API/
-  DB contract changed in any of these; Carbon is a design reference only, never a
-  runtime dependency.
-- **Training Load dashboard backend (3B2)** — schema (`migrations_v2` v15-v18: catalog,
+- **Dashboard permanent delete + deletion log** — PR #91 (`0de6afb`). Migration v19
+  (`migrations_v2/202609170900_training_load_v19_dashboard_delete.sql`):
+  `training_load.delete_dashboard(id, expected_revision, deleted_by_user_id,
+  authorized_via)` and the append-only `training_load.dashboard_deletion_log`.
+  `DELETE /api/training-load/dashboards/:id` uses the same manage rule as Rename/Archive
+  (`canManageDashboardRow`); system templates are never deletable (409
+  `systemTemplateProtected`); a dashboard that was cloned from cannot be deleted (409
+  `dashboardHasClones`, archive instead). Owner decision (c): a platform admin keeps the
+  right to delete any non-system dashboard, and every delete made through
+  `delete_dashboard()` writes one log row (who, basis `owner`/`club_admin`/`team_coach`/
+  `platform_admin`, what, when) in the same transaction. Only deletes through that
+  function are logged; a raw SQL delete on `dashboards` is out of contract (ADR-003).
+  Archive stays available.
+  - **v19 on the local OPTIMOVE database**: applied 2026-09-17 with the standard runner
+    (`npm --prefix backend run migrate`) after a verified `pg_dump` backup, then checked
+    with a disposable probe dashboard whose rows were removed afterwards.
+  - **v19 on the deployed database**: application is **inferred** from the successful
+    server start of the deploy of `0de6afb` (`npm start` runs `node src/migrate.js`
+    before the server, and `/api/health` reported commit `0de6afb` on 2026-09-17). The
+    deployed database itself was **not** queried directly.
+- **Dashboards UX H1** — PR #89 (`3ef6033`), frontend only: dashboard picker (search,
+  groups, badges), "New dashboard"/"Rename" dialog replacing `window.prompt`, dashboard
+  "⋯" and period-preset menus, guided "Add metric" panel (changes staged client-side,
+  nothing sent before Save; Save chains the existing widget/series endpoints; partial-
+  failure handling for new widget, add-first, KPI delete-first and lost responses).
+  `/query` evaluates only saved widgets, so there is no live preview of an unsaved widget
+  (static configuration preview instead).
+- **Dashboard list visibility fix** — PR #90 (`00a6d9b`): the list no longer reveals other
+  users' private dashboards (`dashboardVisibilitySql` data-workspace clause guarded with
+  `owner_scope <> 'user'`); see the residual drift under Open risks.
+- **Training Load IA/UX redesign, Phases A–G** — PRs #82–#88, all merged: A IA shell
+  (Schedule · Data & Analysis), B shared Monday-anchored week across Data & Analysis, C
+  Activities identity + first Carbon-referenced visual pass, D Athletes consolidation, E
+  Overview, F Dashboards hand-off + shell Filter shown unavailable on Dashboards, G cleanup
+  (PR #88, removed the unreachable manual RPE reminder UI — see Separate tasks). Carbon is
+  a design reference only, never a runtime dependency.
+- **Training Load dashboard backend (3B2)** — schema (`migrations_v2` v15–v18: catalog,
   dashboards, widgets/series, sanctioned functions, catalog seed) + routes
   (`backend/src/routes/trainingLoadDashboard.js`) + Access/Query/Catalog/Widgets service
   split. See ADR-001 through ADR-004, ADR-006.
-- **Training Load Analysis frontend (3B3)** — merged via PR #77
-  (`feature/training-load-dashboard-3b3-frontend` → `main`, merge commit `111134d`):
-  Analysis tab, dashboard select/create/clone/archive, batch query, KPI/Table widgets,
-  widget/series configuration, desktop 12-column layout editing with real pointer
-  drag/resize, atomic Save/Cancel/reload persistence, Calendar → Analysis activity picker
-  hand-off, mobile (360/375/390px) — drag/resize disabled on mobile in favor of Move
-  up/down, 16px input font floor, 44px touch targets on the controls that needed it.
+- **Training Load Analysis frontend (3B3)** — PR #77 (`111134d`): Analysis tab, batch
+  query, KPI/Table widgets, widget/series configuration, desktop 12-column layout editing
+  with real pointer drag/resize, atomic Save/Cancel/reload persistence, Calendar →
+  Analysis activity picker hand-off, mobile (360/375/390px) with Move up/down instead of
+  drag/resize.
 - This `CLAUDE.md`/`.claude/agents/` reviewer workflow (`code-reviewer`, `db-reviewer`,
-  `mobile-qa`, `security-reviewer`) — merged as part of the same PR #77 history.
+  `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
-**Implemented ≠ deployed.** The above is confirmed merged to `main`; whether it has been
-deployed to any hosted environment has not been verified as part of this update — don't
-assert a deploy state without checking the actual hosting target first.
+**Implemented ≠ deployed.** The only deploy fact checked in this update is the one above
+(`/api/health` reporting `0de6afb` on 2026-09-17); re-check the hosting target before
+asserting a deploy state later.
 
 ## Known baseline/environment test issues
 
-- `frontend/tests/tests-schedule-management.actions.test.mjs` — 5 tests covering the
-  Tests-module calendar click/drag day-selection (`startTestsCalendarDrag`/
-  `extendTestsCalendarDrag`/`endTestsCalendarDrag` in `frontend/tests-actions.js`) fail.
-  Confirmed via a clean detached `origin/main` worktree (before the 3B3 work) that this
-  predates that branch entirely — not a regression, not yet fixed. These 5 are the only
-  known failing tests in the frontend suite as of the last check; re-run
-  `node --test tests/*.test.mjs` from `frontend/` for the current actual count rather
-  than trusting a number here — pass/fail counts are transient and don't belong in this
-  file (`.claude/rules/memory-maintenance.md`).
+Reproduce against a clean detached `origin/main` worktree before calling a failure
+pre-existing; pass/fail counts don't belong in this file
+(`.claude/rules/memory-maintenance.md`).
+
+- `frontend/tests/tests-schedule-management.actions.test.mjs` — the Tests-module calendar
+  click/drag day-selection tests (`startTestsCalendarDrag`/`extendTestsCalendarDrag`/
+  `endTestsCalendarDrag` in `frontend/tests-actions.js`) fail; confirmed on clean
+  `origin/main` before the 3B3 work. Not re-reproduced in this update.
+- `backend/tests/tests-athlete-device-timezone.test.mjs` — test "13. the worker's
+  occurrence-generation phase catches an ahead athlete's occurrence in its very next
+  cycle…" fails; reproduced identically on a clean detached `origin/main` worktree
+  (`3ef6033`) on 2026-09-17.
+- `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
+  unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
+  operation attempted), so a plain full backend run reports it as failed; same on
+  `3ef6033`.
+
+## Separate tasks (recorded, not prioritized over the Dashboards UX slices)
+
+- **Fix the known failing tests above** so a full suite run can be green again and a new
+  regression can't hide among known failures: the backend worker timing test, a way to run
+  or skip the edit-draft suite without `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL`, and the
+  Tests-module drag-selection tests.
+- **Re-home the manual RPE reminder for external ("OUTSIDE PLAN") sessions.** Its only
+  entry point was the old Today tab's grouped OUTSIDE-PLAN row → per-athlete reminder
+  panel, unreachable since Phase A and removed in Phase G (decision (a), 2026-09-16:
+  `renderTrainingLoadTodayHtml`, the group/reminder actions and state,
+  `sendExternalScheduleReminder`). The backend route
+  `POST /api/training-load/external-schedules/:id/remind` and its tests are untouched.
+  Proposal: per-athlete status + reminder UI in Schedule's external-schedule detail
+  (`renderExternalScheduleDetailHtml`), reusing the Tests module's `reminderSelection`
+  fingerprint pattern.
+- **Read the dashboard deletion log in the app** (owner, 2026-09-17: kept out of PR #91 as
+  a separate task; e.g. an admin-only view). Today
+  `training_load.dashboard_deletion_log` is readable only in the database; no endpoint or
+  UI reads it.
+- **Dashboards and the shell Club/Team/Athletes filter** — see Open risks.
 
 ## Open risks
 
-- The Calendar → Analysis "Choose activity" round trip, the widget series/metric picker,
-  "Use template"/clone, and dashboard "Create" are unit-tested but were not fully
-  exercised in a live browser during the 3B3 review (no seed athlete/activity data in the
-  dev workspace; `window.prompt` isn't supported by the automated browser harness used).
-- `migrations/` (legacy, no `_v2` suffix) still exists alongside `migrations_v2/` —
-  treat it as historical/reference only; new migrations go in `migrations_v2/`.
-- **Dashboards ignores the shell Club/Team/Athletes filter** (Training Load IA
-  Phase F, decision (b), 2026-09-16). `POST /api/training-load/dashboards/:id/query`
-  only receives the runtime activity/component filter
-  (`analysisRuntimeFilterPayload`, `frontend/training-load-analysis-data.js`);
-  `runtimeFilter.athleteIds` is never populated and the backend accepts
-  `athleteIds` only, not club/team. The shell Filter is therefore rendered
-  disabled on Dashboards with a visible note, without an active count, while
-  the coach's selection stays in `state.trainingLoad.filter` for
-  Overview/Activities/Athletes. Proposed separate task (not part of Phase F, no
-  backend change made there): let `/query` accept `clubIds`/`teamIds` and expand
-  them to member athletes server-side (same `athleteExtraFilterSql` union
-  semantics `/weekly` and `/calendar` already use), then feed
-  `state.trainingLoad.filter` into `analysisRuntimeFilterPayload()` and
-  `queryContextKey()` and re-enable the control.
-- **Manual RPE reminder for external ("OUTSIDE PLAN") sessions has no coach UI**
-  (Phase G, 2026-09-16). Its only entry point was the old Today tab's grouped
-  OUTSIDE-PLAN row → per-athlete reminder panel, which became unreachable in Phase A
-  when "today" started rendering the canonical-activity Activities view; Phase G
-  removed that dead UI (`renderTrainingLoadTodayHtml`, the group/reminder actions and
-  state, `sendExternalScheduleReminder`). The backend route
-  `POST /api/training-load/external-schedules/:id/remind` and its tests are untouched.
-  Proposed separate task: re-home the per-athlete status + reminder UI into Schedule's
-  own external-schedule detail (`renderExternalScheduleDetailHtml`), reusing the Tests
-  module's `reminderSelection` fingerprint pattern.
-
-- **Dashboard LIST visibility vs. `canViewDashboardRow` (residual drift, no leak today)** (fix/dashboard-list-visibility, 2026-09-16). That PR closed the private-dashboard list leak by guarding `dashboardVisibilitySql`'s data-workspace clause with `owner_scope <> 'user'` (regression tests §11.1–§11.4 in `backend/tests/training-load-dashboard.test.mjs`). One same-class drift remains, unreachable today: the club owner clause admits ANY `req.authz.clubRoles` entry while `canManageClub` requires `role = 'club_admin'` — every current writer of `public.user_club_roles` inserts `club_admin` only and only club admins can activate a club workspace. The team clause has the same shape (`teamRoles` ∪ `managedTeamIds`). security-reviewer (MEDIUM, out of scope): for such a non-admin member active in a DIFFERENT workspace the list would show the club/team-owned board while the single GET (`canViewDashboardRow` → `dataWorkspaceMatches` against the ACTIVE workspace) 404s — a list/GET split, not a private-data leak. If a non-admin club/team role is ever introduced, decide the contract first (list = only what GET allows is the ADR-006-consistent choice), filter those clauses accordingly (mirroring `canManageClub`/`canManageTeamById`) and add a list+GET test for the new role before shipping it.
+- **Dashboards ignores the shell Club/Team/Athletes filter** (Phase F, decision (b),
+  2026-09-16). `POST /api/training-load/dashboards/:id/query` only receives the runtime
+  activity/component filter (`analysisRuntimeFilterPayload`,
+  `frontend/training-load-analysis-data.js`); `runtimeFilter.athleteIds` is never
+  populated and the backend accepts `athleteIds` only, not club/team. The shell Filter is
+  therefore rendered disabled on Dashboards with a visible note, while the coach's
+  selection stays in `state.trainingLoad.filter` for Overview/Activities/Athletes.
+  Proposed separate task: let `/query` accept `clubIds`/`teamIds` and expand them to
+  member athletes server-side (same `athleteExtraFilterSql` union semantics `/weekly` and
+  `/calendar` use), then feed `state.trainingLoad.filter` into
+  `analysisRuntimeFilterPayload()` and `queryContextKey()` and re-enable the control.
+- **Dashboard LIST visibility vs. `canViewDashboardRow` (residual drift, no leak today)**
+  (PR #90, 2026-09-16). The list SQL's club owner clause admits ANY `req.authz.clubRoles`
+  entry while `canManageClub` requires `role = 'club_admin'`; the team clause has the same
+  shape (`teamRoles` ∪ `managedTeamIds`). Unreachable today — every current writer of
+  `public.user_club_roles` inserts `club_admin` only and only club admins can activate a
+  club workspace. security-reviewer (MEDIUM, out of scope): for such a non-admin member
+  active in a DIFFERENT workspace the list would show the club/team-owned board while the
+  single GET 404s — a list/GET split, not a private-data leak. If a non-admin club/team
+  role is ever introduced, decide the contract first (list = only what GET allows is the
+  ADR-006-consistent choice), filter those clauses with the shared role predicates in
+  `backend/src/authz.js` (`holdsClubAdminRole`, `holdsTeamCoachRole`,
+  `managesTeamThroughClub`, extracted in PR #91) and add a list+GET test for the new role.
+- **Not exercised in a live browser yet** (unit-tested only): "Use template"/clone, the
+  Calendar → Analysis "Choose activity" round trip, and the advanced editor's series
+  metric picker (`renderMetricPickerHtml`, reached through widget "Advanced settings").
+  Dashboard create and the guided "Add metric" panel (`renderMetricPanelHtml`) were
+  live-checked in PR #89's browser QA.
+- `migrations/` (legacy, no `_v2` suffix) still exists alongside `migrations_v2/` — treat
+  it as historical/reference only; new migrations go in `migrations_v2/`.
 
 ## Most likely next step
 
-No committed next phase has been confirmed as of this update — check with the user or
-look for an open PR/branch before assuming what comes after 3B3. A reasonable guess based
-on the merged work (not a confirmed plan): chart-type widgets (line/bar) beyond the
-already-shipped KPI/Table, or wiring the metric picker's chosen `metric_definition_id`s
-into a broader metrics catalog UI outside Training Load Analysis.
+Dashboards UX **H2** (widget "⋯" menus + layout tooling cleanup), on a new branch from
+fresh `origin/main` — see Active phase. The Separate tasks above wait until the owner
+schedules them.
 
 ## How to refresh this file
 
 After a merged milestone or a change in active phase: update the "last reviewed"
 line/commit at the top, move the newly-completed phase into "Last completed, merged
-phases," and re-derive "Open risks"/"Most likely next step" from the actual current
-state — don't carry stale entries forward unexamined. See
+phases," and re-derive "Open risks"/"Separate tasks"/"Most likely next step" from the
+actual current state — don't carry stale entries forward unexamined. See
 `.claude/rules/memory-maintenance.md`.
