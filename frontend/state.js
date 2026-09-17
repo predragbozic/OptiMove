@@ -479,7 +479,6 @@ export const emptyTrainingLoadAnalysisState = (overrides = {}) => ({
   mutationError: "",
   notice: "",
   editMode: false,
-  addWidgetOpen: false,
   layoutDraft: null,
   period: { dateFrom: "", dateTo: "" },
   runtimeFilter: { athleteIds: [], activityId: "", componentId: "" },
@@ -494,6 +493,21 @@ export const emptyTrainingLoadAnalysisState = (overrides = {}) => ({
   metricPicker: { search: "", definitions: null, loading: false, error: "" },
   editor: { open: false, widgetId: "", seriesId: "" },
   selectedSeriesId: "",
+  // Dashboards UX H1: the dashboard picker popover (search + grouped list)
+  // that replaced the bare <select>, and which single popover menu is open
+  // ("dashboard" actions, "period" presets) - one at a time, closed by
+  // Escape/backdrop/any pick.
+  picker: { open: false, search: "" },
+  menu: "",
+  // "New dashboard" / "Rename" dialog (replaces window.prompt) - null when
+  // closed. `mode` is "create" | "rename".
+  dashboardForm: null,
+  // The guided "Add metric" panel - null when closed. Everything in here is
+  // STAGED client-side (nothing is sent until Save; Cancel discards it) -
+  // see emptyAnalysisMetricPanel() in training-load-analysis-data.js for
+  // the shape and the header comment there on why a live preview of an
+  // unsaved widget is not offered.
+  metricPanel: null,
   ...overrides,
 });
 

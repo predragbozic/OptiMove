@@ -25,14 +25,16 @@ import {
   updateExternalSchedule,
 } from "./training-load-data.js";
 import {
+  BUILT_IN_SERIES,
   addAnalysisSeries,
+  applyAnalysisPeriodPreset,
   archiveAnalysisDashboard,
   cancelAnalysisLayoutDraft,
   cloneAnalysisDashboard,
   createAnalysisDashboard,
-  createAnalysisWidget,
   deleteAnalysisSeries,
   deleteAnalysisWidget,
+  emptyAnalysisMetricPanel,
   ensureAnalysisLayoutDraft,
   invalidateTrainingLoadAnalysis,
   loadAnalysisMetricDefinitions,
@@ -45,7 +47,9 @@ import {
   resizeAnalysisWidget,
   resolveAnalysisSeries,
   saveAnalysisLayout,
+  saveAnalysisMetricPanel,
   setActiveAnalysisDashboard,
+  setMetricPanelMetric,
   updateAnalysisDashboardMetadata,
   updateAnalysisLayoutDraft,
   updateAnalysisSeries,
@@ -101,6 +105,43 @@ export function setTrainingLoadSection(section) {
   if (section === "today" || section === "results" || section === "analysis" || section === "overview") {
     state.trainingLoad.lastDataAnalysisSection = section;
   }
+}
+
+// -------------------- Dashboards UX H1: overlays --------------------
+
+function closeAnalysisPopovers() {
+  const a = state.trainingLoad.analysis;
+  const wasOpen = a.picker.open || Boolean(a.menu);
+  a.picker.open = false;
+  a.menu = "";
+  return wasOpen;
+}
+
+// Escape (app.js's global keydown): closes the topmost Dashboards overlay -
+// a popover first, then the dashboard dialog, then the metric panel (never
+// while its save is in flight). Returns whether anything closed so the
+// caller knows to re-render.
+export function closeTrainingLoadAnalysisOverlay() {
+  const a = state.trainingLoad.analysis;
+  if (closeAnalysisPopovers()) return true;
+  if (a.dashboardForm && !a.dashboardForm.submitting) { a.dashboardForm = null; return true; }
+  if (a.metricPanel && !a.metricPanel.saving) { a.metricPanel = null; return true; }
+  return false;
+}
+
+// Live search inside the picker / metric panel (app.js's input handler
+// calls this per keystroke, then re-renders and restores focus).
+export function setTrainingLoadAnalysisSearch(kind, value) {
+  const a = state.trainingLoad.analysis;
+  if (kind === "picker") a.picker.search = value ?? "";
+  else if (kind === "metric" && a.metricPanel) a.metricPanel.search = value ?? "";
+}
+
+function openAnalysisMetricPanel(widget = null) {
+  const a = state.trainingLoad.analysis;
+  closeAnalysisPopovers();
+  a.editor = { open: false, widgetId: "", seriesId: "" };
+  a.metricPanel = emptyAnalysisMetricPanel(widget);
 }
 
 // Phase B (shared weekly temporal context): given a consumer's own prior
@@ -722,8 +763,12 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- Training Load 3B3: Analysis dashboards --------------------
 
   if (type === "training-load-analysis-select-dashboard") {
-    const dashboardId = action.value ?? action.dataset.dashboardId ?? "";
+    // A picker option carries data-dashboard-id; a <button>'s own .value is
+    // "" (not nullish), so the dataset must win over action.value here.
+    const dashboardId = action.dataset.dashboardId ?? action.value ?? "";
     const a = state.trainingLoad.analysis;
+    closeAnalysisPopovers();
+    a.picker.search = "";
     a.selectedDashboardId = dashboardId;
     a.dashboard = null;
     a.widgets = [];
@@ -738,14 +783,119 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-analysis-focus-selector") {
-    document.querySelector("[data-action='training-load-analysis-select-dashboard']")?.focus();
+  // -------------------- Dashboards UX H1: picker, menus, dialog --------------------
+  if (type === "training-load-analysis-open-picker") {
+    const a = state.trainingLoad.analysis;
+    const open = !a.picker.open;
+    closeAnalysisPopovers();
+    a.picker.open = open;
+    if (!open) a.picker.search = "";
+    renderTrainingLoad();
+    if (open) document.querySelector("[data-tl-analysis-search='picker']")?.focus();
     return true;
   }
-  if (type === "training-load-analysis-create") {
-    const name = window.prompt("Dashboard name", "Training Load Analysis");
-    if (!name || !name.trim()) return true;
-    await createAnalysisDashboard({ name: name.trim() }, renderTrainingLoad);
+  if (type === "training-load-analysis-open-menu") {
+    const a = state.trainingLoad.analysis;
+    const menu = action.dataset.menu || "";
+    const open = a.menu !== menu;
+    closeAnalysisPopovers();
+    a.menu = open ? menu : "";
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-close-popovers") {
+    closeAnalysisPopovers();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-picker-search" || type === "training-load-analysis-panel-search") {
+    // change/blur fallback - keystrokes already went through
+    // setTrainingLoadAnalysisSearch (app.js) with a focus-preserving
+    // re-render, so a change event carrying the same value must NOT
+    // re-render again (that would replace the input and drop focus/caret
+    // on Enter, or under automation that fires change per keystroke).
+    const a = state.trainingLoad.analysis;
+    const kind = type.endsWith("picker-search") ? "picker" : "metric";
+    const current = kind === "picker" ? a.picker.search : (a.metricPanel?.search ?? "");
+    if ((action.value ?? "") === current) return true;
+    setTrainingLoadAnalysisSearch(kind, action.value ?? "");
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-period-preset") {
+    const a = state.trainingLoad.analysis;
+    closeAnalysisPopovers();
+    if (!applyAnalysisPeriodPreset(action.dataset.preset)) { renderTrainingLoad(); return true; }
+    renderTrainingLoad();
+    await queryAnalysisDashboard(renderTrainingLoad, { force: true });
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-new-dashboard" || type === "training-load-analysis-rename-dashboard") {
+    const a = state.trainingLoad.analysis;
+    const rename = type.endsWith("rename-dashboard");
+    if (rename && !a.dashboard) return true;
+    closeAnalysisPopovers();
+    a.dashboardForm = { mode: rename ? "rename" : "create", name: rename ? a.dashboard.name : "", description: "", error: "", submitting: false };
+    renderTrainingLoad();
+    document.querySelector("[data-action='training-load-analysis-dashboard-form-name']")?.focus();
+    return true;
+  }
+  if (type === "training-load-analysis-dashboard-form-name" || type === "training-load-analysis-dashboard-form-description") {
+    const form = state.trainingLoad.analysis.dashboardForm;
+    if (!form) return true;
+    form[type.endsWith("-name") ? "name" : "description"] = action.value ?? "";
+    return true;
+  }
+  if (type === "training-load-analysis-dashboard-form-cancel") {
+    const a = state.trainingLoad.analysis;
+    if (a.dashboardForm?.submitting) return true;
+    a.dashboardForm = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-dashboard-form-submit") {
+    const a = state.trainingLoad.analysis;
+    const form = a.dashboardForm;
+    if (!form || form.submitting) return true;
+    // The <form> submit lands here (app.js) - read the live inputs off it
+    // so Enter works without waiting for a change event to fire first.
+    const nameInput = action.querySelector?.("[data-action='training-load-analysis-dashboard-form-name']");
+    if (nameInput) form.name = nameInput.value;
+    const descriptionInput = action.querySelector?.("[data-action='training-load-analysis-dashboard-form-description']");
+    if (descriptionInput) form.description = descriptionInput.value;
+    const name = form.name.trim();
+    if (!name) {
+      form.error = "Give the dashboard a name.";
+      renderTrainingLoad();
+      return true;
+    }
+    if (form.mode === "rename" && name === a.dashboard?.name) {
+      a.dashboardForm = null;
+      renderTrainingLoad();
+      return true;
+    }
+    form.submitting = true;
+    form.error = "";
+    renderTrainingLoad();
+    const result = form.mode === "rename"
+      ? await updateAnalysisDashboardMetadata({ name }, renderTrainingLoad)
+      : await createAnalysisDashboard({ name, description: form.description.trim() }, renderTrainingLoad);
+    if (result) {
+      a.dashboardForm = null;
+      a.notice = form.mode === "rename" ? "Dashboard renamed." : `Dashboard "${name}" created.`;
+    } else {
+      // api.js surfaces the route's error CODE as the message - translate
+      // the ones this dialog can actually hit; the stale-revision case has
+      // already reloaded the dashboard (mutateDashboard) and set `notice`.
+      const code = a.mutationError || a.notice || "";
+      form.submitting = false;
+      form.error = {
+        conflict: "That name is already in use in this workspace - choose another.",
+        invalidRequest: "The name or description is not valid (name 1-200 characters).",
+      }[code] || code || "Could not save the dashboard.";
+      a.mutationError = "";
+    }
     renderTrainingLoad();
     return true;
   }
@@ -758,9 +908,9 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-analysis-toggle-edit") {
     const a = state.trainingLoad.analysis;
+    closeAnalysisPopovers();
     a.editMode = !a.editMode;
     if (!a.editMode) {
-      a.addWidgetOpen = false;
       a.editor = { open: false, widgetId: "", seriesId: "" };
     }
     renderTrainingLoad();
@@ -768,6 +918,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-analysis-set-active") {
     const dashboardId = state.trainingLoad.analysis.dashboard?.id || state.trainingLoad.analysis.selectedDashboardId;
+    closeAnalysisPopovers();
     if (!dashboardId) return true;
     await setActiveAnalysisDashboard(dashboardId, renderTrainingLoad);
     renderTrainingLoad();
@@ -840,20 +991,86 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  // -------------------- Dashboards UX H1: guided "Add metric" panel --------------------
   if (type === "training-load-analysis-add-widget") {
-    state.trainingLoad.analysis.addWidgetOpen = true;
+    if (!state.trainingLoad.analysis.dashboard) return true;
+    openAnalysisMetricPanel(null);
+    // The catalog load flips metricPicker.loading synchronously, so this
+    // first render already shows "Loading metrics..." under the built-ins;
+    // the panel itself never waits for the network.
+    const loading = loadAnalysisMetricDefinitions();
+    renderTrainingLoad();
+    await loading;
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-analysis-close-add-widget") {
-    state.trainingLoad.analysis.addWidgetOpen = false;
+  if (type === "training-load-analysis-panel-close") {
+    const a = state.trainingLoad.analysis;
+    if (a.metricPanel?.saving) return true;
+    // Cancel: staged edits are dropped. Nothing was sent - unless a partial
+    // save already landed, in which case the footer read "Close" and the
+    // server keeps what it has (panel.serverChanged, see
+    // saveAnalysisMetricPanel).
+    a.metricPanel = null;
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-analysis-create-widget") {
-    state.trainingLoad.analysis.addWidgetOpen = false;
-    await createAnalysisWidget(action.dataset.widgetType, renderTrainingLoad);
+  if (type === "training-load-analysis-panel-pick-builtin" || type === "training-load-analysis-panel-pick-metric") {
+    const panel = state.trainingLoad.analysis.metricPanel;
+    if (!panel || panel.saving) return true;
+    if (type.endsWith("builtin")) {
+      const builtIn = BUILT_IN_SERIES.find((b) => b.key === action.dataset.builtInKey);
+      if (builtIn) setMetricPanelMetric(panel, { kind: "builtin", key: builtIn.key, label: builtIn.label, unit: builtIn.unit || "" });
+    } else {
+      const def = (state.trainingLoad.analysis.metricPicker.definitions || []).find((d) => d.id === action.dataset.metricId);
+      if (def) setMetricPanelMetric(panel, { kind: "metric", id: def.id, label: def.label, unit: def.unit || "" });
+    }
     renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-panel-type") {
+    const panel = state.trainingLoad.analysis.metricPanel;
+    if (!panel || panel.saving) return true;
+    panel.widgetType = action.dataset.widgetType || panel.widgetType;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-panel-title") {
+    const panel = state.trainingLoad.analysis.metricPanel;
+    if (!panel || panel.saving) return true;
+    panel.title = action.value ?? "";
+    panel.titleTouched = Boolean(panel.title.trim());
+    if (!panel.titleTouched) panel.title = panel.metric?.label || "";
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-panel-field") {
+    const panel = state.trainingLoad.analysis.metricPanel;
+    const field = action.dataset.field;
+    if (!panel || panel.saving || !["groupBy", "aggregation", "scope"].includes(field)) return true;
+    panel[field] = action.value || panel[field];
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-panel-save") {
+    const panel = state.trainingLoad.analysis.metricPanel;
+    if (!panel) return true;
+    // The title input applies on change/blur; a click on Save may come
+    // before that fires, so read the live value off the input first.
+    const titleInput = document.querySelector("[data-action='training-load-analysis-panel-title']");
+    if (titleInput && typeof titleInput.value === "string" && titleInput.value.trim()) panel.title = titleInput.value;
+    await saveAnalysisMetricPanel(renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-open-advanced") {
+    const a = state.trainingLoad.analysis;
+    const widget = a.widgets.find((w) => w.id === action.dataset.widgetId);
+    if (!widget) return true;
+    a.metricPanel = null;
+    a.editor = { open: true, widgetId: widget.id, seriesId: widget.series?.[0]?.id || "" };
+    renderTrainingLoad();
+    void loadAnalysisMetricDefinitions().then(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-analysis-save-layout") {
@@ -883,25 +1100,23 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
-  if (type === "training-load-analysis-edit-dashboard") {
-    const current = state.trainingLoad.analysis.dashboard;
-    const name = window.prompt("Dashboard name", current?.name || "");
-    if (!name || !name.trim() || name.trim() === current?.name) return true;
-    await updateAnalysisDashboardMetadata({ name: name.trim() }, renderTrainingLoad);
-    renderTrainingLoad();
-    return true;
-  }
   if (type === "training-load-analysis-archive") {
-    if (!window.confirm("Archive this dashboard? It will become read-only.")) return true;
+    closeAnalysisPopovers();
+    if (!window.confirm("Archive this dashboard? It will become read-only.")) { renderTrainingLoad(); return true; }
     await archiveAnalysisDashboard(renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-analysis-edit-widget") {
+    // Widget "Settings" opens the guided panel in edit mode (staged; Save/
+    // Cancel); the full per-series editor stays behind "Advanced settings".
     const widget = state.trainingLoad.analysis.widgets.find((w) => w.id === action.dataset.widgetId);
-    state.trainingLoad.analysis.editor = { open: true, widgetId: action.dataset.widgetId, seriesId: widget?.series?.[0]?.id || "" };
+    if (!widget) return true;
+    // The panel labels a catalog-backed series from the loaded definitions,
+    // so make sure they're in before staging the widget.
+    await loadAnalysisMetricDefinitions();
+    openAnalysisMetricPanel(widget);
     renderTrainingLoad();
-    void loadAnalysisMetricDefinitions().then(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-analysis-close-editor") {

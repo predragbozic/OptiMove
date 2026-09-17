@@ -56,6 +56,12 @@ const seriesId = "55555555-5555-4555-8555-555555555555";
 const metricId = "66666666-6666-4666-8666-666666666666";
 const activityId = "77777777-7777-4777-8777-777777777777";
 const componentId = "88888888-8888-4888-8888-888888888888";
+// Pin for the advanced-editor sequence below: three mutations actually reach
+// the server (title, add series, delete series) and each runs exactly one
+// fresh batch query after its reload; series-up and delete-widget are
+// no-ops in that fixture (see the comments there). Any extra or per-widget
+// query would break this.
+const QUERIES_PER_ADVANCED_EDIT_SEQUENCE = 3;
 
 function resetState() {
   clearAllViewCache();
@@ -410,11 +416,6 @@ test("Analysis actions save active dashboard, runtime filters, widgets, series a
       assert.equal(call.body.layout.length, 2);
       return { status: 200, body: detail({ dashboard: { revision: 4 } }) };
     }
-    if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets`) {
-      assert.equal(call.method, "POST");
-      assert.equal(call.body.widgetType, "bar_chart");
-      return { status: 201, body: detail({ dashboard: { revision: 4 } }) };
-    }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`) {
       assert.equal(call.method, "POST");
       assert.equal(call.body.expectedWidgetRevision, 4);
@@ -452,7 +453,8 @@ test("Analysis actions save active dashboard, runtime filters, widgets, series a
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/query")).length, 2);
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-activity-filter", widgetId }, activityId), { renderTrainingLoad });
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-create-widget", widgetType: "bar_chart" }), { renderTrainingLoad });
+  // Widget creation itself now goes through the guided "Add metric" panel -
+  // covered end-to-end in training-load-dashboards-ux.actions.test.mjs.
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-add-series", widgetId }), { renderTrainingLoad });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-series-bind-metric", widgetId, seriesId, metricId }), { renderTrainingLoad });
 
@@ -777,7 +779,8 @@ test("Analysis widget and series configuration uses revision-guarded endpoints",
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets`) {
       assert.equal(call.method, "POST");
       assert.equal(call.body.widgetType, "line_chart");
-      return { status: 201, body: detail({ dashboard: { revision: 4 } }) };
+      assert.equal(call.body.expectedDashboardRevision, 3);
+      return { status: 201, body: { widgetId, dashboardRevision: 4 } };
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}` && call.method === "PATCH") {
       assert.equal(call.body.expectedWidgetRevision, 4);
@@ -790,7 +793,11 @@ test("Analysis widget and series configuration uses revision-guarded endpoints",
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`) {
       assert.equal(call.method, "POST");
-      assert.equal(call.body.builtInSeriesKey, "srpe");
+      // The panel save posts srpe; the advanced editor's "Add series" posts
+      // its rpe default - both are real calls this sequence makes. (A throw
+      // in here would be swallowed by mutateDashboard's catch, so the
+      // mutationError assertions below are the real guard.)
+      assert.ok(["srpe", "rpe"].includes(call.body.builtInSeriesKey), call.body.builtInSeriesKey);
       return { status: 201, body: detail({ dashboard: { revision: 7 } }) };
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series/${seriesId}` && call.method === "DELETE") {
@@ -807,14 +814,40 @@ test("Analysis widget and series configuration uses revision-guarded endpoints",
     return { status: 404, body: { error: "unexpected" } };
   });
 
-  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-create-widget", widgetType: "line_chart" }), { renderTrainingLoad });
+  // Dashboards UX H1: a new widget is created through the guided panel -
+  // POST widget, then POST series against the fresh widget's revision 1,
+  // then ONE batch query (never a per-widget one).
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-add-widget" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-builtin", builtInKey: "srpe" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-type", widgetType: "line_chart" }), { renderTrainingLoad });
+  const beforeSave = fetchCalls.length;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
+  const saveCalls = fetchCalls.slice(beforeSave);
+  assert.equal(saveCalls[0].method, "POST");
+  assert.equal(saveCalls[0].url, `/api/training-load/dashboards/${dashboardId}/widgets`);
+  assert.equal(saveCalls[1].method, "POST");
+  assert.equal(saveCalls[1].url, `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`);
+  assert.equal(saveCalls[1].body.expectedWidgetRevision, 1);
+  assert.equal(saveCalls.filter((call) => call.url.endsWith("/query")).length, 1);
+  assert.equal(state.trainingLoad.analysis.metricPanel, null, "the panel closes after a successful save");
+
+  const afterPanel = fetchCalls.length;
+  const noMutationError = (step) => assert.equal(state.trainingLoad.analysis.mutationError, "", `${step}: the mutation itself must succeed (a mock assertion thrown inside fetch lands here)`);
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-title", widgetId }, "Readiness"), { renderTrainingLoad });
+  noMutationError("title");
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-add-series", widgetId }), { renderTrainingLoad });
+  noMutationError("add-series");
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-series", widgetId, seriesId }), { renderTrainingLoad });
+  noMutationError("delete-series");
   state.trainingLoad.analysis.selectedSeriesId = seriesId;
+  // series-up (single series -> no move) and delete-widget (secondWidgetId is
+  // not in the reloaded detail) return early without a request - kept as
+  // no-op coverage.
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-series-up", widgetId, seriesId }), { renderTrainingLoad });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-widget", widgetId: secondWidgetId }), { renderTrainingLoad });
-  assert.equal(fetchCalls.filter((call) => call.url.endsWith("/query")).length, 3);
+  // code-reviewer (LOW): one fresh batch query per SUCCESSFUL mutation
+  // (mutateDashboard invalidates the query cache before every reload).
+  assert.equal(fetchCalls.slice(afterPanel).filter((call) => call.url.endsWith("/query")).length, QUERIES_PER_ADVANCED_EDIT_SEQUENCE);
   assert.equal(fetchCalls.some((call) => call.url.includes("/widgets/") && call.url.endsWith("/query")), false);
 });
 
