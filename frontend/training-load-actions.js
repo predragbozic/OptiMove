@@ -139,6 +139,17 @@ function releaseAnalysisLayoutDraft() {
   return true;
 }
 
+// H2 (owner review of #93): leaving Training Load altogether - the main
+// sidebar/rail or browser Back - asks the same question. app.js calls this
+// BEFORE it changes state.activeTab or pushes history; false means the
+// coach wants to keep arranging, so the navigation must not happen.
+// Re-clicking the already-active Training load item counts too: it reloads
+// the dashboard (loadActiveTab), which drops the draft just the same.
+export function confirmLeaveTrainingLoad(_nextTab) {
+  if (state.activeTab !== "training-load") return true;
+  return releaseAnalysisLayoutDraft();
+}
+
 // H2: widget Settings / Advanced settings / Delete reload the dashboard on
 // success, which resets an unsaved layout draft - the widget menu disables
 // them while a draft exists, and the handlers refuse them the same way.
@@ -746,7 +757,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- Coach: Schedule / Data & Analysis sections --------------------
 
   if (type === "training-load-section") {
-    if (state.trainingLoad.section === "analysis" && action.dataset.section !== "analysis" && !releaseAnalysisLayoutDraft()) {
+    // Re-clicking the active Dashboards tab reloads it as well, so it asks too.
+    if (state.trainingLoad.section === "analysis" && !releaseAnalysisLayoutDraft()) {
       renderTrainingLoad();
       return true;
     }

@@ -38,7 +38,7 @@ function installFetchMock(responder) {
   };
 }
 
-const { closeTrainingLoadAnalysisOverlay, handleTrainingLoadAction, setTrainingLoadAnalysisSearch } = await import("../training-load-actions.js");
+const { closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, handleTrainingLoadAction, setTrainingLoadAnalysisSearch } = await import("../training-load-actions.js");
 const { ANALYSIS_PERIOD_PRESETS, analysisPeriodPresetKey, ensureAnalysisPeriod, loadTrainingLoadAnalysis, metricPanelCanSave } = await import("../training-load-analysis-data.js");
 const { dashboardPickerGroups, renderTrainingLoadAnalysisHtml } = await import("../training-load-analysis-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
@@ -1624,6 +1624,101 @@ test("H2 (review): Archive and Delete permanently ask their own question first -
     await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-archive" }), { renderTrainingLoad });
     assert.equal(a.editMode, false, "both accepted: layout mode ends");
     assert.equal(writes().filter((c) => c.url.endsWith("/archive")).length, 1, "and the archive goes ahead");
+  } finally {
+    window.confirm = () => true;
+  }
+});
+
+// -------------------- Owner review of #93: leaving Training Load (sidebar, browser Back) --------------------
+
+test("H2 (owner review): leaving Training Load with a moved widget asks first - declined keeps the layout and the tab, accepted discards it and lets the navigation happen; nothing to lose or staying inside Training Load asks nothing", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  state.activeTab = "training-load";
+  const prompts = [];
+  try {
+    window.confirm = (message) => { prompts.push(message); return false; };
+    assert.equal(confirmLeaveTrainingLoad("tests"), true, "no layout mode: leave freely");
+    a.editMode = true;
+    assert.equal(confirmLeaveTrainingLoad("tests"), true, "layout mode but nothing moved: leave freely");
+    assert.equal(prompts.length, 0);
+
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-down", widgetId }), { renderTrainingLoad });
+    const draft = a.layoutDraft;
+    assert.ok(draft, "a widget was moved");
+    assert.equal(confirmLeaveTrainingLoad("training-load"), false, "re-clicking the active Training load item reloads the dashboard, so it asks too");
+    assert.equal(a.layoutDraft, draft);
+    assert.equal(confirmLeaveTrainingLoad("tests"), false, "declined: the navigation must not happen");
+    assert.deepEqual(prompts, ["Discard your unsaved layout changes?", "Discard your unsaved layout changes?"]);
+    assert.equal(a.layoutDraft, draft, "declined: the moved layout is untouched");
+    assert.equal(a.editMode, true);
+
+    window.confirm = (message) => { prompts.push(message); return true; };
+    assert.equal(confirmLeaveTrainingLoad("weekly"), true, "accepted: the navigation goes ahead");
+    assert.deepEqual([a.editMode, a.layoutDraft], [false, null], "accepted: the draft is discarded and layout mode ends");
+    assert.equal(fetchCalls.filter((c) => c.method !== "GET").length, 0, "nothing is saved or sent either way");
+
+    state.activeTab = "tests";
+    a.editMode = true;
+    a.layoutDraft = draft;
+    assert.equal(confirmLeaveTrainingLoad("weekly"), true, "not on Training Load: never asks");
+    assert.equal(prompts.length, 3);
+  } finally {
+    window.confirm = () => true;
+  }
+});
+
+test("H2 (owner review): every main sidebar/rail navigation and browser Back in app.js asks confirmLeaveTrainingLoad BEFORE changing the tab or pushing history, and a declined Back puts the consumed history entry back", () => {
+  const app = readFileSync(new URL("../app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const before = (block, guard, change, label) => {
+    const g = block.indexOf(guard);
+    const c = block.indexOf(change);
+    assert.ok(g >= 0, `${label}: guard present`);
+    assert.ok(c > g, `${label}: guard runs before ${change}`);
+  };
+  const slice = (start, length = 1200) => {
+    const i = app.indexOf(start);
+    assert.ok(i >= 0, `found: ${start}`);
+    return app.slice(i, i + length);
+  };
+  // sidebar .tab buttons: declined also stops the click reaching handleGlobalClick
+  const tabs = slice("els.tabs.forEach((tab) => {");
+  before(tabs, "if (!confirmLeaveTrainingLoad(tab.dataset.tab)) {", "pushAppHistory();", "sidebar tabs");
+  assert.match(tabs, /if \(!confirmLeaveTrainingLoad\(tab\.dataset\.tab\)\) \{\s*event\.stopPropagation\(\);\s*return;/);
+  before(slice("els.libraryTabs.forEach((button) => {"), "if (!confirmLeaveTrainingLoad(button.dataset.libraryTab)) return;", "pushAppHistory();", "sidebar library tabs");
+  before(slice("els.athleteTabs.forEach((button) => {"), "if (!confirmLeaveTrainingLoad(", "pushAppHistory();", "athlete tabs");
+  before(slice("function openWeeklyCalendarFromRail() {"), 'if (!confirmLeaveTrainingLoad("weekly")) return;', "pushAppHistory();", "rail calendar");
+  before(slice("async function handleGlobalClick(event) {"), "if (!confirmLeaveTrainingLoad(nextTab)) return;", "pushAppHistory();", "global [data-tab]");
+  before(slice('action.dataset.action === "brand-home"'), 'if (!confirmLeaveTrainingLoad("coach-home")) return;', "pushAppHistory();", "brand home");
+  before(slice('els.athleteList.querySelectorAll(".athlete-button").forEach((button) => {'), 'if (!confirmLeaveTrainingLoad("weekly")) return;', 'state.activeTab = "weekly";', "rail athlete list");
+
+  const appBack = slice("function handleAppBack() {", 4000);
+  before(appBack, "if (!confirmLeaveTrainingLoad(rootTab)) return BACK_STAYED;", "state.activeTab = rootTab;", "browser Back");
+  const browserBack = slice("function handleBrowserBack() {", 900);
+  assert.match(browserBack, /state\.appHistoryDepth -= 1;\s*if \(handleAppBack\(\) === BACK_STAYED\) \{[\s\S]*?window\.history\.pushState\(\{ optimove: true \}, "", window\.location\.href\);\s*state\.appHistoryDepth \+= 1;/, "a declined Back re-arms the entry it consumed");
+  assert.match(browserBack, /if \(handleAppBack\(\)\) \{\s*window\.history\.pushState\(\{ optimoveGuard: true \}/, "at the history root, a declined Back (truthy BACK_STAYED) re-arms the guard entry");
+});
+
+test("H2 (owner review): re-clicking the active Dashboards tab with a moved widget asks first - declined keeps the layout and reloads nothing", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  state.activeTab = "training-load";
+  a.editMode = true;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-down", widgetId }), { renderTrainingLoad });
+  const draft = a.layoutDraft;
+  const prompts = [];
+  try {
+    window.confirm = (message) => { prompts.push(message); return false; };
+    const before = fetchCalls.length;
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "analysis" }), { renderTrainingLoad });
+    assert.deepEqual(prompts, ["Discard your unsaved layout changes?"]);
+    assert.equal(a.layoutDraft, draft, "declined: the moved layout is untouched");
+    assert.equal(a.editMode, true);
+    assert.equal(fetchCalls.length, before, "declined: nothing reloaded");
   } finally {
     window.confirm = () => true;
   }
