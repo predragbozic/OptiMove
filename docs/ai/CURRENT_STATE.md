@@ -19,9 +19,8 @@ merged. Next, in this order (owner confirmed 2026-09-17 that this priority stays
     navigation started from the **notifications** panel (`handleNotificationAction` ->
     e.g. `openTestsToday`, `openTrainingLoadResults`, which change `state.activeTab`
     without calling `confirmLeaveTrainingLoad`).
-  - Reported by the owner, not found in code at `0a5936c`: leaving through the
-    **messages** panel (`messages.js` has no path that changes `state.activeTab`).
-    Reproduce it first in H4 before fixing.
+  - Leaving through the **messages** panel: Raised during review; not reproduced or
+    found in code — reproduce first in H4.
 
 ## Last completed, merged phases
 
