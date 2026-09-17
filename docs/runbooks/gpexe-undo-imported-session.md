@@ -131,13 +131,24 @@ is rewritten with `"outcome": "committed"` once the commit succeeds. So:
 | after the commit | `committed` | removed |
 
 A `pending` file is therefore a record that the run was attempted and what it
-covered, never a claim that the removal happened. **When you find one, answer
-the question with the database**: run the same command as a dry run — if it
-still finds the event, nothing was removed; if it reports that no imported
-GPEXE event exists for that session, the removal committed and the `pending`
-file is its record. Writing the log only after the commit was the alternative,
-and it loses the record of a removal that did happen; that trade was made
-deliberately.
+covered, never a claim that the removal happened. **When you find one, check
+the database**: run the same command as a dry run.
+
+- If it still finds the event, **nothing was removed by that attempt** — the
+  session is intact and can be left alone or undone again.
+- If it reports that no imported GPEXE event exists for that session, that tells
+  you **the state of the database right now, and nothing more**. It does not by
+  itself prove that this attempt is what removed it: another run, another
+  operator, or a restore from backup could equally have produced the same
+  state. A `pending` file plus a missing event is consistent with the removal
+  having committed — it is not evidence of it.
+- To attribute the removal, use something the attempt alone cannot fake: the
+  `committed` log of some run, the import's own run report, the database
+  backup taken before the work, or the server log for that window. If none of
+  those settles it, record the outcome as unknown rather than assuming.
+
+Writing the log only after the commit was the alternative, and it loses the
+record of a removal that did happen; that trade was made deliberately.
 
 ## Before this is ever used on a persistent database
 
