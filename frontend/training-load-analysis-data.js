@@ -566,6 +566,14 @@ export async function saveAnalysisMetricPanel(onPainted) {
           panel.seriesId = adopted.id;
           panel.seriesOrder = Number(adopted.series_order || 1);
           panel.originalMetric = panel.metric;
+        } else if (panel.originalMetric) {
+          // A restored previous metric (new row id) is still the one to replace.
+          const restoredOriginal = allSeries.find((s) => sameMetric(metricPanelMetricForSeries(s), panel.originalMetric)) || null;
+          if (restoredOriginal) {
+            series = restoredOriginal;
+            panel.seriesId = restoredOriginal.id;
+            panel.seriesOrder = Number(restoredOriginal.series_order || 1);
+          }
         }
       }
       const capacity = ANALYSIS_SERIES_LIMITS[panel.widgetType] ?? ANALYSIS_SERIES_LIMITS[widget.widget_type] ?? 20;
@@ -586,13 +594,21 @@ export async function saveAnalysisMetricPanel(onPainted) {
           addError = error;
         }
         if (addError) {
-          if (await tryQuietly(() => post(seriesUrl, { expectedWidgetRevision: revision, ...seriesRestoreBody(series) }))) {
+          let restored = null;
+          if (await tryQuietly(async () => { restored = await post(seriesUrl, { expectedWidgetRevision: revision, ...seriesRestoreBody(series) }); })) {
+            // code-reviewer (MEDIUM): the restored row has a NEW id - point
+            // the panel at it, or "Try again" would look for the deleted one
+            // and add-first into a full KPI.
+            panel.seriesId = restored?.seriesId || "";
+            panel.seriesOrder = Number(series.series_order || 1);
             throw failure("Could not replace the metric - your previous metric was put back unchanged. Try again.", addError);
           }
           panel.seriesId = "";
           panel.originalMetric = null;
           panel.serverChanged = true;
-          throw failure("The previous metric was removed but the new one could not be added, and putting the previous one back failed too. Save again to add the metric, or close and pick one under Advanced settings.", addError);
+          throw failure(addError.status === undefined
+            ? "Could not confirm whether the new metric was added - the dashboard was reloaded. Check the widget, then save again or close."
+            : "The previous metric was removed but the new one could not be added, and putting the previous one back failed too. Save again to add the metric, or close and pick one under Advanced settings.", addError);
         }
       } else if (!sameMetric(panel.metric, panel.originalMetric) || !series) {
         // Below capacity: ADD FIRST, remove afterwards - a failed add leaves

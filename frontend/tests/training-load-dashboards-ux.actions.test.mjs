@@ -927,3 +927,71 @@ test("KPI at capacity: when the new POST AND the restore both fail, the panel sa
   assert.deepEqual(log, ["delete-old", "add", "restore", "add"], "the retry adds once - no further delete");
   assert.equal(a.metricPanel, null);
 });
+
+test("KPI at capacity: after a successful restore, Save again replaces the RESTORED series (delete-first again) - never an add into a full KPI", async () => {
+  resetState();
+  loadedDashboard();
+  const log = [];
+  let posts = 0;
+  installFetchMock(responder({
+    widgets: [widget({ series: [series({ id: "s-restored" })], revision: 6 })],
+    extra: (call) => {
+      const seriesUrl = `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`;
+      if (call.url === `${seriesUrl}/${seriesId}` && call.method === "DELETE") { log.push("delete-old"); return { status: 200, body: { widgetRevision: 5 } }; }
+      if (call.url === `${seriesUrl}/s-restored` && call.method === "DELETE") { log.push("delete-restored"); assert.deepEqual(call.body, { expectedWidgetRevision: 6 }); return { status: 200, body: { widgetRevision: 7 } }; }
+      if (call.url === seriesUrl && call.method === "POST") {
+        posts += 1;
+        if (posts === 1) { log.push("add"); return { status: 500, body: { error: "internal" } }; }
+        if (posts === 2) { log.push("restore"); return { status: 201, body: { seriesId: "s-restored", widgetRevision: 6 } }; }
+        log.push("add");
+        assert.equal(call.body.seriesOrder, 1, "into the freed slot, never a second slot on a KPI");
+        assert.equal(call.body.expectedWidgetRevision, 7);
+        return { status: 201, body: { seriesId: "s-final", widgetRevision: 8 } };
+      }
+      return null;
+    },
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-edit-widget", widgetId }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-builtin", builtInKey: "srpe" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
+  const a = state.trainingLoad.analysis;
+  assert.deepEqual(log, ["delete-old", "add", "restore"]);
+  assert.equal(a.metricPanel.seriesId, "s-restored", "the panel now points at the restored row");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
+  assert.deepEqual(log, ["delete-old", "add", "restore", "delete-restored", "add"]);
+  assert.equal(a.metricPanel, null);
+  assert.equal(a.notice, "Metric updated.");
+});
+
+test("KPI at capacity: a LOST response on the new POST plus a 409 restore reports an unknown outcome (never 'could not be added'); the retry adopts the series the reload shows without writing", async () => {
+  resetState();
+  loadedDashboard();
+  let posts = 0;
+  installFetchMock(responder({
+    widgets: [widget({ series: [series({ id: "s2", built_in_series_key: "srpe", analytical_aggregation: "sum" })], revision: 6 })],
+    extra: (call) => {
+      const seriesUrl = `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`;
+      if (call.url === `${seriesUrl}/${seriesId}` && call.method === "DELETE") return { status: 200, body: { widgetRevision: 5 } };
+      if (call.url === seriesUrl && call.method === "POST") {
+        posts += 1;
+        if (posts === 1) throw new TypeError("fetch failed");
+        return { status: 409, body: { error: "staleRevision" } };
+      }
+      return null;
+    },
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-edit-widget", widgetId }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-builtin", builtInKey: "srpe" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
+  const a = state.trainingLoad.analysis;
+  assert.ok(a.metricPanel);
+  assert.match(a.metricPanel.error, /Could not confirm whether the new metric was added/);
+  assert.doesNotMatch(a.metricPanel.error, /could not be added, and/);
+  const writes = () => fetchCalls.filter((c) => c.method !== "GET" && !c.url.endsWith("/query")).length;
+  const writesBefore = writes();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
+  assert.equal(writes(), writesBefore, "the retry writes nothing");
+  assert.equal(posts, 2, "the retry adopted the series the reload shows - no third POST");
+  assert.equal(a.metricPanel, null);
+  assert.equal(a.notice, "Metric updated.");
+});
