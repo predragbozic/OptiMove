@@ -24,6 +24,12 @@ const ANALYSIS_LAYOUT_LIMITS = {
   bar_chart: { minWidth: 3, maxWidth: 12, minHeight: 3, maxHeight: 8 },
 };
 
+// H2: the layout toolbar disables a nudge/resize button that would be a
+// no-op at the current position (clampAnalysisLayoutEntry would undo it).
+export function analysisLayoutLimits(widgetType) {
+  return ANALYSIS_LAYOUT_LIMITS[widgetType] || { minWidth: 1, maxWidth: 12, minHeight: 1, maxHeight: 24 };
+}
+
 let dashboardsGeneration = 0;
 let detailGeneration = 0;
 let queryGeneration = 0;
@@ -123,6 +129,11 @@ export function invalidateTrainingLoadAnalysis() {
 
 function applyDashboardDetail(detail) {
   const analysis = state.trainingLoad.analysis;
+  // H2: layout editing belongs to one dashboard - a detail for a DIFFERENT
+  // dashboard (create, clone, fallback after a delete) never opens in
+  // layout mode. A reload of the same dashboard (save, stale revision)
+  // keeps the mode; its draft is dropped either way, as before.
+  if (analysis.dashboard?.id !== detail.dashboard?.id) analysis.editMode = false;
   analysis.dashboard = detail.dashboard;
   analysis.widgets = detail.widgets || [];
   analysis.selectedDashboardId = detail.dashboard?.id || "";
@@ -916,7 +927,7 @@ export function updateAnalysisLayoutDraft(widgetId, update) {
 }
 
 export function clampAnalysisLayoutEntry(entry, widgetType) {
-  const limits = ANALYSIS_LAYOUT_LIMITS[widgetType] || { minWidth: 1, maxWidth: 12, minHeight: 1, maxHeight: 24 };
+  const limits = analysisLayoutLimits(widgetType);
   const width = Math.max(limits.minWidth, Math.min(limits.maxWidth, Number(entry.width || limits.minWidth)));
   return {
     ...entry,

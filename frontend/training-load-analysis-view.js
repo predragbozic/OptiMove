@@ -1,4 +1,4 @@
-import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_SERIES, analysisPeriodPresetKey, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_SERIES, analysisLayoutLimits, analysisPeriodPresetKey, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 
@@ -249,6 +249,37 @@ function renderTopBarHtml() {
       <div class="tl-analysis-topbar-group">
         ${renderActivityPickerHtml()}
       </div>
+      ${renderLayoutBarHtml()}
+    </div>
+  `;
+}
+
+// ---------------- Dashboards UX H2: layout editing bar ----------------
+// Layout editing is its own mode (dashboard or widget "⋯" -> Edit layout).
+// While it is on, this bar is the one place to leave it: Cancel drops the
+// local draft and exits; the primary button saves the draft (atomic
+// PUT /layout) and exits, or reads "Done" while nothing has been moved.
+// Desktop: a full-width row of the sticky top bar, so it stays in view
+// while the grid scrolls. Phones (<= 720px, where the top bar is static):
+// pinned to the bottom of the screen instead (styles.css).
+function renderLayoutBarHtml() {
+  const a = state.trainingLoad.analysis;
+  if (!a.editMode || !canEdit()) return "";
+  const dirty = Boolean(a.layoutDraft);
+  return `
+    <div class="tl-layout-bar" role="region" aria-label="Layout editing">
+      <div class="tl-layout-bar-text">
+        <strong>Editing layout</strong>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-desktop">Drag a widget or use its arrows; drag the corner or use − / + to resize.</span>
+        <span class="muted tl-layout-bar-hint tl-layout-bar-hint-phone">Use Move up / Move down to set the order on phones.</span>
+        <span class="tl-layout-bar-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${dirty ? "Unsaved changes" : "No changes yet"}</span>
+      </div>
+      <div class="tl-layout-bar-actions">
+        <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.saving ? "disabled" : ""}>Cancel</button>
+        ${dirty
+          ? `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-save-layout" ${a.saving ? "disabled" : ""}>${a.saving ? "Saving..." : "Save layout"}</button>`
+          : `<button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-toggle-edit">Done</button>`}
+      </div>
     </div>
   `;
 }
@@ -267,21 +298,71 @@ function renderEmptyHtml() {
   `;
 }
 
-function renderWidgetToolbarHtml(widget, layout) {
+// H2: layout-only controls, shown in layout mode (Settings/Delete moved to
+// the widget "⋯" menu). A button that would be a no-op at the current
+// position is disabled - clampAnalysisLayoutEntry would undo it anyway.
+// Desktop gets the 12-column nudges and width -/+; phones only Move up/
+// Move down, because the phone layout reads nothing but the order
+// (styles.css hides each group where it has no visible effect).
+function layoutToolButtonHtml(action, widgetId, label, symbol, disabled) {
+  return `<button type="button" class="plain-button icon-button tl-layout-tool" data-action="training-load-analysis-widget-${action}" data-widget-id="${escapeAttr(widgetId)}" aria-label="${label}" title="${label}" ${disabled ? "disabled" : ""}>${symbol}</button>`;
+}
+
+function renderWidgetToolbarHtml(widget, layout, position) {
   if (!state.trainingLoad.analysis.editMode || !canEdit()) return "";
+  const limits = analysisLayoutLimits(widget.widget_type);
+  const x = Number(layout.x || 0);
+  const y = Number(layout.y || 0);
+  const width = Number(layout.width || limits.minWidth);
+  const height = Number(layout.height || limits.minHeight);
+  const id = widget.id;
   return `
-    <div class="tl-analysis-widget-tools">
-      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-left" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move left" title="Move left">&larr;</button>
-      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-right" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move right" title="Move right">&rarr;</button>
-      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-up" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move up" title="Move up">&uarr;</button>
-      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-down" data-widget-id="${escapeAttr(widget.id)}" aria-label="Move down" title="Move down">&darr;</button>
-      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-wider" data-widget-id="${escapeAttr(widget.id)}" aria-label="Wider" title="Wider">+</button>
-      <button type="button" class="plain-button icon-button tl-analysis-grid-control" data-action="training-load-analysis-widget-narrower" data-widget-id="${escapeAttr(widget.id)}" aria-label="Narrower" title="Narrower">-</button>
-      <button type="button" class="plain-button compact-button" data-action="training-load-analysis-edit-widget" data-widget-id="${escapeAttr(widget.id)}">Settings</button>
-      <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-widget" data-widget-id="${escapeAttr(widget.id)}">Delete</button>
-      <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-up" data-widget-id="${escapeAttr(widget.id)}">Move up</button>
-      <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-down" data-widget-id="${escapeAttr(widget.id)}">Move down</button>
-      <span class="muted tl-analysis-grid-control">${Number(layout.width || 0)}x${Number(layout.height || 0)}</span>
+    <div class="tl-analysis-widget-tools" role="group" aria-label="${escapeAttr(`Layout of ${widget.title}`)}">
+      <div class="tl-layout-tool-group tl-analysis-grid-control">
+        ${layoutToolButtonHtml("left", id, "Move left", "&larr;", x <= 0)}
+        ${layoutToolButtonHtml("right", id, "Move right", "&rarr;", x + width >= 12)}
+        ${layoutToolButtonHtml("up", id, "Move up", "&uarr;", y <= 0)}
+        ${layoutToolButtonHtml("down", id, "Move down", "&darr;", false)}
+      </div>
+      <div class="tl-layout-tool-group tl-analysis-grid-control">
+        ${layoutToolButtonHtml("narrower", id, "Narrower", "&minus;", width <= limits.minWidth)}
+        <span class="tl-layout-size" title="Width × height in grid units">${width} × ${height}</span>
+        ${layoutToolButtonHtml("wider", id, "Wider", "+", width >= limits.maxWidth)}
+      </div>
+      <div class="tl-layout-tool-group tl-analysis-mobile-reorder-group">
+        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-up" data-widget-id="${escapeAttr(id)}" ${position.index <= 0 ? "disabled" : ""}>Move up</button>
+        <button type="button" class="plain-button compact-button tl-analysis-mobile-reorder" data-action="training-load-analysis-widget-mobile-down" data-widget-id="${escapeAttr(id)}" ${position.index >= position.total - 1 ? "disabled" : ""}>Move down</button>
+      </div>
+    </div>
+  `;
+}
+
+// H2: the widget "⋯" menu - on every widget of an editable dashboard, in
+// and out of layout mode (before H2 a widget's Settings were only reachable
+// from inside layout mode). While a layout draft is unsaved, Settings/
+// Advanced/Delete are disabled: each of them reloads the dashboard on
+// success, which would silently drop the draft.
+function renderWidgetMenuHtml(widget) {
+  const a = state.trainingLoad.analysis;
+  if (!canEdit()) return "";
+  const menuKey = `widget:${widget.id}`;
+  const open = a.menu === menuKey;
+  const blocked = Boolean(a.editMode && a.layoutDraft);
+  const dataset = { "widget-id": widget.id };
+  return `
+    <div class="tl-popover-anchor tl-widget-menu-anchor ${open ? "is-open" : ""}">
+      <button type="button" class="plain-button icon-button tl-menu-trigger tl-widget-menu-trigger ${open ? "is-open" : ""}" data-action="training-load-analysis-open-menu" data-menu="${escapeAttr(menuKey)}" aria-haspopup="menu" aria-expanded="${open ? "true" : "false"}" aria-label="${escapeAttr(`Widget actions: ${widget.title}`)}" title="Widget actions"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+      ${open ? `
+        ${popoverBackdropHtml()}
+        <div class="tl-popover tl-menu tl-popover-align-end" role="menu" tabindex="-1" aria-label="${escapeAttr(`Actions for ${widget.title}`)}">
+          ${blocked ? `<p class="tl-menu-note" role="note">Save or cancel the layout changes first.</p>` : ""}
+          ${menuItemHtml({ action: "training-load-analysis-edit-widget", label: "Settings", dataset, disabled: blocked || a.saving })}
+          ${menuItemHtml({ action: "training-load-analysis-open-advanced", label: "Advanced settings", dataset, disabled: blocked || a.saving })}
+          ${a.editMode ? "" : menuItemHtml({ action: "training-load-analysis-toggle-edit", label: "Edit layout" })}
+          <div class="tl-menu-separator" role="separator"></div>
+          ${menuItemHtml({ action: "training-load-analysis-delete-widget", label: "Delete widget", dataset, danger: true, disabled: blocked || a.saving })}
+        </div>
+      ` : ""}
     </div>
   `;
 }
@@ -408,22 +489,22 @@ function renderWidgetBodyHtml(widget, results) {
   return renderChartHtml(widget, results, widget.widget_type);
 }
 
-function renderWidgetHtml(widget) {
+function renderWidgetHtml(widget, position) {
   const layout = layoutFor(widget);
   const results = resultByWidgetId(widget.id);
+  const layoutMode = state.trainingLoad.analysis.editMode && canEdit();
   return `
     <article class="panel tl-analysis-widget tl-analysis-widget-${escapeAttr(widget.widget_type)}" data-analysis-widget-id="${escapeAttr(widget.id)}" style="--tl-x:${Number(layout.x || 0)};--tl-y:${Number(layout.y || 0)};--tl-w:${Number(layout.width || 4)};--tl-h:${Number(layout.height || 4)};--tl-mobile:${Number(layout.mobileOrder || 0)}">
-      ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-widget-move" data-analysis-drag-handle="true" aria-label="Move widget" title="Move widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M8 7l4-4 4 4M16 17l-4 4-4-4M7 8l-4 4 4 4M17 16l4-4-4-4"/></svg></button>` : ""}
-      ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-widget-delete" data-action="training-load-analysis-delete-widget" data-widget-id="${escapeAttr(widget.id)}" aria-label="Delete widget" title="Delete widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14"/></svg></button>` : ""}
-      <header class="tl-analysis-widget-head ${state.trainingLoad.analysis.editMode && canEdit() ? "is-draggable" : ""}" data-analysis-drag-handle="${state.trainingLoad.analysis.editMode && canEdit() ? "true" : "false"}">
+      ${layoutMode ? `<button type="button" class="tl-analysis-widget-move" data-analysis-drag-handle="true" aria-label="Move widget" title="Move widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M8 7l4-4 4 4M16 17l-4 4-4-4M7 8l-4 4 4 4M17 16l4-4-4-4"/></svg></button>` : ""}
+      ${renderWidgetMenuHtml(widget)}
+      <header class="tl-analysis-widget-head ${layoutMode ? "is-draggable" : ""} ${canEdit() ? "has-menu" : ""}" data-analysis-drag-handle="${layoutMode ? "true" : "false"}">
         <div>
           <p class="eyebrow">${escapeHtml(widget.widget_type.replace("_", " "))}</p>
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
-        <span class="muted">rev ${escapeHtml(String(widget.revision))}</span>
       </header>
       ${renderWidgetBodyHtml(widget, results)}
-      ${renderWidgetToolbarHtml(widget, layout)}
+      ${renderWidgetToolbarHtml(widget, layout, position)}
       ${state.trainingLoad.analysis.editMode && canEdit() ? `<button type="button" class="tl-analysis-resize-handle" data-analysis-resize-handle aria-label="Resize widget" title="Resize widget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 20h12V8M13 20l7-7M18 20l2-2"/></svg></button>` : ""}
     </article>
   `;
@@ -442,13 +523,8 @@ function renderGridHtml() {
         <h3>${escapeHtml(a.dashboard.name)}</h3>
         ${a.dashboard.description ? `<p class="muted">${escapeHtml(a.dashboard.description)}</p>` : ""}
       </div>
-      ${canEdit() ? `
+      ${canEdit() && !a.editMode ? `
         <div class="tl-analysis-layout-actions">
-          ${a.editMode ? `
-            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-save-layout" ${a.layoutDraft && !a.saving ? "" : "disabled"}>Save layout</button>
-            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-cancel-layout" ${a.layoutDraft ? "" : "disabled"}>Cancel</button>
-            <button type="button" class="plain-button compact-button is-active" data-action="training-load-analysis-toggle-edit">Done</button>
-          ` : ""}
           <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add metric</span></button>
         </div>
       ` : ""}
@@ -461,7 +537,7 @@ function renderGridHtml() {
     ` : ""}
     ${a.dashboard.status === "archived" ? `<p class="tl-analysis-status is-unresolved">Archived dashboards are read-only.</p>` : ""}
     ${widgets.length
-      ? `<div class="tl-analysis-grid">${widgets.map(renderWidgetHtml).join("")}</div>`
+      ? `<div class="tl-analysis-grid">${widgets.map((w, index) => renderWidgetHtml(w, { index, total: widgets.length })).join("")}</div>`
       : `<section class="panel tl-analysis-empty">
           <h3>No metrics yet</h3>
           <p class="muted">${canEdit() ? "Pick a metric (RPE, sRPE, duration or any catalog metric), choose how to show it, and it appears here." : "This dashboard has no widgets."}</p>
