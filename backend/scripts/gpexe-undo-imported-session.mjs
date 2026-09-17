@@ -29,8 +29,20 @@
 // procedure at all: metric_values (v13 metric_values_immutable) and the event
 // binding (v20). Both triggers are disabled INSIDE the transaction and
 // re-enabled before it commits, so the protection is never off outside this
-// one statement sequence. A manual correction anywhere in the session stops
-// the undo: removing someone's hand-entered value is a separate decision.
+// one statement sequence. ALTER TABLE ... DISABLE TRIGGER is transactional in
+// Postgres, so a rollback — from an error, a refusal, a dry run, or a lost
+// connection — restores them without anything having to run; the explicit
+// re-enable plus assertTriggersEnabled() covers the committing path, and the
+// commit is refused if any of the three is not enabled again.
+// A manual correction anywhere in the session stops the undo: removing
+// someone's hand-entered value is a separate decision.
+//
+// The log is written BEFORE the commit, with outcome "pending", and rewritten
+// as "committed" afterwards. If the process dies in between, the file on disk
+// still names the session, the scope and the reason; whether the transaction
+// committed is then answered by a dry run against the database, which the
+// runbook says to do. Writing the log only after the commit would have lost
+// the record of a removal that did happen.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -90,7 +102,25 @@ export async function collectScope(client, { eventId }) {
   };
 }
 
-export async function undoImportedSession(client, scope, { performedByUserId, reason, apply }) {
+// The commit is only allowed once the database itself confirms all three
+// protections are back on (tgenabled 'O' = enabled).
+export async function assertTriggersEnabled(client) {
+  const rows = (await client.query(
+    `select c.relname, t.tgname, t.tgenabled from pg_trigger t
+     join pg_class c on c.oid = t.tgrelid
+     where t.tgname = any($1::text[])`,
+    [PROTECTED_TRIGGERS.map(([, trigger]) => trigger)],
+  )).rows;
+  const disabled = rows.filter((r) => r.tgenabled !== "O").map((r) => `${r.relname}.${r.tgname}=${r.tgenabled}`);
+  if (rows.length !== PROTECTED_TRIGGERS.length || disabled.length) {
+    throw new Error(`refusing to commit: protections are not back on (${disabled.join(", ") || "trigger missing"})`);
+  }
+}
+
+// onBeforeVerify is a test hook: it runs after the protections are switched
+// back on and before they are verified, so a test can prove the verification
+// really guards the commit.
+export async function undoImportedSession(client, scope, { performedByUserId, reason, apply, onBeforeCommit, onBeforeVerify }) {
   if (scope.manualOccasionIds.length) {
     throw new Error(`refusing: ${scope.manualOccasionIds.length} occasion(s) of this session were corrected manually — removing hand-entered values is a separate decision.`);
   }
@@ -131,19 +161,26 @@ export async function undoImportedSession(client, scope, { performedByUserId, re
       await run("metric_import_batches", `delete from training_load.metric_import_batches b where b.id = any($1::uuid[]) and not exists (select 1 from training_load.metric_measurement_occasions o where o.import_batch_id = b.id)`, [scope.batchIds]);
     }
     for (const [table, trigger] of PROTECTED_TRIGGERS) await client.query(`alter table ${table} enable trigger ${trigger}`);
+    if (onBeforeVerify) await onBeforeVerify(client);
+    await assertTriggersEnabled(client);
 
     const log = {
       performedAt: new Date().toISOString(),
       performedByUserId: performedByUserId ?? null,
       reason: reason ?? null,
       applied: Boolean(apply),
+      outcome: "pending",
       eventId: scope.eventId,
       sourceExternalId: scope.binding?.source_external_id ?? null,
       referenceSetExternalId: scope.binding?.reference_set_external_id ?? null,
       removed,
     };
+    // Written to disk while the transaction is still open: a process that dies
+    // during the commit must not leave a removal with no record of it.
+    if (onBeforeCommit) await onBeforeCommit(log);
     if (apply) await client.query("commit");
     else await client.query("rollback");
+    log.outcome = apply ? "committed" : "rolled_back";
     return log;
   } catch (error) {
     await client.query("rollback").catch(() => {});
@@ -174,10 +211,23 @@ export async function main(argv) {
       segments: scope.segmentIds.length, identities: scope.identityIds.length, activities: scope.activities.length,
       importBatches: scope.batchIds.length, manualCorrections: scope.manualOccasionIds.length,
     }, null, 2));
-    const log = await undoImportedSession(client, scope, { performedByUserId: opts.performedByUserId, reason: opts.reason, apply: opts.apply });
+    const writeLog = (log) => {
+      if (!opts.log) return;
+      const handle = fs.openSync(opts.log, "w");
+      try {
+        fs.writeFileSync(handle, JSON.stringify(log, null, 2));
+        fs.fsyncSync(handle);
+      } finally {
+        fs.closeSync(handle);
+      }
+    };
+    const log = await undoImportedSession(client, scope, {
+      performedByUserId: opts.performedByUserId, reason: opts.reason, apply: opts.apply,
+      onBeforeCommit: (pending) => writeLog(pending),
+    });
+    writeLog(log);
     console.log(opts.apply ? "Applied." : "Dry run: the same statements ran and were rolled back; nothing was removed.");
     console.log(JSON.stringify(log, null, 2));
-    if (opts.log) fs.writeFileSync(opts.log, JSON.stringify(log, null, 2));
     return { event, scope, log };
   } finally {
     await client.end();

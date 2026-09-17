@@ -88,6 +88,29 @@ node backend/scripts/gpexe-undo-imported-session.mjs \
   --apply --performed-by-user-id <uuid> --reason "wrong session imported" --log undo.json
 ```
 
+## The protections come back on, including when the run fails
+
+`ALTER TABLE ... DISABLE TRIGGER` is transactional in Postgres, so the two
+immutability protections are restored by three independent things:
+
+1. **Rollback restores them by itself** — an error, a refusal, a dry run, a
+   killed process or a lost connection all abort the transaction, and the
+   trigger state goes back with it. Nothing has to run for this to happen.
+2. **The run switches them back on explicitly** before it commits.
+3. **The commit is refused unless the database confirms all three are enabled
+   again** (`pg_trigger.tgenabled = 'O'`); if any is still off, the run throws
+   and the whole transaction, removal included, is rolled back.
+
+While the triggers are off, the transaction holds a lock on those two tables,
+so no other session can write to them in that window — and no other session
+ever sees the protections as disabled.
+
+Proven by `backend/tests/gpexe-undo-session.test.mjs`: an interrupted run, a
+dry run and a run whose protection is left off at commit time all end with the
+three triggers enabled, the data untouched, and a real delete attempt refused
+again. Each of those checks was verified to fail when the protection it covers
+is removed from the code.
+
 ## The log
 
 Every run returns, prints and (with `--log`) writes a JSON record: when, by
@@ -96,6 +119,25 @@ the threshold set that was recorded for it, and the number of rows removed per
 table. That file is the record of the operation — the database itself keeps no
 deletion log yet, which is exactly why the JSON must be kept with the import's
 own run report.
+
+**The file is written before the commit, not after.** It lands on disk (with
+`fsync`) with `"outcome": "pending"` while the transaction is still open, and
+is rewritten with `"outcome": "committed"` once the commit succeeds. So:
+
+| The process dies... | On disk | In the database |
+|---|---|---|
+| before the log is written | no file | nothing removed (rollback) |
+| between the log write and the commit | `pending` | either nothing removed, or the removal committed — the log alone does not say which |
+| after the commit | `committed` | removed |
+
+A `pending` file is therefore a record that the run was attempted and what it
+covered, never a claim that the removal happened. **When you find one, answer
+the question with the database**: run the same command as a dry run — if it
+still finds the event, nothing was removed; if it reports that no imported
+GPEXE event exists for that session, the removal committed and the `pending`
+file is its record. Writing the log only after the commit was the alternative,
+and it loses the record of a removal that did happen; that trade was made
+deliberately.
 
 ## Before this is ever used on a persistent database
 
