@@ -7,7 +7,9 @@ variant, and the script refuses every database except a disposable
 `optimove_tests_gpexe_*` one.
 
 Script: `backend/scripts/gpexe-undo-imported-session.mjs`.
-Proof: `backend/tests/gpexe-undo-session.test.mjs` (8 tests, disposable database).
+Proof: `backend/tests/gpexe-undo-session.test.mjs` (8 tests) and
+`backend/tests/gpexe-undo-guards.test.mjs` (8 tests), both on a disposable
+database.
 
 ## Why a procedure is needed at all
 
@@ -61,9 +63,17 @@ A later import of the same session reuses them.
 - **A manual correction.** If any occasion of the session was entered by hand
   (`entry_method = 'manual'`), the run refuses. Removing someone's hand-entered
   value is a separate decision, not a side effect of undoing an import.
-- **A shared activity.** If the activity also carries participants of another
-  event, the run refuses rather than deleting a container that outlives this
-  session.
+- **A shared activity.** The run refuses if the activity also carries
+  participants of another event, **or** if another metric event is linked to it
+  at all — an event link is written without any participant link, so counting
+  participants alone would miss it and the activity would be deleted out from
+  under that other event.
+- **A merged, reparented or superseded activity.** Removing it would break a
+  chain another activity depends on, so the run stops instead.
+- **Two events for the same GPEXE session.** v20's uniqueness covers active
+  connections only, so an archived connection can leave a second event with the
+  same `team_session:<id>`. Which one to undo is a decision; the run refuses
+  until the connections are sorted out.
 - **Any database that is not disposable.** Same guard as the import CLI: the
   URL must be explicit and carry no query parameters, the host must be local,
   the name must match `optimove_tests_gpexe_*` and must not be `OPTIMOVE` or
@@ -80,7 +90,11 @@ node backend/scripts/gpexe-undo-imported-session.mjs \
   --database-url <disposable url> --team-session 186942 --owner-team-id <uuid>
 ```
 
-Apply, on a disposable database:
+Apply, on a disposable database. `--log`, `--reason` and
+`--performed-by-user-id` are **required** with `--apply`: an applied run has to
+leave a record naming who ran it and why. The log file is never written over —
+if the path already exists the run refuses, so an earlier record cannot be lost
+by reusing the same file name:
 
 ```
 node backend/scripts/gpexe-undo-imported-session.mjs \
@@ -134,6 +148,8 @@ A `pending` file is therefore a record that the run was attempted and what it
 covered, never a claim that the removal happened. **When you find one, check
 the database**: run the same command as a dry run.
 
+- Use a **new** `--log` path for that check, or leave `--log` out: the run
+  refuses to write over the existing file.
 - If it still finds the event, **nothing was removed by that attempt** — the
   session is intact and can be left alone or undone again.
 - If it reports that no imported GPEXE event exists for that session, that tells

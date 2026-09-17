@@ -49,6 +49,19 @@ import { pathToFileURL } from "node:url";
 import pg from "pg";
 import { parseArgs, describeApplyTarget, assertDisposableApplyTarget } from "./gpexe-import-pilot.mjs";
 
+const DISPOSABLE_NAME = /^optimove_tests_gpexe_[a-z0-9_]+$/;
+
+// Every exported function checks the target itself: these are delete
+// statements, so "the CLI checked first" is not a guarantee a library caller
+// inherits.
+export async function assertDisposableClient(client) {
+  const database = (await client.query("select current_database() as db")).rows[0].db;
+  if (!DISPOSABLE_NAME.test(database)) {
+    throw new Error(`refusing: ${database} is not a disposable GPEXE test database (optimove_tests_gpexe_*)`);
+  }
+  await assertDisposableApplyTarget(client, { database });
+}
+
 const PROTECTED_TRIGGERS = [
   ["training_load.metric_values", "metric_values_immutable"],
   ["training_load.metric_event_source_bindings", "metric_event_source_bindings_immutable"],
@@ -56,7 +69,10 @@ const PROTECTED_TRIGGERS = [
 ];
 
 export async function collectScope(client, { eventId }) {
+  await assertDisposableClient(client);
   const one = async (sql, params = [eventId]) => (await client.query(sql, params)).rows;
+  const event = (await one(`select id, source_connection_id, source_external_id from training_load.metric_events where id = $1`))[0];
+  if (!event) throw new Error(`no metric event ${eventId}`);
   const participants = await one(`select id from training_load.metric_event_participants where event_id = $1`);
   const participantIds = participants.map((r) => r.id);
   const occasions = participantIds.length
@@ -69,10 +85,12 @@ export async function collectScope(client, { eventId }) {
   const segments = await one(`select id from training_load.metric_event_segments where event_id = $1`);
   const binding = await one(`select event_id, source_connection_id, source_external_id, reference_set_external_id from training_load.metric_event_source_bindings where event_id = $1`);
   const identityIds = [...new Set(occasions.map((r) => r.source_identity_id).filter(Boolean))];
-  // The session's own reservation identity has no occasion, so it is found
-  // through the binding's connection and external id instead.
-  const reservation = binding.length
-    ? await one(`select id from training_load.metric_source_identities where source_connection_id = $1 and source_external_id = $2`, [binding[0].source_connection_id, binding[0].source_external_id])
+  // The session's own reservation identity has no occasion. It is found
+  // through the EVENT's own connection and external id, not the binding's: a
+  // binding may be absent (an import from before that guard existed) and the
+  // reservation must be removed all the same.
+  const reservation = event.source_connection_id && event.source_external_id
+    ? await one(`select id from training_load.metric_source_identities where source_connection_id = $1 and source_external_id = $2`, [event.source_connection_id, event.source_external_id])
     : [];
   const activities = await one(
     `select distinct a.id, a.origin,
@@ -87,9 +105,39 @@ export async function collectScope(client, { eventId }) {
      join training_load.metric_event_participants p on p.id = l.metric_event_participant_id
      where p.event_id = $1`,
   );
+  // An activity is reached by this session through its participants OR
+  // through a direct event link, and removing it drops both kinds of link
+  // row — so both have to be looked at before calling it ours alone.
+  const reachedActivities = `
+    select ap.activity_id from training.activity_participants ap
+    join training.activity_participant_metric_participant_links pl on pl.activity_participant_id = ap.id
+    join training_load.metric_event_participants p on p.id = pl.metric_event_participant_id
+    where p.event_id = $1
+    union
+    select activity_id from training.activity_metric_event_links where metric_event_id = $1`;
+  const otherEventLinks = await one(
+    `select l.activity_id, l.metric_event_id, l.link_status from training.activity_metric_event_links l
+     where l.activity_id in (${reachedActivities}) and l.metric_event_id <> $1`,
+  );
+  // Merged, reparented or superseded activities belong to a chain other rows
+  // depend on; undoing one is not this procedure's business.
+  const entangledActivities = await one(
+    `select a.id, a.lifecycle_state, a.superseded_by_activity_id,
+            (select count(*)::int from training.activity_participant_merge_log m where m.source_activity_id = a.id or m.target_activity_id = a.id) as merges,
+            (select count(*)::int from training.activity_participant_reparent_log r where r.from_activity_id = a.id or r.to_activity_id = a.id) as reparents
+     from training.activities a
+     where a.id in (${reachedActivities})
+       and (a.lifecycle_state = 'superseded' or a.superseded_by_activity_id is not null
+            or exists (select 1 from training.activity_participant_merge_log m where m.source_activity_id = a.id or m.target_activity_id = a.id)
+            or exists (select 1 from training.activity_participant_reparent_log r where r.from_activity_id = a.id or r.to_activity_id = a.id))`,
+  );
   const batchIds = [...new Set(occasions.map((r) => r.import_batch_id).filter(Boolean))];
   return {
     eventId,
+    eventConnectionId: event.source_connection_id,
+    eventExternalId: event.source_external_id,
+    otherEventLinks,
+    entangledActivities,
     participantIds,
     occasionIds,
     valueCount: values[0].c,
@@ -105,15 +153,20 @@ export async function collectScope(client, { eventId }) {
 // The commit is only allowed once the database itself confirms all three
 // protections are back on (tgenabled 'O' = enabled).
 export async function assertTriggersEnabled(client) {
+  // Matched on schema, table AND trigger name: a same-named trigger on another
+  // table must neither satisfy this check nor break it.
+  const wanted = PROTECTED_TRIGGERS.map(([table, trigger]) => `${table}.${trigger}`);
   const rows = (await client.query(
-    `select c.relname, t.tgname, t.tgenabled from pg_trigger t
+    `select n.nspname || '.' || c.relname || '.' || t.tgname as name, t.tgenabled from pg_trigger t
      join pg_class c on c.oid = t.tgrelid
-     where t.tgname = any($1::text[])`,
-    [PROTECTED_TRIGGERS.map(([, trigger]) => trigger)],
+     join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname || '.' || c.relname || '.' || t.tgname = any($1::text[])`,
+    [wanted],
   )).rows;
-  const disabled = rows.filter((r) => r.tgenabled !== "O").map((r) => `${r.relname}.${r.tgname}=${r.tgenabled}`);
-  if (rows.length !== PROTECTED_TRIGGERS.length || disabled.length) {
-    throw new Error(`refusing to commit: protections are not back on (${disabled.join(", ") || "trigger missing"})`);
+  const found = new Map(rows.map((r) => [r.name, r.tgenabled]));
+  const notEnabled = wanted.filter((name) => found.get(name) !== "O").map((name) => `${name}=${found.get(name) ?? "missing"}`);
+  if (notEnabled.length) {
+    throw new Error(`refusing to commit: protections are not back on (${notEnabled.join(", ")})`);
   }
 }
 
@@ -121,12 +174,24 @@ export async function assertTriggersEnabled(client) {
 // back on and before they are verified, so a test can prove the verification
 // really guards the commit.
 export async function undoImportedSession(client, scope, { performedByUserId, reason, apply, onBeforeCommit, onBeforeVerify }) {
+  await assertDisposableClient(client);
   if (scope.manualOccasionIds.length) {
     throw new Error(`refusing: ${scope.manualOccasionIds.length} occasion(s) of this session were corrected manually — removing hand-entered values is a separate decision.`);
   }
   const sharedActivity = scope.activities.find((a) => a.participants_from_other_events > 0);
   if (sharedActivity) {
     throw new Error(`refusing: activity ${sharedActivity.id} also carries participants of another event — an activity is only removed when this session is its single source.`);
+  }
+  // An event link needs no participant link to exist
+  // (trainingActivityMetricsLink.ensureConfirmedEventLink writes one on its
+  // own), so the participant check above cannot see it.
+  if (scope.otherEventLinks?.length) {
+    const first = scope.otherEventLinks[0];
+    throw new Error(`refusing: activity ${first.activity_id} is also linked to metric event ${first.metric_event_id} (${first.link_status}) — an activity is only removed when this session is its single source.`);
+  }
+  if (scope.entangledActivities?.length) {
+    const first = scope.entangledActivities[0];
+    throw new Error(`refusing: activity ${first.id} was merged, reparented or superseded (lifecycle ${first.lifecycle_state}, merges ${first.merges}, reparents ${first.reparents}) — removing it would break a chain another activity depends on.`);
   }
   const removed = {};
   const run = async (label, sql, params) => {
@@ -149,7 +214,10 @@ export async function undoImportedSession(client, scope, { performedByUserId, re
     if (scope.occasionIds.length) {
       await run("metric_values", `delete from training_load.metric_values where occasion_id = any($1::uuid[])`, [scope.occasionIds]);
       await client.query(`update training_load.metric_source_identities set current_occasion_id = null where current_occasion_id = any($1::uuid[])`, [scope.occasionIds]);
-      // Superseded chains point at each other, so they go newest-first.
+      // One statement for the whole chain: occasions point at each other
+      // through supersedes/superseded_by, and the referential checks run at
+      // the end of the statement — so the order within it does not matter,
+      // while deleting them one by one would.
       await run("metric_measurement_occasions", `delete from training_load.metric_measurement_occasions where id = any($1::uuid[])`, [scope.occasionIds]);
     }
     if (scope.identityIds.length) await run("metric_source_identities", `delete from training_load.metric_source_identities where id = any($1::uuid[])`, [scope.identityIds]);
@@ -191,19 +259,33 @@ export async function undoImportedSession(client, scope, { performedByUserId, re
 export async function main(argv) {
   const opts = parseArgs(argv);
   if (!opts.teamSession || !opts.ownerTeamId) throw new Error("--team-session and --owner-team-id are required");
+  // The log is part of the contract, not an option: an applied run has to
+  // leave a record that names who ran it and why.
+  if (opts.apply && (!opts.log || !opts.reason || !opts.performedByUserId)) {
+    throw new Error("--apply requires --log, --reason and --performed-by-user-id");
+  }
   const target = describeApplyTarget(opts.databaseUrl);
   console.log(`Target: host ${target.host}, port ${target.port}, database ${target.database}`);
   const client = new pg.Client({ connectionString: opts.databaseUrl });
   await client.connect();
   try {
     await assertDisposableApplyTarget(client, target);
-    const event = (await client.query(
-      `select e.id, e.event_name, e.occurred_date::text as occurred_date from training_load.metric_events e
+    const events = (await client.query(
+      `select e.id, e.event_name, e.occurred_date::text as occurred_date, c.state as connection_state
+       from training_load.metric_events e
        join training_load.metric_source_connections c on c.id = e.source_connection_id
-       where c.source_system = 'gpexe' and c.owner_team_id = $1 and e.source_external_id = $2`,
+       where c.source_system = 'gpexe' and c.owner_team_id = $1 and e.source_external_id = $2
+       order by e.id`,
       [opts.ownerTeamId, `team_session:${opts.teamSession}`],
-    )).rows[0];
-    if (!event) throw new Error(`no imported GPEXE event for team_session ${opts.teamSession} in team ${opts.ownerTeamId}`);
+    )).rows;
+    if (!events.length) throw new Error(`no imported GPEXE event for team_session ${opts.teamSession} in team ${opts.ownerTeamId}`);
+    // v20's uniqueness covers ACTIVE connections only, so an archived one can
+    // leave a second event for the same session. Which of them to undo is a
+    // decision — the importer refuses the same situation with duplicate_event.
+    if (events.length > 1) {
+      throw new Error(`ambiguous: ${events.length} events carry team_session ${opts.teamSession} in team ${opts.ownerTeamId} (connection states: ${events.map((e) => e.connection_state).join(", ")}) — resolve the connections first.`);
+    }
+    const event = events[0];
     const scope = await collectScope(client, { eventId: event.id });
     console.log(`Event ${event.id} "${event.event_name}" (${event.occurred_date})`);
     console.log(JSON.stringify({
@@ -211,9 +293,15 @@ export async function main(argv) {
       segments: scope.segmentIds.length, identities: scope.identityIds.length, activities: scope.activities.length,
       importBatches: scope.batchIds.length, manualCorrections: scope.manualOccasionIds.length,
     }, null, 2));
+    // "wx" for the first write: the file may be the record of an earlier
+    // applied run, and the runbook sends the operator back to this same
+    // command to check the database afterwards. Only this run's own pending
+    // record may be replaced, by its own second write.
+    let mode = "wx";
     const writeLog = (log) => {
       if (!opts.log) return;
-      const handle = fs.openSync(opts.log, "w");
+      const handle = fs.openSync(opts.log, mode);
+      mode = "w";
       try {
         fs.writeFileSync(handle, JSON.stringify(log, null, 2));
         fs.fsyncSync(handle);
