@@ -1007,7 +1007,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   if (type === "training-load-analysis-panel-close") {
     const a = state.trainingLoad.analysis;
     if (a.metricPanel?.saving) return true;
-    a.metricPanel = null; // Cancel: staged edits are dropped, nothing was ever sent
+    // Cancel: staged edits are dropped. Nothing was sent - unless a partial
+    // save already landed, in which case the footer read "Close" and the
+    // server keeps what it has (panel.serverChanged, see
+    // saveAnalysisMetricPanel).
+    a.metricPanel = null;
     renderTrainingLoad();
     return true;
   }

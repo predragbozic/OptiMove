@@ -14292,8 +14292,13 @@ button.tests-assignment-card {
   font-size: 12px;
 }
 
-.tl-metric-panel > .builder-error {
+.tl-metric-panel > .builder-error,
+.tl-metric-panel-server-note {
   margin: 0 18px;
+}
+
+.tl-metric-panel-server-note {
+  font-size: 12px;
 }
 
 .tl-metric-panel-actions {

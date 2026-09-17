@@ -374,6 +374,11 @@ export function emptyAnalysisMetricPanel(widget = null) {
     saving: false,
     error: "",
     createdInFlight: false,
+    // Set when a partial save left the server different from what the coach
+    // last saw (see saveAnalysisMetricPanel): the footer's Cancel becomes
+    // Close, and staleSeriesId names a series a retry must remove first.
+    serverChanged: false,
+    staleSeriesId: "",
   };
 }
 
@@ -424,6 +429,20 @@ function newAnalysisWidgetBody(panel) {
 // migrations_v2 v16's column default - so no extra detail fetch is needed
 // in between). Existing widget: PATCH widget (title/type/per) -> series
 // change, each step threading the widgetRevision the previous one returned.
+//
+// Partial-failure contract (owner review of PR #89): a coach must never be
+// left with a widget that has no metric while the panel still offers a
+// "Cancel" that pretends nothing happened. So:
+// - new widget, series POST fails -> the just-created empty widget is
+//   DELETEd again (compensation); if that delete also fails, the panel
+//   re-stages the created widget (a retry only adds the series) and says so;
+// - metric change on an existing widget: the NEW series is POSTed FIRST and
+//   the old one DELETEd only afterwards, so a failed add leaves the previous
+//   metric untouched; if the delete fails, the new series is removed again
+//   (compensation) and the previous metric stays; if even that fails, both
+//   are on the widget and the panel says so (a retry removes the old one);
+// - whenever the server state genuinely differs from what the coach last saw,
+//   `panel.serverChanged` turns the footer's Cancel into Close.
 // Any server write, successful or not, is followed by the ordinary list +
 // detail + batch-query reload so the grid never shows a half-applied state.
 export async function saveAnalysisMetricPanel(onPainted) {
@@ -433,9 +452,13 @@ export async function saveAnalysisMetricPanel(onPainted) {
   const base = `/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}`;
   const post = (url, body) => api(url, { method: "POST", body: JSON.stringify(body) });
   const patch = (url, body) => api(url, { method: "PATCH", body: JSON.stringify(body) });
+  const del = (url, body) => api(url, { method: "DELETE", body: JSON.stringify(body) });
+  // A best-effort compensating call: true when it went through.
+  const tryQuietly = async (fn) => { try { await fn(); return true; } catch { return false; } };
+  const failure = (message, cause) => { const err = new Error(message); err.status = cause?.status; err.cause = cause; err.userFacing = true; return err; };
   const seriesSettings = { dataScopeLevel: panel.scope, analyticalAggregation: panel.aggregation };
-  // The new-widget branch stages widgetId as soon as the POST lands (see
-  // createdInFlight below), so "new vs edit" is decided up front.
+  // The new-widget branch may stage widgetId mid-flight (see createdInFlight
+  // below), so "new vs edit" is decided up front.
   const wasNew = !panel.widgetId || Boolean(panel.createdInFlight);
   panel.saving = true;
   panel.error = "";
@@ -446,24 +469,48 @@ export async function saveAnalysisMetricPanel(onPainted) {
     if (!panel.widgetId) {
       const created = await post(`${base}/widgets`, newAnalysisWidgetBody(panel));
       wrote = true;
-      // code-reviewer (MEDIUM): the widget now exists - stage its identity at
-      // once, so if the series POST below fails (409/400/network) a retry of
-      // Save takes the existing-widget branch and only adds the series,
-      // never a second empty widget.
-      panel.widgetId = created.widgetId;
-      panel.seriesId = "";
-      panel.seriesOrder = 1;
-      panel.originalMetric = null;
-      // Keeps the panel reading "Add metric" (and the success notice "added")
-      // on a retry - the coach is still adding, not editing.
-      panel.createdInFlight = true;
-      await post(`${base}/widgets/${encodeURIComponent(created.widgetId)}/series`, {
-        expectedWidgetRevision: 1, seriesOrder: 1, ...seriesBodyForMetric(panel.metric), ...seriesSettings,
-      });
+      const widgetUrl = `${base}/widgets/${encodeURIComponent(created.widgetId)}`;
+      let seriesError = null;
+      try {
+        await post(`${widgetUrl}/series`, { expectedWidgetRevision: 1, seriesOrder: 1, ...seriesBodyForMetric(panel.metric), ...seriesSettings });
+      } catch (error) {
+        seriesError = error;
+      }
+      if (seriesError) {
+        // Compensation: take the metric-less widget away again, so the
+        // dashboard is exactly as it was and Cancel stays honest.
+        if (await tryQuietly(() => del(widgetUrl, { expectedWidgetRevision: 1 }))) {
+          throw failure(seriesError.status === 409 && seriesError.message === "staleRevision"
+            ? "Dashboard changed on the server while saving - nothing was saved. Reloaded the latest version; check your settings and try again."
+            : "Could not add the metric - nothing was saved. Check the settings and try again.", seriesError);
+        }
+        // The empty widget is on the dashboard and could not be removed:
+        // stage it so a retry of Save only adds the series (never a second
+        // widget), and be explicit about the server state.
+        panel.widgetId = created.widgetId;
+        panel.seriesId = "";
+        panel.seriesOrder = 1;
+        panel.originalMetric = null;
+        panel.createdInFlight = true;
+        panel.serverChanged = true;
+        throw failure("The widget was created but its metric could not be added, and removing the empty widget failed too. Save again to add the metric, or close and delete the widget from the dashboard.", seriesError);
+      }
     } else {
       const widget = (a.widgets || []).find((w) => w.id === panel.widgetId);
-      if (!widget) throw new Error("This widget no longer exists - reopen the dashboard and try again.");
+      if (!widget) throw failure("This widget no longer exists - reopen the dashboard and try again.");
       let revision = widget.revision;
+      const seriesUrl = `${base}/widgets/${encodeURIComponent(widget.id)}/series`;
+      const allSeries = [...(widget.series || [])].sort((l, r) => Number(l.series_order || 0) - Number(r.series_order || 0));
+      // Leftover from an earlier partial replace (new added, old not removed):
+      // remove the old series first, then carry on with an ordinary save.
+      const stale = panel.staleSeriesId ? allSeries.find((s) => s.id === panel.staleSeriesId) : null;
+      if (stale) {
+        const deleted = await del(`${seriesUrl}/${encodeURIComponent(stale.id)}`, { expectedWidgetRevision: revision });
+        wrote = true;
+        panel.serverChanged = true; // persisted - Cancel must read Close from here on
+        revision = deleted.widgetRevision ?? revision;
+        panel.staleSeriesId = "";
+      }
       const widgetPatch = {};
       if (panel.title.trim() !== widget.title) widgetPatch.title = panel.title.trim();
       if (panel.widgetType !== widget.widget_type) widgetPatch.widgetType = panel.widgetType;
@@ -471,24 +518,63 @@ export async function saveAnalysisMetricPanel(onPainted) {
       if (Object.keys(widgetPatch).length) {
         const updated = await patch(`${base}/widgets/${encodeURIComponent(widget.id)}`, { expectedWidgetRevision: revision, ...widgetPatch });
         wrote = true;
+        panel.serverChanged = true; // persisted - Cancel must read Close from here on
         // PATCH returns the v17 update_widget_content row:
         // { widget: { widget_id, widget_revision, dashboard_id } } - the
         // series step below must carry THAT revision or it 409s.
         revision = updated.widget?.widget_revision ?? revision;
       }
-      const seriesUrl = `${base}/widgets/${encodeURIComponent(widget.id)}/series`;
-      const series = (widget.series || []).find((s) => s.id === panel.seriesId) || null;
-      if (!sameMetric(panel.metric, panel.originalMetric) || !series) {
-        // A different metric = a different series: replace it (same order
-        // slot) rather than mutate a binding in place - the existing
-        // bind-builtin/bind-metric actions do exactly the same.
-        if (series) {
-          const deleted = await api(`${seriesUrl}/${encodeURIComponent(series.id)}`, { method: "DELETE", body: JSON.stringify({ expectedWidgetRevision: revision }) });
-          wrote = true;
-          revision = deleted.widgetRevision ?? revision;
+      let series = allSeries.find((s) => s.id === panel.seriesId) || null;
+      if (!series) {
+        // code-reviewer (MEDIUM): a retry after a LOST response (the series
+        // POST committed, the reply never arrived) must adopt the series the
+        // reload shows instead of adding an identical second one.
+        const adopted = allSeries.find((s) => sameMetric(metricPanelMetricForSeries(s), panel.metric)) || null;
+        if (adopted) {
+          series = adopted;
+          panel.seriesId = adopted.id;
+          panel.seriesOrder = Number(adopted.series_order || 1);
+          panel.originalMetric = panel.metric;
         }
-        await post(seriesUrl, { expectedWidgetRevision: revision, seriesOrder: panel.seriesOrder || 1, ...seriesBodyForMetric(panel.metric), ...seriesSettings });
+      }
+      if (!sameMetric(panel.metric, panel.originalMetric) || !series) {
+        // A different metric = a different series. ADD FIRST, remove
+        // afterwards: a failed add leaves the previous metric untouched.
+        const nextOrder = allSeries.reduce((m, s) => Math.max(m, Number(s.series_order || 0)), 0) + 1;
+        const added = await post(seriesUrl, { expectedWidgetRevision: revision, seriesOrder: nextOrder, ...seriesBodyForMetric(panel.metric), ...seriesSettings });
         wrote = true;
+        revision = added.widgetRevision ?? revision;
+        if (series) {
+          let deleteError = null;
+          try {
+            const deleted = await del(`${seriesUrl}/${encodeURIComponent(series.id)}`, { expectedWidgetRevision: revision });
+            revision = deleted.widgetRevision ?? revision;
+          } catch (error) {
+            deleteError = error;
+          }
+          if (deleteError) {
+            // Compensation: remove the series we just added, so the widget
+            // shows exactly the previous metric again.
+            if (await tryQuietly(() => del(`${seriesUrl}/${encodeURIComponent(added.seriesId)}`, { expectedWidgetRevision: revision }))) {
+              throw failure("Could not replace the metric - your previous metric is unchanged. Try again.", deleteError);
+            }
+            // Both series are on the widget now: stage the new one as current
+            // and remember the old one so a retry only removes it.
+            panel.seriesId = added.seriesId;
+            panel.seriesOrder = nextOrder;
+            panel.originalMetric = panel.metric;
+            panel.staleSeriesId = series.id;
+            panel.serverChanged = true;
+            throw failure("The new metric was added but the previous one could not be removed - the widget shows both for now. Save again to remove the previous metric, or close and remove it under Advanced settings.", deleteError);
+          }
+          // Keep the replaced series in its old slot when the widget has
+          // other series (cosmetic - a failure here changes no data).
+          const others = allSeries.filter((s) => s.id !== series.id && s.id !== stale?.id);
+          if (others.length) {
+            const order = [added.seriesId, ...others.map((s) => s.id)].map((seriesId, i) => ({ seriesId, seriesOrder: i + 1 }));
+            await tryQuietly(() => api(`${seriesUrl}/reorder`, { method: "PUT", body: JSON.stringify({ expectedWidgetRevision: revision, order }) }));
+          }
+        }
       } else if (series.analytical_aggregation !== panel.aggregation || series.data_scope_level !== panel.scope) {
         await patch(`${seriesUrl}/${encodeURIComponent(series.id)}`, { expectedWidgetRevision: revision, ...seriesSettings });
         wrote = true;
@@ -497,9 +583,12 @@ export async function saveAnalysisMetricPanel(onPainted) {
     saved = true;
   } catch (error) {
     panel.saving = false;
-    panel.error = error.status === 409 && error.message === "staleRevision"
-      ? "Dashboard changed on the server. Reloaded the latest version - check your settings and save again."
-      : (error.message || "Could not save this metric.");
+    // No HTTP status = the request itself failed (network) AFTER it may have
+    // committed server-side: reload so the grid and any retry see the truth.
+    if (error.status === undefined && !error.userFacing) wrote = true;
+    if (error.userFacing) panel.error = error.message;
+    else if (error.status === 409 && error.message === "staleRevision") panel.error = "Dashboard changed on the server. Reloaded the latest version - check your settings and save again.";
+    else panel.error = error.message || "Could not save this metric.";
     if (error.status === 409) wrote = true; // reload so the panel edits against the current revision
   }
   if (wrote) {

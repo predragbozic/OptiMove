@@ -561,7 +561,7 @@ function renderMetricPanelHtml() {
       <button class="builder-athlete-backdrop" type="button" data-action="training-load-analysis-panel-close" aria-label="Close" ${panel.saving ? "disabled" : ""}></button>
       <section class="panel tl-metric-panel" role="dialog" aria-modal="true" aria-labelledby="tl-metric-panel-title">
         <div class="tl-overlay-head tl-metric-panel-head">
-          <div><strong id="tl-metric-panel-title">${editing ? "Edit metric" : "Add metric"}</strong><p class="muted">${editing ? "Changes apply when you save." : "Nothing is saved until you press Save."}</p></div>
+          <div><strong id="tl-metric-panel-title">${editing ? "Edit metric" : "Add metric"}</strong><p class="muted">${panel.serverChanged ? "Part of this change is already on the dashboard." : editing ? "Changes apply when you save." : "Nothing is saved until you press Save."}</p></div>
           <button type="button" class="plain-button icon-button" data-action="training-load-analysis-panel-close" aria-label="Close" ${panel.saving ? "disabled" : ""}>&times;</button>
         </div>
         <div class="tl-metric-panel-body">
@@ -593,8 +593,9 @@ function renderMetricPanelHtml() {
           </section>
         </div>
         ${panel.error ? `<p class="builder-error" role="alert">${escapeHtml(panel.error)}</p>` : ""}
+        ${panel.serverChanged ? `<p class="muted tl-metric-panel-server-note">Closing keeps what is already saved on the dashboard.</p>` : ""}
         <div class="tl-analysis-modal-actions tl-metric-panel-actions">
-          <button type="button" class="plain-button compact-button" data-action="training-load-analysis-panel-close" ${panel.saving ? "disabled" : ""}>Cancel</button>
+          <button type="button" class="plain-button compact-button" data-action="training-load-analysis-panel-close" ${panel.saving ? "disabled" : ""}>${panel.serverChanged ? "Close" : "Cancel"}</button>
           <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-panel-save" ${canSave ? "" : "disabled"}>${panel.saving ? "Saving..." : (editing ? "Save changes" : "Save metric")}</button>
         </div>
       </section>
