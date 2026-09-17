@@ -506,9 +506,10 @@ test("widget Settings opens the panel prefilled from the saved widget; Save PATC
   assert.equal(a.notice, "Metric updated.");
 });
 
-test("changing the metric of an existing widget replaces its series ADD-FIRST (POST new at the next slot, then DELETE old at the returned revision) - and an unchanged panel saves without any request", async () => {
+test("changing the metric of a BELOW-capacity (table) widget replaces its series ADD-FIRST (POST new at the next slot, then DELETE old at the returned revision) - and an unchanged panel saves without any request", async () => {
   resetState();
   loadedDashboard();
+  state.trainingLoad.analysis.widgets = [widget({ widget_type: "table", width: 6, height: 4 })];
   const seen = [];
   installFetchMock(responder({
     extra: (call) => {
@@ -650,6 +651,7 @@ test("new widget: when the series POST fails, the just-created empty widget is D
 test("existing widget, metric change: when the NEW series POST fails nothing else is sent - the previous metric is untouched and Cancel is honest", async () => {
   resetState();
   loadedDashboard();
+  state.trainingLoad.analysis.widgets = [widget({ widget_type: "table", width: 6, height: 4 })];
   const log = [];
   installFetchMock(responder({
     extra: (call) => {
@@ -675,6 +677,7 @@ test("existing widget, metric change: when the NEW series POST fails nothing els
 test("existing widget, metric change: when the OLD series DELETE fails, the new series is removed again (compensation) so the widget shows exactly the previous metric", async () => {
   resetState();
   loadedDashboard();
+  state.trainingLoad.analysis.widgets = [widget({ widget_type: "table", width: 6, height: 4 })];
   const log = [];
   installFetchMock(responder({
     extra: (call) => {
@@ -702,7 +705,8 @@ test("existing widget, metric change: when both the DELETE and its compensation 
   loadedDashboard();
   const log = [];
   let oldDeleteAttempts = 0;
-  const reloaded = widget({ series: [series(), series({ id: "s-new", series_order: 2, built_in_series_key: "srpe", analytical_aggregation: "sum" })], revision: 5 });
+  const reloaded = widget({ widget_type: "table", series: [series(), series({ id: "s-new", series_order: 2, built_in_series_key: "srpe", analytical_aggregation: "sum" })], revision: 5 });
+  state.trainingLoad.analysis.widgets = [reloaded];
   installFetchMock(responder({
     widgets: [reloaded],
     extra: (call) => {
@@ -766,6 +770,7 @@ test("new widget: the series POST response is LOST (network), compensation 409s,
 test("existing widget: the series POST itself fails without a status (network) - the dashboard is reloaded so the grid shows the server's truth", async () => {
   resetState();
   loadedDashboard();
+  state.trainingLoad.analysis.widgets = [widget({ widget_type: "table", width: 6, height: 4 })];
   installFetchMock(responder({
     extra: (call) => {
       if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series` && call.method === "POST") throw new TypeError("fetch failed");
@@ -783,6 +788,7 @@ test("existing widget: the series POST itself fails without a status (network) -
 test("existing widget: a persisted title PATCH followed by a failed series POST turns the footer into Close", async () => {
   resetState();
   loadedDashboard();
+  state.trainingLoad.analysis.widgets = [widget({ widget_type: "table", width: 6, height: 4 })];
   installFetchMock(responder({
     extra: (call) => {
       if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}` && call.method === "PATCH") return { status: 200, body: { widget: { widget_id: widgetId, widget_revision: 5, dashboard_id: dashboardId } } };
@@ -803,7 +809,7 @@ test("existing widget: a persisted title PATCH followed by a failed series POST 
 test("retry with a staleSeriesId and a DIFFERENT metric on a multi-series widget: the reorder never names the stale series removed in the same save", async () => {
   resetState();
   loadedDashboard();
-  const reloaded = widget({ revision: 5, series: [
+  const reloaded = widget({ widget_type: "table", revision: 5, series: [
     series(),
     series({ id: "s-new", series_order: 2, built_in_series_key: "srpe", analytical_aggregation: "sum" }),
     series({ id: "s-other", series_order: 3, built_in_series_key: "session_count", analytical_aggregation: "sum" }),
@@ -832,4 +838,92 @@ test("retry with a staleSeriesId and a DIFFERENT metric on a multi-series widget
   assert.ok(reorderBody, "a multi-series widget reorders after the replace");
   assert.deepEqual(reorderBody, { expectedWidgetRevision: 8, order: [{ seriesId: "s-third", seriesOrder: 1 }, { seriesId: "s-other", seriesOrder: 2 }] });
   assert.equal(state.trainingLoad.analysis.metricPanel, null);
+});
+
+// -------------------- At capacity (KPI, max_series = 1): delete-first with restore --------------------
+
+test("KPI at capacity: replacing the metric DELETEs the old series first, then POSTs the new one into the same slot at the returned revision", async () => {
+  resetState();
+  loadedDashboard();
+  const log = [];
+  installFetchMock(responder({
+    widgets: [widget({ series: [series({ id: "s2", built_in_series_key: "srpe", analytical_aggregation: "sum" })], revision: 6 })],
+    extra: (call) => {
+      const seriesUrl = `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`;
+      if (call.url === `${seriesUrl}/${seriesId}` && call.method === "DELETE") { log.push("delete-old"); assert.deepEqual(call.body, { expectedWidgetRevision: 4 }); return { status: 200, body: { widgetRevision: 5 } }; }
+      if (call.url === seriesUrl && call.method === "POST") { log.push("add"); assert.deepEqual(call.body, { expectedWidgetRevision: 5, seriesOrder: 1, builtInSeriesKey: "srpe", dataScopeLevel: "session", analyticalAggregation: "sum" }); return { status: 201, body: { seriesId: "s2", widgetRevision: 6 } }; }
+      return null;
+    },
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-edit-widget", widgetId }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-builtin", builtInKey: "srpe" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
+  assert.deepEqual(log, ["delete-old", "add"]);
+  assert.equal(state.trainingLoad.analysis.metricPanel, null);
+  assert.equal(state.trainingLoad.analysis.notice, "Metric updated.");
+});
+
+test("KPI at capacity: when the new series POST fails, the previous series is POSTed back exactly as it was (restore) - the widget keeps its metric and Cancel is honest", async () => {
+  resetState();
+  loadedDashboard();
+  const log = [];
+  let posts = 0;
+  installFetchMock(responder({
+    extra: (call) => {
+      const seriesUrl = `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`;
+      if (call.url === `${seriesUrl}/${seriesId}` && call.method === "DELETE") { log.push("delete-old"); return { status: 200, body: { widgetRevision: 5 } }; }
+      if (call.url === seriesUrl && call.method === "POST") {
+        posts += 1;
+        if (posts === 1) { log.push("add"); assert.equal(call.body.builtInSeriesKey, "srpe"); return { status: 400, body: { error: "invalidRequest" } }; }
+        log.push("restore");
+        assert.deepEqual(call.body, { expectedWidgetRevision: 5, seriesOrder: 1, axis: "primary", dataScopeLevel: "session", analyticalAggregation: "avg", aggregationRolePolicy: "standalone_only", coveragePolicy: "complete_only", sourcePolicy: "not_applicable", builtInSeriesKey: "rpe" }, "the restore recreates the original series row, not the panel's defaults");
+        return { status: 201, body: { seriesId: "s-restored", widgetRevision: 6 } };
+      }
+      return null;
+    },
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-edit-widget", widgetId }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-builtin", builtInKey: "srpe" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
+  const a = state.trainingLoad.analysis;
+  assert.deepEqual(log, ["delete-old", "add", "restore"]);
+  assert.ok(a.metricPanel);
+  assert.match(a.metricPanel.error, /previous metric was put back unchanged/);
+  assert.equal(a.metricPanel.serverChanged, false);
+  assert.match(renderTrainingLoadAnalysisHtml(), /training-load-analysis-panel-close"[^>]*>Cancel</);
+});
+
+test("KPI at capacity: when the new POST AND the restore both fail, the panel says the widget has no metric, offers Close, and a retry only adds", async () => {
+  resetState();
+  loadedDashboard();
+  const log = [];
+  let posts = 0;
+  installFetchMock(responder({
+    widgets: [widget({ series: [], revision: 5 })],
+    extra: (call) => {
+      const seriesUrl = `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series`;
+      if (call.url === `${seriesUrl}/${seriesId}` && call.method === "DELETE") { log.push("delete-old"); return { status: 200, body: { widgetRevision: 5 } }; }
+      if (call.url === seriesUrl && call.method === "POST") {
+        posts += 1;
+        log.push(posts === 2 ? "restore" : "add");
+        return posts <= 2 ? { status: 500, body: { error: "internal" } } : { status: 201, body: { seriesId: "s3", widgetRevision: 6 } };
+      }
+      return null;
+    },
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-edit-widget", widgetId }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-builtin", builtInKey: "srpe" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
+  const a = state.trainingLoad.analysis;
+  assert.deepEqual(log, ["delete-old", "add", "restore"]);
+  assert.ok(a.metricPanel);
+  assert.equal(a.metricPanel.serverChanged, true);
+  assert.match(a.metricPanel.error, /putting the previous one back failed too/);
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /training-load-analysis-panel-close"[^>]*>Close</);
+  assert.match(html, /Part of this change is already on the dashboard/);
+
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
+  assert.deepEqual(log, ["delete-old", "add", "restore", "add"], "the retry adds once - no further delete");
+  assert.equal(a.metricPanel, null);
 });

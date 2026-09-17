@@ -9,6 +9,14 @@ const DASHBOARD_DETAIL_NAMESPACE = "training-load-analysis-dashboard";
 const DASHBOARD_QUERY_NAMESPACE = "training-load-analysis-query";
 const METRIC_DEFINITIONS_NAMESPACE = "training-load-analysis-metrics";
 
+// Mirrors training_load.dashboard_widget_types.max_series (migrations_v2
+// v18 seed) - the DB trigger on add_series() rejects a series past this with
+// a generic 400, so the guided panel must know up front whether a metric
+// replace can add-first (below capacity) or has to delete-first (at
+// capacity, e.g. a KPI with its single series). Same convention as
+// ANALYSIS_LAYOUT_LIMITS above.
+const ANALYSIS_SERIES_LIMITS = { kpi: 1, table: 12, line_chart: 8, bar_chart: 8 };
+
 const ANALYSIS_LAYOUT_LIMITS = {
   kpi: { minWidth: 2, maxWidth: 4, minHeight: 2, maxHeight: 3 },
   table: { minWidth: 3, maxWidth: 12, minHeight: 3, maxHeight: 12 },
@@ -404,6 +412,29 @@ function seriesBodyForMetric(metric) {
   return metric.kind === "builtin" ? { builtInSeriesKey: metric.key } : { metricDefinitionId: metric.id };
 }
 
+// The POST body that recreates an existing series row exactly (used to put
+// the previous metric back when a delete-first replace fails half-way).
+function seriesRestoreBody(series) {
+  const body = {
+    seriesOrder: Number(series.series_order || 1),
+    axis: series.axis || "primary",
+    dataScopeLevel: series.data_scope_level,
+    analyticalAggregation: series.analytical_aggregation,
+    aggregationRolePolicy: series.aggregation_role_policy,
+    coveragePolicy: series.coverage_policy,
+    sourcePolicy: series.source_policy,
+  };
+  if (series.built_in_series_key) body.builtInSeriesKey = series.built_in_series_key;
+  else if (series.metric_definition_id) body.metricDefinitionId = series.metric_definition_id;
+  else if (Array.isArray(series.template_metric_key_hints) && series.template_metric_key_hints.length) body.templateMetricKeyHints = series.template_metric_key_hints;
+  if (series.color) body.color = series.color;
+  if (series.display_label) body.displayLabel = series.display_label;
+  if (series.source_connection_id) body.sourceConnectionId = series.source_connection_id;
+  if (series.comparison_period) body.comparisonPeriod = series.comparison_period;
+  for (const key of Object.keys(body)) if (body[key] === undefined || body[key] === null) delete body[key];
+  return body;
+}
+
 function newAnalysisWidgetBody(panel) {
   const a = state.trainingLoad.analysis;
   const widgets = a.widgets || [];
@@ -537,9 +568,35 @@ export async function saveAnalysisMetricPanel(onPainted) {
           panel.originalMetric = panel.metric;
         }
       }
-      if (!sameMetric(panel.metric, panel.originalMetric) || !series) {
-        // A different metric = a different series. ADD FIRST, remove
-        // afterwards: a failed add leaves the previous metric untouched.
+      const capacity = ANALYSIS_SERIES_LIMITS[panel.widgetType] ?? ANALYSIS_SERIES_LIMITS[widget.widget_type] ?? 20;
+      if (series && !sameMetric(panel.metric, panel.originalMetric) && allSeries.length >= capacity) {
+        // AT CAPACITY (e.g. a KPI and its single series): add_series() would
+        // be rejected, so this has to delete first. If the new series then
+        // fails, the previous one is put back exactly as it was
+        // (compensation); only if THAT fails too is the widget left without
+        // a metric - said explicitly, with Close instead of Cancel, and a
+        // retry that only adds.
+        const deleted = await del(`${seriesUrl}/${encodeURIComponent(series.id)}`, { expectedWidgetRevision: revision });
+        wrote = true;
+        revision = deleted.widgetRevision ?? revision;
+        let addError = null;
+        try {
+          await post(seriesUrl, { expectedWidgetRevision: revision, seriesOrder: Number(series.series_order || 1), ...seriesBodyForMetric(panel.metric), ...seriesSettings });
+        } catch (error) {
+          addError = error;
+        }
+        if (addError) {
+          if (await tryQuietly(() => post(seriesUrl, { expectedWidgetRevision: revision, ...seriesRestoreBody(series) }))) {
+            throw failure("Could not replace the metric - your previous metric was put back unchanged. Try again.", addError);
+          }
+          panel.seriesId = "";
+          panel.originalMetric = null;
+          panel.serverChanged = true;
+          throw failure("The previous metric was removed but the new one could not be added, and putting the previous one back failed too. Save again to add the metric, or close and pick one under Advanced settings.", addError);
+        }
+      } else if (!sameMetric(panel.metric, panel.originalMetric) || !series) {
+        // Below capacity: ADD FIRST, remove afterwards - a failed add leaves
+        // the previous metric untouched.
         const nextOrder = allSeries.reduce((m, s) => Math.max(m, Number(s.series_order || 0)), 0) + 1;
         const added = await post(seriesUrl, { expectedWidgetRevision: revision, seriesOrder: nextOrder, ...seriesBodyForMetric(panel.metric), ...seriesSettings });
         wrote = true;
