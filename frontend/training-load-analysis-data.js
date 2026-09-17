@@ -133,17 +133,25 @@ function applyDashboardDetail(detail) {
 
 export async function loadTrainingLoadAnalysis(onPainted) {
   ensureAnalysisPeriod();
-  const analysis = state.trainingLoad.analysis;
   await Promise.all([
     loadDashboards(onPainted),
     loadActiveDashboard(onPainted),
   ]);
+  await selectFallbackDashboard(onPainted);
+}
+
+// Which dashboard to show when none is explicitly selected: the account's
+// own active dashboard for this workspace, else nothing (the empty state).
+// Shared by the initial load and by a permanent delete - never "some other
+// dashboard picked from the list".
+async function selectFallbackDashboard(onPainted, { force = false } = {}) {
+  const analysis = state.trainingLoad.analysis;
   if (!analysis.selectedDashboardId && analysis.activeDashboardId) {
     analysis.selectedDashboardId = analysis.activeDashboardId;
   }
   if (analysis.selectedDashboardId) {
-    await loadDashboardDetail(analysis.selectedDashboardId, onPainted);
-    await queryAnalysisDashboard(onPainted);
+    await loadDashboardDetail(analysis.selectedDashboardId, onPainted, { force });
+    await queryAnalysisDashboard(onPainted, { force });
   }
 }
 
@@ -304,6 +312,82 @@ export async function archiveAnalysisDashboard(onPainted) {
     method: "POST",
     body: JSON.stringify({ expectedRevision: a.dashboard.revision }),
   }), onPainted);
+}
+
+// Permanent delete of the dashboard that is currently OPEN (the menu only
+// ever acts on a.dashboard - there is no per-row delete in the picker).
+// The server removes the dashboard, its widgets and series, and every
+// active-selection row pointing at it (v19). Deliberately NOT built on
+// mutateDashboard(): that helper reloads the SAME selected dashboard after
+// the write, which no longer exists here.
+export async function deleteAnalysisDashboard(onPainted) {
+  const a = state.trainingLoad.analysis;
+  const target = a.dashboard;
+  if (!target) return false;
+  a.saving = true;
+  a.mutationError = "";
+  onPainted?.();
+  let alreadyGone = false;
+  try {
+    await api(`/api/training-load/dashboards/${encodeURIComponent(target.id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expectedRevision: target.revision }),
+    });
+  } catch (error) {
+    a.saving = false;
+    if (error.status === 404) {
+      // Already gone (deleted elsewhere, or by a concurrent request) - the
+      // same cleanup as a successful delete, never a "phantom" dashboard
+      // left open (code-reviewer).
+      alreadyGone = true;
+    } else {
+      if (error.status === 409 && error.message === "staleRevision") {
+        await loadDashboardDetail(target.id, onPainted, { force: true });
+        a.notice = "Dashboard changed on the server. Reloaded the latest version - review it before deleting.";
+      } else {
+        a.mutationError = {
+          dashboardHasClones: "This dashboard has been cloned into other dashboards and cannot be permanently deleted. Archive it instead.",
+          systemTemplateProtected: "System templates cannot be permanently deleted.",
+          forbidden: "You can't delete this dashboard.",
+        }[error.message] || error.message || "Could not delete this dashboard.";
+      }
+      onPainted?.();
+      return false;
+    }
+  }
+  a.saving = false;
+  await forgetDeletedAnalysisDashboard(target, onPainted);
+  a.notice = alreadyGone
+    ? `Dashboard "${target.name}" no longer exists.`
+    : `Dashboard "${target.name}" was permanently deleted.`;
+  onPainted?.();
+  return !alreadyGone;
+}
+
+// Drops a dashboard that no longer exists from every place the client
+// holds it. The open view is cleared ONLY if that dashboard is still the
+// selected one: the coach may have picked another dashboard while the
+// DELETE was in flight, and that newer choice must survive (code-reviewer).
+// Every cached list/detail/query entry is invalidated either way - which
+// also discards a detail load still in flight - so the fallback step then
+// reloads whatever is selected: the newer choice, the remaining active
+// dashboard, or nothing (the empty state).
+async function forgetDeletedAnalysisDashboard(target, onPainted) {
+  const a = state.trainingLoad.analysis;
+  if (a.selectedDashboardId === target.id) {
+    a.dashboard = null;
+    a.widgets = [];
+    a.queryResult = null;
+    a.selectedDashboardId = "";
+    a.editMode = false;
+    a.layoutDraft = null;
+    a.metricPanel = null;
+    a.editor = { open: false, widgetId: "", seriesId: "" };
+  }
+  if (a.activeDashboardId === target.id) a.activeDashboardId = "";
+  invalidateTrainingLoadAnalysis();
+  await Promise.all([loadDashboards(onPainted), loadActiveDashboard(onPainted)]);
+  await selectFallbackDashboard(onPainted, { force: true });
 }
 
 export async function updateAnalysisDashboardMetadata(body, onPainted) {

@@ -175,7 +175,7 @@ test("the empty state offers New dashboard + Choose dashboard (the picker), not 
 
 // -------------------- Popover menus --------------------
 
-test("one popover at a time: opening the period menu closes the dashboard menu, the backdrop closes everything, and the dashboard menu only exists for an editable dashboard", async () => {
+test("one popover at a time: opening the period menu closes the dashboard menu, the backdrop closes everything; editing actions only for an editable dashboard, Delete permanently for anything but a system template", async () => {
   resetState();
   loadedDashboard();
   installFetchMock(responder());
@@ -189,8 +189,11 @@ test("one popover at a time: opening the period menu closes the dashboard menu, 
     ["training-load-analysis-set-active", "Active dashboard"],
     ["training-load-analysis-toggle-edit", "Edit layout"],
     ["training-load-analysis-archive", "Archive"],
+    ["training-load-analysis-delete-dashboard", "Delete permanently"],
   ]);
   assert.match(html, /data-action="training-load-analysis-set-active"[^>]*disabled/, "the active dashboard can't be set active again");
+  assert.match(html, /training-load-analysis-archive[\s\S]*role="separator"[\s\S]*training-load-analysis-delete-dashboard/, "Delete sits below a separator, after Archive");
+  assert.match(html, /class="tl-menu-item is-danger"[^>]*data-action="training-load-analysis-delete-dashboard"/);
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-menu", menu: "period" }), { renderTrainingLoad });
   assert.equal(state.trainingLoad.analysis.menu, "period");
@@ -202,12 +205,18 @@ test("one popover at a time: opening the period menu closes the dashboard menu, 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-close-popovers" }), { renderTrainingLoad });
   assert.equal(state.trainingLoad.analysis.menu, "");
 
+  // Owner decision (permanent delete): an archived dashboard and a
+  // club/team template can still be deleted - the menu then offers ONLY
+  // Delete permanently; a system template gets no menu at all.
+  const menuActions = () => [...renderTrainingLoadAnalysisHtml().matchAll(/role="menuitem"[^>]*data-action="([^"]+)"/g)].map((m) => m[1]);
+  state.trainingLoad.analysis.menu = "dashboard";
   state.trainingLoad.analysis.dashboard = dashboard({ status: "archived" });
-  html = renderTrainingLoadAnalysisHtml();
-  assert.doesNotMatch(html, /data-menu="dashboard"/, "archived: no dashboard actions menu");
-  state.trainingLoad.analysis.dashboard = dashboard({ id: templateId, is_template: true });
-  html = renderTrainingLoadAnalysisHtml();
-  assert.doesNotMatch(html, /data-menu="dashboard"/, "template: no dashboard actions menu");
+  assert.deepEqual(menuActions(), ["training-load-analysis-delete-dashboard"], "archived: Delete only - no Rename/Set active/Edit layout/Archive");
+  assert.doesNotMatch(renderTrainingLoadAnalysisHtml(), /role="separator"/, "no separator when Delete is the only item");
+  state.trainingLoad.analysis.dashboard = dashboard({ id: templateId, is_template: true, owner_scope: "club" });
+  assert.deepEqual(menuActions(), ["training-load-analysis-delete-dashboard"], "club template: Delete only");
+  state.trainingLoad.analysis.dashboard = dashboard({ id: templateId, is_template: true, owner_scope: "system" });
+  assert.doesNotMatch(renderTrainingLoadAnalysisHtml(), /data-menu="dashboard"/, "system template: no dashboard actions menu at all");
 });
 
 test("Escape closes the topmost overlay in order - popover, then dialog, then metric panel - and never a panel whose save is in flight", () => {
@@ -1060,4 +1069,188 @@ test("table (below capacity): a lost add-first response where the add did NOT la
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-save" }), { renderTrainingLoad });
   assert.deepEqual(log, ["add", "add", "delete-old"]);
   assert.equal(a.metricPanel, null);
+});
+
+// -------------------- Permanent delete --------------------
+
+test("Delete permanently asks for a confirmation that names the dashboard, its widgets and settings, and points to Archive; declining sends nothing", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  let asked = "";
+  globalThis.window.confirm = (message) => { asked = message; return false; };
+  try {
+    state.trainingLoad.analysis.menu = "dashboard";
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-dashboard" }), { renderTrainingLoad });
+  } finally {
+    globalThis.window.confirm = () => true;
+  }
+  assert.match(asked, /Permanently delete "Load board"\?/);
+  assert.match(asked, /This also deletes its 1 widget and every setting/);
+
+  // Browser QA: the copy must read naturally for 0 and for several widgets too.
+  const confirmFor = async (widgets) => {
+    state.trainingLoad.analysis.widgets = widgets;
+    let text = "";
+    globalThis.window.confirm = (m) => { text = m; return false; };
+    try {
+      await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-dashboard" }), { renderTrainingLoad });
+    } finally {
+      globalThis.window.confirm = () => true;
+    }
+    return text;
+  };
+  const none = await confirmFor([]);
+  assert.match(none, /It has no widgets yet; its settings \(layout, filters\) are deleted too\. It cannot be undone\./);
+  assert.doesNotMatch(none, /all 0/);
+  assert.match(await confirmFor([widget(), widget({ id: newWidgetId })]), /This also deletes all 2 of its widgets and every setting/);
+  state.trainingLoad.analysis.widgets = [widget()];
+  assert.match(asked, /every setting/);
+  assert.match(asked, /cannot be undone/);
+  assert.match(asked, /Archive/, "the confirmation points to Archive as the keep-it option");
+  assert.equal(state.trainingLoad.analysis.menu, "", "the menu closes");
+  assert.equal(writes().length, 0, "declining sends nothing");
+  assert.equal(state.trainingLoad.analysis.dashboard.id, dashboardId, "the dashboard is still open");
+});
+
+test("confirming DELETEs the open dashboard with its revision; when it was the ACTIVE one the selection is cleared and the empty state shows", async () => {
+  resetState();
+  loadedDashboard();
+  let deleted = false;
+  installFetchMock(responder({
+    extra: (call) => {
+      if (call.url === `/api/training-load/dashboards/${dashboardId}` && call.method === "DELETE") {
+        assert.deepEqual(call.body, { expectedRevision: 3 });
+        deleted = true;
+        return { status: 200, body: { deleted: true, dashboardId } };
+      }
+      // After the delete the server has no active selection and no longer lists it.
+      if (deleted && call.url === "/api/training-load/dashboards/active") return { status: 200, body: { activeDashboard: null } };
+      if (deleted && call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { dashboards: allDashboards().filter((d) => d.id !== dashboardId) } };
+      return null;
+    },
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-dashboard" }), { renderTrainingLoad });
+  const a = state.trainingLoad.analysis;
+  assert.equal(deleted, true);
+  assert.equal(a.dashboard, null);
+  assert.equal(a.selectedDashboardId, "");
+  assert.equal(a.activeDashboardId, "", "the active selection is gone");
+  assert.equal(a.widgets.length, 0);
+  assert.ok(!a.dashboards.some((d) => d.id === dashboardId), "the picker list no longer contains it");
+  assert.equal(a.notice, 'Dashboard "Load board" was permanently deleted.');
+  assert.ok(!fetchCalls.some((c) => c.method === "GET" && c.url === `/api/training-load/dashboards/${dashboardId}`), "never tries to reload the deleted dashboard");
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /No dashboard selected/);
+  assert.match(html, /was permanently deleted/);
+});
+
+test("deleting an open dashboard that was NOT the active one lands on the remaining active dashboard", async () => {
+  resetState();
+  loadedDashboard();
+  const a = state.trainingLoad.analysis;
+  // Open "Sprint board" while "Load board" stays the active dashboard.
+  a.selectedDashboardId = otherId;
+  a.dashboard = dashboard({ id: otherId, name: "Sprint board", owner_scope: "club", revision: 2 });
+  a.widgets = [];
+  let deleted = false;
+  installFetchMock(responder({
+    extra: (call) => {
+      if (call.url === `/api/training-load/dashboards/${otherId}` && call.method === "DELETE") { deleted = true; return { status: 200, body: { deleted: true, dashboardId: otherId } }; }
+      if (deleted && call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { dashboards: allDashboards().filter((d) => d.id !== otherId) } };
+      return null;
+    },
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-dashboard" }), { renderTrainingLoad });
+  assert.equal(deleted, true);
+  assert.equal(a.activeDashboardId, dashboardId, "the untouched active selection survives");
+  assert.equal(a.selectedDashboardId, dashboardId, "falls back to the remaining active dashboard");
+  assert.equal(a.dashboard.name, "Load board");
+  assert.ok(fetchCalls.some((c) => c.url === `/api/training-load/dashboards/${dashboardId}/query`), "and queries it");
+  assert.match(renderTrainingLoadAnalysisHtml(), /<h3>Load board<\/h3>/);
+});
+
+test("a refused delete keeps the dashboard open and explains why: has clones (points to Archive), system template, forbidden; a stale revision reloads it", async () => {
+  const cases = [
+    { status: 409, body: { error: "dashboardHasClones" }, expect: /cloned into other dashboards[\s\S]*Archive it instead/ },
+    { status: 409, body: { error: "systemTemplateProtected" }, expect: /System templates cannot be permanently deleted/ },
+    { status: 403, body: { error: "forbidden" }, expect: /can't delete this dashboard/ },
+  ];
+  for (const c of cases) {
+    resetState();
+    loadedDashboard();
+    installFetchMock(responder({ extra: (call) => (call.method === "DELETE" ? c : null) }));
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-dashboard" }), { renderTrainingLoad });
+    const a = state.trainingLoad.analysis;
+    assert.equal(a.dashboard.id, dashboardId, `${c.body.error}: still open`);
+    assert.equal(a.selectedDashboardId, dashboardId);
+    assert.equal(a.saving, false);
+    assert.match(a.mutationError, c.expect, c.body.error);
+    assert.match(renderTrainingLoadAnalysisHtml(), /role="alert"/);
+  }
+
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder({
+    extra: (call) => (call.method === "DELETE" ? { status: 409, body: { error: "staleRevision" } } : null),
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-dashboard" }), { renderTrainingLoad });
+  const a = state.trainingLoad.analysis;
+  assert.equal(a.dashboard.id, dashboardId);
+  assert.match(a.notice, /changed on the server[\s\S]*review it before deleting/);
+  assert.ok(fetchCalls.some((call) => call.method === "GET" && call.url === `/api/training-load/dashboards/${dashboardId}`), "reloaded the latest version");
+  assert.equal(writes().length, 1, "exactly the one refused DELETE - nothing retried automatically");
+});
+
+test("a dashboard picked while the DELETE is still in flight stays open - the delete never overwrites the newer choice", async () => {
+  resetState();
+  loadedDashboard();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let deleted = false;
+  installFetchMock(responder({
+    extra: (call) => {
+      if (call.method === "DELETE" && call.url === `/api/training-load/dashboards/${dashboardId}`) {
+        return gate.then(() => { deleted = true; return { status: 200, body: { deleted: true, dashboardId } }; });
+      }
+      if (deleted && call.url === "/api/training-load/dashboards/active") return { status: 200, body: { activeDashboard: null } };
+      if (deleted && call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { dashboards: allDashboards().filter((d) => d.id !== dashboardId) } };
+      return null;
+    },
+  }));
+  const pending = handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-dashboard" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-select-dashboard", dashboardId: otherId }), { renderTrainingLoad });
+  const a = state.trainingLoad.analysis;
+  assert.equal(a.selectedDashboardId, otherId, "sanity: the coach switched while the DELETE waited");
+  release();
+  await pending;
+  assert.equal(deleted, true);
+  assert.equal(a.selectedDashboardId, otherId, "the newer choice survives");
+  assert.equal(a.dashboard?.id, otherId, "and is loaded, not left blank");
+  assert.equal(a.detailLoading, false, "no stuck loading state after the cache invalidation");
+  assert.equal(a.activeDashboardId, "", "the deleted dashboard's active selection is gone");
+  assert.ok(!a.dashboards.some((d) => d.id === dashboardId));
+  assert.match(a.notice, /"Load board" was permanently deleted/);
+});
+
+test("a 404 on delete means the dashboard is already gone: the same cleanup as a success (never a phantom open dashboard), with its own message", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder({
+    extra: (call) => {
+      if (call.method === "DELETE") return { status: 404, body: { error: "notFound" } };
+      if (call.url === "/api/training-load/dashboards/active") return { status: 200, body: { activeDashboard: null } };
+      if (call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { dashboards: allDashboards().filter((d) => d.id !== dashboardId) } };
+      return null;
+    },
+  }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-dashboard" }), { renderTrainingLoad });
+  const a = state.trainingLoad.analysis;
+  assert.equal(a.dashboard, null);
+  assert.equal(a.selectedDashboardId, "");
+  assert.equal(a.activeDashboardId, "");
+  assert.equal(a.mutationError, "", "not reported as a failure");
+  assert.equal(a.notice, 'Dashboard "Load board" no longer exists.');
+  assert.ok(!a.dashboards.some((d) => d.id === dashboardId));
+  assert.match(renderTrainingLoadAnalysisHtml(), /No dashboard selected/);
 });

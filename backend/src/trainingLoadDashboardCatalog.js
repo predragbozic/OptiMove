@@ -199,6 +199,54 @@ export async function archiveDashboard(req, dataWorkspace, dashboardId, { expect
   }
 }
 
+// Permanent delete (v19) — irreversible, unlike archiveDashboard() above:
+// the row, every one of its widgets and series (dashboard_widgets/
+// dashboard_widget_series cascade automatically, v16), and any active-
+// selection pointing at it (cleared by delete_dashboard() itself, before
+// the delete, in the same transaction — see that migration's own header)
+// are all gone. Deliberately NOT gated by assert_dashboard_writable() —
+// an archived dashboard can (and typically will) be the one being
+// permanently deleted; Archive stays the reversible, softer action.
+//
+// A system template can NEVER be deleted — checked here unconditionally,
+// for every caller including a platform admin (who otherwise passes
+// canManageDashboardRow for every row): a deliberate carve-out with no
+// exception, not an authorization gap.
+export async function deleteDashboard(req, dataWorkspace, dashboardId, { expectedRevision }) {
+  const row = await fetchVisibleDashboard(req, dataWorkspace, dashboardId);
+  // Checked BEFORE the manage check (code-reviewer): a system template is
+  // visible to every account, so answering it with the same 409 for
+  // everyone leaks nothing - and every caller gets one consistent reason.
+  if (row.owner_scope === "system") throw httpError(409, "System templates cannot be permanently deleted.", "systemTemplateProtected");
+  if (!canManageDashboardRow(req, row)) throw httpError(403, "Forbidden.");
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+    throw httpError(400, "expectedRevision must be a positive integer.");
+  }
+  try {
+    await query(`select * from training_load.delete_dashboard($1, $2)`, [dashboardId, expectedRevision]);
+    return { deleted: true, dashboardId };
+  } catch (error) {
+    if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");
+    // Deleted by a concurrent request while this one waited on the row
+    // lock (delete_dashboard raises P0002) - the same info-hiding 404 as
+    // any dashboard that does not exist.
+    if (error?.code === "P0002") throw httpError(404, "Dashboard not found.");
+    // dashboards.cloned_from_dashboard_id is ON DELETE RESTRICT and
+    // immutable (v15) — a dashboard that has been cloned from cannot be
+    // deleted without breaking that lineage guarantee. Surfaced as a
+    // clean, specific conflict rather than the generic 400 the route's
+    // default SQLSTATE mapping would otherwise give a raw 23503.
+    // Matched by constraint NAME, not just SQLSTATE: any other 23503 (a
+    // future FK, or the active-selection RESTRICT if delete_dashboard()
+    // ever stopped clearing it first) must never be misreported as
+    // "has clones" - it falls through to the route's generic mapping.
+    if (error?.code === "23503" && error?.constraint === "dashboards_cloned_from_dashboard_id_fkey") {
+      throw httpError(409, "This dashboard has been cloned into other dashboards and cannot be permanently deleted. Archive it instead.", "dashboardHasClones");
+    }
+    throw error;
+  }
+}
+
 // ------------------------------------------------------------
 // Clone — the REAL clone service the design proof explicitly left as
 // future application logic (DASHBOARD_MODEL_REPORT.md §0-R4.7): inserts
