@@ -2654,8 +2654,9 @@ test("§10.10 REAL concurrency: add_series() vs createDefinitionVersion(), BOTH 
 // dashboardVisibilitySql's data-workspace clause listed every OTHER
 // account's private dashboard whose stored data workspace equalled the
 // caller's. The single-row GET always re-checked and 404'd, so the leak
-// was names/descriptions in the list only - but the new picker shows
-// exactly that list. Each test below asserts BOTH surfaces (list + GET)
+// was the list row itself (id, name, description, ownership, data-workspace
+// binding, status, revision, timestamps) - never widgets/series/query data -
+// but the new picker shows exactly that list. Each test below asserts BOTH surfaces (list + GET)
 // for the same dashboard, so they can never drift apart again.
 // ============================================================
 

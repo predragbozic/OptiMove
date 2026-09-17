@@ -294,9 +294,11 @@ export function dashboardVisibilitySql(req, dataWorkspace, alias, params) {
     params.push([...teamIds]);
     clauses.push(`(${alias}.owner_scope = 'team' and ${alias}.owner_team_id = any($${params.length}::uuid[]))`);
   }
-  // Data-workspace READ visibility - the SQL twin of canViewDashboardRow's
-  // last branch, which only ever reaches dataWorkspaceMatches() for a
-  // SHARED (club/team-owned) dashboard: a 'user'-owned private dashboard is
+  // Data-workspace READ visibility - mirrors canViewDashboardRow's last
+  // branch, which only ever reaches dataWorkspaceMatches() for a SHARED
+  // (club/team-owned) dashboard (for today's roles; the club/team owner
+  // clauses above are wider than canManageClub/canManageTeamById for any
+  // future non-admin role - see docs/ai/CURRENT_STATE.md, Open risks): a 'user'-owned private dashboard is
   // visible to its owner (the clause above) or a platform admin, NEVER via
   // a workspace match. Without the owner_scope guard here this clause
   // listed every OTHER account's private dashboard whose stored data
@@ -304,7 +306,9 @@ export function dashboardVisibilitySql(req, dataWorkspace, alias, params) {
   // (`private_coach` + null scope) board to every other private coach, and
   // one club coach's private board to every colleague active in the same
   // club/team. The single-row GET always re-checked via canViewDashboardRow
-  // and 404'd, so only names/descriptions leaked through the list.
+  // and 404'd, so what leaked was the LIST row itself - id, name,
+  // description, owner_scope/owner ids, data-workspace binding, status,
+  // revision, timestamps - never the widgets, series or query data.
   if (dataWorkspace?.dataWorkspaceType) {
     params.push(dataWorkspace.dataWorkspaceType);
     const typeIdx = params.length;
