@@ -122,7 +122,7 @@ async function fetchOccasionContexts(occasionIds) {
   const uniq = [...new Set(occasionIds)];
   if (!uniq.length) return {};
   const r = await query(
-    `select o.id as occasion_id, e.source_connection_id, e.scope_level as event_scope_level, e.occurred_instant as event_instant
+    `select o.id as occasion_id, o.entry_method, e.source_connection_id, e.scope_level as event_scope_level, e.occurred_instant as event_instant
      from training_load.metric_measurement_occasions o
      join training_load.metric_event_participants ep on ep.id = o.event_participant_id
      join training_load.metric_events e on e.id = ep.event_id
@@ -130,6 +130,10 @@ async function fetchOccasionContexts(occasionIds) {
     [uniq],
   );
   return Object.fromEntries(r.rows.map((row) => [row.occasion_id, {
+    // Read by resolveFactsToRows for the manual/api_import/csv_import
+    // source policies; without it those policies matched no session or
+    // component fact at all.
+    entryMethod: row.entry_method,
     sourceConnectionId: row.source_connection_id,
     eventScopeLevel: row.event_scope_level,
     eventInstant: row.event_instant ? row.event_instant.toISOString() : null,
