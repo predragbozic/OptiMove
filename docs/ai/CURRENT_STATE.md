@@ -1,18 +1,27 @@
 # Current state
 
-Last reviewed: 2026-09-17. Last `origin/main` commit checked: `0de6afb` (merge of PR #91,
-`feature/training-load-dashboard-delete` → `main`).
+Last reviewed: 2026-09-17. Last `origin/main` commit checked: `0a5936c` (merge of PR #93,
+`feature/training-load-dashboards-ux-h2` → `main`).
 
 ## Active phase
 
 **Training Load Dashboards UX redesign (H-slices)** — one branch/PR per slice, frontend
-only unless a separate product decision says otherwise. H1 is merged (PR #89). Next, in
-this order (owner confirmed 2026-09-17 that this priority stays):
+only unless a separate product decision says otherwise. H1 (PR #89) and H2 (PR #93) are
+merged. Next, in this order (owner confirmed 2026-09-17 that this priority stays):
 
-- **H2** — widget "⋯" menus and layout-editing tooling cleanup.
 - **H3** — staged Save/Cancel for the advanced per-series editor (today it still saves
   each field change immediately).
-- **H4** — states and polish.
+- **H4** — states and polish. Also in H4 (owner, 2026-09-17, recorded at the H2 merge):
+  extend the unsaved-layout guard to the exits H2 does not cover yet.
+  - Confirmed in code at `0a5936c` - both drop a moved-but-unsaved Dashboards layout
+    without asking: a **workspace switch** (`onWorkspaceChanged` ->
+    `resetTrainingLoadForWorkspaceChange`, `app.js` / `training-load-actions.js`), and
+    navigation started from the **notifications** panel (`handleNotificationAction` ->
+    e.g. `openTestsToday`, `openTrainingLoadResults`, which change `state.activeTab`
+    without calling `confirmLeaveTrainingLoad`).
+  - Reported by the owner, not found in code at `0a5936c`: leaving through the
+    **messages** panel (`messages.js` has no path that changes `state.activeTab`).
+    Reproduce it first in H4 before fixing.
 
 ## Last completed, merged phases
 
@@ -36,6 +45,14 @@ this order (owner confirmed 2026-09-17 that this priority stays):
     server start of the deploy of `0de6afb` (`npm start` runs `node src/migrate.js`
     before the server, and `/api/health` reported commit `0de6afb` on 2026-09-17). The
     deployed database itself was **not** queried directly.
+- **Dashboards UX H2** — PR #93 (`0a5936c`), frontend only: widget "⋯" menu (Settings,
+  Advanced settings, Edit layout, Delete widget) on every widget of an editable dashboard;
+  layout mode with one layout bar (Cancel / Save layout or Done; sticky on desktop, pinned
+  to the bottom on phones) and layout-only per-widget tools (no-op moves disabled; phones
+  get Move up/down only). An unsaved layout is never dropped silently inside Training
+  Load, through the main sidebar/rail, or through browser Back: `releaseAnalysisLayoutDraft`
+  / `confirmLeaveTrainingLoad` ask "Discard your unsaved layout changes?" first (a declined
+  Back restores the consumed history entry). Remaining exits → H4 (see Active phase).
 - **Dashboards UX H1** — PR #89 (`3ef6033`), frontend only: dashboard picker (search,
   groups, badges), "New dashboard"/"Rename" dialog replacing `window.prompt`, dashboard
   "⋯" and period-preset menus, guided "Add metric" panel (changes staged client-side,
@@ -143,9 +160,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-Dashboards UX **H2** (widget "⋯" menus + layout tooling cleanup), on a new branch from
-fresh `origin/main` — see Active phase. The Separate tasks above wait until the owner
-schedules them.
+Dashboards UX **H3** (staged Save/Cancel for the advanced per-series editor), on a new
+branch from fresh `origin/main` — see Active phase. The Separate tasks above wait until
+the owner schedules them.
 
 ## How to refresh this file
 
