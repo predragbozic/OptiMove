@@ -1,32 +1,38 @@
 # Current state
 
-Last reviewed: 2026-09-17. Last `origin/main` commit checked: `d2189fa` (merge of PR #95,
-`feature/training-load-dashboards-ux-h3` → `main`).
+Last reviewed: 2026-09-17. Last `origin/main` commit checked: `70eabaf` (merge of PR #97,
+`feature/training-load-dashboards-ux-h4` → `main`).
 
 ## Active phase
 
-**Training Load Dashboards UX redesign (H-slices)** — one branch/PR per slice, frontend
-only unless a separate product decision says otherwise. H1 (PR #89), H2 (PR #93) and H3
-(PR #95) are merged. Next (owner confirmed 2026-09-17 that this priority stays):
-
-- **H4** — states and polish. Also in H4:
-  - **Readable labels for the advanced editor's raw policy values** (source / role /
-    coverage), owner decision 2026-09-17 at the H3 merge: do it in H4, and only after
-    checking what each value actually means - a readable but wrong label is worse than
-    the raw value. These fields must be sorted out before the UX slices are finished.
-  - Extend the leave guard to the exits H2 does not cover yet (owner, 2026-09-17,
-    recorded at the H2 merge). Since H3, `confirmLeaveTrainingLoad` guards both an unsaved
-    layout and an unsaved Advanced settings draft, so both are affected by these gaps.
-  - Confirmed in code at `0a5936c` (unchanged at `d2189fa`) - both drop an unsaved
-    Dashboards layout without asking: a **workspace switch** (`onWorkspaceChanged` ->
-    `resetTrainingLoadForWorkspaceChange`, `app.js` / `training-load-actions.js`), and
-    navigation started from the **notifications** panel (`handleNotificationAction` ->
-    e.g. `openTestsToday`, `openTrainingLoadResults`, which change `state.activeTab`
-    without calling `confirmLeaveTrainingLoad`).
-  - Leaving through the **messages** panel: Raised during review; not reproduced or
-    found in code — reproduce first in H4.
+**Training Load Dashboards UX redesign (H-slices)** — frontend only unless a separate
+product decision says otherwise. H1 (PR #89), H2 (PR #93), H3 (PR #95) and H4 (PR #97)
+are merged. No further slice is scheduled; the small follow-up found during H4 is recorded
+under Separate tasks.
 
 ## Last completed, merged phases
+
+- **Dashboards UX H4** — PR #97 (`70eabaf`), frontend only.
+  - **Readable labels in Advanced settings**, named after what the query engine does with
+    each stored value (`resolveFactsToRows` / `shiftDateRange` in
+    `backend/src/trainingLoadDashboardQuery.js`, value meanings in the v3 Metrics-Core and
+    v16 dashboard migrations); stored values and request bodies are unchanged. Source =
+    how a catalog metric's value was recorded (All sources, Manual entry only, API import
+    only, CSV import only, Calculated values only, One connected source); Values included
+    (`aggregation_role_policy`) = direct values / source totals / calculated totals; Total
+    coverage (`coverage_policy`) = complete / partial / unknown-coverage totals, direct
+    values pass every choice. A help text explains the terms and conflicts. For built-in
+    metrics the three filters are disabled with a note, because
+    `queryBuiltInSeriesFromContext` never applies them. Owner decision 2026-09-17 at the
+    H3 merge: meanings verified before naming.
+  - **Remaining leave-guard exits**: notification rows that open another screen and a
+    workspace switch now ask before any request (`confirmLeaveTrainingLoad(_, { discard:
+    false })`). Declined changes nothing; the draft is discarded only after the request
+    succeeded (a notification's mark-read, then `discardTrainingLoadLeaveDrafts`; a
+    workspace switch resets Training Load itself), so a failed request loses nothing.
+    Covers both an unsaved layout and an unsaved Advanced settings change. The
+    **messages panel** exit was **not reproduced** live (open, conversation, send, close,
+    outside click, Escape, phone Back all kept both drafts) and was left unchanged.
 
 - **Dashboards UX H3** — PR #95 (`d2189fa`), frontend only: the advanced widget editor
   ("Advanced settings") edits a local draft; nothing is sent before "Save changes", and
@@ -71,7 +77,8 @@ only unless a separate product decision says otherwise. H1 (PR #89), H2 (PR #93)
   get Move up/down only). An unsaved layout is never dropped silently inside Training
   Load, through the main sidebar/rail, or through browser Back: `releaseAnalysisLayoutDraft`
   / `confirmLeaveTrainingLoad` ask "Discard your unsaved layout changes?" first (a declined
-  Back restores the consumed history entry). Remaining exits → H4 (see Active phase).
+  Back restores the consumed history entry). The remaining exits (notifications, workspace
+  switch) were closed in H4 (PR #97).
 - **Dashboards UX H1** — PR #89 (`3ef6033`), frontend only: dashboard picker (search,
   groups, badges), "New dashboard"/"Rename" dialog replacing `window.prompt`, dashboard
   "⋯" and period-preset menus, guided "Add metric" panel (changes staged client-side,
@@ -123,7 +130,12 @@ pre-existing; pass/fail counts don't belong in this file
   operation attempted), so a plain full backend run reports it as failed; same on
   `3ef6033`.
 
-## Separate tasks (recorded, not prioritized over the Dashboards UX slices)
+## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **Small Dashboards UX follow-up** (owner, 2026-09-17, found during H4): the guided
+  "Add metric" panel (H1, `renderMetricPanelHtml`) closes without asking even when it
+  holds staged changes, and its search field is 42px tall on phones (below the 44px
+  touch-target rule).
 
 - **Fix the known failing tests above** so a full suite run can be green again and a new
   regression can't hide among known failures: the backend worker timing test, a way to run
@@ -173,15 +185,17 @@ pre-existing; pass/fail counts don't belong in this file
   the Calendar → Analysis "Choose activity" round trip. Dashboard create and the guided
   "Add metric" panel (`renderMetricPanelHtml`) were live-checked in PR #89's browser QA,
   the advanced editor with its series metric picker (`renderMetricPickerHtml`) in PR
-  #95's.
+  #95's, and the notification / workspace-switch leave guard in PR #97's.
+- **Leaving the app with unsaved Dashboards changes** (found during H4, not scheduled):
+  signing out, reloading the page or closing the tab still leaves without asking about an
+  unsaved layout or Advanced settings change (no `beforeunload` guard).
 - `migrations/` (legacy, no `_v2` suffix) still exists alongside `migrations_v2/` — treat
   it as historical/reference only; new migrations go in `migrations_v2/`.
 
 ## Most likely next step
 
-Dashboards UX **H4** (states and polish, readable advanced policy labels, remaining
-leave-guard exits), on a new branch from fresh `origin/main` — see Active phase. The Separate tasks above wait until
-the owner schedules them.
+The Dashboards UX slices H1–H4 are merged. The next task is whichever of the Separate
+tasks above the owner schedules (including the small Dashboards UX follow-up).
 
 ## How to refresh this file
 
