@@ -12,7 +12,7 @@ const GROUP_BY = ["day", "week", "session", "component", "athlete", "cohort"];
 const AGGREGATIONS = ["sum", "avg", "max", "last", "none"];
 const SCOPE_LEVELS = ["day", "session", "component"];
 // Dashboards UX H1: coach-facing labels for the guided panel's basic
-// settings. The advanced editor below keeps showing the raw enum values.
+// settings (H4: the advanced editor uses them too).
 const GROUP_BY_LABELS = { day: "Per day", week: "Per week", session: "Per session", component: "Per component", athlete: "Per athlete", cohort: "Whole group" };
 const AGGREGATION_LABELS = { sum: "Total", avg: "Average", max: "Maximum", last: "Latest value", none: "Raw values" };
 const SCOPE_LABELS = { day: "Day", session: "Session", component: "Component" };
@@ -20,6 +20,38 @@ const SOURCE_POLICIES = ["all_with_conflicts", "source_connection", "manual", "a
 const COVERAGE_POLICIES = ["complete_only", "complete_and_partial", "any"];
 const ROLE_POLICIES = ["standalone_only", "standalone_and_source_rollup", "all_including_derived"];
 const COMPARISONS = ["", "previous_period", "previous_year"];
+// Dashboards UX H4: labels for the advanced editor's stored values, named after
+// what the query engine does with them (resolveFactsToRows and shiftDateRange
+// in backend/src/trainingLoadDashboardQuery.js; value meanings in the v3
+// Metrics-Core and v16 dashboard migrations). The stored values never change.
+// Source filters a catalog metric's values by how they were recorded
+// (occasion entry_method, metric_values.is_derived, source connection).
+const SOURCE_LABELS = {
+  all_with_conflicts: "All sources",
+  source_connection: "One connected source",
+  manual: "Manual entry only",
+  api_import: "API import only",
+  csv_import: "CSV import only",
+  derived: "Calculated values only",
+  not_applicable: "Not used for built-in metrics",
+};
+// Values included filters by metric_values.aggregation_role: standalone = a value
+// recorded as it is, source_rollup = a total reported by the source itself,
+// derived_rollup = a total computed afterwards from other values.
+const ROLE_POLICY_LABELS = {
+  standalone_only: "Direct values only",
+  standalone_and_source_rollup: "Direct values and source totals",
+  all_including_derived: "Direct values, source totals and calculated totals",
+};
+// Total coverage filters totals by metric_values.coverage; a direct value has
+// no coverage (not_applicable) and passes every option.
+const COVERAGE_LABELS = {
+  complete_only: "Complete totals only",
+  complete_and_partial: "Complete and partial totals",
+  any: "All totals, also unknown coverage",
+};
+const AXIS_LABELS = { primary: "Primary", secondary: "Secondary" };
+const COMPARISON_LABELS = { "": "None", previous_period: "Previous period of the same length", previous_year: "Same dates last year" };
 
 function optionHtml(value, label, selected) {
   return `<option value="${escapeAttr(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(label || value)}</option>`;
@@ -767,13 +799,17 @@ function renderEditorHtml() {
   const entryIndex = entry ? entries.indexOf(entry) : -1;
   const key = entry ? `data-series-key="${escapeAttr(entry.key)}"` : "";
   const isBuiltIn = entry?.metric?.kind === "builtin";
+  // H4: the query engine reads built-in series without these three filters.
+  const policyOff = saving || isBuiltIn ? "disabled" : "";
   const sourceChoices = isBuiltIn
     ? ["not_applicable"]
     : SOURCE_POLICIES.filter((v) => v !== "not_applicable" && (v !== "source_connection" || entry?.fields.sourcePolicy === "source_connection"));
   const status = (item) => {
     if (!item.id || !rowsById.has(item.id)) return "New - not saved yet";
     const row = rowsById.get(item.id);
-    return row.resolution_status && row.resolution_status !== "resolved" ? row.resolution_status : (item.fields.axis || "primary");
+    if (row.resolution_status === "unresolved") return "Choose a metric";
+    if (row.resolution_status === "ambiguous") return "Ambiguous metric";
+    return `${AXIS_LABELS[item.fields.axis || "primary"]} axis`;
   };
   return `
     <div class="builder-athlete-overlay">
@@ -816,14 +852,17 @@ function renderEditorHtml() {
           ${entry ? `
             <div class="tl-analysis-editor-grid">
               <label>Label<input type="text" data-action="training-load-analysis-series-label" data-tl-editor-field="label" ${key} value="${escapeAttr(entry.fields.displayLabel || "")}" maxlength="200" placeholder="${escapeAttr(editorMetricLabel(entry.metric))}" ${off}></label>
-              <label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, v, entry.fields.axis || "primary")).join("")}</select></label>
+              <label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, AXIS_LABELS[v], entry.fields.axis || "primary")).join("")}</select></label>
               <label>Color<input type="color" data-action="training-load-analysis-series-color" ${key} value="${escapeAttr(entry.fields.color || "#0f766e")}" ${off}></label>
               ${saving ? `<label>Scope<select disabled>${optionHtml(entry.fields.dataScopeLevel, SCOPE_LABELS[entry.fields.dataScopeLevel] || entry.fields.dataScopeLevel, entry.fields.dataScopeLevel)}</select></label>` : renderScopeSelectHtml({ action: "training-load-analysis-series-scope", attrs: key, value: entry.fields.dataScopeLevel, metric: entry.metric, label: "Scope" })}
-              <label>Aggregation<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${AGGREGATIONS.map((v) => optionHtml(v, v, entry.fields.analyticalAggregation)).join("")}</select></label>
-              <label>Source<select data-action="training-load-analysis-series-source" ${key} ${saving || isBuiltIn ? "disabled" : ""}>${sourceChoices.map((v) => optionHtml(v, v, entry.fields.sourcePolicy)).join("")}</select></label>
-              <label>Role policy<select data-action="training-load-analysis-series-role" ${key} ${off}>${ROLE_POLICIES.map((v) => optionHtml(v, v, entry.fields.aggregationRolePolicy)).join("")}</select></label>
-              <label>Coverage<select data-action="training-load-analysis-series-coverage" ${key} ${off}>${COVERAGE_POLICIES.map((v) => optionHtml(v, v, entry.fields.coveragePolicy)).join("")}</select></label>
-              ${analysisWidgetSupportsComparison(draft.widgetType) ? `<label>Comparison<select data-action="training-load-analysis-series-comparison" ${key} ${off}>${COMPARISONS.map((v) => optionHtml(v, v || "None", entry.fields.comparisonPeriod || "")).join("")}</select></label>` : ""}
+              <label>Aggregation<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${AGGREGATIONS.map((v) => optionHtml(v, AGGREGATION_LABELS[v], entry.fields.analyticalAggregation)).join("")}</select></label>
+              ${analysisWidgetSupportsComparison(draft.widgetType) ? `<label>Comparison<select data-action="training-load-analysis-series-comparison" ${key} ${off}>${COMPARISONS.map((v) => optionHtml(v, COMPARISON_LABELS[v], entry.fields.comparisonPeriod || "")).join("")}</select></label>` : ""}
+              <label class="tl-editor-wide">Source<select data-action="training-load-analysis-series-source" ${key} ${policyOff}>${sourceChoices.map((v) => optionHtml(v, SOURCE_LABELS[v], entry.fields.sourcePolicy)).join("")}</select></label>
+              <label class="tl-editor-wide">Values included<select data-action="training-load-analysis-series-role" ${key} ${policyOff}>${ROLE_POLICIES.map((v) => optionHtml(v, ROLE_POLICY_LABELS[v], entry.fields.aggregationRolePolicy)).join("")}</select></label>
+              <label class="tl-editor-wide">Total coverage<select data-action="training-load-analysis-series-coverage" ${key} ${policyOff}>${COVERAGE_POLICIES.map((v) => optionHtml(v, COVERAGE_LABELS[v], entry.fields.coveragePolicy)).join("")}</select></label>
+              <p class="muted tl-editor-help">${isBuiltIn
+                ? "Source, values included and total coverage don't apply to built-in metrics."
+                : "Direct value: recorded as it is, not a total. Source total: a total reported by the device or system itself. Calculated total: a total computed afterwards from other values. Partial total: some parts are missing, for example after a device dropout. Direct values are kept by every total coverage choice. If two values remain for the same athlete and session, component or day, the widget shows a conflict instead of adding them up."}</p>
             </div>
             <div class="tl-analysis-series-actions">
               <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-up" ${key} ${saving || entryIndex <= 0 ? "disabled" : ""}>Move up</button>

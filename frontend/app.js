@@ -61,7 +61,7 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, handleTrainingLoadAction, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadTrainingLoadAnalysis } from "./training-load-analysis-data.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
@@ -1487,6 +1487,9 @@ function goHome() {
   renderCurrentNode();
 }
 
+// Dashboards UX H4: the question only - see confirmLeaveTrainingLoad.
+const askLeaveTrainingLoad = () => confirmLeaveTrainingLoad(null, { discard: false });
+
 async function handleGlobalClick(event) {
   const tab = event.target.closest("[data-tab]");
   if (tab) {
@@ -1516,10 +1519,10 @@ async function handleGlobalClick(event) {
     closeWorkspaceSwitcherIfOutside(event.target);
     return;
   }
-  if (await handleWorkspaceAction(action, { onWorkspaceChanged })) {
+  if (await handleWorkspaceAction(action, { onWorkspaceChanged, confirmLeave: askLeaveTrainingLoad })) {
     return;
   }
-  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification })) {
+  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
     renderMessages();
     return;
   }

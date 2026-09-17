@@ -33,8 +33,27 @@ export function renderNotifications() {
   els.notificationPanel.innerHTML = renderNotificationPanelHtml();
 }
 
+// Dashboards UX H4: notification rows that open another screen. Before any of
+// them marks the row read, closes the panel or navigates, handlers.confirmLeave
+// (app.js -> confirmLeaveTrainingLoad, ask only) may keep an unsaved Dashboards
+// layout or widget draft - false leaves everything as it was. The draft is
+// discarded (handlers.discardLeave) only after the row was marked read, so a
+// failed request loses nothing. Opening a conversation only opens the Messages
+// panel over the current screen, so it is not listed.
+const NAVIGATING_NOTIFICATION_ACTIONS = new Set([
+  "notification-open-program-requests",
+  "notification-open-test-assignment",
+  "notification-open-training-load-assignment",
+  "notification-open-training-load-results",
+  "notification-open-tests-today",
+  "notification-open-tests-results",
+  "notification-open-weekly-plan",
+  "notification-open-specific-program",
+]);
+
 export async function handleNotificationAction(action, handlers = {}) {
   const type = action?.dataset?.action || "";
+  if (NAVIGATING_NOTIFICATION_ACTIONS.has(type) && handlers.confirmLeave && !handlers.confirmLeave()) return true;
   if (type === "notifications-toggle") {
     state.notifications.open = !state.notifications.open;
     if (state.notifications.open && state.messages) state.messages.open = false;
@@ -58,7 +77,7 @@ export async function handleNotificationAction(action, handlers = {}) {
   }
   if (type === "notification-open-program-requests") {
     const id = action.dataset.notificationId;
-    if (id) await markNotificationRead(id);
+    await markReadBeforeLeaving(id, handlers);
     state.notifications.open = false;
     renderNotifications();
     await handlers.openProgramRequests?.();
@@ -80,7 +99,7 @@ export async function handleNotificationAction(action, handlers = {}) {
   if (type === "notification-open-test-assignment") {
     const id = action.dataset.notificationId;
     const assignmentId = action.dataset.assignmentId;
-    if (id) await markNotificationRead(id);
+    await markReadBeforeLeaving(id, handlers);
     state.notifications.open = false;
     renderNotifications();
     if (assignmentId) await handlers.openTestAssignment?.(assignmentId);
@@ -95,7 +114,7 @@ export async function handleNotificationAction(action, handlers = {}) {
   if (type === "notification-open-training-load-assignment") {
     const id = action.dataset.notificationId;
     const assignmentId = action.dataset.assignmentId;
-    if (id) await markNotificationRead(id);
+    await markReadBeforeLeaving(id, handlers);
     state.notifications.open = false;
     renderNotifications();
     if (assignmentId) await handlers.openTrainingLoadAssignment?.(assignmentId);
@@ -106,7 +125,7 @@ export async function handleNotificationAction(action, handlers = {}) {
   if (type === "notification-open-training-load-results") {
     const id = action.dataset.notificationId;
     const scheduledDate = action.dataset.scheduledDate;
-    if (id) await markNotificationRead(id);
+    await markReadBeforeLeaving(id, handlers);
     state.notifications.open = false;
     renderNotifications();
     await handlers.openTrainingLoadResults?.(scheduledDate);
@@ -115,7 +134,7 @@ export async function handleNotificationAction(action, handlers = {}) {
   // Coach live digest - opens Tests -> Today (coach side).
   if (type === "notification-open-tests-today") {
     const id = action.dataset.notificationId;
-    if (id) await markNotificationRead(id);
+    await markReadBeforeLeaving(id, handlers);
     state.notifications.open = false;
     renderNotifications();
     await handlers.openTestsToday?.();
@@ -125,7 +144,7 @@ export async function handleNotificationAction(action, handlers = {}) {
   if (type === "notification-open-tests-results") {
     const id = action.dataset.notificationId;
     const scheduleId = action.dataset.scheduleId;
-    if (id) await markNotificationRead(id);
+    await markReadBeforeLeaving(id, handlers);
     state.notifications.open = false;
     renderNotifications();
     await handlers.openTestsResults?.(scheduleId);
@@ -138,7 +157,7 @@ export async function handleNotificationAction(action, handlers = {}) {
   if (type === "notification-open-weekly-plan") {
     const id = action.dataset.notificationId;
     const weekStart = action.dataset.weekStart;
-    if (id) await markNotificationRead(id);
+    await markReadBeforeLeaving(id, handlers);
     state.notifications.open = false;
     renderNotifications();
     if (weekStart) await handlers.openWeeklyPlanFromNotification?.(weekStart);
@@ -150,7 +169,7 @@ export async function handleNotificationAction(action, handlers = {}) {
   if (type === "notification-open-specific-program") {
     const id = action.dataset.notificationId;
     const planId = action.dataset.planId;
-    if (id) await markNotificationRead(id);
+    await markReadBeforeLeaving(id, handlers);
     state.notifications.open = false;
     renderNotifications();
     if (planId) await handlers.openSpecificProgramFromNotification?.(planId);
@@ -278,6 +297,11 @@ function renderNotificationRow(row) {
         : ""}
     </article>
   `;
+}
+
+async function markReadBeforeLeaving(id, handlers) {
+  if (id) await markNotificationRead(id);
+  handlers.discardLeave?.();
 }
 
 async function markNotificationRead(id) {

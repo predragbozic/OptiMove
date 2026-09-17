@@ -13931,6 +13931,29 @@ button.tests-assignment-card {
   max-width: 100%;
 }
 
+/* Dashboards UX H4: the source / values included / total coverage choices
+   have long readable labels - one full row each, with their help text. */
+.tl-analysis-editor .tl-analysis-editor-grid .tl-editor-wide,
+.tl-analysis-editor .tl-analysis-editor-grid .tl-editor-help {
+  grid-column: 1 / -1;
+}
+
+.tl-analysis-editor .tl-editor-wide select {
+  max-width: 460px;
+}
+
+/* Built-in metrics: these filters are shown but not used. */
+.tl-analysis-editor .tl-editor-wide select:disabled {
+  cursor: not-allowed;
+}
+
+.tl-analysis-editor .tl-editor-help {
+  max-width: 72ch;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* The footer stays in view while the long editor scrolls (the modal is the
    scroll container, padded 16px). */
 .tl-analysis-modal-actions.tl-editor-footer {
@@ -13977,9 +14000,12 @@ button.tests-assignment-card {
 
 @media (max-width: 720px) {
   /* mobile-qa: the Clear override buttons (compact, 30px) and the color
-     swatch were under the 44px floor in the editor. */
+     swatch were under the 44px floor in the editor. H4: its text fields,
+     selects and metric search too (39-42px). */
   .tl-analysis-editor .tl-analysis-control .plain-button,
-  .tl-analysis-editor .tl-analysis-editor-grid input[type="color"],
+  .tl-analysis-editor .tl-analysis-editor-grid input,
+  .tl-analysis-editor .tl-analysis-editor-grid select,
+  .tl-analysis-editor .tl-analysis-metric-picker input,
   .tl-editor-footer-row .plain-button,
   .tl-analysis-series-head .plain-button,
   .tl-analysis-series-actions .plain-button,
