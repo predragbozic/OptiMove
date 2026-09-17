@@ -1098,6 +1098,33 @@ test("writer: a binding written under an older hash rule is reported as such, no
   assert.deepEqual(await snapshot(org.teamId), before, "an unreadable provenance stops the import, it does not overwrite it");
 });
 
+test("database: v20 adds no obstacle to any event that is not a gpexe import", async () => {
+  const org = await setupTeam();
+  // A connection and an event of another source system, the shape every
+  // non-GPEXE importer and the existing test fixtures use.
+  const connectionId = (await admin.query(
+    `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1) returning id`,
+    [org.teamId],
+  )).rows[0].id;
+  const withConnection = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('csv upload','2026-09-14','2026-09-14T18:08:12Z','session','team',$1,$2,'file:rows.csv',$3) returning id`,
+    [org.teamId, connectionId, TZ],
+  )).rows[0].id;
+  const withoutConnection = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, event_timezone_snapshot)
+     values ('manual entry','2026-09-14','2026-09-14T18:08:12Z','session','team',$1,$2) returning id`,
+    [org.teamId, TZ],
+  )).rows[0].id;
+
+  // No binding is created for them, so nothing new stands in the way: both
+  // still delete exactly as they did before this migration.
+  await assert.doesNotReject(admin.query(`delete from training_load.metric_events where id = any($1::uuid[])`, [[withConnection, withoutConnection]]));
+  await assert.doesNotReject(admin.query(`delete from training_load.metric_source_connections where id = $1`, [connectionId]));
+});
+
 test("database: a binding can be neither updated nor deleted", async () => {
   const org = await setupTeam();
   const summary = await runImport(org, makeBundle({ sessionId: 5028, athletes: standardAthletes() }));
