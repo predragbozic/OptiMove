@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-17. Last `origin/main` commit checked: `70eabaf` (merge of PR #97,
-`feature/training-load-dashboards-ux-h4` → `main`).
+Last reviewed: 2026-09-17. Last `origin/main` commit checked: `41e9555` (merge of PR #99,
+`feature/gpexe-pilot-import` → `main`).
 
 ## Active phase
 
@@ -10,7 +10,50 @@ product decision says otherwise. H1 (PR #89), H2 (PR #93), H3 (PR #95) and H4 (P
 are merged. No further slice is scheduled; the small follow-up found during H4 is recorded
 under Separate tasks.
 
+Alongside it, the **GPEXE pilot import** (PR #99) is merged as code only. It writes to a
+disposable test database, never to a persistent one, so no imported data is visible in the
+app — see the entry below and the Separate task it leaves open.
+
 ## Last completed, merged phases
+
+- **GPEXE pilot import (code only)** — PR #99 (`41e9555`), backend only:
+  `backend/src/gpexeImportMapper.js` (pure plan builder) + `backend/src/gpexeImportWriter.js`
+  (one transaction under a team advisory lock) + `backend/scripts/gpexe-import-pilot.mjs`
+  (CLI) + `backend/scripts/gpexe-pilot-disposable-run.mjs` + `backend/tests/gpexe-import.test.mjs`.
+  One GPEXE team session becomes a `training_load.metric_events` row with participants,
+  drill segments, occasions and values, plus the activity the existing
+  `training.materialize_activity_group_from_metric_event` materializes with one
+  `activity_components` row of type `drill` per segment.
+  - **Only GPEXE's own values are stored**: TIME (min), TotDist (m), SPEEDmax (km/h),
+    acceleration/deceleration events, burst/brake events (definition unconfirmed),
+    "Sprint distanca ≥25,2 km/h" (m) from the GPEXE 7 m/s speed zone, and each GPEXE power
+    zone separately (25–60, 60–75, ≥75 W/kg). Owner decision 2026-09-17: `m/min`,
+    `Acc+Dec`, `Burst&brakes`, `HMLD ≥25 W/kg` and `EXPDist ≥60 W/kg` are **not**
+    imported — they wait for a derived-metrics feature with a formula and a formula
+    version, so an OptiMove-computed sum is never stored as a value GPEXE delivered.
+  - **Identity and idempotency**: separate source identities
+    `athlete_session:<id>:full` and `athlete_session:<id>:drill:<n>`; the occasion content
+    hash covers unit, level, `aggregation_role`, `coverage` and the GPEXE source context;
+    values fetched later (drill burst/brake) become current through a `supplemented`
+    supersede path that only adds metrics while every existing value stays identical, while
+    changed, dropped or older data stays `needs_review` and a manual correction is never
+    replaced.
+  - **Verified on a disposable database only** (`optimove_tests_gpexe_*`, created and
+    dropped in the same run, with real responses for team 980 / session 186942): first
+    import 19 results, then 15 drill results supplemented with burst/brake, a repeat import
+    writing nothing, and two concurrent imports ending in the same state as one.
+    `backend/tests/gpexe-import.test.mjs` covers mapper, writer, concurrency, deadlock, the
+    dashboard source filter and the CLI guard.
+  - **Nothing was written to the local OPTIMOVE or the Supabase database**, and the CLI
+    refuses to: `--apply` requires a local `optimove_tests_gpexe_*` database carrying the
+    marker table written by `backend/tests/_gpexe-disposable-db.mjs`, and `--dry-run` (the
+    default) opens no connection at all. **No imported GPEXE data is therefore visible
+    anywhere in the app today.**
+  - Also fixed: `fetchOccasionContexts` in `backend/src/trainingLoadDashboardQuery.js` did
+    not read `entry_method`, so the dashboard source policy (manual / api_import /
+    csv_import) could never match imported values.
+  - The read-only fetch script that collects the GPEXE responses stays **outside the
+    repository** (owner decision 2026-09-17); the token never leaves the owner's own shell.
 
 - **Dashboards UX H4** — PR #97 (`70eabaf`), frontend only.
   - **Readable labels in Advanced settings**, named after what the query engine does with
@@ -132,6 +175,17 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **Import GPEXE data into the local OPTIMOVE database and show it in the app** (owner,
+  2026-09-17, at the PR #99 merge). The merge approved the pilot code, not an import. Open
+  before any write to a persistent database: (a) database-level uniqueness for the GPEXE
+  source connection and the session event — today only the writer's team advisory lock
+  prevents duplicates, `training_load.metric_events` has no unique
+  `(source_connection_id, source_external_id)` index; (b) how the GPEXE threshold used for
+  each result is preserved over time — today it lives in the metric definition version's
+  `condition_description` and a changed threshold only skips the metric; (c) where a coach
+  would actually see session and drill values, since a team-owned imported metric has to be
+  reachable from the dashboard catalog. Each of those is its own decision.
+
 - **Small Dashboards UX follow-up** (owner, 2026-09-17, found during H4): the guided
   "Add metric" panel (H1, `renderMetricPanelHtml`) closes without asking even when it
   holds staged changes, and its search field is 42px tall on phones (below the 44px
@@ -194,8 +248,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The Dashboards UX slices H1–H4 are merged. The next task is whichever of the Separate
-tasks above the owner schedules (including the small Dashboards UX follow-up).
+The Dashboards UX slices H1–H4 are merged and the GPEXE pilot import is merged as code.
+The next task the owner named (2026-09-17) is the plan for importing into the local
+OPTIMOVE database and showing the data — uniqueness, threshold provenance and the display
+surface — followed by whichever of the other Separate tasks they schedule.
 
 ## How to refresh this file
 
