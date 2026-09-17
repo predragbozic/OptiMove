@@ -136,12 +136,24 @@ function exitAnalysisLayoutMode() {
 // as an unsaved layout. True when there is nothing to lose or the coach
 // agreed (the editor is then closed without saving).
 function releaseAnalysisEditorDraft() {
+  if (!analysisEditorMayBeDiscarded()) return false;
+  discardAnalysisEditorDraft();
+  return true;
+}
+
+// H4: the question and the discard, separately - a leave that still depends on
+// a request (workspace switch, a notification's mark-read) asks first and
+// discards only once that request went through.
+function analysisEditorMayBeDiscarded() {
   const a = state.trainingLoad.analysis;
   if (!a.editor?.open) return true;
   if (a.editor.saving) return false;
-  if (analysisEditorIsDirty() && !window.confirm("Discard your unsaved widget changes?")) return false;
-  a.editor = closedAnalysisWidgetEditor();
-  return true;
+  return !analysisEditorIsDirty() || window.confirm("Discard your unsaved widget changes?");
+}
+
+function discardAnalysisEditorDraft() {
+  const a = state.trainingLoad.analysis;
+  if (a.editor?.open) a.editor = closedAnalysisWidgetEditor();
 }
 
 // H2: moved-but-unsaved widgets are never dropped silently. Every Dashboards
@@ -151,11 +163,19 @@ function releaseAnalysisEditorDraft() {
 // to lose or the coach agreed - the draft is then discarded and layout mode
 // ends - and false when the coach wants to keep editing.
 function releaseAnalysisLayoutDraft() {
-  const a = state.trainingLoad.analysis;
-  if (!a.editMode || !a.layoutDraft) return true;
-  if (!window.confirm("Discard your unsaved layout changes?")) return false;
-  exitAnalysisLayoutMode();
+  if (!analysisLayoutMayBeDiscarded()) return false;
+  discardAnalysisLayoutDraft();
   return true;
+}
+
+function analysisLayoutMayBeDiscarded() {
+  const a = state.trainingLoad.analysis;
+  return !a.editMode || !a.layoutDraft || window.confirm("Discard your unsaved layout changes?");
+}
+
+function discardAnalysisLayoutDraft() {
+  const a = state.trainingLoad.analysis;
+  if (a.editMode && a.layoutDraft) exitAnalysisLayoutMode();
 }
 
 // H2 (owner review of #93): leaving Training Load altogether - the main
@@ -164,9 +184,22 @@ function releaseAnalysisLayoutDraft() {
 // coach wants to keep arranging, so the navigation must not happen.
 // Re-clicking the already-active Training load item counts too: it reloads
 // the dashboard (loadActiveTab), which drops the draft just the same.
-export function confirmLeaveTrainingLoad(_nextTab) {
+// H4: notification rows that open another screen and a workspace switch ask
+// too, before they change anything (notifications.js, workspace-actions.js),
+// with { discard: false }: a declined or failed request must not lose the
+// draft. A notification then calls discardTrainingLoadLeaveDrafts right before
+// it navigates; a successful workspace switch resets Training Load anyway
+// (resetTrainingLoadForWorkspaceChange) or reloads the page.
+export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   if (state.activeTab !== "training-load") return true;
+  if (!discard) return analysisEditorMayBeDiscarded() && analysisLayoutMayBeDiscarded();
   return releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft();
+}
+
+export function discardTrainingLoadLeaveDrafts() {
+  if (state.activeTab !== "training-load") return;
+  discardAnalysisEditorDraft();
+  discardAnalysisLayoutDraft();
 }
 
 // H2: widget Settings / Advanced settings / Delete reload the dashboard on

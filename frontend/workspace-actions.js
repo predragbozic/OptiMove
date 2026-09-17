@@ -103,6 +103,11 @@ export async function handleWorkspaceAction(action, handlers = {}) {
       renderWorkspaceSwitcher();
       return true;
     }
+    // Dashboards UX H4: a switch resets Training Load (onWorkspaceChanged) or
+    // reloads the page, so an unsaved Dashboards layout or widget draft is
+    // confirmed before the request - false keeps the current workspace. The
+    // question does not discard anything: if the request fails, the draft stays.
+    if (handlers.confirmLeave && !handlers.confirmLeave()) return true;
 
     state.workspaceSwitcher.pending = true;
     state.workspaceSwitcher.error = "";
