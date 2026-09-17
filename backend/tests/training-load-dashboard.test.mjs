@@ -40,6 +40,7 @@ const MIGRATIONS = [
   "202609101000_training_load_v16_dashboard_widgets_series_selection.sql",
   "202609101100_training_load_v17_dashboard_sanctioned_functions.sql",
   "202609101200_training_load_v18_dashboard_catalog_seed.sql",
+  "202609170900_training_load_v19_dashboard_delete.sql",
 ];
 const BASE_MIGRATIONS = MIGRATIONS.slice(0, 14); // everything BEFORE the dashboard migrations — used by the upgrade-safety test
 const DASHBOARD_MIGRATIONS = MIGRATIONS.slice(14);
@@ -473,15 +474,15 @@ async function makeComponentFixture({ clubId, coachId, athleteId, connectionId, 
 // rollback-on-error, run against a real, unmodified migrate.js.
 // ============================================================
 
-test("§1.1 all 18 migrations (incl. v15-v18) applied cleanly at before() — schema_migrations records exactly this run's own files", async () => {
+test("§1.1 all 19 migrations (incl. v15-v19) applied cleanly at before() — schema_migrations records exactly this run's own files", async () => {
   const applied = await query(`select migration_name from public.schema_migrations where migration_name like '%dashboard%' order by migration_name`);
-  assert.equal(applied.rowCount, 4, "exactly the 4 new dashboard migrations must be recorded");
+  assert.equal(applied.rowCount, 5, "exactly the 5 new dashboard migrations (v15-v19) must be recorded");
 });
 
 test("§1.2 re-applying the SAME migrations_v2 directory a second time is a genuine no-op (checksum-safe idempotent re-run)", async () => {
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
   const applied = await query(`select count(*)::int as n from public.schema_migrations where migration_name like '%dashboard%'`);
-  assert.equal(applied.rows[0].n, 4, "re-running must not duplicate or re-apply anything");
+  assert.equal(applied.rows[0].n, 5, "re-running must not duplicate or re-apply anything");
 });
 
 test("§1.3 upgrade path: a database at exactly v1-v14 (no dashboard tables) can apply v15-v18 cleanly on top, in one runner call", async () => {
@@ -2774,4 +2775,502 @@ test("§11.4 two athletes of the SAME club (athlete workspace, null scope): A's 
   assert.equal(getByB.status, 404);
   assert.equal(getByB.body.error, "notFound");
   assert.ok((await listIds(a.cookie)).includes(dashA.id), "the athlete owner still lists their own dashboard");
+});
+
+// ============================================================
+// Section 12 - Permanent delete (feature/training-load-dashboard-delete).
+// Real DELETE /api/training-load/dashboards/:id, exercised over real HTTP
+// against the real migrated schema. Covers: only a manager may delete
+// (owner / a different, unrelated user / a viewer-but-not-manager);
+// system templates can never be deleted, no exception; deleting the
+// currently ACTIVE dashboard clears the active selection; an ARCHIVED
+// dashboard can still be deleted (unlike other writes); a dashboard that
+// has been cloned from is protected (dashboards.cloned_from_dashboard_id
+// is ON DELETE RESTRICT and immutable, v15/v19); stale revision and
+// invalid-input matrices.
+// ============================================================
+
+async function countRows(table, whereSql, params) {
+  const r = await query(`select count(*)::int as n from ${table} where ${whereSql}`, params);
+  return r.rows[0].n;
+}
+// Adding/removing a widget or series bumps dashboards.revision
+// (bump_dashboard_revision, v15/v16), so a revision captured when the
+// dashboard was created is stale by the time a test deletes it.
+async function freshRevision(cookie, dashboardId) {
+  const r = await api(`/api/training-load/dashboards/${dashboardId}`, { cookie });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return r.body.dashboard.revision;
+}
+
+test("delete 1: the owner can permanently delete their own dashboard - the dashboard, its widgets AND its series are all gone; a subsequent GET is info-hiding 404", async () => {
+  const { coachCookie } = await makeClubCoach("ld1");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+  const series = await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
+    method: "POST", cookie: coachCookie,
+    body: { expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "rpe", dataScopeLevel: "session", analyticalAggregation: "avg" },
+  });
+  assert.equal(series.status, 201);
+  const revision = await freshRevision(coachCookie, dashboard.id);
+  assert.ok(revision > dashboard.revision, "sanity: the widget/series writes really bumped the dashboard revision");
+
+  const deleted = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: revision } });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  assert.equal(deleted.body.deleted, true);
+  assert.equal(deleted.body.dashboardId, dashboard.id);
+
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [dashboard.id]), 0, "the dashboard row itself is gone");
+  assert.equal(await countRows("training_load.dashboard_widgets", "id = $1", [w.widgetId]), 0, "its widget cascaded away");
+  assert.equal(await countRows("training_load.dashboard_widget_series", "id = $1", [series.body.seriesId]), 0, "its series cascaded away");
+
+  const fromOwner = await api(`/api/training-load/dashboards/${dashboard.id}`, { cookie: coachCookie });
+  assert.equal(fromOwner.status, 404, "info-hiding: deleted looks exactly like never-existed, even to the former owner");
+  assert.equal(fromOwner.body.error, "notFound");
+});
+
+test("delete 2: other users - an unrelated coach and the admin of a DIFFERENT club both get info-hiding 404 and the dashboard survives; a platform admin CAN delete another user's private dashboard (the same canManageDashboardRow contract Archive and Rename already use)", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("ld2");
+  const dashboard = await makeDashboardHttp(coachCookie, { ownerScope: "club", ownerClubId: clubId });
+
+  const strangerId = await makeUser({ email: `ld2-stranger-${uid()}@test.local` });
+  await grantGlobalRole(strangerId, "independent_coach");
+  await setActiveWorkspace(strangerId, "private_coach", null);
+  const strangerCookie = await loginCookie(strangerId);
+  const fromStranger = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: strangerCookie, body: { expectedRevision: dashboard.revision } });
+  assert.equal(fromStranger.status, 404, "a dashboard this account cannot even VIEW must never distinguish not-yours from does-not-exist");
+  assert.equal(fromStranger.body.error, "notFound");
+
+  // Only a club_admin can be ACTIVE in a club (loadAvailableWorkspaces), so
+  // the realistic other-tenant case is the admin of another club.
+  const { coachCookie: otherClubCookie } = await makeClubCoach("ld2other");
+  const fromOtherClub = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: otherClubCookie, body: { expectedRevision: dashboard.revision } });
+  assert.equal(fromOtherClub.status, 404, "another club's admin cannot see - and so cannot delete - this club's dashboard");
+  assert.equal(fromOtherClub.body.error, "notFound");
+
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [dashboard.id]), 1, "neither refused attempt deleted anything");
+
+  // Pinned on purpose: Delete follows exactly the manage contract Archive and
+  // Rename already use - a platform admin manages every non-system dashboard.
+  const ownerId = await makeUser({ email: `ld2-owner-${uid()}@test.local` });
+  await grantGlobalRole(ownerId, "independent_coach");
+  await setActiveWorkspace(ownerId, "private_coach", null);
+  const ownerCookie = await loginCookie(ownerId);
+  const privateBoard = await makeDashboardHttp(ownerCookie, { name: "Owner private" });
+  assert.equal(privateBoard.owner_scope, "user");
+  const { adminCookie } = await makePlatformAdmin("ld2");
+  const fromAdmin = await api(`/api/training-load/dashboards/${privateBoard.id}`, { method: "DELETE", cookie: adminCookie, body: { expectedRevision: privateBoard.revision } });
+  assert.equal(fromAdmin.status, 200, JSON.stringify(fromAdmin.body));
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [privateBoard.id]), 0);
+});
+
+test("delete 3: a system template can NEVER be permanently deleted - not even by a platform admin who can manage every other system dashboard", async () => {
+  const { adminCookie } = await makePlatformAdmin("ld3");
+  const template = await makeDashboardHttp(adminCookie, { ownerScope: "system" });
+  assert.equal(template.owner_scope, "system");
+  const rejected = await api(`/api/training-load/dashboards/${template.id}`, { method: "DELETE", cookie: adminCookie, body: { expectedRevision: template.revision } });
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
+  assert.equal(rejected.body.error, "systemTemplateProtected");
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [template.id]), 1, "the system template is untouched");
+});
+
+test("delete 3b: a NON-system template (club-owned, is_template true) is NOT protected by the system-template rule - its manager can delete it", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("ld3b");
+  const template = await makeDashboardHttp(coachCookie, { ownerScope: "club", ownerClubId: clubId, isTemplate: true });
+  assert.equal(template.owner_scope, "club");
+  assert.equal(template.is_template, true);
+  const deleted = await api(`/api/training-load/dashboards/${template.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: template.revision } });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [template.id]), 0);
+});
+
+test("delete 4: deleting the CURRENTLY ACTIVE dashboard clears the active selection atomically - GET active shows none afterward, for every viewer who had it active", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("ld4");
+  const dashboard = await makeDashboardHttp(coachCookie, { ownerScope: "club", ownerClubId: clubId });
+  await api("/api/training-load/dashboards/active", { method: "POST", cookie: coachCookie, body: { dashboardId: dashboard.id } });
+
+  // A second coach, sharing the same club workspace, ALSO has it active -
+  // dashboard_active_selection.dashboard_id is ON DELETE RESTRICT (not
+  // cascade) specifically because more than one row can point at the same
+  // shared dashboard; every one of them must be cleared, not just the
+  // deleting account's own.
+  const secondCoachId = await makeUser({ email: `ld4-second-${uid()}@test.local` });
+  await grantClubAdmin(secondCoachId, clubId);
+  await setActiveWorkspace(secondCoachId, "club", clubId);
+  const secondCookie = await loginCookie(secondCoachId);
+  await api("/api/training-load/dashboards/active", { method: "POST", cookie: secondCookie, body: { dashboardId: dashboard.id } });
+
+  assert.equal(await countRows("training_load.dashboard_active_selection", "dashboard_id = $1", [dashboard.id]), 2, "sanity: two active-selection rows point at it");
+
+  const deleted = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: dashboard.revision } });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+
+  assert.equal(await countRows("training_load.dashboard_active_selection", "dashboard_id = $1", [dashboard.id]), 0, "every active-selection row pointing at the deleted dashboard is gone");
+  const gotFirst = await api("/api/training-load/dashboards/active", { cookie: coachCookie });
+  assert.equal(gotFirst.body.activeDashboard, null);
+  const gotSecond = await api("/api/training-load/dashboards/active", { cookie: secondCookie });
+  assert.equal(gotSecond.body.activeDashboard, null);
+});
+
+test("delete 5: a dashboard that has been CLONED FROM cannot be permanently deleted - dashboards.cloned_from_dashboard_id is ON DELETE RESTRICT and immutable; the source, its clone, and their widgets/series all survive the refused attempt", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("ld5");
+  const template = await makeDashboardHttp(coachCookie, { ownerScope: "club", ownerClubId: clubId, isTemplate: true });
+  const tw = await makeWidgetHttp(coachCookie, template);
+  await api(`/api/training-load/dashboards/${template.id}/widgets/${tw.widgetId}/series`, {
+    method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "rpe", dataScopeLevel: "session", analyticalAggregation: "avg" },
+  });
+  const cloned = await api(`/api/training-load/dashboards/${template.id}/clone`, { method: "POST", cookie: coachCookie, body: { ownerScope: "club", ownerClubId: clubId, name: "Cloned from LD5" } });
+  assert.equal(cloned.status, 201, JSON.stringify(cloned.body));
+  assert.equal(cloned.body.dashboard.cloned_from_dashboard_id, template.id);
+
+  const rejected = await api(`/api/training-load/dashboards/${template.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: await freshRevision(coachCookie, template.id) } });
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
+  assert.equal(rejected.body.error, "dashboardHasClones");
+
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [template.id]), 1, "the source template survives the refused delete");
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [cloned.body.dashboard.id]), 1, "the clone itself is untouched");
+  assert.equal(await countRows("training_load.dashboard_widgets", "dashboard_id = $1", [template.id]), 1, "the source's own widget is untouched - nothing was partially deleted");
+
+  // Deleting the CLONE (which nothing else references) still works fine -
+  // the restriction is specific to being a clone SOURCE, not to having ever
+  // participated in a clone relationship at all.
+  const deletedClone = await api(`/api/training-load/dashboards/${cloned.body.dashboard.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: await freshRevision(coachCookie, cloned.body.dashboard.id) } });
+  assert.equal(deletedClone.status, 200, JSON.stringify(deletedClone.body));
+});
+
+test("delete 6: a stale expectedRevision is refused 409 staleRevision - zero writes, the dashboard is untouched", async () => {
+  const { coachCookie } = await makeClubCoach("ld6");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  // Bump the real revision once via an unrelated metadata PATCH, so the
+  // dashboard's ORIGINAL revision (still held by the test) is now stale.
+  await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: dashboard.revision, name: "Renamed" } });
+  const rejected = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: dashboard.revision } });
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
+  assert.equal(rejected.body.error, "staleRevision");
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [dashboard.id]), 1);
+});
+
+test("delete 7: an ARCHIVED dashboard can still be permanently deleted - delete is deliberately NOT gated by the archived read-only rule that blocks every other write", async () => {
+  const { coachCookie } = await makeClubCoach("ld7");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const archived = await api(`/api/training-load/dashboards/${dashboard.id}/archive`, { method: "POST", cookie: coachCookie, body: { expectedRevision: dashboard.revision } });
+  assert.equal(archived.status, 200);
+  const deleted = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: archived.body.dashboard.revision } });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  const logged = await query(`select status from training_load.dashboard_deletion_log where dashboard_id = $1`, [dashboard.id]);
+  assert.deepEqual(logged.rows.map((r) => r.status), ["archived"], "the log records the status the dashboard had when it was deleted");
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [dashboard.id]), 0);
+});
+
+test("delete 8: invalid input matrix - an unknown field, a missing/non-integer/zero expectedRevision, and an invalid dashboardId all reject 400 with zero writes", async () => {
+  const { coachCookie } = await makeClubCoach("ld8");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const attempts = [
+    { url: `/api/training-load/dashboards/${dashboard.id}`, body: { expectedRevision: dashboard.revision, unknownField: 1 } },
+    { url: `/api/training-load/dashboards/${dashboard.id}`, body: {} },
+    { url: `/api/training-load/dashboards/${dashboard.id}`, body: { expectedRevision: 0 } },
+    { url: `/api/training-load/dashboards/${dashboard.id}`, body: { expectedRevision: "1" } },
+    { url: "/api/training-load/dashboards/not-a-uuid", body: { expectedRevision: dashboard.revision } },
+  ];
+  for (const attempt of attempts) {
+    const res = await api(attempt.url, { method: "DELETE", cookie: coachCookie, body: attempt.body });
+    assert.equal(res.status, 400, `${JSON.stringify(attempt)} -> got ${res.status} ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.error, "invalidRequest");
+  }
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [dashboard.id]), 1, "no rejected attempt deleted anything");
+});
+
+test("delete 3c: a NON-admin gets the same 409 systemTemplateProtected for a system template (checked before the manage check) - one consistent answer for every caller", async () => {
+  const { adminCookie } = await makePlatformAdmin("ld3c");
+  const template = await makeDashboardHttp(adminCookie, { ownerScope: "system" });
+  const { coachCookie } = await makeClubCoach("ld3c");
+  const seen = await api(`/api/training-load/dashboards/${template.id}`, { cookie: coachCookie });
+  assert.equal(seen.status, 200, "sanity: a system template is visible to every account");
+  const rejected = await api(`/api/training-load/dashboards/${template.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: template.revision } });
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
+  assert.equal(rejected.body.error, "systemTemplateProtected");
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [template.id]), 1);
+});
+
+test("delete 9: REAL concurrency - a dashboard deleted by another transaction while this DELETE waits on the row lock returns info-hiding 404 notFound, never 400 or 500 (waiter proven via pg_stat_activity, no sleep)", async () => {
+  const { coachCookie } = await makeClubCoach("ld9");
+  const dashboard = await makeDashboardHttp(coachCookie);
+  const { client } = await newClient();
+  try {
+    await client.query("begin");
+    await client.query("select 1 from training_load.dashboards where id = $1 for update", [dashboard.id]);
+    const pending = api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: dashboard.revision } });
+    const blockedPid = await waitForAnyLockWait();
+    assert.ok(blockedPid, "the HTTP DELETE really waited on the row lock");
+    await client.query("delete from training_load.dashboards where id = $1", [dashboard.id]);
+    await client.query("commit");
+    const res = await pending;
+    assert.equal(res.status, 404, JSON.stringify(res.body));
+    assert.equal(res.body.error, "notFound");
+  } finally {
+    await client.end();
+  }
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [dashboard.id]), 0);
+  assert.equal(await countRows("training_load.dashboard_deletion_log", "dashboard_id = $1", [dashboard.id]), 0, "the request that got 404 wrote no deletion record");
+});
+
+// ============================================================
+// Deletion log (product decision (c), 2026-09-17): whoever may manage a
+// dashboard - a platform admin included - keeps the right to delete it,
+// and EVERY permanent delete is recorded in the append-only
+// training_load.dashboard_deletion_log: who, on what authority, what, when.
+// ============================================================
+
+async function deletionLogRows(dashboardId) {
+  const r = await query(`select * from training_load.dashboard_deletion_log where dashboard_id = $1 order by deleted_at`, [dashboardId]);
+  return r.rows;
+}
+
+test("log 1: an owner's delete writes exactly one record - who (the owner), on what authority ('owner'), what (name, ownership, workspace, template flag, status, revision, widget and series counts, original creator) and when", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("lg1");
+  const dashboard = await makeDashboardHttp(coachCookie, { name: "Readiness board" });
+  const w = await makeWidgetHttp(coachCookie, dashboard);
+  await api(`/api/training-load/dashboards/${dashboard.id}/widgets/${w.widgetId}/series`, {
+    method: "POST", cookie: coachCookie, body: { expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "rpe", dataScopeLevel: "session", analyticalAggregation: "avg" },
+  });
+  const w2 = await makeWidgetHttp(coachCookie, { ...dashboard, revision: await freshRevision(coachCookie, dashboard.id) }, { x: 6 });
+  const revision = await freshRevision(coachCookie, dashboard.id);
+  // Database clock, not Node's: deleted_at must be the moment of THIS delete.
+  const { rows: [{ t: beforeDelete }] } = await query("select clock_timestamp() as t");
+  const deleted = await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: revision } });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  assert.ok(w2.widgetId);
+
+  const rows = await deletionLogRows(dashboard.id);
+  assert.equal(rows.length, 1);
+  const row = rows[0];
+  assert.equal(row.deleted_by_user_id, coachId);
+  assert.equal(row.authorized_via, "owner");
+  assert.equal(row.dashboard_name, "Readiness board");
+  assert.equal(row.owner_scope, "user");
+  assert.equal(row.owner_user_id, coachId);
+  assert.equal(row.owner_club_id, null);
+  assert.equal(row.data_workspace_type, "club");
+  assert.equal(row.data_workspace_scope_id, clubId);
+  assert.equal(row.is_template, false);
+  assert.equal(row.status, "active");
+  assert.equal(row.revision, revision, "the revision the dashboard had when it was deleted");
+  assert.equal(row.widget_count, 2);
+  assert.equal(row.series_count, 1);
+  assert.equal(row.dashboard_created_by_user_id, coachId);
+  assert.ok(row.dashboard_created_at instanceof Date);
+  assert.ok(row.deleted_at >= beforeDelete, "deleted_at is the moment of the delete, not a snapshot of the dashboard's own timestamps");
+  assert.ok(row.deleted_at > row.dashboard_created_at);
+  assert.ok(!Object.prototype.hasOwnProperty.call(deleted.body, "logId"), "the log is not exposed through the API response");
+});
+
+test("log 2: a platform admin deleting ANOTHER user's private dashboard is allowed and recorded as authorized_via 'platform_admin' with the admin as the actor and the original owner preserved; an admin deleting their OWN private dashboard is recorded as 'owner'", async () => {
+  const ownerId = await makeUser({ email: `lg2-owner-${uid()}@test.local` });
+  await grantGlobalRole(ownerId, "independent_coach");
+  await setActiveWorkspace(ownerId, "private_coach", null);
+  const ownerCookie = await loginCookie(ownerId);
+  const privateBoard = await makeDashboardHttp(ownerCookie, { name: "Owner's private board" });
+
+  const adminId = await makeUser({ email: `lg2-admin-${uid()}@test.local` });
+  await grantGlobalRole(adminId, "platform_admin");
+  await grantGlobalRole(adminId, "independent_coach");
+  await setActiveWorkspace(adminId, "private_coach", null);
+  const adminCookie = await loginCookie(adminId);
+
+  const byAdmin = await api(`/api/training-load/dashboards/${privateBoard.id}`, { method: "DELETE", cookie: adminCookie, body: { expectedRevision: privateBoard.revision } });
+  assert.equal(byAdmin.status, 200, JSON.stringify(byAdmin.body));
+  const [overrideRow] = await deletionLogRows(privateBoard.id);
+  assert.equal(overrideRow.deleted_by_user_id, adminId);
+  assert.equal(overrideRow.authorized_via, "platform_admin", "the admin override was the only basis");
+  assert.equal(overrideRow.owner_user_id, ownerId, "whose dashboard it was is preserved");
+  assert.equal(overrideRow.dashboard_name, "Owner's private board");
+
+  const adminOwn = await makeDashboardHttp(adminCookie, { name: "Admin's own board" });
+  const ownDelete = await api(`/api/training-load/dashboards/${adminOwn.id}`, { method: "DELETE", cookie: adminCookie, body: { expectedRevision: adminOwn.revision } });
+  assert.equal(ownDelete.status, 200);
+  const [ownRow] = await deletionLogRows(adminOwn.id);
+  assert.equal(ownRow.authorized_via, "owner", "the most specific basis wins - an admin deleting their own board is the owner");
+});
+
+test("log 3: club and team authority are recorded precisely - club admin on a club dashboard ('club_admin'), team coach on a team dashboard ('team_coach'), and a club admin on a team dashboard under their club ('club_admin')", async () => {
+  const { clubId, coachId: clubAdminId, coachCookie: clubAdminCookie } = await makeClubCoach("lg3");
+  const clubBoard = await makeDashboardHttp(clubAdminCookie, { name: "Club board", ownerScope: "club", ownerClubId: clubId });
+  assert.equal((await api(`/api/training-load/dashboards/${clubBoard.id}`, { method: "DELETE", cookie: clubAdminCookie, body: { expectedRevision: clubBoard.revision } })).status, 200);
+  const [clubRow] = await deletionLogRows(clubBoard.id);
+  assert.equal(clubRow.authorized_via, "club_admin");
+  assert.equal(clubRow.deleted_by_user_id, clubAdminId);
+  assert.equal(clubRow.owner_club_id, clubId);
+
+  const { teamId, coachId: teamCoachId, coachCookie: teamCoachCookie } = await makeTeamCoach("lg3", { clubId });
+  const teamBoard1 = await makeDashboardHttp(teamCoachCookie, { name: "Team board 1", ownerScope: "team", ownerTeamId: teamId });
+  assert.equal((await api(`/api/training-load/dashboards/${teamBoard1.id}`, { method: "DELETE", cookie: teamCoachCookie, body: { expectedRevision: teamBoard1.revision } })).status, 200);
+  const [teamRow] = await deletionLogRows(teamBoard1.id);
+  assert.equal(teamRow.authorized_via, "team_coach");
+  assert.equal(teamRow.deleted_by_user_id, teamCoachId);
+  assert.equal(teamRow.owner_team_id, teamId);
+
+  const teamBoard2 = await makeDashboardHttp(teamCoachCookie, { name: "Team board 2", ownerScope: "team", ownerTeamId: teamId });
+  const byClubAdmin = await api(`/api/training-load/dashboards/${teamBoard2.id}`, { method: "DELETE", cookie: clubAdminCookie, body: { expectedRevision: teamBoard2.revision } });
+  assert.equal(byClubAdmin.status, 200, JSON.stringify(byClubAdmin.body));
+  const [parentClubRow] = await deletionLogRows(teamBoard2.id);
+  assert.equal(parentClubRow.authorized_via, "club_admin", "managing a team through its parent club is club-admin authority, not team-coach");
+  assert.equal(parentClubRow.deleted_by_user_id, clubAdminId);
+});
+
+test("log 4: a refused or rolled-back delete leaves NO record - unrelated user 404, system template 409, stale revision 409, and a cloned-from dashboard whose log insert rolls back with the failing delete", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("lg4");
+
+  const board = await makeDashboardHttp(coachCookie, { name: "Survivor" });
+  const strangerId = await makeUser({ email: `lg4-stranger-${uid()}@test.local` });
+  await grantGlobalRole(strangerId, "independent_coach");
+  await setActiveWorkspace(strangerId, "private_coach", null);
+  const strangerCookie = await loginCookie(strangerId);
+  assert.equal((await api(`/api/training-load/dashboards/${board.id}`, { method: "DELETE", cookie: strangerCookie, body: { expectedRevision: board.revision } })).status, 404);
+  await api(`/api/training-load/dashboards/${board.id}`, { method: "PATCH", cookie: coachCookie, body: { expectedRevision: board.revision, name: "Survivor renamed" } });
+  assert.equal((await api(`/api/training-load/dashboards/${board.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: board.revision } })).status, 409, "stale");
+  assert.equal((await deletionLogRows(board.id)).length, 0);
+
+  const { adminCookie } = await makePlatformAdmin("lg4");
+  const systemTemplate = await makeDashboardHttp(adminCookie, { ownerScope: "system" });
+  assert.equal((await api(`/api/training-load/dashboards/${systemTemplate.id}`, { method: "DELETE", cookie: adminCookie, body: { expectedRevision: systemTemplate.revision } })).status, 409);
+  assert.equal((await deletionLogRows(systemTemplate.id)).length, 0);
+
+  // The log row is inserted BEFORE the delete; the delete then fails on
+  // the clone FK (23503) - the insert must roll back with it.
+  const template = await makeDashboardHttp(coachCookie, { ownerScope: "club", ownerClubId: clubId, isTemplate: true });
+  const cloned = await api(`/api/training-load/dashboards/${template.id}/clone`, { method: "POST", cookie: coachCookie, body: { ownerScope: "club", ownerClubId: clubId, name: "Clone LG4" } });
+  assert.equal(cloned.status, 201, JSON.stringify(cloned.body));
+  const refused = await api(`/api/training-load/dashboards/${template.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: await freshRevision(coachCookie, template.id) } });
+  assert.equal(refused.body.error, "dashboardHasClones");
+  assert.equal((await deletionLogRows(template.id)).length, 0, "no record for a delete that rolled back");
+});
+
+test("log 5: the deletion log is append-only - UPDATE, DELETE and TRUNCATE are all refused by the database, and the record survives", async () => {
+  const { coachCookie } = await makeClubCoach("lg5");
+  const dashboard = await makeDashboardHttp(coachCookie, { name: "To be recorded" });
+  assert.equal((await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: dashboard.revision } })).status, 200);
+  const [row] = await deletionLogRows(dashboard.id);
+  assert.ok(row);
+  await assert.rejects(query(`update training_load.dashboard_deletion_log set dashboard_name = 'tampered' where id = $1`, [row.id]), /append-only \(UPDATE refused\)/);
+  await assert.rejects(query(`delete from training_load.dashboard_deletion_log where id = $1`, [row.id]), /append-only \(DELETE refused\)/);
+  await assert.rejects(query(`truncate training_load.dashboard_deletion_log`), /append-only \(TRUNCATE refused\)/);
+  const [after] = await deletionLogRows(dashboard.id);
+  assert.equal(after.dashboard_name, "To be recorded");
+});
+
+test("log 6: database-level backstop - calling delete_dashboard() directly on a SYSTEM template fails the log's owner_scope CHECK and the whole delete rolls back, even with a platform-admin basis", async () => {
+  const { adminId, adminCookie } = await makePlatformAdmin("lg6");
+  const template = await makeDashboardHttp(adminCookie, { ownerScope: "system" });
+  await assert.rejects(
+    query(`select * from training_load.delete_dashboard($1, $2, $3, $4)`, [template.id, template.revision, adminId, "platform_admin"]),
+    (error) => error.code === "23514",
+  );
+  assert.equal(await countRows("training_load.dashboards", "id = $1", [template.id]), 1, "the system template survives");
+  assert.equal((await deletionLogRows(template.id)).length, 0);
+});
+
+test("log 7: a platform admin with NO club/team role deleting a club and a team dashboard is recorded as 'platform_admin' (never as club_admin/team_coach); a team coach who is ALSO club admin of the parent club is recorded as 'team_coach'", async () => {
+  const { clubId, coachCookie: clubAdminCookie } = await makeClubCoach("lg7");
+  const { teamId, coachCookie: teamCoachCookie } = await makeTeamCoach("lg7", { clubId });
+  const { adminId, adminCookie } = await makePlatformAdmin("lg7");
+
+  const clubBoard = await makeDashboardHttp(clubAdminCookie, { name: "LG7 club board", ownerScope: "club", ownerClubId: clubId });
+  const byAdminClub = await api(`/api/training-load/dashboards/${clubBoard.id}`, { method: "DELETE", cookie: adminCookie, body: { expectedRevision: clubBoard.revision } });
+  assert.equal(byAdminClub.status, 200, JSON.stringify(byAdminClub.body));
+  const [clubRow] = await deletionLogRows(clubBoard.id);
+  assert.equal(clubRow.authorized_via, "platform_admin", "the admin override was the only basis for a club dashboard");
+  assert.equal(clubRow.deleted_by_user_id, adminId);
+
+  const teamBoard = await makeDashboardHttp(teamCoachCookie, { name: "LG7 team board", ownerScope: "team", ownerTeamId: teamId });
+  const byAdminTeam = await api(`/api/training-load/dashboards/${teamBoard.id}`, { method: "DELETE", cookie: adminCookie, body: { expectedRevision: teamBoard.revision } });
+  assert.equal(byAdminTeam.status, 200, JSON.stringify(byAdminTeam.body));
+  const [teamRow] = await deletionLogRows(teamBoard.id);
+  assert.equal(teamRow.authorized_via, "platform_admin", "the admin override was the only basis for a team dashboard");
+
+  // Both a direct team_coach role AND club-admin authority over the parent
+  // club: the direct team role is the most specific basis.
+  const { teamId: teamId2, coachId: dualId, coachCookie: dualCookie } = await makeTeamCoach("lg7b", { clubId });
+  await grantClubAdmin(dualId, clubId);
+  const dualBoard = await makeDashboardHttp(dualCookie, { name: "LG7 dual board", ownerScope: "team", ownerTeamId: teamId2 });
+  const byDual = await api(`/api/training-load/dashboards/${dualBoard.id}`, { method: "DELETE", cookie: dualCookie, body: { expectedRevision: dualBoard.revision } });
+  assert.equal(byDual.status, 200, JSON.stringify(byDual.body));
+  const [dualRow] = await deletionLogRows(dualBoard.id);
+  assert.equal(dualRow.authorized_via, "team_coach");
+  assert.equal(dualRow.deleted_by_user_id, dualId);
+});
+
+test("log 8: dashboardManageBasis agrees with canManageDashboardRow for EVERY owner_scope x role combination (non-null exactly when management is allowed), and names the most specific basis", async () => {
+  const { dashboardManageBasis, canManageDashboardRow } = await import("../src/trainingLoadDashboardAccess.js");
+  const me = "11111111-1111-4111-8111-000000000001";
+  const other = "11111111-1111-4111-8111-000000000002";
+  const c1 = "22222222-2222-4222-8222-000000000001";
+  const c2 = "22222222-2222-4222-8222-000000000002";
+  const t1 = "33333333-3333-4333-8333-000000000001";
+  const t2 = "33333333-3333-4333-8333-000000000002";
+  const authz = (over = {}) => ({ platformRoles: [], clubRoles: [], teamRoles: [], managedTeamIds: [], ...over });
+  const accounts = {
+    unrelated: authz(),
+    admin: authz({ platformRoles: ["platform_admin"] }),
+    clubAdminC1: authz({ clubRoles: [{ clubId: c1, role: "club_admin" }], managedTeamIds: [t1] }),
+    otherClubRoleC1: authz({ clubRoles: [{ clubId: c1, role: "club_member" }] }),
+    teamCoachT1: authz({ teamRoles: [{ teamId: t1, role: "team_coach" }] }),
+    otherTeamRoleT1: authz({ teamRoles: [{ teamId: t1, role: "team_member" }] }),
+    teamCoachT1AndClubAdminC1: authz({ teamRoles: [{ teamId: t1, role: "team_coach" }], clubRoles: [{ clubId: c1, role: "club_admin" }], managedTeamIds: [t1] }),
+    adminAndClubAdminC1: authz({ platformRoles: ["platform_admin"], clubRoles: [{ clubId: c1, role: "club_admin" }], managedTeamIds: [t1] }),
+  };
+  const rows = {
+    ownPrivate: { owner_scope: "user", owner_user_id: me },
+    otherPrivate: { owner_scope: "user", owner_user_id: other },
+    clubC1: { owner_scope: "club", owner_club_id: c1 },
+    clubC2: { owner_scope: "club", owner_club_id: c2 },
+    teamT1: { owner_scope: "team", owner_team_id: t1 },
+    teamT2: { owner_scope: "team", owner_team_id: t2 },
+    system: { owner_scope: "system" },
+  };
+  const expected = {
+    unrelated: { ownPrivate: "owner", otherPrivate: null, clubC1: null, clubC2: null, teamT1: null, teamT2: null, system: null },
+    admin: { ownPrivate: "owner", otherPrivate: "platform_admin", clubC1: "platform_admin", clubC2: "platform_admin", teamT1: "platform_admin", teamT2: "platform_admin", system: "platform_admin" },
+    clubAdminC1: { ownPrivate: "owner", otherPrivate: null, clubC1: "club_admin", clubC2: null, teamT1: "club_admin", teamT2: null, system: null },
+    otherClubRoleC1: { ownPrivate: "owner", otherPrivate: null, clubC1: null, clubC2: null, teamT1: null, teamT2: null, system: null },
+    teamCoachT1: { ownPrivate: "owner", otherPrivate: null, clubC1: null, clubC2: null, teamT1: "team_coach", teamT2: null, system: null },
+    otherTeamRoleT1: { ownPrivate: "owner", otherPrivate: null, clubC1: null, clubC2: null, teamT1: null, teamT2: null, system: null },
+    teamCoachT1AndClubAdminC1: { ownPrivate: "owner", otherPrivate: null, clubC1: "club_admin", clubC2: null, teamT1: "team_coach", teamT2: null, system: null },
+    adminAndClubAdminC1: { ownPrivate: "owner", otherPrivate: "platform_admin", clubC1: "club_admin", clubC2: "platform_admin", teamT1: "club_admin", teamT2: "platform_admin", system: "platform_admin" },
+  };
+  let checked = 0;
+  for (const [accountName, accountAuthz] of Object.entries(accounts)) {
+    for (const [rowName, row] of Object.entries(rows)) {
+      const req = { authz: accountAuthz, user: { id: me } };
+      const basis = dashboardManageBasis(req, row);
+      const manage = canManageDashboardRow(req, row);
+      assert.equal(basis !== null, manage, `${accountName} x ${rowName}: basis ${basis} vs canManage ${manage}`);
+      assert.equal(basis, expected[accountName][rowName], `${accountName} x ${rowName}`);
+      checked += 1;
+    }
+  }
+  assert.equal(checked, Object.keys(accounts).length * Object.keys(rows).length);
+});
+
+test("log 9: the log's own CHECKs reject a malformed record written outside delete_dashboard() (bad status, bad workspace type, owner id not matching owner_scope), and a second record for the same dashboard is rejected as a duplicate", async () => {
+  const { coachId, coachCookie } = await makeClubCoach("lg9");
+  const dashboard = await makeDashboardHttp(coachCookie, { name: "LG9" });
+  assert.equal((await api(`/api/training-load/dashboards/${dashboard.id}`, { method: "DELETE", cookie: coachCookie, body: { expectedRevision: dashboard.revision } })).status, 200);
+  const [row] = await deletionLogRows(dashboard.id);
+  const insert = (over) => {
+    const r = { ...row, ...over };
+    return query(
+      `insert into training_load.dashboard_deletion_log (deleted_by_user_id, authorized_via, dashboard_id, dashboard_name, owner_scope, owner_user_id, owner_club_id, owner_team_id,
+         data_workspace_type, data_workspace_scope_id, is_template, status, revision, widget_count, series_count, dashboard_created_by_user_id, dashboard_created_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+      [r.deleted_by_user_id, r.authorized_via, r.dashboard_id, r.dashboard_name, r.owner_scope, r.owner_user_id, r.owner_club_id, r.owner_team_id,
+        r.data_workspace_type, r.data_workspace_scope_id, r.is_template, r.status, r.revision, r.widget_count, r.series_count, r.dashboard_created_by_user_id, r.dashboard_created_at],
+    );
+  };
+  const fresh = () => crypto.randomUUID();
+  await assert.rejects(insert({ dashboard_id: fresh(), status: "pending" }), (e) => e.code === "23514", "status outside active/archived");
+  await assert.rejects(insert({ dashboard_id: fresh(), data_workspace_type: "galaxy" }), (e) => e.code === "23514", "unknown data workspace type");
+  await assert.rejects(insert({ dashboard_id: fresh(), owner_scope: "club" }), (e) => e.code === "23514", "owner_scope club with only an owner_user_id set");
+  await assert.rejects(insert({ dashboard_id: fresh(), owner_club_id: coachId }), (e) => e.code === "23514", "two owner ids at once");
+  await assert.rejects(insert({}), (e) => e.code === "23505", "a second record for the same dashboard id");
+  assert.equal((await deletionLogRows(dashboard.id)).length, 1);
 });

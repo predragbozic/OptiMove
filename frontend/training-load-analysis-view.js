@@ -47,6 +47,16 @@ function canEdit() {
   return Boolean(d) && d.status !== "archived" && !d.is_template;
 }
 
+// Permanent delete is offered for any open dashboard except a system
+// template - including archived dashboards and club/team templates, which
+// canEdit() above excludes. Whether this account may actually MANAGE it is
+// the server's decision (canManageDashboardRow -> 403/404), exactly as for
+// Rename and Archive.
+function canDeleteDashboard() {
+  const d = state.trainingLoad.analysis.dashboard;
+  return Boolean(d) && d.owner_scope !== "system";
+}
+
 // 3B3 UX slice: the "Choose activity" chip replaces the old raw Activity/
 // Component ID text inputs - it always shows the activity's real name and
 // date (never its UUID), and the Component select only appears once an
@@ -174,7 +184,7 @@ function menuItemHtml({ action, label, dataset = {}, disabled = false, danger = 
 
 function renderDashboardMenuHtml() {
   const a = state.trainingLoad.analysis;
-  if (!a.dashboard || !canEdit()) return "";
+  if (!a.dashboard || (!canEdit() && !canDeleteDashboard())) return "";
   const open = a.menu === "dashboard";
   const isActive = a.dashboard.id === a.activeDashboardId;
   return `
@@ -183,12 +193,18 @@ function renderDashboardMenuHtml() {
       ${open ? `
         ${popoverBackdropHtml()}
         <div class="tl-popover tl-menu" role="menu" aria-label="Dashboard actions">
-          ${menuItemHtml({ action: "training-load-analysis-rename-dashboard", label: "Rename" })}
-          ${isActive
-            ? menuItemHtml({ action: "training-load-analysis-set-active", label: "Active dashboard", disabled: true })
-            : menuItemHtml({ action: "training-load-analysis-set-active", label: "Set as active" })}
-          ${menuItemHtml({ action: "training-load-analysis-toggle-edit", label: a.editMode ? "Done editing layout" : "Edit layout" })}
-          ${menuItemHtml({ action: "training-load-analysis-archive", label: "Archive", danger: true })}
+          ${canEdit() ? `
+            ${menuItemHtml({ action: "training-load-analysis-rename-dashboard", label: "Rename" })}
+            ${isActive
+              ? menuItemHtml({ action: "training-load-analysis-set-active", label: "Active dashboard", disabled: true })
+              : menuItemHtml({ action: "training-load-analysis-set-active", label: "Set as active" })}
+            ${menuItemHtml({ action: "training-load-analysis-toggle-edit", label: a.editMode ? "Done editing layout" : "Edit layout" })}
+            ${menuItemHtml({ action: "training-load-analysis-archive", label: "Archive", danger: true })}
+          ` : ""}
+          ${canDeleteDashboard() ? `
+            ${canEdit() ? `<div class="tl-menu-separator" role="separator"></div>` : ""}
+            ${menuItemHtml({ action: "training-load-analysis-delete-dashboard", label: "Delete permanently", danger: true, disabled: a.saving })}
+          ` : ""}
         </div>
       ` : ""}
     </div>

@@ -16,7 +16,7 @@
 import { Router } from "express";
 import { resolveActiveDataWorkspace, canManageDashboardRow, dataWorkspaceMatches } from "../trainingLoadDashboardAccess.js";
 import {
-  listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, cloneDashboard,
+  listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, deleteDashboard, cloneDashboard,
   getActiveDashboard, setActiveDashboard, clearActiveDashboard, httpError, validFilterShape,
 } from "../trainingLoadDashboardCatalog.js";
 import {
@@ -376,6 +376,29 @@ router.post("/:dashboardId/archive", async (req, res, next) => {
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     res.json(await archiveDashboard(req, dataWorkspace, req.params.dashboardId, { expectedRevision: b.expectedRevision }));
+  } catch (error) {
+    respondToServiceError(res, next, error);
+  }
+});
+
+// Permanent delete — a real DELETE (unlike archive, a status flip). Body
+// still carries expectedRevision (same optimistic-concurrency contract as
+// every other write here) even though DELETE requests are sometimes
+// modeled without a body: this router's writes have used a required-field
+// JSON body uniformly (see /:dashboardId/archive above), and the delete
+// itself is irreversible enough that a stale-revision guard genuinely
+// matters — never silently deleting a dashboard the client last saw at an
+// older revision without the caller confirming that's still what they mean.
+router.delete("/:dashboardId", async (req, res, next) => {
+  try {
+    if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
+    const b = req.body || {};
+    const unknown = rejectUnknownKeys(b, ["expectedRevision"]);
+    if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown}.` });
+    if (!validRevision(b.expectedRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedRevision must be a positive integer." });
+    const dataWorkspace = await requireDataWorkspace(req, res);
+    if (!dataWorkspace) return;
+    res.json(await deleteDashboard(req, dataWorkspace, req.params.dashboardId, { expectedRevision: b.expectedRevision }));
   } catch (error) {
     respondToServiceError(res, next, error);
   }

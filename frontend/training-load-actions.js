@@ -29,6 +29,7 @@ import {
   addAnalysisSeries,
   applyAnalysisPeriodPreset,
   archiveAnalysisDashboard,
+  deleteAnalysisDashboard,
   cancelAnalysisLayoutDraft,
   cloneAnalysisDashboard,
   createAnalysisDashboard,
@@ -1104,6 +1105,25 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     closeAnalysisPopovers();
     if (!window.confirm("Archive this dashboard? It will become read-only.")) { renderTrainingLoad(); return true; }
     await archiveAnalysisDashboard(renderTrainingLoad);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-delete-dashboard") {
+    const a = state.trainingLoad.analysis;
+    const target = a.dashboard;
+    closeAnalysisPopovers();
+    if (!target || a.saving) { renderTrainingLoad(); return true; }
+    const widgetCount = (a.widgets || []).length;
+    const whatElse = widgetCount === 0
+      ? "It has no widgets yet; its settings (layout, filters) are deleted too."
+      : `This also deletes ${widgetCount === 1 ? "its 1 widget" : `all ${widgetCount} of its widgets`} and every setting (metrics, layout, filters).`;
+    const confirmed = window.confirm(
+      `Permanently delete "${target.name}"?\n\n`
+      + `${whatElse} It cannot be undone.\n\n`
+      + "To keep it as a read-only record instead, choose Archive.",
+    );
+    if (!confirmed) { renderTrainingLoad(); return true; }
+    await deleteAnalysisDashboard(renderTrainingLoad);
     renderTrainingLoad();
     return true;
   }
