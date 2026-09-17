@@ -17,6 +17,38 @@ const METRIC_DEFINITIONS_NAMESPACE = "training-load-analysis-metrics";
 // ANALYSIS_LAYOUT_LIMITS above.
 const ANALYSIS_SERIES_LIMITS = { kpi: 1, table: 12, line_chart: 8, bar_chart: 8 };
 
+// Mirrors training_load.dashboard_builtin_series.fixed_data_scope_level
+// (migrations_v2 v18 seed): a built-in series' data level is fixed by the
+// catalog, and the v16 validate_builtin_scope trigger rejects any other
+// value with a generic 400. Same convention as ANALYSIS_SERIES_LIMITS.
+export const BUILT_IN_FIXED_SCOPE = { rpe: "session", srpe: "session", duration_minutes: "session", session_count: "day", last_session_date: "day" };
+
+// Mirrors dashboard_widget_types.supports_comparison_period (v18 seed: KPI
+// only) - the v16 type-change trigger refuses a comparison on any other type.
+const ANALYSIS_COMPARISON_TYPES = new Set(["kpi"]);
+
+// Mirrors dashboard_widget_types.has_shared_axis (v18 seed): on these types
+// the v16 validate_axis_unit trigger refuses a series whose unit differs
+// from another series on the same axis - so a metric replace there must
+// remove the previous series BEFORE adding the new one (code-reviewer HIGH).
+const ANALYSIS_SHARED_AXIS_TYPES = new Set(["line_chart", "bar_chart"]);
+
+// Mirrors dashboard_builtin_series.unit / value_type (v18 seed). A text or
+// boolean value only supports the "last" / "none" aggregation (v16
+// validate_aggregation_type_compat).
+const BUILT_IN_SERIES_UNITS = { rpe: null, srpe: "AU", duration_minutes: "min", session_count: null, last_session_date: null };
+const BUILT_IN_VALUE_TYPES = { rpe: "numeric", srpe: "numeric", duration_minutes: "numeric", session_count: "numeric", last_session_date: "text" };
+const NON_NUMERIC_AGGREGATIONS = new Set(["last", "none"]);
+const ANALYSIS_WIDGET_TYPE_LABELS = { kpi: "KPI", table: "Table", line_chart: "Line chart", bar_chart: "Bar chart" };
+
+export function analysisSeriesLimit(widgetType) {
+  return ANALYSIS_SERIES_LIMITS[widgetType] ?? 20;
+}
+
+export function analysisWidgetSupportsComparison(widgetType) {
+  return ANALYSIS_COMPARISON_TYPES.has(widgetType);
+}
+
 const ANALYSIS_LAYOUT_LIMITS = {
   kpi: { minWidth: 2, maxWidth: 4, minHeight: 2, maxHeight: 3 },
   table: { minWidth: 3, maxWidth: 12, minHeight: 3, maxHeight: 12 },
@@ -393,7 +425,7 @@ async function forgetDeletedAnalysisDashboard(target, onPainted) {
     a.editMode = false;
     a.layoutDraft = null;
     a.metricPanel = null;
-    a.editor = { open: false, widgetId: "", seriesId: "" };
+    a.editor = closedAnalysisWidgetEditor();
   }
   if (a.activeDashboardId === target.id) a.activeDashboardId = "";
   invalidateTrainingLoadAnalysis();
@@ -440,8 +472,10 @@ const BUILT_IN_DEFAULTS = {
   rpe: { aggregation: "avg", scope: "session" },
   srpe: { aggregation: "sum", scope: "session" },
   duration_minutes: { aggregation: "sum", scope: "session" },
-  session_count: { aggregation: "sum", scope: "session" },
-  last_session_date: { aggregation: "last", scope: "session" },
+  // Dashboards UX H3: these two are DAY-level by the catalog
+  // (BUILT_IN_FIXED_SCOPE) - "session" here made the panel's Save a 400.
+  session_count: { aggregation: "sum", scope: "day" },
+  last_session_date: { aggregation: "last", scope: "day" },
 };
 
 export function metricPanelMetricForSeries(series) {
@@ -676,7 +710,10 @@ export async function saveAnalysisMetricPanel(onPainted) {
         }
       }
       const capacity = ANALYSIS_SERIES_LIMITS[panel.widgetType] ?? ANALYSIS_SERIES_LIMITS[widget.widget_type] ?? 20;
-      if (series && !sameMetric(panel.metric, panel.originalMetric) && allSeries.length >= capacity) {
+      // H3 (code-reviewer HIGH): on a shared-axis chart an add-first POST of a
+      // metric with another unit is refused by the axis-unit trigger - delete
+      // first there as well (the restore below still protects the metric).
+      if (series && !sameMetric(panel.metric, panel.originalMetric) && (allSeries.length >= capacity || ANALYSIS_SHARED_AXIS_TYPES.has(panel.widgetType))) {
         // AT CAPACITY (e.g. a KPI and its single series): add_series() would
         // be rejected, so this has to delete first. If the new series then
         // fails, the previous one is put back exactly as it was
@@ -813,13 +850,547 @@ export async function saveAnalysisMetricPanel(onPainted) {
   return saved;
 }
 
-export async function updateAnalysisWidget(widgetId, body, onPainted) {
-  const w = state.trainingLoad.analysis.widgets.find((item) => item.id === widgetId);
-  if (!w) return null;
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ expectedWidgetRevision: w.revision, ...body }),
-  }), onPainted);
+// ------------------------------------------------------------
+// Dashboards UX H3: the advanced per-series editor, staged.
+//
+// Every change in "Advanced settings" (widget title/type/per, clearing a
+// filter override, adding/removing/reordering series, a series' metric and
+// its settings) edits `editor.draft` only - nothing reaches the server until
+// "Save changes". Save compares the draft with the widget as the server has
+// it NOW (analysisEditorPlan) and applies the difference through the
+// existing endpoints, threading the widget revision each call returns, in an
+// order the v16/v17 triggers accept:
+//   1. remove series (removed by the coach, or left over from an earlier
+//      partial replace) - frees capacity before anything is added,
+//   2. series settings, when the type moves away from KPI (a comparison
+//      must be cleared before the type change is allowed),
+//   3. the widget itself (title / type / per / filter override),
+//   4. metric changes: resolve for an unresolved template series, otherwise
+//      replace - ADD FIRST below the type's series cap, DELETE FIRST at the
+//      cap with the previous series put back if the new one fails,
+//   5. the remaining series settings,
+//   6. new series,
+//   7. the order, when it can differ.
+// Partial-failure contract (same as the H1 panel, owner review of #89):
+// nothing is ever silently lost or duplicated. Any failure stops the save,
+// reloads the dashboard and rebases the draft on what the server now has
+// (rebaseAnalysisEditorDraft: a lost add is recognised, never posted twice);
+// what still differs stays staged for "Save again", and once anything was
+// written the footer's Cancel reads Close.
+// ------------------------------------------------------------
+
+const SERIES_FIELDS = [
+  ["displayLabel", "display_label"], ["axis", "axis"], ["color", "color"],
+  ["dataScopeLevel", "data_scope_level"], ["analyticalAggregation", "analytical_aggregation"],
+  ["sourcePolicy", "source_policy"], ["aggregationRolePolicy", "aggregation_role_policy"],
+  ["coveragePolicy", "coverage_policy"], ["comparisonPeriod", "comparison_period"],
+];
+const NULLABLE_SERIES_FIELDS = new Set(["displayLabel", "color", "comparisonPeriod"]);
+
+export function closedAnalysisWidgetEditor() {
+  return { open: false, widgetId: "", seriesKey: "", draft: null, base: null, saving: false, error: "", serverChanged: false };
+}
+
+function sortedWidgetSeries(widget) {
+  return [...(widget?.series || [])].sort((l, r) => Number(l.series_order || 0) - Number(r.series_order || 0));
+}
+
+export function analysisEditorMetricOf(row) {
+  if (row.built_in_series_key) return { kind: "builtin", key: row.built_in_series_key };
+  if (row.metric_definition_id) return { kind: "metric", id: row.metric_definition_id };
+  return { kind: "template", hints: row.template_metric_key_hints || [] };
+}
+
+function sameEditorMetric(left, right) {
+  if (!left || !right) return left === right;
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "builtin") return left.key === right.key;
+  if (left.kind === "metric") return left.id === right.id;
+  return JSON.stringify(left.hints || []) === JSON.stringify(right.hints || []);
+}
+
+function seriesFieldsOf(row) {
+  const fields = {};
+  for (const [key, column] of SERIES_FIELDS) fields[key] = row[column] ?? null;
+  return fields;
+}
+
+function editorEntryFor(row) {
+  return { key: row.id, id: row.id, metric: analysisEditorMetricOf(row), fields: seriesFieldsOf(row), sourceConnectionId: row.source_connection_id || null, pendingAdd: null };
+}
+
+function normalizedFilterOverride(override) {
+  if (!override) return null;
+  const clean = {};
+  for (const [key, value] of Object.entries(override)) if (value !== null && value !== undefined && value !== "") clean[key] = value;
+  return Object.keys(clean).length ? clean : null;
+}
+
+export function analysisEditorDraftFromWidget(widget) {
+  return {
+    title: widget.title || "",
+    widgetType: widget.widget_type,
+    groupBy: widget.group_by || "day",
+    localFilterOverride: normalizedFilterOverride(widget.local_filter_override),
+    series: sortedWidgetSeries(widget).map(editorEntryFor),
+    removedIds: [],
+    staleIds: [],
+    nextKey: 1,
+  };
+}
+
+export function openAnalysisWidgetEditor(widget) {
+  const draft = analysisEditorDraftFromWidget(widget);
+  // `base` is the widget as the coach first saw it: after a stale-revision
+  // reload, only what the coach actually changed stays theirs (see
+  // rebaseAnalysisEditorDraft).
+  state.trainingLoad.analysis.editor = { ...closedAnalysisWidgetEditor(), open: true, widgetId: widget.id, seriesKey: draft.series[0]?.key || "", draft, base: analysisEditorDraftFromWidget(widget) };
+}
+
+export function editorSeriesEntry(draft, key) {
+  return draft?.series.find((entry) => entry.key === key) || null;
+}
+
+export function addEditorSeries(draft) {
+  const key = `new-${draft.nextKey}`;
+  draft.nextKey += 1;
+  const entry = {
+    key, id: "", metric: null, sourceConnectionId: null, pendingAdd: null,
+    fields: { displayLabel: null, axis: "primary", color: null, dataScopeLevel: "session", analyticalAggregation: "avg", sourcePolicy: null, aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "complete_and_partial", comparisonPeriod: null },
+  };
+  setEditorSeriesMetric(entry, { kind: "builtin", key: "rpe" });
+  draft.series.push(entry);
+  return key;
+}
+
+// Returns the key to select next (the neighbour), or "".
+export function removeEditorSeries(draft, key) {
+  const index = draft.series.findIndex((entry) => entry.key === key);
+  if (index < 0) return "";
+  const [entry] = draft.series.splice(index, 1);
+  if (entry.id && !draft.removedIds.includes(entry.id)) draft.removedIds.push(entry.id);
+  return (draft.series[index] || draft.series[index - 1])?.key || "";
+}
+
+export function moveEditorSeries(draft, key, direction) {
+  const index = draft.series.findIndex((entry) => entry.key === key);
+  const next = index + direction;
+  if (index < 0 || next < 0 || next >= draft.series.length) return;
+  [draft.series[index], draft.series[next]] = [draft.series[next], draft.series[index]];
+}
+
+// A metric change keeps the series' settings, but never in a combination
+// the table CHECKs refuse: a built-in is always source 'not_applicable' at
+// its catalog-fixed data level; a catalog metric never 'not_applicable'.
+export function setEditorSeriesMetric(entry, metric) {
+  entry.metric = metric;
+  if (metric.kind === "builtin") {
+    entry.fields.sourcePolicy = "not_applicable";
+    entry.sourceConnectionId = null;
+    if (BUILT_IN_FIXED_SCOPE[metric.key]) entry.fields.dataScopeLevel = BUILT_IN_FIXED_SCOPE[metric.key];
+  } else if (metric.kind === "metric" && (!entry.fields.sourcePolicy || entry.fields.sourcePolicy === "not_applicable")) {
+    entry.fields.sourcePolicy = "all_with_conflicts";
+  }
+  // code-reviewer (MEDIUM): settings the catalog makes impossible for the
+  // new metric are moved to the nearest allowed value (text values only
+  // take last/none; a catalog metric only its configured data levels).
+  const facts = editorMetricFacts(metric);
+  if (facts.textual && !NON_NUMERIC_AGGREGATIONS.has(entry.fields.analyticalAggregation)) {
+    entry.fields.analyticalAggregation = (metric.kind === "builtin" && BUILT_IN_DEFAULTS[metric.key]?.aggregation) || "last";
+  }
+  if (facts.scopes.length && !facts.scopes.includes(entry.fields.dataScopeLevel)) entry.fields.dataScopeLevel = facts.scopes[0];
+}
+
+// What the catalog says about a staged metric: its unit (undefined when not
+// known client-side), whether it is text/boolean, and its allowed data levels.
+function editorMetricFacts(metric) {
+  if (metric?.kind === "builtin") {
+    return { unit: BUILT_IN_SERIES_UNITS[metric.key], known: metric.key in BUILT_IN_SERIES_UNITS, textual: BUILT_IN_VALUE_TYPES[metric.key] === "text", scopes: [], label: BUILT_IN_SERIES.find((b) => b.key === metric.key)?.label || metric.key };
+  }
+  if (metric?.kind === "metric") {
+    const def = (state.trainingLoad.analysis.metricPicker.definitions || []).find((d) => d.id === metric.id);
+    return { unit: def ? (def.unit || null) : undefined, known: Boolean(def), textual: ["text", "boolean"].includes(def?.valueType), scopes: def?.scopeCapabilities || [], label: def?.label || "This metric" };
+  }
+  return { unit: undefined, known: false, textual: false, scopes: [], label: "This series" };
+}
+
+export function setEditorWidgetType(draft, widgetType) {
+  draft.widgetType = widgetType;
+  if (!analysisWidgetSupportsComparison(widgetType)) {
+    for (const entry of draft.series) entry.fields.comparisonPeriod = null;
+  }
+}
+
+// What would block a Save before any request is made ("" = nothing).
+export function analysisEditorProblem(draft) {
+  if (!draft) return "";
+  const title = draft.title.trim();
+  if (!title) return "Give the widget a title.";
+  if (title.length > 200) return "The title can be at most 200 characters.";
+  const cap = analysisSeriesLimit(draft.widgetType);
+  if (draft.series.length > cap) {
+    return `A ${ANALYSIS_WIDGET_TYPE_LABELS[draft.widgetType] || draft.widgetType} widget holds at most ${cap} series - remove ${draft.series.length - cap} or choose another type.`;
+  }
+  for (const entry of draft.series) {
+    const fixed = entry.metric?.kind === "builtin" ? BUILT_IN_FIXED_SCOPE[entry.metric.key] : null;
+    if (fixed && entry.fields.dataScopeLevel !== fixed) return `A built-in series is always at the ${fixed} level.`;
+    if (entry.fields.sourcePolicy === "source_connection" && !entry.sourceConnectionId) return "Choosing one connected source is not available here yet - pick another data source.";
+    if (entry.fields.comparisonPeriod && !analysisWidgetSupportsComparison(draft.widgetType)) return "Only a KPI widget can compare with a previous period.";
+    const facts = editorMetricFacts(entry.metric);
+    if (facts.textual && !NON_NUMERIC_AGGREGATIONS.has(entry.fields.analyticalAggregation)) return `${facts.label} can only show the latest value or raw values - choose "last" or "none".`;
+    if (facts.scopes.length && !facts.scopes.includes(entry.fields.dataScopeLevel)) return `${facts.label} is only available at the ${facts.scopes.join(" / ")} level.`;
+  }
+  if (ANALYSIS_SHARED_AXIS_TYPES.has(draft.widgetType)) {
+    const unitByAxis = new Map();
+    for (const entry of draft.series) {
+      const facts = editorMetricFacts(entry.metric);
+      if (!facts.known) continue;
+      const axis = entry.fields.axis || "primary";
+      if (!unitByAxis.has(axis)) unitByAxis.set(axis, facts.unit);
+      else if (unitByAxis.get(axis) !== facts.unit) return `Series on the ${axis} axis must share one unit - move ${facts.label} to the other axis or choose another metric.`;
+    }
+  }
+  return "";
+}
+
+export function analysisEditorPlan(widget, draft) {
+  if (!widget || !draft) return [];
+  const rows = sortedWidgetSeries(widget);
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const toRemove = [...new Set([...draft.staleIds, ...draft.removedIds])].filter((id) => byId.has(id));
+  const ops = toRemove.map((seriesId) => ({ type: "deleteSeries", seriesId }));
+
+  const widgetBody = {};
+  if (draft.title.trim() !== widget.title) widgetBody.title = draft.title.trim();
+  if (draft.widgetType !== widget.widget_type) widgetBody.widgetType = draft.widgetType;
+  if (draft.groupBy !== (widget.group_by || "day")) widgetBody.groupBy = draft.groupBy;
+  const override = normalizedFilterOverride(draft.localFilterOverride);
+  if (JSON.stringify(override) !== JSON.stringify(normalizedFilterOverride(widget.local_filter_override))) widgetBody.localFilterOverride = override;
+
+  const metricOps = [];
+  const patches = [];
+  const comparisonOn = [];
+  const adds = [];
+  for (const entry of draft.series) {
+    const row = entry.id && !toRemove.includes(entry.id) ? byId.get(entry.id) : null;
+    if (!row) {
+      adds.push({ type: "addSeries", key: entry.key });
+      continue;
+    }
+    if (!sameEditorMetric(entry.metric, analysisEditorMetricOf(row))) {
+      if (row.resolution_status !== "resolved" && entry.metric?.kind === "metric") {
+        metricOps.push({ type: "resolveSeries", key: entry.key, seriesId: row.id, metricDefinitionId: entry.metric.id });
+      } else {
+        // the replacement series is posted with the draft's settings; a
+        // comparison can only be set once the widget is a KPI (below)
+        metricOps.push({ type: "replaceSeries", key: entry.key, seriesId: row.id });
+        if (widgetBody.widgetType && entry.fields.comparisonPeriod) comparisonOn.push({ type: "patchSeries", key: entry.key, seriesId: "", body: { comparisonPeriod: entry.fields.comparisonPeriod } });
+        continue;
+      }
+    }
+    const current = seriesFieldsOf(row);
+    const body = {};
+    for (const [key] of SERIES_FIELDS) {
+      const next = entry.fields[key] ?? null;
+      if (next === null && !NULLABLE_SERIES_FIELDS.has(key)) continue;
+      if (next !== (current[key] ?? null)) body[key] = next;
+    }
+    if (body.comparisonPeriod && widgetBody.widgetType) {
+      comparisonOn.push({ type: "patchSeries", key: entry.key, seriesId: row.id, body: { comparisonPeriod: body.comparisonPeriod } });
+      delete body.comparisonPeriod;
+    }
+    if (Object.keys(body).length) patches.push({ type: "patchSeries", key: entry.key, seriesId: row.id, body });
+  }
+
+  // code-reviewer (MEDIUM): the v16 type-change trigger validates the series
+  // that exist AT THAT MOMENT (cap, comparison only on KPI, one unit per
+  // axis), so every series change the final state depends on happens before
+  // the widget PATCH - except turning a comparison ON, which the series
+  // trigger only allows once the widget is a KPI. New series come last,
+  // under the new type's cap.
+  // code-reviewer (re-review MEDIUM): the other direction - leaving a
+  // shared-axis chart for a type without one - must change the type FIRST,
+  // or the series changes are still judged by the old chart's one-unit-per-
+  // axis rule. Charts carry no comparisons, and removals already ran, so a
+  // move to a KPI stays within its cap.
+  const typeFirst = Boolean(widgetBody.widgetType) && ANALYSIS_SHARED_AXIS_TYPES.has(widget.widget_type) && !ANALYSIS_SHARED_AXIS_TYPES.has(draft.widgetType);
+  if (typeFirst) {
+    ops.push({ type: "patchWidget", body: widgetBody }, ...metricOps, ...patches);
+  } else {
+    ops.push(...metricOps, ...patches);
+    if (Object.keys(widgetBody).length) ops.push({ type: "patchWidget", body: widgetBody });
+  }
+  ops.push(...comparisonOn, ...adds);
+
+  const keptInDraftOrder = draft.series.filter((entry) => entry.id && byId.has(entry.id) && !toRemove.includes(entry.id)).map((entry) => entry.id);
+  const keptInServerOrder = rows.map((row) => row.id).filter((id) => keptInDraftOrder.includes(id));
+  const orderChanged = keptInDraftOrder.join(",") !== keptInServerOrder.join(",");
+  if (draft.series.length > 1 && (orderChanged || adds.length || metricOps.some((op) => op.type === "replaceSeries"))) ops.push({ type: "reorder" });
+  return ops;
+}
+
+export function analysisEditorIsDirty(analysis = state.trainingLoad.analysis) {
+  const editor = analysis.editor;
+  if (!editor?.open || !editor.draft) return false;
+  const widget = (analysis.widgets || []).find((w) => w.id === editor.widgetId);
+  return analysisEditorPlan(widget, editor.draft).length > 0;
+}
+
+function editorSeriesPostBody(entry, seriesOrder) {
+  const body = { seriesOrder };
+  if (entry.metric.kind === "builtin") body.builtInSeriesKey = entry.metric.key;
+  else if (entry.metric.kind === "metric") body.metricDefinitionId = entry.metric.id;
+  else body.templateMetricKeyHints = entry.metric.hints;
+  for (const [key] of SERIES_FIELDS) {
+    const value = entry.fields[key];
+    if (value !== null && value !== undefined && value !== "") body[key] = value;
+  }
+  if (body.sourcePolicy === "source_connection" && entry.sourceConnectionId) body.sourceConnectionId = entry.sourceConnectionId;
+  return body;
+}
+
+// After a failed/partial save and the reload: line the draft up with what
+// the server now has, keeping every change the coach still wants. `base` is
+// the widget as the coach last saw it (editor.base): a field the coach did
+// NOT change takes the server's current value, so a retry after a stale
+// revision never reverts someone else's edit (code-reviewer HIGH, 3-way
+// base/draft/server). Returns true when a lost add turned out to have
+// landed (the server changed).
+export function rebaseAnalysisEditorDraft(widget, draft, base = null) {
+  let adopted = false;
+  const rows = sortedWidgetSeries(widget);
+  const ids = new Set(rows.map((row) => row.id));
+  const referenced = new Set(draft.series.map((entry) => entry.id).filter(Boolean));
+  for (const entry of draft.series) {
+    if (!entry.pendingAdd) continue;
+    // A POST whose response was lost: if a series with this metric appeared
+    // that was not there before the POST, it landed - adopt it (a replace
+    // that added first still has its previous series to remove).
+    const known = new Set(entry.pendingAdd.knownIds);
+    const landed = rows.find((row) => !known.has(row.id) && !referenced.has(row.id) && sameEditorMetric(analysisEditorMetricOf(row), entry.metric));
+    if (landed) {
+      if (entry.id && ids.has(entry.id)) draft.staleIds.push(entry.id);
+      entry.id = landed.id;
+      referenced.add(landed.id);
+      adopted = true;
+    }
+    entry.pendingAdd = null;
+  }
+  const serverDraft = analysisEditorDraftFromWidget(widget);
+  if (base) {
+    for (const key of ["title", "widgetType", "groupBy"]) if (draft[key] === base[key]) draft[key] = serverDraft[key];
+    if (JSON.stringify(draft.localFilterOverride) === JSON.stringify(base.localFilterOverride)) draft.localFilterOverride = serverDraft.localFilterOverride;
+    const baseById = new Map(base.series.map((entry) => [entry.id, entry]));
+    const serverById = new Map(serverDraft.series.map((entry) => [entry.id, entry]));
+    const untouched = (entry, was) => sameEditorMetric(entry.metric, was.metric) && Object.keys(was.fields).every((key) => entry.fields[key] === was.fields[key]);
+    draft.series = draft.series.filter((entry) => {
+      const was = entry.id ? baseById.get(entry.id) : null;
+      // deleted elsewhere and never touched here: let it go
+      return !(was && !ids.has(entry.id) && untouched(entry, was));
+    });
+    for (const entry of draft.series) {
+      const was = entry.id ? baseById.get(entry.id) : null;
+      const now = entry.id ? serverById.get(entry.id) : null;
+      if (!was || !now) continue;
+      if (sameEditorMetric(entry.metric, was.metric)) entry.metric = now.metric;
+      for (const key of Object.keys(was.fields)) if (entry.fields[key] === was.fields[key]) entry.fields[key] = now.fields[key];
+      if (entry.sourceConnectionId === was.sourceConnectionId) entry.sourceConnectionId = now.sourceConnectionId;
+    }
+    // Order the coach did not touch follows the server's order.
+    const baseOrder = base.series.map((entry) => entry.id);
+    const known = draft.series.filter((entry) => entry.id && baseOrder.includes(entry.id));
+    const newOnesLast = draft.series.findIndex((entry) => !entry.id || !baseOrder.includes(entry.id)) === -1
+      || draft.series.slice(draft.series.findIndex((entry) => !entry.id || !baseOrder.includes(entry.id))).every((entry) => !entry.id || !baseOrder.includes(entry.id));
+    const sameRelativeOrder = known.map((entry) => entry.id).join(",") === baseOrder.filter((id) => known.some((entry) => entry.id === id)).join(",");
+    if (newOnesLast && sameRelativeOrder) {
+      const position = new Map(rows.map((row, index) => [row.id, index]));
+      const rest = draft.series.filter((entry) => !known.includes(entry));
+      draft.series = [...known.sort((l, r) => (position.get(l.id) ?? 1e9) - (position.get(r.id) ?? 1e9)), ...rest];
+    }
+  }
+  // Gone on the server (removed half-way through a replace, or changed here
+  // but deleted elsewhere): add it again.
+  for (const entry of draft.series) if (entry.id && !ids.has(entry.id)) entry.id = "";
+  draft.removedIds = draft.removedIds.filter((id) => ids.has(id));
+  draft.staleIds = [...new Set(draft.staleIds)].filter((id) => ids.has(id));
+  // A series that appeared on the server meanwhile is shown, never deleted
+  // behind the coach's back.
+  const accounted = new Set([...draft.series.map((entry) => entry.id).filter(Boolean), ...draft.removedIds, ...draft.staleIds]);
+  for (const row of rows) if (!accounted.has(row.id)) draft.series.push(editorEntryFor(row));
+  return adopted;
+}
+
+export async function saveAnalysisWidgetEditor(onPainted) {
+  const a = state.trainingLoad.analysis;
+  const editor = a.editor;
+  const draft = editor?.draft;
+  if (!editor?.open || !draft || editor.saving || !a.dashboard) return false;
+  const widget = (a.widgets || []).find((w) => w.id === editor.widgetId);
+  if (!widget) {
+    editor.error = "This widget no longer exists - close the editor.";
+    onPainted?.();
+    return false;
+  }
+  const problem = analysisEditorProblem(draft);
+  if (problem) {
+    editor.error = problem;
+    onPainted?.();
+    return false;
+  }
+  const plan = analysisEditorPlan(widget, draft);
+  if (!plan.length) {
+    a.editor = closedAnalysisWidgetEditor();
+    onPainted?.();
+    return true;
+  }
+  const widgetUrl = `/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}/widgets/${encodeURIComponent(widget.id)}`;
+  const seriesUrl = `${widgetUrl}/series`;
+  const send = (method, url, body) => api(url, { method, body: JSON.stringify(body) });
+  const failure = (message, cause) => { const err = new Error(message); err.status = cause?.status; err.cause = cause; err.userFacing = true; return err; };
+  const rows = sortedWidgetSeries(widget);
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const liveIds = new Set(rows.map((row) => row.id));
+  // The widget's type as the SERVER has it at each step (the PATCH that
+  // changes it comes after the series changes - see analysisEditorPlan).
+  let currentType = widget.widget_type;
+  let revision = widget.revision;
+  let count = rows.length;
+  let nextOrder = rows.reduce((max, row) => Math.max(max, Number(row.series_order || 0)), 0) + 1;
+  let wrote = false;
+  let saved = false;
+  const written = (result) => {
+    wrote = true;
+    editor.serverChanged = true;
+    revision = result?.widgetRevision ?? result?.widget?.widget_revision ?? revision;
+  };
+  // POST a series for `entry`; a request that fails without a status may
+  // still have committed - remember what existed before, so the rebase can
+  // recognise it after the reload.
+  const postSeries = async (entry, seriesOrder) => {
+    const knownIds = [...liveIds];
+    try {
+      const body = editorSeriesPostBody(entry, seriesOrder);
+      // a comparison is turned on after the type change (plan: comparisonOn)
+      if (!analysisWidgetSupportsComparison(currentType)) delete body.comparisonPeriod;
+      const added = await send("POST", seriesUrl, { expectedWidgetRevision: revision, ...body });
+      written(added);
+      liveIds.add(added.seriesId);
+      count += 1;
+      entry.id = added.seriesId;
+      entry.pendingAdd = null;
+      return added;
+    } catch (error) {
+      if (error.status === undefined) entry.pendingAdd = { knownIds };
+      throw error;
+    }
+  };
+  const deleteSeries = async (seriesId) => {
+    written(await send("DELETE", `${seriesUrl}/${encodeURIComponent(seriesId)}`, { expectedWidgetRevision: revision }));
+    liveIds.delete(seriesId);
+    count -= 1;
+  };
+  editor.saving = true;
+  editor.error = "";
+  onPainted?.();
+  try {
+    for (const op of plan) {
+      const entry = op.key ? editorSeriesEntry(draft, op.key) : null;
+      if (op.type === "deleteSeries") {
+        await deleteSeries(op.seriesId);
+        draft.removedIds = draft.removedIds.filter((id) => id !== op.seriesId);
+        draft.staleIds = draft.staleIds.filter((id) => id !== op.seriesId);
+      } else if (op.type === "patchWidget") {
+        written(await send("PATCH", widgetUrl, { expectedWidgetRevision: revision, ...op.body }));
+        if (op.body.widgetType) currentType = op.body.widgetType;
+      } else if (op.type === "resolveSeries") {
+        written(await send("POST", `${seriesUrl}/${encodeURIComponent(op.seriesId)}/resolve`, { expectedWidgetRevision: revision, metricDefinitionId: op.metricDefinitionId }));
+      } else if (op.type === "patchSeries") {
+        const seriesId = op.seriesId || entry?.id;
+        if (seriesId) written(await send("PATCH", `${seriesUrl}/${encodeURIComponent(seriesId)}`, { expectedWidgetRevision: revision, ...op.body }));
+      } else if (op.type === "addSeries") {
+        await postSeries(entry, nextOrder);
+        nextOrder += 1;
+      } else if (op.type === "replaceSeries") {
+        const previous = byId.get(op.seriesId);
+        if (count < analysisSeriesLimit(currentType) && !ANALYSIS_SHARED_AXIS_TYPES.has(currentType)) {
+          // Below the cap: ADD FIRST - a failed add leaves the previous metric untouched.
+          await postSeries(entry, nextOrder);
+          nextOrder += 1;
+          try {
+            await deleteSeries(previous.id);
+          } catch (error) {
+            draft.staleIds.push(previous.id);
+            if (error.status === undefined) throw error;
+            throw failure("The new metric was added, but the previous one could not be removed yet - both are on the widget for now. Save again to finish.", error);
+          }
+        } else {
+          // At the cap (e.g. a KPI's single series), or on a shared-axis chart
+          // where the new unit may differ: DELETE FIRST, then add
+          // into the same slot; if the add fails, put the previous one back.
+          await deleteSeries(previous.id);
+          entry.id = "";
+          try {
+            await postSeries(entry, Number(previous.series_order || 1));
+          } catch (error) {
+            if (error.status === undefined) throw error;
+            let restored = null;
+            try {
+              restored = await send("POST", seriesUrl, { expectedWidgetRevision: revision, ...seriesRestoreBody(previous) });
+            } catch {
+              restored = null;
+            }
+            if (restored) {
+              written(restored);
+              liveIds.add(restored.seriesId);
+              count += 1;
+              entry.id = restored.seriesId;
+              throw failure("Could not replace the metric - the previous one was put back unchanged. Your other changes are still here; save again to retry.", error);
+            }
+            throw failure("The previous metric was removed but the new one could not be added, and putting it back failed too. Save again to add the new metric.", error);
+          }
+        }
+      } else if (op.type === "reorder") {
+        const order = draft.series.map((item, index) => ({ seriesId: item.id, seriesOrder: index + 1 }));
+        if (order.length > 1 && order.every((item) => item.seriesId)) {
+          written(await send("PUT", `${seriesUrl}/reorder`, { expectedWidgetRevision: revision, order }));
+        }
+      }
+    }
+    saved = true;
+  } catch (error) {
+    // No status = the request itself failed after it may have committed;
+    // 409/404 = the dashboard or widget changed elsewhere - reload either way.
+    if (error.status === undefined || error.status === 409 || error.status === 404) wrote = true;
+    if (error.userFacing) editor.error = error.message;
+    else if (error.status === undefined) editor.error = "Could not confirm whether the last change was saved - the dashboard was reloaded. Check the widget, then save again or close.";
+    else if (error.status === 409 && error.message === "staleRevision") editor.error = "The widget changed on the server. Reloaded the latest version - your remaining changes are still here; check them and save again.";
+    else if (error.status === 409) editor.error = "This dashboard can't be edited right now (archived or a template). Close the editor.";
+    else editor.error = "The server refused one of the changes (a setting that doesn't fit this metric or widget type). What was saved so far is kept; the rest is still here - adjust it and save again.";
+  }
+  editor.saving = false;
+  if (wrote) {
+    invalidateTrainingLoadAnalysis();
+    await loadDashboards(onPainted);
+    if (a.selectedDashboardId) {
+      await loadDashboardDetail(a.selectedDashboardId, onPainted, { force: true });
+      await queryAnalysisDashboard(onPainted, { force: true });
+    }
+  }
+  if (saved) {
+    if (a.editor === editor) a.editor = closedAnalysisWidgetEditor();
+    a.notice = "Widget settings saved.";
+  } else if (a.editor === editor) {
+    const reloaded = (a.widgets || []).find((w) => w.id === editor.widgetId);
+    if (reloaded) {
+      if (rebaseAnalysisEditorDraft(reloaded, draft, editor.base)) editor.serverChanged = true;
+      editor.base = analysisEditorDraftFromWidget(reloaded);
+      if (!editorSeriesEntry(draft, editor.seriesKey)) editor.seriesKey = draft.series[0]?.key || "";
+    } else {
+      editor.error = "This widget no longer exists - close the editor.";
+    }
+  }
+  onPainted?.();
+  return saved;
 }
 
 export async function deleteAnalysisWidget(widgetId, onPainted) {
@@ -828,57 +1399,6 @@ export async function deleteAnalysisWidget(widgetId, onPainted) {
   return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}`, {
     method: "DELETE",
     body: JSON.stringify({ expectedWidgetRevision: w.revision }),
-  }), onPainted);
-}
-
-export async function addAnalysisSeries(widgetId, seriesBody, onPainted) {
-  const w = state.trainingLoad.analysis.widgets.find((item) => item.id === widgetId);
-  if (!w) return null;
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}/series`, {
-    method: "POST",
-    body: JSON.stringify({ expectedWidgetRevision: w.revision, seriesOrder: (w.series || []).length + 1, ...seriesBody }),
-  }), onPainted);
-}
-
-export async function updateAnalysisSeries(widgetId, seriesId, body, onPainted) {
-  const w = state.trainingLoad.analysis.widgets.find((item) => item.id === widgetId);
-  if (!w) return null;
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}/series/${encodeURIComponent(seriesId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ expectedWidgetRevision: w.revision, ...body }),
-  }), onPainted);
-}
-
-export async function deleteAnalysisSeries(widgetId, seriesId, onPainted) {
-  const w = state.trainingLoad.analysis.widgets.find((item) => item.id === widgetId);
-  if (!w) return null;
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}/series/${encodeURIComponent(seriesId)}`, {
-    method: "DELETE",
-    body: JSON.stringify({ expectedWidgetRevision: w.revision }),
-  }), onPainted);
-}
-
-export async function reorderAnalysisSeries(widgetId, direction, onPainted) {
-  const w = state.trainingLoad.analysis.widgets.find((item) => item.id === widgetId);
-  if (!w) return null;
-  const series = [...(w.series || [])].sort((a, b) => Number(a.series_order || 0) - Number(b.series_order || 0));
-  const index = series.findIndex((s) => s.id === state.trainingLoad.analysis.selectedSeriesId);
-  const next = index + direction;
-  if (index < 0 || next < 0 || next >= series.length) return null;
-  [series[index], series[next]] = [series[next], series[index]];
-  const order = series.map((s, i) => ({ seriesId: s.id, seriesOrder: i + 1 }));
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}/series/reorder`, {
-    method: "PUT",
-    body: JSON.stringify({ expectedWidgetRevision: w.revision, order }),
-  }), onPainted);
-}
-
-export async function resolveAnalysisSeries(widgetId, seriesId, metricDefinitionId, onPainted) {
-  const w = state.trainingLoad.analysis.widgets.find((item) => item.id === widgetId);
-  if (!w) return null;
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}/series/${encodeURIComponent(seriesId)}/resolve`, {
-    method: "POST",
-    body: JSON.stringify({ expectedWidgetRevision: w.revision, metricDefinitionId }),
   }), onPainted);
 }
 

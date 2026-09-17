@@ -61,7 +61,7 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, handleTrainingLoadAction, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadTrainingLoadAnalysis } from "./training-load-analysis-data.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
@@ -1037,6 +1037,12 @@ function handleContentInput(event) {
         restored.focus();
         if (typeof restored.setSelectionRange === "function" && selectionStart !== null) restored.setSelectionRange(selectionStart, selectionEnd);
       }
+      return;
+    }
+    // Dashboards UX H3: the widget editor's Title/Label go straight into the
+    // staged draft per keystroke, without a re-render.
+    if (trainingLoadInput.dataset.tlEditorField) {
+      setTrainingLoadAnalysisEditorText(trainingLoadInput);
       return;
     }
     // Other Analysis text fields apply on change/blur. Re-rendering on every
