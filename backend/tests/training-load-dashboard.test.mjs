@@ -2647,3 +2647,131 @@ test("§10.10 REAL concurrency: add_series() vs createDefinitionVersion(), BOTH 
     assert.equal(hintRow.rows[0].template_metric_key_hints[0].unit, "bpm", "add_series(), having already locked and read the metric BEFORE createDefinitionVersion() ever started, must keep its OWN snapshot of the OLD version — never retroactively see the version that committed AFTER it");
   }
 });
+
+// ============================================================
+// §11 - LIST visibility must equal canViewDashboardRow (fix/dashboard-
+// list-visibility). Found live during the Dashboards UX H1 browser QA:
+// dashboardVisibilitySql's data-workspace clause listed every OTHER
+// account's private dashboard whose stored data workspace equalled the
+// caller's. The single-row GET always re-checked and 404'd, so the leak
+// was the list row itself (id, name, description, ownership, data-workspace
+// binding, status, revision, timestamps) - never widgets/series/query data -
+// but the new picker shows exactly that list. Each test below asserts BOTH surfaces (list + GET)
+// for the same dashboard, so they can never drift apart again.
+// ============================================================
+
+async function listIds(cookie) {
+  const r = await api("/api/training-load/dashboards", { cookie });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return r.body.dashboards.map((d) => d.id);
+}
+
+test("§11.1 two private_coach accounts: A's private dashboard is NOT in B's list (same workspace type, null scope) and B's GET is info-hiding 404; A still lists it; a platform admin still lists and reads it", async () => {
+  const mk = async (label) => {
+    const id = await makeUser({ email: `l111-${label}-${uid()}@test.local` });
+    await grantGlobalRole(id, "independent_coach");
+    await setActiveWorkspace(id, "private_coach", null);
+    return { id, cookie: await loginCookie(id) };
+  };
+  const a = await mk("coacha");
+  const b = await mk("coachb");
+  const dashA = await makeDashboardHttp(a.cookie, { name: "A private" });
+  assert.equal(dashA.owner_scope, "user");
+  assert.equal(dashA.data_workspace_type, "private_coach");
+  const dashB = await makeDashboardHttp(b.cookie, { name: "B private" });
+
+  const seenByB = await listIds(b.cookie);
+  assert.ok(!seenByB.includes(dashA.id), "B must NOT list A's private dashboard - an identical private_coach/null data workspace is not a match for a 'user'-owned board");
+  assert.ok(seenByB.includes(dashB.id), "B lists their OWN private dashboard");
+  const getByB = await api(`/api/training-load/dashboards/${dashA.id}`, { cookie: b.cookie });
+  assert.equal(getByB.status, 404);
+  assert.equal(getByB.body.error, "notFound");
+
+  const seenByA = await listIds(a.cookie);
+  assert.ok(seenByA.includes(dashA.id), "the owner keeps listing their own private dashboard");
+  assert.ok(!seenByA.includes(dashB.id), "and never the other coach's");
+
+  const { adminCookie } = await makePlatformAdmin("l111");
+  const seenByAdmin = await listIds(adminCookie);
+  assert.ok(seenByAdmin.includes(dashA.id) && seenByAdmin.includes(dashB.id), "platform-admin list visibility is unchanged (everything)");
+  const getByAdmin = await api(`/api/training-load/dashboards/${dashA.id}`, { cookie: adminCookie });
+  assert.equal(getByAdmin.status, 200, "platform-admin single GET is unchanged");
+});
+
+test("§11.2 two club admins active in the SAME club: A's private dashboard is NOT in B's list nor readable by B; A's club-owned (shared) dashboard IS listed and readable by B; a system template is listed by both", async () => {
+  const clubId = await makeClub(`l112 club ${uid()}`);
+  const mk = async (label) => {
+    const id = await makeUser({ email: `l112-${label}-${uid()}@test.local` });
+    await grantClubAdmin(id, clubId);
+    await setActiveWorkspace(id, "club", clubId);
+    return { id, cookie: await loginCookie(id) };
+  };
+  const a = await mk("a");
+  const b = await mk("b");
+  const privateA = await makeDashboardHttp(a.cookie, { name: "A private in club" });
+  assert.equal(privateA.owner_scope, "user");
+  assert.equal(privateA.data_workspace_type, "club");
+  assert.equal(String(privateA.data_workspace_scope_id), String(clubId), "sanity: the private board is bound to the very club B is active in");
+  const sharedA = await makeDashboardHttp(a.cookie, { name: "Club shared", ownerScope: "club", ownerClubId: clubId });
+  assert.equal(sharedA.owner_scope, "club");
+  const { adminCookie } = await makePlatformAdmin("l112");
+  const template = await makeDashboardHttp(adminCookie, { name: "L112 system template", ownerScope: "system" });
+  assert.equal(template.owner_scope, "system");
+
+  const seenByB = await listIds(b.cookie);
+  assert.ok(!seenByB.includes(privateA.id), "a colleague's PRIVATE dashboard must not be listed just because both are active in the same club");
+  assert.ok(seenByB.includes(sharedA.id), "the club-OWNED dashboard stays visible to every coach active in that club");
+  assert.ok(seenByB.includes(template.id), "system templates stay visible");
+  const privateGetByB = await api(`/api/training-load/dashboards/${privateA.id}`, { cookie: b.cookie });
+  assert.equal(privateGetByB.status, 404);
+  assert.equal(privateGetByB.body.error, "notFound");
+  const sharedGetByB = await api(`/api/training-load/dashboards/${sharedA.id}`, { cookie: b.cookie });
+  assert.equal(sharedGetByB.status, 200, "the shared club dashboard is readable by the colleague");
+
+  const seenByA = await listIds(a.cookie);
+  assert.ok(seenByA.includes(privateA.id) && seenByA.includes(sharedA.id) && seenByA.includes(template.id), "the owner lists all three");
+});
+
+test("§11.3 two team coaches of the SAME team: A's private dashboard is NOT in B's list nor readable by B; the team-owned dashboard IS listed and readable by B", async () => {
+  const clubId = await makeClub(`l113 club ${uid()}`);
+  const teamRes = await query(`insert into public.teams (club_id, name) values ($1,$2) returning id`, [clubId, `l113 Team ${uid()}`]);
+  const teamId = teamRes.rows[0].id;
+  const mk = async (label) => {
+    const id = await makeUser({ email: `l113-${label}-${uid()}@test.local` });
+    await query(`insert into public.user_team_roles (user_id, team_id, role) values ($1,$2,'team_coach')`, [id, teamId]);
+    await setActiveWorkspace(id, "team", teamId);
+    return { id, cookie: await loginCookie(id) };
+  };
+  const a = await mk("a");
+  const b = await mk("b");
+  const privateA = await makeDashboardHttp(a.cookie, { name: "A private in team" });
+  assert.equal(privateA.owner_scope, "user");
+  assert.equal(privateA.data_workspace_type, "team");
+  assert.equal(String(privateA.data_workspace_scope_id), String(teamId));
+  const sharedA = await makeDashboardHttp(a.cookie, { name: "Team shared", ownerScope: "team", ownerTeamId: teamId });
+  assert.equal(sharedA.owner_scope, "team");
+
+  const seenByB = await listIds(b.cookie);
+  assert.ok(!seenByB.includes(privateA.id), "a team-mate's PRIVATE dashboard must not be listed via the shared team workspace");
+  assert.ok(seenByB.includes(sharedA.id), "the team-OWNED dashboard stays visible to every coach of that team");
+  const privateGetByB = await api(`/api/training-load/dashboards/${privateA.id}`, { cookie: b.cookie });
+  assert.equal(privateGetByB.status, 404);
+  assert.equal(privateGetByB.body.error, "notFound");
+  const sharedGetByB = await api(`/api/training-load/dashboards/${sharedA.id}`, { cookie: b.cookie });
+  assert.equal(sharedGetByB.status, 200);
+});
+
+test("§11.4 two athletes of the SAME club (athlete workspace, null scope): A's private self-view dashboard is NOT in B's list and B's GET is info-hiding 404; A still lists it - code-reviewer note", async () => {
+  const clubId = await makeClub(`l114 club ${uid()}`);
+  const a = await makeAthleteInClub(clubId);
+  const b = await makeAthleteInClub(clubId);
+  const dashA = await makeDashboardHttp(a.cookie, { name: "A self-view" });
+  assert.equal(dashA.owner_scope, "user");
+  assert.equal(dashA.data_workspace_type, "athlete");
+  const seenByB = await listIds(b.cookie);
+  assert.ok(!seenByB.includes(dashA.id), "another athlete's private self-view dashboard must not be listed via the shared athlete/null data workspace");
+  const getByB = await api(`/api/training-load/dashboards/${dashA.id}`, { cookie: b.cookie });
+  assert.equal(getByB.status, 404);
+  assert.equal(getByB.body.error, "notFound");
+  assert.ok((await listIds(a.cookie)).includes(dashA.id), "the athlete owner still lists their own dashboard");
+});

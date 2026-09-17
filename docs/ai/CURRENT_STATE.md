@@ -79,6 +79,8 @@ assert a deploy state without checking the actual hosting target first.
   own external-schedule detail (`renderExternalScheduleDetailHtml`), reusing the Tests
   module's `reminderSelection` fingerprint pattern.
 
+- **Dashboard LIST visibility vs. `canViewDashboardRow` (residual drift, no leak today)** (fix/dashboard-list-visibility, 2026-09-16). That PR closed the private-dashboard list leak by guarding `dashboardVisibilitySql`'s data-workspace clause with `owner_scope <> 'user'` (regression tests §11.1–§11.4 in `backend/tests/training-load-dashboard.test.mjs`). One same-class drift remains, unreachable today: the club owner clause admits ANY `req.authz.clubRoles` entry while `canManageClub` requires `role = 'club_admin'` — every current writer of `public.user_club_roles` inserts `club_admin` only and only club admins can activate a club workspace. The team clause has the same shape (`teamRoles` ∪ `managedTeamIds`). security-reviewer (MEDIUM, out of scope): for such a non-admin member active in a DIFFERENT workspace the list would show the club/team-owned board while the single GET (`canViewDashboardRow` → `dataWorkspaceMatches` against the ACTIVE workspace) 404s — a list/GET split, not a private-data leak. If a non-admin club/team role is ever introduced, decide the contract first (list = only what GET allows is the ADR-006-consistent choice), filter those clauses accordingly (mirroring `canManageClub`/`canManageTeamById`) and add a list+GET test for the new role before shipping it.
+
 ## Most likely next step
 
 No committed next phase has been confirmed as of this update — check with the user or
