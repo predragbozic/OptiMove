@@ -1,20 +1,24 @@
 # Current state
 
-Last reviewed: 2026-09-17. Last `origin/main` commit checked: `0a5936c` (merge of PR #93,
-`feature/training-load-dashboards-ux-h2` → `main`).
+Last reviewed: 2026-09-17. Last `origin/main` commit checked: `d2189fa` (merge of PR #95,
+`feature/training-load-dashboards-ux-h3` → `main`).
 
 ## Active phase
 
 **Training Load Dashboards UX redesign (H-slices)** — one branch/PR per slice, frontend
-only unless a separate product decision says otherwise. H1 (PR #89) and H2 (PR #93) are
-merged. Next, in this order (owner confirmed 2026-09-17 that this priority stays):
+only unless a separate product decision says otherwise. H1 (PR #89), H2 (PR #93) and H3
+(PR #95) are merged. Next (owner confirmed 2026-09-17 that this priority stays):
 
-- **H3** — staged Save/Cancel for the advanced per-series editor (today it still saves
-  each field change immediately).
-- **H4** — states and polish. Also in H4 (owner, 2026-09-17, recorded at the H2 merge):
-  extend the unsaved-layout guard to the exits H2 does not cover yet.
-  - Confirmed in code at `0a5936c` - both drop a moved-but-unsaved Dashboards layout
-    without asking: a **workspace switch** (`onWorkspaceChanged` ->
+- **H4** — states and polish. Also in H4:
+  - **Readable labels for the advanced editor's raw policy values** (source / role /
+    coverage), owner decision 2026-09-17 at the H3 merge: do it in H4, and only after
+    checking what each value actually means - a readable but wrong label is worse than
+    the raw value. These fields must be sorted out before the UX slices are finished.
+  - Extend the leave guard to the exits H2 does not cover yet (owner, 2026-09-17,
+    recorded at the H2 merge). Since H3, `confirmLeaveTrainingLoad` guards both an unsaved
+    layout and an unsaved Advanced settings draft, so both are affected by these gaps.
+  - Confirmed in code at `0a5936c` (unchanged at `d2189fa`) - both drop an unsaved
+    Dashboards layout without asking: a **workspace switch** (`onWorkspaceChanged` ->
     `resetTrainingLoadForWorkspaceChange`, `app.js` / `training-load-actions.js`), and
     navigation started from the **notifications** panel (`handleNotificationAction` ->
     e.g. `openTestsToday`, `openTrainingLoadResults`, which change `state.activeTab`
@@ -23,6 +27,22 @@ merged. Next, in this order (owner confirmed 2026-09-17 that this priority stays
     found in code — reproduce first in H4.
 
 ## Last completed, merged phases
+
+- **Dashboards UX H3** — PR #95 (`d2189fa`), frontend only: the advanced widget editor
+  ("Advanced settings") edits a local draft; nothing is sent before "Save changes", and
+  Cancel, Escape, section switch and the H2 leave guard ask "Discard your unsaved widget
+  changes?". Save sends only the difference through the existing widget/series endpoints,
+  in an order the v16/v17 triggers accept (add-first below the type's series cap,
+  delete-first with exact restore at the cap and on line/bar charts; the widget type
+  change before or after the series changes depending on direction). After a failure the
+  dashboard reloads when something may have been written (a completed step, a lost
+  response, or a 409/404), and the draft is rebased 3-way (base / draft / server): a series
+  whose response was lost is adopted, not posted again, and a retry after a stale
+  revision keeps other users' changes. Checks before any request: series cap, a
+  built-in's fixed data level, text-metric aggregation, catalog data levels, one unit per
+  chart axis, comparison only on KPI. Also fixed in the H1 guided panel: "Session count" /
+  "Last session date" now use data level `day`, and a metric change on a line/bar chart
+  deletes first. External review (trigger #4) done by the owner on `7aea7cc`.
 
 - **Dashboard permanent delete + deletion log** — PR #91 (`0de6afb`). Migration v19
   (`migrations_v2/202609170900_training_load_v19_dashboard_delete.sql`):
@@ -149,18 +169,18 @@ pre-existing; pass/fail counts don't belong in this file
   ADR-006-consistent choice), filter those clauses with the shared role predicates in
   `backend/src/authz.js` (`holdsClubAdminRole`, `holdsTeamCoachRole`,
   `managesTeamThroughClub`, extracted in PR #91) and add a list+GET test for the new role.
-- **Not exercised in a live browser yet** (unit-tested only): "Use template"/clone, the
-  Calendar → Analysis "Choose activity" round trip, and the advanced editor's series
-  metric picker (`renderMetricPickerHtml`, reached through widget "Advanced settings").
-  Dashboard create and the guided "Add metric" panel (`renderMetricPanelHtml`) were
-  live-checked in PR #89's browser QA.
+- **Not exercised in a live browser yet** (unit-tested only): "Use template"/clone and
+  the Calendar → Analysis "Choose activity" round trip. Dashboard create and the guided
+  "Add metric" panel (`renderMetricPanelHtml`) were live-checked in PR #89's browser QA,
+  the advanced editor with its series metric picker (`renderMetricPickerHtml`) in PR
+  #95's.
 - `migrations/` (legacy, no `_v2` suffix) still exists alongside `migrations_v2/` — treat
   it as historical/reference only; new migrations go in `migrations_v2/`.
 
 ## Most likely next step
 
-Dashboards UX **H3** (staged Save/Cancel for the advanced per-series editor), on a new
-branch from fresh `origin/main` — see Active phase. The Separate tasks above wait until
+Dashboards UX **H4** (states and polish, readable advanced policy labels, remaining
+leave-guard exits), on a new branch from fresh `origin/main` — see Active phase. The Separate tasks above wait until
 the owner schedules them.
 
 ## How to refresh this file
