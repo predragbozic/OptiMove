@@ -387,6 +387,10 @@ export function emptyAnalysisMetricPanel(widget = null) {
     // Close, and staleSeriesId names a series a retry must remove first.
     serverChanged: false,
     staleSeriesId: "",
+    // Set when an add-first POST failed WITHOUT a status (network): the
+    // server may or may not have added it. After the reload a series with
+    // this metric is treated as that add - never POSTed again.
+    pendingAddMetric: null,
   };
 }
 
@@ -614,8 +618,30 @@ export async function saveAnalysisMetricPanel(onPainted) {
         // Below capacity: ADD FIRST, remove afterwards - a failed add leaves
         // the previous metric untouched.
         const nextOrder = allSeries.reduce((m, s) => Math.max(m, Number(s.series_order || 0)), 0) + 1;
-        const added = await post(seriesUrl, { expectedWidgetRevision: revision, seriesOrder: nextOrder, ...seriesBodyForMetric(panel.metric), ...seriesSettings });
-        wrote = true;
+        // Owner review: an earlier add whose RESPONSE was lost may already be
+        // on the reloaded widget - adopt it instead of adding a copy.
+        const landed = panel.pendingAddMetric && sameMetric(panel.pendingAddMetric, panel.metric)
+          ? allSeries.find((s) => s.id !== series?.id && sameMetric(metricPanelMetricForSeries(s), panel.metric)) || null
+          : null;
+        let added;
+        if (landed) {
+          added = { seriesId: landed.id, widgetRevision: revision };
+        } else {
+          try {
+            added = await post(seriesUrl, { expectedWidgetRevision: revision, seriesOrder: nextOrder, ...seriesBodyForMetric(panel.metric), ...seriesSettings });
+          } catch (error) {
+            if (error.status === undefined) {
+              // Unknown outcome: remember what was sent so the retry can
+              // recognise it after the reload; the reload decides Cancel/Close.
+              panel.pendingAddMetric = panel.metric;
+              wrote = true; // the reload is what tells whether it landed
+              throw failure("Could not confirm whether the new metric was added - the dashboard was reloaded. Check the widget, then save again or close.", error);
+            }
+            throw error;
+          }
+          wrote = true;
+        }
+        panel.pendingAddMetric = null;
         revision = added.widgetRevision ?? revision;
         if (series) {
           let deleteError = null;
@@ -642,7 +668,7 @@ export async function saveAnalysisMetricPanel(onPainted) {
           }
           // Keep the replaced series in its old slot when the widget has
           // other series (cosmetic - a failure here changes no data).
-          const others = allSeries.filter((s) => s.id !== series.id && s.id !== stale?.id);
+          const others = allSeries.filter((s) => s.id !== series.id && s.id !== stale?.id && s.id !== added.seriesId);
           if (others.length) {
             const order = [added.seriesId, ...others.map((s) => s.id)].map((seriesId, i) => ({ seriesId, seriesOrder: i + 1 }));
             await tryQuietly(() => api(`${seriesUrl}/reorder`, { method: "PUT", body: JSON.stringify({ expectedWidgetRevision: revision, order }) }));
@@ -670,6 +696,18 @@ export async function saveAnalysisMetricPanel(onPainted) {
     if (a.selectedDashboardId) {
       await loadDashboardDetail(a.selectedDashboardId, onPainted, { force: true });
       await queryAnalysisDashboard(onPainted, { force: true });
+    }
+    if (panel.pendingAddMetric && a.metricPanel === panel) {
+      // The reload tells whether the lost add landed: if it did, the widget
+      // now carries both metrics and Cancel must read Close.
+      const reloaded = (a.widgets || []).find((w) => w.id === panel.widgetId);
+      const landed = (reloaded?.series || []).some((s) => s.id !== panel.seriesId && sameMetric(metricPanelMetricForSeries(s), panel.pendingAddMetric));
+      if (landed) {
+        panel.serverChanged = true;
+        panel.error = "The new metric was added but the previous one is still on the widget. Save again to remove the previous metric, or close and remove it under Advanced settings.";
+      } else {
+        panel.pendingAddMetric = null; // it never landed - an ordinary retry
+      }
     }
   }
   if (saved) {
