@@ -61,7 +61,7 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, handleTrainingLoadAction, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadTrainingLoadAnalysis } from "./training-load-analysis-data.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
@@ -323,7 +323,14 @@ function bindEvents() {
   els.signOut?.addEventListener("click", signOut);
   els.calendarToggle?.addEventListener("click", openWeeklyCalendarFromRail);
   els.tabs.forEach((tab) => {
-    tab.addEventListener("click", () => {
+    tab.addEventListener("click", (event) => {
+      // Dashboards UX H2: an unsaved Dashboards layout asks before leaving
+      // Training Load. Declined: stop here - and stop the same click from
+      // reaching handleGlobalClick's own [data-tab] branch as well.
+      if (!confirmLeaveTrainingLoad(tab.dataset.tab)) {
+        event.stopPropagation();
+        return;
+      }
       if (state.activeTab !== tab.dataset.tab) pushAppHistory();
       state.activeTab = tab.dataset.tab;
       state.selectedProgramId = null;
@@ -338,6 +345,7 @@ function bindEvents() {
   });
   els.libraryTabs.forEach((button) => {
     button.addEventListener("click", () => {
+      if (!confirmLeaveTrainingLoad(button.dataset.libraryTab)) return;
       if (state.activeTab !== button.dataset.libraryTab) pushAppHistory();
       state.activeTab = button.dataset.libraryTab;
       if (button.dataset.templateScope) {
@@ -367,6 +375,7 @@ function bindEvents() {
   els.athleteTabs.forEach((button) => {
     button.addEventListener("click", () => {
       const targetTab = button.dataset.athleteTab || "weekly";
+      if (!confirmLeaveTrainingLoad(targetTab === "calendar" ? "weekly" : targetTab)) return;
       if (state.activeTab !== targetTab) pushAppHistory();
       state.selectedProgramId = null;
       state.selectedTemplateId = null;
@@ -1369,6 +1378,7 @@ function collapseRailAfterNav() {
 }
 
 function openWeeklyCalendarFromRail() {
+  if (!confirmLeaveTrainingLoad("weekly")) return;
   const shouldToggleLoadedWeekly = state.activeTab === "weekly" && state.lastWeeklyData && state.selectedAthleteId;
   if (state.activeTab !== "weekly" || (shouldToggleLoadedWeekly && !state.weekSelectorOpen)) pushAppHistory();
   state.activeTab = "weekly";
@@ -1475,6 +1485,7 @@ async function handleGlobalClick(event) {
   const tab = event.target.closest("[data-tab]");
   if (tab) {
     const nextTab = tab.dataset.tab;
+    if (!confirmLeaveTrainingLoad(nextTab)) return;
     if (state.activeTab !== nextTab) pushAppHistory();
     state.activeTab = nextTab;
     state.selectedProgramId = null;
@@ -1516,6 +1527,7 @@ async function handleGlobalClick(event) {
     if (document.body.classList.contains("athlete-mode")) {
       goHome();
     } else if (state.activeTab !== "coach-home") {
+      if (!confirmLeaveTrainingLoad("coach-home")) return;
       pushAppHistory();
       state.activeTab = "coach-home";
       state.selectedProgramId = null;
@@ -1660,11 +1672,20 @@ function ensureBackGuard() {
 // Exit OptiMove? modal instead (Stay/Exit), matching this app's own visual
 // language rather than an OS-level dialog. The coach shell's existing
 // window.confirm() flow below is completely untouched.
+// handleAppBack's answer when Back would have left the current screen but
+// the coach chose to stay (Dashboards UX H2: an unsaved Dashboards layout).
+const BACK_STAYED = "stayed";
+
 function handleBrowserBack() {
   if (state.allowBrowserExit) return;
   if (state.appHistoryDepth > 0) {
     state.appHistoryDepth -= 1;
-    handleAppBack();
+    if (handleAppBack() === BACK_STAYED) {
+      // The browser has already stepped back one entry - put it back, so the
+      // address bar and the next Back press behave as if nothing happened.
+      window.history.pushState({ optimove: true }, "", window.location.href);
+      state.appHistoryDepth += 1;
+    }
     return;
   }
   if (handleAppBack()) {
@@ -1755,6 +1776,7 @@ function handleAppBack() {
   // Home nav item exists - see goHome()); the coach shell's is unchanged.
   const rootTab = isAthleteMode() ? "athlete-home" : "weekly";
   if (state.activeTab !== rootTab) {
+    if (!confirmLeaveTrainingLoad(rootTab)) return BACK_STAYED;
     state.activeTab = rootTab;
     state.selectedProgramId = null;
     state.selectedTemplateId = null;
@@ -2592,6 +2614,7 @@ function renderAthleteList() {
 
   els.athleteList.querySelectorAll(".athlete-button").forEach((button) => {
     button.addEventListener("click", () => {
+      if (!confirmLeaveTrainingLoad("weekly")) return;
       state.selectedAthleteId = button.dataset.athleteId;
       state.athletesExpanded = false;
       state.activeTab = "weekly";

@@ -372,7 +372,7 @@ test("Analysis renders real KPI and table results from the batch response", () =
   assert.match(html, /Conflict \/ Unit conflict/);
 });
 
-test("Analysis edit layout markup exposes direct delete and CSS applies saved grid rows", () => {
+test("Analysis layout mode markup: move grip, drag and resize handles, and the widget menu instead of inline Settings/Delete buttons; CSS applies saved grid rows", () => {
   resetState();
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
@@ -381,8 +381,10 @@ test("Analysis edit layout markup exposes direct delete and CSS applies saved gr
   state.trainingLoad.analysis.widgets = [widget({ y: 2, height: 3 })];
 
   const html = renderTrainingLoadAnalysisHtml();
-  assert.match(html, /data-action="training-load-analysis-delete-widget"/);
-  assert.match(html, /class="tl-analysis-widget-delete"/);
+  // Dashboards UX H2: Settings/Delete moved into the widget "⋯" menu (closed
+  // here), so layout mode shows layout controls only.
+  assert.match(html, /data-action="training-load-analysis-open-menu" data-menu="widget:/);
+  assert.doesNotMatch(html, /data-action="training-load-analysis-delete-widget"|data-action="training-load-analysis-edit-widget"/);
   assert.match(html, /class="tl-analysis-widget-move"/);
   assert.match(html, /data-analysis-drag-handle="true"/);
   assert.doesNotMatch(html, /draggable="true"/);
@@ -392,7 +394,7 @@ test("Analysis edit layout markup exposes direct delete and CSS applies saved gr
   assert.match(css, /\.tl-analysis-widget\s*\{[\s\S]*grid-row:\s*calc\(var\(--tl-y\) \+ 1\) \/ span var\(--tl-h\);/);
   assert.match(css, /\.tl-analysis-grid\s*\{[\s\S]*grid-auto-rows:\s*46px;/);
   assert.match(css, /\.tl-analysis-resize-handle\s*\{[\s\S]*width:\s*42px;[\s\S]*height:\s*42px;/);
-  assert.match(css, /\.tl-analysis-widget-delete\s*\{/);
+  assert.match(css, /\.tl-popover-anchor\.tl-widget-menu-anchor\s*\{/);
   assert.match(css, /\.tl-analysis-widget-move\s*\{/);
 });
 
@@ -1087,10 +1089,15 @@ test("+ Add widget lives in the dashboard header and shows whenever the dashboar
   assert.match(html, /class="tl-analysis-dashboard-head">[\s\S]*data-action="training-load-analysis-add-widget"[\s\S]*<\/section>/);
   assert.match(html, /tl-analysis-primary tl-analysis-add-widget-button/);
 
+  // Dashboards UX H2: layout mode is layout-only - the header Add metric
+  // steps aside (saving a widget reloads the dashboard, which would drop an
+  // unsaved layout draft) and the layout bar takes over; with no widgets
+  // the empty-state CTA is still offered.
   state.trainingLoad.analysis.editMode = true;
   html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, /tl-analysis-add-widget-button/);
   assert.match(html, /data-action="training-load-analysis-add-widget"/);
-  assert.match(html, /Save layout/);
+  assert.match(html, /class="tl-layout-bar"/);
 
   state.trainingLoad.analysis.dashboard = dashboard({ status: "archived" });
   html = renderTrainingLoadAnalysisHtml();

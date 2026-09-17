@@ -118,6 +118,46 @@ function closeAnalysisPopovers() {
   return wasOpen;
 }
 
+function exitAnalysisLayoutMode() {
+  const a = state.trainingLoad.analysis;
+  cancelAnalysisLayoutDraft();
+  a.editMode = false;
+  a.editor = { open: false, widgetId: "", seriesId: "" };
+}
+
+// H2: moved-but-unsaved widgets are never dropped silently. Every Dashboards
+// action that would reload the dashboard or leave it (Done, picking another
+// dashboard, New/Rename/Archive/Delete/Use template, Choose activity,
+// switching section) calls this first. Returns true when there is nothing
+// to lose or the coach agreed - the draft is then discarded and layout mode
+// ends - and false when the coach wants to keep editing.
+function releaseAnalysisLayoutDraft() {
+  const a = state.trainingLoad.analysis;
+  if (!a.editMode || !a.layoutDraft) return true;
+  if (!window.confirm("Discard your unsaved layout changes?")) return false;
+  exitAnalysisLayoutMode();
+  return true;
+}
+
+// H2 (owner review of #93): leaving Training Load altogether - the main
+// sidebar/rail or browser Back - asks the same question. app.js calls this
+// BEFORE it changes state.activeTab or pushes history; false means the
+// coach wants to keep arranging, so the navigation must not happen.
+// Re-clicking the already-active Training load item counts too: it reloads
+// the dashboard (loadActiveTab), which drops the draft just the same.
+export function confirmLeaveTrainingLoad(_nextTab) {
+  if (state.activeTab !== "training-load") return true;
+  return releaseAnalysisLayoutDraft();
+}
+
+// H2: widget Settings / Advanced settings / Delete reload the dashboard on
+// success, which resets an unsaved layout draft - the widget menu disables
+// them while a draft exists, and the handlers refuse them the same way.
+function analysisWidgetActionsBlocked() {
+  const a = state.trainingLoad.analysis;
+  return Boolean(a.editMode && a.layoutDraft);
+}
+
 // Escape (app.js's global keydown): closes the topmost Dashboards overlay -
 // a popover first, then the dashboard dialog, then the metric panel (never
 // while its save is in flight). Returns whether anything closed so the
@@ -300,7 +340,7 @@ function analysisPointerTarget(event) {
   if (explicitTarget) return explicitTarget;
   const widget = event.target.closest?.("[data-analysis-widget-id]");
   if (!widget) return null;
-  const interactiveTarget = event.target.closest?.("button, input, select, textarea, a, [role='button'], [data-action]");
+  const interactiveTarget = event.target.closest?.("button, input, select, textarea, a, [role='button'], [data-action], .tl-popover");
   if (interactiveTarget) return null;
   return widget.querySelector?.("[data-analysis-drag-handle='true']") || null;
 }
@@ -411,7 +451,10 @@ function analysisDirectStart(event, target, renderTrainingLoad) {
 }
 
 function analysisIsInteractiveTarget(target) {
-  return Boolean(target.closest?.("button, input, select, textarea, a, [role='button'], [data-action]"));
+  // .tl-popover: H2's widget "⋯" menu opens inside the widget, and its
+  // non-button content (the "save or cancel first" note) must not start a
+  // drag in layout mode.
+  return Boolean(target.closest?.("button, input, select, textarea, a, [role='button'], [data-action], .tl-popover"));
 }
 
 export function bindTrainingLoadAnalysisLayoutInteractions(root = document, renderTrainingLoad) {
@@ -714,6 +757,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- Coach: Schedule / Data & Analysis sections --------------------
 
   if (type === "training-load-section") {
+    // Re-clicking the active Dashboards tab reloads it as well, so it asks too.
+    if (state.trainingLoad.section === "analysis" && !releaseAnalysisLayoutDraft()) {
+      renderTrainingLoad();
+      return true;
+    }
     setTrainingLoadSection(action.dataset.section);
     // perf: the tab strip itself (and whatever this section's own
     // nav.data already holds - real data from an earlier visit this
@@ -769,6 +817,16 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const dashboardId = action.dataset.dashboardId ?? action.value ?? "";
     const a = state.trainingLoad.analysis;
     closeAnalysisPopovers();
+    // Re-picking the dashboard that is already open while arranging it just
+    // closes the picker - reloading it would drop the unsaved layout.
+    if (dashboardId === a.selectedDashboardId && a.dashboard && a.editMode && a.layoutDraft) {
+      renderTrainingLoad();
+      return true;
+    }
+    if (!releaseAnalysisLayoutDraft()) {
+      renderTrainingLoad();
+      return true;
+    }
     a.picker.search = "";
     a.selectedDashboardId = dashboardId;
     a.dashboard = null;
@@ -802,6 +860,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     closeAnalysisPopovers();
     a.menu = open ? menu : "";
     renderTrainingLoad();
+    // H2: keyboard users land on the first available item of the menu
+    // they just opened (Escape closes it again - closeTrainingLoadAnalysisOverlay).
+    // When every item is disabled (widget menu over an unsaved layout), the
+    // menu itself takes focus so its note is where the keyboard is.
+    if (open) (document.querySelector(".tl-menu [role^='menuitem']:not([disabled])") || document.querySelector(".tl-menu[tabindex='-1']"))?.focus?.();
     return true;
   }
   if (type === "training-load-analysis-close-popovers") {
@@ -837,6 +900,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const rename = type.endsWith("rename-dashboard");
     if (rename && !a.dashboard) return true;
     closeAnalysisPopovers();
+    if (!releaseAnalysisLayoutDraft()) { renderTrainingLoad(); return true; }
     a.dashboardForm = { mode: rename ? "rename" : "create", name: rename ? a.dashboard.name : "", description: "", error: "", submitting: false };
     renderTrainingLoad();
     document.querySelector("[data-action='training-load-analysis-dashboard-form-name']")?.focus();
@@ -903,6 +967,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   if (type === "training-load-analysis-clone-template") {
     const templateId = action.dataset.templateId || action.value;
     if (!templateId) return true;
+    closeAnalysisPopovers();
+    if (!releaseAnalysisLayoutDraft()) { renderTrainingLoad(); return true; }
     await cloneAnalysisDashboard(templateId, renderTrainingLoad);
     renderTrainingLoad();
     return true;
@@ -910,9 +976,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   if (type === "training-load-analysis-toggle-edit") {
     const a = state.trainingLoad.analysis;
     closeAnalysisPopovers();
-    a.editMode = !a.editMode;
     if (!a.editMode) {
-      a.editor = { open: false, widgetId: "", seriesId: "" };
+      a.editMode = true;
+    } else if (releaseAnalysisLayoutDraft()) {
+      exitAnalysisLayoutMode();
     }
     renderTrainingLoad();
     return true;
@@ -941,6 +1008,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // ANY open activity whose detail has loaded - pickingActivity only adds
   // the banner/Cancel affordance, it is no longer the gate for the button.
   if (type === "training-load-analysis-choose-activity") {
+    if (!releaseAnalysisLayoutDraft()) { renderTrainingLoad(); return true; }
     state.trainingLoad.analysis.pickingActivity = true;
     setTrainingLoadSection("today");
     renderTrainingLoad();
@@ -1066,8 +1134,9 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-analysis-open-advanced") {
     const a = state.trainingLoad.analysis;
+    closeAnalysisPopovers();
     const widget = a.widgets.find((w) => w.id === action.dataset.widgetId);
-    if (!widget) return true;
+    if (!widget || analysisWidgetActionsBlocked()) { renderTrainingLoad(); return true; }
     a.metricPanel = null;
     a.editor = { open: true, widgetId: widget.id, seriesId: widget.series?.[0]?.id || "" };
     renderTrainingLoad();
@@ -1075,12 +1144,23 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-analysis-save-layout") {
-    await saveAnalysisLayout(renderTrainingLoad);
+    const a = state.trainingLoad.analysis;
+    if (a.saving) return true;
+    const saved = await saveAnalysisLayout(renderTrainingLoad);
+    // H2: a saved layout ends layout mode. A refusal (stale revision - the
+    // latest version was reloaded - or any other error) stays in it, so the
+    // coach sees the message and can arrange again.
+    if (saved) {
+      exitAnalysisLayoutMode();
+      a.notice = "Layout saved.";
+    }
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-analysis-cancel-layout") {
-    cancelAnalysisLayoutDraft();
+    // H2: Cancel is the explicit "throw the moves away" - no extra confirm.
+    if (state.trainingLoad.analysis.saving) return true;
+    exitAnalysisLayoutMode();
     renderTrainingLoad();
     return true;
   }
@@ -1103,7 +1183,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-analysis-archive") {
     closeAnalysisPopovers();
+    // The action's own question first: an unsaved layout is only discarded
+    // for an archive the coach actually goes through with.
     if (!window.confirm("Archive this dashboard? It will become read-only.")) { renderTrainingLoad(); return true; }
+    if (!releaseAnalysisLayoutDraft()) { renderTrainingLoad(); return true; }
     await archiveAnalysisDashboard(renderTrainingLoad);
     renderTrainingLoad();
     return true;
@@ -1122,7 +1205,9 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       + `${whatElse} It cannot be undone.\n\n`
       + "To keep it as a read-only record instead, choose Archive.",
     );
-    if (!confirmed) { renderTrainingLoad(); return true; }
+    // Same order as Archive: discard an unsaved layout only once the delete
+    // itself is confirmed.
+    if (!confirmed || !releaseAnalysisLayoutDraft()) { renderTrainingLoad(); return true; }
     await deleteAnalysisDashboard(renderTrainingLoad);
     renderTrainingLoad();
     return true;
@@ -1131,7 +1216,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // Widget "Settings" opens the guided panel in edit mode (staged; Save/
     // Cancel); the full per-series editor stays behind "Advanced settings".
     const widget = state.trainingLoad.analysis.widgets.find((w) => w.id === action.dataset.widgetId);
-    if (!widget) return true;
+    if (!widget || analysisWidgetActionsBlocked()) { closeAnalysisPopovers(); renderTrainingLoad(); return true; }
     // The panel labels a catalog-backed series from the loaded definitions,
     // so make sure they're in before staging the widget.
     await loadAnalysisMetricDefinitions();
@@ -1171,7 +1256,15 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-analysis-delete-widget") {
-    if (!window.confirm("Delete this widget?")) return true;
+    const a = state.trainingLoad.analysis;
+    closeAnalysisPopovers();
+    const target = a.widgets.find((w) => w.id === action.dataset.widgetId);
+    if (!target || a.saving || analysisWidgetActionsBlocked()) { renderTrainingLoad(); return true; }
+    const confirmed = window.confirm(
+      `Delete "${target.title}"?\n\n`
+      + "Its metrics and settings are removed from this dashboard. It cannot be undone.",
+    );
+    if (!confirmed) { renderTrainingLoad(); return true; }
     await deleteAnalysisWidget(action.dataset.widgetId, renderTrainingLoad);
     state.trainingLoad.analysis.editor = { open: false, widgetId: "", seriesId: "" };
     renderTrainingLoad();

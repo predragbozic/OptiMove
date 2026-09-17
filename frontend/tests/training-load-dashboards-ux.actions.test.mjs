@@ -8,6 +8,7 @@
 // stay covered by training-load-analysis.actions.test.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 let queried = {};
 globalThis.document = {
@@ -37,7 +38,7 @@ function installFetchMock(responder) {
   };
 }
 
-const { closeTrainingLoadAnalysisOverlay, handleTrainingLoadAction, setTrainingLoadAnalysisSearch } = await import("../training-load-actions.js");
+const { closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, handleTrainingLoadAction, setTrainingLoadAnalysisSearch } = await import("../training-load-actions.js");
 const { ANALYSIS_PERIOD_PRESETS, analysisPeriodPresetKey, ensureAnalysisPeriod, loadTrainingLoadAnalysis, metricPanelCanSave } = await import("../training-load-analysis-data.js");
 const { dashboardPickerGroups, renderTrainingLoadAnalysisHtml } = await import("../training-load-analysis-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
@@ -614,10 +615,12 @@ test("the Add metric button and the empty-state CTA exist only for an editable d
   assert.match(html, /No metrics yet/);
   assert.equal((html.match(/data-action="training-load-analysis-add-widget"/g) || []).length, 2, "header button + empty-state CTA");
   assert.doesNotMatch(html, />Metadata<|>Archive<\/button>|>Set active</);
+  // Dashboards UX H2: layout mode moves Save/Cancel/Done into the layout
+  // bar; before anything has moved it offers Cancel + Done.
   state.trainingLoad.analysis.editMode = true;
   html = renderTrainingLoadAnalysisHtml();
-  assert.match(html, /Save layout/);
-  assert.match(html, /data-action="training-load-analysis-toggle-edit">Done</);
+  assert.match(html, /class="tl-layout-bar"[\s\S]*data-action="training-load-analysis-toggle-edit">Done</);
+  assert.doesNotMatch(html, /Save layout/);
   state.trainingLoad.analysis.dashboard = dashboard({ status: "archived" });
   html = renderTrainingLoadAnalysisHtml();
   assert.doesNotMatch(html, /data-action="training-load-analysis-add-widget"/);
@@ -1253,4 +1256,470 @@ test("a 404 on delete means the dashboard is already gone: the same cleanup as a
   assert.equal(a.notice, 'Dashboard "Load board" no longer exists.');
   assert.ok(!a.dashboards.some((d) => d.id === dashboardId));
   assert.match(renderTrainingLoadAnalysisHtml(), /No dashboard selected/);
+});
+
+// -------------------- Dashboards UX H2: widget menu + layout tooling --------------------
+
+const menuItems = (html) => [...html.matchAll(/role="menuitem"[^>]*data-action="([^"]+)"[^>]*>([^<]+)</g)].map((m) => [m[1], m[2]]);
+function layoutButtonDisabled(html, id, action) {
+  const match = html.match(new RegExp(`data-action="training-load-analysis-widget-${action}" data-widget-id="${id}"[^>]*>`));
+  assert.ok(match, `${action} button for ${id}`);
+  return /\sdisabled>$/.test(match[0]);
+}
+function twoWidgets() {
+  state.trainingLoad.analysis.widgets = [
+    widget(),
+    widget({ id: newWidgetId, title: "Load table", widget_type: "table", x: 3, y: 0, width: 9, height: 4, mobile_order: 2, revision: 2, series: [] }),
+  ];
+}
+
+test("H2 widget menu: every widget of an editable dashboard has a ⋯ trigger (in and out of layout mode) with Settings / Advanced settings / Edit layout / Delete widget; one popover at a time, Escape closes it; read-only dashboards have none", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  let html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, new RegExp(`data-action="training-load-analysis-open-menu" data-menu="widget:${widgetId}" aria-haspopup="menu" aria-expanded="false" aria-label="Widget actions: Average RPE"`));
+  assert.doesNotMatch(html, /rev 4/, "no internal revision number in the widget header");
+
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-menu", menu: "dashboard" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-menu", menu: `widget:${widgetId}` }), { renderTrainingLoad });
+  assert.equal(a.menu, `widget:${widgetId}`, "opening the widget menu closes the dashboard menu");
+  html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, /role="menu" aria-label="Dashboard actions"/);
+  assert.match(html, /class="tl-popover tl-menu tl-popover-align-end" role="menu" tabindex="-1" aria-label="Actions for Average RPE"/);
+  assert.deepEqual(menuItems(html), [
+    ["training-load-analysis-edit-widget", "Settings"],
+    ["training-load-analysis-open-advanced", "Advanced settings"],
+    ["training-load-analysis-toggle-edit", "Edit layout"],
+    ["training-load-analysis-delete-widget", "Delete widget"],
+  ]);
+  assert.match(html, new RegExp(`class="tl-menu-item is-danger"[^>]*data-action="training-load-analysis-delete-widget" data-widget-id="${widgetId}"`));
+  assert.equal(closeTrainingLoadAnalysisOverlay(), true);
+  assert.equal(a.menu, "");
+
+  a.editMode = true;
+  a.menu = `widget:${widgetId}`;
+  assert.deepEqual(menuItems(renderTrainingLoadAnalysisHtml()).map(([action]) => action), [
+    "training-load-analysis-edit-widget",
+    "training-load-analysis-open-advanced",
+    "training-load-analysis-delete-widget",
+  ], "in layout mode the menu has no 'Edit layout'");
+
+  a.editMode = false;
+  a.menu = "";
+  a.dashboard = dashboard({ status: "archived" });
+  assert.doesNotMatch(renderTrainingLoadAnalysisHtml(), /data-menu="widget:/, "archived: no widget menu");
+  a.dashboard = dashboard({ id: templateId, is_template: true, owner_scope: "system" });
+  assert.doesNotMatch(renderTrainingLoadAnalysisHtml(), /data-menu="widget:/, "template: no widget menu");
+});
+
+test("H2 widget menu actions outside layout mode: Settings opens the guided panel for that widget, Advanced settings the per-series editor; both close the menu and write nothing", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  a.menu = `widget:${widgetId}`;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-edit-widget", widgetId }), { renderTrainingLoad });
+  assert.equal(a.menu, "");
+  assert.equal(a.editMode, false, "no need to enter layout mode to change a widget");
+  assert.equal(a.metricPanel?.widgetId, widgetId);
+
+  a.metricPanel = null;
+  a.menu = `widget:${widgetId}`;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-open-advanced", widgetId }), { renderTrainingLoad });
+  assert.equal(a.menu, "");
+  assert.deepEqual([a.editor.open, a.editor.widgetId], [true, widgetId]);
+  assert.equal(writes().length, 0);
+});
+
+test("H2 Delete widget asks for a confirmation that names the widget; declining sends nothing, confirming DELETEs it with its revision", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder({ extra: (call) => call.method === "DELETE" ? { status: 200, body: { deleted: true } } : null }));
+  const a = state.trainingLoad.analysis;
+  const prompts = [];
+  try {
+    window.confirm = (message) => { prompts.push(message); return false; };
+    a.menu = `widget:${widgetId}`;
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-widget", widgetId }), { renderTrainingLoad });
+    assert.equal(a.menu, "", "the menu closes before the confirmation");
+    assert.match(prompts[0], /^Delete "Average RPE"\?/);
+    assert.match(prompts[0], /metrics and settings are removed from this dashboard\. It cannot be undone\./);
+    assert.equal(writes().length, 0, "declined: nothing sent");
+
+    window.confirm = (message) => { prompts.push(message); return true; };
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-delete-widget", widgetId }), { renderTrainingLoad });
+    const deletes = writes().filter((c) => c.method === "DELETE");
+    assert.equal(deletes.length, 1);
+    assert.equal(deletes[0].url, `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}`);
+    assert.deepEqual(deletes[0].body, { expectedWidgetRevision: 4 });
+  } finally {
+    window.confirm = () => true;
+  }
+});
+
+test("H2 layout mode: a layout bar (Cancel + Done until something moves, then 'Unsaved changes' + Save layout), no header Add metric, and layout-only widget tools whose no-op moves are disabled", async () => {
+  resetState();
+  loadedDashboard();
+  twoWidgets();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  let html = renderTrainingLoadAnalysisHtml();
+  assert.doesNotMatch(html, /tl-layout-bar|tl-analysis-widget-tools/, "view mode: no layout tooling");
+
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-toggle-edit" }), { renderTrainingLoad });
+  assert.equal(a.editMode, true);
+  html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /class="tl-layout-bar" role="region" aria-label="Layout editing"/);
+  assert.match(html, /No changes yet/);
+  assert.match(html, /data-action="training-load-analysis-cancel-layout"/);
+  assert.match(html, /tl-layout-bar[\s\S]*data-action="training-load-analysis-toggle-edit">Done</);
+  assert.doesNotMatch(html, /Save layout/);
+  assert.doesNotMatch(html, /tl-analysis-add-widget-button/);
+  assert.doesNotMatch(html, />Settings<|>Delete</, "no inline Settings/Delete buttons in the widget tools");
+  assert.match(html, /role="group" aria-label="Layout of Average RPE"/);
+  assert.match(html, />3 × 3</);
+
+  // KPI at x0/y0, width 3 of 2..4; table at x3, width 9 (right edge).
+  assert.equal(layoutButtonDisabled(html, widgetId, "left"), true);
+  assert.equal(layoutButtonDisabled(html, widgetId, "up"), true);
+  assert.equal(layoutButtonDisabled(html, widgetId, "right"), false);
+  assert.equal(layoutButtonDisabled(html, widgetId, "down"), false);
+  assert.equal(layoutButtonDisabled(html, widgetId, "narrower"), false);
+  assert.equal(layoutButtonDisabled(html, widgetId, "wider"), false);
+  assert.equal(layoutButtonDisabled(html, newWidgetId, "right"), true, "already touching the 12th column");
+  assert.equal(layoutButtonDisabled(html, widgetId, "mobile-up"), true, "first in phone order");
+  assert.equal(layoutButtonDisabled(html, widgetId, "mobile-down"), false);
+  assert.equal(layoutButtonDisabled(html, newWidgetId, "mobile-down"), true, "last in phone order");
+
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-wider", widgetId }), { renderTrainingLoad });
+  html = renderTrainingLoadAnalysisHtml();
+  assert.equal(layoutButtonDisabled(html, widgetId, "wider"), true, "a KPI is at most 4 columns wide");
+  assert.match(html, /class="tl-layout-bar-status is-dirty" aria-live="polite">Unsaved changes</);
+  assert.match(html, /data-action="training-load-analysis-save-layout" >Save layout</);
+  assert.doesNotMatch(html, /tl-layout-bar[\s\S]*data-action="training-load-analysis-toggle-edit">Done</);
+  assert.equal(writes().length, 0, "moving only changes the local draft");
+});
+
+test("H2 Save layout PUTs the draft once and leaves layout mode with a notice; a stale revision stays in layout mode; Cancel leaves layout mode without a request", async () => {
+  resetState();
+  loadedDashboard();
+  let layoutStatus = 200;
+  installFetchMock(responder({
+    extra: (call) => call.url.endsWith("/layout")
+      ? (layoutStatus === 200 ? { status: 200, body: { dashboard: dashboard({ revision: 4 }) } } : { status: 409, body: { error: "staleRevision" } })
+      : null,
+  }));
+  const a = state.trainingLoad.analysis;
+  a.editMode = true;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-right", widgetId }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-save-layout" }), { renderTrainingLoad });
+  assert.equal(fetchCalls.filter((c) => c.method === "PUT" && c.url.endsWith("/layout")).length, 1);
+  assert.deepEqual([a.editMode, a.layoutDraft, a.notice], [false, null, "Layout saved."]);
+
+  layoutStatus = 409;
+  a.editMode = true;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-right", widgetId }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-save-layout" }), { renderTrainingLoad });
+  assert.equal(a.editMode, true, "a refused save stays in layout mode");
+  assert.equal(a.notice, "Dashboard changed on the server. Reloaded the latest version.");
+
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-right", widgetId }), { renderTrainingLoad });
+  const before = fetchCalls.length;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-cancel-layout" }), { renderTrainingLoad });
+  assert.deepEqual([a.editMode, a.layoutDraft], [false, null]);
+  assert.equal(fetchCalls.length, before, "Cancel sends nothing");
+});
+
+test("H2 leaving layout mode with unsaved moves asks first - Done from the menu and picking another dashboard; declining keeps the draft and sends nothing; with no moves nothing is asked", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  const prompts = [];
+  try {
+    window.confirm = (message) => { prompts.push(message); return false; };
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-toggle-edit" }), { renderTrainingLoad });
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-toggle-edit" }), { renderTrainingLoad });
+    assert.equal(a.editMode, false);
+    assert.equal(prompts.length, 0, "nothing moved: no question");
+
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-toggle-edit" }), { renderTrainingLoad });
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-down", widgetId }), { renderTrainingLoad });
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-toggle-edit" }), { renderTrainingLoad });
+    assert.deepEqual(prompts, ["Discard your unsaved layout changes?"]);
+    assert.equal(a.editMode, true);
+    assert.ok(a.layoutDraft, "declined: the draft survives");
+
+    const before = fetchCalls.length;
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-select-dashboard", dashboardId: otherId }), { renderTrainingLoad });
+    assert.equal(prompts.length, 2);
+    assert.equal(a.selectedDashboardId, dashboardId, "declined: still on the same dashboard");
+    assert.ok(a.layoutDraft);
+    assert.equal(fetchCalls.length, before, "declined: nothing loaded");
+
+    window.confirm = (message) => { prompts.push(message); return true; };
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-select-dashboard", dashboardId: otherId }), { renderTrainingLoad });
+    assert.equal(a.selectedDashboardId, otherId);
+    assert.deepEqual([a.editMode, a.layoutDraft], [false, null]);
+  } finally {
+    window.confirm = () => true;
+  }
+});
+
+test("H2 while a layout draft is unsaved, the widget menu disables Settings / Advanced settings / Delete (each would reload and drop the draft) and the handlers refuse them without a request or a prompt", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  a.editMode = true;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-down", widgetId }), { renderTrainingLoad });
+  a.menu = `widget:${widgetId}`;
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /Save or cancel the layout changes first\./);
+  for (const action of ["edit-widget", "open-advanced", "delete-widget"]) {
+    assert.match(html, new RegExp(`data-action="training-load-analysis-${action}" data-widget-id="${widgetId}"\\s+disabled`), `${action} disabled`);
+  }
+  let prompted = false;
+  try {
+    window.confirm = () => { prompted = true; return true; };
+    const before = fetchCalls.length;
+    for (const action of ["edit-widget", "open-advanced", "delete-widget"]) {
+      await handleTrainingLoadAction(fakeAction({ action: `training-load-analysis-${action}`, widgetId }), { renderTrainingLoad });
+    }
+    assert.equal(fetchCalls.length, before);
+    assert.equal(prompted, false);
+    assert.equal(a.metricPanel, null);
+    assert.equal(a.editor.open, false);
+    assert.ok(a.layoutDraft, "the draft is untouched");
+    assert.equal(a.menu, "");
+  } finally {
+    window.confirm = () => true;
+  }
+});
+
+test("H2 layout mode belongs to one dashboard: the dashboard just created while editing a layout opens in view mode", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder({
+    extra: (call) => call.method === "POST" && call.url === "/api/training-load/dashboards"
+      ? { status: 201, body: { dashboard: dashboard({ id: otherId, name: "Sprint board" }) } }
+      : null,
+  }));
+  const a = state.trainingLoad.analysis;
+  a.editMode = true;
+  a.dashboardForm = { mode: "create", name: "Sprint board", description: "", error: "", submitting: false };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-dashboard-form-submit" }), { renderTrainingLoad });
+  assert.equal(a.dashboard?.id, otherId);
+  assert.equal(a.editMode, false);
+});
+
+test("H2 CSS: on phones the layout bar is pinned to the bottom with 44px actions and the widget menu trigger is 44px; desktop hides the phone-order buttons", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  assert.match(css, /@media \(min-width: 721px\) \{\s*\.tl-analysis-mobile-reorder-group \{\s*display: none;/);
+  const phone = css.slice(css.indexOf("H2: the widget \"⋯\" menu keeps its corner position"));
+  assert.ok(phone.length < css.length, "the phone block exists");
+  assert.match(phone, /\.tl-layout-bar \{[^}]*position: fixed;[^}]*bottom: 0;/);
+  assert.match(phone, /\.tl-layout-bar-actions \.plain-button \{[^}]*min-height: 44px;/);
+  assert.match(phone, /\.tl-widget-menu-anchor \.tl-widget-menu-trigger\.icon-button \{[^}]*width: 44px;[^}]*min-height: 44px;/);
+});
+
+test("H2 (review): every Dashboards action that would reload or leave the dashboard asks before dropping an unsaved layout - declining keeps the draft and sends nothing; re-picking the open dashboard just closes the picker", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  const prompts = [];
+  const withDraft = async () => {
+    a.editMode = true;
+    a.layoutDraft = null;
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-down", widgetId }), { renderTrainingLoad });
+    assert.ok(a.layoutDraft);
+  };
+  try {
+    window.confirm = (message) => { prompts.push(message); return false; };
+    // Archive / Delete permanently ask their own question first and are
+    // covered by the next test.
+    const exits = [
+      ["training-load-analysis-new-dashboard", {}],
+      ["training-load-analysis-rename-dashboard", {}],
+      ["training-load-analysis-clone-template", { templateId }],
+      ["training-load-analysis-choose-activity", {}],
+      ["training-load-section", { section: "overview" }],
+    ];
+    for (const [action, dataset] of exits) {
+      await withDraft();
+      const before = fetchCalls.length;
+      const asked = prompts.length;
+      await handleTrainingLoadAction(fakeAction({ action, ...dataset }), { renderTrainingLoad });
+      assert.equal(prompts.length, asked + 1, `${action}: asked`);
+      assert.equal(prompts[prompts.length - 1], "Discard your unsaved layout changes?", `${action}: the discard question comes first`);
+      assert.ok(a.layoutDraft, `${action}: declined keeps the draft`);
+      assert.equal(a.editMode, true, `${action}: still arranging`);
+      assert.equal(fetchCalls.length, before, `${action}: nothing sent or loaded`);
+      assert.equal(a.dashboardForm, null, `${action}: no dialog opened`);
+      assert.equal(state.trainingLoad.section, "analysis", `${action}: still on Dashboards`);
+    }
+
+    await withDraft();
+    const before = fetchCalls.length;
+    const asked = prompts.length;
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-select-dashboard", dashboardId }), { renderTrainingLoad });
+    assert.equal(prompts.length, asked, "re-picking the open dashboard asks nothing");
+    assert.ok(a.layoutDraft, "and keeps the draft");
+    assert.equal(fetchCalls.length, before, "and reloads nothing");
+
+    window.confirm = (message) => { prompts.push(message); return true; };
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-rename-dashboard" }), { renderTrainingLoad });
+    assert.deepEqual([a.editMode, a.layoutDraft], [false, null], "agreed: layout mode ends, draft discarded");
+    assert.equal(a.dashboardForm?.mode, "rename", "and the action goes ahead");
+  } finally {
+    window.confirm = () => true;
+  }
+});
+
+test("H2 (review): an open widget menu stacks above the next widgets' controls and the phone layout bar", () => {
+  resetState();
+  loadedDashboard();
+  const a = state.trainingLoad.analysis;
+  a.editMode = true;
+  a.menu = `widget:${widgetId}`;
+  const html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /class="tl-popover-anchor tl-widget-menu-anchor is-open"/);
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const openZ = Number(css.match(/\.tl-popover-anchor\.tl-widget-menu-anchor\.is-open\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
+  const anchorZ = Number(css.match(/\.tl-popover-anchor\.tl-widget-menu-anchor\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
+  const phone = css.slice(css.indexOf("H2: the layout bar leaves the (static) top bar"));
+  const barZ = Number(phone.match(/\.tl-layout-bar\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
+  const gripZ = Number(css.match(/\.tl-analysis-widget-move\s*\{[^}]*z-index:\s*(\d+)/)?.[1]);
+  assert.ok(openZ > anchorZ && openZ > barZ && openZ > gripZ, JSON.stringify({ openZ, anchorZ, barZ, gripZ }));
+});
+
+test("H2 (review): Archive and Delete permanently ask their own question first - an unsaved layout survives when either question is declined, and is discarded only when both are accepted", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder({ extra: (call) => (call.url.endsWith("/archive") ? { status: 200, body: { dashboard: dashboard({ status: "archived" }) } } : null) }));
+  const a = state.trainingLoad.analysis;
+  try {
+    for (const action of ["training-load-analysis-archive", "training-load-analysis-delete-dashboard"]) {
+      for (const answers of [[false], [true, false]]) {
+        a.editMode = true;
+        a.layoutDraft = null;
+        await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-down", widgetId }), { renderTrainingLoad });
+        const prompts = [];
+        const queue = [...answers];
+        window.confirm = (message) => { prompts.push(message); return queue.shift(); };
+        await handleTrainingLoadAction(fakeAction({ action }), { renderTrainingLoad });
+        assert.doesNotMatch(prompts[0], /Discard your unsaved layout changes/, `${action}: the action's own question comes first`);
+        if (answers.length === 2) assert.equal(prompts[1], "Discard your unsaved layout changes?");
+        assert.equal(prompts.length, answers.length, `${action} ${JSON.stringify(answers)}: no further questions`);
+        assert.ok(a.layoutDraft, `${action} ${JSON.stringify(answers)}: the draft survives`);
+        assert.equal(a.editMode, true);
+        assert.equal(writes().length, 0, `${action} ${JSON.stringify(answers)}: nothing sent`);
+      }
+    }
+    const queue = [true, true];
+    window.confirm = () => queue.shift();
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-archive" }), { renderTrainingLoad });
+    assert.equal(a.editMode, false, "both accepted: layout mode ends");
+    assert.equal(writes().filter((c) => c.url.endsWith("/archive")).length, 1, "and the archive goes ahead");
+  } finally {
+    window.confirm = () => true;
+  }
+});
+
+// -------------------- Owner review of #93: leaving Training Load (sidebar, browser Back) --------------------
+
+test("H2 (owner review): leaving Training Load with a moved widget asks first - declined keeps the layout and the tab, accepted discards it and lets the navigation happen; nothing to lose or staying inside Training Load asks nothing", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  state.activeTab = "training-load";
+  const prompts = [];
+  try {
+    window.confirm = (message) => { prompts.push(message); return false; };
+    assert.equal(confirmLeaveTrainingLoad("tests"), true, "no layout mode: leave freely");
+    a.editMode = true;
+    assert.equal(confirmLeaveTrainingLoad("tests"), true, "layout mode but nothing moved: leave freely");
+    assert.equal(prompts.length, 0);
+
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-down", widgetId }), { renderTrainingLoad });
+    const draft = a.layoutDraft;
+    assert.ok(draft, "a widget was moved");
+    assert.equal(confirmLeaveTrainingLoad("training-load"), false, "re-clicking the active Training load item reloads the dashboard, so it asks too");
+    assert.equal(a.layoutDraft, draft);
+    assert.equal(confirmLeaveTrainingLoad("tests"), false, "declined: the navigation must not happen");
+    assert.deepEqual(prompts, ["Discard your unsaved layout changes?", "Discard your unsaved layout changes?"]);
+    assert.equal(a.layoutDraft, draft, "declined: the moved layout is untouched");
+    assert.equal(a.editMode, true);
+
+    window.confirm = (message) => { prompts.push(message); return true; };
+    assert.equal(confirmLeaveTrainingLoad("weekly"), true, "accepted: the navigation goes ahead");
+    assert.deepEqual([a.editMode, a.layoutDraft], [false, null], "accepted: the draft is discarded and layout mode ends");
+    assert.equal(fetchCalls.filter((c) => c.method !== "GET").length, 0, "nothing is saved or sent either way");
+
+    state.activeTab = "tests";
+    a.editMode = true;
+    a.layoutDraft = draft;
+    assert.equal(confirmLeaveTrainingLoad("weekly"), true, "not on Training Load: never asks");
+    assert.equal(prompts.length, 3);
+  } finally {
+    window.confirm = () => true;
+  }
+});
+
+test("H2 (owner review): every main sidebar/rail navigation and browser Back in app.js asks confirmLeaveTrainingLoad BEFORE changing the tab or pushing history, and a declined Back puts the consumed history entry back", () => {
+  const app = readFileSync(new URL("../app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const before = (block, guard, change, label) => {
+    const g = block.indexOf(guard);
+    const c = block.indexOf(change);
+    assert.ok(g >= 0, `${label}: guard present`);
+    assert.ok(c > g, `${label}: guard runs before ${change}`);
+  };
+  const slice = (start, length = 1200) => {
+    const i = app.indexOf(start);
+    assert.ok(i >= 0, `found: ${start}`);
+    return app.slice(i, i + length);
+  };
+  // sidebar .tab buttons: declined also stops the click reaching handleGlobalClick
+  const tabs = slice("els.tabs.forEach((tab) => {");
+  before(tabs, "if (!confirmLeaveTrainingLoad(tab.dataset.tab)) {", "pushAppHistory();", "sidebar tabs");
+  assert.match(tabs, /if \(!confirmLeaveTrainingLoad\(tab\.dataset\.tab\)\) \{\s*event\.stopPropagation\(\);\s*return;/);
+  before(slice("els.libraryTabs.forEach((button) => {"), "if (!confirmLeaveTrainingLoad(button.dataset.libraryTab)) return;", "pushAppHistory();", "sidebar library tabs");
+  before(slice("els.athleteTabs.forEach((button) => {"), "if (!confirmLeaveTrainingLoad(", "pushAppHistory();", "athlete tabs");
+  before(slice("function openWeeklyCalendarFromRail() {"), 'if (!confirmLeaveTrainingLoad("weekly")) return;', "pushAppHistory();", "rail calendar");
+  before(slice("async function handleGlobalClick(event) {"), "if (!confirmLeaveTrainingLoad(nextTab)) return;", "pushAppHistory();", "global [data-tab]");
+  before(slice('action.dataset.action === "brand-home"'), 'if (!confirmLeaveTrainingLoad("coach-home")) return;', "pushAppHistory();", "brand home");
+  before(slice('els.athleteList.querySelectorAll(".athlete-button").forEach((button) => {'), 'if (!confirmLeaveTrainingLoad("weekly")) return;', 'state.activeTab = "weekly";', "rail athlete list");
+
+  const appBack = slice("function handleAppBack() {", 4000);
+  before(appBack, "if (!confirmLeaveTrainingLoad(rootTab)) return BACK_STAYED;", "state.activeTab = rootTab;", "browser Back");
+  const browserBack = slice("function handleBrowserBack() {", 900);
+  assert.match(browserBack, /state\.appHistoryDepth -= 1;\s*if \(handleAppBack\(\) === BACK_STAYED\) \{[\s\S]*?window\.history\.pushState\(\{ optimove: true \}, "", window\.location\.href\);\s*state\.appHistoryDepth \+= 1;/, "a declined Back re-arms the entry it consumed");
+  assert.match(browserBack, /if \(handleAppBack\(\)\) \{\s*window\.history\.pushState\(\{ optimoveGuard: true \}/, "at the history root, a declined Back (truthy BACK_STAYED) re-arms the guard entry");
+});
+
+test("H2 (owner review): re-clicking the active Dashboards tab with a moved widget asks first - declined keeps the layout and reloads nothing", async () => {
+  resetState();
+  loadedDashboard();
+  installFetchMock(responder());
+  const a = state.trainingLoad.analysis;
+  state.activeTab = "training-load";
+  a.editMode = true;
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-widget-down", widgetId }), { renderTrainingLoad });
+  const draft = a.layoutDraft;
+  const prompts = [];
+  try {
+    window.confirm = (message) => { prompts.push(message); return false; };
+    const before = fetchCalls.length;
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-section", section: "analysis" }), { renderTrainingLoad });
+    assert.deepEqual(prompts, ["Discard your unsaved layout changes?"]);
+    assert.equal(a.layoutDraft, draft, "declined: the moved layout is untouched");
+    assert.equal(a.editMode, true);
+    assert.equal(fetchCalls.length, before, "declined: nothing reloaded");
+  } finally {
+    window.confirm = () => true;
+  }
 });
