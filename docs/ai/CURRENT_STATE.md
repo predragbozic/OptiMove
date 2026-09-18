@@ -225,8 +225,18 @@ the owner named (2026-09-18) is the in-app import (see Most likely next step).
 - v20 and v21 on the deployed database are **inferred** from the successful start of
   that deploy (`npm start` runs `node src/migrate.js &&` the server). The deployed
   database itself was **not** queried.
-- On 2026-09-18 the last migration applied to the **local OPTIMOVE** database was **v19**,
-  checked by a read-only query. v20 and v21 were not applied there.
+- **v20 and v21 on the local OPTIMOVE database**: applied 2026-09-18 with the standard
+  runner (owner-approved). The steps were:
+  - a fresh backup taken immediately before, verified by a trial restore with
+    `backend/scripts/gpexe-backup-verify.mjs` and kept outside the repo;
+  - the migration run itself;
+  - a direct check afterwards:
+    - both new tables exist and are empty, and the three deletion-log triggers are
+      enabled;
+    - every table that existed before has the same row count and content digest, apart
+      from the two new `schema_migrations` rows;
+    - the catalog only gained objects; nothing existing changed or disappeared.
+  - No GPEXE data was imported.
 
 Re-check the hosting target and the database before asserting a deploy state later.
 
@@ -351,13 +361,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's order of 2026-09-18 had three steps: local migrations, this state update, and
-the in-app import. This state update (step 2) was done before step 1, so two steps remain
-open:
-1. **Local migrations, still pending on 2026-09-18.** Apply v20 and v21 to the local
-   OPTIMOVE database after a fresh verified backup. Then check directly that the deletion
-   log exists and that existing data is unchanged. This is not a GPEXE import.
-2. **In-app GPEXE import** (see Separate tasks).
+The **in-app GPEXE import** (see Separate tasks). It is the last open step of the owner's
+2026-09-18 order; the local migrations and this state update are done.
 
 The other Separate tasks wait until the owner schedules them.
 
