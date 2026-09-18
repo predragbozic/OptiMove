@@ -24,6 +24,8 @@ import trainingLoadRouter from "./routes/trainingLoad.js";
 import trainingLoadMetricsRouter from "./routes/trainingLoadMetrics.js";
 import trainingActivityRouter from "./routes/trainingActivity.js";
 import trainingLoadDashboardRouter from "./routes/trainingLoadDashboard.js";
+import gpexeImportRouter from "./routes/gpexeImport.js";
+import { startGpexeRetentionSchedule } from "./gpexeImportService.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { pool } from "./db.js";
 import { realtimeRouter } from "./realtime.js";
@@ -104,6 +106,7 @@ app.use("/api/training-activity", requireAuth, trainingActivityRouter);
 // canManageDashboardRow inside the router itself, same pattern as every
 // other training_load router above.
 app.use("/api/training-load/dashboards", requireAuth, trainingLoadDashboardRouter);
+app.use("/api/training-load/gpexe", requireAuth, gpexeImportRouter);
 app.get("/api/realtime", requireAuth, realtimeRouter);
 
 // Dev/test: this is a plain ES-modules frontend with no build step - script
@@ -191,6 +194,11 @@ if (isMainModule) {
   app.listen(port, () => {
     console.log(`Optimove backend listening on http://localhost:${port}`);
   });
+  // Purges expired raw GPEXE snapshots on start and every few hours. Not the
+  // only trigger: every check purges too, the CLI (npm run gpexe:retention)
+  // is for an external scheduler, and an expired snapshot is treated as gone
+  // even before it is purged.
+  startGpexeRetentionSchedule();
 }
 
 export { app };
