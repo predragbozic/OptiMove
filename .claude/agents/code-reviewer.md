@@ -119,6 +119,35 @@ proveriš ŠTA testovi stvarno dokazuju, ne da li postoje.
    bez prilagođavanja testa da prihvati pogrešno ponašanje (test promenjen da prođe
    umesto da kod bude ispravljen je BLOCKER nalaz sam po sebi).
 
+## Transakcije sa spoljnim efektom (samo kad važi)
+
+Važi samo kad promena uvodi ili menja transakciju koja upisuje važne podatke — uvoz,
+brisanje, odobravanje i slično. Za ostale izmene preskoči ovaj odeljak. Zbog njega ne
+tražiš pun test paket.
+
+Pre verdikta READY proveri:
+
+1. **Grešku pre COMMIT-a, tokom COMMIT-a i posle uspešnog COMMIT-a** (npr. čitanje
+   posle upisa) — šta korisnik dobija i šta ostaje u bazi u svakom slučaju.
+2. **Tri ishoda čekanja** na korak koji odlučuje ishod (posebno sam COMMIT): uspeh,
+   izričita greška, odgovor koji nikad ne stigne (postoji li rok).
+3. **Da li odgovor tačno razlikuje „nije upisano”, „upisano” i „ishod nepoznat”** —
+   kad odgovor na poslat COMMIT izostane ili je nejasan (prekid konekcije, istek roka),
+   nijedan put ne sme reći „nije upisano”; to sme samo posle izričite greške koju baza
+   vrati na sam COMMIT. Nijedna greška posle uspešnog COMMIT-a ne sme sakriti upis.
+4. **Konekcija, lockovi i ponovljen zahtev u svakom ishodu** — vraća li se konekcija u
+   pool ili se zatvara; lockovi se oslobađaju kad server završi transakciju, ne kad
+   klijent dobije odgovor; ponovljen zahtev ne sme duplirati upis.
+5. **Bar jedan ciljani test kroz stvarnu rutu** za najrizičniji slučaj, ne samo kroz
+   servis ili mock.
+
+Ishod svih pet tačaka navedi u jednom kratkom redu teksta iznad izlazne tabele; tabela i
+poslednji `Verdict:` red ostaju nepromenjeni. Tačka koju ne možeš da proveriš jer ti
+nedostaje kod ili test rezultat: `Verdict: BLOCKED` (kao nedostajući dokaz za kritičan
+tok), sa tačnim spiskom šta nedostaje. Tačka koja je proverena i nije pokrivena je nalaz:
+najmanje MEDIUM/WARNING, a HIGH kad može dovesti do pogrešne tvrdnje o upisu ili do
+dupliranog upisa.
+
 ## Šta se broji kao nalaz
 
 Nalaz bez dokaza nije nalaz. Zabranjeni su opšti saveti ("razmisli o bezbednosti ovde"),

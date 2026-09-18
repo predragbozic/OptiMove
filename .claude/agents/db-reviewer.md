@@ -60,6 +60,36 @@ Proveri, tim redom:
    backend. Prihvatljivo dok se baza ne izlaže direktno preko Supabase client-side ključeva
    na frontendu — ako migracija dodaje nešto što bi moglo biti izloženo tako, upozori.
 
+## Transakcije sa spoljnim efektom (samo kad važi)
+
+Važi samo kad promena uvodi ili menja transakciju koja upisuje važne podatke — uvoz,
+brisanje, odobravanje i slično. Za ostale izmene preskoči ovaj odeljak. Zbog njega ne
+tražiš pun test paket. „COMMIT” ovde znači COMMIT koji izvršava aplikacija (ruta/servis)
+oko poziva SQL-a, ne nešto u `migrations_v2/*.sql` (migracija ne sme imati svoju
+transakcionu kontrolu, tačka 1 gore).
+
+Pre nego što zaključiš da za tu transakciju nema BLOCKER/CRITICAL ni HIGH nalaza, proveri:
+
+1. **Grešku pre COMMIT-a, tokom COMMIT-a i posle uspešnog COMMIT-a** (npr. čitanje
+   posle upisa) — šta korisnik dobija i šta ostaje u bazi u svakom slučaju.
+2. **Tri ishoda čekanja** na korak koji odlučuje ishod (posebno sam COMMIT): uspeh,
+   izričita greška, odgovor koji nikad ne stigne (postoji li rok).
+3. **Da li odgovor tačno razlikuje „nije upisano”, „upisano” i „ishod nepoznat”** —
+   kad odgovor na poslat COMMIT izostane ili je nejasan (prekid konekcije, istek roka),
+   nijedan put ne sme reći „nije upisano”; to sme samo posle izričite greške koju baza
+   vrati na sam COMMIT. Nijedna greška posle uspešnog COMMIT-a ne sme sakriti upis.
+4. **Konekcija, lockovi i ponovljen zahtev u svakom ishodu** — vraća li se konekcija u
+   pool ili se zatvara; lockovi se oslobađaju kad server završi transakciju, ne kad
+   klijent dobije odgovor; ponovljen zahtev ne sme duplirati upis.
+5. **Bar jedan ciljani test kroz stvarnu rutu** za najrizičniji slučaj, ne samo kroz
+   servis ili mock.
+
+Ishod svih pet tačaka navedi u izveštaju. Ako ti kod koji izvršava COMMIT i upravlja
+konekcijom (ruta/servis) ili test rezultat nije prosleđen, prijavi to kao nedostajući
+ulaz, kao i status grane iz uvoda — ne pretpostavljaj i ne pravi nalaz bez dokaza. Tačka
+koja je proverena i nije pokrivena je nalaz: najmanje MEDIUM/WARNING, a HIGH kad može
+dovesti do pogrešne tvrdnje o upisu ili do dupliranog upisa.
+
 Format izveštaja (severity skala zajednička za sve reviewere, vidi CLAUDE.md "Severity
 contract" — koristi tačno ove nazive):
 - Svaki nalaz: **[BLOCKER/CRITICAL / HIGH / MEDIUM/WARNING / LOW/NIT]**, konkretan
