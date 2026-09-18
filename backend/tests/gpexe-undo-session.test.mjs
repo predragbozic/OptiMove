@@ -40,6 +40,7 @@ async function newClient() {
 
 async function setupTeam() {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["Athlete A", "Athlete B", "Athlete C"] });
+  await admin.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1, 'platform_admin', true)`, [org.userId]);
   return { ...org, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
 }
 
@@ -330,7 +331,7 @@ test("undo: refuses any database that is not a disposable GPEXE test database", 
     "postgresql://u:p@localhost:5432/optimove_tests_gpexe_x?host=db.example.supabase.com",
   ]) {
     await assert.rejects(
-      undoMain(["--database-url", url, "--team-session", "6004", "--owner-team-id", "00000000-0000-0000-0000-000000000000"]),
+      undoMain(["--database-url", url, "--team-session", "6004", "--owner-team-id", "00000000-0000-0000-0000-000000000000", "--performed-by-user-id", "00000000-0000-0000-0000-000000000000", "--reason", "guard check"]),
       /refusing --apply/,
       url,
     );

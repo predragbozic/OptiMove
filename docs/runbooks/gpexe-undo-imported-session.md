@@ -7,9 +7,38 @@ variant, and the script refuses every database except a disposable
 `optimove_tests_gpexe_*` one.
 
 Script: `backend/scripts/gpexe-undo-imported-session.mjs`.
-Proof: `backend/tests/gpexe-undo-session.test.mjs` (8 tests) and
-`backend/tests/gpexe-undo-guards.test.mjs` (9 tests), both on a disposable
-database.
+Database record: `training_load.import_deletion_log` (migration v21,
+`migrations_v2/202609181000_training_load_v21_import_deletion_log.sql`).
+Proof: `backend/tests/gpexe-undo-session.test.mjs` and
+`backend/tests/gpexe-undo-guards.test.mjs`, both on a disposable database.
+
+## Who may run it
+
+Only an **active platform admin**, and only with a **reason** (owner decision
+2026-09-18). "Active" means a `public.user_global_roles` row with
+`role = 'platform_admin'` and `is_active = true`, for a user whose own
+`public.users.is_active` is true. A revoked role or a disabled account is
+refused.
+
+The check is made twice, independently:
+
+1. **By the script**, first thing inside the transaction, before any lock is
+   taken or any protection is disabled. It reads the role row `FOR SHARE`, so a
+   concurrent revocation either commits first and is seen, or waits until the
+   run has finished.
+2. **By the database**, when the log row is written: the v21 insert trigger
+   repeats the same check and raises `insufficient_privilege` (SQLSTATE
+   42501). A copy of the script with its own check removed still cannot commit
+   a removal under a non-admin's name.
+
+**What this does not do: authenticate the person at the keyboard.** The CLI
+has no login. It checks that the user id passed with `--performed-by-user-id`
+is an active platform admin, not that the operator *is* that admin. Whoever
+can run the script with database credentials that are allowed to disable
+triggers can name any admin. The record is therefore "run in the name of this
+admin, for this reason". The accountability rests on who holds those
+credentials. An in-app undo behind the normal login would close this gap, and
+is separate, unapproved work.
 
 ## Why a procedure is needed at all
 
@@ -88,25 +117,28 @@ A later import of the same session reuses them.
 
 ## How to run it
 
+`--reason` and `--performed-by-user-id` are required for **every** run. That
+includes the dry run, which goes through the same checks and the same
+statements as the real run, log insert included.
+
 Dry run — runs the same statements in a normal transaction and rolls it back,
 so the reported scope is what would actually happen. It holds the same locks as
 an applied run while it lasts, so it is not free on a database others are using:
 
 ```
 node backend/scripts/gpexe-undo-imported-session.mjs \
-  --database-url <disposable url> --team-session 186942 --owner-team-id <uuid>
+  --database-url <disposable url> --team-session 186942 --owner-team-id <uuid> \
+  --performed-by-user-id <platform admin uuid> --reason "check before undo"
 ```
 
-Apply, on a disposable database. `--log`, `--reason` and
-`--performed-by-user-id` are **required** with `--apply`: an applied run has to
-leave a record naming who ran it and why. The log file is never written over —
-if the path already exists the run refuses, so an earlier record cannot be lost
-by reusing the same file name:
+Apply, on a disposable database. `--log` is also **required** with `--apply`.
+The log file is never written over: if the path already exists the run refuses,
+so an earlier record cannot be lost by reusing the same file name:
 
 ```
 node backend/scripts/gpexe-undo-imported-session.mjs \
   --database-url <disposable url> --team-session 186942 --owner-team-id <uuid> \
-  --apply --performed-by-user-id <uuid> --reason "wrong session imported" --log undo.json
+  --apply --performed-by-user-id <platform admin uuid> --reason "wrong session imported" --log undo.json
 ```
 
 ## The protections come back on, including when the run fails
@@ -132,14 +164,46 @@ three triggers enabled, the data untouched, and a real delete attempt refused
 again. Each of those checks was verified to fail when the protection it covers
 is removed from the code.
 
-## The log
+## The database log
 
-Every run returns, prints and (with `--log`) writes a JSON record: when, by
-whom, why, whether it was applied, the event id, the GPEXE `source_external_id`,
-the threshold set that was recorded for it, and the number of rows removed per
-table. That file is the record of the operation — the database itself keeps no
-deletion log yet, which is exactly why the JSON must be kept with the import's
-own run report.
+An applied run writes **one row** to `training_load.import_deletion_log` in the
+**same transaction** as the removal. The row commits with the removal or not
+at all. It records:
+
+| Column | What |
+|---|---|
+| `deleted_at` | when (transaction time) |
+| `deleted_by_user_id`, `authorized_via` | which platform admin, on what basis (`platform_admin` is the only basis accepted) |
+| `reason` | why, trimmed; a blank reason is refused |
+| `event_id`, `source_system`, `source_connection_id`, `source_external_id` | which session (`team_session:<id>`); the event itself is gone, so it is kept by value |
+| `owner_team_id`, `occurred_date` | the team and the day |
+| `reference_set_external_id` | the GPEXE threshold set the values had been imported under, if the event had a v20 binding |
+| `removed_counts`, `removed_total` | rows removed per table, and their sum |
+
+What the database guarantees on its own:
+
+- the row cannot be **changed or deleted** (an append-only trigger refuses
+  `UPDATE` and `DELETE`, the same shape as v19's `dashboard_deletion_log`);
+- it can only name an **active platform admin** (see Who may run it);
+- it can only describe an event that **no longer exists** at the moment of the
+  insert. It records a removal made in that transaction, never a plan;
+- one row per event id, a non-empty reason, non-empty counts, a positive total.
+
+What it does **not** guarantee: that every removal is logged. Removing an
+imported session by hand, outside this procedure, is already out of contract
+and takes disabling the v13/v20 protections as the table owner. Such a
+removal leaves no row here.
+
+A dry run inserts the row too, and rolls it back with everything else. Nothing
+remains.
+
+## The file log
+
+Every run also returns, prints and (with `--log`) writes a JSON record: when,
+by whom, why, whether it was applied, the event id, the team, the GPEXE
+`source_external_id`, the threshold set that was recorded for it, the number of
+rows removed per table and in total, and, for an applied run, the id of the
+database log row (`databaseLogId`). Keep it with the import's own run report.
 
 **The file is written before the commit, not after.** It lands on disk (with
 `fsync`) with `"outcome": "pending"` while the transaction is still open, and
@@ -177,11 +241,23 @@ record of a removal that did happen; that trade was made deliberately.
 
 Not approved, and not covered by the proof above:
 
-- A **verified backup** taken immediately before the import, and a restore that
-  was actually tried once.
-- A decision on **who** may run this, and on a database-side deletion log (the
-  dashboard subsystem's `dashboard_deletion_log`, added in v19, is the shape to
-  copy).
+- Applying v21 to that database. The deletion log and its checks exist only
+  where the migration has run.
+- A **verified backup** taken immediately before the import, with
+  `backend/scripts/gpexe-backup-verify.mjs`. It restores the dump into a
+  separate database and compares it with the source table by table and row by
+  row. See `docs/runbooks/gpexe-backup-verify.md`.
+- Unlocking the script for anything but a disposable database. That is its own
+  decision, after the ones above, and it needs an external review (auth/role
+  trigger). Before that, at least three things are needed:
+  - **A real authenticated identity.** Either a server-side action behind the
+    app's normal login, driven by the session's `req.authz`, or a CLI that makes
+    the admin re-authenticate at run time. A user id typed on the command line
+    is not enough.
+  - **A narrow credential for disabling the v13/v20 protections.** It must be
+    separate from "has the platform_admin role", and its use must be audited.
+  - **A second person's approval, or a ticket reference,** recorded with the
+    reason.
 - A decision on the two cases this procedure deliberately refuses: a session
   with a manual correction, and an activity shared with another event.
 - Per-athlete removal, editing an imported session's own fields, and filling in
