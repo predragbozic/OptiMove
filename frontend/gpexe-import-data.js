@@ -136,7 +136,7 @@ export async function reloadGpexeCandidates(render) {
   render();
 }
 
-// "Check now": starts a background check on the server, then polls it
+// "Check for new sessions": starts a background check on the server, then polls it
 // until it is no longer running.
 export async function startGpexeCheck({ from, to }, render) {
   const gx = g();
@@ -187,7 +187,7 @@ export async function pollGpexeCheck(render) {
         if (generation !== gx.generation) return;
         gx.checkError = errorInfo(error);
         // Not known any more: nothing is shown as running (which would keep
-        // "Check now" disabled); the next load takes the state from the server.
+        // the check button disabled); the next load takes the state from the server.
         gx.check = null;
         if (gx.status) gx.status.lastCheck = null;
         render();
@@ -322,12 +322,11 @@ export async function verifyGpexeApproval(render) {
     detail.candidate = candidate;
     const importedBy = approval || candidate.approval;
     if (candidate.status === "imported" && importedBy) detail.outcome = { ...detail.outcome, verified: "imported", approval: importedBy };
-    // "Not imported" only on the server's own verify contract (503: the
-    // approval does not exist and the candidate is pending). After a lost
-    // answer the first approval may still be running on the server, so a
-    // pending candidate only means nothing is visible yet.
-    else if (verify?.approvalId && !approval && candidate.status === "pending" && !candidate.approval) detail.outcome = { ...detail.outcome, verified: "not_imported" };
-    else if (!verify?.approvalId && candidate.status === "pending" && !candidate.approval) detail.outcome = { ...detail.outcome, verified: "not_visible_yet" };
+    // Never "not imported" here (owner, F3a external review): a missing
+    // approval with a pending candidate - after a 503 or after a lost answer
+    // alike - only means the import is not visible yet; the first approval
+    // may still be finishing. Only a confirmed import is final.
+    else if (!approval && candidate.status === "pending" && !candidate.approval) detail.outcome = { ...detail.outcome, verified: "not_visible_yet" };
     else detail.outcome = { ...detail.outcome, verified: "still_unknown" };
   } catch (error) {
     if (generation !== gx.generation || gx.detail !== detail) return;
@@ -360,7 +359,7 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId }, render) {
   try {
     await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId, athleteId }) });
     await reloadGpexeLinks(generation);
-    if (generation === gx.generation) gx.notice = `GPEXE athlete ${gpexeAthleteId} is linked. Press "Check now" to see the effect on the preview.`;
+    if (generation === gx.generation) gx.notice = `GPEXE athlete ${gpexeAthleteId} is linked. Check for new sessions to see it in the review.`;
   } catch (error) {
     if (generation === gx.generation) gx.linkError = errorInfo(error);
   } finally {
@@ -380,7 +379,7 @@ export async function unlinkGpexeAthlete(linkId, render) {
   try {
     await api(teamPath(gx.teamId, `/athlete-links/${encodeURIComponent(linkId)}/unlink`), { method: "POST" });
     await reloadGpexeLinks(generation);
-    if (generation === gx.generation) gx.notice = `The link is removed. Press "Check now" to see the effect on the preview.`;
+    if (generation === gx.generation) gx.notice = `The link is removed. Check for new sessions to see it in the review.`;
   } catch (error) {
     if (generation === gx.generation) gx.linkError = errorInfo(error);
   } finally {

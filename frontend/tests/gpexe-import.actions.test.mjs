@@ -193,7 +193,8 @@ test("GPEXE imports: the review shows participation and GPS apart, a left-out va
   const html = renderTrainingLoadCoachHtml();
   assert.match(html, /role="dialog"/);
   assert.match(html, /Participation: recorded by GPEXE · GPS: Measured/);
-  assert.match(html, /1 value\(s\) left out: details_not_fetched\. A left-out value is not a zero\./);
+  assert.match(html, /1 value\(s\) left out: drill details not in GPEXE yet\. A left-out value is not a zero\./);
+  assert.ok(!/details_not_fetched/.test(html), "the reason code is not shown to the coach");
   assert.match(html, /GPEXE athlete 104/);
   assert.match(html, /Not imported: This GPEXE athlete is not linked/);
   assert.match(html, /Team athletes without a GPEXE record \(1\)/);
@@ -221,7 +222,7 @@ test("approve: changes to imported results are listed, and nothing is sent until
 
   await approve();
   assert.equal(approveCalls().length, 0, "not accepted: nothing sent");
-  assert.match(renderTrainingLoadCoachHtml(), /tick the box to accept those changes/);
+  assert.match(renderTrainingLoadCoachHtml(), /Tick the box to accept those changes, then approve\./);
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-accept" }, { checked: true }), { renderTrainingLoad: render });
   await approve();
@@ -265,7 +266,9 @@ test("approve: 409 preview_changed says nothing was imported and offers to revie
   await openCandidate();
   await approve();
   let html = renderTrainingLoadCoachHtml();
-  assert.match(html, /changed since you opened it\. Nothing was imported; review it again\./);
+  assert.match(html, /Not imported: the data changed since you opened this session\. Review it again, then approve\./);
+  assert.match(html, /<details class="gpexe-tech"><summary>Technical details<\/summary>[\s\S]*preview_changed/, "the code is only in the technical details");
+  assert.ok(!/<p>[^<]*preview_changed/.test(html));
   assert.match(html, /data-action="training-load-gpexe-open" data-candidate-id="cand-1">Review again/);
   await openCandidate("cand-1");
   assert.equal(detailLoads, 2);
@@ -273,14 +276,22 @@ test("approve: 409 preview_changed says nothing was imported and offers to revie
   assert.equal(state.trainingLoad.gpexe.detail.outcome, null, "a fresh review, no stale answer");
 });
 
-test("approve: 503 import_outcome_unknown is never shown as not imported; checking the outcome tells imported from not imported", async () => {
+test("approve: after a 503 import_outcome_unknown, approval 404 + candidate pending is only 'not visible yet' - never 'not imported'; a confirmed import is final; approving again never duplicates", async () => {
   const verify = { candidateId: "cand-1", candidateHref: "/c", approvalId: "appr-9", approvalHref: "/a", imported: "...", notImported: "...", retry: "..." };
-  for (const scenario of ["not_imported", "imported"]) {
+  for (const scenario of ["pending", "imported"]) {
     resetState();
+    let approvals = 0;
     installFetchMock(gpexeServer({
       teamStatus: { [TEAM_A]: { enabled: true } },
-      onCandidate: () => ({ status: 200, body: { candidate: candidateDetail({ summary: { status: scenario === "imported" && fetchCalls.some((c) => c.url.endsWith("/approve")) ? "imported" : "pending" } }) } }),
-      onApprove: () => ({ status: 503, body: { error: "import_outcome_unknown", message: "The database did not confirm the import, and it could not be verified yet. It may or may not have been imported; do not assume either.", verify } }),
+      onCandidate: () => ({ status: 200, body: { candidate: candidateDetail((scenario === "imported" && approvals > 0) || approvals > 1 ? { summary: { status: "imported", approvalBlockers: ["already_imported"] }, approval: { id: "appr-9", approvedAt: "2026-09-18T10:00:00Z", basis: "team_grant", import: { counts: { created: 4 } } } } : {}) } }),
+      onApprove: () => {
+        approvals += 1;
+        // The first approval's answer is lost (503); the server imports a
+        // candidate only once, so a later approval is refused.
+        return approvals === 1
+          ? { status: 503, body: { error: "import_outcome_unknown", message: "The database did not confirm the import, and it could not be verified yet.", verify } }
+          : { status: 409, body: { error: "already_imported", message: "This candidate has already been imported." } };
+      },
       onApproval: () => (scenario === "imported"
         ? { status: 200, body: { approval: { id: "appr-9", candidateId: "cand-1", approvedAt: "2026-09-18T10:00:00Z", basis: "team_grant" } } }
         : { status: 404, body: { error: "notFound" } }),
@@ -289,18 +300,31 @@ test("approve: 503 import_outcome_unknown is never shown as not imported; checki
     await openCandidate();
     await approve();
     let html = renderTrainingLoadCoachHtml();
-    assert.match(html, /It is not known whether this session was imported\./, scenario);
-    assert.ok(!/Nothing was imported/.test(html), "an unknown outcome is never 'nothing was imported'");
-    assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "no approve button while the outcome is unknown");
+    assert.match(html, /We can't tell yet whether this session was imported\./, scenario);
+    const outcomeBlock = html.slice(html.indexOf('class="gpexe-unknown"'));
+    assert.ok(!/not imported/i.test(outcomeBlock.slice(0, outcomeBlock.indexOf("</div>"))), "an unknown outcome is never 'not imported'");
+    assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "no approve button before the result is checked");
+    assert.match(html, /<details class="gpexe-tech">[\s\S]*import_outcome_unknown[\s\S]*appr-9/, "the code and the approval id are in the technical details");
     await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-verify" }), { renderTrainingLoad: render });
     assert.ok(fetchCalls.some((c) => c.url.endsWith("/approvals/appr-9")));
     html = renderTrainingLoadCoachHtml();
     if (scenario === "imported") {
-      assert.match(html, /Checked: it was imported\./);
-      assert.ok(!/data-action="training-load-gpexe-approve"/.test(html));
+      assert.match(html, /<strong>Imported\.<\/strong> Checked: the import is in OptiMove\./);
+      assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "a confirmed import is final");
+      assert.ok(!/data-action="training-load-gpexe-verify"/.test(html));
     } else {
-      assert.match(html, /Checked: it was not imported\. You can approve it again\./);
-      assert.match(html, /data-action="training-load-gpexe-approve"/, "approving again is offered");
+      assert.equal(state.trainingLoad.gpexe.detail.outcome.verified, "not_visible_yet");
+      assert.match(html, /The import is not visible yet; we are still checking the result\./);
+      assert.ok(!/it was not imported/i.test(html));
+      assert.match(html, /data-action="training-load-gpexe-verify"[^>]*>Check again/);
+      // Approving again is offered and safe: here the first approval did
+      // commit after all, and the server refuses a second one.
+      assert.match(html, /data-action="training-load-gpexe-approve"/);
+      await approve();
+      assert.equal(approveCalls().length, 2);
+      html = renderTrainingLoadCoachHtml();
+      assert.match(html, /Already imported - another approval got there first\. Nothing more was written\./);
+      assert.ok(!/data-action="training-load-gpexe-approve"/.test(html));
     }
   }
 });
@@ -351,7 +375,7 @@ test("athlete links: linking takes the athlete chosen in the picker; unlinking a
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link", gpexeAthleteId: "104" }), { renderTrainingLoad: render });
   const link = fetchCalls.find((c) => c.url.endsWith("/athlete-links") && c.method === "POST");
   assert.deepEqual(link.body, { gpexeAthleteId: "104", athleteId: "ath-2" });
-  assert.match(renderTrainingLoadCoachHtml(), /GPEXE athlete 104 is linked\. Press &quot;Check now&quot;/);
+  assert.match(renderTrainingLoadCoachHtml(), /GPEXE athlete 104 is linked\. Check for new sessions to see it in the review\./);
 
   confirmAnswer = false;
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-unlink", linkId: "link-1" }), { renderTrainingLoad: render });
@@ -415,13 +439,13 @@ test("approve: a lost answer (fetch throws) or a 502 without JSON is never 'noth
     await openCandidate();
     await approve();
     let html = renderTrainingLoadCoachHtml();
-    assert.match(html, /It is not known whether this session was imported\./, kind);
+    assert.match(html, /We can't tell yet whether this session was imported\./, kind);
     assert.ok(!/Nothing was imported/.test(html), kind);
     assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), kind);
     await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-verify" }), { renderTrainingLoad: render });
     assert.ok(!fetchCalls.some((c) => c.url.includes("/approvals/")), "no approval id to read after a lost answer");
     html = renderTrainingLoadCoachHtml();
-    assert.match(html, /Checked: it was imported\./, kind);
+    assert.match(html, /Checked: the import is in OptiMove\./, kind);
   }
 });
 
@@ -458,7 +482,7 @@ test("check: leaving the tab mid-check and coming back resumes it, and a finishe
   serverCheck = { ...serverCheck, status: "succeeded", finishedAt: "2026-09-18T10:00:00Z", sessionsSeen: 1, candidatesNew: 1 };
   await openImports();
   assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
-  assert.ok(/data-action="training-load-gpexe-check" >Check now/.test(renderTrainingLoadCoachHtml()), "Check now is enabled again");
+  assert.ok(/data-action="training-load-gpexe-check" >Check for new sessions/.test(renderTrainingLoadCoachHtml()), "the check button is enabled again");
 });
 
 test("check: a failed poll does not leave Check now disabled", async () => {
@@ -469,7 +493,7 @@ test("check: a failed poll does not leave Check now disabled", async () => {
   }));
   await openImports();
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
-  assert.ok(/data-action="training-load-gpexe-check" >Check now/.test(renderTrainingLoadCoachHtml()));
+  assert.ok(/data-action="training-load-gpexe-check" >Check for new sessions/.test(renderTrainingLoadCoachHtml()));
 });
 
 test("approve: the dialog cannot be closed while the approval is running, so its answer is never lost", async () => {
@@ -493,7 +517,7 @@ test("approve: the dialog cannot be closed while the approval is running, so its
   release();
   await approving;
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /It is not known whether this session was imported\./);
+  assert.match(html, /We can't tell yet whether this session was imported\./);
   assert.match(html, /data-action="training-load-gpexe-verify"/);
 });
 
@@ -509,7 +533,7 @@ test("approve: a 409 already_imported refreshes the candidate, so no Approve but
   await openCandidate();
   await approve();
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /already imported, perhaps by another approval at the same time\. Nothing more was written\./);
+  assert.match(html, /Already imported - another approval got there first\. Nothing more was written\./);
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html));
 });
 
@@ -539,7 +563,70 @@ test("approve: after a lost answer a still-pending candidate is never 'checked: 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-verify" }), { renderTrainingLoad: render });
   const html = renderTrainingLoadCoachHtml();
   assert.ok(!/it was not imported/.test(html), "a single read after a lost answer proves nothing");
-  assert.match(html, /No import is visible yet\. The first approval may still be running on the server\./);
+  assert.match(html, /The import is not visible yet; we are still checking the result\./);
   assert.match(html, /data-action="training-load-gpexe-approve"/, "approving again is offered: the server refuses a duplicate");
   assert.equal(state.trainingLoad.gpexe.detail.outcome.verified, "not_visible_yet");
+});
+
+test("main screen speaks to the coach: check for new sessions, needs a decision, imported, and one next step per session", async () => {
+  resetState();
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) {
+      return { status: 200, body: { candidates: [
+        candidateSummary({ id: "c-new", label: "Training A" }),
+        candidateSummary({ id: "c-chg", label: "Training B", changesToImported: 2 }),
+        candidateSummary({ id: "c-blk", label: "Match C", status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] }),
+        candidateSummary({ id: "c-imp", label: "Training D", status: "imported", approvalBlockers: ["already_imported"] }),
+      ] } };
+    }
+    return base(call);
+  });
+  await openImports();
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 3 session\(s\) need a decision - open one below\./);
+  assert.match(html, />Check for new sessions</);
+  assert.match(html, /<h3>Needs a decision \(3\)<\/h3>/);
+  assert.match(html, /<h3>Imported \(1\)<\/h3>/);
+  assert.match(html, /Training A[\s\S]*Next: review it and approve the import\./);
+  assert.match(html, /Training B[\s\S]*Next: review 2 change\(s\) to results already imported, then approve\./);
+  assert.match(html, /Match C[\s\S]*Next: open it - something must be fixed before it can be imported\./);
+  for (const code of ["preview_changed", "changes_need_acceptance", "import_outcome_unknown", "already_imported", "snapshot_expired_check_again"]) {
+    assert.ok(!html.includes(code), `no API code on the main screen: ${code}`);
+  }
+});
+
+test("blocked steps speak to the coach: no field names or runbook paths in the main text, the server's wording only in Technical details", async () => {
+  resetState();
+  const serverStep = 'Make the OptiMove athlete (previousAthleteId) an active member of the team again, then press "Check now". Or a platform admin undoes the earlier import of this session (docs/runbooks/gpexe-undo-imported-session.md; for a persistent database that needs its own approval first), and the session is checked again.';
+  installFetchMock(gpexeServer({
+    onCandidate: () => ({ status: 200, body: { candidate: candidateDetail({
+      summary: { status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] },
+      blocked: { code: "identities_missing_from_source", message: "Results imported earlier would be left behind.", gpexeAthleteIds: ["101"],
+        resolution: [{ gpexeAthleteId: "101", previousAthleteId: "ath-1", cause: "athlete_not_in_team", action: "restore_team_membership", step: serverStep }] },
+    }) } }),
+  }));
+  await openImports();
+  await openCandidate();
+  const html = renderTrainingLoadCoachHtml();
+  const ol = html.slice(html.indexOf("<ol>"), html.indexOf("</ol>"));
+  assert.match(ol, /Make Ana Example an active member of the team again, then check for new sessions\. Or ask a platform admin to undo the earlier import\./);
+  assert.ok(!/previousAthleteId|docs\/runbooks|Check now/.test(ol), ol);
+  assert.match(html, /Technical details[\s\S]*restore_team_membership: [\s\S]*docs\/runbooks\/gpexe-undo-imported-session\.md/);
+});
+
+test("a failed outcome check is listed in Technical details", async () => {
+  resetState();
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    onApprove: () => ({ status: 503, body: { error: "import_outcome_unknown", message: "...", verify: { candidateId: "cand-1", approvalId: "appr-3", candidateHref: "/c", approvalHref: "/a" } } }),
+    onApproval: () => ({ status: 500, body: { error: "internal_error" } }),
+  }));
+  await openImports();
+  await openCandidate();
+  await approve();
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-verify" }), { renderTrainingLoad: render });
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /Still not clear\. Check again in a moment\./);
+  assert.match(html, /Technical details[\s\S]*Check error<\/dt><dd>500 internal_error/);
 });

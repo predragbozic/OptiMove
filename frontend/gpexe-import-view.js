@@ -8,7 +8,11 @@
 // the GPS measurement are shown separately; a missing value is never shown as
 // a zero; the approval covers the whole candidate; every change to an already
 // imported result is listed and must be accepted explicitly; an uncertain
-// outcome is never shown as "not imported".
+// outcome is never shown as "not imported" (owner, F3a external review: a
+// missing approval with a pending candidate only means "not visible yet";
+// only a confirmed import is final, only an explicit refusal is "not
+// imported"). Main messages are written for the coach; the API's codes are
+// kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import { gpexeTeamOptions } from "./gpexe-import-data.js";
@@ -48,17 +52,64 @@ const GPS_TEXT = {
 // What a refused approval means, and the one thing to do next. Every code
 // here is a refusal BEFORE anything was written (the server says so).
 const REFUSAL_TEXT = {
-  import_switch_off: "Import writing is off in this environment. Nothing was imported.",
-  not_an_approver: "You may not approve GPEXE imports for this team. A platform admin can grant you the right, or approve it.",
-  already_imported: "This session was already imported, perhaps by another approval at the same time. Nothing more was written.",
-  superseded_by_newer_data: "GPEXE has newer data for this session. Nothing was imported; review the newer candidate.",
-  blocked: "This session is blocked. Nothing was imported; see the reason and the step that lifts it.",
-  snapshot_expired_check_again: "The GPEXE data of this candidate expired. Nothing was imported; press \"Check now\" again.",
-  nothing_to_import: "This candidate would write nothing.",
-  changes_need_acceptance: "This import changes results that were already imported. Nothing was imported; tick the box to accept those changes, then approve again.",
-  preview_changed: "What this import would do changed since you opened it. Nothing was imported; review it again.",
-  internal_error: "The approval failed on the server before anything was written. Nothing was imported.",
+  import_switch_off: "Not imported: importing is switched off in this environment.",
+  not_an_approver: "Not imported: you may not approve imports for this team. Ask a platform admin to approve it or to give you the right.",
+  already_imported: "Already imported - another approval got there first. Nothing more was written.",
+  superseded_by_newer_data: "Not imported: GPEXE has newer data for this session. Open the newer version.",
+  blocked: "Not imported: this session must be fixed first. See what to fix above.",
+  snapshot_expired_check_again: "Not imported: the GPEXE data is too old. Check for new sessions, then review it again.",
+  nothing_to_import: "Nothing to import: GPEXE has nothing new for this session.",
+  changes_need_acceptance: "Not imported yet: this import changes results that were already imported. Tick the box to accept those changes, then approve.",
+  preview_changed: "Not imported: the data changed since you opened this session. Review it again, then approve.",
+  internal_error: "Not imported: the server failed before writing anything. Try again later.",
 };
+
+// Why a value was left out, in the coach's words. An unknown code is shown
+// as "other reason" and listed under Technical details.
+const SKIP_TEXT = {
+  details_not_fetched: "drill details not in GPEXE yet",
+  team_threshold_missing: "team thresholds missing in GPEXE",
+  team_threshold_split: "team thresholds changed during the session",
+  threshold_mismatch: "thresholds do not match the team's",
+  zones_missing: "zones missing in GPEXE",
+  zones_not_ready: "zones not ready in GPEXE",
+  zone_boundary_missing: "zone limits missing",
+  zone_boundary_ambiguous: "zone limits unclear",
+  zone_distance_missing: "zone distance missing",
+  events_missing: "events missing in GPEXE",
+  count_missing: "count missing",
+  duration_mismatch: "durations do not add up",
+  field_missing: "value missing in GPEXE",
+  value_missing: "value missing in GPEXE",
+  max_v_missing: "top speed missing in GPEXE",
+  total_distance_missing: "total distance missing in GPEXE",
+  total_time_missing: "total time missing in GPEXE",
+  unexpected_unit: "unexpected unit in GPEXE",
+};
+
+// The step that lifts a block, in the coach's words, built from the step's
+// action; the server's own wording (with field names and the runbook path)
+// stays in Technical details.
+function coachStep(s, c) {
+  const name = s.previousAthleteId ? athleteName(c, s.previousAthleteId, null) : "the athlete";
+  const undo = "Or ask a platform admin to undo the earlier import.";
+  if (s.action === "relink_athlete") return `Link GPEXE athlete ${s.gpexeAthleteId} again to ${name} (the athlete their earlier results belong to), then check for new sessions.`;
+  if (s.action === "restore_team_membership") return `Make ${name} an active member of the team again, then check for new sessions. ${undo}`;
+  if (s.action === "fix_in_gpexe_or_undo") return `Fix this athlete's data in GPEXE (one track, valid statistics), then check for new sessions. ${undo}`;
+  if (s.action === "undo_earlier_import") return "GPEXE no longer lists some results that were imported earlier. Ask a platform admin to undo the earlier import.";
+  return "Ask a platform admin what to do (see Technical details).";
+}
+
+function techHtml(entries) {
+  const rows = entries.filter(([, v]) => v !== undefined && v !== null && v !== "");
+  if (!rows.length) return "";
+  return `<details class="gpexe-tech"><summary>Technical details</summary><dl>${rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join("")}</dl></details>`;
+}
+
+function errorTech(error) {
+  if (!error) return "";
+  return techHtml([["HTTP status", error.status || "no answer"], ["Code", error.code], ["Server message", error.message]]);
+}
 
 // Day and time on the same (local) clock.
 function fmtDateTime(value) {
@@ -108,6 +159,7 @@ export function renderGpexeImportsHtml() {
       ${gx.error ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.error, "Could not load GPEXE imports."))}</p>` : ""}
       ${gx.loading && !status ? `<p class="muted">Loading...</p>` : ""}
       ${status ? renderStatusHtml(status) : ""}
+      ${status ? renderNextStepHtml(gx, status) : ""}
       ${status ? renderCheckHtml(gx, status) : ""}
       ${gx.notice ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
       ${status ? renderCandidatesHtml(gx) : ""}
@@ -148,6 +200,38 @@ function renderStatusHtml(status) {
   `;
 }
 
+function candidateGroup(c) {
+  if (c.status === "imported") return "imported";
+  if (c.status === "superseded") return "replaced";
+  if (c.status === "pending" && c.previewStatus === "no_changes") return "uptodate";
+  return "decision";
+}
+
+// The one next step for a session, from what the list already says.
+function nextStepText(c, status) {
+  const viewer = status?.viewer || {};
+  if (c.status === "imported") return "";
+  if (c.status === "superseded") return "Replaced by newer GPEXE data. Nothing to do.";
+  if (!c.snapshot?.available) return "Next: check for new sessions again (the GPEXE data is too old).";
+  if (c.status === "blocked") return "Next: open it - something must be fixed before it can be imported.";
+  if (c.previewStatus === "no_changes") return "Nothing new to import.";
+  if (!status?.importSwitch?.enabled) return "Next: review it. Importing is switched off in this environment.";
+  if (!viewer.canApprove) return "Next: review it. An approver must approve the import.";
+  if (c.changesToImported) return `Next: review ${c.changesToImported} change(s) to results already imported, then approve.`;
+  return "Next: review it and approve the import.";
+}
+
+function renderNextStepHtml(gx, status) {
+  const check = gx.check || status.lastCheck;
+  const decisions = (gx.candidates || []).filter((c) => candidateGroup(c) === "decision").length;
+  let text;
+  if (!status.settings) text = "A platform admin needs to connect this team to its GPEXE team (Settings > Teams).";
+  else if (gx.checkStarting || check?.status === "running") text = "Checking GPEXE for new sessions...";
+  else if (decisions) text = `Next step: ${decisions} session(s) need a decision - open one below.`;
+  else text = "Next step: check for new sessions.";
+  return `<p class="gpexe-next" role="status">${escapeHtml(text)}</p>`;
+}
+
 function renderCheckHtml(gx, status) {
   const check = gx.check || status.lastCheck;
   const running = Boolean(gx.checkStarting || check?.status === "running");
@@ -157,10 +241,10 @@ function renderCheckHtml(gx, status) {
       <div class="gpexe-check-row">
         <label class="gpexe-date"><span>From</span><input type="date" data-gpexe-field="from" ${running ? "disabled" : ""}></label>
         <label class="gpexe-date"><span>To</span><input type="date" data-gpexe-field="to" ${running ? "disabled" : ""}></label>
-        <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-check" ${canCheck ? "" : "disabled"}>${running ? "Checking..." : "Check now"}</button>
+        <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-check" ${canCheck ? "" : "disabled"}>${running ? "Checking..." : "Check for new sessions"}</button>
       </div>
-      <p class="muted gpexe-hint">Without dates, the last 14 days are checked (at most 31). A check saves what GPEXE shows as candidates; it imports nothing.</p>
-      ${gx.checkError ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.checkError, "The check could not start."))}</p>` : ""}
+      <p class="muted gpexe-hint">Without dates, the last 14 days are checked (at most 31). Checking only shows what GPEXE has; nothing is imported until you approve.</p>
+      ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(gx.checkError.code === "check_already_running" ? "A check is already running for this team." : "The check could not start. Try again in a moment.")}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check ? renderCheckSummaryHtml(check) : ""}
     </section>
   `;
@@ -170,29 +254,48 @@ function renderCheckSummaryHtml(check) {
   const counts = `${check.sessionsSeen} session(s): ${check.candidatesNew} new, ${check.candidatesChanged} changed, ${check.candidatesUnchanged} unchanged`;
   if (check.status === "running") return `<p class="gpexe-check-state" role="status">Checking GPEXE ${escapeHtml(formatDate(check.window?.from))} - ${escapeHtml(formatDate(check.window?.to))}... ${escapeHtml(counts)} so far.</p>`;
   if (check.status === "failed") {
-    return `<p class="gpexe-error" role="alert">The last check (${escapeHtml(fmtDateTime(check.startedAt))}) failed: ${escapeHtml(check.error?.message || check.error?.code || "unknown error")}</p>`;
+    return `<div class="gpexe-error" role="alert"><p>The last check (${escapeHtml(fmtDateTime(check.startedAt))}) did not finish. Try again in a moment.</p>${techHtml([["Code", check.error?.code], ["Server message", check.error?.message]])}</div>`;
   }
   return `<p class="gpexe-check-state">Last check ${escapeHtml(fmtDateTime(check.finishedAt || check.startedAt))} (${escapeHtml(formatDate(check.window?.from))} - ${escapeHtml(formatDate(check.window?.to))}): ${escapeHtml(counts)}.</p>`;
 }
 
 function renderCandidatesHtml(gx) {
   const list = gx.candidates || [];
+  const status = gx.status;
+  const group = (name) => list.filter((c) => candidateGroup(c) === name);
+  const decision = group("decision");
+  const imported = group("imported");
+  const uptodate = group("uptodate");
+  const replaced = group("replaced");
+  const rows = (items) => `<ul class="gpexe-candidate-list">${items.map((c) => renderCandidateRowHtml(c, status)).join("")}</ul>`;
   return `
-    <section class="gpexe-panel" aria-label="Import candidates">
-      <div class="gpexe-panel-head">
-        <h3>Sessions from GPEXE</h3>
-        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-superseded" aria-pressed="${gx.includeSuperseded ? "true" : "false"}">${gx.includeSuperseded ? "Hide replaced" : "Show replaced"}</button>
-      </div>
-      ${!list.length ? `<p class="muted">No sessions yet. Press "Check now".</p>` : `
-        <ul class="gpexe-candidate-list">
-          ${list.map((c) => renderCandidateRowHtml(c)).join("")}
-        </ul>
-      `}
+    <section class="gpexe-panel gpexe-group is-decision" aria-label="Needs a decision">
+      <div class="gpexe-panel-head"><h3>Needs a decision (${decision.length})</h3></div>
+      ${decision.length ? rows(decision) : `<p class="muted">Nothing needs a decision.${list.length ? "" : " Check for new sessions."}</p>`}
     </section>
+    <section class="gpexe-panel gpexe-group is-imported" aria-label="Imported">
+      <div class="gpexe-panel-head"><h3>Imported (${imported.length})</h3></div>
+      ${imported.length ? rows(imported) : `<p class="muted">Nothing imported yet.</p>`}
+    </section>
+    ${uptodate.length ? `
+      <details class="gpexe-panel gpexe-group">
+        <summary>Up to date - nothing new (${uptodate.length})</summary>
+        ${rows(uptodate)}
+      </details>
+    ` : ""}
+    <div class="gpexe-replaced-toggle">
+      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-superseded" aria-pressed="${gx.includeSuperseded ? "true" : "false"}">${gx.includeSuperseded ? "Hide replaced versions" : "Show replaced versions"}</button>
+    </div>
+    ${gx.includeSuperseded && replaced.length ? `
+      <section class="gpexe-panel gpexe-group" aria-label="Replaced versions">
+        <div class="gpexe-panel-head"><h3>Replaced versions (${replaced.length})</h3></div>
+        ${rows(replaced)}
+      </section>
+    ` : ""}
   `;
 }
 
-function renderCandidateRowHtml(c) {
+function renderCandidateRowHtml(c, status) {
   const counts = c.counts || {};
   const facts = [];
   if (c.status === "pending" || c.status === "blocked") {
@@ -200,7 +303,7 @@ function renderCandidateRowHtml(c) {
     if (c.changesToImported) facts.push(`${c.changesToImported} change(s) to imported results`);
     if (counts.athletesNotImported) facts.push(`${counts.athletesNotImported} athlete(s) left out`);
   }
-  const blockers = (c.approvalBlockers || []).filter((b) => b !== "import_switch_off" && b !== "already_imported");
+  const next = nextStepText(c, status);
   return `
     <li>
       <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}">
@@ -210,7 +313,7 @@ function renderCandidateRowHtml(c) {
         </span>
         <span class="gpexe-badge is-${escapeAttr(c.status)}">${escapeHtml(STATUS_TEXT[c.status] || c.status)}</span>
         ${facts.length ? `<span class="gpexe-candidate-facts">${escapeHtml(facts.join(" · "))}</span>` : ""}
-        ${blockers.length ? `<span class="gpexe-candidate-facts muted">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || b).join(" · "))}</span>` : ""}
+        ${next ? `<span class="gpexe-candidate-next">${escapeHtml(next)}</span>` : ""}
       </button>
     </li>
   `;
@@ -276,7 +379,7 @@ function renderCandidateBodyHtml(c, detail, status) {
       ${c.snapshot?.available ? `<span class="muted">GPEXE data kept until ${escapeHtml(formatDate(c.snapshot.expiresAt))}</span>` : ""}
     </p>
     ${renderApprovalRecordHtml(c)}
-    ${!preview ? `<p class="muted">${c.snapshot?.available === false ? "The GPEXE data of this candidate expired. Press \"Check now\" to see it again." : "No preview."}</p>` : `
+    ${!preview ? `<p class="muted">${c.snapshot?.available === false ? "The GPEXE data is too old. Check for new sessions to see it again." : "No preview."}</p>` : `
       ${renderBlockedHtml(preview, c)}
       ${renderChangesHtml(preview, c)}
       ${renderAthletesHtml(preview, c)}
@@ -299,8 +402,9 @@ function renderBlockedHtml(preview, c) {
   const steps = preview.blocked.resolution || [];
   return `
     <div class="gpexe-blocked" role="note">
-      <p><strong>Blocked:</strong> ${escapeHtml(preview.blocked.message || preview.blocked.code)}</p>
-      ${steps.length ? `<ol>${steps.map((s) => `<li>${escapeHtml(s.gpexeAthleteId ? `${athleteName(c, s.previousAthleteId, s.gpexeAthleteId)}: ` : "")}${escapeHtml(s.step)}</li>`).join("")}</ol>` : ""}
+      <p><strong>Must be fixed before import:</strong> ${escapeHtml(preview.blocked.message || "this session cannot be imported as it is.")}</p>
+      ${steps.length ? `<p>What to do:</p><ol>${steps.map((s) => `<li>${escapeHtml(coachStep(s, c))}</li>`).join("")}</ol>` : ""}
+      ${techHtml([["Code", preview.blocked.code], ...steps.map((s, i) => [`Step ${i + 1} (server)`, `${s.action}: ${s.step}`])])}
     </div>
   `;
 }
@@ -380,7 +484,7 @@ function renderAthleteHtml(a, c, unlinkedChoices) {
           ${renderValueTableHtml(r.values.filter((v) => v.change !== "same" || r.outcome === "created"), r.outcome !== "created")}
         </div>
       `).join("")}
-      ${(a.skippedValues || []).length ? `<p class="muted">${a.skippedValues.length} value(s) left out: ${escapeHtml([...new Set(a.skippedValues.map((s) => s.reason))].join(", "))}. A left-out value is not a zero.</p>` : ""}
+      ${(a.skippedValues || []).length ? `<p class="muted">${a.skippedValues.length} value(s) left out: ${escapeHtml([...new Set(a.skippedValues.map((s) => SKIP_TEXT[s.reason] || "other reason"))].join(", "))}. A left-out value is not a zero.</p>${a.skippedValues.some((s) => !SKIP_TEXT[s.reason]) ? techHtml([["Left-out codes", [...new Set(a.skippedValues.map((s) => s.reason))].join(", ")]]) : ""}` : ""}
     </details>
   `;
 }
@@ -417,14 +521,16 @@ function renderOutcomeHtml(detail) {
   }
   if (o.kind === "unknown") {
     const verified = o.verified;
+    if (verified === "imported") {
+      return `<div class="gpexe-success" role="status"><p><strong>Imported.</strong> Checked: the import is in OptiMove.</p>${errorTech(o.error)}</div>`;
+    }
     return `
       <div class="gpexe-unknown" role="alert">
-        <p><strong>It is not known whether this session was imported.</strong> ${o.verify ? "The database did not confirm the import in time." : "The answer to the approval was lost or unclear."} Do not approve again or enter data by hand before checking.</p>
-        ${verified === "imported" ? `<p class="gpexe-success">Checked: it was imported.</p>` : ""}
-        ${verified === "not_imported" ? `<p>Checked: it was not imported. You can approve it again.</p>` : ""}
-        ${verified === "not_visible_yet" ? `<p>No import is visible yet. The first approval may still be running on the server. Approving again is safe: if the first one finishes, the second is refused as already imported.</p>` : ""}
-        ${verified === "still_unknown" ? `<p>Still not known. Try the check again in a moment.</p>` : ""}
-        ${verified === "imported" || verified === "not_imported" ? "" : `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-verify" ${detail.verifying ? "disabled" : ""}>${detail.verifying ? "Checking..." : "Check the outcome"}</button>`}
+        <p><strong>We can't tell yet whether this session was imported.</strong> Don't enter the data by hand and don't assume either way - check the result first.</p>
+        ${verified === "not_visible_yet" ? `<p>The import is not visible yet; we are still checking the result. Check again in a moment. Approving again is safe: the server never imports the same session twice.</p>` : ""}
+        ${verified === "still_unknown" ? `<p>Still not clear. Check again in a moment.</p>` : ""}
+        <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-verify" ${detail.verifying ? "disabled" : ""}>${detail.verifying ? "Checking..." : verified ? "Check again" : "Check the result"}</button>
+        ${techHtml([["HTTP status", o.error?.status || "no answer"], ["Code", o.error?.code], ["Server message", o.error?.message], ["Approval id", o.verify?.approvalId], ["Check error", o.verifyError ? `${o.verifyError.status || "no answer"} ${o.verifyError.code || ""}`.trim() : undefined]])}
       </div>
     `;
   }
@@ -432,15 +538,16 @@ function renderOutcomeHtml(detail) {
   const reviewAgain = o.error?.data?.reviewAgain;
   return `
     <div class="gpexe-refused" role="alert">
-      <p>${escapeHtml(REFUSAL_TEXT[code] || (o.error?.status === 404 ? "This session is not available." : "The approval was refused. Nothing was imported."))}</p>
+      <p>${escapeHtml(REFUSAL_TEXT[code] || (o.error?.status === 404 ? "Not imported: this session is not available." : "Not imported: the server refused the approval."))}</p>
       ${reviewAgain?.candidateId ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(reviewAgain.candidateId)}">Review again</button>` : ""}
+      ${errorTech(o.error)}
     </div>
   `;
 }
 
 function renderApproveHtml(c, detail, status) {
   if (c.status === "imported" || detail.outcome?.kind === "imported" || detail.outcome?.verified === "imported") return "";
-  if (detail.outcome?.kind === "unknown" && detail.outcome.verified !== "not_imported" && detail.outcome.verified !== "not_visible_yet") return "";
+  if (detail.outcome?.kind === "unknown" && detail.outcome.verified !== "not_visible_yet") return "";
   const viewer = status?.viewer || {};
   const blockers = c.approvalBlockers || [];
   if (!viewer.canApprove) return `<p class="muted gpexe-approve-note">Approving needs a platform admin or an explicit approver grant for this team.</p>`;
