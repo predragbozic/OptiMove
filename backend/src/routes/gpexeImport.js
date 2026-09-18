@@ -1,7 +1,7 @@
-// In-app GPEXE import, phase F1. Mounted at /api/training-load/gpexe behind
+// In-app GPEXE import. Mounted at /api/training-load/gpexe behind
 // requireAuth. Check, candidates, previews, athlete links, approver grants
-// and retention status. No route here writes a measurement, an event or an
-// activity; approving an import is phase F2.
+// and retention status (phase F1); approving a candidate, the only route
+// that writes measurements, an event and an activity (phase F2).
 import { Router } from "express";
 import { query } from "../db.js";
 import { canApproveGpexeImport, resolveGpexeTeamAccess } from "../gpexeImportAccess.js";
@@ -24,7 +24,15 @@ function handle(fn) {
       await fn(req, res);
     } catch (error) {
       if (error instanceof service.GpexeImportServiceError) {
-        return res.status(error.status).json({ error: error.code, message: error.message });
+        if (error.status === 404) return notFound(res);
+        // Only the known detail fields, so a detail can never replace error/message.
+        const { reviewAgain, changesToImported, verify } = error.details || {};
+        return res.status(error.status).json({
+          error: error.code, message: error.message,
+          ...(reviewAgain ? { reviewAgain } : {}),
+          ...(changesToImported !== undefined ? { changesToImported } : {}),
+          ...(verify ? { verify } : {}),
+        });
       }
       next(error);
     }
@@ -56,8 +64,7 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     importSwitch: service.applySwitchInfo(),
     lastCheck,
     viewer: { canApprove: approval.canApprove, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin },
-    // F1 has no approval step yet; the screens say so instead of hiding it.
-    approvalAvailable: false,
+    approvalAvailable: true,
   });
 }));
 
@@ -99,6 +106,50 @@ router.get("/teams/:teamId/candidates/:candidateId", handle(async (req, res) => 
   const candidate = await service.getCandidate(access.teamId, req.params.candidateId);
   if (!candidate) return notFound(res);
   res.json({ candidate, importSwitch: service.applySwitchInfo() });
+}));
+
+// Approve a candidate as a whole and import it. Body: { previewHash, the
+// hash of the preview the approver reviewed; acceptChanges, true when the
+// preview lists changes to already imported results }. Refused, with
+// nothing written, when the import switch is off, the caller may not approve
+// for this team, the candidate is not pending or its snapshot expired, the
+// preview is not the one reviewed, or changes were not accepted. A preview
+// that changed under the approval's own locks rolls everything back and
+// answers 409 preview_changed with reviewAgain.
+router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!UUID.test(req.params.candidateId)) return notFound(res);
+  const result = await service.approveCandidate(access.teamId, req.params.candidateId, {
+    userId: req.user.id, previewHash: req.body?.previewHash, acceptChanges: req.body?.acceptChanges,
+  });
+  // The import is committed. Reading the candidate afterwards is only a
+  // convenience; if it fails, the answer still says the import happened.
+  let candidate = null;
+  let candidateReadError = null;
+  try {
+    candidate = await service.getCandidate(access.teamId, req.params.candidateId);
+  } catch (error) {
+    console.error(`[gpexe] reading candidate ${req.params.candidateId} after its import failed: ${error?.message}`);
+    candidateReadError = {
+      error: "candidate_read_failed",
+      message: "The import was committed; only reading the candidate afterwards failed. Open the candidate again to see it.",
+      candidateHref: `/api/training-load/gpexe/teams/${access.teamId}/candidates/${req.params.candidateId}`,
+    };
+  }
+  res.json({ ...result, candidate, ...(candidateReadError ? { candidateReadError } : {}) });
+}));
+
+// One approval of the team, by id. With the candidate, this is how an
+// approval whose outcome was uncertain (503 import_outcome_unknown) is
+// checked. Another team's approval is the same 404 as a missing one.
+router.get("/teams/:teamId/approvals/:approvalId", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!UUID.test(req.params.approvalId)) return notFound(res);
+  const approval = await service.getApproval(access.teamId, req.params.approvalId);
+  if (!approval) return notFound(res);
+  res.json({ approval });
 }));
 
 router.get("/teams/:teamId/athlete-links", handle(async (req, res) => {
