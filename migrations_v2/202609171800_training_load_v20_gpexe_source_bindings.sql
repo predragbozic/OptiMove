@@ -46,15 +46,22 @@ begin
   -- agreeing with nothing left to detect it. Checked before anything else,
   -- because clearing source_external_id or source_connection_id would
   -- otherwise fall through the early return below. It reads only the binding
-  -- row (immutable and undeletable, so a plain read is stable) and takes no
-  -- lock of its own, leaving the connection -> identity -> event order as it
-  -- was.
+  -- row and takes no lock of its own, leaving the connection -> identity ->
+  -- event order as it was.
+  --
+  -- Why a plain read is enough against a concurrent binding insert: every
+  -- such insert goes through validate_event_source_binding(), which locks
+  -- THIS event row "for update" first, and an UPDATE of the same row blocks
+  -- on that lock and re-runs its BEFORE triggers against the committed row.
+  -- The shared row is what serializes the two, not the read. Do not remove
+  -- that "for update" without re-examining this guard.
   if TG_OP = 'UPDATE'
      and (new.source_connection_id is distinct from old.source_connection_id
           or new.source_external_id is distinct from old.source_external_id)
      and exists (select 1 from training_load.metric_event_source_bindings b where b.event_id = old.id) then
     raise exception 'metric_events (id=%): source identity is immutable once the event is bound to a source session (recorded as %/%)',
-      old.id, old.source_connection_id, old.source_external_id;
+      old.id, old.source_connection_id, old.source_external_id
+      using errcode = 'integrity_constraint_violation';
   end if;
   if new.source_connection_id is null or new.source_external_id is null then
     return new;

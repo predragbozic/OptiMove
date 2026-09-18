@@ -1139,7 +1139,9 @@ test("database: a bound event's own source identity can no longer be changed", a
   // would stop agreeing, with nothing left to detect it.
   await assert.rejects(
     admin.query(`update training_load.metric_events set source_external_id = 'team_session:free' where id = $1`, [summary.eventId]),
-    /source identity is immutable once the event is bound/,
+    // Its own SQLSTATE, so a caller can branch on the code instead of the
+    // message, and never confuse it with the duplicate guard's 23505.
+    (e) => /source identity is immutable once the event is bound/.test(e.message) && e.code === "23000",
   );
   await assert.rejects(
     admin.query(`update training_load.metric_events set source_external_id = null where id = $1`, [summary.eventId]),
