@@ -583,14 +583,16 @@ test("main screen speaks to the coach: check for new sessions, needs a decision,
     return base(call);
   });
   await openImports();
+  await new Promise((resolve) => setImmediate(resolve));
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 3 session\(s\) need a decision - open one below\./);
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 2 session\(s\) need a decision - open one below\./);
   assert.match(html, />Check for new sessions</);
-  assert.match(html, /<h3>Needs a decision \(3\)<\/h3>/);
+  assert.match(html, /<h3>Needs a decision \(2\)<\/h3>/);
+  assert.match(html, /<h3>Can't be imported yet \(1\)<\/h3>/);
   assert.match(html, /<h3>Imported \(1\)<\/h3>/);
   assert.match(html, /Training A[\s\S]*Next: review it and approve the import\./);
   assert.match(html, /Training B[\s\S]*Next: review 2 change\(s\) to results already imported, then approve\./);
-  assert.match(html, /Match C[\s\S]*Next: open it - something must be fixed before it can be imported\./);
+  assert.match(html, /Match C[\s\S]*Next: open it to see why it can&#039;t be imported yet\./);
   for (const code of ["preview_changed", "changes_need_acceptance", "import_outcome_unknown", "already_imported", "snapshot_expired_check_again"]) {
     assert.ok(!html.includes(code), `no API code on the main screen: ${code}`);
   }
@@ -634,7 +636,7 @@ test("a failed outcome check is listed in Technical details", async () => {
 test("blocked sessions: the coach reads why and what to do; the server's message (with GPEXE ids) is only in Technical details", async () => {
   const cases = [
     { code: "unsupported_category", message: 'team_session 8002 category "OFFICIAL MATCH" is not importable in the pilot.', session: { categoryName: "OFFICIAL MATCH" },
-      reason: /&quot;OFFICIAL MATCH&quot; sessions are not imported from GPEXE\./, step: /Nothing to do - it stays out of OptiMove\./ },
+      reason: /&quot;OFFICIAL MATCH&quot; sessions are not imported from GPEXE\./, step: /No action needed - it stays out of OptiMove\./ },
     { code: "thresholds_not_valid_for_session", message: "thresholds 1473 (valid 2025-01-01 – open) do not cover session start 2024-12-01T10:00:00.000Z.",
       reason: /thresholds \(speed and power zones\) are missing or don(?:'|&#039;)t cover this session(?:'|&#039;)s date\./, step: /Check the team thresholds in GPEXE, then check for new sessions\./ },
     { code: "track_missing", message: "track 9005 for athlete 104 was not fetched.",
@@ -674,4 +676,110 @@ test("an up-to-date session reads as up to date, not as waiting with athletes le
   assert.match(group, /Nothing new to import - no action needed\./);
   assert.ok(!/left out|Waiting for approval/.test(group.slice(0, group.indexOf("</details>"))));
   assert.match(html, /<h3>Needs a decision \(0\)<\/h3>/);
+});
+
+test("blocked sessions in the list: a session that stays out for good is not a decision and asks for nothing; every other block shows the detail's own step", async () => {
+  resetState();
+  const blockedCases = {
+    "c-match": { code: "unsupported_category", message: 'team_session 8002 category "OFFICIAL MATCH" is not importable in the pilot.', categoryName: "OFFICIAL MATCH" },
+    "c-thr": { code: "thresholds_not_valid_for_session", message: "thresholds 1473 do not cover session start." },
+    "c-stats": { code: "session_stats_invalid", message: "team_session 8003 has is_stats_valid=false." },
+    "c-none": { code: "no_importable_participants", message: "team_session 8004 has no importable athlete." },
+    "c-data": { code: "track_missing", message: "track 9005 for athlete 104 was not fetched." },
+    "c-conf": { code: "binding_conflict", message: "event bound to a different threshold set." },
+  };
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) {
+      return { status: 200, body: { candidates: [
+        candidateSummary({ id: "c-ok", label: "Training OK" }),
+        ...Object.keys(blockedCases).map((id) => candidateSummary({ id, label: `Session ${id}`, status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"], lastSeenAt: "2026-09-18T10:00:00Z" })),
+      ] } };
+    }
+    const m = call.url.match(/\/candidates\/(c-[a-z]+)$/);
+    if (m && blockedCases[m[1]]) {
+      const k = blockedCases[m[1]];
+      const detail = candidateDetail({ summary: { id: m[1], status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] } });
+      return { status: 200, body: { candidate: { ...detail, preview: { ...detail.preview, status: "blocked", blocked: { code: k.code, message: k.message }, session: { categoryName: k.categoryName || null }, athletes: [], teamAthletesWithoutGpexeRecord: [] } } } };
+    }
+    return base(call);
+  });
+  await openImports();
+  await new Promise((resolve) => setImmediate(resolve));
+  let html = renderTrainingLoadCoachHtml();
+
+  // The match: its own collapsed group, badge "Not imported", no call to act.
+  assert.match(html, /<h3>Needs a decision \(1\)<\/h3>/, "only the approvable session is a decision");
+  assert.match(html, /<summary>Stays out of OptiMove \(1\)<\/summary>/);
+  const out = html.slice(html.indexOf("<summary>Stays out of OptiMove"));
+  assert.match(out, /Session c-match[\s\S]*Not imported[\s\S]*No action needed - it stays out of OptiMove\./);
+  assert.ok(!/fix|Next:/.test(out.slice(0, out.indexOf("</details>"))), "the excluded session asks for nothing");
+
+  // Every other block: "Can't be imported yet", and the row's next step is
+  // exactly the detail's "What to do".
+  assert.match(html, /<h3>Can't be imported yet \(5\)<\/h3>/);
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 session\(s\) need a decision/);
+  for (const id of ["c-thr", "c-stats", "c-none", "c-data", "c-conf"]) {
+    const row = html.slice(html.indexOf(`data-candidate-id="${id}"`), html.indexOf("</button>", html.indexOf(`data-candidate-id="${id}"`)));
+    const rowStep = row.match(/<span class="gpexe-candidate-next">Next: ([^<]+)<\/span>/)?.[1];
+    assert.ok(rowStep, `${id}: a next step in the list`);
+    await openCandidate(id);
+    const detailHtml = renderTrainingLoadCoachHtml();
+    const detailStep = detailHtml.match(/<strong>What to do:<\/strong> ([^<]+)<\/p>/)?.[1];
+    assert.equal(rowStep.toLowerCase(), detailStep.toLowerCase(), `${id}: the list's next step is the detail's step`);
+    assert.match(detailHtml, /<strong>Can't be imported yet\.<\/strong>/, id);
+    await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
+  }
+
+  // And the match's detail says the same as its row.
+  await openCandidate("c-match");
+  html = renderTrainingLoadCoachHtml();
+  assert.match(html, /<strong>Not imported\.<\/strong> &quot;OFFICIAL MATCH&quot; sessions are not imported from GPEXE\./);
+  assert.match(html, /<strong>What to do:<\/strong> No action needed - it stays out of OptiMove\./);
+});
+
+test("when nothing needs a decision but some sessions can't be imported yet, the next-step line says so", async () => {
+  resetState();
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-thr", status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] })] } };
+    if (call.url.endsWith("/candidates/c-thr")) {
+      const d = candidateDetail();
+      return { status: 200, body: { candidate: { ...d, id: "c-thr", status: "blocked", preview: { ...d.preview, status: "blocked", blocked: { code: "thresholds_missing", message: "x" }, athletes: [] } } } };
+    }
+    return base(call);
+  });
+  await openImports();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(renderTrainingLoadCoachHtml(), /class="gpexe-next"[^>]*>Next step: 1 session\(s\) can&#039;t be imported yet - see what to do below\./);
+});
+
+test("after a check ends, a newly blocked session's reason is loaded and painted (not left on 'Loading why...')", async () => {
+  resetState();
+  let afterCheck = false;
+  const base = gpexeServer({
+    checks: {
+      start: () => ({ status: 202, body: { check: { id: "chk-9", status: "running", window: { from: "2026-09-05", to: "2026-09-18" }, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0 } } }),
+      poll: () => { afterCheck = true; return { status: 200, body: { check: { id: "chk-9", status: "succeeded", window: { from: "2026-09-05", to: "2026-09-18" }, finishedAt: "2026-09-18T10:00:00Z", sessionsSeen: 1, candidatesNew: 1, candidatesChanged: 0, candidatesUnchanged: 0, error: null } } }; },
+    },
+  });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) {
+      return { status: 200, body: { candidates: afterCheck ? [candidateSummary({ id: "c-m", label: "GPEXE OFFICIAL MATCH", status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] })] : [] } };
+    }
+    if (call.url.endsWith("/candidates/c-m")) {
+      const d = candidateDetail();
+      return { status: 200, body: { candidate: { ...d, id: "c-m", status: "blocked", preview: { ...d.preview, status: "blocked", blocked: { code: "unsupported_category", message: "x" }, session: { categoryName: "OFFICIAL MATCH" }, athletes: [] } } } };
+    }
+    return base(call);
+  });
+  await openImports();
+  // What the coach would see at each paint: the screen must be painted at
+  // least once AFTER the reason arrived, or it stays on "Loading why...".
+  let paintedWithReason = false;
+  const paint = () => { if (/Stays out of OptiMove/.test(renderTrainingLoadCoachHtml())) paintedWithReason = true; };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: paint });
+  for (let i = 0; i < 20 && !paintedWithReason; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(paintedWithReason, "a paint happened after the blocked reason was loaded");
+  assert.ok(fetchCalls.filter((c) => c.url.endsWith("/candidates/c-m")).length === 1, "the reason is read once");
 });

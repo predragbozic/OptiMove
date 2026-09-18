@@ -80,6 +80,8 @@ function resetGpexeTeamState(teamId) {
   gx.error = null;
   gx.detail = null;
   gx.notice = "";
+  gx.blockedReasons = {};
+  gx.blockedReasonErrors = {};
 }
 
 export async function loadGpexeTeam(render) {
@@ -104,6 +106,7 @@ export async function loadGpexeTeam(render) {
     gx.status = status;
     gx.candidates = candidates.candidates;
     gx.links = links.links;
+    void loadBlockedReasons(render);
     // The server's lastCheck is the truth: a check left while polling (the
     // coach went to another tab) or whose polling failed is taken over from
     // it, and followed again if it is still running.
@@ -122,6 +125,37 @@ export async function loadGpexeTeam(render) {
   }
 }
 
+// The list answer does not say why a session is blocked; its detail does.
+// For each blocked session whose reason is not known for this sighting
+// (id + lastSeenAt), the detail is read once, so the list can group it and
+// show the same next step as the detail.
+const reasonsInFlight = new Set();
+
+export async function loadBlockedReasons(render) {
+  const gx = g();
+  const generation = gx.generation;
+  const keyOf = (c) => `${c.id}|${c.lastSeenAt || ""}`;
+  const missing = (gx.candidates || []).filter((c) => c.status === "blocked" && c.snapshot?.available
+    && !gx.blockedReasons[keyOf(c)] && !gx.blockedReasonErrors[keyOf(c)] && !reasonsInFlight.has(`${generation}|${keyOf(c)}`));
+  if (!missing.length) return;
+  await Promise.all(missing.map(async (c) => {
+    const key = keyOf(c);
+    reasonsInFlight.add(`${generation}|${key}`);
+    try {
+      const { candidate } = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(c.id)}`));
+      if (generation !== gx.generation) return;
+      const blocked = candidate?.preview?.blocked;
+      if (blocked?.code) gx.blockedReasons[key] = { code: blocked.code, categoryName: candidate.preview.session?.categoryName || null };
+      else gx.blockedReasonErrors[key] = true;
+    } catch {
+      if (generation === gx.generation) gx.blockedReasonErrors[key] = true;
+    } finally {
+      reasonsInFlight.delete(`${generation}|${key}`);
+    }
+  }));
+  if (generation === gx.generation) render();
+}
+
 export async function reloadGpexeCandidates(render) {
   const gx = g();
   const generation = gx.generation;
@@ -129,6 +163,7 @@ export async function reloadGpexeCandidates(render) {
     const { candidates } = await api(teamPath(gx.teamId, `/candidates${gx.includeSuperseded ? "?includeSuperseded=true" : ""}`));
     if (generation !== gx.generation) return;
     gx.candidates = candidates;
+    void loadBlockedReasons(render);
   } catch (error) {
     if (generation !== gx.generation) return;
     gx.error = errorInfo(error);
@@ -196,7 +231,7 @@ export async function pollGpexeCheck(render) {
       render();
     }
     if (generation === gx.generation && gx.check && gx.check.status !== "running") {
-      const [status] = await Promise.all([api(teamPath(gx.teamId, "/status")).catch(() => null), reloadGpexeCandidates(() => {})]);
+      const [status] = await Promise.all([api(teamPath(gx.teamId, "/status")).catch(() => null), reloadGpexeCandidates(render)]);
       if (generation !== gx.generation) return;
       if (status) gx.status = status;
       render();

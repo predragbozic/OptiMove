@@ -636,6 +636,9 @@ export const emptyGpexeImportState = () => ({
   polling: "",
   notice: "",
   detail: null,
+  // Why each blocked session is blocked, by id|lastSeenAt: { code, categoryName }.
+  blockedReasons: {},
+  blockedReasonErrors: {},
 });
 
 export const emptyTrainingLoadState = (overrides = {}) => ({

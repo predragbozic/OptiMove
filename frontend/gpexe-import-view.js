@@ -207,20 +207,46 @@ function renderStatusHtml(status) {
   `;
 }
 
-function candidateGroup(c) {
+// Which group a session belongs in, from what the coach actually has to do:
+//   decision - it can be reviewed and approved;
+//   notyet   - it can't be imported until a step is taken (the step is the
+//              same one the detail shows);
+//   excluded - it stays out of OptiMove for good (e.g. a match): no action;
+//   uptodate / imported / replaced.
+// A blocked session's reason is not in the list answer; it comes from the
+// session's own detail (gx.blockedReasons, loaded by the data module).
+export function candidateGroup(c, gx = state.trainingLoad.gpexe) {
   if (c.status === "imported") return "imported";
   if (c.status === "superseded") return "replaced";
-  if (c.status === "pending" && c.previewStatus === "no_changes") return "uptodate";
+  if (!c.snapshot?.available) return "notyet";
+  if (c.status === "blocked") {
+    const reason = blockedReasonFor(c, gx);
+    return reason && blockedCoachText(reason).excluded ? "excluded" : "notyet";
+  }
+  if (c.previewStatus === "no_changes") return "uptodate";
   return "decision";
 }
 
+function blockedReasonFor(c, gx) {
+  return gx?.blockedReasons?.[blockedReasonKey(c)] || null;
+}
+
+export function blockedReasonKey(c) {
+  return `${c.id}|${c.lastSeenAt || ""}`;
+}
+
 // The one next step for a session, from what the list already says.
-function nextStepText(c, status) {
+function nextStepText(c, status, gx = state.trainingLoad.gpexe) {
   const viewer = status?.viewer || {};
   if (c.status === "imported") return "";
   if (c.status === "superseded") return "Replaced by newer GPEXE data. Nothing to do.";
   if (!c.snapshot?.available) return "Next: check for new sessions again (the GPEXE data is too old).";
-  if (c.status === "blocked") return "Next: open it - something must be fixed before it can be imported.";
+  if (c.status === "blocked") {
+    const reason = blockedReasonFor(c, gx);
+    if (!reason) return reason === null && gx?.blockedReasonErrors?.[blockedReasonKey(c)] ? "Next: open it to see why it can't be imported yet." : "Loading why it can't be imported yet...";
+    const text = blockedCoachText(reason);
+    return text.excluded ? text.step : `Next: ${text.step.charAt(0).toLowerCase()}${text.step.slice(1)}`;
+  }
   if (c.previewStatus === "no_changes") return "Nothing new to import - no action needed.";
   if (!status?.importSwitch?.enabled) return "Next: review it. Importing is switched off in this environment.";
   if (!viewer.canApprove) return "Next: review it. An approver must approve the import.";
@@ -230,11 +256,13 @@ function nextStepText(c, status) {
 
 function renderNextStepHtml(gx, status) {
   const check = gx.check || status.lastCheck;
-  const decisions = (gx.candidates || []).filter((c) => candidateGroup(c) === "decision").length;
+  const decisions = (gx.candidates || []).filter((c) => candidateGroup(c, gx) === "decision").length;
+  const notYet = (gx.candidates || []).filter((c) => candidateGroup(c, gx) === "notyet").length;
   let text;
   if (!status.settings) text = "A platform admin needs to connect this team to its GPEXE team (Settings > Teams).";
   else if (gx.checkStarting || check?.status === "running") text = "Checking GPEXE for new sessions...";
   else if (decisions) text = `Next step: ${decisions} session(s) need a decision - open one below.`;
+  else if (notYet) text = `Next step: ${notYet} session(s) can't be imported yet - see what to do below.`;
   else text = "Next step: check for new sessions.";
   return `<p class="gpexe-next" role="status">${escapeHtml(text)}</p>`;
 }
@@ -269,8 +297,10 @@ function renderCheckSummaryHtml(check) {
 function renderCandidatesHtml(gx) {
   const list = gx.candidates || [];
   const status = gx.status;
-  const group = (name) => list.filter((c) => candidateGroup(c) === name);
+  const group = (name) => list.filter((c) => candidateGroup(c, gx) === name);
   const decision = group("decision");
+  const notYet = group("notyet");
+  const excluded = group("excluded");
   const imported = group("imported");
   const uptodate = group("uptodate");
   const replaced = group("replaced");
@@ -280,6 +310,12 @@ function renderCandidatesHtml(gx) {
       <div class="gpexe-panel-head"><h3>Needs a decision (${decision.length})</h3></div>
       ${decision.length ? rows(decision) : `<p class="muted">Nothing needs a decision.${list.length ? "" : " Check for new sessions."}</p>`}
     </section>
+    ${notYet.length ? `
+      <section class="gpexe-panel gpexe-group is-notyet" aria-label="Can't be imported yet">
+        <div class="gpexe-panel-head"><h3>Can't be imported yet (${notYet.length})</h3></div>
+        ${rows(notYet)}
+      </section>
+    ` : ""}
     <section class="gpexe-panel gpexe-group is-imported" aria-label="Imported">
       <div class="gpexe-panel-head"><h3>Imported (${imported.length})</h3></div>
       ${imported.length ? rows(imported) : `<p class="muted">Nothing imported yet.</p>`}
@@ -288,6 +324,12 @@ function renderCandidatesHtml(gx) {
       <details class="gpexe-panel gpexe-group">
         <summary>Up to date - nothing new (${uptodate.length})</summary>
         ${rows(uptodate)}
+      </details>
+    ` : ""}
+    ${excluded.length ? `
+      <details class="gpexe-panel gpexe-group">
+        <summary>Stays out of OptiMove (${excluded.length})</summary>
+        ${rows(excluded)}
       </details>
     ` : ""}
     <div class="gpexe-replaced-toggle">
@@ -305,8 +347,10 @@ function renderCandidatesHtml(gx) {
 function renderCandidateRowHtml(c, status) {
   const counts = c.counts || {};
   const facts = [];
-  const upToDate = candidateGroup(c) === "uptodate";
-  if (!upToDate && (c.status === "pending" || c.status === "blocked")) {
+  const group = candidateGroup(c);
+  const upToDate = group === "uptodate";
+  const excluded = group === "excluded";
+  if (!upToDate && !excluded && (c.status === "pending" || c.status === "blocked")) {
     if (counts.created) facts.push(`${counts.created} new result(s)`);
     if (c.changesToImported) facts.push(`${c.changesToImported} change(s) to imported results`);
     if (counts.athletesNotImported) facts.push(`${counts.athletesNotImported} athlete(s) left out`);
@@ -319,7 +363,7 @@ function renderCandidateRowHtml(c, status) {
           <strong>${escapeHtml(sessionTitle(c))}</strong>
           <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>
         </span>
-        <span class="gpexe-badge is-${escapeAttr(upToDate ? "uptodate" : c.status)}">${escapeHtml(upToDate ? "Up to date" : STATUS_TEXT[c.status] || c.status)}</span>
+        <span class="gpexe-badge is-${escapeAttr(upToDate ? "uptodate" : excluded ? "excluded" : c.status)}">${escapeHtml(upToDate ? "Up to date" : excluded ? "Not imported" : group === "notyet" ? "Can't be imported yet" : STATUS_TEXT[c.status] || c.status)}</span>
         ${facts.length ? `<span class="gpexe-candidate-facts">${escapeHtml(facts.join(" · "))}</span>` : ""}
         ${next ? `<span class="gpexe-candidate-next">${escapeHtml(next)}</span>` : ""}
       </button>
@@ -414,14 +458,16 @@ const DATA_PROBLEM = new Set([
 ]);
 const THRESHOLDS = new Set(["thresholds_missing", "thresholds_wrong_team", "thresholds_not_valid_for_session", "thresholds_payload_incomplete"]);
 
-function blockedCoachText(blocked, preview) {
-  const code = blocked.code;
+// `reason` is { code, categoryName }. `excluded` marks a session that stays
+// out of OptiMove for good - nothing to fix, no decision.
+function blockedCoachText(reason) {
+  const code = reason.code;
   if (code === "identities_missing_from_source") {
     return { reason: "Some athletes' results from this session were imported before, but would now be left out.", step: "Do the step below for each athlete, then check for new sessions." };
   }
   if (code === "unsupported_category") {
-    const category = preview.session?.categoryName;
-    return { reason: `${category ? `"${category}" sessions are` : "This type of session is"} not imported from GPEXE.`, step: "Nothing to do - it stays out of OptiMove." };
+    const category = reason.categoryName;
+    return { excluded: true, reason: `${category ? `"${category}" sessions are` : "This type of session is"} not imported from GPEXE.`, step: "No action needed - it stays out of OptiMove." };
   }
   if (THRESHOLDS.has(code)) {
     return { reason: "The team's GPEXE thresholds (speed and power zones) are missing or don't cover this session's date.", step: "Check the team thresholds in GPEXE, then check for new sessions." };
@@ -441,10 +487,10 @@ function blockedCoachText(blocked, preview) {
 function renderBlockedHtml(preview, c) {
   if (!preview.blocked) return "";
   const steps = preview.blocked.resolution || [];
-  const text = blockedCoachText(preview.blocked, preview);
+  const text = blockedCoachText({ code: preview.blocked.code, categoryName: preview.session?.categoryName });
   return `
     <div class="gpexe-blocked" role="note">
-      <p><strong>Can't be imported yet.</strong> ${escapeHtml(text.reason)}</p>
+      <p><strong>${text.excluded ? "Not imported." : "Can't be imported yet."}</strong> ${escapeHtml(text.reason)}</p>
       <p><strong>What to do:</strong> ${escapeHtml(text.step)}</p>
       ${steps.length ? `<ol>${steps.map((s) => `<li>${escapeHtml(coachStep(s, c))}</li>`).join("")}</ol>` : ""}
       ${techHtml([["Code", preview.blocked.code], ["Server message", preview.blocked.message], ...steps.map((s, i) => [`Step ${i + 1} (server)`, `${s.action}: ${s.step}`])])}
