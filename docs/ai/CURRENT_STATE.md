@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-18. Last `origin/main` commit checked: `6c5b3a6` (merge of PR #104,
-`feature/gpexe-undo-authorization-log` → `main`).
+Last reviewed: 2026-09-18. Last `origin/main` commit checked: `636fdf3` (merge of PR #108,
+`docs/reviewer-transactions-external-effect` → `main`).
 
 ## Active phase
 
@@ -18,12 +18,82 @@ Alongside it, the **GPEXE import groundwork** is merged:
 - undo authorization with a database deletion log (v21) and a backup proven by a trial
   restore (PR #104).
 
-All of it is code only. **No GPEXE data has been imported into the local OPTIMOVE or the
-deployed database**, so nothing imported is visible in the app. The next functional task
-the owner named (2026-09-18) is the in-app import (see Most likely next step).
+On top of it, the **in-app GPEXE import** phases F1 (check, candidates, preview; PR #106)
+and F2 (approve and import; PR #107) are merged. The screens (F3) are next.
+
+All of it is code only. **`GPEXE_IMPORT_APPLY_ENABLED` is off in every environment and no
+GPEXE data has been imported into the local OPTIMOVE or the deployed database**, so
+nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **Reviewer rule for transactions with an external effect** — PR #108 (`636fdf3`),
+  `.claude/agents/code-reviewer.md` and `db-reviewer.md` only. For a change to a
+  transaction that writes important data (import, deletion, approval), the reviewers
+  check five things before READY:
+  - an error before, during and after a successful COMMIT;
+  - success, an explicit error, and an answer that never comes;
+  - that the answer tells apart "not written", "written" and "outcome unknown";
+  - the connection, the locks and a retried request in each outcome;
+  - one targeted test through the real route.
+
+  Owner decision: it stays in the two agent files, not in a shared rules file.
+- **In-app GPEXE import F2: approving imports** — PR #107 (`cb3399a`, reviewed head
+  `d1d92db`), migration v23
+  (`migrations_v2/202609201000_training_load_v23_gpexe_import_approval.sql`).
+  - `POST /api/training-load/gpexe/teams/:teamId/candidates/:candidateId/approve
+    {previewHash, acceptChanges}` imports the **whole candidate** exactly as its preview
+    showed it. Refused with nothing written when:
+    - the switch is off;
+    - the caller has no right;
+    - the candidate is not pending, or its snapshot expired;
+    - the preview is not the one reviewed;
+    - changes to already imported results were not accepted.
+  - **One transaction:** approver rights (`lock_gpexe_import_approver`, role, grant and
+    user rows `FOR SHARE`) → candidate `FOR UPDATE` → team import lock → the import and
+    the preview recomputed from it → hash compare → approval row → candidate `imported`.
+    A different hash rolls everything back, including what the import wrote, and answers
+    409 `preview_changed` with `reviewAgain`.
+  - **Preview v2 `changesToImported`** lists every already imported result the import
+    writes to (`corrected`, `supplemented`, `needs_review`, `stale_resend_ignored`). The
+    approval needs `acceptChanges` for them.
+  - **v23:** `training_load.gpexe_import_approvals`, one per candidate. It is append-only
+    and cannot be truncated. Its trigger re-checks:
+    - the right and its basis;
+    - the candidate's state, content hash and preview hash;
+    - the number of changes.
+
+    A candidate becomes `imported` only from `pending` with its approval, and is never
+    inserted as `imported`.
+  - **The COMMIT's outcome** (two external review rounds):
+    - once the COMMIT is sent, the answer never says "nothing was imported";
+    - the answer to the COMMIT is awaited at most 15 s. After an error or that time, the
+      connection is closed, and the approval is looked for on another connection (at most
+      5 s);
+    - the answer is then `200` with `verified_after_commit_error`, or `503
+      import_outcome_unknown` with `verify` links;
+    - `GET .../approvals/:approvalId` exists, and an imported candidate names its
+      approval;
+    - a failed candidate read after the commit still answers `200` with
+      `candidateReadError`.
+  - External review by the owner: three rounds, READY on `d1d92db`.
+- **In-app GPEXE import F1: check, candidates, preview** — PR #106 (`96d876d`, reviewed
+  head `b070a54`), migration v22 (`migrations_v2/202609191000_training_load_v22_gpexe_in_app_import.sql`).
+  - **"Check now"** runs in the background and reads GPEXE through a fixed-host,
+    GET-only client (`backend/src/gpexeClient.js`). Header paging is read to the end or
+    refused.
+  - **Candidates:** one per (team, session, content). New content supersedes older
+    candidates that were never imported.
+  - **The preview** is a rolled-back run of the real import under the team lock. It
+    shows participation and GPS separately and gives a reason for every left-out value.
+    An athlete imported earlier and now left out blocks the session, with the step that
+    lifts it.
+  - **Approver grants** (platform admin only), athlete links, raw-snapshot retention
+    (30 days unapproved, 90 days after import), and a purge that does not depend on one
+    process.
+  - The real GPEXE API was checked read-only by the owner's probe
+    (`backend/scripts/gpexe-api-probe.mjs`).
+  - Runbook: `docs/runbooks/gpexe-in-app-import.md`, which also covers F2.
 - **GPEXE undo authorization, deletion log and verified backup** — PR #104 (`6c5b3a6`),
   migration v21 (`migrations_v2/202609181000_training_load_v21_import_deletion_log.sql`).
   - **Who may run the undo** (`backend/scripts/gpexe-undo-imported-session.mjs`): only an
@@ -222,9 +292,18 @@ the owner named (2026-09-18) is the in-app import (see Most likely next step).
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
 - `/api/health` reported commit `0de6afb` on 2026-09-17.
 - `/api/health` reported commit `6c5b3a6` on 2026-09-18.
-- v20 and v21 on the deployed database are **inferred** from the successful start of
-  that deploy (`npm start` runs `node src/migrate.js &&` the server). The deployed
+- `/api/health` reported commit `96d876d` (F1) and later `cb3399a` (F2) on 2026-09-18.
+  The new GPEXE routes answered 401 when called without a login on the deployed app
+  (checked on 2026-09-18), as expected from `requireAuth` on the whole router.
+- **v22 and v23 on the deployed database are inferred** from the successful start of
+  those deploys (`npm start` runs `node src/migrate.js &&` the server). The deployed
   database itself was **not** queried.
+- **v22 and v23 are not applied to the local OPTIMOVE database**, which is at v21.
+  Applying them is a separate decision.
+- `GPEXE_IMPORT_APPLY_ENABLED` is off in both environments. No real import has been run.
+- v20 and v21 on the deployed database are **inferred** from the successful start of
+  the deploy of `6c5b3a6` (`npm start` runs `node src/migrate.js &&` the server). The
+  deployed database itself was **not** queried.
 - **v20 and v21 on the local OPTIMOVE database**: applied 2026-09-18 with the standard
   runner (owner-approved). The steps were:
   - a fresh backup taken immediately before, verified by a trial restore with
@@ -264,8 +343,25 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
-- **In-app GPEXE import** (owner, 2026-09-18: the next functional task).
-  - Planned shape:
+- **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
+  F1 and F2 are merged (see above). F3 (screens) is the next step; F4 is the first real
+  local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an environment until all three
+  of these hold there:
+  1. **A fresh, restore-verified backup of that environment.** This is an operational
+     gate: `docs/runbooks/gpexe-in-app-import.md` has a record table (backup path or
+     identifier, `.verify.json`, when it was verified, who confirmed it). The local
+     OPTIMOVE and Supabase are separate decisions. The app never claims a backup was
+     checked. Before regular self-service imports, a mechanism that reliably checks
+     backup freshness is to be proposed, instead of a switch left on.
+  2. **A bound on the lock waits before the COMMIT** of an approval: the approver's role
+     and grant rows, the candidate, and the team import lock. For example `lock_timeout`
+     and `idle_in_transaction_session_timeout` with a stable refusal code, and the
+     deployed request timeout confirmed. Today another approval of the same team, or a
+     transaction abandoned on a real network stall, can make an approval wait with no
+     limit.
+  3. **The undo script takes the team import lock** (`lockTeamForImport`) before it is
+     ever used on a persistent database. Today it runs only on disposable databases.
+  - Planned shape (as built in F1–F2):
     - "Check now" fetches from GPEXE;
     - a list of import candidates;
     - a review of what would change;
@@ -291,8 +387,8 @@ pre-existing; pass/fail counts don't belong in this file
       grants. The server checks the right on every request and records who approved.
       Coaches without the grant can review candidates but not approve them.
     - **`GPEXE_IMPORT_APPLY_ENABLED`:** it blocks writing results and activities. "Check
-      now" still writes candidates and the check record. The deployed database gets the
-      flag only after its backups and a restore on the provider's side are confirmed.
+      now" still writes candidates and the check record. When it may be turned on: see
+      the three conditions above.
     - **Raw GPEXE JSON retention:**
       - kept for 90 days after import;
       - kept for 30 days for a candidate that was never approved;
@@ -386,6 +482,10 @@ pre-existing; pass/fail counts don't belong in this file
 - **Leaving the app with unsaved Dashboards changes** (found during H4, not scheduled):
   signing out, reloading the page or closing the tab still leaves without asking about an
   unsaved layout or Advanced settings change (no `beforeunload` guard).
+- **An approval can wait without a limit before its COMMIT** (PR #107 reviews, not fixed).
+  It waits on the role and grant rows, the candidate row, and the team import lock. It
+  also waits when a transaction abandoned on a network stall keeps those locks until TCP
+  keepalive notices. This is condition 2 in Separate tasks.
 - **The GPEXE undo CLI cannot authenticate its operator** (PR #104). It is limited to
   disposable databases. The runbook lists what a persistent-database unlock would need
   first: a real authenticated identity, a narrow break-glass credential, and a second
@@ -395,8 +495,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The **in-app GPEXE import** (see Separate tasks). It is the last open step of the owner's
-2026-09-18 order; the local migrations and this state update are done.
+**F3 of the in-app GPEXE import: the screens**, on the existing F1/F2 API contracts,
+with the switch left off and no real import (owner, 2026-09-18). After that, the three
+conditions under Separate tasks come before F4, the first real local import.
 
 The other Separate tasks wait until the owner schedules them.
 
