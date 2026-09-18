@@ -131,6 +131,13 @@ function resultLabel(result) {
   return result.level === "drill" ? `Drill ${Number(result.drillIndex) + 1}` : "Whole session";
 }
 
+// The session's name without a raw timestamp at its end; the date and time
+// are shown next to it anyway.
+function sessionTitle(c) {
+  const label = c.label || `GPEXE session ${c.gpexeTeamSessionId}`;
+  return label.replace(/\s+\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z?$/, "");
+}
+
 function athleteName(candidate, athleteId, gpexeAthleteId) {
   const name = athleteId ? candidate.athletes?.[athleteId]?.name : "";
   if (name) return name;
@@ -214,7 +221,7 @@ function nextStepText(c, status) {
   if (c.status === "superseded") return "Replaced by newer GPEXE data. Nothing to do.";
   if (!c.snapshot?.available) return "Next: check for new sessions again (the GPEXE data is too old).";
   if (c.status === "blocked") return "Next: open it - something must be fixed before it can be imported.";
-  if (c.previewStatus === "no_changes") return "Nothing new to import.";
+  if (c.previewStatus === "no_changes") return "Nothing new to import - no action needed.";
   if (!status?.importSwitch?.enabled) return "Next: review it. Importing is switched off in this environment.";
   if (!viewer.canApprove) return "Next: review it. An approver must approve the import.";
   if (c.changesToImported) return `Next: review ${c.changesToImported} change(s) to results already imported, then approve.`;
@@ -298,7 +305,8 @@ function renderCandidatesHtml(gx) {
 function renderCandidateRowHtml(c, status) {
   const counts = c.counts || {};
   const facts = [];
-  if (c.status === "pending" || c.status === "blocked") {
+  const upToDate = candidateGroup(c) === "uptodate";
+  if (!upToDate && (c.status === "pending" || c.status === "blocked")) {
     if (counts.created) facts.push(`${counts.created} new result(s)`);
     if (c.changesToImported) facts.push(`${c.changesToImported} change(s) to imported results`);
     if (counts.athletesNotImported) facts.push(`${counts.athletesNotImported} athlete(s) left out`);
@@ -308,10 +316,10 @@ function renderCandidateRowHtml(c, status) {
     <li>
       <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}">
         <span class="gpexe-candidate-main">
-          <strong>${escapeHtml(c.label || `GPEXE session ${c.gpexeTeamSessionId}`)}</strong>
+          <strong>${escapeHtml(sessionTitle(c))}</strong>
           <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>
         </span>
-        <span class="gpexe-badge is-${escapeAttr(c.status)}">${escapeHtml(STATUS_TEXT[c.status] || c.status)}</span>
+        <span class="gpexe-badge is-${escapeAttr(upToDate ? "uptodate" : c.status)}">${escapeHtml(upToDate ? "Up to date" : STATUS_TEXT[c.status] || c.status)}</span>
         ${facts.length ? `<span class="gpexe-candidate-facts">${escapeHtml(facts.join(" · "))}</span>` : ""}
         ${next ? `<span class="gpexe-candidate-next">${escapeHtml(next)}</span>` : ""}
       </button>
@@ -349,7 +357,7 @@ function renderCandidateDetailHtml(gx, status) {
   const c = detail.candidate;
   // Not closable while an approval runs: its answer must be seen.
   const busy = detail.approving || detail.verifying ? "disabled" : "";
-  const title = c ? (c.label || `GPEXE session ${c.gpexeTeamSessionId}`) : "GPEXE session";
+  const title = c ? sessionTitle(c) : "GPEXE session";
   return `
     <div class="builder-athlete-overlay gpexe-detail-overlay">
       <button type="button" class="builder-athlete-backdrop" data-action="training-load-gpexe-close" aria-label="Close" ${busy}></button>
@@ -397,14 +405,49 @@ function renderApprovalRecordHtml(c) {
   return `<p class="gpexe-success">Imported ${escapeHtml(fmtDateTime(a.approvedAt))} (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
 }
 
+// Why a session is blocked, in the coach's words, with the one step to take.
+// The server's own message (which can carry GPEXE ids and field names) is
+// only in Technical details.
+const DATA_PROBLEM = new Set([
+  "session_missing", "invalid_timestamp", "timestamp_semantics_changed", "invalid_timezone", "mixed_timezones",
+  "invalid_drills_count", "drill_index_out_of_range", "duplicate_drill_row", "track_missing", "track_athlete_mismatch", "more_missing",
+]);
+const THRESHOLDS = new Set(["thresholds_missing", "thresholds_wrong_team", "thresholds_not_valid_for_session", "thresholds_payload_incomplete"]);
+
+function blockedCoachText(blocked, preview) {
+  const code = blocked.code;
+  if (code === "identities_missing_from_source") {
+    return { reason: "Some athletes' results from this session were imported before, but would now be left out.", step: "Do the step below for each athlete, then check for new sessions." };
+  }
+  if (code === "unsupported_category") {
+    const category = preview.session?.categoryName;
+    return { reason: `${category ? `"${category}" sessions are` : "This type of session is"} not imported from GPEXE.`, step: "Nothing to do - it stays out of OptiMove." };
+  }
+  if (THRESHOLDS.has(code)) {
+    return { reason: "The team's GPEXE thresholds (speed and power zones) are missing or don't cover this session's date.", step: "Check the team thresholds in GPEXE, then check for new sessions." };
+  }
+  if (code === "session_stats_invalid") {
+    return { reason: "GPEXE marks this session's statistics as not valid.", step: "Fix the session in GPEXE, then check for new sessions." };
+  }
+  if (code === "no_importable_participants") {
+    return { reason: "No athlete in this session can be imported.", step: "Link the athletes to OptiMove athletes or fix their data in GPEXE, then check for new sessions." };
+  }
+  if (DATA_PROBLEM.has(code)) {
+    return { reason: "GPEXE sent incomplete or inconsistent data for this session.", step: "Check for new sessions again later. If it stays like this, ask a platform admin (give them the Technical details)." };
+  }
+  return { reason: "This session conflicts with data already in OptiMove and can't be imported automatically.", step: "Ask a platform admin to look at it (give them the Technical details)." };
+}
+
 function renderBlockedHtml(preview, c) {
   if (!preview.blocked) return "";
   const steps = preview.blocked.resolution || [];
+  const text = blockedCoachText(preview.blocked, preview);
   return `
     <div class="gpexe-blocked" role="note">
-      <p><strong>Must be fixed before import:</strong> ${escapeHtml(preview.blocked.message || "this session cannot be imported as it is.")}</p>
-      ${steps.length ? `<p>What to do:</p><ol>${steps.map((s) => `<li>${escapeHtml(coachStep(s, c))}</li>`).join("")}</ol>` : ""}
-      ${techHtml([["Code", preview.blocked.code], ...steps.map((s, i) => [`Step ${i + 1} (server)`, `${s.action}: ${s.step}`])])}
+      <p><strong>Can't be imported yet.</strong> ${escapeHtml(text.reason)}</p>
+      <p><strong>What to do:</strong> ${escapeHtml(text.step)}</p>
+      ${steps.length ? `<ol>${steps.map((s) => `<li>${escapeHtml(coachStep(s, c))}</li>`).join("")}</ol>` : ""}
+      ${techHtml([["Code", preview.blocked.code], ["Server message", preview.blocked.message], ...steps.map((s, i) => [`Step ${i + 1} (server)`, `${s.action}: ${s.step}`])])}
     </div>
   `;
 }

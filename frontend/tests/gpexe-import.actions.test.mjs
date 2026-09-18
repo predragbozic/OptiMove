@@ -630,3 +630,48 @@ test("a failed outcome check is listed in Technical details", async () => {
   assert.match(html, /Still not clear\. Check again in a moment\./);
   assert.match(html, /Technical details[\s\S]*Check error<\/dt><dd>500 internal_error/);
 });
+
+test("blocked sessions: the coach reads why and what to do; the server's message (with GPEXE ids) is only in Technical details", async () => {
+  const cases = [
+    { code: "unsupported_category", message: 'team_session 8002 category "OFFICIAL MATCH" is not importable in the pilot.', session: { categoryName: "OFFICIAL MATCH" },
+      reason: /&quot;OFFICIAL MATCH&quot; sessions are not imported from GPEXE\./, step: /Nothing to do - it stays out of OptiMove\./ },
+    { code: "thresholds_not_valid_for_session", message: "thresholds 1473 (valid 2025-01-01 – open) do not cover session start 2024-12-01T10:00:00.000Z.",
+      reason: /thresholds \(speed and power zones\) are missing or don(?:'|&#039;)t cover this session(?:'|&#039;)s date\./, step: /Check the team thresholds in GPEXE, then check for new sessions\./ },
+    { code: "track_missing", message: "track 9005 for athlete 104 was not fetched.",
+      reason: /GPEXE sent incomplete or inconsistent data for this session\./, step: /Check for new sessions again later\./ },
+    { code: "binding_conflict", message: "event 3f2c... is bound to a different threshold set.",
+      reason: /conflicts with data already in OptiMove/, step: /Ask a platform admin to look at it/ },
+  ];
+  for (const k of cases) {
+    resetState();
+    installFetchMock(gpexeServer({
+      onCandidate: () => ({ status: 200, body: { candidate: { ...candidateDetail({ summary: { status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"], label: "GPEXE OFFICIAL MATCH 2026-09-16T17:00:00" } }),
+        preview: { ...candidateDetail().preview, status: "blocked", blocked: { code: k.code, message: k.message }, session: k.session || {}, athletes: [], teamAthletesWithoutGpexeRecord: [] } } } }),
+    }));
+    await openImports();
+    await openCandidate();
+    const html = renderTrainingLoadCoachHtml();
+    const block = html.slice(html.indexOf('class="gpexe-blocked"'), html.indexOf('<details class="gpexe-tech">', html.indexOf('class="gpexe-blocked"')));
+    assert.match(block, k.reason, k.code);
+    assert.match(block, k.step, k.code);
+    assert.ok(!block.includes(k.message) && !block.includes(k.code), `${k.code}: no server message or code in the main text`);
+    assert.ok(html.includes(`<dt>Server message</dt><dd>${k.message.replaceAll('"', "&quot;")}</dd>`), `${k.code}: server message in Technical details`);
+    assert.match(html, /aria-label="GPEXE OFFICIAL MATCH"/, "no raw timestamp in the session title");
+  }
+});
+
+test("an up-to-date session reads as up to date, not as waiting with athletes left out", async () => {
+  resetState();
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-same", label: "Training E", previewStatus: "no_changes", counts: { created: 0, unchanged: 5, athletesNotImported: 3 } })] } };
+    return base(call);
+  });
+  await openImports();
+  const html = renderTrainingLoadCoachHtml();
+  const group = html.slice(html.indexOf("Up to date - nothing new (1)"));
+  assert.match(group, /<span class="gpexe-badge is-uptodate">Up to date<\/span>/);
+  assert.match(group, /Nothing new to import - no action needed\./);
+  assert.ok(!/left out|Waiting for approval/.test(group.slice(0, group.indexOf("</details>"))));
+  assert.match(html, /<h3>Needs a decision \(0\)<\/h3>/);
+});
