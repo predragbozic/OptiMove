@@ -43,6 +43,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202609101200_training_load_v18_dashboard_catalog_seed.sql",
   "202609170900_training_load_v19_dashboard_delete.sql",
   "202609171800_training_load_v20_gpexe_source_bindings.sql",
+  "202609181000_training_load_v21_import_deletion_log.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

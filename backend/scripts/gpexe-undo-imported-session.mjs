@@ -13,6 +13,20 @@
 //   Apply — disposable test database only, same guard as the import CLI:
 //     ... --apply --performed-by-user-id <uuid> --reason "bad drill mapping" --log undo.json
 //
+// Only a platform admin may run it, and only with a reason (owner decision
+// 2026-09-18). The removal and one row in training_load.import_deletion_log
+// (v21) are written in the same transaction; the log row names the session,
+// the team, the admin, the reason and the rows removed, and cannot be
+// changed afterwards. The CLI cannot authenticate whoever runs it: it checks
+// that the user id given with --performed-by-user-id is an active platform
+// admin, and the database checks it again when the log row is written.
+//
+// It refuses, rather than guessing, whenever the session is entangled with
+// anything else: a manual correction, an activity that also carries another
+// event or was merged/reparented, or two events claiming the same GPEXE
+// session. Every entry point checks that it is talking to a disposable
+// database, not only the CLI wrapper.
+//
 // What it removes, in this order (everything for that one event):
 //   activity_component_metric_segment_links -> activity_components ->
 //   activity_participant_metric_participant_links -> activity_participants ->
@@ -72,7 +86,11 @@ const PROTECTED_TRIGGERS = [
 export async function collectScope(client, { eventId }) {
   await assertDisposableClient(client);
   const one = async (sql, params = [eventId]) => (await client.query(sql, params)).rows;
-  const event = (await one(`select id, source_connection_id, source_external_id from training_load.metric_events where id = $1`))[0];
+  const event = (await one(
+    `select e.id, e.source_connection_id, e.source_external_id, e.owner_team_id, e.occurred_date::text as occurred_date, c.source_system
+     from training_load.metric_events e left join training_load.metric_source_connections c on c.id = e.source_connection_id
+     where e.id = $1`,
+  ))[0];
   if (!event) throw new Error(`no metric event ${eventId}`);
   const participants = await one(`select id from training_load.metric_event_participants where event_id = $1`);
   const participantIds = participants.map((r) => r.id);
@@ -136,6 +154,9 @@ export async function collectScope(client, { eventId }) {
   return {
     eventId,
     eventConnectionId: event.source_connection_id,
+    eventOwnerTeamId: event.owner_team_id,
+    eventOccurredDate: event.occurred_date,
+    eventSourceSystem: event.source_system,
     eventExternalId: event.source_external_id,
     otherEventLinks,
     entangledActivities,
@@ -201,8 +222,23 @@ function assertUndoable(scope) {
 // earlier look and this run is either visible here (and refused) or blocked
 // until this transaction ends. Locking the event first and its activities
 // second is the same direction the rest of the chain uses (event -> activity).
+// Checked before anything is locked or disabled, with the role row read FOR
+// SHARE so a concurrent revocation either lands first or waits for this run.
+// The log trigger (v21) repeats the check when the row is written.
+async function assertPlatformAdmin(client, userId) {
+  const r = await client.query(
+    `select 1 from public.user_global_roles r join public.users u on u.id = r.user_id
+     where r.user_id = $1 and r.role = 'platform_admin' and r.is_active = true and u.is_active = true
+     for share of r`,
+    [userId],
+  );
+  if (!r.rowCount) throw new Error(`refusing: user ${userId} is not an active platform admin — only a platform admin may undo an imported session.`);
+}
+
 export async function undoImportedSession(client, requested, { performedByUserId, reason, apply, onBeforeCommit, onBeforeVerify }) {
   await assertDisposableClient(client);
+  if (!performedByUserId) throw new Error("refusing: the platform admin performing the undo must be named (performedByUserId).");
+  if (typeof reason !== "string" || !reason.trim()) throw new Error("refusing: a reason is required.");
   const removed = {};
   const run = async (label, sql, params) => {
     const r = await client.query(sql, params);
@@ -211,6 +247,7 @@ export async function undoImportedSession(client, requested, { performedByUserId
 
   await client.query("begin");
   try {
+    await assertPlatformAdmin(client, performedByUserId);
     const eventRow = await client.query(`select id from training_load.metric_events where id = $1 for update`, [requested.eventId]);
     if (!eventRow.rowCount) throw new Error(`no metric event ${requested.eventId}`);
     let scope = await collectScope(client, { eventId: requested.eventId });
@@ -250,20 +287,34 @@ export async function undoImportedSession(client, requested, { performedByUserId
     if (scope.batchIds.length) {
       await run("metric_import_batches", `delete from training_load.metric_import_batches b where b.id = any($1::uuid[]) and not exists (select 1 from training_load.metric_measurement_occasions o where o.import_batch_id = b.id)`, [scope.batchIds]);
     }
+    // The database record of this removal, in the same transaction: it
+    // commits with the removal or not at all.
+    const removedTotal = Object.values(removed).reduce((sum, n) => sum + n, 0);
+    const logRow = (await client.query(
+      `insert into training_load.import_deletion_log
+         (deleted_by_user_id, authorized_via, reason, event_id, source_system, source_connection_id, source_external_id, owner_team_id, occurred_date, reference_set_external_id, removed_counts, removed_total)
+       values ($1,'platform_admin',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id, deleted_at`,
+      [performedByUserId, reason.trim(), scope.eventId, scope.eventSourceSystem, scope.eventConnectionId, scope.eventExternalId, scope.eventOwnerTeamId, scope.eventOccurredDate, scope.binding?.reference_set_external_id ?? null, JSON.stringify(removed), removedTotal],
+    )).rows[0];
     for (const [table, trigger] of PROTECTED_TRIGGERS) await client.query(`alter table ${table} enable trigger ${trigger}`);
     if (onBeforeVerify) await onBeforeVerify(client);
     await assertTriggersEnabled(client);
 
     const log = {
       performedAt: new Date().toISOString(),
-      performedByUserId: performedByUserId ?? null,
-      reason: reason ?? null,
+      performedByUserId,
+      authorizedVia: "platform_admin",
+      reason: reason.trim(),
+      // A dry run inserts the row too, then rolls it back: no id to point at.
+      databaseLogId: apply ? logRow.id : null,
+      teamId: scope.eventOwnerTeamId,
       applied: Boolean(apply),
       outcome: "pending",
       eventId: scope.eventId,
       sourceExternalId: scope.binding?.source_external_id ?? null,
       referenceSetExternalId: scope.binding?.reference_set_external_id ?? null,
       removed,
+      removedTotal,
     };
     // Written to disk while the transaction is still open: a process that dies
     // during the commit must not leave a removal with no record of it.
@@ -283,8 +334,13 @@ export async function main(argv) {
   if (!opts.teamSession || !opts.ownerTeamId) throw new Error("--team-session and --owner-team-id are required");
   // The log is part of the contract, not an option: an applied run has to
   // leave a record that names who ran it and why.
-  if (opts.apply && (!opts.log || !opts.reason || !opts.performedByUserId)) {
-    throw new Error("--apply requires --log, --reason and --performed-by-user-id");
+  // A dry run goes through the same checks as the real one (it runs the same
+  // statements, the log insert included), so it needs the same identity.
+  if (!opts.reason || !opts.performedByUserId) {
+    throw new Error("--reason and --performed-by-user-id (an active platform admin) are required");
+  }
+  if (opts.apply && !opts.log) {
+    throw new Error("--apply requires --log");
   }
   const target = describeApplyTarget(opts.databaseUrl);
   console.log(`Target: host ${target.host}, port ${target.port}, database ${target.database}`);

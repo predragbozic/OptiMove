@@ -39,6 +39,7 @@ async function newClient() {
 
 async function setupTeam() {
   const org = await createGpexePilotOrg(admin, { athleteNames: ["Athlete A", "Athlete B", "Athlete C"] });
+  await admin.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1, 'platform_admin', true)`, [org.userId]);
   return { ...org, athleteMap: { 101: org.athleteIds[0], 102: org.athleteIds[1], 103: org.athleteIds[2] } };
 }
 
@@ -210,7 +211,7 @@ test("undo: refuses when two gpexe connections carry the same team_session", asy
   );
   const before = await rowCounts(org.teamId);
   await assert.rejects(
-    undoMain(["--database-url", db.url, "--team-session", "6104", "--owner-team-id", org.teamId]),
+    undoMain(["--database-url", db.url, "--team-session", "6104", "--owner-team-id", org.teamId, "--performed-by-user-id", org.userId, "--reason", "undo guard test"]),
     /ambiguous: 2 events/,
   );
   assert.deepEqual(await rowCounts(org.teamId), before);
@@ -241,7 +242,7 @@ test("undo CLI: an applied run through main() removes the session and writes a c
     // The runbook sends the operator back to this command to check the
     // database; that must not overwrite the record of what was applied.
     await assert.rejects(
-      undoMain(["--database-url", db.url, "--team-session", "6105", "--owner-team-id", org.teamId, "--log", logPath]),
+      undoMain(["--database-url", db.url, "--team-session", "6105", "--owner-team-id", org.teamId, "--performed-by-user-id", org.userId, "--reason", "undo guard test", "--log", logPath]),
       /no imported GPEXE event|EEXIST/,
     );
     assert.equal(JSON.parse(await fsp.readFile(logPath, "utf8")).outcome, "committed", "the applied record survives");
@@ -264,7 +265,7 @@ test("undo CLI: a later run never writes over an existing log file", async () =>
   try {
     // A dry run for a session that DOES exist would otherwise write here.
     await assert.rejects(
-      undoMain(["--database-url", db.url, "--team-session", "6107", "--owner-team-id", org.teamId, "--log", logPath]),
+      undoMain(["--database-url", db.url, "--team-session", "6107", "--owner-team-id", org.teamId, "--performed-by-user-id", org.userId, "--reason", "undo guard test", "--log", logPath]),
       (error) => error.code === "EEXIST",
     );
     assert.deepEqual(JSON.parse(await fsp.readFile(logPath, "utf8")), earlier, "the earlier record is untouched");
@@ -274,19 +275,184 @@ test("undo CLI: a later run never writes over an existing log file", async () =>
   }
 });
 
-test("undo CLI: --apply without a log, a reason or an author is refused", async () => {
+test("undo CLI: a run without a reason or an author, or an applied run without a log, is refused", async () => {
   const org = await setupTeam();
   const summary = await runImport(org, makeBundle({ sessionId: 6106, athletes: standardAthletes() }));
   const before = await rowCounts(org.teamId);
-  for (const extra of [[], ["--reason", "x"], ["--performed-by-user-id", "00000000-0000-0000-0000-000000000000"]]) {
+  for (const extra of [[], ["--reason", "x"], ["--performed-by-user-id", org.userId], ["--apply", "--reason", "x"], ["--apply", "--performed-by-user-id", org.userId]]) {
     await assert.rejects(
-      undoMain(["--database-url", db.url, "--team-session", "6106", "--owner-team-id", org.teamId, "--apply", ...extra]),
-      /--apply requires --log, --reason and --performed-by-user-id/,
+      undoMain(["--database-url", db.url, "--team-session", "6106", "--owner-team-id", org.teamId, ...extra]),
+      /--reason and --performed-by-user-id \(an active platform admin\) are required/,
       JSON.stringify(extra),
     );
   }
+  await assert.rejects(
+    undoMain(["--database-url", db.url, "--team-session", "6106", "--owner-team-id", org.teamId, "--apply", "--reason", "x", "--performed-by-user-id", org.userId]),
+    /--apply requires --log/,
+  );
   assert.deepEqual(await rowCounts(org.teamId), before);
   assert.ok(summary.eventId);
+});
+
+async function deletionLog(eventId) {
+  return (await admin.query(`select *, occurred_date::text as occurred_day from training_load.import_deletion_log where event_id = $1`, [eventId])).rows;
+}
+
+test("undo: only an active platform admin may run it; anyone else is refused before anything is removed", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 6201, athletes: standardAthletes() }));
+  const coach = (await admin.query(`insert into public.users (email, full_name) values ($1, 'Team coach') returning id`, [`coach-${org.teamId}@example.test`])).rows[0].id;
+  const revoked = (await admin.query(`insert into public.users (email, full_name) values ($1, 'Former admin') returning id`, [`former-${org.teamId}@example.test`])).rows[0].id;
+  await admin.query(`insert into public.user_global_roles (user_id, role, is_active, revoked_at) values ($1, 'platform_admin', false, now())`, [revoked]);
+  const inactive = (await admin.query(`insert into public.users (email, full_name, is_active) values ($1, 'Disabled admin', false) returning id`, [`off-${org.teamId}@example.test`])).rows[0].id;
+  await admin.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1, 'platform_admin', true)`, [inactive]);
+  const before = await rowCounts(org.teamId);
+
+  const client = await newClient();
+  try {
+    const scope = await collectScope(client, { eventId: summary.eventId });
+    for (const [who, userId] of [["a team coach", coach], ["a revoked admin", revoked], ["a disabled admin account", inactive]]) {
+      await assert.rejects(
+        undoImportedSession(client, scope, { performedByUserId: userId, reason: "not allowed", apply: true }),
+        // The script's own check, before anything is locked; the database
+        // check behind it is tested on its own below.
+        // (assert.rejects matches a RegExp against String(error), hence "Error: ".)
+        /^Error: refusing: user \S+ is not an active platform admin/,
+        who,
+      );
+    }
+    await assert.rejects(undoImportedSession(client, scope, { performedByUserId: org.userId, reason: "   ", apply: true }), /a reason is required/);
+    await assert.rejects(undoImportedSession(client, scope, { performedByUserId: null, reason: "no author", apply: true }), /must be named/);
+  } finally {
+    await client.end();
+  }
+  assert.deepEqual(await rowCounts(org.teamId), before, "nothing was removed");
+  assert.equal((await deletionLog(summary.eventId)).length, 0, "and nothing was logged");
+});
+
+test("undo: the removal and its database log row commit together, and the row says who, why, what and how much", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 6202, athletes: standardAthletes() }));
+  const client = await newClient();
+  let log;
+  try {
+    const scope = await collectScope(client, { eventId: summary.eventId });
+    log = await undoImportedSession(client, scope, { performedByUserId: org.userId, reason: "  imported the wrong session  ", apply: true });
+  } finally {
+    await client.end();
+  }
+  const rows = await deletionLog(summary.eventId);
+  assert.equal(rows.length, 1);
+  const row = rows[0];
+  assert.equal(String(row.id), String(log.databaseLogId), "the file log names the database row");
+  assert.equal(String(row.deleted_by_user_id), String(org.userId));
+  assert.equal(row.authorized_via, "platform_admin");
+  assert.equal(row.reason, "imported the wrong session", "the reason, trimmed");
+  assert.equal(row.source_system, "gpexe");
+  assert.equal(row.source_external_id, "team_session:6202");
+  assert.equal(String(row.owner_team_id), String(org.teamId));
+  assert.equal(row.occurred_day, "2026-09-14");
+  assert.equal(row.reference_set_external_id, "1473");
+  assert.equal(row.removed_counts.metric_events, 1);
+  assert.equal(row.removed_counts.metric_values, log.removed.metric_values);
+  assert.equal(row.removed_total, Object.values(row.removed_counts).reduce((a, b) => a + b, 0));
+  assert.equal(log.removedTotal, row.removed_total);
+  assert.equal((await rowCounts(org.teamId)).events, 0);
+});
+
+test("undo: a dry run writes and rolls back the log row, and names no row that does not exist", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 6205, athletes: standardAthletes() }));
+  const client = await newClient();
+  let log;
+  try {
+    const scope = await collectScope(client, { eventId: summary.eventId });
+    log = await undoImportedSession(client, scope, { performedByUserId: org.userId, reason: "dry run", apply: false });
+  } finally {
+    await client.end();
+  }
+  assert.equal(log.applied, false);
+  assert.ok(log.removedTotal > 0, "the dry run went through the whole removal, log insert included");
+  assert.equal(log.databaseLogId, null);
+  assert.equal((await deletionLog(summary.eventId)).length, 0);
+  assert.equal((await rowCounts(org.teamId)).events, 1);
+});
+
+test("undo: a run that fails after the removal leaves neither the removal nor a log row", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 6203, athletes: standardAthletes() }));
+  const before = await rowCounts(org.teamId);
+  const client = await newClient();
+  try {
+    const scope = await collectScope(client, { eventId: summary.eventId });
+    await assert.rejects(
+      undoImportedSession(client, scope, {
+        performedByUserId: org.userId, reason: "interrupted after the log row", apply: true,
+        onBeforeCommit: async () => { throw new Error("process died before commit"); },
+      }),
+      /process died before commit/,
+    );
+  } finally {
+    await client.end();
+  }
+  assert.deepEqual(await rowCounts(org.teamId), before);
+  assert.equal((await deletionLog(summary.eventId)).length, 0, "the log row went with the rolled-back removal");
+});
+
+test("database: the deletion log is append-only and only records removals that happened, by an active platform admin", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 6204, athletes: standardAthletes() }));
+  const connectionId = summary.connectionId;
+  const insertLog = (eventId, userId, extra = {}) => admin.query(
+    `insert into training_load.import_deletion_log
+       (deleted_by_user_id, authorized_via, reason, event_id, source_system, source_connection_id, source_external_id, owner_team_id, occurred_date, removed_counts, removed_total)
+     values ($1,'platform_admin',$2,$3,'gpexe',$4,'team_session:x',$5,'2026-09-14',$6,$7)`,
+    [userId, extra.reason ?? "because", eventId, connectionId, org.teamId, extra.counts ?? '{"metric_events":1}', extra.total ?? 1],
+  );
+  // An event that still exists: a log row is a record of a removal, not a plan.
+  await assert.rejects(insertLog(summary.eventId, org.userId), /still exists/);
+  // A user who is not an active platform admin cannot be recorded as the one
+  // who did it: not a coach, not a revoked admin, not a disabled account.
+  const coach = (await admin.query(`insert into public.users (email, full_name) values ($1, 'Coach') returning id`, [`c2-${org.teamId}@example.test`])).rows[0].id;
+  const revoked = (await admin.query(`insert into public.users (email, full_name) values ($1, 'Revoked') returning id`, [`r2-${org.teamId}@example.test`])).rows[0].id;
+  await admin.query(`insert into public.user_global_roles (user_id, role, is_active, revoked_at) values ($1, 'platform_admin', false, now())`, [revoked]);
+  const disabled = (await admin.query(`insert into public.users (email, full_name, is_active) values ($1, 'Disabled', false) returning id`, [`d2-${org.teamId}@example.test`])).rows[0].id;
+  await admin.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1, 'platform_admin', true)`, [disabled]);
+  for (const userId of [coach, revoked, disabled]) {
+    await assert.rejects(insertLog("00000000-0000-4000-8000-000000000001", userId), (e) => e.code === "42501" && /is not an active platform admin/.test(e.message));
+  }
+  // Empty reason, empty counts, a non-positive total, another basis: refused by the table itself.
+  await assert.rejects(insertLog("00000000-0000-4000-8000-000000000002", org.userId, { reason: " " }), /check constraint/);
+  await assert.rejects(insertLog("00000000-0000-4000-8000-000000000003", org.userId, { counts: "{}" }), /check constraint/);
+  await assert.rejects(insertLog("00000000-0000-4000-8000-000000000004", org.userId, { total: 0 }), /check constraint/);
+  await assert.rejects(
+    admin.query(`insert into training_load.import_deletion_log (deleted_by_user_id, authorized_via, reason, event_id, source_system, source_connection_id, source_external_id, owner_team_id, occurred_date, removed_counts, removed_total)
+                 values ($1,'team_coach','x','00000000-0000-4000-8000-000000000005','gpexe',$2,'x',$3,'2026-09-14','{"a":1}',1)`, [org.userId, connectionId, org.teamId]),
+    /check constraint/,
+  );
+
+  // A real row, then: it can be neither changed nor removed.
+  const client = await newClient();
+  try {
+    const scope = await collectScope(client, { eventId: summary.eventId });
+    await undoImportedSession(client, scope, { performedByUserId: org.userId, reason: "append-only check", apply: true });
+  } finally {
+    await client.end();
+  }
+  await assert.rejects(admin.query(`update training_load.import_deletion_log set reason = 'rewritten' where event_id = $1`, [summary.eventId]), /append-only/);
+  await assert.rejects(admin.query(`delete from training_load.import_deletion_log where event_id = $1`, [summary.eventId]), /append-only/);
+  await assert.rejects(admin.query(`truncate training_load.import_deletion_log`), /append-only \(TRUNCATE refused\)/);
+  // Nor through a cascade from a table it references: ON DELETE RESTRICT does
+  // not apply to TRUNCATE, the trigger does.
+  const c = await newClient();
+  try {
+    await c.query("begin");
+    await assert.rejects(c.query(`truncate training_load.metric_source_connections cascade`), /append-only \(TRUNCATE refused\)/);
+  } finally {
+    await c.query("rollback").catch(() => {});
+    await c.end();
+  }
+  assert.equal((await deletionLog(summary.eventId))[0].reason, "append-only check");
 });
 
 test("undo: the exported functions refuse a client connected to a database that is not disposable", async () => {
