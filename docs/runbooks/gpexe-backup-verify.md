@@ -21,6 +21,15 @@ node --env-file=backend/.env backend/scripts/gpexe-backup-verify.mjs \
   `?host=...` would redirect the connection past that check. After
   connecting, the script also verifies that the server's own address is local
   and that the database name matches.
+- `pg_dump` and `pg_restore` inherit **no libpq variable** from the shell they
+  are started from. The script removes `PGHOST`, `PGHOSTADDR`, `PGPORT`,
+  `PGUSER`, `PGDATABASE`, `PGSERVICE`, `PGSERVICEFILE`, `PGPASSFILE`,
+  `PGOPTIONS`, `PGSSLMODE` and every other `PG*` variable. Host, port, user and
+  database are passed as explicit arguments, with `--no-password`. The password
+  is the only thing passed through the environment, never on the command line.
+  A leftover `PGHOSTADDR` would otherwise send the tool to a different server
+  than the one that was checked. A database name that libpq would read as a
+  connection string (containing `=` or starting with `postgres:`) is refused.
 - The source is **only read**. The trial restore goes into a new database,
   `optimove_tests_gpexe_restore_<random>`, on the same server. The script drops
   that database at the end in every case and checks that it is gone.

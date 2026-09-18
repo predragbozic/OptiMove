@@ -13,7 +13,7 @@ import path from "node:path";
 import pg from "pg";
 import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
 import { importGpexePlan } from "../src/gpexeImportWriter.js";
-import { backupAndVerify, main as backupMain, normalizeCheck, normalizeIndex, NOT_COMPARED } from "../scripts/gpexe-backup-verify.mjs";
+import { backupAndVerify, main as backupMain, normalizeCheck, normalizeIndex, NOT_COMPARED, pgConnectionArgs, pgDumpArgs, pgEnv, pgRestoreArgs } from "../scripts/gpexe-backup-verify.mjs";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
 import { makeBundle, standardAthletes } from "./_gpexe-fixtures.mjs";
 
@@ -221,6 +221,53 @@ test("backup: when the source side fails while pg_dump is still writing, no dump
   assert.equal(fs.existsSync(`${dump}.verify.json`), false);
   const restoreNamesAfter = (await admin.query(`select count(*)::int as c from pg_database where datname like 'optimove_tests_gpexe_restore_%'`)).rows[0].c;
   assert.equal(restoreNamesAfter, restoreNamesBefore);
+});
+
+test("backup: pg_dump and pg_restore get no inherited libpq variable, only the password and explicit connection arguments", () => {
+  const url = new URL("postgresql://backup_user:s%40cret@localhost:5433/OPTIMOVE");
+  const env = pgEnv(url, {
+    PGHOSTADDR: "203.0.113.10", PGSERVICE: "elsewhere", PGSERVICEFILE: "C:/x/pg_service.conf", PGPASSFILE: "C:/x/pgpass",
+    PGHOST: "db.example.com", PGPORT: "6543", PGUSER: "someone", PGDATABASE: "other", PGOPTIONS: "-c x=y", PGSSLMODE: "disable",
+    pghostaddr: "203.0.113.11", PG_BIN: "C:/pg/bin", Path: "C:/Windows", SystemRoot: "C:/Windows",
+  });
+  assert.deepEqual(Object.keys(env).sort(), ["PGPASSWORD", "PG_BIN", "Path", "SystemRoot"]);
+  assert.equal(env.PGPASSWORD, "s@cret");
+  assert.deepEqual(pgConnectionArgs(url, "OPTIMOVE"), ["--host", "localhost", "--port", "5433", "--username", "backup_user", "--dbname", "OPTIMOVE", "--no-password"]);
+  assert.deepEqual(pgConnectionArgs(new URL("postgresql://u@[::1]/db"), "db").slice(0, 4), ["--host", "::1", "--port", "5432"]);
+  const connection = ["--host", "localhost", "--port", "5433", "--username", "backup_user"];
+  assert.deepEqual(pgDumpArgs(url, "OPTIMOVE", "00000003-1", "C:/b/x.dump"),
+    ["-Fc", "--snapshot=00000003-1", "-f", "C:/b/x.dump", ...connection, "--dbname", "OPTIMOVE", "--no-password"]);
+  assert.deepEqual(pgRestoreArgs(url, "optimove_tests_gpexe_restore_0123456789", "C:/b/x.dump"),
+    ["--exit-on-error", "--no-owner", "--no-privileges", ...connection, "--dbname", "optimove_tests_gpexe_restore_0123456789", "--no-password", "C:/b/x.dump"]);
+});
+
+test("backup: a non-local PGHOSTADDR and a PGSERVICE in the parent environment do not reach pg_dump or pg_restore", { skip }, async () => {
+  const saved = { PGHOSTADDR: process.env.PGHOSTADDR, PGSERVICE: process.env.PGSERVICE, PGCONNECT_TIMEOUT: process.env.PGCONNECT_TIMEOUT };
+  // 203.0.113.0/24 is TEST-NET-3: never a real server. Were it inherited,
+  // pg_dump would try it (and give up after 3 s) instead of localhost, and
+  // the unknown service name alone would already make libpq refuse.
+  process.env.PGHOSTADDR = "203.0.113.10";
+  process.env.PGSERVICE = "optimove_no_such_service";
+  process.env.PGCONNECT_TIMEOUT = "3";
+  let report;
+  try {
+    report = await backupAndVerify({ databaseUrl: db.url, dumpPath: dumpPath(), pgBin: PG_BIN });
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+  assert.equal(report.verified, true, JSON.stringify(report.mismatches));
+  assert.equal(report.source.database, db.name);
+  assert.equal(report.restoreDropped, true);
+});
+
+test("backup: a database name that libpq would read as a connection string is refused", async () => {
+  const u = new URL(ORIGINAL_DATABASE_URL);
+  u.pathname = "/" + encodeURIComponent("host=db.example.com dbname=x");
+  await assert.rejects(backupAndVerify({ databaseUrl: u.toString(), dumpPath: path.join(os.tmpdir(), "never-created.dump") }), /must be a plain name/);
+  assert.equal(fs.existsSync(path.join(os.tmpdir(), "never-created.dump")), false);
 });
 
 test("backup: the catalog normalization rewrites only the re-printed IN list, nothing else", () => {

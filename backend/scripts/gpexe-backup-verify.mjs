@@ -75,17 +75,48 @@ function quoteIdent(name) {
 }
 
 function describe(url) {
-  return { host: url.hostname, port: url.port || "5432", database: decodeURIComponent(url.pathname.slice(1)) };
+  const database = decodeURIComponent(url.pathname.slice(1));
+  // pg_dump/pg_restore read a --dbname containing "=" or a URI prefix as a
+  // whole connection string, which could name another host.
+  if (!database || database.includes("=") || /^postgres(ql)?:/i.test(database)) {
+    throw new Error("refusing: the database name must be a plain name");
+  }
+  return { host: url.hostname, port: url.port || "5432", database };
 }
 
-function pgEnv(url) {
-  return {
-    ...process.env,
-    PGHOST: url.hostname,
-    PGPORT: url.port || "5432",
-    PGUSER: decodeURIComponent(url.username),
-    PGPASSWORD: decodeURIComponent(url.password),
-  };
+// The environment for pg_dump and pg_restore. Every libpq variable the parent
+// process carries (PGHOST, PGHOSTADDR, PGPORT, PGDATABASE, PGUSER, PGSERVICE,
+// PGSERVICEFILE, PGPASSFILE, PGOPTIONS, PGSSLMODE, ...) is dropped: PGHOSTADDR
+// alone would send the tool to a different server than the one the host check
+// approved, and a service entry can supply host, port, user and database.
+// Only the password is passed through the environment (never on the command
+// line); host, port, user and database go as explicit arguments
+// (pgConnectionArgs). PG_BIN is not a libpq variable and is kept.
+export function pgEnv(url, parentEnv = process.env) {
+  const env = {};
+  for (const [key, value] of Object.entries(parentEnv)) {
+    if (!/^PG[A-Z]/.test(key.toUpperCase())) env[key] = value;
+  }
+  env.PGPASSWORD = decodeURIComponent(url.password);
+  return env;
+}
+
+export function pgConnectionArgs(url, database) {
+  return [
+    "--host", url.hostname.replace(/^\[|\]$/g, ""),
+    "--port", url.port || "5432",
+    "--username", decodeURIComponent(url.username),
+    "--dbname", database,
+    "--no-password",
+  ];
+}
+
+export function pgDumpArgs(source, database, snapshot, dump) {
+  return ["-Fc", `--snapshot=${snapshot}`, "-f", dump, ...pgConnectionArgs(source, database)];
+}
+
+export function pgRestoreArgs(source, restoreDatabase, dump) {
+  return ["--exit-on-error", "--no-owner", "--no-privileges", ...pgConnectionArgs(source, restoreDatabase), dump];
 }
 
 function tool(pgBin, name) {
@@ -318,7 +349,7 @@ export async function backupAndVerify({ databaseUrl, dumpPath, pgBin = "", onSna
 
     // 2. Dump and source fingerprint, concurrently, on the same snapshot.
     const env = pgEnv(source);
-    const dumping = run(tool(pgBin, "pg_dump"), ["-Fc", `--snapshot=${snapshot}`, "-f", dump, sourceInfo.database], { env, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    const dumping = run(tool(pgBin, "pg_dump"), pgDumpArgs(source, sourceInfo.database, snapshot, dump), { env, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
     if (onDumpStarted) await onDumpStarted({ sourcePid: sourceClient.processID });
     // allSettled, not all: if the fingerprint fails, pg_dump is still writing
     // the file, and it must have finished before the file can be removed.
@@ -329,7 +360,7 @@ export async function backupAndVerify({ databaseUrl, dumpPath, pgBin = "", onSna
     await sourceClient.query("rollback");
     report.dump.bytes = (await fsp.stat(dump)).size;
     report.dump.sha256 = await sha256(dump);
-    report.pgDumpVersion = (await run(tool(pgBin, "pg_dump"), ["--version"], { windowsHide: true })).stdout.trim();
+    report.pgDumpVersion = (await run(tool(pgBin, "pg_dump"), ["--version"], { env, windowsHide: true })).stdout.trim();
     log(`dump written: ${report.dump.bytes} bytes, sha256 ${report.dump.sha256}`);
 
     // 3. Trial restore into a new database.
@@ -341,7 +372,7 @@ export async function backupAndVerify({ databaseUrl, dumpPath, pgBin = "", onSna
     } finally {
       await maintenance.end();
     }
-    await run(tool(pgBin, "pg_restore"), ["--exit-on-error", "--no-owner", "--no-privileges", "-d", restoreName, dump], { env, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    await run(tool(pgBin, "pg_restore"), pgRestoreArgs(source, restoreName, dump), { env, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
     log(`restored into ${restoreName}`);
     if (onRestored) await onRestored(restoreUrl.toString());
 
