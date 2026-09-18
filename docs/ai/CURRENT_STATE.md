@@ -278,6 +278,40 @@ pre-existing; pass/fail counts don't belong in this file
     The 2026-09-18 backup (`...-r2.dump`, kept outside the repo) does not replace it.
   - Not approved yet: any write of GPEXE data to the local OPTIMOVE or the deployed
     database.
+  - Owner decisions for the plan, 2026-09-18. F1 was approved to start.
+    - **Phases:**
+      - F1: fetch, candidates and preview;
+      - F2: approval and the actual import;
+      - F3: screens;
+      - F4: the first real local import, after a fresh verified backup.
+    - **Credentials:** the GPEXE token lives only in the server environment
+      (`GPEXE_API_TOKEN`).
+    - **Who may approve:** an active platform admin, or a coach who holds an explicit
+      approver grant for that team. Only a platform admin grants and revokes those
+      grants. The server checks the right on every request and records who approved.
+      Coaches without the grant can review candidates but not approve them.
+    - **`GPEXE_IMPORT_APPLY_ENABLED`:** it blocks writing results and activities. "Check
+      now" still writes candidates and the check record. The deployed database gets the
+      flag only after its backups and a restore on the provider's side are confirmed.
+    - **Raw GPEXE JSON retention:**
+      - kept for 90 days after import;
+      - kept for 30 days for a candidate that was never approved;
+      - the hash, source mapping, decision, approver and write report are kept.
+      - Deletion must not depend only on the server process running every day.
+      - A candidate whose raw snapshot has expired can no longer be approved; it has to
+        be checked again.
+    - **The review shows participation and the GPS measurement separately.** A missing
+      value is not a zero. "GPS was not worn" is shown only when the data confirms it or
+      a coach enters it.
+- **Athletes who trained without a GPS record** (owner, 2026-09-18). Scheduled after
+  phases F1–F3 of the in-app import. Options, none of them decided yet:
+  - participation only, with no values;
+  - a manual entry by the coach;
+  - an estimate from the team average, the position average, another athlete or a
+    similar session.
+
+  An estimate is never stored as a GPEXE measurement. It is stored as an estimate, with
+  its source and method, close to the future derived-metrics feature.
 - **GPEXE session table readability** (owner, 2026-09-18, for later). The goal is that the
   Activities "Recorded metrics" table reads like GPEXE's own session table:
   - short column labels; `metric_definitions.short_label` and `icon_url` already exist
