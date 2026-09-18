@@ -11,12 +11,16 @@
 --      restricted to source_system = 'gpexe'.
 --
 --   2. One event per (GPEXE connection, GPEXE team_session), enforced in two
---      places: a BEFORE INSERT guard on metric_events that refuses a second
---      row for the same gpexe connection and external id (so the duplicate row
---      cannot come into existence at all, whoever writes it), and the unique
---      key on the binding table below. v12's generic contract is untouched:
---      the guard reads the row's own connection and does nothing unless that
---      connection's source_system is 'gpexe'; every other source keeps
+--      places: a guard on metric_events that refuses a second row for the same
+--      gpexe connection and external id (on INSERT and on UPDATE, so the
+--      duplicate cannot come into existence at all, whoever writes it), and
+--      the unique key on the binding table below. The same guard freezes the
+--      source identity of an event that already has a binding: the binding is
+--      immutable, so an event free to move to another external id would stop
+--      agreeing with the record of which session produced its values.
+--      v12's generic contract is untouched: for a connection whose
+--      source_system is not 'gpexe' the guard does nothing, and an event with
+--      no binding stays as editable as v12 allows; every other source keeps
 --      metric_events as descriptive provenance with no dedup.
 --      The binding additionally carries the one fact the importer otherwise
 --      loses: WHICH GPEXE threshold set produced that session's values.
@@ -36,6 +40,22 @@ create function training_load.enforce_gpexe_event_uniqueness() returns trigger a
 declare
   system text;
 begin
+  -- A bound event's own identity is frozen. The binding is immutable and
+  -- records WHICH GPEXE session produced these values; if the event could be
+  -- moved to another external id — even a free one — the two would stop
+  -- agreeing with nothing left to detect it. Checked before anything else,
+  -- because clearing source_external_id or source_connection_id would
+  -- otherwise fall through the early return below. It reads only the binding
+  -- row (immutable and undeletable, so a plain read is stable) and takes no
+  -- lock of its own, leaving the connection -> identity -> event order as it
+  -- was.
+  if TG_OP = 'UPDATE'
+     and (new.source_connection_id is distinct from old.source_connection_id
+          or new.source_external_id is distinct from old.source_external_id)
+     and exists (select 1 from training_load.metric_event_source_bindings b where b.event_id = old.id) then
+    raise exception 'metric_events (id=%): source identity is immutable once the event is bound to a source session (recorded as %/%)',
+      old.id, old.source_connection_id, old.source_external_id;
+  end if;
   if new.source_connection_id is null or new.source_external_id is null then
     return new;
   end if;

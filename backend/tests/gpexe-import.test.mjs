@@ -1125,6 +1125,60 @@ test("database: v20 adds no obstacle to any event that is not a gpexe import", a
   await assert.doesNotReject(admin.query(`delete from training_load.metric_source_connections where id = $1`, [connectionId]));
 });
 
+test("database: a bound event's own source identity can no longer be changed", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5031, athletes: standardAthletes() }));
+  const binding = (await admin.query(
+    `select source_connection_id, source_external_id from training_load.metric_event_source_bindings where event_id = $1`,
+    [summary.eventId],
+  )).rows[0];
+  assert.equal(binding.source_external_id, "team_session:5031");
+
+  // Moving a bound event onto a FREE external id was allowed: the binding is
+  // immutable, so the event and the record of which GPEXE session produced it
+  // would stop agreeing, with nothing left to detect it.
+  await assert.rejects(
+    admin.query(`update training_load.metric_events set source_external_id = 'team_session:free' where id = $1`, [summary.eventId]),
+    /source identity is immutable once the event is bound/,
+  );
+  await assert.rejects(
+    admin.query(`update training_load.metric_events set source_external_id = null where id = $1`, [summary.eventId]),
+    /source identity is immutable once the event is bound/,
+  );
+  const otherConnection = (await admin.query(
+    `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1) returning id`,
+    [org.teamId],
+  )).rows[0].id;
+  await assert.rejects(
+    admin.query(`update training_load.metric_events set source_connection_id = $1 where id = $2`, [otherConnection, summary.eventId]),
+    /source identity is immutable once the event is bound/,
+  );
+
+  const still = (await admin.query(
+    `select e.source_external_id, e.source_connection_id from training_load.metric_events e where e.id = $1`,
+    [summary.eventId],
+  )).rows[0];
+  assert.equal(still.source_external_id, binding.source_external_id, "event and binding still agree");
+  assert.equal(String(still.source_connection_id), String(binding.source_connection_id));
+
+  // An event with no binding stays as mutable as v12 always allowed.
+  const unbound = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('not imported yet','2026-09-15','2026-09-15T18:08:12Z','session','team',$1,$2,'team_session:5031b',$3) returning id`,
+    [org.teamId, binding.source_connection_id, TZ],
+  )).rows[0].id;
+  await assert.doesNotReject(
+    admin.query(`update training_load.metric_events set source_external_id = 'team_session:5031c' where id = $1`, [unbound]),
+    "an unbound event is still editable where the existing contract allows it",
+  );
+  await assert.rejects(
+    admin.query(`update training_load.metric_events set source_external_id = 'team_session:5031' where id = $1`, [unbound]),
+    (e) => e.code === "23505",
+    "and still cannot take an id this connection already uses",
+  );
+});
+
 test("database: a binding can be neither updated nor deleted", async () => {
   const org = await setupTeam();
   const summary = await runImport(org, makeBundle({ sessionId: 5028, athletes: standardAthletes() }));
