@@ -44,7 +44,11 @@ before(async () => {
 
 after(async () => {
   service?.setGpexeClientFactory(null);
-  if (server) await new Promise((resolve) => server.close(resolve));
+  // A request left hanging by a failed test must not keep the suite open.
+  if (server) {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
   if (appPool) await appPool.end();
   if (admin) await admin.end();
   if (db) await db.drop();
@@ -1357,4 +1361,225 @@ test("database: a candidate is never inserted as imported, and an approval must 
         approver_grant_id, changes_to_imported, changes_accepted, metric_event_id, import_counts)
      values ($1,$2,$3,$4,$5,$6,'platform_admin',null,1,true,gen_random_uuid(),'{}')`,
     [candidate.id, team.teamId, row.gpexe_team_session_id, row.bundle_hash, row.preview_hash, team.padmin.id]), /changes_to_imported does not match/);
+});
+
+// ---------------------------------------------------------------------------
+// External review of f8ecab2: an unconfirmed COMMIT, and a failed read of the
+// candidate after a committed import, must never hide or deny an import.
+// ---------------------------------------------------------------------------
+
+async function withCommitReplaced(commit, fn) {
+  service.setApprovalCommitForTests(commit);
+  try {
+    return await fn();
+  } finally {
+    service.setApprovalCommitForTests(null);
+  }
+}
+
+test("approve: the COMMIT went through but its answer was lost — the answer says imported, verified, never 'nothing was imported'", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7201 })] }));
+  await checkNow(team);
+  const candidate = await pendingCandidate(team);
+  await withSwitchOn(() => withCommitReplaced(async (client) => {
+    await client.query("commit");
+    throw new Error("Connection terminated unexpectedly");
+  }, async () => {
+    const r = await approve(team, candidate, team.padmin.cookie);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.outcome, "imported");
+    assert.equal(r.body.commitConfirmation, "verified_after_commit_error");
+    assert.ok(!/nothing was imported/i.test(JSON.stringify(r.body)));
+    assert.equal(r.body.candidate.status, "imported");
+    assert.equal(r.body.candidate.approval.id, r.body.approval.id, "the candidate names the approval that imported it");
+
+    const [approval] = await approvalsOf(candidate.id);
+    assert.equal(approval.id, r.body.approval.id);
+    const rows = await writtenRows(team.teamId);
+    assert.deepEqual([rows.events, rows.activities], [1, 1]);
+    const byId = await api(`/teams/${team.teamId}/approvals/${approval.id}`, { cookie: team.coach.cookie });
+    assert.equal(byId.status, 200);
+    assert.deepEqual([byId.body.approval.candidateId, byId.body.approval.import.eventId], [candidate.id, r.body.import.eventId]);
+  }));
+});
+
+test("approve: the COMMIT was never confirmed and the import is not there — 503 import_outcome_unknown with how to check, and approving again is safe", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7202 })] }));
+  await checkNow(team);
+  const candidate = await pendingCandidate(team);
+  const before = await allRowCounts();
+  let approvalId;
+  await withSwitchOn(() => withCommitReplaced(async (client) => {
+    // The connection is lost before the server commits: the transaction ends
+    // without its rows.
+    await client.query("rollback");
+    throw new Error("Connection terminated unexpectedly");
+  }, async () => {
+    const r = await approve(team, candidate, team.padmin.cookie);
+    assert.equal(r.status, 503, JSON.stringify(r.body));
+    assert.equal(r.body.error, "import_outcome_unknown");
+    assert.ok(!/nothing was imported/i.test(JSON.stringify(r.body)), "an unconfirmed COMMIT is never reported as nothing imported");
+    assert.match(r.body.message, /may or may not have been imported/);
+    const { verify } = r.body;
+    approvalId = verify.approvalId;
+    assert.equal(verify.candidateId, candidate.id);
+    assert.equal(verify.candidateHref, `/api/training-load/gpexe/teams/${team.teamId}/candidates/${candidate.id}`);
+    assert.equal(verify.approvalHref, `/api/training-load/gpexe/teams/${team.teamId}/approvals/${verify.approvalId}`);
+    assert.ok(verify.imported && verify.notImported && verify.retry);
+  }));
+
+  // Following the steps: no approval, candidate still pending — not imported.
+  assert.deepEqual(await api(`/teams/${team.teamId}/approvals/${approvalId}`, { cookie: team.coach.cookie }), { status: 404, body: { error: "notFound" } });
+  const after = (await api(`/teams/${team.teamId}/candidates/${candidate.id}`, { cookie: team.coach.cookie })).body.candidate;
+  assert.deepEqual([after.status, after.approval], ["pending", null]);
+  assert.deepEqual(await allRowCounts(), before);
+
+  // Approving again is safe and imports it once.
+  await withSwitchOn(async () => {
+    const again = await approve(team, candidate, team.padmin.cookie);
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    assert.equal(again.body.commitConfirmation, "confirmed");
+    assert.equal((await approve(team, candidate, team.padmin.cookie)).body.error, "already_imported");
+  });
+  assert.equal((await approvalsOf(candidate.id)).length, 1);
+});
+
+test("approve: reading the candidate after a committed import fails — the answer still says imported, with the approval and the write report", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7203 })] }));
+  await checkNow(team);
+  const candidate = await pendingCandidate(team);
+  await withSwitchOn(async () => {
+    service.setCandidateReadFaultForTests((id) => {
+      if (id === candidate.id) throw new Error("read failed");
+    });
+    let r;
+    try {
+      r = await approve(team, candidate, team.padmin.cookie);
+    } finally {
+      service.setCandidateReadFaultForTests(null);
+    }
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.outcome, "imported");
+    assert.equal(r.body.commitConfirmation, "confirmed");
+    assert.ok(r.body.approval.id && r.body.import.eventId);
+    assert.equal(r.body.candidate, null);
+    assert.deepEqual(Object.keys(r.body.candidateReadError).sort(), ["candidateHref", "error", "message"]);
+    assert.equal(r.body.candidateReadError.error, "candidate_read_failed");
+    assert.match(r.body.candidateReadError.message, /import was committed/);
+    assert.ok(!/read failed/.test(JSON.stringify(r.body)), "the underlying error text is not sent");
+  });
+  const [approval] = await approvalsOf(candidate.id);
+  assert.equal(approval.metric_event_id, (await admin.query(`select id from training_load.metric_events where owner_team_id = $1`, [team.teamId])).rows[0].id);
+  assert.equal((await candidateRow(candidate.id)).status, "imported");
+});
+
+test("approvals by id: another team's approval and a malformed id are the same 404 as a missing one", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7204 })] }));
+  await checkNow(team);
+  const approvalId = await withSwitchOn(async () => (await approve(team, await pendingCandidate(team), team.padmin.cookie)).body.approval.id);
+  const other = await setupTeam();
+  const notFound = { status: 404, body: { error: "notFound" } };
+  assert.deepEqual(await api(`/teams/${other.teamId}/approvals/${approvalId}`, { cookie: other.coach.cookie }), notFound);
+  assert.deepEqual(await api(`/teams/${team.teamId}/approvals/${approvalId}`, { cookie: other.coach.cookie }), notFound);
+  assert.deepEqual(await api(`/teams/${team.teamId}/approvals/nope`, { cookie: team.coach.cookie }), notFound);
+  assert.equal((await api(`/teams/${team.teamId}/approvals/${approvalId}`, { cookie: team.coach.cookie })).status, 200);
+});
+
+// Which pooled connection the approval used, and whether the pool dropped it.
+async function approvalConnectionFate(fn) {
+  let used = null;
+  service.setApprovalObserver(({ client }) => { used = client; });
+  const removed = new Set();
+  const onRemove = (client) => removed.add(client);
+  appPool.on("remove", onRemove);
+  try {
+    const result = await fn();
+    assert.ok(used, "the approval reached its import");
+    // The pool emits "remove" only once the dropped connection has closed,
+    // which can be after the HTTP answer: wait for it (a kept connection
+    // waits the whole time and stays kept).
+    for (let i = 0; i < 75 && !removed.has(used); i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+    return { result, dropped: removed.has(used) };
+  } finally {
+    appPool.off("remove", onRemove);
+    service.setApprovalObserver(null);
+  }
+}
+
+test("approve: after a confirmed COMMIT the connection goes back to the pool; only an unconfirmed one is dropped", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7205 }), sessionBundle({ sessionId: 7206 })] }));
+  await checkNow(team);
+  const [first, second] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
+  const detail = async (id) => (await api(`/teams/${team.teamId}/candidates/${id}`, { cookie: team.coach.cookie })).body.candidate;
+  await withSwitchOn(async () => {
+    const ok = await approvalConnectionFate(async () => approve(team, await detail(first.id), team.padmin.cookie));
+    assert.equal(ok.result.status, 200);
+    assert.equal(ok.result.body.commitConfirmation, "confirmed");
+    assert.equal(ok.dropped, false, "a confirmed COMMIT keeps the connection in the pool");
+
+    const lost = await withCommitReplaced(async (client) => {
+      await client.query("commit");
+      throw new Error("Connection terminated unexpectedly");
+    }, () => approvalConnectionFate(async () => approve(team, await detail(second.id), team.padmin.cookie)));
+    assert.equal(lost.result.body.commitConfirmation, "verified_after_commit_error");
+    assert.equal(lost.dropped, true, "a connection whose COMMIT went unanswered is not reused");
+  });
+});
+
+test("approve: the COMMIT went unconfirmed and the check fails or hangs — 503 import_outcome_unknown in bounded time, never 'nothing was imported'", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7207 })] }));
+  await checkNow(team);
+  const candidate = await pendingCandidate(team);
+  const lostAnswer = async (client) => {
+    await client.query("commit");
+    throw new Error("Connection terminated unexpectedly");
+  };
+  await withSwitchOn(() => withCommitReplaced(lostAnswer, async () => {
+    try {
+      // The check itself fails (the database is unreachable).
+      service.setUncertainCommitCheckForTests({ fault: () => { throw new Error("db down"); } });
+      const failed = await approve(team, candidate, team.padmin.cookie);
+      assert.deepEqual([failed.status, failed.body.error], [503, "import_outcome_unknown"], JSON.stringify(failed.body));
+      assert.ok(failed.body.verify.approvalHref);
+      assert.ok(!/nothing was imported|db down/i.test(JSON.stringify(failed.body)));
+      // Here the COMMIT did go through: the steps in verify find it.
+      assert.equal((await api(failed.body.verify.approvalHref.replace("/api/training-load/gpexe", ""), { cookie: team.coach.cookie })).status, 200);
+      assert.equal((await api(failed.body.verify.candidateHref.replace("/api/training-load/gpexe", ""), { cookie: team.coach.cookie })).body.candidate.status, "imported");
+    } finally {
+      service.setUncertainCommitCheckForTests();
+    }
+  }));
+
+  const team2 = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7208 })] }));
+  await checkNow(team2);
+  const candidate2 = await pendingCandidate(team2);
+  await withSwitchOn(() => withCommitReplaced(lostAnswer, async () => {
+    try {
+      // The check's own query never answers (a real stuck query on its
+      // connection): the bound ends it, and that connection is not left
+      // occupying the pool.
+      service.setUncertainCommitCheckForTests({ fault: (client) => client.query("select pg_sleep(30)"), timeoutMs: 500 });
+      const started = Date.now();
+      const hung = await approve(team2, candidate2, team2.padmin.cookie);
+      assert.deepEqual([hung.status, hung.body.error], [503, "import_outcome_unknown"], JSON.stringify(hung.body));
+      assert.ok(Date.now() - started < 5_000, `answered within the bound (${Date.now() - started} ms)`);
+      assert.ok(!/nothing was imported/i.test(JSON.stringify(hung.body)));
+      let inUse = Infinity;
+      for (let i = 0; i < 100 && inUse > 0; i += 1) {
+        inUse = appPool.totalCount - appPool.idleCount;
+        if (inUse > 0) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(inUse, 0, "no pool connection is left held by the stuck check");
+      assert.equal(appPool.waitingCount, 0);
+    } finally {
+      service.setUncertainCommitCheckForTests();
+    }
+  }));
 });

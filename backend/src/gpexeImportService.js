@@ -455,7 +455,38 @@ export async function listCandidates(teamId, { includeSuperseded = false } = {})
   return rows.map(candidateSummary);
 }
 
+// Tests make reading a candidate fail, to prove the approval route never
+// hides a committed import behind that failure.
+let candidateReadFault = null;
+export function setCandidateReadFaultForTests(fault) {
+  candidateReadFault = fault ?? null;
+}
+
+function approvalView(row) {
+  return {
+    id: row.id,
+    candidateId: row.candidate_id,
+    approvedAt: row.approved_at,
+    approvedByUserId: row.approved_by_user_id,
+    basis: row.approval_basis,
+    changesToImported: row.changes_to_imported,
+    changesAccepted: row.changes_accepted,
+    import: { eventId: row.metric_event_id, activityId: row.activity_id, importBatchId: row.import_batch_id, counts: row.import_counts },
+  };
+}
+
+const APPROVAL_COLUMNS = `id, candidate_id, approved_at, approved_by_user_id, approval_basis, changes_to_imported, changes_accepted,
+  metric_event_id, activity_id, import_batch_id, import_counts`;
+
+// One approval of the team, by id: what "was it imported?" is checked
+// against when an approval's outcome is uncertain.
+export async function getApproval(teamId, approvalId) {
+  const row = (await query(`select ${APPROVAL_COLUMNS} from training_load.gpexe_import_approvals where id = $1 and owner_team_id = $2`, [approvalId, teamId])).rows[0];
+  return row ? approvalView(row) : null;
+}
+
 export async function getCandidate(teamId, candidateId) {
+  if (candidateReadFault) await candidateReadFault(candidateId);
   const row = (await query(`select ${CANDIDATE_COLUMNS} from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2`, [candidateId, teamId])).rows[0];
   if (!row) return null;
   const summary = candidateSummary(row);
@@ -478,7 +509,11 @@ export async function getCandidate(teamId, candidateId) {
       athletes = Object.fromEntries(named.map((r) => [r.id, { name: r.name }]));
     }
   }
-  return { ...summary, preview, previewHash: preview ? row.preview_hash : null, athletes };
+  // An imported candidate names its approval (who, when, what was written).
+  const approvalRow = row.status === "imported"
+    ? (await query(`select ${APPROVAL_COLUMNS} from training_load.gpexe_import_approvals where candidate_id = $1 and owner_team_id = $2`, [candidateId, teamId])).rows[0]
+    : null;
+  return { ...summary, preview, previewHash: preview ? row.preview_hash : null, athletes, approval: approvalRow ? approvalView(approvalRow) : null };
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +619,105 @@ export function setApprovalObserver(observer) {
   approvalObserver = observer ?? null;
 }
 
+// Tests replace the approval's COMMIT (e.g. commit and then lose the
+// answer, or lose the connection before it), to prove what the caller is
+// told when the outcome of the commit is not known.
+let approvalCommit = null;
+export function setApprovalCommitForTests(commit) {
+  approvalCommit = commit ?? null;
+}
+
+// The check after an unconfirmed COMMIT runs exactly when the database may
+// be unreachable, so it is bounded: past this, the answer is 503
+// import_outcome_unknown instead of a request that hangs.
+export const UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS = 5_000;
+let uncertainCommitCheckTimeoutMs = UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS;
+// Tests make that check fail or hang (the fault gets the check's own
+// connection, e.g. to run a query that never answers), and shorten its bound.
+let uncertainCommitCheckFault = null;
+export function setUncertainCommitCheckForTests({ fault = null, timeoutMs = UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS } = {}) {
+  uncertainCommitCheckFault = fault;
+  uncertainCommitCheckTimeoutMs = timeoutMs;
+}
+
+// Is the approval committed? Bounded as a whole, and it never leaves a pool
+// connection behind: getting a connection and the query share one deadline;
+// a connection that arrives after the deadline is closed at once, and one
+// whose query did not answer in time is closed instead of returned.
+async function approvalIsCommitted(approvalId, teamId, ms) {
+  const deadline = Date.now() + ms;
+  const left = () => Math.max(1, deadline - Date.now());
+  const connecting = pool.connect();
+  let client;
+  try {
+    client = await withinBound(connecting, left());
+  } catch (error) {
+    connecting.then((late) => late.release(true), () => {});
+    throw error;
+  }
+  let broken = false;
+  try {
+    if (uncertainCommitCheckFault) {
+      const fault = Promise.resolve().then(() => uncertainCommitCheckFault(client));
+      fault.catch(() => {});
+      await withinBound(fault, left());
+    }
+    const answer = client.query({
+      text: `select 1 from training_load.gpexe_import_approvals a
+               join training_load.gpexe_import_candidates c on c.id = a.candidate_id
+              where a.id = $1 and a.owner_team_id = $2 and c.status = 'imported'`,
+      values: [approvalId, teamId],
+      query_timeout: left(),
+    });
+    answer.catch(() => {});
+    return (await withinBound(answer, left())).rowCount === 1;
+  } catch (error) {
+    broken = true;
+    throw error;
+  } finally {
+    client.release(broken ? true : undefined);
+  }
+}
+
+function withinBound(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// The COMMIT was sent but its answer did not arrive: the import may or may
+// not be in the database. Never "nothing was imported". The approval row is
+// looked for on another connection: found, the import IS committed and the
+// caller is told so; not found (it may not be visible yet, or never will
+// be) or not readable, the caller gets 503 import_outcome_unknown with how
+// to check. Approving again is safe either way (an imported candidate
+// answers 409 already_imported).
+async function resolveUncertainCommit(teamId, candidateId, { approvalId, result, commitError }) {
+  console.error(`[gpexe] approval ${approvalId} of candidate ${candidateId}: the COMMIT was not confirmed (${commitError?.code ?? ""} ${commitError?.message}); checking whether it is in the database`);
+  let found = false;
+  try {
+    found = await approvalIsCommitted(approvalId, teamId, uncertainCommitCheckTimeoutMs);
+  } catch (error) {
+    console.error(`[gpexe] checking approval ${approvalId} after an unconfirmed COMMIT failed: ${error?.message}`);
+  }
+  if (found) return { ...result, commitConfirmation: "verified_after_commit_error" };
+  throw refusal(503, "import_outcome_unknown",
+    "The database did not confirm the import, and it could not be verified yet. It may or may not have been imported; do not assume either. Check the candidate or the approval before doing anything else.",
+    {
+      verify: {
+        candidateId,
+        candidateHref: reviewAgain(teamId, candidateId).href,
+        approvalId,
+        approvalHref: `/api/training-load/gpexe/teams/${teamId}/approvals/${approvalId}`,
+        imported: "The approval exists and the candidate's status is 'imported' (with this approval).",
+        notImported: "The approval does not exist (404) and the candidate is still 'pending'.",
+        retry: "Approving again is safe: an imported candidate answers 409 already_imported, a pending one is approved normally.",
+      },
+    });
+}
+
 // Where a caller whose preview is out of date reviews the candidate again.
 function reviewAgain(teamId, candidateId) {
   return { candidateId, href: `/api/training-load/gpexe/teams/${teamId}/candidates/${candidateId}` };
@@ -638,6 +772,10 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
 
   const client = await pool.connect();
   let refreshed = null;
+  // commitSent: no ROLLBACK after the COMMIT was sent. commitUncertain: the
+  // COMMIT got no answer, so this connection is not returned to the pool.
+  let commitSent = false;
+  let commitUncertain = false;
   try {
     await client.query("begin");
     // Step 1.
@@ -710,13 +848,25 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
         where id = $1`,
       [candidateId, RAW_RETENTION_IMPORTED_DAYS],
     );
-    await client.query("commit");
-    return {
+    const result = {
+      outcome: "imported",
+      commitConfirmation: "confirmed",
       approval: { id: approval.id, approvedAt: approval.approved_at, basis: right.basis, changesAccepted: changesToImported },
       import: { eventId: summary.eventId, activityId: summary.activityId, importBatchId: summary.importBatchId, counts: summary.counts },
     };
+    // From here on "nothing was imported" can no longer be said: once the
+    // COMMIT is sent, a missing answer is an unknown outcome.
+    commitSent = true;
+    try {
+      if (approvalCommit) await approvalCommit(client);
+      else await client.query("commit");
+    } catch (commitError) {
+      commitUncertain = true;
+      return await resolveUncertainCommit(teamId, candidateId, { approvalId: approval.id, result, commitError });
+    }
+    return result;
   } catch (error) {
-    await client.query("rollback").catch(() => {});
+    if (!commitSent) await client.query("rollback").catch(() => {});
     if (refreshed) {
       await storeRefreshedPreview(candidateId, refreshed)
         .catch((e) => console.error(`[gpexe] storing the refreshed preview of ${candidateId} failed: ${e?.message}`));
@@ -728,6 +878,7 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     console.error(`[gpexe] approval of candidate ${candidateId} failed: ${error?.code ?? ""} ${error?.message}`);
     throw refusal(500, "internal_error", "The approval failed on the server; nothing was imported.");
   } finally {
-    client.release();
+    // A connection whose COMMIT went unanswered is not trusted again.
+    client.release(commitUncertain ? true : undefined);
   }
 }

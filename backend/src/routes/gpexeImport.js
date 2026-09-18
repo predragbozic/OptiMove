@@ -26,11 +26,12 @@ function handle(fn) {
       if (error instanceof service.GpexeImportServiceError) {
         if (error.status === 404) return notFound(res);
         // Only the known detail fields, so a detail can never replace error/message.
-        const { reviewAgain, changesToImported } = error.details || {};
+        const { reviewAgain, changesToImported, verify } = error.details || {};
         return res.status(error.status).json({
           error: error.code, message: error.message,
           ...(reviewAgain ? { reviewAgain } : {}),
           ...(changesToImported !== undefined ? { changesToImported } : {}),
+          ...(verify ? { verify } : {}),
         });
       }
       next(error);
@@ -122,7 +123,33 @@ router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req,
   const result = await service.approveCandidate(access.teamId, req.params.candidateId, {
     userId: req.user.id, previewHash: req.body?.previewHash, acceptChanges: req.body?.acceptChanges,
   });
-  res.json({ ...result, candidate: await service.getCandidate(access.teamId, req.params.candidateId) });
+  // The import is committed. Reading the candidate afterwards is only a
+  // convenience; if it fails, the answer still says the import happened.
+  let candidate = null;
+  let candidateReadError = null;
+  try {
+    candidate = await service.getCandidate(access.teamId, req.params.candidateId);
+  } catch (error) {
+    console.error(`[gpexe] reading candidate ${req.params.candidateId} after its import failed: ${error?.message}`);
+    candidateReadError = {
+      error: "candidate_read_failed",
+      message: "The import was committed; only reading the candidate afterwards failed. Open the candidate again to see it.",
+      candidateHref: `/api/training-load/gpexe/teams/${access.teamId}/candidates/${req.params.candidateId}`,
+    };
+  }
+  res.json({ ...result, candidate, ...(candidateReadError ? { candidateReadError } : {}) });
+}));
+
+// One approval of the team, by id. With the candidate, this is how an
+// approval whose outcome was uncertain (503 import_outcome_unknown) is
+// checked. Another team's approval is the same 404 as a missing one.
+router.get("/teams/:teamId/approvals/:approvalId", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!UUID.test(req.params.approvalId)) return notFound(res);
+  const approval = await service.getApproval(access.teamId, req.params.approvalId);
+  if (!approval) return notFound(res);
+  res.json({ approval });
 }));
 
 router.get("/teams/:teamId/athlete-links", handle(async (req, res) => {

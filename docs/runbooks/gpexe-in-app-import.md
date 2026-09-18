@@ -249,13 +249,50 @@ same time: the second waits for the candidate row and is then refused with
 | 409 `nothing_to_import` | The import would write nothing. | Nothing. |
 | 409 `changes_need_acceptance` | Changes to imported results were not accepted. | Review them and send `acceptChanges: true`. |
 | 409 `preview_changed` | The preview is not the one reviewed, or what the import would do changed between the review and the approval. | Open `reviewAgain.href`, review the candidate again, approve the new `previewHash`. |
-| 500 `internal_error` | Anything unexpected, e.g. a database guard firing. Nothing was imported; the server log has the detail. | Report it; do not retry blindly. |
+| 500 `internal_error` | Anything unexpected **before the COMMIT was sent**, e.g. a database guard firing. Nothing was imported; the server log has the detail. | Report it; do not retry blindly. |
+| 503 `import_outcome_unknown` | The COMMIT was sent but not confirmed, and the import could not be found yet. **It may or may not have been imported.** | Follow "When the outcome is uncertain" below. |
 
 When `preview_changed` comes from step 4, the candidate is given the
 preview recomputed in step 3, so reopening it shows what an import would do
 now. If the stored GPEXE data can no longer be imported at all (the
 importer's rules changed since the check), the candidate becomes `blocked`
 with that reason instead. Nothing else of that attempt remains.
+
+### What a successful answer says
+
+`200` with `outcome: "imported"`, the approval (`approval.id`, who, when,
+basis, accepted changes) and the write report (`import`: event, activity,
+batch, counts). `commitConfirmation` is:
+
+- `confirmed` — the database confirmed the COMMIT;
+- `verified_after_commit_error` — the COMMIT's answer was lost, and the
+  approval was then found committed on another connection.
+
+After the import, the answer also carries the candidate as it is now. If
+reading it fails, the import still stands: `candidate` is `null` and
+`candidateReadError` (`candidate_read_failed`) says so and links the
+candidate. Never read a failed candidate read as a failed import.
+
+### When the outcome is uncertain (503 `import_outcome_unknown`)
+
+Once the COMMIT has been sent, the answer never says "nothing was imported":
+a lost answer means the outcome is unknown. The server first looks for the
+approval on another connection, for at most 5 seconds; if it is there, the
+answer is a normal 200 (`verified_after_commit_error`). If it is not there,
+the check fails, or the 5 seconds pass, the answer is 503 with `verify`. The
+connection whose COMMIT went unanswered is closed, not reused.
+
+1. Open `verify.approvalHref` (`GET /teams/:teamId/approvals/:approvalId`).
+   `200` means the import was committed; the approval shows what was
+   written. `404` means that approval does not exist (yet).
+2. Open `verify.candidateHref`. `status: "imported"` with `approval.id`
+   equal to `verify.approvalId` means imported; `status: "pending"` and
+   `approval: null` mean not imported.
+3. If both say "not imported", approving again is safe. If it was imported
+   in the meantime, the approval answers 409 `already_imported` and writes
+   nothing; otherwise it imports once.
+
+Never undo or re-enter data by hand because of a 503: first check as above.
 
 **Before undoing an import on a persistent database** (not allowed today:
 the undo script accepts only disposable databases): the undo script must
