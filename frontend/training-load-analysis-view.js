@@ -399,7 +399,13 @@ function renderWidgetMenuHtml(widget) {
 function seriesLabel(series) {
   if (series.display_label) return series.display_label;
   if (series.built_in_series_key) return BUILT_IN_SERIES.find((b) => b.key === series.built_in_series_key)?.label || series.built_in_series_key;
-  if (series.metric_definition_id) return "Metric";
+  // A catalog metric's own name. The catalog is loaded alongside a dashboard
+  // that has such series (loadDashboardDetail); until it arrives the label
+  // says what kind of series it is instead of a generic "Metric".
+  if (series.metric_definition_id) {
+    const def = (state.trainingLoad.analysis.metricPicker.definitions || []).find((d) => d.id === series.metric_definition_id);
+    return def?.label || "Catalog metric";
+  }
   const hint = series.template_metric_key_hints?.[0];
   return hint?.key || "Choose a metric";
 }
