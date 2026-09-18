@@ -8,7 +8,7 @@ variant, and the script refuses every database except a disposable
 
 Script: `backend/scripts/gpexe-undo-imported-session.mjs`.
 Proof: `backend/tests/gpexe-undo-session.test.mjs` (8 tests) and
-`backend/tests/gpexe-undo-guards.test.mjs` (8 tests), both on a disposable
+`backend/tests/gpexe-undo-guards.test.mjs` (9 tests), both on a disposable
 database.
 
 ## Why a procedure is needed at all
@@ -33,7 +33,13 @@ only inside the one transaction that does it.
 
 ## Scope — what one run removes
 
-Everything that belongs to that single event, in this order:
+Everything that belongs to that single event. The scope is collected **inside
+the same transaction that removes it**, after the event row and then its
+activities are locked, so a link another writer adds in the meantime is either
+seen (and the run refuses) or blocked until the run ends. Link rows are removed
+only for this event, never "every link of the activity": if a foreign link were
+somehow still there, removing the activity fails on its foreign key and the
+whole run rolls back. The order:
 
 1. `activity_component_metric_segment_links`
 2. `activity_components`
@@ -82,8 +88,9 @@ A later import of the same session reuses them.
 
 ## How to run it
 
-Dry run — runs the same statements and rolls them back, so the reported scope
-is what would actually happen:
+Dry run — runs the same statements in a normal transaction and rolls it back,
+so the reported scope is what would actually happen. It holds the same locks as
+an applied run while it lasts, so it is not free on a database others are using:
 
 ```
 node backend/scripts/gpexe-undo-imported-session.mjs \

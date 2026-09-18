@@ -106,6 +106,34 @@ test("undo: refuses an activity that another event is linked to, even with no pa
   assert.deepEqual(await rowCounts(org.teamId), before, "the other event keeps its activity");
 });
 
+test("undo: a foreign event link added after the scope was collected still stops the run", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 6108, athletes: standardAthletes() }));
+  const client = await newClient();
+  let foreignEventId;
+  try {
+    // Scope collected while the activity is still this session's alone...
+    const scope = await collectScope(client, { eventId: summary.eventId });
+    assert.equal(scope.otherEventLinks.length, 0);
+    // ...then another event is linked to it before the undo starts.
+    foreignEventId = await otherEvent(org.teamId, "linked in between");
+    await admin.query(
+      `insert into training.activity_metric_event_links (activity_id, metric_event_id, link_method, link_status, confirmed_by_user_id, confirmed_at, created_by_user_id)
+       values ($1,$2,'manual','confirmed',$3,now(),$3)`,
+      [summary.activityId, foreignEventId, org.userId],
+    );
+    await assert.rejects(
+      undoImportedSession(client, scope, { performedByUserId: org.userId, reason: "stale scope", apply: true }),
+      /is also linked to metric event/,
+    );
+  } finally {
+    await client.end();
+  }
+  const kept = (await admin.query(`select count(*)::int as c from training.activity_metric_event_links where metric_event_id = $1`, [foreignEventId])).rows[0].c;
+  assert.equal(kept, 1, "the other event's link survives");
+  assert.equal((await rowCounts(org.teamId)).events, 2, "nothing of this session was removed either");
+});
+
 test("undo: refuses an activity that was reparented into another one", async () => {
   const org = await setupTeam();
   const summary = await runImport(org, makeBundle({ sessionId: 6102, athletes: standardAthletes() }));

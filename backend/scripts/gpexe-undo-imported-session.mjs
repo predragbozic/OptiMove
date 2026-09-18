@@ -4,8 +4,9 @@
 // down, executable and proven before anything is imported into a persistent
 // database.
 //
-//   Dry run (default) — reports exactly what would be removed, opens a
-//   read-only transaction and rolls it back:
+//   Dry run (default) — reports exactly what would be removed by running the
+//   same statements in a normal transaction (protections disabled, exclusive
+//   locks held on those tables for its duration) and rolling it back:
 //     node backend/scripts/gpexe-undo-imported-session.mjs \
 //       --database-url <url> --team-session 186942 --owner-team-id <uuid>
 //
@@ -173,8 +174,7 @@ export async function assertTriggersEnabled(client) {
 // onBeforeVerify is a test hook: it runs after the protections are switched
 // back on and before they are verified, so a test can prove the verification
 // really guards the commit.
-export async function undoImportedSession(client, scope, { performedByUserId, reason, apply, onBeforeCommit, onBeforeVerify }) {
-  await assertDisposableClient(client);
+function assertUndoable(scope) {
   if (scope.manualOccasionIds.length) {
     throw new Error(`refusing: ${scope.manualOccasionIds.length} occasion(s) of this session were corrected manually — removing hand-entered values is a separate decision.`);
   }
@@ -193,6 +193,16 @@ export async function undoImportedSession(client, scope, { performedByUserId, re
     const first = scope.entangledActivities[0];
     throw new Error(`refusing: activity ${first.id} was merged, reparented or superseded (lifecycle ${first.lifecycle_state}, merges ${first.merges}, reparents ${first.reparents}) — removing it would break a chain another activity depends on.`);
   }
+}
+
+// The scope a caller passes in only names the event. What is actually
+// checked and removed is collected again INSIDE the transaction, after the
+// event row and then its activities are locked: a link added between an
+// earlier look and this run is either visible here (and refused) or blocked
+// until this transaction ends. Locking the event first and its activities
+// second is the same direction the rest of the chain uses (event -> activity).
+export async function undoImportedSession(client, requested, { performedByUserId, reason, apply, onBeforeCommit, onBeforeVerify }) {
+  await assertDisposableClient(client);
   const removed = {};
   const run = async (label, sql, params) => {
     const r = await client.query(sql, params);
@@ -201,14 +211,26 @@ export async function undoImportedSession(client, scope, { performedByUserId, re
 
   await client.query("begin");
   try {
+    const eventRow = await client.query(`select id from training_load.metric_events where id = $1 for update`, [requested.eventId]);
+    if (!eventRow.rowCount) throw new Error(`no metric event ${requested.eventId}`);
+    let scope = await collectScope(client, { eventId: requested.eventId });
+    if (scope.activities.length) {
+      await client.query(`select id from training.activities where id = any($1::uuid[]) order by id for update`, [scope.activities.map((a) => a.id)]);
+      scope = await collectScope(client, { eventId: requested.eventId });
+    }
+    assertUndoable(scope);
+
     for (const [table, trigger] of PROTECTED_TRIGGERS) await client.query(`alter table ${table} disable trigger ${trigger}`);
     const activityIds = scope.activities.map((a) => a.id);
     if (activityIds.length) {
       await run("activity_component_metric_segment_links", `delete from training.activity_component_metric_segment_links l using training.activity_components c where c.id = l.activity_component_id and c.activity_id = any($1::uuid[])`, [activityIds]);
       await run("activity_components", `delete from training.activity_components where activity_id = any($1::uuid[])`, [activityIds]);
-      await run("activity_participant_metric_participant_links", `delete from training.activity_participant_metric_participant_links l using training.activity_participants ap where ap.id = l.activity_participant_id and ap.activity_id = any($1::uuid[])`, [activityIds]);
+      // Only this event's links, never "every link of the activity": if a
+      // foreign one were still there, deleting the activity below fails on
+      // its foreign key and the whole run rolls back instead of taking it.
+      await run("activity_participant_metric_participant_links", `delete from training.activity_participant_metric_participant_links l using training_load.metric_event_participants p where p.id = l.metric_event_participant_id and p.event_id = $1`, [scope.eventId]);
       await run("activity_participants", `delete from training.activity_participants where activity_id = any($1::uuid[])`, [activityIds]);
-      await run("activity_metric_event_links", `delete from training.activity_metric_event_links where activity_id = any($1::uuid[])`, [activityIds]);
+      await run("activity_metric_event_links", `delete from training.activity_metric_event_links where metric_event_id = $1`, [scope.eventId]);
       await run("activities", `delete from training.activities where id = any($1::uuid[])`, [activityIds]);
     }
     if (scope.occasionIds.length) {
