@@ -72,9 +72,24 @@ coordinates, who submitted a session, and roles.
    - Drills are part of their parent, not candidates of their own.
    - The list is read from one day earlier. That way a drill whose parent
      started the evening before is still recognized as a drill.
-   - Lists are paged to the end.
-   - A list that cannot be completed, or a session that claims more than 30
-     drills, fails the check with a stable code. It is never cut short.
+   - **Lists are read to the end.** GPEXE pages with headers: the body is a
+     plain array, `X-Total-Count` gives the total, and `Link: <…>; rel="next"`
+     gives the next page. A `{count, next, results}` body is accepted too.
+   - Every next page is followed, **however short the page before it was**.
+   - The list must end complete: exactly the reported number of rows, and no id
+     twice.
+   - The check fails with a stable code instead of returning part of the list
+     when:
+     - the total is missing (`list_shape_unclear`);
+     - the body has another shape (`list_shape_unclear`);
+     - a row has no id (`list_shape_unclear`);
+     - another page is announced after all rows (`list_shape_unclear`);
+     - the total changes between pages (`list_changed`);
+     - a row comes twice (`list_changed`);
+     - rows are missing at the end (`list_incomplete`);
+     - the next page is outside the API (`list_incomplete`);
+     - there are more than 20 pages (`list_incomplete`);
+     - a session claims more than 30 drills (`drills_count_out_of_range`).
 3. For each session it fetches the full snapshot and hashes it. It then stores
    or refreshes **one candidate per (team, session, content)**:
    - **The same content seen again** refreshes the same row, so repeated
@@ -122,7 +137,40 @@ therefore come from one state.
   - names him in `blocked.gpexeAthleteIds`;
   - marks him `blocksSession: true`.
 
-  Nothing is written until that is resolved.
+  Nothing is written until that is resolved. `blocked.resolution` gives one
+  step per blocking athlete. It names the OptiMove athlete the earlier results
+  belong to (`previousAthleteId`):
+
+  | Why the athlete is left out | `action` | What to do |
+  |---|---|---|
+  | `athlete_not_linked` | `relink_athlete` | Link the GPEXE athlete again to `previousAthleteId`, then "Check now". |
+  | `athlete_not_in_team` | `restore_team_membership` | Make `previousAthleteId` an active team member again, then "Check now"; or undo the earlier import. |
+  | two tracks, invalid statistics | `fix_in_gpexe_or_undo` | Correct the data in GPEXE, then "Check now"; or undo the earlier import. |
+  | no longer in GPEXE at all | `undo_earlier_import` | Undo the earlier import. |
+
+  "Undo the earlier import" is the platform-admin procedure in
+  `docs/runbooks/gpexe-undo-imported-session.md`. For a persistent database it
+  needs its own approval first.
+
+## Checking the real GPEXE API (read only)
+
+Before F1 is called ready, the owner runs this probe in their own terminal.
+The token never leaves that terminal:
+
+```
+$env:GPEXE_API_TOKEN = $env:GPEXE_TOKEN
+node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-09-01 --to 2026-09-17
+```
+
+It opens no database and writes nothing. It prints only shapes and counts —
+never a name, an athlete id, a value or the token. Category names are free
+text, so they are counted, not printed, and a path that changed between two
+fetches shows `<id>` instead of any id key. It reports:
+- how the session list and a session's athlete rows are paged;
+- whether both are read complete;
+- whether one session fetched twice gives the same content hash, and if not,
+  which fields changed;
+- what the importer would make of that session.
 - **Athletes of the team with no GPEXE row:** participation unknown, no GPS
   record, **no reason**. "GPS was not worn" is only ever stated when the data
   shows it; a coach-entered reason comes after F1–F3.

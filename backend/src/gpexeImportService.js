@@ -270,7 +270,7 @@ async function runCheckBody(checkId, { teamId, userId, gpexeTeamId, window, gpex
     // Every check is also a retention run, so expired snapshots go even when
     // no scheduler ran; a failure here must not stop the check.
     await runRetention("check").catch((error) => console.error(`[gpexe] retention during check failed: ${error?.message}`));
-    const sessions = await gpexe.listTeamSessions({ gpexeTeamId, fromDay: window.from, toDay: window.to });
+    const sessions = await gpexe.listTeamSessions({ gpexeTeamId, fromDay: window.from, toDay: window.to, onProgress: alive });
     await alive();
     for (const session of sessions) {
       // A heartbeat after every GPEXE request: one slow session must not look

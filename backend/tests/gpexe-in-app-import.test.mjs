@@ -612,6 +612,20 @@ test("preview: an athlete imported before and now left out blocks the session, a
   assert.equal(by["101"].notImported.code, "athlete_not_linked");
   assert.equal(by["102"].blocksSession, false);
   assert.equal(by["102"].notImported.code, "session_blocked");
+  // One concrete step that lifts the block, naming the athlete the earlier
+  // results belong to.
+  assert.equal(preview.blocked.resolution.length, 1);
+  const [step] = preview.blocked.resolution;
+  assert.deepEqual([step.gpexeAthleteId, step.previousAthleteId, step.cause, step.action], ["101", team.ids.a, "athlete_not_linked", "relink_athlete"]);
+  assert.match(step.step, /Link GPEXE athlete 101 again/);
+
+  // Doing that step lifts the block.
+  await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: team.coach.cookie, body: { gpexeAthleteId: "101", athleteId: team.ids.a } });
+  await checkNow(team);
+  const after = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates[0];
+  // No longer blocked; 101 and 102 were imported already and are unchanged.
+  assert.equal(after.status, "pending");
+  assert.equal(after.previewStatus, "no_changes");
 });
 
 test("access: the club admin sees the team in the club's workspace, not in another club's", async () => {

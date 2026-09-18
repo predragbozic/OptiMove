@@ -199,6 +199,23 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
         const athleteByRow = new Map((bundle.athleteSessions || []).map((r) => [String(r.id), String(r.athlete)]));
         blocked.gpexeAthleteIds = [...new Set(error.missingExternalIds.map((id) => athleteByRow.get(String(id).split(":")[1])).filter(Boolean))].sort();
         blocked.unknownExternalIds = error.missingExternalIds.filter((id) => !athleteByRow.has(String(id).split(":")[1]));
+        // Which OptiMove athlete those earlier results belong to: what the
+        // resolution step has to name.
+        const owners = (await client.query(
+          `select si.source_external_id, p.athlete_id
+             from training_load.metric_source_connections c
+             join training_load.metric_source_identities si on si.source_connection_id = c.id
+             join training_load.metric_measurement_occasions o on o.id = si.current_occasion_id
+             join training_load.metric_event_participants p on p.id = o.event_participant_id
+            where c.source_system = 'gpexe' and c.owner_scope = 'team' and c.owner_team_id = $1 and c.state = 'active'
+              and si.source_external_id = any($2::text[])`,
+          [ownerTeamId, error.missingExternalIds],
+        )).rows;
+        blocked.previousAthleteByGpexeId = {};
+        for (const row of owners) {
+          const gpexeId = athleteByRow.get(String(row.source_external_id).split(":")[1]);
+          if (gpexeId) blocked.previousAthleteByGpexeId[gpexeId] = String(row.athlete_id);
+        }
       }
       summary = null;
     }
@@ -272,6 +289,38 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
     .filter((id) => !linkedWithRows.has(id))
     .sort()
     .map((athleteId) => ({ athleteId, participation: { status: "unknown" }, gps: { status: "no_record", reason: null } }));
+
+  // For a session blocked by earlier imported results, one concrete step per
+  // athlete that lifts the block. Undoing an earlier import is only rehearsed
+  // on disposable databases today; the step says so.
+  if (blocked?.code === "identities_missing_from_source") {
+    const byId = new Map(athletes.map((a) => [a.gpexeAthleteId, a]));
+    const UNDO = "Or a platform admin undoes the earlier import of this session (docs/runbooks/gpexe-undo-imported-session.md; for a persistent database that needs its own approval first), and the session is checked again.";
+    blocked.resolution = (blocked.gpexeAthleteIds || []).map((gpexeAthleteId) => {
+      const entry = byId.get(gpexeAthleteId);
+      const cause = entry?.notImported?.code ?? "missing_in_gpexe";
+      const previousAthleteId = blocked.previousAthleteByGpexeId?.[gpexeAthleteId] ?? null;
+      let action;
+      let step;
+      if (cause === "athlete_not_linked") {
+        action = "relink_athlete";
+        step = `Link GPEXE athlete ${gpexeAthleteId} again to the OptiMove athlete its earlier results belong to (previousAthleteId), then press "Check now".`;
+      } else if (cause === "athlete_not_in_team") {
+        action = "restore_team_membership";
+        step = `Make the OptiMove athlete (previousAthleteId) an active member of the team again, then press "Check now". ${UNDO}`;
+      } else {
+        action = "fix_in_gpexe_or_undo";
+        step = `Correct this athlete's data in GPEXE (one track, valid statistics), then press "Check now". ${UNDO}`;
+      }
+      return { gpexeAthleteId, previousAthleteId, cause, action, step };
+    });
+    if (blocked.unknownExternalIds?.length) {
+      blocked.resolution.push({
+        gpexeAthleteId: null, previousAthleteId: null, cause: "missing_in_gpexe", action: "undo_earlier_import",
+        step: `GPEXE no longer lists ${blocked.unknownExternalIds.length} earlier imported result(s) of this session at all. ${UNDO}`,
+      });
+    }
+  }
 
   const writes = counts.created + counts.supplemented + counts.corrected + counts.needs_review + counts.stale_resend_ignored;
   const status = blocked ? "blocked" : writes > 0 ? "ready" : "no_changes";

@@ -40,12 +40,6 @@ export function redactGpexe(value) {
   return value;
 }
 
-function listItems(body) {
-  if (Array.isArray(body)) return body;
-  if (Array.isArray(body?.results)) return body.results;
-  return [];
-}
-
 function assertId(value, what) {
   if (!/^[0-9]{1,12}$/.test(String(value ?? ""))) throw new GpexeClientError("invalid_id", `${what} must be a numeric GPEXE id.`);
   return String(value);
@@ -56,14 +50,27 @@ function assertDay(value, what) {
   return value;
 }
 
-// Page size for the session list. A window that returns a full page may be
-// missing sessions, so the caller is told to use a shorter window.
-export const SESSION_LIST_LIMIT = 100;
-// athlete_session rows of one session: one whole-session row plus one per
-// drill for every athlete. Pages are followed; a full page with no way to
-// the next one is refused rather than silently cut.
-export const ATHLETE_SESSION_PAGE = 100;
-export const ATHLETE_SESSION_MAX_PAGES = 20;
+// Paged lists. GPEXE pages with headers (seen on the pilot's real responses,
+// 2026-09-17): the body is a plain array, `X-Total-Count` carries the total
+// and `Link: <...>; rel="next"` the next page. A Django REST Framework body
+// ({count, next, results}) is accepted too. Every page is followed, whatever
+// its length, and the list must end complete: the rows collected equal the
+// reported total, with no id twice. Anything else — no total, a total that
+// changes between pages, a next page outside the API, a body of another
+// shape — fails the check instead of returning part of the list.
+export const PAGE_SIZE = 100;
+export const SESSION_LIST_LIMIT = PAGE_SIZE;
+export const ATHLETE_SESSION_PAGE = PAGE_SIZE;
+export const MAX_PAGES = 20;
+
+function nextFromLinkHeader(link) {
+  if (typeof link !== "string") return null;
+  for (const part of link.split(",")) {
+    const m = part.match(/<([^>]+)>\s*;\s*rel="?next"?/i);
+    if (m) return m[1];
+  }
+  return null;
+}
 // A session with more drills than this is refused: drills_count comes from
 // GPEXE and drives one request per drill.
 export const MAX_DRILLS = 30;
@@ -80,7 +87,7 @@ export function createGpexeClient({
     throw new GpexeClientError("token_missing", "GPEXE_API_TOKEN is not set on the server.");
   }
 
-  async function get(apiPath) {
+  async function request(apiPath) {
     if (typeof apiPath !== "string" || /^[a-z]+:/i.test(apiPath) || apiPath.startsWith("/") || apiPath.includes("..")) {
       throw new GpexeClientError("invalid_path", "only relative GPEXE API paths are allowed.");
     }
@@ -122,20 +129,80 @@ export function createGpexeClient({
         throw new GpexeClientError("request_refused", `GPEXE answered ${url.pathname} with ${res.status}.`, { status: res.status });
       }
       const text = await res.text();
+      let body;
       try {
-        return redactGpexe(JSON.parse(text));
+        body = redactGpexe(JSON.parse(text));
       } catch {
         throw new GpexeClientError("not_json", `GPEXE answered ${url.pathname} with something that is not JSON.`);
       }
+      const header = (name) => (typeof res.headers?.get === "function" ? res.headers.get(name) : null);
+      return { body, totalCount: header("x-total-count"), link: header("link") };
     }
     throw lastError;
+  }
+
+  async function get(apiPath) {
+    return (await request(apiPath)).body;
+  }
+
+  // All rows of a paged list, or an error — never part of it.
+  async function getAllPages(apiPath, { step = null } = {}) {
+    const what = apiPath.split("?")[0];
+    const rows = [];
+    const ids = new Set();
+    let total = null;
+    let path = apiPath;
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
+      const res = await request(path);
+      if (step) await step();
+      let pageRows;
+      let pageTotal;
+      let next;
+      if (Array.isArray(res.body)) {
+        pageRows = res.body;
+        pageTotal = res.totalCount;
+        next = nextFromLinkHeader(res.link);
+      } else if (res.body && typeof res.body === "object" && Array.isArray(res.body.results)) {
+        pageRows = res.body.results;
+        pageTotal = res.body.count;
+        next = res.body.next ?? null;
+      } else {
+        throw new GpexeClientError("list_shape_unclear", `GPEXE answered ${what} with a body that is neither a list nor a paged result.`);
+      }
+      const n = Number(pageTotal);
+      if (pageTotal === null || pageTotal === undefined || pageTotal === "" || !Number.isInteger(n) || n < 0) {
+        throw new GpexeClientError("list_shape_unclear", `GPEXE did not say how many rows ${what} has.`);
+      }
+      if (total === null) total = n;
+      else if (total !== n) throw new GpexeClientError("list_changed", `the number of rows of ${what} changed while it was read (${total} then ${n}); check again.`);
+      for (const row of pageRows) {
+        const id = row?.id === undefined || row?.id === null ? null : String(row.id);
+        if (id === null) throw new GpexeClientError("list_shape_unclear", `a row of ${what} has no id.`);
+        if (ids.has(id)) throw new GpexeClientError("list_changed", `row ${id} of ${what} came twice while the list was read; check again.`);
+        ids.add(id);
+        rows.push(row);
+      }
+      if (rows.length > total) throw new GpexeClientError("list_changed", `${what} returned more rows (${rows.length}) than it reported (${total}); check again.`);
+      if (next === null || next === undefined || next === "") {
+        if (rows.length !== total) throw new GpexeClientError("list_incomplete", `${what} reported ${total} rows but only ${rows.length} could be read.`);
+        return rows;
+      }
+      if (typeof next !== "string" || !next.startsWith(GPEXE_API_BASE)) {
+        throw new GpexeClientError("list_incomplete", `GPEXE pointed to a next page of ${what} outside its API.`);
+      }
+      if (rows.length === total) {
+        throw new GpexeClientError("list_shape_unclear", `GPEXE announced another page of ${what} after all ${total} rows.`);
+      }
+      path = next.slice(GPEXE_API_BASE.length);
+    }
+    throw new GpexeClientError("list_incomplete", `${what} has more than ${MAX_PAGES} pages.`);
   }
 
   // Parent sessions whose start falls in [fromDay, toDay] (dates as GPEXE
   // stores them: naive UTC). Drills are listed by GPEXE as their own
   // sessions and named in their parent's `drills`; they are not candidates of
   // their own.
-  async function listTeamSessions({ gpexeTeamId, fromDay, toDay }) {
+  async function listTeamSessions({ gpexeTeamId, fromDay, toDay, onProgress = null }) {
     const team = assertId(gpexeTeamId, "gpexeTeamId");
     const from = assertDay(fromDay, "fromDay");
     const to = assertDay(toDay, "toDay");
@@ -143,11 +210,7 @@ export function createGpexeClient({
     // belong to a parent that started the evening before, and is only
     // recognisable as a drill through that parent's `drills`.
     const lookFrom = new Date(Date.parse(`${from}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
-    const body = await get(`team_session/?team=${team}&start_timestamp_gte=${lookFrom}%2000:00:00&start_timestamp_lte=${to}%2023:59:59&limit=${SESSION_LIST_LIMIT}`);
-    const items = listItems(body);
-    if (items.length >= SESSION_LIST_LIMIT) {
-      throw new GpexeClientError("window_too_large", `GPEXE returned ${items.length} sessions for this window; choose a shorter one.`);
-    }
+    const items = await getAllPages(`team_session/?team=${team}&start_timestamp_gte=${lookFrom}%2000:00:00&start_timestamp_lte=${to}%2023:59:59&limit=${SESSION_LIST_LIMIT}`, { step: onProgress });
     const foreign = items.filter((s) => String(s.team) !== team);
     if (foreign.length) throw new GpexeClientError("team_filter_ignored", `GPEXE returned sessions of another team for team ${team}.`);
     const drillIds = new Set(items.flatMap((s) => (Array.isArray(s.drills) ? s.drills.map(String) : [])));
@@ -164,34 +227,8 @@ export function createGpexeClient({
       }));
   }
 
-  // Every row of a paged list: follows `next` (only within the API base) or,
-  // for a plain array, refuses a full page — never returns a silently cut list.
-  async function getAllPages(apiPath, limit, step) {
-    const out = [];
-    let path = apiPath;
-    for (let page = 0; page < ATHLETE_SESSION_MAX_PAGES; page += 1) {
-      const body = await step(path);
-      if (Array.isArray(body)) {
-        if (body.length >= limit) throw new GpexeClientError("list_incomplete", `GPEXE returned a full page of ${body.length} rows for ${apiPath.split("?")[0]} with no next page.`);
-        return out.concat(body);
-      }
-      out.push(...listItems(body));
-      if (!body?.next) {
-        if (Number.isFinite(Number(body?.count)) && out.length < Number(body.count)) {
-          throw new GpexeClientError("list_incomplete", `GPEXE reported ${body.count} rows for ${apiPath.split("?")[0]} but returned ${out.length}.`);
-        }
-        return out;
-      }
-      if (typeof body.next !== "string" || !body.next.startsWith(GPEXE_API_BASE)) {
-        throw new GpexeClientError("list_incomplete", "GPEXE pointed to a next page outside its API.");
-      }
-      path = body.next.slice(GPEXE_API_BASE.length);
-    }
-    throw new GpexeClientError("list_incomplete", `more than ${ATHLETE_SESSION_MAX_PAGES} pages for ${apiPath.split("?")[0]}.`);
-  }
-
-  async function athleteSessionsFor(sessionId, step) {
-    const listed = (await getAllPages(`athlete_session/?teamsession=${sessionId}&limit=${ATHLETE_SESSION_PAGE}`, ATHLETE_SESSION_PAGE, step))
+  async function athleteSessionsFor(sessionId, step, onPage) {
+    const listed = (await getAllPages(`athlete_session/?teamsession=${sessionId}&limit=${ATHLETE_SESSION_PAGE}`, { step: onPage }))
       .filter((a) => String(a.teamsession) === String(sessionId));
     // The list rows are enough for the ids; the full row is what the pilot
     // read (and what the mapper's fixtures describe).
@@ -220,7 +257,7 @@ export function createGpexeClient({
       throw new GpexeClientError("drills_count_out_of_range", `session ${id} reports drills_count ${teamSession.drills_count}; at most ${MAX_DRILLS} is accepted.`);
     }
     const day = String(teamSession.start_timestamp ?? "").slice(0, 10);
-    const athleteSessions = await athleteSessionsFor(id, step);
+    const athleteSessions = await athleteSessionsFor(id, step, onProgress);
     const more = {};
     const tracks = {};
     for (const row of athleteSessions) {
@@ -243,5 +280,5 @@ export function createGpexeClient({
     return { teamSession, teamThresholds, details: { full, drills }, athleteSessions, more, tracks };
   }
 
-  return { get, listTeamSessions, fetchSessionBundle };
+  return { get, request, getAllPages, listTeamSessions, fetchSessionBundle };
 }
