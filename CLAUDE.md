@@ -59,7 +59,7 @@ eksplicitne potvrde): `.claude/rules/git-safety.md`.
 
 Glavna Claude sesija je jedini implementer — jedina koja menja fajlove (kod,
 konfiguraciju, migracije, i ovaj memory-set). Subagenti (`code-reviewer`, `db-reviewer`,
-`security-reviewer`, `mobile-qa`) su **read-only revieweri** — analiziraju i prijavljuju
+`security-reviewer`, `mobile-qa`, `ux-design-reviewer`) su **read-only revieweri** — analiziraju i prijavljuju
 nalaze, ne menjaju ništa. Ako subagent "predloži ispravku", to je tekst predloga za
 glavnu sesiju da primeni, ne akcija koju je subagent sam izveo. Reviewer agenti ne pišu
 memoriju (`.claude/rules/memory-maintenance.md`).
@@ -93,6 +93,7 @@ kompletan; dopuni ulaz i pozovi ponovo, ne tumači BLOCKED kao "sve je u redu".
 |---|---|
 | frontend JS/data/actions bez vizuelne promene | samo `code-reviewer` |
 | frontend CSS/layout/responsive/pointer/touch/UI | `code-reviewer` + `mobile-qa` |
+| nov ili bitno izmenjen korisnički tok/ekran | prethodni relevantni revieweri + `ux-design-reviewer` |
 | običan backend servis/query (bez access/ownership uticaja) | samo `code-reviewer` |
 | backend auth/access/workspace/ownership/multi-tenant | `code-reviewer` + `security-reviewer` |
 | migracija/schema | `db-reviewer` (+ `security-reviewer` SAMO ako dira access/ownership) |
@@ -106,7 +107,7 @@ reviewera mogao da promeni produktnu odluku, bezbednosni profil, ili obim zadatk
 
 ## External-review okidači — tačno pet
 
-Interni reviewer skup (code-reviewer/db-reviewer/security-reviewer/mobile-qa) je
+Interni reviewer skup (code-reviewer/db-reviewer/security-reviewer/mobile-qa/ux-design-reviewer) je
 dovoljan za većinu zadataka, ali NIJE dovoljan sam po sebi kad se aktivira bilo koji od
 sledećih pet okidača:
 
@@ -126,8 +127,8 @@ merge-readiness i ne radi PR, merge, ni deploy** dok se ta spoljna revizija ne o
 Ovo važi bez obzira na to koliko su interni reviewer nalazi čisti.
 
 "Spoljna revizija" ovde znači: paket se preda KORISNIKU (ili osobi/procesu koju
-korisnik odredi) na pregled izvan internog agent seta — nijedan od četiri postojeća
-agenta (code-reviewer/db-reviewer/security-reviewer/mobile-qa) se ne broji kao "spoljni"
+korisnik odredi) na pregled izvan internog agent seta — nijedan od pet internih
+agenata (code-reviewer/db-reviewer/security-reviewer/mobile-qa/ux-design-reviewer) se ne broji kao "spoljni"
 sam po sebi, koliko god bio adversarial. Glavna sesija ne nastavlja sama dalje ka
 merge-readiness dok korisnik (ili taj određeni proces) eksplicitno ne potvrdi da je
 paket pregledan.

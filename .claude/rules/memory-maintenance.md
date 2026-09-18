@@ -31,7 +31,7 @@ application's own code or database.
 ## Who writes
 
 - Only the main session writes to the brain files. Review agents (`code-reviewer`,
-  `db-reviewer`, `mobile-qa`, `security-reviewer`) are read-only — a finding they report
+  `db-reviewer`, `mobile-qa`, `security-reviewer`, `ux-design-reviewer`) are read-only — a finding they report
   is text for the main session to act on, never a file they edit themselves, and that
   includes the brain files.
 - At the end of a task, the main session decides whether a memory write-back is actually
