@@ -554,21 +554,46 @@ async function importResult(client, { result, identity, participantId, segmentId
   return { outcome: "corrected", occasionId };
 }
 
+// The per-team import lock. Every import of a team — and the in-app preview,
+// which must read the state it describes under the same lock — takes it
+// first, inside its transaction.
+export async function lockTeamForImport(client, ownerTeamId) {
+  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, ${IMPORT_LOCK_SEED}))`, [`gpexe-import-team:${ownerTeamId}`]);
+}
+
+function checkImportContext(plan, ctx) {
+  const athleteIdByGpexeId = ctx.athleteIdByGpexeId instanceof Map ? ctx.athleteIdByGpexeId : new Map(Object.entries(ctx.athleteIdByGpexeId || {}));
+  const unmapped = plan.participants.map((p) => p.gpexeAthleteId).filter((id) => !athleteIdByGpexeId.has(id));
+  if (unmapped.length) throw new GpexeImportError("athlete_not_mapped", `GPEXE athlete(s) ${unmapped.join(", ")} have no OptiMove athlete mapping.`);
+  if (!ctx.ownerTeamId || !ctx.performedByUserId) throw new GpexeImportError("context_missing", "ownerTeamId and performedByUserId are required.");
+  return athleteIdByGpexeId;
+}
+
 // ctx = { ownerTeamId, performedByUserId, athleteIdByGpexeId: Map|object, batchFilename }
 // Test hooks: onLocked(client) runs right after the import lock is held;
 // onResultImported(result) runs after each result is written, still inside
 // the transaction.
 export async function importGpexePlan(client, plan, ctx, { onLocked, onResultImported } = {}) {
-  const athleteIdByGpexeId = ctx.athleteIdByGpexeId instanceof Map ? ctx.athleteIdByGpexeId : new Map(Object.entries(ctx.athleteIdByGpexeId || {}));
-  const unmapped = plan.participants.map((p) => p.gpexeAthleteId).filter((id) => !athleteIdByGpexeId.has(id));
-  if (unmapped.length) throw new GpexeImportError("athlete_not_mapped", `GPEXE athlete(s) ${unmapped.join(", ")} have no OptiMove athlete mapping.`);
-  if (!ctx.ownerTeamId || !ctx.performedByUserId) throw new GpexeImportError("context_missing", "ownerTeamId and performedByUserId are required.");
-
+  checkImportContext(plan, ctx);
   await client.query("begin");
   try {
-    await client.query(`select pg_advisory_xact_lock(hashtextextended($1, ${IMPORT_LOCK_SEED}))`, [`gpexe-import-team:${ctx.ownerTeamId}`]);
+    await lockTeamForImport(client, ctx.ownerTeamId);
     if (onLocked) await onLocked(client);
+    const summary = await importGpexePlanLocked(client, plan, ctx, { onResultImported });
+    await client.query("commit");
+    return summary;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  }
+}
 
+// The import itself, for a caller that has already begun the transaction and
+// taken lockTeamForImport(). It neither commits nor rolls back: the caller
+// decides (the preview always rolls back; F2 commits after its own checks).
+export async function importGpexePlanLocked(client, plan, ctx, { onResultImported } = {}) {
+  const athleteIdByGpexeId = checkImportContext(plan, ctx);
+  {
     await assertAthletesInTeam(client, ctx.ownerTeamId, plan.participants.map((p) => athleteIdByGpexeId.get(p.gpexeAthleteId)));
     const connection = await ensureSourceConnection(client, { sourceSystem: plan.sourceSystem, ownerTeamId: ctx.ownerTeamId });
     // Always both levels, so a later session with drills can reuse the
@@ -624,7 +649,6 @@ export async function importGpexePlan(client, plan, ctx, { onLocked, onResultImp
         if (onResultImported) await onResultImported(results[results.length - 1]);
       }
     }
-    await client.query("commit");
 
     const counts = {};
     for (const r of results) counts[r.outcome] = (counts[r.outcome] || 0) + 1;
@@ -636,8 +660,5 @@ export async function importGpexePlan(client, plan, ctx, { onLocked, onResultImp
       boundReferenceSet: binding.storedReferenceSet,
       importBatchId: batchId, counts, results,
     };
-  } catch (error) {
-    await client.query("rollback").catch(() => {});
-    throw error;
   }
 }

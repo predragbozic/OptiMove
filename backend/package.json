@@ -9,6 +9,7 @@
     "migrate": "node src/migrate.js",
     "tests:notifications:worker": "node src/testsNotificationWorkerCli.js",
     "training-load:notifications:worker": "node src/trainingLoadNotificationWorkerCli.js",
+    "gpexe:retention": "node src/gpexeRetentionCli.js",
     "test": "node --test --test-concurrency=1 tests/**/*.test.mjs",
     "test:verify-isolation": "node scripts/verify-test-suite-isolation.mjs",
     "import:plans:preview": "python ../tools/plan_import.py preview",
