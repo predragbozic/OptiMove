@@ -1368,8 +1368,8 @@ test("database: a candidate is never inserted as imported, and an approval must 
 // candidate after a committed import, must never hide or deny an import.
 // ---------------------------------------------------------------------------
 
-async function withCommitReplaced(commit, fn) {
-  service.setApprovalCommitForTests(commit);
+async function withCommitReplaced(commit, fn, options) {
+  service.setApprovalCommitForTests(commit, options);
   try {
     return await fn();
   } finally {
@@ -1582,4 +1582,91 @@ test("approve: the COMMIT went unconfirmed and the check fails or hangs — 503 
       service.setUncertainCommitCheckForTests();
     }
   }));
+});
+
+// Narrow external review of a89e244: a COMMIT whose answer never comes.
+async function poolSettled() {
+  let inUse = Infinity;
+  let openTx = Infinity;
+  for (let i = 0; i < 150 && (inUse > 0 || openTx > 0); i += 1) {
+    inUse = appPool.totalCount - appPool.idleCount;
+    openTx = (await admin.query(
+      `select count(*)::int as n from pg_stat_activity where datname = current_database() and state like 'idle in transaction%'`,
+    )).rows[0].n;
+    if (inUse > 0 || openTx > 0) await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return { inUse, openTx, waiting: appPool.waitingCount };
+}
+
+test("approve: a COMMIT that never answers is bounded — the request ends, the connection is closed, and without a commit the answer is import_outcome_unknown", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7209 })] }));
+  await checkNow(team);
+  const candidate = await pendingCandidate(team);
+  const before = await allRowCounts();
+  await withSwitchOn(async () => {
+    // The COMMIT is "sent" but its promise never settles, and it never
+    // reached the server.
+    const fate = await withCommitReplaced(() => new Promise(() => {}), () => approvalConnectionFate(async () => {
+      const started = Date.now();
+      const r = await approve(team, candidate, team.padmin.cookie);
+      return { r, ms: Date.now() - started };
+    }), { timeoutMs: 400 });
+    const { r, ms } = fate.result;
+    assert.ok(ms < 8_000, `the request ended (${ms} ms)`);
+    assert.deepEqual([r.status, r.body.error], [503, "import_outcome_unknown"], JSON.stringify(r.body));
+    assert.ok(!/nothing was imported/i.test(JSON.stringify(r.body)));
+    assert.equal(r.body.verify.candidateId, candidate.id);
+    assert.equal(fate.dropped, true, "the connection whose COMMIT never answered is closed, not returned to the pool");
+  });
+  assert.deepEqual(await poolSettled(), { inUse: 0, openTx: 0, waiting: 0 }, "no pool connection held and no transaction left open");
+  // Following verify: not imported. Nothing of it remains, and approving
+  // again (the candidate row is no longer locked) imports it once.
+  assert.equal((await api(`/teams/${team.teamId}/candidates/${candidate.id}`, { cookie: team.coach.cookie })).body.candidate.status, "pending");
+  assert.deepEqual(await allRowCounts(), before);
+  await withSwitchOn(async () => {
+    const again = await approve(team, candidate, team.padmin.cookie);
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    assert.equal(again.body.commitConfirmation, "confirmed");
+  });
+  assert.equal((await approvalsOf(candidate.id)).length, 1);
+});
+
+test("approve: the COMMIT went through but its answer never comes — bounded, the connection is closed, and the answer is the verified import", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7210 })] }));
+  await checkNow(team);
+  const candidate = await pendingCandidate(team);
+  await withSwitchOn(async () => {
+    let commitClient = null;
+    // The unreliable connection is closed BEFORE the check runs: by the time
+    // the check starts, it can no longer be used. Otherwise the check throws
+    // and the answer would be 503.
+    service.setUncertainCommitCheckForTests({
+      fault: async () => { await assert.rejects(commitClient.query("select 1")); },
+    });
+    let fate;
+    try {
+      fate = await withCommitReplaced(async (client) => {
+        commitClient = client;
+        await client.query("commit");
+        return new Promise(() => {}); // the answer never arrives
+      }, () => approvalConnectionFate(async () => {
+        const started = Date.now();
+        const r = await approve(team, candidate, team.padmin.cookie);
+        return { r, ms: Date.now() - started };
+      }), { timeoutMs: 400 });
+    } finally {
+      service.setUncertainCommitCheckForTests();
+    }
+    const { r, ms } = fate.result;
+    assert.ok(ms < 8_000, `the request ended (${ms} ms)`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual([r.body.outcome, r.body.commitConfirmation], ["imported", "verified_after_commit_error"]);
+    assert.equal(r.body.candidate.approval.id, r.body.approval.id);
+    assert.equal(fate.dropped, true);
+  });
+  assert.deepEqual(await poolSettled(), { inUse: 0, openTx: 0, waiting: 0 });
+  assert.equal((await approvalsOf(candidate.id)).length, 1);
+  assert.equal((await writtenRows(team.teamId)).events, 1);
 });

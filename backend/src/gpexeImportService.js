@@ -623,8 +623,15 @@ export function setApprovalObserver(observer) {
 // answer, or lose the connection before it), to prove what the caller is
 // told when the outcome of the commit is not known.
 let approvalCommit = null;
-export function setApprovalCommitForTests(commit) {
+// How long the approval waits for the answer to its COMMIT. Past this the
+// outcome is unknown: the connection is closed and the approval is looked
+// for on another one (resolveUncertainCommit). A COMMIT itself is short;
+// this only has to cover a slow disk or network, not the import.
+export const COMMIT_ANSWER_TIMEOUT_MS = 15_000;
+let commitAnswerTimeoutMs = COMMIT_ANSWER_TIMEOUT_MS;
+export function setApprovalCommitForTests(commit, { timeoutMs = COMMIT_ANSWER_TIMEOUT_MS } = {}) {
   approvalCommit = commit ?? null;
+  commitAnswerTimeoutMs = timeoutMs;
 }
 
 // The check after an unconfirmed COMMIT runs exactly when the database may
@@ -776,6 +783,7 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
   // COMMIT got no answer, so this connection is not returned to the pool.
   let commitSent = false;
   let commitUncertain = false;
+  let released = false;
   try {
     await client.query("begin");
     // Step 1.
@@ -857,11 +865,17 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // From here on "nothing was imported" can no longer be said: once the
     // COMMIT is sent, a missing answer is an unknown outcome.
     commitSent = true;
+    const committing = Promise.resolve().then(() => (approvalCommit ? approvalCommit(client) : client.query("commit")));
+    committing.catch(() => {}); // a COMMIT that loses the race may still fail later
     try {
-      if (approvalCommit) await approvalCommit(client);
-      else await client.query("commit");
+      // An answer that never comes is bounded like a lost one.
+      await withinBound(committing, commitAnswerTimeoutMs);
     } catch (commitError) {
       commitUncertain = true;
+      // The connection is not trusted any more: close it first (this also
+      // ends a COMMIT still waiting on it), then look on another one.
+      released = true;
+      client.release(true);
       return await resolveUncertainCommit(teamId, candidateId, { approvalId: approval.id, result, commitError });
     }
     return result;
@@ -879,6 +893,6 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     throw refusal(500, "internal_error", "The approval failed on the server; nothing was imported.");
   } finally {
     // A connection whose COMMIT went unanswered is not trusted again.
-    client.release(commitUncertain ? true : undefined);
+    if (!released) client.release(commitUncertain ? true : undefined);
   }
 }

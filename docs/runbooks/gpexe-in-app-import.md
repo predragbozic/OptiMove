@@ -276,7 +276,9 @@ candidate. Never read a failed candidate read as a failed import.
 ### When the outcome is uncertain (503 `import_outcome_unknown`)
 
 Once the COMMIT has been sent, the answer never says "nothing was imported":
-a lost answer means the outcome is unknown. The server first looks for the
+a lost answer means the outcome is unknown. The approval waits at most 15
+seconds for the COMMIT's answer; an answer that never comes is treated like
+a lost one, and the connection is closed first. The server first looks for the
 approval on another connection, for at most 5 seconds; if it is there, the
 answer is a normal 200 (`verified_after_commit_error`). If it is not there,
 the check fails, or the 5 seconds pass, the answer is 503 with `verify`. The
@@ -293,6 +295,20 @@ connection whose COMMIT went unanswered is closed, not reused.
    nothing; otherwise it imports once.
 
 Never undo or re-enter data by hand because of a 503: first check as above.
+
+**Open risk (recorded in the F2 reviews, not fixed in F2):**
+- The waits **before** the COMMIT are not bounded: the approver's role and
+  grant rows, the candidate row, and the team import lock. If another
+  approval or import of the same team holds them, a new approval waits
+  until it finishes.
+- On a real network stall (not a clean close), the server may notice the
+  dead connection only through TCP keepalive. Until then, the abandoned
+  transaction keeps those locks, and a retried approval waits.
+- Before regular imports: give these waits a bound (`lock_timeout` and
+  `idle_in_transaction_session_timeout` for the approval transaction) with
+  a stable refusal code, and confirm the deployed request timeout (Render
+  and any proxy). Today the COMMIT alone can take up to 15 s plus the 5 s
+  check.
 
 **Before undoing an import on a persistent database** (not allowed today:
 the undo script accepts only disposable databases): the undo script must
