@@ -1,0 +1,85 @@
+{
+  "id": 1473,
+  "acceleration_thresholds": [
+    2.5
+  ],
+  "deceleration_thresholds": [
+    -2.5
+  ],
+  "is_heart_rate_thresholds_in_percent": true,
+  "heart_rate_thresholds_in_percent": [
+    0.85,
+    0.95
+  ],
+  "power_thresholds": [
+    20,
+    25,
+    60,
+    75
+  ],
+  "speed_thresholds": [
+    5.5,
+    7
+  ],
+  "relative_speed_thresholds": [
+    0.6,
+    0.8,
+    0.9
+  ],
+  "jump_height_thresholds": [
+    0.25,
+    0.5
+  ],
+  "dive_load_thresholds": [
+    30,
+    50
+  ],
+  "dive_return_time_thresholds": [
+    1,
+    2
+  ],
+  "impact_intensity_thresholds": [
+    75,
+    90
+  ],
+  "power_events_speed_thresholds": [
+    5.5,
+    7
+  ],
+  "power_events_distance_thresholds": [
+    10,
+    20
+  ],
+  "power_events_time_thresholds": [
+    3,
+    6
+  ],
+  "acceleration_events_threshold": 2.5,
+  "acceleration_events_duration": 0.3,
+  "deceleration_events_threshold": -2.5,
+  "deceleration_events_duration": 0.3,
+  "speed_events_threshold": 7,
+  "speed_events_duration": 0,
+  "relative_speed_events_threshold": 0.6,
+  "relative_speed_events_duration": 0,
+  "team": 980,
+  "validity_start": "2025-01-01T00:00:00",
+  "validity_end": null,
+  "are_acceleration_events_zones_visible": true,
+  "are_acceleration_time_zones_visible": true,
+  "are_acceleration_distance_zones_visible": true,
+  "are_deceleration_events_zones_visible": true,
+  "are_deceleration_time_zones_visible": true,
+  "are_deceleration_distance_zones_visible": true,
+  "are_heart_rate_time_zones_visible": true,
+  "are_heart_rate_distance_zones_visible": false,
+  "are_power_time_zones_visible": true,
+  "are_power_distance_zones_visible": true,
+  "are_speed_events_zones_visible": true,
+  "are_speed_time_zones_visible": true,
+  "are_speed_distance_zones_visible": true,
+  "are_relative_speed_events_zones_visible": true,
+  "are_relative_speed_time_zones_visible": true,
+  "are_relative_speed_distance_zones_visible": true,
+  "use_hr_min": true
+}

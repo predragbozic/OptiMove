@@ -11,8 +11,9 @@ import os from "node:os";
 import path from "node:path";
 import pg from "pg";
 import { buildGpexeImportPlan, GPEXE_METRIC_SPECS, GPEXE_DERIVED_NOT_IMPORTED, GpexeMappingError } from "../src/gpexeImportMapper.js";
-import { importGpexePlan, importedOccasionContentHash, GpexeImportError } from "../src/gpexeImportWriter.js";
+import { importGpexePlan, importedOccasionContentHash, referenceSetHash, GpexeImportError } from "../src/gpexeImportWriter.js";
 import { createGpexeDisposableDb, createGpexePilotOrg } from "./_gpexe-disposable-db.mjs";
+import realTeamThresholds from "./fixtures/gpexe-team-thresholds-1473.json" with { type: "json" };
 import { describeApplyTarget, assertDisposableApplyTarget, main as cliMain } from "../scripts/gpexe-import-pilot.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
@@ -29,7 +30,12 @@ function naive(date) {
 }
 
 function defaultThresholds(gpexeTeamId) {
-  return { id: 1473, team: gpexeTeamId, validity_start: "2025-01-01T00:00:00", validity_end: null, power_thresholds: [20, 25, 60, 75], speed_thresholds: [5.5, 7] };
+  return {
+    id: 1473, team: gpexeTeamId, validity_start: "2025-01-01T00:00:00", validity_end: null,
+    power_thresholds: [20, 25, 60, 75], speed_thresholds: [5.5, 7],
+    acceleration_events_threshold: 2.5, acceleration_events_duration: 0.3,
+    deceleration_events_threshold: -2.5, deceleration_events_duration: 0.3,
+  };
 }
 
 function moreFor(row, { powerZoneDistances, speedZoneDistances, acc, dec, powerBounds = ZONE_BOUNDS.power, accThreshold = 2.5 }) {
@@ -134,7 +140,14 @@ test("mapper: GPEXE source values only, units and conversions, separate full/dri
   assert.equal(plan.event.sourceExternalId, "team_session:5001");
   assert.deepEqual(plan.segments.map((s) => [s.drillIndex, s.order]), [[0, 1], [1, 2]]);
   assert.deepEqual(plan.metrics.map((m) => m.key), GPEXE_METRIC_SPECS.map((s) => s.key));
-  assert.deepEqual(plan.thresholdsUsed, { id: "1473", validityStart: "2025-01-01T00:00:00.000Z", validityEnd: null });
+  assert.equal(plan.thresholdsUsed.id, "1473");
+  assert.equal(plan.thresholdsUsed.validityStart, "2025-01-01T00:00:00.000Z");
+  assert.equal(plan.thresholdsUsed.validityEnd, null);
+  assert.deepEqual(plan.thresholdsUsed.payload, {
+    power_thresholds: [20, 25, 60, 75], speed_thresholds: [5.5, 7],
+    acceleration_events_threshold: 2.5, acceleration_events_duration: 0.3,
+    deceleration_events_threshold: -2.5, deceleration_events_duration: 0.3,
+  }, "the plan carries the threshold set itself, not only its id");
   const derivedLabels = ["m/min", "Acc+Dec", "Burst&brakes", "HMLD ≥25 W/kg (m)", "EXPDist ≥60 W/kg (m)"];
   assert.deepEqual(plan.derivedNotImported.map((m) => m.label), derivedLabels);
   assert.deepEqual(GPEXE_DERIVED_NOT_IMPORTED.map((m) => m.label), derivedLabels);
@@ -201,6 +214,36 @@ test("mapper: a changed zone boundary, event threshold or team threshold skips t
 
   const splitZone = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), thresholds: { ...defaultThresholds(77), power_thresholds: [20, 25, 50, 60, 75], speed_thresholds: [5.5, 7, 8] } }));
   assert.deepEqual(skipsFor(splitZone, "500101"), ["gpexe_power_zone_25_60_distance:team_threshold_split", "gpexe_sprint_distance_7mps:team_threshold_split"], "a team threshold inside a zone means the zone no longer has that meaning");
+});
+
+test("mapper: the snapshot is built from the real captured GPEXE threshold set", () => {
+  // backend/tests/fixtures/gpexe-team-thresholds-1473.json is GET
+  // team/980/thresholds/?valid_on=2026-09-14 as GPEXE returned it on
+  // 2026-09-17, with the "user" field removed. If GPEXE renames a field, this
+  // test fails instead of the importer recording an empty provenance.
+  const plan = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes().slice(0, 1), gpexeTeamId: realTeamThresholds.team, thresholds: realTeamThresholds }));
+  assert.equal(plan.thresholdsUsed.id, String(realTeamThresholds.id));
+  assert.equal(plan.thresholdsUsed.validityStart, "2025-01-01T00:00:00.000Z");
+  assert.equal(plan.thresholdsUsed.validityEnd, null);
+  for (const [key, value] of Object.entries(plan.thresholdsUsed.payload)) {
+    const numbers = Array.isArray(value) ? value : [value];
+    assert.ok(numbers.length > 0 && numbers.every((n) => typeof n === "number" && Number.isFinite(n)), `${key}: ${JSON.stringify(value)}`);
+  }
+  assert.deepEqual(plan.thresholdsUsed.payload.power_thresholds, [20, 25, 60, 75]);
+  assert.deepEqual(plan.thresholdsUsed.payload.speed_thresholds, [5.5, 7]);
+});
+
+test("mapper: a threshold set missing any of the fields the snapshot records is refused", () => {
+  const athletes = standardAthletes().slice(0, 1);
+  for (const field of ["power_thresholds", "speed_thresholds", "acceleration_events_threshold", "deceleration_events_duration"]) {
+    const thresholds = { ...defaultThresholds(77) };
+    delete thresholds[field];
+    assert.throws(
+      () => buildGpexeImportPlan(makeBundle({ athletes, thresholds })),
+      (e) => e.code === "thresholds_payload_incomplete" && e.message.includes(field),
+      field,
+    );
+  }
 });
 
 test("mapper: team thresholds must belong to the session's team and be valid at the session start", () => {
@@ -318,6 +361,7 @@ const TEAM_TABLES = {
   activity_participants: `select count(*)::int as c from training.activity_participants ap join training.activities a on a.id = ap.activity_id where a.owner_team_id = $1`,
   activity_components: `select count(*)::int as c from training.activity_components ac join training.activities a on a.id = ac.activity_id where a.owner_team_id = $1`,
   component_segment_links: `select count(*)::int as c from training.activity_component_metric_segment_links l join training.activity_components ac on ac.id = l.activity_component_id join training.activities a on a.id = ac.activity_id where a.owner_team_id = $1`,
+  event_source_bindings: `select count(*)::int as c from training_load.metric_event_source_bindings b join training_load.metric_events e on e.id = b.event_id where e.owner_team_id = $1`,
 };
 
 async function snapshot(teamId) {
@@ -331,14 +375,24 @@ test("writer: first import creates one event, activity, drill components and one
   const summary = await runImport(org, makeBundle({ athletes: standardAthletes() }));
   assert.deepEqual(summary.counts, { created: 5 }, "101: full + 2 drills, 102: full + 1 drill; 103 skipped (two tracks)");
   assert.equal(summary.definitionsCreated.length, 11);
-  assert.deepEqual(summary.thresholdsUsed, { id: "1473", validityStart: "2025-01-01T00:00:00.000Z", validityEnd: null });
+  assert.equal(summary.thresholdsUsed.id, "1473");
+  assert.equal(summary.bindingCreated, true);
 
   const state = await snapshot(org.teamId);
   assert.deepEqual(state, {
     connections: 1, definitions: 11, definition_versions: 11, scope_capabilities: 22, events: 1, segments: 2, event_participants: 2,
-    source_identities: 5, import_batches: 1, occasions: 5, metric_values: 53, activities: 1, activity_participants: 2,
-    activity_components: 2, component_segment_links: 2,
+    source_identities: 6, import_batches: 1, occasions: 5, metric_values: 53, activities: 1, activity_participants: 2,
+    activity_components: 2, component_segment_links: 2, event_source_bindings: 1,
   });
+
+  const reserved = (await admin.query(
+    `select si.source_external_id, si.current_occasion_id from training_load.metric_source_identities si
+     join training_load.metric_source_connections c on c.id = si.source_connection_id
+     where c.owner_team_id = $1 and si.source_external_id = 'team_session:5001'`,
+    [org.teamId],
+  )).rows;
+  assert.equal(reserved.length, 1, "the session itself is reserved as an identity");
+  assert.equal(reserved[0].current_occasion_id, null, "the reservation never receives an occasion");
 
   const sprint = (await admin.query(
     `select d.label, v.unit, v.condition_description from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id = d.current_version_id
@@ -507,8 +561,9 @@ test("writer: two concurrent imports of the same session serialize on the team l
   const state = await snapshot(org.teamId);
   assert.deepEqual(
     [state.connections, state.definitions, state.events, state.source_identities, state.occasions, state.import_batches, state.activities, state.activity_components],
-    [1, 11, 1, 5, 5, 1, 1, 2],
+    [1, 11, 1, 6, 5, 1, 1, 2],
   );
+  assert.equal(state.event_source_bindings, 1, "one binding, whichever import created the event");
 });
 
 test("writer: three concurrent first imports without any test hook also end with one copy", async () => {
@@ -518,7 +573,8 @@ test("writer: three concurrent first imports without any test hook also end with
   const outcomes = summaries.map((s) => JSON.stringify(s.counts)).sort();
   assert.deepEqual(outcomes, [JSON.stringify({ created: 5 }), JSON.stringify({ unchanged: 5 }), JSON.stringify({ unchanged: 5 })]);
   const state = await snapshot(org.teamId);
-  assert.deepEqual([state.connections, state.definitions, state.events, state.source_identities, state.occasions, state.activities], [1, 11, 1, 5, 5, 1]);
+  assert.deepEqual([state.connections, state.definitions, state.events, state.source_identities, state.occasions, state.activities], [1, 11, 1, 6, 5, 1]);
+  assert.equal(state.event_source_bindings, 1);
 });
 
 test("writer: an athlete without an active membership in the team stops the import with zero writes", async () => {
@@ -796,6 +852,484 @@ test("writer: an import racing a catalog archive of its definition waits and the
   const outcome = await reimport;
   assert.equal(outcome.error?.code, "metric_definition_mismatch", JSON.stringify(outcome.summary?.counts ?? outcome.error?.message));
   assert.equal((await snapshot(org.teamId)).events, 1, "the second session was not written");
+});
+
+test("writer: the event binding stores which GPEXE threshold set produced the session", async () => {
+  const org = await setupTeam();
+  const bundle = makeBundle({ sessionId: 5021, athletes: standardAthletes() });
+  const summary = await runImport(org, bundle);
+  const binding = (await admin.query(
+    `select b.event_id, b.source_external_id, b.reference_set_external_id, b.reference_valid_from, b.reference_valid_to, b.reference_payload, b.reference_hash, b.created_by_user_id
+     from training_load.metric_event_source_bindings b join training_load.metric_events e on e.id = b.event_id where e.owner_team_id = $1`,
+    [org.teamId],
+  )).rows;
+  assert.equal(binding.length, 1);
+  assert.equal(String(binding[0].event_id), String(summary.eventId));
+  assert.equal(binding[0].source_external_id, "team_session:5021");
+  assert.equal(binding[0].reference_set_external_id, "1473");
+  assert.equal(binding[0].reference_valid_from.toISOString(), "2025-01-01T00:00:00.000Z");
+  assert.equal(binding[0].reference_valid_to, null, "an open-ended set stays open-ended");
+  assert.deepEqual(binding[0].reference_payload.power_thresholds, [20, 25, 60, 75]);
+  assert.equal(binding[0].reference_payload.acceleration_events_duration, 0.3);
+  assert.equal(binding[0].reference_hash, referenceSetHash(buildGpexeImportPlan(bundle).thresholdsUsed));
+  // The same set serialized differently by GPEXE (numeric strings) is the same set.
+  const restated = defaultThresholds(77);
+  const asStrings = {
+    ...restated,
+    power_thresholds: restated.power_thresholds.map(String),
+    speed_thresholds: restated.speed_thresholds.map(String),
+    acceleration_events_duration: String(restated.acceleration_events_duration),
+  };
+  assert.equal(
+    referenceSetHash(buildGpexeImportPlan(makeBundle({ sessionId: 5021, athletes: standardAthletes(), thresholds: asStrings })).thresholdsUsed),
+    binding[0].reference_hash,
+    "a re-serialized set must not read as a changed set",
+  );
+  assert.equal(String(binding[0].created_by_user_id), String(org.userId));
+
+  // The binding is a record of what the source reported: it cannot be rewritten.
+  await assert.rejects(
+    admin.query(`update training_load.metric_event_source_bindings set reference_hash = 'x' where event_id = $1`, [summary.eventId]),
+    /immutable/,
+  );
+  // Nor can a binding describe an event it does not belong to.
+  const otherOrg = await setupTeam();
+  const otherSummary = await runImport(otherOrg, makeBundle({ sessionId: 5022, athletes: standardAthletes() }));
+  await assert.rejects(
+    admin.query(
+      `insert into training_load.metric_event_source_bindings (event_id, source_connection_id, source_external_id)
+       select $1, source_connection_id, 'team_session:9999' from training_load.metric_events where id = $1`,
+      [otherSummary.eventId],
+    ),
+    /does not match event/,
+  );
+});
+
+test("writer: a re-import under a different GPEXE threshold set stops instead of restating what stored values mean", async () => {
+  const org = await setupTeam();
+  await runImport(org, makeBundle({ sessionId: 5023, athletes: standardAthletes() }));
+  const before = await snapshot(org.teamId);
+
+  // The thresholds themselves changed under the same set id: what the stored
+  // values mean is no longer certain, so the import stops.
+  const changedSet = { ...defaultThresholds(77), power_thresholds: [20, 25, 55, 75] };
+  await assert.rejects(
+    runImport(org, makeBundle({ sessionId: 5023, athletes: standardAthletes(), thresholds: changedSet, updatedOn: "2026-09-15T08:00:00" })),
+    (e) => e.code === "source_reference_set_changed" && e.storedReferenceSet.externalId === "1473" && e.incomingReferenceSet.hash !== e.storedReferenceSet.hash,
+  );
+  assert.deepEqual(await snapshot(org.teamId), before, "a changed threshold set writes nothing at all");
+
+  // A different set id with the same thresholds is also a stop: which set was
+  // in force is part of the provenance.
+  await assert.rejects(
+    runImport(org, makeBundle({ sessionId: 5023, athletes: standardAthletes(), thresholds: { ...defaultThresholds(77), id: 1600 } })),
+    (e) => e.code === "source_reference_set_changed",
+  );
+
+  // GPEXE closing the validity window when a successor set appears changes no
+  // value's meaning, so the re-import continues and reports the difference.
+  const closedWindow = await runImport(org, makeBundle({ sessionId: 5023, athletes: standardAthletes(), thresholds: { ...defaultThresholds(77), validity_end: "2027-01-01T00:00:00" } }));
+  assert.deepEqual(closedWindow.counts, { unchanged: 5 });
+  assert.equal(closedWindow.referenceSetWindowChanged, true);
+  assert.equal(closedWindow.boundReferenceSet.validTo, null, "the summary reports the recorded window, not the incoming one");
+  assert.equal(closedWindow.boundReferenceSet.hashVersion, 1);
+  const storedWindow = (await admin.query(
+    `select b.reference_valid_to from training_load.metric_event_source_bindings b join training_load.metric_events e on e.id = b.event_id where e.owner_team_id = $1`,
+    [org.teamId],
+  )).rows[0].reference_valid_to;
+  assert.equal(storedWindow, null, "the recorded window stays what it was at import time");
+
+  // An unchanged set still re-imports as usual.
+  const again = await runImport(org, makeBundle({ sessionId: 5023, athletes: standardAthletes() }));
+  assert.deepEqual(again.counts, { unchanged: 5 });
+  assert.equal(again.referenceSetWindowChanged, false);
+});
+
+test("writer: a failure after the event leaves no reservation and no binding behind", async () => {
+  const org = await setupTeam();
+  // The reservation identity, the event and its binding are all written
+  // before the first result. A failure at that point must take every one of
+  // them back with the transaction.
+  await assert.rejects(
+    runImport(org, makeBundle({ sessionId: 5026, athletes: standardAthletes() }), {
+      onResultImported: async () => { throw new Error("import interrupted after the first result"); },
+    }),
+    /import interrupted/,
+  );
+  const state = await snapshot(org.teamId);
+  assert.ok(Object.values(state).every((c) => c === 0), JSON.stringify(state));
+  const reservations = (await admin.query(
+    `select count(*)::int as c from training_load.metric_source_identities si
+     join training_load.metric_source_connections c on c.id = si.source_connection_id where c.owner_team_id = $1`,
+    [org.teamId],
+  )).rows[0].c;
+  assert.equal(reservations, 0, "no reservation survives a rolled-back import");
+
+  // The same session imports normally afterwards.
+  const retry = await runImport(org, makeBundle({ sessionId: 5026, athletes: standardAthletes() }));
+  assert.deepEqual(retry.counts, { created: 5 });
+  assert.equal(retry.bindingCreated, true);
+});
+
+test("database: one active gpexe connection per team, other systems and inactive rows untouched", async () => {
+  const org = await setupTeam();
+  await runImport(org, makeBundle({ sessionId: 5024, athletes: standardAthletes() }));
+  const other = await setupTeam();
+
+  await assert.rejects(
+    admin.query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1)`, [org.teamId]),
+    (e) => e.code === "23505",
+    "a second ACTIVE gpexe connection for the same team is refused by the database",
+  );
+  await assert.doesNotReject(
+    admin.query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id, state) values ('gpexe','team',$1,'inactive')`, [org.teamId]),
+    "an inactive one is still allowed",
+  );
+  await assert.doesNotReject(
+    admin.query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1)`, [other.teamId]),
+    "another team is unaffected",
+  );
+  // v11 deliberately allows several connections of the same system per owner;
+  // only gpexe is narrowed (the dashboard suite relies on the generic rule).
+  await assert.doesNotReject((async () => {
+    await admin.query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1)`, [org.teamId]);
+    await admin.query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1)`, [org.teamId]);
+  })());
+});
+
+test("database: two concurrent transactions cannot both create an active gpexe connection for one team", async () => {
+  const org = await setupTeam();
+  const a = await newClient();
+  const b = await newClient();
+  try {
+    await a.query("begin");
+    await b.query("begin");
+    await a.query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1)`, [org.teamId]);
+    // A pg client runs one query at a time, so the second connection's pid has
+    // to be read BEFORE its insert starts waiting.
+    const pid = (await b.query("select pg_backend_pid() as pid")).rows[0].pid;
+    // The second transaction blocks on the unique index until the first one
+    // commits, then fails — no advisory lock involved.
+    const second = b.query(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1)`, [org.teamId])
+      .then(() => ({ ok: true }), (error) => ({ error }));
+    let waiting = false;
+    for (let i = 0; i < 100 && !waiting; i += 1) {
+      const r = await admin.query(`select wait_event_type from pg_stat_activity where pid = $1`, [pid]);
+      waiting = r.rows[0]?.wait_event_type === "Lock";
+      if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(waiting, true, "the second insert waits on the index, it does not proceed");
+    await a.query("commit");
+    const result = await second;
+    assert.equal(result.error?.code, "23505", "the loser of the race is refused by the database");
+    await b.query("rollback");
+  } finally {
+    await a.end();
+    await b.end();
+  }
+  const active = (await admin.query(
+    `select count(*)::int as c from training_load.metric_source_connections where owner_team_id = $1 and source_system = 'gpexe' and state = 'active'`,
+    [org.teamId],
+  )).rows[0].c;
+  assert.equal(active, 1);
+});
+
+test("database: a second event row for the same gpexe connection and team_session is refused outright", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5025, athletes: standardAthletes() }));
+  const connectionId = summary.connectionId;
+  const insertEvent = (externalId, connection) => admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('rogue','2026-09-14','2026-09-14T18:08:12Z','session','team',$1,$2,$3,$4) returning id`,
+    [org.teamId, connection, externalId, TZ],
+  );
+
+  // A writer that skips the advisory lock cannot create the duplicate at all.
+  await assert.rejects(insertEvent("team_session:5025", connectionId), (e) => e.code === "23505");
+  // Another GPEXE session on the same connection is unaffected.
+  const other = await insertEvent("team_session:5025b", connectionId);
+  assert.ok(other.rows[0].id);
+  // And the generic v12 contract still holds for every other source system:
+  // two events with the same external id on a non-gpexe connection are fine.
+  const generic = (await admin.query(
+    `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1) returning id`,
+    [org.teamId],
+  )).rows[0].id;
+  await assert.doesNotReject((async () => {
+    await insertEvent("team_session:5025", generic);
+    await insertEvent("team_session:5025", generic);
+  })());
+});
+
+test("database: an event cannot be moved onto an external id the same gpexe connection already uses", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5029, athletes: standardAthletes() }));
+  const second = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('another session','2026-09-15','2026-09-15T18:08:12Z','session','team',$1,$2,'team_session:5029b',$3) returning id`,
+    [org.teamId, summary.connectionId, TZ],
+  )).rows[0].id;
+  // v12 leaves source_external_id mutable, so the guard has to cover UPDATE.
+  await assert.rejects(
+    admin.query(`update training_load.metric_events set source_external_id = 'team_session:5029' where id = $1`, [second]),
+    (e) => e.code === "23505",
+  );
+  // Moving it to a free id is still allowed, and a no-op update of the row
+  // itself must not report a conflict with itself.
+  await assert.doesNotReject(admin.query(`update training_load.metric_events set source_external_id = 'team_session:5029c' where id = $1`, [second]));
+  await assert.doesNotReject(admin.query(`update training_load.metric_events set source_external_id = 'team_session:5029c' where id = $1`, [second]));
+});
+
+test("writer: a binding written under an older hash rule is reported as such, not as a changed threshold set", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5030, athletes: standardAthletes() }));
+  // Simulate a row written by an earlier version of the hash rule. The stored
+  // hash then says nothing about whether the source changed.
+  await admin.query(`alter table training_load.metric_event_source_bindings disable trigger metric_event_source_bindings_immutable`);
+  await admin.query(`update training_load.metric_event_source_bindings set reference_hash_version = 0 where event_id = $1`, [summary.eventId]);
+  await admin.query(`alter table training_load.metric_event_source_bindings enable trigger metric_event_source_bindings_immutable`);
+  const before = await snapshot(org.teamId);
+  await assert.rejects(
+    runImport(org, makeBundle({ sessionId: 5030, athletes: standardAthletes() })),
+    (e) => e.code === "reference_hash_version_outdated" && e.storedReferenceSet.hashVersion === 0,
+  );
+  assert.deepEqual(await snapshot(org.teamId), before, "an unreadable provenance stops the import, it does not overwrite it");
+});
+
+test("database: v20 adds no obstacle to any event that is not a gpexe import", async () => {
+  const org = await setupTeam();
+  // A connection and an event of another source system, the shape every
+  // non-GPEXE importer and the existing test fixtures use.
+  const connectionId = (await admin.query(
+    `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1) returning id`,
+    [org.teamId],
+  )).rows[0].id;
+  const withConnection = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('csv upload','2026-09-14','2026-09-14T18:08:12Z','session','team',$1,$2,'file:rows.csv',$3) returning id`,
+    [org.teamId, connectionId, TZ],
+  )).rows[0].id;
+  const withoutConnection = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, event_timezone_snapshot)
+     values ('manual entry','2026-09-14','2026-09-14T18:08:12Z','session','team',$1,$2) returning id`,
+    [org.teamId, TZ],
+  )).rows[0].id;
+
+  // No binding is created for them, so nothing new stands in the way: both
+  // still delete exactly as they did before this migration.
+  await assert.doesNotReject(admin.query(`delete from training_load.metric_events where id = any($1::uuid[])`, [[withConnection, withoutConnection]]));
+  await assert.doesNotReject(admin.query(`delete from training_load.metric_source_connections where id = $1`, [connectionId]));
+});
+
+test("database: a bound event's own source identity can no longer be changed", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5031, athletes: standardAthletes() }));
+  const binding = (await admin.query(
+    `select source_connection_id, source_external_id from training_load.metric_event_source_bindings where event_id = $1`,
+    [summary.eventId],
+  )).rows[0];
+  assert.equal(binding.source_external_id, "team_session:5031");
+
+  // Moving a bound event onto a FREE external id was allowed: the binding is
+  // immutable, so the event and the record of which GPEXE session produced it
+  // would stop agreeing, with nothing left to detect it.
+  await assert.rejects(
+    admin.query(`update training_load.metric_events set source_external_id = 'team_session:free' where id = $1`, [summary.eventId]),
+    // Its own SQLSTATE, so a caller can branch on the code instead of the
+    // message, and never confuse it with the duplicate guard's 23505.
+    (e) => /source identity is immutable once the event is bound/.test(e.message) && e.code === "23000",
+  );
+  await assert.rejects(
+    admin.query(`update training_load.metric_events set source_external_id = null where id = $1`, [summary.eventId]),
+    /source identity is immutable once the event is bound/,
+  );
+  const otherConnection = (await admin.query(
+    `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1) returning id`,
+    [org.teamId],
+  )).rows[0].id;
+  await assert.rejects(
+    admin.query(`update training_load.metric_events set source_connection_id = $1 where id = $2`, [otherConnection, summary.eventId]),
+    /source identity is immutable once the event is bound/,
+  );
+
+  const still = (await admin.query(
+    `select e.source_external_id, e.source_connection_id from training_load.metric_events e where e.id = $1`,
+    [summary.eventId],
+  )).rows[0];
+  assert.equal(still.source_external_id, binding.source_external_id, "event and binding still agree");
+  assert.equal(String(still.source_connection_id), String(binding.source_connection_id));
+
+  // Renaming a bound event is untouched: only its source identity is frozen.
+  await assert.doesNotReject(
+    admin.query(`update training_load.metric_events set event_name = 'renamed' where id = $1`, [summary.eventId]),
+  );
+
+  // The control case has everything a too-broad guard might key on except the
+  // binding: another source system, and measurements underneath it. v12 leaves
+  // source_external_id editable there, and v20 must not change that.
+  const measuredConnection = (await admin.query(
+    `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1) returning id`,
+    [org.teamId],
+  )).rows[0].id;
+  const measuredEvent = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('csv upload','2026-09-16','2026-09-16T18:08:12Z','session','team',$1,$2,'file:rows.csv',$3) returning id`,
+    [org.teamId, measuredConnection, TZ],
+  )).rows[0].id;
+  const measuredParticipant = (await admin.query(
+    `insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,$3) returning id`,
+    [measuredEvent, org.athleteIds[0], TZ],
+  )).rows[0].id;
+  await admin.query(
+    `insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'csv_import',$2)`,
+    [measuredParticipant, org.userId],
+  );
+  await assert.doesNotReject(
+    admin.query(`update training_load.metric_events set source_external_id = 'file:rows2.csv' where id = $1`, [measuredEvent]),
+    "a measured event of another source keeps the editability v12 gives it",
+  );
+
+  // An event with no binding stays as mutable as v12 always allowed.
+  const unbound = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('not imported yet','2026-09-15','2026-09-15T18:08:12Z','session','team',$1,$2,'team_session:5031b',$3) returning id`,
+    [org.teamId, binding.source_connection_id, TZ],
+  )).rows[0].id;
+  await assert.doesNotReject(
+    admin.query(`update training_load.metric_events set source_external_id = 'team_session:5031c' where id = $1`, [unbound]),
+    "an unbound event is still editable where the existing contract allows it",
+  );
+  await assert.rejects(
+    admin.query(`update training_load.metric_events set source_external_id = 'team_session:5031' where id = $1`, [unbound]),
+    (e) => e.code === "23505",
+    "and still cannot take an id this connection already uses",
+  );
+});
+
+test("database: a binding committed while an identity update waits still blocks that update", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5032, athletes: standardAthletes() }));
+  // A second, not-yet-bound event on the same GPEXE connection.
+  const unbound = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('not bound yet','2026-09-16','2026-09-16T18:08:12Z','session','team',$1,$2,'team_session:5032b',$3) returning id`,
+    [org.teamId, summary.connectionId, TZ],
+  )).rows[0].id;
+
+  const binder = await newClient();
+  const mover = await newClient();
+  try {
+    const moverPid = (await mover.query("select pg_backend_pid() as pid")).rows[0].pid;
+    await binder.query("begin");
+    // The binding insert locks that event row for update — this is the
+    // mechanism the freeze's unlocked read relies on.
+    await binder.query(
+      `insert into training_load.metric_event_source_bindings (event_id, source_connection_id, source_external_id) values ($1,$2,'team_session:5032b')`,
+      [unbound, summary.connectionId],
+    );
+    await mover.query("begin");
+    const move = mover.query(`update training_load.metric_events set source_external_id = 'team_session:free' where id = $1`, [unbound])
+      .then(() => ({ ok: true }), (error) => ({ error }));
+    let waiting = false;
+    for (let i = 0; i < 100 && !waiting; i += 1) {
+      const r = await admin.query(`select wait_event_type from pg_stat_activity where pid = $1`, [moverPid]);
+      waiting = r.rows[0]?.wait_event_type === "Lock";
+      if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(waiting, true, "the update waits for the row the binding insert locked");
+    await binder.query("commit");
+    const outcome = await move;
+    assert.match(String(outcome.error?.message), /source identity is immutable once the event is bound/, "it then sees the committed binding");
+    await mover.query("rollback");
+  } finally {
+    await binder.end();
+    await mover.end();
+  }
+  const still = (await admin.query(`select source_external_id from training_load.metric_events where id = $1`, [unbound])).rows[0];
+  assert.equal(still.source_external_id, "team_session:5032b", "event and binding agree");
+});
+
+test("database: an identity update committed first makes the binding insert fail instead", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5033, athletes: standardAthletes() }));
+  const unbound = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('not bound yet','2026-09-16','2026-09-16T18:08:12Z','session','team',$1,$2,'team_session:5033b',$3) returning id`,
+    [org.teamId, summary.connectionId, TZ],
+  )).rows[0].id;
+
+  const mover = await newClient();
+  const binder = await newClient();
+  try {
+    const binderPid = (await binder.query("select pg_backend_pid() as pid")).rows[0].pid;
+    await mover.query("begin");
+    await mover.query(`update training_load.metric_events set source_external_id = 'team_session:5033c' where id = $1`, [unbound]);
+    await binder.query("begin");
+    const bind = binder.query(
+      `insert into training_load.metric_event_source_bindings (event_id, source_connection_id, source_external_id) values ($1,$2,'team_session:5033b')`,
+      [unbound, summary.connectionId],
+    ).then(() => ({ ok: true }), (error) => ({ error }));
+    let waiting = false;
+    for (let i = 0; i < 100 && !waiting; i += 1) {
+      const r = await admin.query(`select wait_event_type from pg_stat_activity where pid = $1`, [binderPid]);
+      waiting = r.rows[0]?.wait_event_type === "Lock";
+      if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(waiting, true, "the binding insert waits for the row the update holds");
+    await mover.query("commit");
+    const outcome = await bind;
+    assert.match(String(outcome.error?.message), /does not match event/, "the binding refuses to describe an identity that moved");
+    await binder.query("rollback");
+  } finally {
+    await mover.end();
+    await binder.end();
+  }
+});
+
+test("database: a binding can be neither updated nor deleted", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5028, athletes: standardAthletes() }));
+  await assert.rejects(
+    admin.query(`update training_load.metric_event_source_bindings set reference_hash = 'x' where event_id = $1`, [summary.eventId]),
+    /immutable/,
+  );
+  await assert.rejects(
+    admin.query(`delete from training_load.metric_event_source_bindings where event_id = $1`, [summary.eventId]),
+    /cannot be deleted/,
+  );
+});
+
+test("writer: an existing event without a binding stops instead of recording a threshold set for values it did not produce", async () => {
+  const org = await setupTeam();
+  // An event that predates this guard: imported by an earlier writer, so no
+  // binding exists and nothing says which threshold set produced its values.
+  const connectionId = (await admin.query(
+    `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('gpexe','team',$1) returning id`,
+    [org.teamId],
+  )).rows[0].id;
+  await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('earlier import','2026-09-14','2026-09-14T18:08:12Z','session','team',$1,$2,'team_session:5027',$3)`,
+    [org.teamId, connectionId, TZ],
+  );
+  await assert.rejects(
+    runImport(org, makeBundle({ sessionId: 5027, athletes: standardAthletes() })),
+    (e) => e.code === "binding_missing",
+  );
+  const bindings = (await admin.query(
+    `select count(*)::int as c from training_load.metric_event_source_bindings b join training_load.metric_events e on e.id = b.event_id where e.owner_team_id = $1`,
+    [org.teamId],
+  )).rows[0].c;
+  assert.equal(bindings, 0, "no binding is invented for it");
 });
 
 test("dashboard: source policy api_import now returns imported session and drill values; manual returns none", async () => {

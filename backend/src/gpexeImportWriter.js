@@ -17,12 +17,25 @@
 //   the manual correction path.
 // - A re-import that no longer contains a previously imported result stops
 //   with identities_missing_from_source instead of leaving it effective.
-// - Only the identity layer has a database backstop. The event
-//   (metric_events by source_connection_id + source_external_id) and the
-//   source connection are deduplicated by the team advisory lock alone —
-//   v12 has no unique index on them — so every writer of GPEXE events must
-//   take that same lock. Drill segment links are additionally protected by
+// - Database backstops (v20), in addition to the advisory lock:
+//   metric_source_identities is unique on (connection, external_id) — the
+//   plan also reserves one identity for the session itself
+//   (team_session:<id>), so two first imports serialize in the database and
+//   not only on the advisory lock; a BEFORE INSERT guard on metric_events
+//   refuses a second event for the same gpexe connection and
+//   source_external_id, whoever writes it, so the duplicate row cannot come
+//   into existence at all; metric_event_source_bindings is unique on
+//   (connection, external_id) and holds one row per event;
+//   metric_source_connections has a partial unique index that allows one
+//   ACTIVE gpexe connection per team. v12's generic contract is unchanged:
+//   metric_events itself still carries descriptive provenance only.
+//   Drill segment links are additionally protected by
 //   activity_component_metric_links_one_confirmed_idx.
+// - The binding also stores WHICH GPEXE threshold set produced the session
+//   (id, validity window, the thresholds themselves, and a hash). A
+//   re-import whose set differs stops with source_reference_set_changed:
+//   restating what stored values mean is a separate decision, never an
+//   automatic rewrite.
 // - Each imported result set has its own source identity:
 //   athlete_session:<id>:full and athlete_session:<id>:drill:<n>.
 // - The occasion content hash covers level, drill index, and per value the
@@ -59,6 +72,28 @@ function canonicalize(value) {
   const out = {};
   for (const k of Object.keys(value).sort()) out[k] = canonicalize(value[k]);
   return out;
+}
+
+// Hash of the external reference set (GPEXE team thresholds) exactly as the
+// plan carries it: id, validity window and the thresholds the import depends
+// on. Stored with the event so a later import can tell "same set" from "the
+// source redefined the set" without comparing free-form JSON by eye.
+// The mapper normalizes those thresholds to numbers first, so a set GPEXE
+// re-serializes differently (5.5 vs "5.5") still hashes the same.
+export const REFERENCE_SET_HASH_VERSION = 1;
+
+export function referenceSetHash(thresholdsUsed) {
+  // Only what changes MEANING: the set's identity and its thresholds. The
+  // validity window is stored but not hashed — GPEXE closes an open window
+  // when a successor set is created, and that must not stop a re-import of a
+  // session whose thresholds are unchanged. REFERENCE_SET_HASH_VERSION is
+  // stored next to the hash, never mixed into it, so a future change of this
+  // rule is recognizable instead of looking like a changed source.
+  const canon = {
+    externalId: String(thresholdsUsed.id),
+    payload: thresholdsUsed.payload ?? null,
+  };
+  return crypto.createHash("sha256").update(JSON.stringify(canonicalize(canon))).digest("hex");
 }
 
 export function importedOccasionContentHash({ level, drillIndex, values }) {
@@ -107,11 +142,19 @@ async function ensureSourceConnection(client, { sourceSystem, ownerTeamId }) {
   );
   if (existing.rowCount > 1) throw new GpexeImportError("ambiguous_source_connection", `team ${ownerTeamId} has ${existing.rowCount} active ${sourceSystem} connections.`);
   if (existing.rowCount === 1) return { id: existing.rows[0].id, created: false };
-  const inserted = await client.query(
-    `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ($1,'team',$2) returning id`,
-    [sourceSystem, ownerTeamId],
-  );
-  return { id: inserted.rows[0].id, created: true };
+  try {
+    const inserted = await client.query(
+      `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ($1,'team',$2) returning id`,
+      [sourceSystem, ownerTeamId],
+    );
+    return { id: inserted.rows[0].id, created: true };
+  } catch (error) {
+    // v20 partial unique index: one active gpexe connection per team.
+    if (error.code === "23505") {
+      throw new GpexeImportError("source_connection_conflict", `another import created an active ${sourceSystem} connection for team ${ownerTeamId} at the same time — retry the import.`);
+    }
+    throw error;
+  }
 }
 
 function conditionDescriptionFor(metric) {
@@ -196,13 +239,107 @@ async function ensureEvent(client, { plan, connectionId, ownerTeamId, performedB
     if (!same) throw new GpexeImportError("event_changed", `event for ${plan.event.sourceExternalId} exists with a different date/time/timezone/owner — needs review.`);
     return { id: row.id, created: false };
   }
-  const inserted = await client.query(
-    `insert into training_load.metric_events
-       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, created_by_user_id, event_timezone_snapshot)
-     values ($1,$2,$3,'session','team',$4,$5,$6,$7,$8) returning id`,
-    [plan.event.name, plan.event.occurredLocalDate, plan.event.occurredInstant, ownerTeamId, connectionId, plan.event.sourceExternalId, performedByUserId, plan.event.timezone],
+  try {
+    const inserted = await client.query(
+      `insert into training_load.metric_events
+         (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, created_by_user_id, event_timezone_snapshot)
+       values ($1,$2,$3,'session','team',$4,$5,$6,$7,$8) returning id`,
+      [plan.event.name, plan.event.occurredLocalDate, plan.event.occurredInstant, ownerTeamId, connectionId, plan.event.sourceExternalId, performedByUserId, plan.event.timezone],
+    );
+    return { id: inserted.rows[0].id, created: true };
+  } catch (error) {
+    // The v20 guard on metric_events, raised as unique_violation.
+    if (error.code === "23505") {
+      throw new GpexeImportError("event_conflict", `another writer created an event for ${plan.event.sourceExternalId} at the same time — retry the import.`);
+    }
+    throw error;
+  }
+}
+
+// v20: the binding is what makes "one event per GPEXE team_session" a
+// database guarantee, and it records the threshold set the session was
+// imported under. Written right after the event and before any occasion, so
+// the event row is locked no later than the occasion trigger would lock it.
+async function ensureSourceBinding(client, { eventId, eventCreated, connectionId, plan, performedByUserId }) {
+  const hash = referenceSetHash(plan.thresholdsUsed);
+  const existing = await client.query(
+    `select event_id, reference_set_external_id, reference_valid_from, reference_valid_to, reference_hash, reference_hash_version
+     from training_load.metric_event_source_bindings
+     where source_connection_id = $1 and source_external_id = $2 for update`,
+    [connectionId, plan.event.sourceExternalId],
   );
-  return { id: inserted.rows[0].id, created: true };
+  const row = existing.rows[0];
+  if (row) {
+    if (String(row.event_id) !== String(eventId)) {
+      // Unreachable while the v20 metric_events guard stands (a second event
+      // for this key cannot exist); kept as the check that would catch it if
+      // that guard were ever relaxed.
+      throw new GpexeImportError("binding_event_mismatch", `${plan.event.sourceExternalId} is already bound to another event.`);
+    }
+    if (row.reference_hash_version !== REFERENCE_SET_HASH_VERSION) {
+      // The stored hash was computed by a different rule, so it says nothing
+      // about whether the source changed. Deciding what to do with such a row
+      // is its own task, not something an import may assume.
+      const error = new GpexeImportError(
+        "reference_hash_version_outdated",
+        `${plan.event.sourceExternalId} was bound under reference hash version ${row.reference_hash_version}, this importer writes version ${REFERENCE_SET_HASH_VERSION} — the two cannot be compared.`,
+      );
+      error.storedReferenceSet = { externalId: row.reference_set_external_id, hashVersion: row.reference_hash_version };
+      throw error;
+    }
+    if (row.reference_hash !== hash) {
+      const error = new GpexeImportError(
+        "source_reference_set_changed",
+        `${plan.event.sourceExternalId} was imported under GPEXE threshold set ${row.reference_set_external_id} (valid ${row.reference_valid_from?.toISOString?.() ?? row.reference_valid_from} – ${row.reference_valid_to?.toISOString?.() ?? row.reference_valid_to ?? "open"}), the source now reports set ${plan.thresholdsUsed.id} — needs a decision before re-import.`,
+      );
+      error.storedReferenceSet = { externalId: row.reference_set_external_id, validFrom: row.reference_valid_from, validTo: row.reference_valid_to, hash: row.reference_hash };
+      error.incomingReferenceSet = { externalId: plan.thresholdsUsed.id, validFrom: plan.thresholdsUsed.validityStart, validTo: plan.thresholdsUsed.validityEnd, hash };
+      throw error;
+    }
+    const windowChanged = (row.reference_valid_to?.toISOString?.() ?? null) !== (plan.thresholdsUsed.validityEnd ?? null)
+      || (row.reference_valid_from?.toISOString?.() ?? null) !== (plan.thresholdsUsed.validityStart ?? null);
+    // Same set, same thresholds, a moved validity window: the values keep
+    // their meaning, so the import continues and the recorded (immutable)
+    // window stays as it was, reported rather than rewritten.
+    return {
+      created: false, hash, windowChanged,
+      // What the immutable row actually records, so a caller reports that and
+      // not the set it happens to be holding.
+      storedReferenceSet: {
+        externalId: row.reference_set_external_id,
+        validFrom: row.reference_valid_from?.toISOString?.() ?? row.reference_valid_from ?? null,
+        validTo: row.reference_valid_to?.toISOString?.() ?? row.reference_valid_to ?? null,
+        hash: row.reference_hash,
+        hashVersion: row.reference_hash_version,
+      },
+    };
+  }
+  if (!eventCreated) {
+    throw new GpexeImportError("binding_missing", `event ${eventId} for ${plan.event.sourceExternalId} exists without a source binding — its values were imported before this guard existed, or by another writer; recording a threshold set for them now would be a guess.`);
+  }
+  try {
+    await client.query(
+      `insert into training_load.metric_event_source_bindings
+         (event_id, source_connection_id, source_external_id, reference_set_external_id, reference_valid_from, reference_valid_to, reference_payload, reference_hash, reference_hash_version, created_by_user_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [eventId, connectionId, plan.event.sourceExternalId, String(plan.thresholdsUsed.id), plan.thresholdsUsed.validityStart, plan.thresholdsUsed.validityEnd, JSON.stringify(plan.thresholdsUsed.payload ?? null), hash, REFERENCE_SET_HASH_VERSION, performedByUserId],
+    );
+  } catch (error) {
+    if (error.code === "23505") {
+      // Reachable as a concurrent import of this same session that committed
+      // between the select above and this insert; the event guard makes a
+      // genuinely different event impossible.
+      throw new GpexeImportError("binding_conflict", `${plan.event.sourceExternalId} was bound by a concurrent import — retry.`);
+    }
+    throw error;
+  }
+  return {
+    created: true, hash,
+    storedReferenceSet: {
+      externalId: String(plan.thresholdsUsed.id), validFrom: plan.thresholdsUsed.validityStart,
+      validTo: plan.thresholdsUsed.validityEnd, hash, hashVersion: REFERENCE_SET_HASH_VERSION,
+    },
+  };
 }
 
 async function ensureSegments(client, { eventId, segments }) {
@@ -438,9 +575,13 @@ export async function importGpexePlan(client, plan, ctx, { onLocked, onResultImp
     // definitions a session without drills created.
     const scopeLevels = ["session", "component"];
     const definitions = await ensureMetricDefinitions(client, { metrics: plan.metrics, ownerTeamId: ctx.ownerTeamId, performedByUserId: ctx.performedByUserId, scopeLevels });
-    const externalIds = plan.participants.flatMap((p) => p.results.map((r) => r.externalId));
+    // The session itself is reserved as an identity too: its row is what two
+    // concurrent first imports collide on inside the database, independently
+    // of the advisory lock. It never receives an occasion.
+    const externalIds = [plan.event.sourceExternalId, ...plan.participants.flatMap((p) => p.results.map((r) => r.externalId))];
     const identities = await lockPlanIdentities(client, { connectionId: connection.id, externalIds });
     const event = await ensureEvent(client, { plan, connectionId: connection.id, ownerTeamId: ctx.ownerTeamId, performedByUserId: ctx.performedByUserId });
+    const binding = await ensureSourceBinding(client, { eventId: event.id, eventCreated: event.created, connectionId: connection.id, plan, performedByUserId: ctx.performedByUserId });
     if (!event.created) await assertNoIdentitiesMissingFromSource(client, { connectionId: connection.id, eventId: event.id, externalIds });
     const segmentsByDrillIndex = await ensureSegments(client, { eventId: event.id, segments: plan.segments });
     const participantIds = await ensureParticipants(client, { eventId: event.id, participants: plan.participants, athleteIdByGpexeId });
@@ -491,6 +632,8 @@ export async function importGpexePlan(client, plan, ctx, { onLocked, onResultImp
       connectionId: connection.id, connectionCreated: connection.created,
       definitionsCreated: definitions.created, thresholdsUsed: plan.thresholdsUsed,
       eventId: event.id, eventCreated: event.created, activityId,
+      bindingCreated: binding.created, referenceSetHash: binding.hash, referenceSetWindowChanged: binding.windowChanged ?? false,
+      boundReferenceSet: binding.storedReferenceSet,
       importBatchId: batchId, counts, results,
     };
   } catch (error) {
