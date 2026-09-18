@@ -381,3 +381,22 @@ test("api probe: a GPEXE that never answers is stopped at the time limit, and wh
   assert.equal(report.stoppedInPhase, "session-list");
   assert.deepEqual(report.requests, { started: 1, done: 0 });
 });
+
+test("api probe --paging-only: the session list for exactly the window is read through both pages and counted, nothing else fetched", async () => {
+  const listPath = "team_session/?team=980&start_timestamp_gte=2026-08-01%2000:00:00&start_timestamp_lte=2026-09-17%2023:59:59&limit=100";
+  const rows = (from, count) => Array.from({ length: count }, (_, i) => ({ id: from + i, team: 980, category_name: "Real Name Drill", drills: [], start_timestamp: "2026-09-05T18:00:00" }));
+  // Exactly the shape the pilot recorded: 122 rows, a Link to offset=100.
+  const { fetchImpl, calls } = fakeFetch({
+    [listPath]: page(rows(1, 100), { total: 122, next: "team_session/?limit=100&offset=100&start_timestamp_gte=2026-08-01+00%3A00%3A00&start_timestamp_lte=2026-09-17+23%3A59%3A59&team=980" }),
+    "team_session/?limit=100&offset=100&start_timestamp_gte=2026-08-01+00%3A00%3A00&start_timestamp_lte=2026-09-17+23%3A59%3A59&team=980": page(rows(101, 22), { total: 122 }),
+  });
+  const lines = [];
+  const report = await probe(["--team", "980", "--from", "2026-08-01", "--to", "2026-09-17", "--paging-only"], { fetchImpl, token: TOKEN, sleep: noSleep, log: (l) => lines.push(l) });
+  assert.equal(report.mode, "list");
+  assert.equal(report.maxSeconds, 60);
+  assert.deepEqual(report.sessionList, { complete: true, totalReported: 122, rowsRead: 122, pagesRead: 2, readThroughMoreThanOnePage: true });
+  assert.equal(report.firstPage.nextPage.insideApi, true);
+  assert.ok(calls.every((c) => c.url.includes("team_session/?")), "only the session list was fetched");
+  const text = JSON.stringify(report) + lines.join("\n");
+  assert.ok(!text.includes("Real Name") && !text.includes(TOKEN));
+});

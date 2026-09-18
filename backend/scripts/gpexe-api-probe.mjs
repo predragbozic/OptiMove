@@ -25,19 +25,31 @@
 //   $env:GPEXE_API_TOKEN = $env:GPEXE_TOKEN
 //   node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-09-14 --to 2026-09-14 --session 186942
 //   node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-09-14 --to 2026-09-14 --session 186942 --mode hash
+//   node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-08-01 --to 2026-09-17 --paging-only
+//
+// --paging-only reads just the session list for exactly [from, to] (no
+// day-before widening, no session fetched) through the app's paging rules and
+// reports the total GPEXE announced, the rows read, the pages it took and
+// whether the list ended complete. Rows are counted, never printed.
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { createGpexeClient, GPEXE_API_BASE, GpexeClientError } from "../src/gpexeClient.js";
 import { buildGpexeImportPlan, GpexeMappingError } from "../src/gpexeImportMapper.js";
 import { canonicalJson, sha256Hex } from "../src/gpexeImportPreview.js";
 
-const DEFAULT_MAX_SECONDS = { paging: 90, hash: 600 };
+const DEFAULT_MAX_SECONDS = { paging: 90, hash: 600, list: 60 };
 // Per request, shorter than the app's 90 s x 3: the probe is meant to answer.
 const PROBE_REQUEST_TIMEOUT_MS = 30_000;
 const PROBE_ATTEMPTS = 2;
 
 function parseArgs(argv) {
   const opts = { mode: "paging" };
+  argv = [...argv];
+  const flag = argv.indexOf("--paging-only");
+  if (flag !== -1) {
+    argv.splice(flag, 1);
+    opts.mode = "list";
+  }
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i];
     const value = argv[i + 1];
@@ -47,7 +59,7 @@ function parseArgs(argv) {
   for (const k of ["team", "from", "to"]) if (!opts[k]) throw new Error(`--${k} is required`);
   for (const k of ["team", "session"]) if (opts[k] !== undefined && !/^[0-9]{1,12}$/.test(opts[k])) throw new Error(`--${k} must be a numeric GPEXE id`);
   for (const k of ["from", "to"]) if (!/^\d{4}-\d{2}-\d{2}$/.test(opts[k])) throw new Error(`--${k} must be YYYY-MM-DD`);
-  if (!["paging", "hash"].includes(opts.mode)) throw new Error("--mode must be paging or hash");
+  if (!["paging", "hash", "list"].includes(opts.mode)) throw new Error("--mode must be paging or hash");
   const max = opts["max-seconds"] === undefined ? DEFAULT_MAX_SECONDS[opts.mode] : Number(opts["max-seconds"]);
   if (!Number.isFinite(max) || max <= 0 || max > 3600) throw new Error("--max-seconds must be between 1 and 3600");
   opts.maxSeconds = max;
@@ -190,6 +202,28 @@ async function pagingChecks(client, opts, report, setPhase) {
   }
 }
 
+// --paging-only: the session list for exactly [from, to], every page, counts only.
+async function listOnly(client, opts, report, setPhase, state) {
+  setPhase("session-list");
+  const listPath = `team_session/?team=${opts.team}&start_timestamp_gte=${opts.from}%2000:00:00&start_timestamp_lte=${opts.to}%2023:59:59&limit=100`;
+  const first = await client.request(listPath);
+  report.firstPage = pageShape(first);
+  const before = state.done;
+  try {
+    const rows = await client.getAllPages(listPath);
+    report.sessionList = {
+      complete: true,
+      totalReported: Number(first.totalCount ?? first.body?.count),
+      rowsRead: rows.length,
+      pagesRead: state.done - before,
+      readThroughMoreThanOnePage: state.done - before > 1,
+    };
+  } catch (error) {
+    if (error instanceof ProbeDeadline) throw error;
+    report.sessionList = { complete: false, pagesRead: state.done - before, ...errorReport(error) };
+  }
+}
+
 async function hashCheck(client, opts, report, setPhase) {
   if (!opts.session) throw new Error("--mode hash needs --session");
   setPhase("fetch-1");
@@ -238,6 +272,7 @@ export async function main(argv, { fetchImpl = globalThis.fetch, token = process
   const report = { mode: opts.mode, team: opts.team, window: { from: opts.from, to: opts.to }, maxSeconds: opts.maxSeconds };
   try {
     if (opts.mode === "paging") await pagingChecks(client, opts, report, setPhase);
+    else if (opts.mode === "list") await listOnly(client, opts, report, setPhase, state);
     else await hashCheck(client, opts, report, setPhase);
   } catch (error) {
     if (state.timedOut || error instanceof ProbeDeadline) {
