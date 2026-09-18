@@ -152,25 +152,6 @@ therefore come from one state.
   `docs/runbooks/gpexe-undo-imported-session.md`. For a persistent database it
   needs its own approval first.
 
-## Checking the real GPEXE API (read only)
-
-Before F1 is called ready, the owner runs this probe in their own terminal.
-The token never leaves that terminal:
-
-```
-$env:GPEXE_API_TOKEN = $env:GPEXE_TOKEN
-node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-09-01 --to 2026-09-17
-```
-
-It opens no database and writes nothing. It prints only shapes and counts —
-never a name, an athlete id, a value or the token. Category names are free
-text, so they are counted, not printed, and a path that changed between two
-fetches shows `<id>` instead of any id key. It reports:
-- how the session list and a session's athlete rows are paged;
-- whether both are read complete;
-- whether one session fetched twice gives the same content hash, and if not,
-  which fields changed;
-- what the importer would make of that session.
 - **Athletes of the team with no GPEXE row:** participation unknown, no GPS
   record, **no reason**. "GPS was not worn" is only ever stated when the data
   shows it; a coach-entered reason comes after F1–F3.
@@ -178,6 +159,42 @@ fetches shows `<id>` instead of any id key. It reports:
   preview marks it.
 - The preview stores athlete ids, not names. Names are read at request time,
   for the team's own athletes only.
+
+## Checking the real GPEXE API (read only)
+
+Before F1 is called ready, the owner runs this probe in their own terminal.
+The token never leaves that terminal. It opens no database and writes
+nothing. There are two separate checks:
+
+```
+$env:GPEXE_API_TOKEN = $env:GPEXE_TOKEN
+node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-09-14 --to 2026-09-14 --session 186942
+node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-09-14 --to 2026-09-14 --session 186942 --mode hash
+```
+
+- **`--mode paging`** is the default. It is quick: a handful of requests, and a
+  limit of 90 s. It shows how the session list and the session's athlete rows
+  are paged, and whether both are read complete.
+- **`--mode hash`** fetches the whole session twice, so it takes 2 requests per
+  athlete row, plus tracks and drills. Its limit is 600 s. It shows:
+  - whether the content hash is the same on both fetches;
+  - if not, which fields changed;
+  - what the importer would make of the session.
+
+**Progress** goes to stderr:
+- the phase;
+- every request as it starts and ends, with every number in its path masked;
+- how many requests are done, and the seconds elapsed;
+- a line every 10 s while a request is still waiting.
+
+Each request waits at most 30 s and is tried twice. **The whole run stops at
+`--max-seconds`.** What was found up to then is still printed, with
+`"timedOut": true` and the phase it stopped in, and the exit code is 2.
+
+**What is never printed:** a name, an athlete id, a value or the token.
+- Category names are free text, so they are counted, not printed.
+- A path that changed between two fetches shows `<id>` instead of an id key.
+- Error messages are masked the same way.
 
 ## Retention of raw GPEXE data (owner decision 2026-09-18)
 

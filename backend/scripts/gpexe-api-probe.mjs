@@ -1,41 +1,109 @@
 // Read-only probe of the real GPEXE API, for the owner to run in their own
-// terminal before the in-app import (phase F1) is called ready. It exercises
-// the app's own client (backend/src/gpexeClient.js) and prints only the SHAPE
-// of what GPEXE answers — never a name, an athlete id, a value, or the token:
-//
-//   * how a list is paged (plain array + X-Total-Count + Link, or
-//     {count, next, results}), whether the next page stays inside the API;
-//   * whether the whole session list and one session's athlete rows are read
-//     complete through every page;
-//   * whether the same session fetched twice gives the same content hash
-//     (a hash that changes on unchanged data would make every check a
-//     "change");
-//   * what the importer would make of that session: counts only.
-//
+// terminal before the in-app import (phase F1) is called ready. It uses the
+// app's own client (backend/src/gpexeClient.js) and prints only the SHAPE of
+// what GPEXE answers — never a name, an athlete id, a value, or the token.
 // No database connection is opened and nothing is written anywhere.
+//
+// Two separate checks, so the quick one answers in seconds:
+//
+//   --mode paging (default, a handful of requests)
+//     how the session list and one session's athlete rows are paged, and
+//     whether both are read complete through every page.
+//
+//   --mode hash (one full session fetched twice: 2 requests per athlete row
+//   plus tracks and drills — can take minutes on a slow GPEXE)
+//     whether the same session hashes alike on two fetches (changed paths
+//     with ids masked) and what the importer makes of it (counts only).
+//
+// Progress goes to stderr: the phase, each request as it starts and ends
+// (paths with ids masked), requests done, seconds elapsed, and a line every
+// 10 s while a request is still waiting. The whole run stops at
+// --max-seconds (default 90 for paging, 600 for hash); what was found until
+// then is still printed, with "timedOut": true, and the exit code is 2.
 //
 // PowerShell (the token stays in your own terminal):
 //   $env:GPEXE_API_TOKEN = $env:GPEXE_TOKEN
-//   node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-09-01 --to 2026-09-17
 //   node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-09-14 --to 2026-09-14 --session 186942
+//   node backend/scripts/gpexe-api-probe.mjs --team 980 --from 2026-09-14 --to 2026-09-14 --session 186942 --mode hash
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { createGpexeClient, GPEXE_API_BASE, GpexeClientError } from "../src/gpexeClient.js";
 import { buildGpexeImportPlan, GpexeMappingError } from "../src/gpexeImportMapper.js";
 import { canonicalJson, sha256Hex } from "../src/gpexeImportPreview.js";
 
+const DEFAULT_MAX_SECONDS = { paging: 90, hash: 600 };
+// Per request, shorter than the app's 90 s x 3: the probe is meant to answer.
+const PROBE_REQUEST_TIMEOUT_MS = 30_000;
+const PROBE_ATTEMPTS = 2;
+
 function parseArgs(argv) {
-  const opts = {};
+  const opts = { mode: "paging" };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i];
     const value = argv[i + 1];
-    if (!["--team", "--from", "--to", "--session"].includes(key) || value === undefined) throw new Error(`unknown or incomplete argument ${key}`);
+    if (!["--team", "--from", "--to", "--session", "--mode", "--max-seconds"].includes(key) || value === undefined) throw new Error(`unknown or incomplete argument ${key}`);
     opts[key.slice(2)] = value;
   }
   for (const k of ["team", "from", "to"]) if (!opts[k]) throw new Error(`--${k} is required`);
   for (const k of ["team", "session"]) if (opts[k] !== undefined && !/^[0-9]{1,12}$/.test(opts[k])) throw new Error(`--${k} must be a numeric GPEXE id`);
   for (const k of ["from", "to"]) if (!/^\d{4}-\d{2}-\d{2}$/.test(opts[k])) throw new Error(`--${k} must be YYYY-MM-DD`);
+  if (!["paging", "hash"].includes(opts.mode)) throw new Error("--mode must be paging or hash");
+  const max = opts["max-seconds"] === undefined ? DEFAULT_MAX_SECONDS[opts.mode] : Number(opts["max-seconds"]);
+  if (!Number.isFinite(max) || max <= 0 || max > 3600) throw new Error("--max-seconds must be between 1 and 3600");
+  opts.maxSeconds = max;
   return opts;
+}
+
+// A request path for the progress lines: API-relative, every number masked,
+// query values dropped.
+export function maskPath(url) {
+  const u = new URL(String(url));
+  const rel = u.pathname.startsWith("/api/") ? u.pathname.slice(5) : u.pathname;
+  const keys = [...u.searchParams.keys()];
+  return `${rel.replace(/\d+/g, "<id>")}${keys.length ? `?${keys.join("&")}` : ""}`;
+}
+
+class ProbeDeadline extends Error {
+  constructor() {
+    super("the probe reached its time limit");
+    this.name = "ProbeDeadline";
+  }
+}
+
+// Wraps fetch: counts requests, logs progress, and stops everything at the
+// deadline (the client's own retries then fail at once too).
+function instrumentedFetch(fetchImpl, state, log) {
+  return async (url, init = {}) => {
+    const remaining = state.deadlineAt - Date.now();
+    if (remaining <= 0) {
+      state.timedOut = true;
+      throw new ProbeDeadline();
+    }
+    const label = maskPath(url);
+    const started = Date.now();
+    state.started += 1;
+    const n = state.started;
+    log(`[${state.phase}] #${n} → ${label}`);
+    const waiting = setInterval(() => log(`[${state.phase}] #${n} still waiting on ${label} (${Math.round((Date.now() - started) / 1000)} s)`), 10_000);
+    waiting.unref?.();
+    const signals = [AbortSignal.timeout(remaining)];
+    if (init.signal) signals.push(init.signal);
+    try {
+      const res = await fetchImpl(url, { ...init, signal: AbortSignal.any(signals) });
+      state.done += 1;
+      log(`[${state.phase}] #${n} ✓ ${res.status} in ${((Date.now() - started) / 1000).toFixed(1)} s — ${state.done} done, ${((Date.now() - state.startedAt) / 1000).toFixed(0)} s total`);
+      return res;
+    } catch (error) {
+      if (Date.now() >= state.deadlineAt) {
+        state.timedOut = true;
+        throw new ProbeDeadline();
+      }
+      log(`[${state.phase}] #${n} ✗ ${error?.name ?? "error"} after ${((Date.now() - started) / 1000).toFixed(1)} s`);
+      throw error;
+    } finally {
+      clearInterval(waiting);
+    }
+  };
 }
 
 function pageShape(res) {
@@ -60,9 +128,6 @@ function pageShape(res) {
   };
 }
 
-// Paths whose content differs between two fetches of the same session: keys
-// only, no values, and every key that is an id (athlete, athlete_session,
-// track, drill index maps) is printed as <id>.
 // Distinct paths only (after masking, one field changing for every athlete is
 // one path), at most 20.
 function differingPaths(a, b, prefix = "", out = new Set()) {
@@ -83,23 +148,20 @@ function safeMessage(error) {
   return String(error?.message ?? "").replace(/\b\d+\b/g, "<id>");
 }
 
+function errorReport(error) {
+  return { error: error instanceof GpexeClientError ? error.code : error?.name ?? "error", message: safeMessage(error) };
+}
+
 function countBy(items, key) {
   const out = {};
   for (const item of items) out[item[key]] = (out[item[key]] || 0) + 1;
   return out;
 }
 
-export async function main(argv, { client = null } = {}) {
-  const opts = parseArgs(argv);
-  client = client ?? createGpexeClient();
-  const report = { team: opts.team, window: { from: opts.from, to: opts.to } };
-
-  // 1. The raw first page of the session list, as GPEXE sends it.
+async function pagingChecks(client, opts, report, setPhase) {
+  setPhase("session-list");
   const lookFrom = new Date(Date.parse(`${opts.from}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
-  const firstPage = await client.request(`team_session/?team=${opts.team}&start_timestamp_gte=${lookFrom}%2000:00:00&start_timestamp_lte=${opts.to}%2023:59:59&limit=100`);
-  report.sessionListFirstPage = pageShape(firstPage);
-
-  // 2. The whole list through the app's own paging rules.
+  report.sessionListFirstPage = pageShape(await client.request(`team_session/?team=${opts.team}&start_timestamp_gte=${lookFrom}%2000:00:00&start_timestamp_lte=${opts.to}%2023:59:59&limit=100`));
   try {
     const sessions = await client.listTeamSessions({ gpexeTeamId: opts.team, fromDay: opts.from, toDay: opts.to });
     // Category names are free text a team types in GPEXE: counted, not printed.
@@ -110,53 +172,98 @@ export async function main(argv, { client = null } = {}) {
       otherCategories: sessions.filter((s) => s.categoryName !== "FULL TRAINING").length,
     };
     report.sessionIdsForNextStep = sessions.filter((s) => s.categoryName === "FULL TRAINING").slice(0, 5).map((s) => s.id);
-    if (!opts.session) opts.session = sessions.find((s) => s.categoryName === "FULL TRAINING")?.id ?? sessions[0]?.id;
+    if (!opts.session) opts.session = report.sessionIdsForNextStep[0];
   } catch (error) {
-    report.sessionList = { complete: false, error: error instanceof GpexeClientError ? error.code : error.name, message: safeMessage(error) };
+    if (error instanceof ProbeDeadline) throw error;
+    report.sessionList = { complete: false, ...errorReport(error) };
   }
+  if (!opts.session) return;
+  setPhase("athlete-rows");
+  const athleteList = `athlete_session/?teamsession=${opts.session}&limit=100`;
+  report.athleteRowsFirstPage = pageShape(await client.request(athleteList));
+  try {
+    const rows = await client.getAllPages(athleteList);
+    report.athleteRows = { complete: true, session: opts.session, rows: rows.length, rowsOfThisSession: rows.filter((r) => String(r.teamsession) === String(opts.session)).length };
+  } catch (error) {
+    if (error instanceof ProbeDeadline) throw error;
+    report.athleteRows = { complete: false, session: opts.session, ...errorReport(error) };
+  }
+}
 
-  // 3. One session: its athlete rows' paging, and whether two fetches hash alike.
-  if (opts.session) {
-    const athletePage = await client.request(`athlete_session/?teamsession=${opts.session}&limit=100`);
-    report.athleteRowsFirstPage = pageShape(athletePage);
-    try {
-      const first = await client.fetchSessionBundle({ gpexeTeamId: opts.team, sessionId: opts.session });
-      const second = await client.fetchSessionBundle({ gpexeTeamId: opts.team, sessionId: opts.session });
-      const h1 = sha256Hex(canonicalJson(first));
-      const h2 = sha256Hex(canonicalJson(second));
-      report.session = {
-        id: opts.session,
-        athleteRows: first.athleteSessions.length,
-        tracks: Object.keys(first.tracks).length,
-        drillsFetched: Object.keys(first.details.drills).length,
-        thresholdsFound: first.teamThresholds !== null,
-        sameHashOnTwoFetches: h1 === h2,
-        pathsThatChangedBetweenFetches: h1 === h2 ? [] : differingPaths(first, second),
-      };
-      try {
-        const plan = buildGpexeImportPlan(first);
-        report.session.importerView = {
-          participants: plan.participants.length,
-          results: plan.participants.reduce((n, p) => n + p.results.length, 0),
-          anomalies: countBy(plan.anomalies, "kind"),
-          skippedValuesByReason: countBy(plan.metricSkips, "reason"),
-        };
-      } catch (error) {
-        report.session.importerView = { blocked: error instanceof GpexeMappingError ? error.code : error.name };
-      }
-    } catch (error) {
-      report.session = { id: opts.session, error: error instanceof GpexeClientError ? error.code : error.name, message: safeMessage(error) };
+async function hashCheck(client, opts, report, setPhase) {
+  if (!opts.session) throw new Error("--mode hash needs --session");
+  setPhase("fetch-1");
+  const first = await client.fetchSessionBundle({ gpexeTeamId: opts.team, sessionId: opts.session });
+  report.session = {
+    id: opts.session,
+    athleteRows: first.athleteSessions.length,
+    tracks: Object.keys(first.tracks).length,
+    drillsFetched: Object.keys(first.details.drills).length,
+    thresholdsFound: first.teamThresholds !== null,
+  };
+  setPhase("fetch-2");
+  const second = await client.fetchSessionBundle({ gpexeTeamId: opts.team, sessionId: opts.session });
+  const same = sha256Hex(canonicalJson(first)) === sha256Hex(canonicalJson(second));
+  report.session.sameHashOnTwoFetches = same;
+  report.session.pathsThatChangedBetweenFetches = same ? [] : differingPaths(first, second);
+  setPhase("importer-view");
+  try {
+    const plan = buildGpexeImportPlan(first);
+    report.session.importerView = {
+      participants: plan.participants.length,
+      results: plan.participants.reduce((n, p) => n + p.results.length, 0),
+      anomalies: countBy(plan.anomalies, "kind"),
+      skippedValuesByReason: countBy(plan.metricSkips, "reason"),
+    };
+  } catch (error) {
+    report.session.importerView = { blocked: error instanceof GpexeMappingError ? error.code : error.name };
+  }
+}
+
+export async function main(argv, { fetchImpl = globalThis.fetch, token = process.env.GPEXE_API_TOKEN, log = (line) => console.error(line), sleep } = {}) {
+  const opts = parseArgs(argv);
+  const state = { phase: "start", started: 0, done: 0, startedAt: Date.now(), deadlineAt: Date.now() + opts.maxSeconds * 1000, timedOut: false };
+  const client = createGpexeClient({
+    token,
+    fetchImpl: instrumentedFetch(fetchImpl, state, log),
+    timeoutMs: PROBE_REQUEST_TIMEOUT_MS,
+    attempts: PROBE_ATTEMPTS,
+    retryDelayMs: 500,
+    ...(sleep ? { sleep } : {}),
+  });
+  const setPhase = (phase) => {
+    state.phase = phase;
+    log(`[${phase}] started — ${state.done} requests done, ${((Date.now() - state.startedAt) / 1000).toFixed(0)} s elapsed`);
+  };
+  const report = { mode: opts.mode, team: opts.team, window: { from: opts.from, to: opts.to }, maxSeconds: opts.maxSeconds };
+  try {
+    if (opts.mode === "paging") await pagingChecks(client, opts, report, setPhase);
+    else await hashCheck(client, opts, report, setPhase);
+  } catch (error) {
+    if (state.timedOut || error instanceof ProbeDeadline) {
+      report.timedOut = true;
+      report.stoppedInPhase = state.phase;
+    } else {
+      report.failedInPhase = state.phase;
+      Object.assign(report, errorReport(error));
     }
   }
+  report.requests = { started: state.started, done: state.done };
+  report.seconds = Number(((Date.now() - state.startedAt) / 1000).toFixed(1));
+  report.timedOut = Boolean(report.timedOut || state.timedOut);
   return report;
 }
 
 const isMainModule = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMainModule) {
   main(process.argv.slice(2))
-    .then((report) => console.log(JSON.stringify(report, null, 2)))
+    .then((report) => {
+      console.log(JSON.stringify(report, null, 2));
+      if (report.timedOut) process.exitCode = 2;
+      else if (report.error) process.exitCode = 1;
+    })
     .catch((error) => {
-      console.error(error instanceof GpexeClientError ? `${error.code}: ${error.message}` : error.message);
+      console.error(error instanceof GpexeClientError ? `${error.code}: ${safeMessage(error)}` : safeMessage(error));
       process.exitCode = 1;
     });
 }

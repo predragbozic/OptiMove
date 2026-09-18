@@ -237,6 +237,11 @@ test("gpexe client: a session claiming more drills than accepted is refused befo
   assert.equal(ticks, ok.calls.length - 1);
 });
 
+// The probe builds its own client around this fetch; progress lines collected.
+function probeEnv(routes, lines = []) {
+  return { fetchImpl: fakeFetch(routes).fetchImpl, token: TOKEN, sleep: noSleep, log: (line) => lines.push(line) };
+}
+
 function probeRoutes({ bundle, category = "FULL TRAINING", changeOnSecondFetch = false }) {
   const players = Object.fromEntries(bundle.athleteSessions.map((r) => [`athlete_session/${r.id}/`, r]));
   const more = Object.fromEntries(Object.entries(bundle.more).map(([id, m]) => [`athlete_session/${id}/more/`, m]));
@@ -261,8 +266,7 @@ function probeRoutes({ bundle, category = "FULL TRAINING", changeOnSecondFetch =
 
 test("api probe: content that changes between two fetches is reported by path, with ids masked", async () => {
   const bundle = makeBundle({ sessionId: 186942, gpexeTeamId: 980, athletes: standardAthletes() });
-  const client = createGpexeClient({ token: TOKEN, fetchImpl: fakeFetch(probeRoutes({ bundle, changeOnSecondFetch: true })).fetchImpl, sleep: noSleep });
-  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942"], { client });
+  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942", "--mode", "hash"], probeEnv(probeRoutes({ bundle, changeOnSecondFetch: true })));
   assert.equal(report.session.sameHashOnTwoFetches, false);
   assert.deepEqual(report.session.pathsThatChangedBetweenFetches, [".details.full.players.<id>.tot_burst_events.value"]);
   assert.ok(!/\b10[1-3]\b/.test(JSON.stringify(report.session.pathsThatChangedBetweenFetches)));
@@ -273,8 +277,7 @@ test("api probe: a relative next link is reported as such, not a crash; category
   const routes = probeRoutes({ bundle, category: "Individual Real Name" });
   routes["team_session/?team=980&start_timestamp_gte=2026-09-13%2000:00:00&start_timestamp_lte=2026-09-14%2023:59:59&limit=100"] =
     () => response(200, [{ id: 186942, team: 980, category_name: "Individual Real Name", drills: [], start_timestamp: "2026-09-14T18:08:12" }], { "x-total-count": "2", link: '</api/team_session/?offset=1>; rel="next"' });
-  const client = createGpexeClient({ token: TOKEN, fetchImpl: fakeFetch(routes).fetchImpl, sleep: noSleep });
-  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942"], { client });
+  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942"], probeEnv(routes));
   assert.equal(report.sessionListFirstPage.nextPage.relative, true);
   assert.equal(report.sessionListFirstPage.nextPage.insideApi, false);
   assert.deepEqual([report.sessionList.complete, report.sessionList.error], [false, "list_incomplete"]);
@@ -306,11 +309,12 @@ test("api probe: reports the paging shape and a stable hash without any name, at
     "team_session/186942/details/?drill=1": { players: {} },
     "team/980/thresholds/?valid_on=2026-09-14": bundle.teamThresholds,
   };
-  const client = createGpexeClient({ token: TOKEN, fetchImpl: fakeFetch(routes).fetchImpl, sleep: noSleep });
-  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14"], { client });
-  assert.equal(report.sessionListFirstPage.body, "array");
-  assert.equal(report.sessionListFirstPage.totalHeader, "1");
-  assert.equal(report.sessionList.complete, true);
+  const paging = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14"], probeEnv(routes));
+  assert.equal(paging.sessionListFirstPage.body, "array");
+  assert.equal(paging.sessionListFirstPage.totalHeader, "1");
+  assert.equal(paging.sessionList.complete, true);
+  assert.deepEqual(paging.athleteRows, { complete: true, session: "186942", rows: bundle.athleteSessions.length, rowsOfThisSession: bundle.athleteSessions.length });
+  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942", "--mode", "hash"], probeEnv(routes));
   assert.equal(report.session.sameHashOnTwoFetches, true);
   assert.equal(report.session.athleteRows, bundle.athleteSessions.length);
   assert.ok(report.session.importerView.participants >= 1);
@@ -334,8 +338,7 @@ test("api probe: every distinct changed field is reported, and a failing request
     trackCalls += 1;
     return response(200, { ...bundle.tracks["8024"], timezone: trackCalls === 2 ? "Europe/Belgrade" : bundle.tracks["8024"].timezone });
   };
-  const client = createGpexeClient({ token: TOKEN, fetchImpl: fakeFetch(routes).fetchImpl, sleep: noSleep });
-  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942"], { client });
+  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942", "--mode", "hash"], probeEnv(routes));
   assert.ok(report.session.pathsThatChangedBetweenFetches.includes(".details.full.players.<id>.tot_burst_events.value"));
   assert.ok(report.session.pathsThatChangedBetweenFetches.includes(".tracks.<id>.timezone"));
 
@@ -343,8 +346,38 @@ test("api probe: every distinct changed field is reported, and a failing request
   const firstRow = Object.keys(failing).find((k) => /^athlete_session\/\d+\/more\/$/.test(k));
   const rowId = firstRow.match(/\d+/)[0];
   failing[firstRow] = () => response(500, "error");
-  const failingClient = createGpexeClient({ token: TOKEN, fetchImpl: fakeFetch(failing).fetchImpl, sleep: noSleep });
-  const failed = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942"], { client: failingClient });
-  assert.equal(failed.session.error, "server_error");
+  const failed = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942", "--mode", "hash"], probeEnv(failing));
+  assert.equal(failed.error, "server_error");
+  assert.equal(failed.failedInPhase, "fetch-1");
   assert.ok(!JSON.stringify(failed).includes(rowId));
+});
+
+test("api probe: the quick paging check touches only the lists, and its progress lines carry phases and counts but no id or token", async () => {
+  const bundle = makeBundle({ sessionId: 186942, gpexeTeamId: 980, athletes: standardAthletes() });
+  const routes = probeRoutes({ bundle });
+  const { fetchImpl, calls } = fakeFetch(routes);
+  const lines = [];
+  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--session", "186942"], { fetchImpl, token: TOKEN, sleep: noSleep, log: (l) => lines.push(l) });
+  assert.equal(report.mode, "paging");
+  assert.equal(report.timedOut, false);
+  assert.deepEqual(report.requests, { started: 4, done: 4 }, "two list pages read raw + two read through the paging rules");
+  assert.ok(calls.every((c) => /team_session\/\?|athlete_session\/\?/.test(c.url)), "no per-athlete, track or details request");
+  assert.ok(lines.some((l) => l.startsWith("[session-list] started")));
+  assert.ok(lines.some((l) => l.startsWith("[athlete-rows] started")));
+  assert.ok(lines.some((l) => /✓ 200 .* 4 done/.test(l)));
+  const text = lines.join("\n");
+  assert.ok(!text.includes(TOKEN));
+  assert.ok(!/186942|980|\b10[1-3]\b/.test(text), "paths are masked");
+});
+
+test("api probe: a GPEXE that never answers is stopped at the time limit, and what was found is still reported", async () => {
+  const hanging = async (_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })));
+  });
+  const started = Date.now();
+  const report = await probe(["--team", "980", "--from", "2026-09-14", "--to", "2026-09-14", "--max-seconds", "1"], { fetchImpl: hanging, token: TOKEN, sleep: noSleep, log: () => {} });
+  assert.ok(Date.now() - started < 5000, "stopped close to the limit");
+  assert.equal(report.timedOut, true);
+  assert.equal(report.stoppedInPhase, "session-list");
+  assert.deepEqual(report.requests, { started: 1, done: 0 });
 });
