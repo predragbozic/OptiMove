@@ -1163,6 +1163,37 @@ test("database: a bound event's own source identity can no longer be changed", a
   assert.equal(still.source_external_id, binding.source_external_id, "event and binding still agree");
   assert.equal(String(still.source_connection_id), String(binding.source_connection_id));
 
+  // Renaming a bound event is untouched: only its source identity is frozen.
+  await assert.doesNotReject(
+    admin.query(`update training_load.metric_events set event_name = 'renamed' where id = $1`, [summary.eventId]),
+  );
+
+  // The control case has everything a too-broad guard might key on except the
+  // binding: another source system, and measurements underneath it. v12 leaves
+  // source_external_id editable there, and v20 must not change that.
+  const measuredConnection = (await admin.query(
+    `insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-import','team',$1) returning id`,
+    [org.teamId],
+  )).rows[0].id;
+  const measuredEvent = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('csv upload','2026-09-16','2026-09-16T18:08:12Z','session','team',$1,$2,'file:rows.csv',$3) returning id`,
+    [org.teamId, measuredConnection, TZ],
+  )).rows[0].id;
+  const measuredParticipant = (await admin.query(
+    `insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1,$2,$3) returning id`,
+    [measuredEvent, org.athleteIds[0], TZ],
+  )).rows[0].id;
+  await admin.query(
+    `insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1,'csv_import',$2)`,
+    [measuredParticipant, org.userId],
+  );
+  await assert.doesNotReject(
+    admin.query(`update training_load.metric_events set source_external_id = 'file:rows2.csv' where id = $1`, [measuredEvent]),
+    "a measured event of another source keeps the editability v12 gives it",
+  );
+
   // An event with no binding stays as mutable as v12 always allowed.
   const unbound = (await admin.query(
     `insert into training_load.metric_events
@@ -1179,6 +1210,88 @@ test("database: a bound event's own source identity can no longer be changed", a
     (e) => e.code === "23505",
     "and still cannot take an id this connection already uses",
   );
+});
+
+test("database: a binding committed while an identity update waits still blocks that update", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5032, athletes: standardAthletes() }));
+  // A second, not-yet-bound event on the same GPEXE connection.
+  const unbound = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('not bound yet','2026-09-16','2026-09-16T18:08:12Z','session','team',$1,$2,'team_session:5032b',$3) returning id`,
+    [org.teamId, summary.connectionId, TZ],
+  )).rows[0].id;
+
+  const binder = await newClient();
+  const mover = await newClient();
+  try {
+    const moverPid = (await mover.query("select pg_backend_pid() as pid")).rows[0].pid;
+    await binder.query("begin");
+    // The binding insert locks that event row for update — this is the
+    // mechanism the freeze's unlocked read relies on.
+    await binder.query(
+      `insert into training_load.metric_event_source_bindings (event_id, source_connection_id, source_external_id) values ($1,$2,'team_session:5032b')`,
+      [unbound, summary.connectionId],
+    );
+    await mover.query("begin");
+    const move = mover.query(`update training_load.metric_events set source_external_id = 'team_session:free' where id = $1`, [unbound])
+      .then(() => ({ ok: true }), (error) => ({ error }));
+    let waiting = false;
+    for (let i = 0; i < 100 && !waiting; i += 1) {
+      const r = await admin.query(`select wait_event_type from pg_stat_activity where pid = $1`, [moverPid]);
+      waiting = r.rows[0]?.wait_event_type === "Lock";
+      if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(waiting, true, "the update waits for the row the binding insert locked");
+    await binder.query("commit");
+    const outcome = await move;
+    assert.match(String(outcome.error?.message), /source identity is immutable once the event is bound/, "it then sees the committed binding");
+    await mover.query("rollback");
+  } finally {
+    await binder.end();
+    await mover.end();
+  }
+  const still = (await admin.query(`select source_external_id from training_load.metric_events where id = $1`, [unbound])).rows[0];
+  assert.equal(still.source_external_id, "team_session:5032b", "event and binding agree");
+});
+
+test("database: an identity update committed first makes the binding insert fail instead", async () => {
+  const org = await setupTeam();
+  const summary = await runImport(org, makeBundle({ sessionId: 5033, athletes: standardAthletes() }));
+  const unbound = (await admin.query(
+    `insert into training_load.metric_events
+       (event_name, occurred_date, occurred_instant, scope_level, owner_scope, owner_team_id, source_connection_id, source_external_id, event_timezone_snapshot)
+     values ('not bound yet','2026-09-16','2026-09-16T18:08:12Z','session','team',$1,$2,'team_session:5033b',$3) returning id`,
+    [org.teamId, summary.connectionId, TZ],
+  )).rows[0].id;
+
+  const mover = await newClient();
+  const binder = await newClient();
+  try {
+    const binderPid = (await binder.query("select pg_backend_pid() as pid")).rows[0].pid;
+    await mover.query("begin");
+    await mover.query(`update training_load.metric_events set source_external_id = 'team_session:5033c' where id = $1`, [unbound]);
+    await binder.query("begin");
+    const bind = binder.query(
+      `insert into training_load.metric_event_source_bindings (event_id, source_connection_id, source_external_id) values ($1,$2,'team_session:5033b')`,
+      [unbound, summary.connectionId],
+    ).then(() => ({ ok: true }), (error) => ({ error }));
+    let waiting = false;
+    for (let i = 0; i < 100 && !waiting; i += 1) {
+      const r = await admin.query(`select wait_event_type from pg_stat_activity where pid = $1`, [binderPid]);
+      waiting = r.rows[0]?.wait_event_type === "Lock";
+      if (!waiting) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(waiting, true, "the binding insert waits for the row the update holds");
+    await mover.query("commit");
+    const outcome = await bind;
+    assert.match(String(outcome.error?.message), /does not match event/, "the binding refuses to describe an identity that moved");
+    await binder.query("rollback");
+  } finally {
+    await mover.end();
+    await binder.end();
+  }
 });
 
 test("database: a binding can be neither updated nor deleted", async () => {
