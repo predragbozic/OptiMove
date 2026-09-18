@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-17. Last `origin/main` commit checked: `41e9555` (merge of PR #99,
-`feature/gpexe-pilot-import` → `main`).
+Last reviewed: 2026-09-18. Last `origin/main` commit checked: `6c5b3a6` (merge of PR #104,
+`feature/gpexe-undo-authorization-log` → `main`).
 
 ## Active phase
 
@@ -10,12 +10,81 @@ product decision says otherwise. H1 (PR #89), H2 (PR #93), H3 (PR #95) and H4 (P
 are merged. No further slice is scheduled; the small follow-up found during H4 is recorded
 under Separate tasks.
 
-Alongside it, the **GPEXE pilot import** (PR #99) is merged as code only. It writes to a
-disposable test database, never to a persistent one, so no imported data is visible in the
-app — see the entry below and the Separate task it leaves open.
+Alongside it, the **GPEXE import groundwork** is merged:
+- the pilot importer (PR #99);
+- database uniqueness and threshold bindings (v20, PR #101);
+- a rehearsed undo of one imported session (PR #102);
+- session and drill display in Activities (PR #103);
+- undo authorization with a database deletion log (v21) and a backup proven by a trial
+  restore (PR #104).
+
+All of it is code only. **No GPEXE data has been imported into the local OPTIMOVE or the
+deployed database**, so nothing imported is visible in the app. The next functional task
+the owner named (2026-09-18) is the in-app import (see Most likely next step).
 
 ## Last completed, merged phases
 
+- **GPEXE undo authorization, deletion log and verified backup** — PR #104 (`6c5b3a6`),
+  migration v21 (`migrations_v2/202609181000_training_load_v21_import_deletion_log.sql`).
+  - **Who may run the undo** (`backend/scripts/gpexe-undo-imported-session.mjs`): only an
+    **active platform admin** (active `user_global_roles` role and `users.is_active`),
+    always with a reason.
+    - The script checks this before taking any lock, and the v21 insert trigger checks it
+      again (SQLSTATE 42501).
+    - `--reason` and `--performed-by-user-id` are required on every run, dry run included.
+    - The script still refuses any database that is not a disposable
+      `optimove_tests_gpexe_*` one.
+  - **`training_load.import_deletion_log`**:
+    - one row per removed event, written in the **same transaction** as the removal;
+    - records the session, team, day, admin, reason, threshold set, and rows removed per
+      table and in total;
+    - append-only against UPDATE, DELETE and TRUNCATE;
+    - a row can only name an active platform admin and an event that no longer exists;
+    - lock order: `user_global_roles` (FOR SHARE) → `metric_events` → `activities`.
+  - **Verified backup** (`backend/scripts/gpexe-backup-verify.mjs`,
+    `docs/runbooks/gpexe-backup-verify.md`):
+    - `pg_dump` runs on an exported snapshot;
+    - the dump is restored into a new `optimove_tests_gpexe_restore_*` database, which is
+      always dropped afterwards;
+    - the copy is compared table by table (row count plus a digest of every row) and per
+      catalog object, including whether each trigger is enabled;
+    - an unverified dump is deleted, and a verified one gets `<dump>.verify.json` with its
+      sha256;
+    - local sources only; `pg_dump`/`pg_restore` inherit no `PG*` variable and get
+      explicit connection arguments.
+  - **Known limit, stated in the runbook**: the CLI cannot authenticate its operator. It
+    checks that the given user id is an active platform admin, not that the person running
+    it is that admin. The runbook lists what must be in place before any persistent-database
+    unlock.
+- **GPEXE session and drills in Activities** — PR #103 (`37dadb1`), frontend only.
+  - The Activities drawer shows the whole session and each drill separately, with readable
+    metric names, and marks real conflicts.
+  - Dashboards series are named from the metric catalog.
+  - The Dashboards "Bucket" column still shows raw ids (see Separate tasks).
+- **GPEXE undo procedure** — PR #102 (`df3cc6b`): `backend/scripts/gpexe-undo-imported-session.mjs`
+  and `docs/runbooks/gpexe-undo-imported-session.md`.
+  - Undoes one imported session in a fixed order.
+  - The v13/v20 immutability triggers are disabled only inside that one transaction, and
+    the commit is refused unless they are enabled again.
+  - A JSON log is written before the commit (`pending`, then `committed`).
+  - It refuses rather than guesses when it finds:
+    - a manual correction;
+    - an activity shared with, or linked to, another event;
+    - a merged or reparented activity;
+    - two events for one GPEXE session.
+  - Disposable databases only.
+- **GPEXE uniqueness and threshold provenance** — PR #101 (`c066b3b`), migration v20
+  (`migrations_v2/202609171800_training_load_v20_gpexe_source_bindings.sql`).
+  - One active GPEXE connection per team.
+  - A trigger refuses a second event for the same GPEXE connection and `team_session:<id>`,
+    and freezes the source identity of a bound event.
+  - `training_load.metric_event_source_bindings` records, per event, the GPEXE threshold
+    set the values were imported under:
+    - the hash covers the set id and the payload;
+    - the hash version has its own column;
+    - rows cannot be changed.
+  - The writer stops with `binding_missing`, `source_reference_set_changed` or
+    `reference_hash_version_outdated` instead of mixing threshold sets.
 - **GPEXE pilot import (code only)** — PR #99 (`41e9555`), backend only:
   `backend/src/gpexeImportMapper.js` (pure plan builder) + `backend/src/gpexeImportWriter.js`
   (one transaction under a team advisory lock) + `backend/scripts/gpexe-import-pilot.mjs`
@@ -150,9 +219,16 @@ app — see the entry below and the Separate task it leaves open.
 - This `CLAUDE.md`/`.claude/agents/` reviewer workflow (`code-reviewer`, `db-reviewer`,
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
-**Implemented ≠ deployed.** The only deploy fact checked in this update is the one above
-(`/api/health` reporting `0de6afb` on 2026-09-17); re-check the hosting target before
-asserting a deploy state later.
+**Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `0de6afb` on 2026-09-17.
+- `/api/health` reported commit `6c5b3a6` on 2026-09-18.
+- v20 and v21 on the deployed database are **inferred** from the successful start of
+  that deploy (`npm start` runs `node src/migrate.js &&` the server). The deployed
+  database itself was **not** queried.
+- On 2026-09-18 the last migration applied to the **local OPTIMOVE** database was **v19**,
+  checked by a read-only query. v20 and v21 were not applied there.
+
+Re-check the hosting target and the database before asserting a deploy state later.
 
 ## Known baseline/environment test issues
 
@@ -168,6 +244,9 @@ pre-existing; pass/fail counts don't belong in this file
   occurrence-generation phase catches an ahead athlete's occurrence in its very next
   cycle…" fails; reproduced identically on a clean detached `origin/main` worktree
   (`3ef6033`) on 2026-09-17.
+- `frontend/tests/training-load.actions.test.mjs` — the process never exits after the
+  suite runs. It was reproduced on clean `main` on 2026-09-18, but the baseline commit
+  was not recorded. Not fixed.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on
@@ -175,16 +254,36 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
-- **Import GPEXE data into the local OPTIMOVE database and show it in the app** (owner,
-  2026-09-17, at the PR #99 merge). The merge approved the pilot code, not an import. Open
-  before any write to a persistent database: (a) database-level uniqueness for the GPEXE
-  source connection and the session event — today only the writer's team advisory lock
-  prevents duplicates, `training_load.metric_events` has no unique
-  `(source_connection_id, source_external_id)` index; (b) how the GPEXE threshold used for
-  each result is preserved over time — today it lives in the metric definition version's
-  `condition_description` and a changed threshold only skips the metric; (c) where a coach
-  would actually see session and drill values, since a team-owned imported metric has to be
-  reachable from the dashboard catalog. Each of those is its own decision.
+- **In-app GPEXE import** (owner, 2026-09-18: the next functional task).
+  - Planned shape:
+    - "Check now" fetches from GPEXE;
+    - a list of import candidates;
+    - a review of what would change;
+    - an explicit approve button.
+  - Periodic checks and notifications can later feed the same candidate queue.
+  - **One athlete** whose session data needs review stays **flagged for review**. The
+    identity and details are only in the report kept outside the repo. That athlete's
+    data must **not block** importing the other athletes.
+  - Before any real import, take a **new verified backup** of the state at that moment.
+    The 2026-09-18 backup (`...-r2.dump`, kept outside the repo) does not replace it.
+  - Not approved yet: any write of GPEXE data to the local OPTIMOVE or the deployed
+    database.
+- **GPEXE session table readability** (owner, 2026-09-18, for later). The goal is that the
+  Activities "Recorded metrics" table reads like GPEXE's own session table:
+  - short column labels; `metric_definitions.short_label` and `icon_url` already exist
+    (v10) but the table does not use them;
+  - the unit shown once in the header, not in every cell;
+  - duration as mm:ss;
+  - no empty RPE columns;
+  - a drill switch in the table.
+  - Also: the "Choose metrics" picker is unusable at about 515 px width.
+  - Importing GPEXE speed zones and max acceleration would change the import scope, so it
+    needs its own decision.
+- **Dashboards "Bucket" column shows raw ids** (found in PR #103). Fixing it needs readable
+  labels from the backend and a security review.
+- **Read the GPEXE import deletion log in the app.** Same shape as the dashboard deletion
+  log task below: today `training_load.import_deletion_log` is readable only in the
+  database.
 
 - **Small Dashboards UX follow-up** (owner, 2026-09-17, found during H4): the guided
   "Add metric" panel (H1, `renderMetricPanelHtml`) closes without asking even when it
@@ -243,15 +342,24 @@ pre-existing; pass/fail counts don't belong in this file
 - **Leaving the app with unsaved Dashboards changes** (found during H4, not scheduled):
   signing out, reloading the page or closing the tab still leaves without asking about an
   unsaved layout or Advanced settings change (no `beforeunload` guard).
+- **The GPEXE undo CLI cannot authenticate its operator** (PR #104). It is limited to
+  disposable databases. The runbook lists what a persistent-database unlock would need
+  first: a real authenticated identity, a narrow break-glass credential, and a second
+  person's approval.
 - `migrations/` (legacy, no `_v2` suffix) still exists alongside `migrations_v2/` — treat
   it as historical/reference only; new migrations go in `migrations_v2/`.
 
 ## Most likely next step
 
-The Dashboards UX slices H1–H4 are merged and the GPEXE pilot import is merged as code.
-The next task the owner named (2026-09-17) is the plan for importing into the local
-OPTIMOVE database and showing the data — uniqueness, threshold provenance and the display
-surface — followed by whichever of the other Separate tasks they schedule.
+The owner's order of 2026-09-18 had three steps: local migrations, this state update, and
+the in-app import. This state update (step 2) was done before step 1, so two steps remain
+open:
+1. **Local migrations, still pending on 2026-09-18.** Apply v20 and v21 to the local
+   OPTIMOVE database after a fresh verified backup. Then check directly that the deletion
+   log exists and that existing data is unchanged. This is not a GPEXE import.
+2. **In-app GPEXE import** (see Separate tasks).
+
+The other Separate tasks wait until the owner schedules them.
 
 ## How to refresh this file
 
