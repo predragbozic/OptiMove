@@ -43,7 +43,7 @@ function installFetchMock(responder) {
 }
 
 const { bindTrainingLoadAnalysisLayoutInteractions, handleTrainingLoadAction, handleTrainingLoadAnalysisPointerDown, handleTrainingLoadAnalysisPointerEnd, handleTrainingLoadAnalysisPointerMove } = await import("../training-load-actions.js");
-const { loadTrainingLoadAnalysis, loadAnalysisMetricDefinitions, queryAnalysisDashboard } = await import("../training-load-analysis-data.js");
+const { loadDashboardDetail, loadTrainingLoadAnalysis, loadAnalysisMetricDefinitions, queryAnalysisDashboard } = await import("../training-load-analysis-data.js");
 const { renderTrainingLoadAnalysisHtml } = await import("../training-load-analysis-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
@@ -337,6 +337,84 @@ test("Analysis load selects active dashboard and queries it through the single b
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/query")).length, 1);
   assert.equal(fetchCalls.some((c) => c.url.includes("/widgets/") && c.url.endsWith("/query")), false);
   assert.deepEqual(fetchCalls.find((c) => c.url.endsWith("/query")).body.athleteIds, undefined);
+});
+
+test("a series bound to a catalog metric is labelled with that metric's name, never a generic Metric", () => {
+  resetState();
+  state.trainingLoad.analysis.dashboard = dashboard();
+  const metricSeries = { ...widget().series[0], built_in_series_key: null, display_label: null, metric_definition_id: "metric-totdist" };
+  state.trainingLoad.analysis.widgets = [widget({ widget_type: "table", title: "Distance", series: [metricSeries] })];
+  state.trainingLoad.analysis.queryResult = {
+    dashboardRevision: 3,
+    widgets: [{ widgetId, series: [{ seriesId, status: "ok", data: { current: [{ bucketKey: "2026-09-14", value: 5737, unit: "m" }], comparison: [] } }] }],
+  };
+
+  // Before the catalog has arrived it says what kind of series it is.
+  let html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /Catalog metric/);
+  assert.doesNotMatch(html, />Metric</);
+
+  state.trainingLoad.analysis.metricPicker.definitions = [{ id: "metric-totdist", key: "gpexe_total_distance", label: "TotDist", unit: "m" }];
+  html = renderTrainingLoadAnalysisHtml();
+  assert.match(html, /TotDist/);
+  assert.doesNotMatch(html, /Catalog metric/);
+});
+
+test("loading a dashboard whose series use catalog metrics also loads the catalog, once; a built-in-only dashboard does not", async () => {
+  resetState();
+  const metricSeries = { ...widget().series[0], built_in_series_key: null, display_label: null, metric_definition_id: metricId };
+  let dashboardWidgets = [widget({ widget_type: "table", series: [metricSeries] })];
+  installFetchMock(async (call) => {
+    if (call.url.includes("/api/training-load/metrics/definitions")) return { status: 200, body: { rows: [{ id: metricId, key: "gpexe_total_distance", label: "TotDist", unit: "m" }], nextCursor: null } };
+    if (call.url.includes("/dashboards/" + dashboardId) && !call.url.endsWith("/query")) return { status: 200, body: detail({ widgets: dashboardWidgets }) };
+    return { status: 200, body: { rows: [] } };
+  });
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  await loadDashboardDetail(dashboardId, renderTrainingLoad, { force: true });
+  for (let i = 0; i < 40 && !state.trainingLoad.analysis.metricPicker.definitions; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(state.trainingLoad.analysis.metricPicker.definitions?.map((d) => d.label), ["TotDist"], "the catalog arrives without opening any editor");
+  assert.equal(fetchCalls.filter((c) => c.url.includes("/metrics/definitions")).length, 1);
+
+  // A dashboard with built-in series only never asks for the catalog.
+  resetState();
+  dashboardWidgets = [widget()];
+  const catalogCallsBefore = fetchCalls.filter((c) => c.url.includes("/metrics/definitions")).length;
+  state.trainingLoad.analysis.selectedDashboardId = dashboardId;
+  await loadDashboardDetail(dashboardId, renderTrainingLoad, { force: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(fetchCalls.filter((c) => c.url.includes("/metrics/definitions")).length, catalogCallsBefore, "no catalog request for built-in series");
+});
+
+test("concurrent catalog requests share one load, and a late load never writes into a newer workspace's state", async () => {
+  resetState();
+  const releases = [];
+  installFetchMock(async (call) => {
+    if (call.url.includes("/metrics/definitions")) {
+      await new Promise((resolve) => releases.push(resolve));
+      return { status: 200, body: { rows: [{ id: metricId, key: "gpexe_total_distance", label: "TotDist", unit: "m" }], nextCursor: null } };
+    }
+    return { status: 200, body: { rows: [] } };
+  });
+  const first = loadAnalysisMetricDefinitions();
+  const second = loadAnalysisMetricDefinitions();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(fetchCalls.filter((c) => c.url.includes("/metrics/definitions")).length, 1, "the second caller joins the running load");
+  releases.forEach((release) => release());
+  const [a, b] = await Promise.all([first, second]);
+  assert.deepEqual(a.map((d) => d.label), ["TotDist"]);
+  assert.equal(a, b);
+
+  // A load started for one analysis state, finishing after that state was
+  // replaced (a workspace switch), leaves the new state alone.
+  resetState();
+  const oldPicker = state.trainingLoad.analysis.metricPicker;
+  const late = loadAnalysisMetricDefinitions();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  state.trainingLoad = emptyTrainingLoadState();
+  releases.forEach((release) => release());
+  await late;
+  assert.equal(state.trainingLoad.analysis.metricPicker.definitions, null, "the new workspace's catalog is not the old one's");
+  assert.notEqual(state.trainingLoad.analysis.metricPicker, oldPicker);
 });
 
 test("Analysis renders real KPI and table results from the batch response", () => {

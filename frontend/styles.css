@@ -13187,7 +13187,48 @@ button.tests-assignment-card {
 
 .tl-athlete-drawer-metrics {
   margin: 8px 0 0;
-  padding-left: 18px;
+  padding: 0;
+}
+
+/* One row per value: the metric's name, then its value and unit, on one line
+   when there is room and wrapping cleanly on a phone. */
+.tl-athlete-drawer-group + .tl-athlete-drawer-group {
+  margin-top: 12px;
+}
+
+.tl-athlete-drawer-group-label {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.tl-athlete-drawer-metric {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line, rgba(0, 0, 0, 0.08));
+}
+
+.tl-athlete-drawer-metric dt {
+  flex: 1 1 60%;
+  min-width: 0;
+}
+
+/* A value may be free text of any length, so it wraps rather than forcing a
+   horizontal scrollbar inside the drawer on a phone. */
+.tl-athlete-drawer-metric dd {
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.tl-results-parts-hint {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
 }
 
 /* Mobile: no page-level horizontal overflow anywhere in this feature. */

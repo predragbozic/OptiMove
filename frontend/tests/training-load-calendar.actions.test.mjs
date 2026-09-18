@@ -348,7 +348,7 @@ test("select-detail-tab reads its OWN dataset key (tlCalendarDetailTab), not the
 // 6. Whole-session / component filtering
 // ------------------------------------------------------------
 
-test("selecting a component filters results to that component, hides session-level RPE, and 'Whole session' returns everything", async () => {
+test("selecting a component filters results to that component, hides session-level RPE, and 'Whole session' returns the session-level view", async () => {
   resetState();
   const cal = state.trainingLoad.calendar;
   withActivitySelected(cal, {
@@ -742,6 +742,149 @@ test("resetTrainingLoadForWorkspaceChange clears every calendar field, including
 // ------------------------------------------------------------
 // 20. Athlete drawer keeps date/activity/component context
 // ------------------------------------------------------------
+
+// ------------------------------------------------------------
+// Whole session and its parts are shown separately (GPEXE drills)
+// ------------------------------------------------------------
+
+function gpexeLikeDetail() {
+  // One athlete, one metric: a whole-session total plus the same metric for
+  // each of two drills — the shape an imported GPEXE session has.
+  return activityDetailPayload({
+    athleteNamesById: { "ath-1": "Ana Zzzqa" },
+    components: [
+      { id: "comp-d2", name: "Drill 2", componentTypeKey: "drill", sortOrder: 2, plannedDurationSeconds: null, actualDurationSeconds: null },
+      { id: "comp-d1", name: "Drill 1", componentTypeKey: "drill", sortOrder: 1, plannedDurationSeconds: null, actualDurationSeconds: null },
+    ],
+    facts: [
+      metricValueFact("ath-1", { occasionId: "occ-full", valueNumeric: 5737, aggregationRole: "source_rollup", coverage: "complete" }),
+      metricValueFact("ath-1", { occasionId: "occ-d1", valueNumeric: 2100, segmentId: "seg-1" }),
+      metricValueFact("ath-1", { occasionId: "occ-d2", valueNumeric: 3637, segmentId: "seg-2" }),
+      componentLinkFact("comp-d1", "seg-1"),
+      componentLinkFact("comp-d2", "seg-2"),
+    ],
+  });
+}
+
+test("the whole-session view shows the session total alone, never as a conflict with its own drills", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: gpexeLikeDetail() });
+  cal.metricPicker.definitions = [{ id: "def-distance", label: "TotDist", unit: "m" }];
+  const html = renderTrainingLoadCalendarHtml();
+  assert.ok(html.includes("5737"), "the whole-session value is shown");
+  assert.ok(!html.includes("tl-cell-conflict"), "a session total and its drills are not a conflict");
+  assert.ok(!html.includes("3 values"));
+  assert.ok(!html.includes("2100") && !html.includes("3637"), "drill values are not mixed into the whole-session table");
+  assert.ok(!html.includes("7837") && !html.includes("11474"), "nothing is summed");
+  assert.match(html, /2 parts of this session have their own values \(Drill 1, Drill 2\)/, "the parts are named, in their own order");
+});
+
+test("choosing a drill shows that drill's value only", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: gpexeLikeDetail() });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-calendar-select-component", componentId: "comp-d2" }), { renderTrainingLoad });
+  const html = renderTrainingLoadCalendarHtml();
+  assert.ok(html.includes("3637"), "the selected drill's value");
+  assert.ok(!html.includes("5737") && !html.includes("2100"), "neither the session total nor the other drill");
+  assert.ok(!html.includes("parts of this session have their own values"), "the hint belongs to the whole-session view");
+});
+
+test("a session with values only in its parts says so instead of showing an empty table", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  const detail = gpexeLikeDetail();
+  detail.facts = detail.facts.filter((f) => f.detail.occasionId !== "occ-full");
+  withActivitySelected(cal, { detail });
+  const html = renderTrainingLoadCalendarHtml();
+  assert.ok(html.includes("No whole-session values recorded yet"));
+  assert.ok(html.includes("2 parts of this session have their own values"));
+});
+
+test("a real conflict between two whole-session values is still shown as a conflict", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, {
+    detail: activityDetailPayload({
+      facts: [
+        metricValueFact("ath-1", { occasionId: "occ-a", valueNumeric: 4800 }),
+        metricValueFact("ath-1", { occasionId: "occ-b", valueNumeric: 5100 }),
+        metricValueFact("ath-1", { occasionId: "occ-c", valueNumeric: 900, segmentId: "seg-1" }),
+        componentLinkFact("comp-main", "seg-1"),
+      ],
+      components: [{ id: "comp-main", name: "Main Set", componentTypeKey: "block", sortOrder: 1, plannedDurationSeconds: null, actualDurationSeconds: null }],
+    }),
+  });
+  const html = renderTrainingLoadCalendarHtml();
+  assert.ok(html.includes("2 values"), "two session-level sources still conflict, and the drill value is not counted in");
+});
+
+test("the athlete drawer names each metric and separates the whole session from each part", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, { detail: gpexeLikeDetail() });
+  cal.metricPicker.definitions = [{ id: "def-distance", label: "TotDist", unit: "m" }];
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-calendar-select-athlete", athleteId: "ath-1" }), { renderTrainingLoad });
+  const html = renderTrainingLoadCalendarHtml();
+  const drawer = html.slice(html.indexOf("tl-athlete-drawer-overlay"));
+  assert.ok(drawer.includes("TotDist"), "the metric's own name, not a bare number");
+  const whole = drawer.indexOf("Whole session");
+  const d1 = drawer.indexOf("Drill 1");
+  const d2 = drawer.indexOf("Drill 2");
+  assert.ok(whole >= 0 && d1 > whole && d2 > d1, "whole session first, then the parts in their own order");
+  assert.ok(drawer.indexOf("5737") > whole && drawer.indexOf("5737") < d1, "the total sits under Whole session");
+  assert.ok(drawer.indexOf("3637") > d2, "each drill value sits under its drill");
+});
+
+test("the athlete drawer marks two whole-session values of one metric as a conflict, like the table", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  withActivitySelected(cal, {
+    detail: activityDetailPayload({
+      athleteNamesById: { "ath-1": "Ana Zzzqa" },
+      facts: [
+        metricValueFact("ath-1", { occasionId: "occ-a", valueNumeric: 4800 }),
+        metricValueFact("ath-1", { occasionId: "occ-b", valueNumeric: 5100 }),
+      ],
+    }),
+  });
+  cal.metricPicker.definitions = [{ id: "def-distance", label: "TotDist", unit: "m" }];
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-calendar-select-athlete", athleteId: "ath-1" }), { renderTrainingLoad });
+  const drawer = renderTrainingLoadCalendarHtml().split("tl-athlete-drawer-overlay")[1] || "";
+  assert.equal((drawer.match(/<dt>TotDist<\/dt>/g) || []).length, 1, "one row for the metric, not two unrelated rows");
+  assert.match(drawer, /2 values: 4800/);
+  assert.match(drawer, /5100/);
+  assert.match(drawer, /is-conflict/);
+});
+
+test("segment-to-component resolution is linear in the number of facts", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  const components = [];
+  const facts = [];
+  for (let i = 0; i < 2000; i += 1) {
+    facts.push(metricValueFact(`ath-${i % 25}`, { occasionId: `occ-${i}`, valueNumeric: i, segmentId: i % 3 === 0 ? null : `seg-${i % 5}`, metricDefinitionId: `def-${i % 10}` }));
+  }
+  // Links last: the worst case for a per-value scan, which has to walk past
+  // every metric fact to reach them.
+  for (let c = 0; c < 5; c += 1) {
+    components.push({ id: `comp-${c}`, name: `Drill ${c + 1}`, componentTypeKey: "drill", sortOrder: c + 1, plannedDurationSeconds: null, actualDurationSeconds: null });
+    facts.push(componentLinkFact(`comp-${c}`, `seg-${c}`));
+  }
+  // Count every indexed read of the facts array while rendering.
+  let reads = 0;
+  const counted = new Proxy(facts, {
+    get(target, prop, receiver) {
+      if (typeof prop === "string" && /^\d+$/.test(prop)) reads += 1;
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+  withActivitySelected(cal, { detail: activityDetailPayload({ components, facts: counted }) });
+  cal.selectedResultsAthleteId = "ath-1";
+  renderTrainingLoadCalendarHtml();
+  assert.ok(reads < 20 * facts.length, `${reads} reads for ${facts.length} facts — a per-value scan would be millions`);
+});
 
 test("opening the athlete drawer never loses the current date/activity/component context", async () => {
   resetState();
