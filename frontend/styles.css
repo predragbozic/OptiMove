@@ -14833,3 +14833,272 @@ button.tests-assignment-card {
     min-height: 44px;
   }
 }
+
+/* ------------------------------------------------------------
+   Training Load -> Data & Analysis -> GPEXE imports (F3a)
+   ------------------------------------------------------------ */
+.gpexe-imports {
+  display: grid;
+  gap: 14px;
+  padding: 4px 0 24px;
+}
+.gpexe-team-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.gpexe-team-label {
+  font-weight: 600;
+  color: var(--muted);
+}
+.gpexe-select,
+.gpexe-date input {
+  min-height: 44px;
+  font-size: 16px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  max-width: 100%;
+}
+.gpexe-button {
+  min-height: 44px;
+}
+.gpexe-status p,
+.gpexe-panel p {
+  margin: 4px 0;
+}
+.gpexe-switch {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+.gpexe-switch.is-off {
+  border-color: var(--line-strong);
+}
+.gpexe-panel {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.gpexe-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.gpexe-panel-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.gpexe-check-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+.gpexe-date {
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.gpexe-hint {
+  font-size: 0.85rem;
+}
+.gpexe-error,
+.gpexe-refused {
+  color: var(--danger);
+}
+.gpexe-warning,
+.gpexe-unknown {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--danger);
+  background: var(--surface-soft);
+}
+.gpexe-success {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+}
+.gpexe-notice {
+  color: var(--text);
+  font-weight: 500;
+}
+.gpexe-candidate-list,
+.gpexe-link-list,
+.gpexe-changes ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.gpexe-candidate {
+  width: 100%;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.gpexe-candidate:hover {
+  border-color: var(--line-strong);
+}
+.gpexe-candidate-main {
+  display: grid;
+  gap: 2px;
+}
+.gpexe-candidate-facts {
+  grid-column: 1 / -1;
+  font-size: 0.85rem;
+}
+.gpexe-badge {
+  align-self: start;
+  justify-self: end;
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+.gpexe-badge.is-imported {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.gpexe-badge.is-blocked {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.gpexe-link-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* Height: the shared dialog's own max-height (88dvh on phones) applies. */
+.gpexe-detail {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+}
+.gpexe-detail .builder-athlete-picker-cancel {
+  min-width: 44px;
+  min-height: 44px;
+}
+.gpexe-detail-body {
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding: 4px 2px 12px;
+}
+.gpexe-detail-body h4 {
+  margin: 4px 0;
+  font-size: 0.95rem;
+}
+.gpexe-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.gpexe-blocked {
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+}
+.gpexe-blocked ol {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+.gpexe-values-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.gpexe-values {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.gpexe-values th,
+.gpexe-values td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.gpexe-athlete {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+.gpexe-athlete.is-blocking {
+  border-color: var(--danger);
+}
+.gpexe-athlete summary {
+  display: grid;
+  gap: 2px;
+  cursor: pointer;
+  min-height: 44px;
+  align-content: center;
+}
+.gpexe-result p {
+  margin: 8px 0 4px;
+  font-weight: 500;
+}
+.gpexe-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 8px 0;
+}
+.gpexe-link-row label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+.gpexe-approve {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.gpexe-accept {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+}
+.gpexe-accept input {
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  flex: none;
+}
+@media (max-width: 760px) {
+  .gpexe-check-row > *,
+  .gpexe-link-row > *,
+  .gpexe-select {
+    width: 100%;
+  }
+  .gpexe-date input {
+    width: 100%;
+  }
+}

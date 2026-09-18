@@ -615,6 +615,29 @@ export const emptyExternalScheduleDetail = (overrides = {}) => ({
   ...overrides,
 });
 
+// Data & Analysis -> "GPEXE imports" (section key "imports", phase F3a). One
+// team at a time; `generation` drops answers for a team no longer shown.
+// `detail` is the open candidate; its `outcome` is the approval's answer:
+// imported / refused (nothing written) / unknown (COMMIT not confirmed).
+export const emptyGpexeImportState = () => ({
+  teamId: "",
+  generation: 0,
+  loading: false,
+  error: null,
+  status: null,
+  candidates: null,
+  includeSuperseded: false,
+  links: null,
+  linkBusy: false,
+  linkError: null,
+  check: null,
+  checkStarting: false,
+  checkError: null,
+  polling: "",
+  notice: "",
+  detail: null,
+});
+
 export const emptyTrainingLoadState = (overrides = {}) => ({
   // Coach sections (Schedule; Athletes/Overview in Data & Analysis) - same shared weekly navigator
   // shape/behavior as tests.weekly (see frontend/tests-data.js's own
@@ -666,6 +689,7 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // one KPI/aggregate or one cache entry.
   overviewCoverage: { weekStart: "", data: null, loading: false, error: "" },
   analysis: emptyTrainingLoadAnalysisState(),
+  gpexe: emptyGpexeImportState(),
   filter: emptyTrainingLoadFilter(),
   filterPicker: emptyTrainingLoadFilterPicker(),
   // A snapshot of `filter` taken the instant the picker opens, restored on
