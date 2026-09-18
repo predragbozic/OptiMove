@@ -45,6 +45,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202609171800_training_load_v20_gpexe_source_bindings.sql",
   "202609181000_training_load_v21_import_deletion_log.sql",
   "202609191000_training_load_v22_gpexe_in_app_import.sql",
+  "202609201000_training_load_v23_gpexe_import_approval.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

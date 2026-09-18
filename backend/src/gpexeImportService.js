@@ -1,14 +1,21 @@
-// In-app GPEXE import, phase F1: "Check now", candidates, previews,
-// athlete links, approver grants and retention of the raw snapshots.
-// Nothing here writes a measurement, an event or an activity: the preview is
-// a rolled-back dry run, and approving/importing a candidate is phase F2.
+// In-app GPEXE import: "Check now", candidates, previews, athlete links,
+// approver grants and retention of the raw snapshots (phase F1), and
+// approving a candidate, which imports it (phase F2, approveCandidate).
+// Only approveCandidate writes measurements, events or activities; the
+// preview is a rolled-back dry run.
 //
 // GPEXE_IMPORT_APPLY_ENABLED (owner decision 2026-09-18) blocks writing
-// results and activities. It does not block this module: a check still
-// records itself and its candidates, which is what makes them reviewable.
+// results and activities, i.e. approving. It does not block checks: a check
+// still records itself and its candidates, which is what makes them
+// reviewable. The switch stays off in an environment until a fresh,
+// restore-verified backup of it exists (operational gate, recorded in
+// docs/runbooks/gpexe-in-app-import.md); nothing here checks or claims a
+// backup.
 import { pool, query } from "./db.js";
 import { createGpexeClient, GpexeClientError } from "./gpexeClient.js";
-import { buildCandidatePreview, canonicalJson, sha256Hex } from "./gpexeImportPreview.js";
+import { buildGpexeImportPlan, GpexeMappingError } from "./gpexeImportMapper.js";
+import { blockedByMapping, buildCandidatePreview, canonicalJson, previewLocked, sha256Hex } from "./gpexeImportPreview.js";
+import { lockTeamForImport } from "./gpexeImportWriter.js";
 
 export const RAW_RETENTION_UNAPPROVED_DAYS = 30;
 export const RAW_RETENTION_IMPORTED_DAYS = 90;
@@ -399,11 +406,11 @@ function snapshotState(row) {
   return { available: true, reason: null, expiresAt: row.raw_expires_at };
 }
 
-// Why this candidate cannot be approved right now. F1 has no approval at
-// all, so "approval_not_available_yet" is always there; the other reasons are
-// the ones F2 keeps.
+// Why this candidate cannot be approved right now (the approval checks the
+// same things again, under its locks). Whether the viewer may approve is the
+// status route's viewer.canApprove.
 function approvalBlockers(row, snapshot, preview) {
-  const blockers = ["approval_not_available_yet"];
+  const blockers = [];
   if (!applyEnabled()) blockers.push("import_switch_off");
   if (row.status === "superseded") blockers.push("superseded_by_newer_data");
   if (row.status === "imported") blockers.push("already_imported");
@@ -424,6 +431,8 @@ function candidateSummary(row) {
     status: row.status,
     previewStatus: preview?.status ?? null,
     counts: preview?.counts ?? null,
+    // The approval must carry acceptChanges = true when this is > 0.
+    changesToImported: preview ? (preview.changesToImported?.length ?? 0) : null,
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
     importedAt: row.imported_at,
@@ -561,5 +570,164 @@ export async function revokeApprover(teamId, { grantId, revokedByUserId, reason 
     return r.rowCount === 1;
   } catch (error) {
     throw mapTriggerError(error, "revoke_refused");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Approval and import (phase F2)
+// ---------------------------------------------------------------------------
+
+// Tests look inside the approval transaction right after the import ran and
+// before the preview hash is compared (the rows are there, uncommitted).
+let approvalObserver = null;
+export function setApprovalObserver(observer) {
+  approvalObserver = observer ?? null;
+}
+
+// Where a caller whose preview is out of date reviews the candidate again.
+function reviewAgain(teamId, candidateId) {
+  return { candidateId, href: `/api/training-load/gpexe/teams/${teamId}/candidates/${candidateId}` };
+}
+
+function refusal(status, code, message, details) {
+  const error = new GpexeImportServiceError(status, code, message);
+  if (details) error.details = details;
+  return error;
+}
+
+function previewChanged(teamId, candidateId, message) {
+  return refusal(409, "preview_changed", message, { reviewAgain: reviewAgain(teamId, candidateId) });
+}
+
+// The preview recomputed under the approval's locks differs from the one
+// that was approved, and the approval was rolled back. The candidate gets
+// the recomputed preview, so the next review shows what an import would do
+// now, unless somebody refreshed it in the meantime.
+async function storeRefreshedPreview(candidateId, { expectedPreviewHash, preview, previewHash }) {
+  await query(
+    `update training_load.gpexe_import_candidates
+        set preview = $3, preview_hash = $4, preview_computed_at = now(), status = $5
+      where id = $1 and preview_hash = $2 and status in ('pending', 'blocked') and raw_bundle is not null`,
+    [candidateId, expectedPreviewHash, preview, previewHash, preview.status === "blocked" ? "blocked" : "pending"],
+  );
+}
+
+const HASH = /^[0-9a-f]{64}$/;
+
+// Approves one candidate as a whole and imports it, in ONE transaction:
+//   1. the approver's right, held FOR SHARE (lock_gpexe_import_approver);
+//   2. the candidate, FOR UPDATE: pending, snapshot not expired, the stored
+//      preview is the one the caller reviewed, and every change to an
+//      already imported result is accepted (acceptChanges);
+//   3. the team's import lock, the import itself, and the preview recomputed
+//      from what the import did (previewLocked);
+//   4. the recomputed preview hash must equal the approved one; otherwise
+//      EVERYTHING is rolled back, including what the import had written, and
+//      the caller is sent back to review the candidate;
+//   5. the approval row and the candidate becoming 'imported' (its snapshot
+//      kept 90 more days); commit.
+// Nothing is written before step 3, and nothing survives a refusal.
+export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges }) {
+  if (typeof previewHash !== "string" || !HASH.test(previewHash)) {
+    throw refusal(400, "invalid_preview_hash", "previewHash must be the hash of the preview you reviewed.");
+  }
+  if (acceptChanges !== undefined && typeof acceptChanges !== "boolean") {
+    throw refusal(400, "invalid_accept_changes", "acceptChanges must be true or false.");
+  }
+  if (!applyEnabled()) throw refusal(409, "import_switch_off", applySwitchInfo().message);
+
+  const client = await pool.connect();
+  let refreshed = null;
+  try {
+    await client.query("begin");
+    // Step 1.
+    const right = (await client.query(
+      `select basis, grant_id from training_load.lock_gpexe_import_approver($1, $2) limit 1`,
+      [userId, teamId],
+    )).rows[0];
+
+    // Step 2.
+    const row = (await client.query(
+      `select id, gpexe_team_session_id, bundle_hash, raw_bundle, raw_expires_at, raw_purged_at, status,
+              superseded_by_candidate_id, preview, preview_hash
+         from training_load.gpexe_import_candidates where id = $1 and owner_team_id = $2 for update`,
+      [candidateId, teamId],
+    )).rows[0];
+    if (!row) throw refusal(404, "notFound", "Not found.");
+    if (row.status === "imported") throw refusal(409, "already_imported", "This candidate has already been imported.");
+    if (row.status === "superseded") {
+      throw refusal(409, "superseded_by_newer_data", "GPEXE has newer data for this session; review the newer candidate.",
+        { reviewAgain: reviewAgain(teamId, row.superseded_by_candidate_id) });
+    }
+    if (row.status === "blocked") throw refusal(409, "blocked", "This session is blocked; the preview names the reason and the step that lifts it.");
+    if (!snapshotState(row).available) throw refusal(409, "snapshot_expired_check_again", "The GPEXE data of this candidate has expired; press \"Check now\" again.");
+    if (row.preview_hash !== previewHash) {
+      throw previewChanged(teamId, candidateId, "The preview was recomputed after you reviewed it; review the candidate again.");
+    }
+    if (row.preview?.status === "no_changes") throw refusal(409, "nothing_to_import", "This candidate would write nothing.");
+    const changesToImported = row.preview?.changesToImported?.length ?? 0;
+    if (changesToImported > 0 && acceptChanges !== true) {
+      throw refusal(409, "changes_need_acceptance",
+        `This import changes ${changesToImported} already imported result(s); accept them explicitly (acceptChanges).`,
+        { changesToImported });
+    }
+
+    // Step 3: from here on the import writes, uncommitted.
+    let plan;
+    try {
+      plan = buildGpexeImportPlan(row.raw_bundle);
+    } catch (error) {
+      if (!(error instanceof GpexeMappingError)) throw error;
+      // The candidate becomes blocked with the mapping reason, so the next
+      // review shows why and does not lead back here.
+      const blocked = blockedByMapping(row.raw_bundle, error);
+      refreshed = { expectedPreviewHash: row.preview_hash, preview: blocked.preview, previewHash: blocked.previewHash };
+      throw previewChanged(teamId, candidateId, "The stored GPEXE data can no longer be imported; nothing was imported. Review the candidate again.");
+    }
+    await lockTeamForImport(client, teamId);
+    const fresh = await previewLocked(client, { bundle: row.raw_bundle, plan, ownerTeamId: teamId, performedByUserId: userId });
+    if (approvalObserver) await approvalObserver({ client, candidateId, freshPreviewHash: fresh.previewHash });
+
+    // Step 4.
+    if (fresh.previewHash !== previewHash || fresh.preview.status !== "ready" || !fresh.summary) {
+      refreshed = { expectedPreviewHash: row.preview_hash, preview: fresh.preview, previewHash: fresh.previewHash };
+      throw previewChanged(teamId, candidateId, "What this import would do has changed since the preview was made; nothing was imported. Review the candidate again.");
+    }
+
+    // Step 5.
+    const summary = fresh.summary;
+    const approval = (await client.query(
+      `insert into training_load.gpexe_import_approvals
+         (candidate_id, owner_team_id, gpexe_team_session_id, bundle_hash, preview_hash, approved_by_user_id, approval_basis,
+          approver_grant_id, changes_to_imported, changes_accepted, metric_event_id, activity_id, import_batch_id, import_counts)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id, approved_at`,
+      [candidateId, teamId, row.gpexe_team_session_id, row.bundle_hash, previewHash, userId, right.basis, right.grant_id,
+        changesToImported, changesToImported > 0, summary.eventId, summary.activityId, summary.importBatchId, summary.counts],
+    )).rows[0];
+    await client.query(
+      `update training_load.gpexe_import_candidates
+          set status = 'imported', imported_at = now(), raw_expires_at = now() + make_interval(days => $2)
+        where id = $1`,
+      [candidateId, RAW_RETENTION_IMPORTED_DAYS],
+    );
+    await client.query("commit");
+    return {
+      approval: { id: approval.id, approvedAt: approval.approved_at, basis: right.basis, changesAccepted: changesToImported },
+      import: { eventId: summary.eventId, activityId: summary.activityId, importBatchId: summary.importBatchId, counts: summary.counts },
+    };
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (refreshed) {
+      await storeRefreshedPreview(candidateId, refreshed)
+        .catch((e) => console.error(`[gpexe] storing the refreshed preview of ${candidateId} failed: ${e?.message}`));
+    }
+    if (error instanceof GpexeImportServiceError) throw error;
+    if (error?.code === "42501") throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    // Anything else (a database guard firing, a bug) is logged here and
+    // answered with a stable code; its text never reaches the caller.
+    console.error(`[gpexe] approval of candidate ${candidateId} failed: ${error?.code ?? ""} ${error?.message}`);
+    throw refusal(500, "internal_error", "The approval failed on the server; nothing was imported.");
+  } finally {
+    client.release();
   }
 }

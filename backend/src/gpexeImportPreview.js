@@ -18,7 +18,29 @@ import crypto from "node:crypto";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_METRIC_SPECS } from "./gpexeImportMapper.js";
 import { importGpexePlanLocked, lockTeamForImport, GpexeImportError } from "./gpexeImportWriter.js";
 
-export const PREVIEW_VERSION = 1;
+// 2: changesToImported (phase F2).
+export const PREVIEW_VERSION = 2;
+
+// What an approved import does to a result that was ALREADY imported, per
+// importer outcome. Every one of these has to be accepted explicitly
+// (acceptChanges) before the approval writes anything (owner, 2026-09-18).
+// "unchanged" and "*_already_recorded" write nothing and are not listed.
+export const CHANGE_TO_IMPORTED = {
+  corrected: { effect: "replaces_current_values", newVersionBecomesCurrent: true, message: "GPEXE reports newer values; the imported values are replaced (the old ones stay in the history)." },
+  supplemented: { effect: "adds_values_to_imported_result", newVersionBecomesCurrent: true, message: "GPEXE now has more values for this result; they are added, the existing values stay the same." },
+  needs_review: { effect: "conflicting_version_flagged", newVersionBecomesCurrent: false, message: "GPEXE reports different values without a newer report time; they are stored as a conflicting version for review, the current values stay." },
+  stale_resend_ignored: { effect: "older_or_manual_version_flagged", newVersionBecomesCurrent: false, message: "The current values are older-dated GPEXE data or a manual correction; the GPEXE version is stored flagged, the current values stay." },
+};
+
+// The acceptance rule for what the importer did to a result that was
+// already imported: null when it wrote nothing, the rule otherwise. An
+// outcome with no rule stops the preview instead of going unlisted.
+export function changeToImportedRule(outcome) {
+  if (outcome === "unchanged" || outcome.endsWith("_already_recorded")) return null;
+  const rule = CHANGE_TO_IMPORTED[outcome];
+  if (!rule) throw new Error(`gpexe preview: outcome ${outcome} on an imported result has no acceptance rule`);
+  return rule;
+}
 
 const METRIC_BY_KEY = new Map(GPEXE_METRIC_SPECS.map((m) => [m.key, m]));
 
@@ -118,10 +140,10 @@ function valueDiff(result, outcome, previous) {
   });
 }
 
-function blockedByMapping(bundle, error) {
+export function blockedByMapping(bundle, error) {
   const preview = {
     version: PREVIEW_VERSION, status: "blocked", blocked: { code: error.code, message: error.message },
-    session: sessionSummary(bundle, null), counts: {}, athletes: [], teamAthletesWithoutGpexeRecord: [], anomalies: [],
+    session: sessionSummary(bundle, null), counts: {}, changesToImported: [], athletes: [], teamAthletesWithoutGpexeRecord: [], anomalies: [],
   };
   return { preview, previewHash: sha256Hex(canonicalJson({ preview, state: [] })), summary: null };
 }
@@ -228,7 +250,8 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
     anomaliesByAthlete.get(a.gpexeAthleteId).push(a);
   }
   const participantById = new Map(plan.participants.map((p) => [p.gpexeAthleteId, p]));
-  const counts = { created: 0, unchanged: 0, supplemented: 0, corrected: 0, needs_review: 0, stale_resend_ignored: 0, already_recorded: 0, skippedValues: 0, athletesNotImported: 0, athletesManualReview: 0 };
+  const counts = { created: 0, unchanged: 0, supplemented: 0, corrected: 0, needs_review: 0, stale_resend_ignored: 0, already_recorded: 0, skippedValues: 0, athletesNotImported: 0, athletesManualReview: 0, changesToImported: 0 };
+  const changesToImported = [];
 
   const athletes = [];
   for (const gpexeAthleteId of [...gpexeRowsByAthlete.keys()].sort((a, b) => Number(a) - Number(b))) {
@@ -265,14 +288,26 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
           const bucket = outcome.endsWith("_already_recorded") ? "already_recorded" : outcome;
           counts[bucket] = (counts[bucket] || 0) + 1;
         }
+        const values = valueDiff(result, outcome, previous);
         entry.results.push({
           externalId: result.externalId,
           level: result.level,
           drillIndex: result.drillIndex,
           outcome: outcome ?? "not_imported",
           ...(previous?.entryMethod === "manual" ? { manualCorrectionKept: true } : {}),
-          values: valueDiff(result, outcome, previous),
+          values,
         });
+        // A result imported before that this import would write to: listed
+        // on its own, with the values that differ, for acceptChanges.
+        const change = outcome && previous?.currentOccasionId ? changeToImportedRule(outcome) : null;
+        if (change) {
+          changesToImported.push({
+            gpexeAthleteId, athleteId, externalId: result.externalId, level: result.level, drillIndex: result.drillIndex,
+            outcome, ...change,
+            ...(previous.entryMethod === "manual" ? { manualCorrectionKept: true } : {}),
+            values: values.filter((v) => v.change !== "same"),
+          });
+        }
       }
     }
     for (const skip of plan.metricSkips.filter((s) => s.gpexeAthleteId === gpexeAthleteId)) {
@@ -322,6 +357,7 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
     }
   }
 
+  counts.changesToImported = changesToImported.length;
   const writes = counts.created + counts.supplemented + counts.corrected + counts.needs_review + counts.stale_resend_ignored;
   const status = blocked ? "blocked" : writes > 0 ? "ready" : "no_changes";
   const preview = {
@@ -331,6 +367,8 @@ export async function previewLocked(client, { bundle, plan, ownerTeamId, perform
     session: sessionSummary(bundle, plan),
     thresholdsUsed: plan.thresholdsUsed ? { id: plan.thresholdsUsed.id ?? null } : null,
     counts,
+    // Non-empty: the approval must carry acceptChanges = true.
+    changesToImported,
     athletes,
     teamAthletesWithoutGpexeRecord,
     anomalies: plan.anomalies.filter((a) => !a.gpexeAthleteId),

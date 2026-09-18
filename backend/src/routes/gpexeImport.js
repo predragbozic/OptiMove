@@ -1,7 +1,7 @@
-// In-app GPEXE import, phase F1. Mounted at /api/training-load/gpexe behind
+// In-app GPEXE import. Mounted at /api/training-load/gpexe behind
 // requireAuth. Check, candidates, previews, athlete links, approver grants
-// and retention status. No route here writes a measurement, an event or an
-// activity; approving an import is phase F2.
+// and retention status (phase F1); approving a candidate, the only route
+// that writes measurements, an event and an activity (phase F2).
 import { Router } from "express";
 import { query } from "../db.js";
 import { canApproveGpexeImport, resolveGpexeTeamAccess } from "../gpexeImportAccess.js";
@@ -24,7 +24,14 @@ function handle(fn) {
       await fn(req, res);
     } catch (error) {
       if (error instanceof service.GpexeImportServiceError) {
-        return res.status(error.status).json({ error: error.code, message: error.message });
+        if (error.status === 404) return notFound(res);
+        // Only the known detail fields, so a detail can never replace error/message.
+        const { reviewAgain, changesToImported } = error.details || {};
+        return res.status(error.status).json({
+          error: error.code, message: error.message,
+          ...(reviewAgain ? { reviewAgain } : {}),
+          ...(changesToImported !== undefined ? { changesToImported } : {}),
+        });
       }
       next(error);
     }
@@ -56,8 +63,7 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     importSwitch: service.applySwitchInfo(),
     lastCheck,
     viewer: { canApprove: approval.canApprove, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin },
-    // F1 has no approval step yet; the screens say so instead of hiding it.
-    approvalAvailable: false,
+    approvalAvailable: true,
   });
 }));
 
@@ -99,6 +105,24 @@ router.get("/teams/:teamId/candidates/:candidateId", handle(async (req, res) => 
   const candidate = await service.getCandidate(access.teamId, req.params.candidateId);
   if (!candidate) return notFound(res);
   res.json({ candidate, importSwitch: service.applySwitchInfo() });
+}));
+
+// Approve a candidate as a whole and import it. Body: { previewHash, the
+// hash of the preview the approver reviewed; acceptChanges, true when the
+// preview lists changes to already imported results }. Refused, with
+// nothing written, when the import switch is off, the caller may not approve
+// for this team, the candidate is not pending or its snapshot expired, the
+// preview is not the one reviewed, or changes were not accepted. A preview
+// that changed under the approval's own locks rolls everything back and
+// answers 409 preview_changed with reviewAgain.
+router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!UUID.test(req.params.candidateId)) return notFound(res);
+  const result = await service.approveCandidate(access.teamId, req.params.candidateId, {
+    userId: req.user.id, previewHash: req.body?.previewHash, acceptChanges: req.body?.acceptChanges,
+  });
+  res.json({ ...result, candidate: await service.getCandidate(access.teamId, req.params.candidateId) });
 }));
 
 router.get("/teams/:teamId/athlete-links", handle(async (req, res) => {
