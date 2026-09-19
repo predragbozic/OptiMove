@@ -379,7 +379,13 @@ function collectResultsRows(detail, nav) {
       if (f.factKind === "metric_value") return f.detail.segmentId && findSegmentComponent(detail, f.detail.segmentId) === nav.selectedComponentId;
       return false; // RPE/component-performance facts are session-level or a different shape — component view shows metrics only
     }
-    return f.factKind === "rpe" || f.factKind === "metric_value";
+    // Whole session: session-level values only. A value with a segmentId
+    // belongs to one part of the session (a GPEXE drill, say) and is shown
+    // when that part is selected. Mixing the parts in here put a session
+    // total and its own drill values in one cell, which read as "N values"
+    // in conflict when nothing conflicted; they are never summed either.
+    if (f.factKind === "metric_value") return !f.detail.segmentId;
+    return f.factKind === "rpe";
   });
 
   const byAthlete = new Map();
@@ -400,9 +406,22 @@ function collectResultsRows(detail, nav) {
   }
   return byAthlete;
 }
+// segment -> component, built once per loaded activity detail. Every value is
+// resolved through it, so scanning all facts per value (quadratic in the
+// number of facts) never happens on a render.
+const segmentComponentMaps = new WeakMap();
 function findSegmentComponent(detail, segmentId) {
-  const link = detail.facts.find((f) => f.factKind === "component_metric_segment_link" && f.detail.metricEventSegmentId === segmentId);
-  return link ? link.detail.componentId : null;
+  let map = segmentComponentMaps.get(detail);
+  if (!map) {
+    map = new Map();
+    for (const f of detail.facts) {
+      if (f.factKind === "component_metric_segment_link" && !map.has(f.detail.metricEventSegmentId)) {
+        map.set(f.detail.metricEventSegmentId, f.detail.componentId);
+      }
+    }
+    segmentComponentMaps.set(detail, map);
+  }
+  return map.get(segmentId) ?? null;
 }
 
 function metricColumnsFromRows(rows, definitions) {
@@ -457,9 +476,37 @@ function sortIndicator(nav, column) {
   return nav.resultsSort.direction === "asc" ? " &uarr;" : " &darr;";
 }
 
+// Parts of the session that carry their own values, in component order —
+// only components some metric value actually points at.
+function componentsWithValues(detail) {
+  const ids = new Set();
+  for (const f of detail.facts) {
+    if (f.factKind !== "metric_value" || !f.detail.segmentId) continue;
+    const componentId = findSegmentComponent(detail, f.detail.segmentId);
+    if (componentId) ids.add(componentId);
+  }
+  return (detail.components || []).filter((c) => ids.has(c.id)).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+}
+
+function renderPartValuesHintHtml(nav, detail) {
+  if (nav.selectedComponentId) return "";
+  const parts = componentsWithValues(detail);
+  if (!parts.length) return "";
+  return `
+    <p class="muted tl-results-parts-hint">
+      ${parts.length === 1 ? "1 part of this session has its own values" : `${parts.length} parts of this session have their own values`} (${escapeHtml(parts.map((c) => c.name || "Component").join(", "))}). Choose one in Components to see them; they are not included here.
+    </p>
+  `;
+}
+
 function renderResultsTableHtml(nav, detail, athleteNamesById) {
   const rowsMap = collectResultsRows(detail, nav);
-  if (!rowsMap.size) return `<p class="muted training-load-empty">No results recorded yet for this ${nav.selectedComponentId ? "component" : "activity"}.</p>`;
+  if (!rowsMap.size) {
+    return `
+      <p class="muted training-load-empty">No ${nav.selectedComponentId ? "values recorded yet for this part of the session" : "whole-session values recorded yet"}.</p>
+      ${renderPartValuesHintHtml(nav, detail)}
+    `;
+  }
   const columns = pickedMetricColumns(nav, rowsMap, nav.metricPicker.definitions);
   const rows = sortRows([...rowsMap.values()], nav.resultsSort, athleteNamesById);
   const showRpe = !nav.selectedComponentId; // session-level RPE never falsely attributed to a component
@@ -488,6 +535,7 @@ function renderResultsTableHtml(nav, detail, athleteNamesById) {
         </tbody>
       </table>
     </div>
+    ${renderPartValuesHintHtml(nav, detail)}
   `;
 }
 
@@ -576,12 +624,58 @@ function renderConflictPanelHtml() {
 // present in the loaded activity detail — no second fetch.
 // ------------------------------------------------------------
 
+// One athlete's values grouped the way the table separates them: the whole
+// session first, then each part of it in component order. Each value carries
+// its metric's own name from the catalog, never a bare number.
+function athleteMetricGroups(detail, metrics, definitions) {
+  const known = new Map((definitions || []).map((d) => [d.id, d]));
+  const formatValue = (m) => {
+    const raw = m.detail.valueNumeric ?? (m.detail.valueBoolean != null ? (m.detail.valueBoolean ? "Yes" : "No") : m.detail.valueText);
+    return typeof raw === "number" ? (Number.isInteger(raw) ? String(raw) : raw.toFixed(1)) : String(raw ?? "");
+  };
+  // One row per metric within a group. Two values for the same metric at the
+  // same level are a conflict, marked exactly as the results table marks it,
+  // never shown as two unrelated rows. The unit is the captured one, as in
+  // the table.
+  const rowsFor = (values) => {
+    const byMetric = new Map();
+    for (const m of values) {
+      const id = m.detail.metricDefinitionId;
+      if (!byMetric.has(id)) byMetric.set(id, []);
+      byMetric.get(id).push(m);
+    }
+    return [...byMetric.entries()].map(([id, list]) => {
+      const def = known.get(id);
+      return {
+        name: def?.shortLabel || def?.label || "Metric",
+        values: list.map((m) => ({ value: formatValue(m), unit: m.detail.unitAtCapture || "" })),
+      };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  };
+  const groups = [];
+  const whole = metrics.filter((m) => !m.detail.segmentId);
+  if (whole.length) groups.push({ label: "Whole session", rows: rowsFor(whole) });
+  const components = [...(detail.components || [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  for (const c of components) {
+    const values = metrics.filter((m) => m.detail.segmentId && findSegmentComponent(detail, m.detail.segmentId) === c.id);
+    if (values.length) groups.push({ label: c.name || "Component", rows: rowsFor(values) });
+  }
+  return groups;
+}
+
+function renderDrawerValueHtml(row) {
+  const one = (v) => `${escapeHtml(v.value)}${v.unit ? ` <span class="tl-cell-unit">${escapeHtml(v.unit)}</span>` : ""}`;
+  if (row.values.length === 1) return one(row.values[0]);
+  return `<span class="tl-conflict-dot" aria-hidden="true"></span>${row.values.length} values: ${row.values.map(one).join(" · ")}`;
+}
+
 function renderAthleteDrawerHtml(nav, detail, athleteNamesById) {
   const athleteId = nav.selectedResultsAthleteId;
   if (!athleteId || !detail) return "";
   const facts = detail.facts.filter((f) => f.athleteId === athleteId);
   const rpe = facts.find((f) => f.factKind === "rpe");
   const metrics = facts.filter((f) => f.factKind === "metric_value");
+  const groups = athleteMetricGroups(detail, metrics, nav.metricPicker.definitions);
   return `
     <div class="builder-athlete-overlay tl-athlete-drawer-overlay">
       <button class="builder-athlete-backdrop" type="button" data-action="training-load-calendar-close-athlete" aria-label="Close"></button>
@@ -591,11 +685,19 @@ function renderAthleteDrawerHtml(nav, detail, athleteNamesById) {
           <button class="plain-button icon-button builder-athlete-picker-cancel" type="button" data-action="training-load-calendar-close-athlete" aria-label="Close" title="Close">&times;</button>
         </div>
         ${rpe ? `<p>RPE ${rpe.detail.rpe} &middot; sRPE ${escapeHtml(formatSrpe(rpe.detail.srpe))} &middot; ${rpe.detail.durationMinutes} min</p>` : `<p class="muted">No RPE recorded.</p>`}
-        ${metrics.length ? `
-          <ul class="tl-athlete-drawer-metrics">
-            ${metrics.map((m) => `<li>${escapeHtml(String(m.detail.valueNumeric ?? m.detail.valueText ?? ""))}${m.detail.unitAtCapture ? ` ${escapeHtml(m.detail.unitAtCapture)}` : ""}</li>`).join("")}
-          </ul>
-        ` : `<p class="muted">No metric values recorded.</p>`}
+        ${groups.length ? groups.map((g) => `
+          <div class="tl-athlete-drawer-group">
+            <h5 class="tl-athlete-drawer-group-label">${escapeHtml(g.label)}</h5>
+            <dl class="tl-athlete-drawer-metrics">
+              ${g.rows.map((row) => `
+                <div class="tl-athlete-drawer-metric${row.values.length > 1 ? " is-conflict" : ""}">
+                  <dt>${escapeHtml(row.name)}</dt>
+                  <dd>${renderDrawerValueHtml(row)}</dd>
+                </div>
+              `).join("")}
+            </dl>
+          </div>
+        `).join("") : `<p class="muted">No metric values recorded.</p>`}
       </section>
     </div>
   `;

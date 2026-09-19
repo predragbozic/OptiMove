@@ -66,6 +66,11 @@ let dashboardsGeneration = 0;
 let detailGeneration = 0;
 let queryGeneration = 0;
 let metricDefinitionsWorkspaceKey = "";
+// One catalog load per workspace at a time. loadCachedView can call a
+// dashboard's applyData twice (cached, then fresh), and several callers
+// (the dashboard, the editors, the pickers) ask independently, so a load that
+// is already running is shared instead of started again.
+let metricDefinitionsInFlight = null;
 
 export const BUILT_IN_SERIES = [
   { key: "rpe", label: "RPE", unit: "RPE", icon: "R" },
@@ -251,6 +256,13 @@ export async function loadDashboardDetail(dashboardId, onPainted, { force = fals
       if (generation !== detailGeneration || state.trainingLoad.analysis.selectedDashboardId !== dashboardId) return;
       applyDashboardDetail(data);
       onPainted?.();
+      // Series bound to a catalog metric are labelled with that metric's
+      // name, which lives in the catalog. It is fetched once per workspace
+      // (memoized in loadAnalysisMetricDefinitions) and only when needed.
+      const needsCatalog = (state.trainingLoad.analysis.widgets || []).some((w) => (w.series || []).some((s) => s.metric_definition_id));
+      if (needsCatalog) {
+        void loadAnalysisMetricDefinitions().then(() => onPainted?.(), () => {});
+      }
     },
     applyError: (error) => {
       if (generation !== detailGeneration || state.trainingLoad.analysis.selectedDashboardId !== dashboardId) return;
@@ -1491,6 +1503,25 @@ export async function loadAnalysisMetricDefinitions() {
   const picker = analysis.metricPicker;
   const contextKey = buildContextKey(currentUserWorkspaceContextParts());
   if (picker.definitions && metricDefinitionsWorkspaceKey === contextKey) return picker.definitions;
+  if (metricDefinitionsInFlight && metricDefinitionsInFlight.key === contextKey && metricDefinitionsInFlight.picker === picker) {
+    return metricDefinitionsInFlight.promise;
+  }
+  const promise = fetchAnalysisMetricDefinitions(picker, contextKey);
+  const entry = { key: contextKey, picker, promise };
+  metricDefinitionsInFlight = entry;
+  try {
+    return await promise;
+  } finally {
+    if (metricDefinitionsInFlight === entry) metricDefinitionsInFlight = null;
+  }
+}
+
+// Writes only into the picker it was started for. After a workspace switch
+// the analysis state is a new object, so a late response for the old
+// workspace already lands in the discarded one; the check below is defence in
+// depth that also keeps the old load from recording its workspace key.
+async function fetchAnalysisMetricDefinitions(picker, contextKey) {
+  const current = () => state.trainingLoad.analysis.metricPicker === picker;
   picker.loading = true;
   picker.error = "";
   try {
@@ -1518,6 +1549,7 @@ export async function loadAnalysisMetricDefinitions() {
         categoryLabel: link.category_id ? categoryNameById.get(link.category_id) || null : null,
       });
     }
+    if (!current()) return [];
     picker.definitions = rows.map((d) => ({
       id: d.id,
       key: d.key,
@@ -1533,6 +1565,7 @@ export async function loadAnalysisMetricDefinitions() {
     picker.loading = false;
     return picker.definitions;
   } catch (error) {
+    if (!current()) return [];
     picker.loading = false;
     picker.error = error.message || "Could not load metric definitions.";
     return [];
