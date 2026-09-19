@@ -17,6 +17,9 @@ export async function api(path, options = {}) {
     error.status = response.status;
     error.path = path;
     error.requiresLogin = Boolean(errorData?.requiresLogin);
+    // The whole error body, for callers that act on more than its code
+    // (e.g. the GPEXE approval's reviewAgain / verify details).
+    error.data = errorData;
     throw error;
   }
   return response.json();

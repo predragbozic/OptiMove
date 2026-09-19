@@ -61,10 +61,8 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
-import { loadTrainingLoadAnalysis } from "./training-load-analysis-data.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
-import { loadTrainingLoadCalendarWeek } from "./training-load-calendar-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import { els } from "./dom.js";
 import {
@@ -1975,11 +1973,7 @@ async function loadTrainingLoad() {
   // selectedDate to today on its own first call, same convention as
   // loadTrainingLoadWeekly).
   await Promise.all([
-    state.trainingLoad.section === "today"
-      ? loadTrainingLoadCalendarWeek(renderTrainingLoad)
-      : state.trainingLoad.section === "analysis"
-        ? loadTrainingLoadAnalysis(renderTrainingLoad)
-        : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+    loadTrainingLoadSectionData(state.trainingLoad.section, renderTrainingLoad),
     state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
   ]);
   renderTrainingLoad();

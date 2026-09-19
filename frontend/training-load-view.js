@@ -3,6 +3,7 @@ import { addDaysIso, escapeAttr, escapeHtml, formatDate, formatDayMonth, formatW
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { renderTrainingLoadAnalysisHtml } from "./training-load-analysis-view.js";
 import { renderTrainingLoadCalendarHtml } from "./training-load-calendar-view.js";
+import { renderGpexeImportsHtml } from "./gpexe-import-view.js";
 
 // Training load (RPE/sRPE), first complete phase. Deliberately its own
 // visual language - white surfaces, neutral gray borders, dark text, muted
@@ -1540,6 +1541,7 @@ const DATA_ANALYSIS_SUBVIEWS = [
   { section: "today", label: "Activities" },
   { section: "results", label: "Athletes" },
   { section: "analysis", label: "Dashboards" },
+  { section: "imports", label: "GPEXE imports" },
 ];
 
 function renderDataAnalysisSubNavHtml(section) {
@@ -1568,7 +1570,7 @@ export function renderTrainingLoadCoachHtml() {
           <button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
           <button type="button" class="training-load-tab ${space === "dataAnalysis" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataAnalysis" ? "true" : "false"}" data-action="training-load-section" data-section="${dataAnalysisTargetSection}">${renderTrainingLoadTabIcon("analysis")}<span>Data &amp; Analysis</span></button>
         </div>
-        ${section === "analysis"
+        ${section === "analysis" || section === "imports"
           // Phase F (confirmed decision): the shell's Club/Team/Athletes
           // filter never reaches the Dashboards query (it only ever sends
           // the runtime activity/component filter - see
@@ -1581,12 +1583,14 @@ export function renderTrainingLoadCoachHtml() {
           : `<button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>`}
       </div>
       ${section === "analysis" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">Club, team and athlete filters are not available for Dashboards yet.</p>` : ""}
+      ${section === "imports" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">GPEXE imports work one team at a time; choose the team below.</p>` : ""}
       ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section) : ""}
       ${section === "overview" ? renderTrainingLoadOverviewHtml() : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}
       ${section === "schedule" ? renderTrainingLoadScheduleHtml() : ""}
       ${section === "results" ? renderTrainingLoadResultsHtml() : ""}
       ${section === "analysis" ? renderTrainingLoadAnalysisHtml() : ""}
+      ${section === "imports" ? renderGpexeImportsHtml() : ""}
       ${state.trainingLoad.filterPicker.open ? renderTrainingLoadFilterPickerHtml() : ""}
     </div>
   `;

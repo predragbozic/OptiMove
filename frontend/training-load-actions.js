@@ -1,4 +1,6 @@
-import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
+import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
+import { handleGpexeImportAction } from "./gpexe-import-actions.js";
+import { loadGpexeImports } from "./gpexe-import-data.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
   captureTrainingLoadAthleteWeeklyMutationContext,
@@ -106,9 +108,20 @@ function analysisIsMobileLayoutViewport() {
 // app.js's own notification-driven openTrainingLoadResults - exported
 // specifically so that (and any other future non-training-load-actions.js
 // entry point) never has to fall back to a direct assignment.
+// The one place that knows which loader a section's own data comes from, used
+// by the section switch below and by app.js on entering the tab or after a
+// workspace switch. A section without a weekly slot must never reach
+// loadTrainingLoadWeekly.
+export function loadTrainingLoadSectionData(section, render) {
+  if (section === "today") return loadTrainingLoadCalendarWeek(render);
+  if (section === "analysis") return loadTrainingLoadAnalysis(render);
+  if (section === "imports") return loadGpexeImports(render);
+  return loadTrainingLoadWeekly(section, render);
+}
+
 export function setTrainingLoadSection(section) {
   state.trainingLoad.section = section;
-  if (section === "today" || section === "results" || section === "analysis" || section === "overview") {
+  if (section === "today" || section === "results" || section === "analysis" || section === "overview" || section === "imports") {
     state.trainingLoad.lastDataAnalysisSection = section;
   }
 }
@@ -564,6 +577,7 @@ export function bindTrainingLoadAnalysisLayoutInteractions(root = document, rend
 export async function handleTrainingLoadAction(action, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate }) {
   const type = action.dataset.action;
   if (!type?.startsWith("training-load-")) return false;
+  if (type.startsWith("training-load-gpexe-")) return handleGpexeImportAction(action, { renderTrainingLoad });
 
   // -------------------- Athlete: Home card / session list --------------------
 
@@ -865,11 +879,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       await Promise.all([weeklyPromise, loadOverviewCoverage(state.trainingLoad.weekly.overview.weekStart, renderTrainingLoad)]);
     } else {
       await Promise.all([
-        state.trainingLoad.section === "today"
-          ? loadTrainingLoadCalendarWeek(renderTrainingLoad)
-          : state.trainingLoad.section === "analysis"
-            ? loadTrainingLoadAnalysis(renderTrainingLoad)
-            : loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad),
+        loadTrainingLoadSectionData(state.trainingLoad.section, renderTrainingLoad),
         state.trainingLoad.section === "schedule" ? loadPlannedRpeSetting() : Promise.resolve(),
       ]);
     }
@@ -2618,6 +2628,10 @@ export function resetTrainingLoadForWorkspaceChange() {
   state.trainingLoad.filterPicker = emptyTrainingLoadFilterPicker();
   state.trainingLoad.filterSnapshotAtOpen = null;
   state.trainingLoad.orgPickerData = null;
+  // GPEXE imports: the old object's generation is bumped first, so a check
+  // still being polled for the OLD workspace's team stops by itself.
+  state.trainingLoad.gpexe.generation += 1;
+  state.trainingLoad.gpexe = emptyGpexeImportState();
   // (v9) The OLD workspace's own enabled/enabledAt must never keep
   // showing (even briefly) once a switch has started - `loaded: false`
   // puts the toggle control back into its disabled "not yet known" state
