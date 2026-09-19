@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-18. Last `origin/main` commit checked: `636fdf3` (merge of PR #108,
-`docs/reviewer-transactions-external-effect` → `main`).
+Last reviewed: 2026-09-19. Last `origin/main` commit checked: `ed49031` (merge of PR #110,
+`feature/gpexe-in-app-import-f3` → `main`).
 
 ## Active phase
 
@@ -19,13 +19,35 @@ Alongside it, the **GPEXE import groundwork** is merged:
   restore (PR #104).
 
 On top of it, the **in-app GPEXE import** phases F1 (check, candidates, preview; PR #106)
-and F2 (approve and import; PR #107) are merged. The screens (F3) are next.
+and F2 (approve and import; PR #107) are merged, and so are the coach screens F3a
+(PR #110). Next is F3b (Settings → Teams admin setup).
 
 All of it is code only. **`GPEXE_IMPORT_APPLY_ENABLED` is off in every environment and no
 GPEXE data has been imported into the local OPTIMOVE or the deployed database**, so
 nothing imported is visible in the app.
 
 ## Last completed, merged phases
+
+- **In-app GPEXE import F3a: coach screens** — PR #110 (`ed49031`, reviewed head
+  `4d36781`), frontend only: a "GPEXE imports" sub-tab in Training Load → Data &
+  Analysis (`frontend/gpexe-import-{data,view,actions}.js`) on the F1/F2 routes.
+  - Sessions are grouped by what the coach has to do (needs a decision, can't be imported
+    yet, stays out, up to date, imported). A blocked session's reason and step come from
+    its own detail.
+  - The review shows participation and GPS apart, coach metric names (GPEXE's names only
+    in Technical details), each left-out value with level, metric and reason, and every
+    change to an already-imported result behind an accept checkbox.
+  - Outcomes: imported, not imported (only an explicit refusal), and unknown. An unknown
+    outcome is never shown as "not imported", stays marked in the list, and after three
+    checks the coach is sent to a platform admin.
+  - **Linking a GPEXE athlete** (owner decision (b), 2026-09-19): the session's values
+    only help to find the athlete in GPEXE; no athlete is preselected; a confirmation
+    shows both sides and says the link applies to this session and every GPEXE session
+    imported later; a name shared by two team athletes can't be confirmed. After a link
+    change a session's review is not approvable until a check that started after the
+    change has seen that session (the server's preview hash check stays the real guard).
+  - Reviewed by `code-reviewer`, `mobile-qa` and the `ux-design-reviewer` agent. That
+    agent was added to `main` by PR #111, which is merged; this stacked docs branch predates it.
 
 - **Reviewer rule for transactions with an external effect** — PR #108 (`636fdf3`),
   `.claude/agents/code-reviewer.md` and `db-reviewer.md` only. For a change to a
@@ -295,6 +317,10 @@ nothing imported is visible in the app.
 - `/api/health` reported commit `96d876d` (F1) and later `cb3399a` (F2) on 2026-09-18.
   The new GPEXE routes answered 401 when called without a login on the deployed app
   (checked on 2026-09-18), as expected from `requireAuth` on the whole router.
+- `/api/health` reported commit `ed49031` (F3a) with `ok: true` on 2026-09-19. The
+  served frontend contains the GPEXE imports screens, and a GPEXE route answered 401
+  without a login. The tab itself was not opened on the deployed app (no signed-in
+  session there).
 - **v22 and v23 on the deployed database are inferred** from the successful start of
   those deploys (`npm start` runs `node src/migrate.js &&` the server). The deployed
   database itself was **not** queried.
@@ -344,9 +370,10 @@ pre-existing; pass/fail counts don't belong in this file
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
 - **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
-  F1 and F2 are merged (see above). F3 (screens) is the next step; F4 is the first real
-  local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an environment until all three
-  of these hold there:
+  F1, F2 and F3a are merged (see above). F3b (Settings → Teams admin setup) is the next
+  step; F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
+  environment until conditions 1–3 hold there; condition 4 is required before regular
+  production imports:
   1. **A fresh, restore-verified backup of that environment.** This is an operational
      gate: `docs/runbooks/gpexe-in-app-import.md` has a record table (backup path or
      identifier, `.verify.json`, when it was verified, who confirmed it). The local
@@ -361,6 +388,13 @@ pre-existing; pass/fail counts don't belong in this file
      limit.
   3. **The undo script takes the team import lock** (`lockTeamForImport`) before it is
      ever used on a persistent database. Today it runs only on disposable databases.
+  4. **Mandatory before regular production imports** (owner, 2026-09-19): a safe,
+     verified production procedure for results imported under a wrongly linked GPEXE
+     athlete. Unlinking only ends the link and never changes imported results; the app
+     tells the coach those results "can't be changed here — contact a platform
+     administrator". Today the only path is the controlled admin undo
+     (`docs/runbooks/gpexe-undo-imported-session.md`), rehearsed on disposable databases
+     only. The procedure must be defined and verified.
   - Planned shape (as built in F1–F2):
     - "Check now" fetches from GPEXE;
     - a list of import candidates;
@@ -495,9 +529,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**F3 of the in-app GPEXE import: the screens**, on the existing F1/F2 API contracts,
-with the switch left off and no real import (owner, 2026-09-18). After that, the three
-conditions under Separate tasks come before F4, the first real local import.
+**F3b of the in-app GPEXE import: Settings → Teams admin setup**, with the switch left off
+and no real import. The F3a deploy was healthy on 2026-09-19 by `/api/health`, the served
+bundle and the 401 check (see above); a signed-in open of the tab on the deployed app was
+not done. F3b starts when the owner schedules it. After that, conditions
+1–3 under Separate tasks come before F4, the first real local import, and condition 4
+before regular production imports.
 
 The other Separate tasks wait until the owner schedules them.
 
