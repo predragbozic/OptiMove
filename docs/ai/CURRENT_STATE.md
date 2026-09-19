@@ -1,32 +1,242 @@
 # Current state
 
-Last reviewed: 2026-09-17. Last `origin/main` commit checked: `d2189fa` (merge of PR #95,
-`feature/training-load-dashboards-ux-h3` → `main`).
+Last reviewed: 2026-09-19. Last `origin/main` commit checked: `ed49031` (merge of PR #110,
+`feature/gpexe-in-app-import-f3` → `main`).
 
 ## Active phase
 
-**Training Load Dashboards UX redesign (H-slices)** — one branch/PR per slice, frontend
-only unless a separate product decision says otherwise. H1 (PR #89), H2 (PR #93) and H3
-(PR #95) are merged. Next (owner confirmed 2026-09-17 that this priority stays):
+**Training Load Dashboards UX redesign (H-slices)** — frontend only unless a separate
+product decision says otherwise. H1 (PR #89), H2 (PR #93), H3 (PR #95) and H4 (PR #97)
+are merged. No further slice is scheduled; the small follow-up found during H4 is recorded
+under Separate tasks.
 
-- **H4** — states and polish. Also in H4:
-  - **Readable labels for the advanced editor's raw policy values** (source / role /
-    coverage), owner decision 2026-09-17 at the H3 merge: do it in H4, and only after
-    checking what each value actually means - a readable but wrong label is worse than
-    the raw value. These fields must be sorted out before the UX slices are finished.
-  - Extend the leave guard to the exits H2 does not cover yet (owner, 2026-09-17,
-    recorded at the H2 merge). Since H3, `confirmLeaveTrainingLoad` guards both an unsaved
-    layout and an unsaved Advanced settings draft, so both are affected by these gaps.
-  - Confirmed in code at `0a5936c` (unchanged at `d2189fa`) - both drop an unsaved
-    Dashboards layout without asking: a **workspace switch** (`onWorkspaceChanged` ->
-    `resetTrainingLoadForWorkspaceChange`, `app.js` / `training-load-actions.js`), and
-    navigation started from the **notifications** panel (`handleNotificationAction` ->
-    e.g. `openTestsToday`, `openTrainingLoadResults`, which change `state.activeTab`
-    without calling `confirmLeaveTrainingLoad`).
-  - Leaving through the **messages** panel: Raised during review; not reproduced or
-    found in code — reproduce first in H4.
+Alongside it, the **GPEXE import groundwork** is merged:
+- the pilot importer (PR #99);
+- database uniqueness and threshold bindings (v20, PR #101);
+- a rehearsed undo of one imported session (PR #102);
+- session and drill display in Activities (PR #103);
+- undo authorization with a database deletion log (v21) and a backup proven by a trial
+  restore (PR #104).
+
+On top of it, the **in-app GPEXE import** phases F1 (check, candidates, preview; PR #106)
+and F2 (approve and import; PR #107) are merged, and so are the coach screens F3a
+(PR #110). Next is F3b (Settings → Teams admin setup).
+
+All of it is code only. **`GPEXE_IMPORT_APPLY_ENABLED` is off in every environment and no
+GPEXE data has been imported into the local OPTIMOVE or the deployed database**, so
+nothing imported is visible in the app.
 
 ## Last completed, merged phases
+
+- **In-app GPEXE import F3a: coach screens** — PR #110 (`ed49031`, reviewed head
+  `4d36781`), frontend only: a "GPEXE imports" sub-tab in Training Load → Data &
+  Analysis (`frontend/gpexe-import-{data,view,actions}.js`) on the F1/F2 routes.
+  - Sessions are grouped by what the coach has to do (needs a decision, can't be imported
+    yet, stays out, up to date, imported). A blocked session's reason and step come from
+    its own detail.
+  - The review shows participation and GPS apart, coach metric names (GPEXE's names only
+    in Technical details), each left-out value with level, metric and reason, and every
+    change to an already-imported result behind an accept checkbox.
+  - Outcomes: imported, not imported (only an explicit refusal), and unknown. An unknown
+    outcome is never shown as "not imported", stays marked in the list, and after three
+    checks the coach is sent to a platform admin.
+  - **Linking a GPEXE athlete** (owner decision (b), 2026-09-19): the session's values
+    only help to find the athlete in GPEXE; no athlete is preselected; a confirmation
+    shows both sides and says the link applies to this session and every GPEXE session
+    imported later; a name shared by two team athletes can't be confirmed. After a link
+    change a session's review is not approvable until a check that started after the
+    change has seen that session (the server's preview hash check stays the real guard).
+  - Reviewed by `code-reviewer`, `mobile-qa` and the `ux-design-reviewer` agent. That
+    agent was added to `main` by PR #111, which is merged; this stacked docs branch predates it.
+
+- **Reviewer rule for transactions with an external effect** — PR #108 (`636fdf3`),
+  `.claude/agents/code-reviewer.md` and `db-reviewer.md` only. For a change to a
+  transaction that writes important data (import, deletion, approval), the reviewers
+  check five things before READY:
+  - an error before, during and after a successful COMMIT;
+  - success, an explicit error, and an answer that never comes;
+  - that the answer tells apart "not written", "written" and "outcome unknown";
+  - the connection, the locks and a retried request in each outcome;
+  - one targeted test through the real route.
+
+  Owner decision: it stays in the two agent files, not in a shared rules file.
+- **In-app GPEXE import F2: approving imports** — PR #107 (`cb3399a`, reviewed head
+  `d1d92db`), migration v23
+  (`migrations_v2/202609201000_training_load_v23_gpexe_import_approval.sql`).
+  - `POST /api/training-load/gpexe/teams/:teamId/candidates/:candidateId/approve
+    {previewHash, acceptChanges}` imports the **whole candidate** exactly as its preview
+    showed it. Refused with nothing written when:
+    - the switch is off;
+    - the caller has no right;
+    - the candidate is not pending, or its snapshot expired;
+    - the preview is not the one reviewed;
+    - changes to already imported results were not accepted.
+  - **One transaction:** approver rights (`lock_gpexe_import_approver`, role, grant and
+    user rows `FOR SHARE`) → candidate `FOR UPDATE` → team import lock → the import and
+    the preview recomputed from it → hash compare → approval row → candidate `imported`.
+    A different hash rolls everything back, including what the import wrote, and answers
+    409 `preview_changed` with `reviewAgain`.
+  - **Preview v2 `changesToImported`** lists every already imported result the import
+    writes to (`corrected`, `supplemented`, `needs_review`, `stale_resend_ignored`). The
+    approval needs `acceptChanges` for them.
+  - **v23:** `training_load.gpexe_import_approvals`, one per candidate. It is append-only
+    and cannot be truncated. Its trigger re-checks:
+    - the right and its basis;
+    - the candidate's state, content hash and preview hash;
+    - the number of changes.
+
+    A candidate becomes `imported` only from `pending` with its approval, and is never
+    inserted as `imported`.
+  - **The COMMIT's outcome** (two external review rounds):
+    - once the COMMIT is sent, the answer never says "nothing was imported";
+    - the answer to the COMMIT is awaited at most 15 s. After an error or that time, the
+      connection is closed, and the approval is looked for on another connection (at most
+      5 s);
+    - the answer is then `200` with `verified_after_commit_error`, or `503
+      import_outcome_unknown` with `verify` links;
+    - `GET .../approvals/:approvalId` exists, and an imported candidate names its
+      approval;
+    - a failed candidate read after the commit still answers `200` with
+      `candidateReadError`.
+  - External review by the owner: three rounds, READY on `d1d92db`.
+- **In-app GPEXE import F1: check, candidates, preview** — PR #106 (`96d876d`, reviewed
+  head `b070a54`), migration v22 (`migrations_v2/202609191000_training_load_v22_gpexe_in_app_import.sql`).
+  - **"Check now"** runs in the background and reads GPEXE through a fixed-host,
+    GET-only client (`backend/src/gpexeClient.js`). Header paging is read to the end or
+    refused.
+  - **Candidates:** one per (team, session, content). New content supersedes older
+    candidates that were never imported.
+  - **The preview** is a rolled-back run of the real import under the team lock. It
+    shows participation and GPS separately and gives a reason for every left-out value.
+    An athlete imported earlier and now left out blocks the session, with the step that
+    lifts it.
+  - **Approver grants** (platform admin only), athlete links, raw-snapshot retention
+    (30 days unapproved, 90 days after import), and a purge that does not depend on one
+    process.
+  - The real GPEXE API was checked read-only by the owner's probe
+    (`backend/scripts/gpexe-api-probe.mjs`).
+  - Runbook: `docs/runbooks/gpexe-in-app-import.md`, which also covers F2.
+- **GPEXE undo authorization, deletion log and verified backup** — PR #104 (`6c5b3a6`),
+  migration v21 (`migrations_v2/202609181000_training_load_v21_import_deletion_log.sql`).
+  - **Who may run the undo** (`backend/scripts/gpexe-undo-imported-session.mjs`): only an
+    **active platform admin** (active `user_global_roles` role and `users.is_active`),
+    always with a reason.
+    - The script checks this before taking any lock, and the v21 insert trigger checks it
+      again (SQLSTATE 42501).
+    - `--reason` and `--performed-by-user-id` are required on every run, dry run included.
+    - The script still refuses any database that is not a disposable
+      `optimove_tests_gpexe_*` one.
+  - **`training_load.import_deletion_log`**:
+    - one row per removed event, written in the **same transaction** as the removal;
+    - records the session, team, day, admin, reason, threshold set, and rows removed per
+      table and in total;
+    - append-only against UPDATE, DELETE and TRUNCATE;
+    - a row can only name an active platform admin and an event that no longer exists;
+    - lock order: `user_global_roles` (FOR SHARE) → `metric_events` → `activities`.
+  - **Verified backup** (`backend/scripts/gpexe-backup-verify.mjs`,
+    `docs/runbooks/gpexe-backup-verify.md`):
+    - `pg_dump` runs on an exported snapshot;
+    - the dump is restored into a new `optimove_tests_gpexe_restore_*` database, which is
+      always dropped afterwards;
+    - the copy is compared table by table (row count plus a digest of every row) and per
+      catalog object, including whether each trigger is enabled;
+    - an unverified dump is deleted, and a verified one gets `<dump>.verify.json` with its
+      sha256;
+    - local sources only; `pg_dump`/`pg_restore` inherit no `PG*` variable and get
+      explicit connection arguments.
+  - **Known limit, stated in the runbook**: the CLI cannot authenticate its operator. It
+    checks that the given user id is an active platform admin, not that the person running
+    it is that admin. The runbook lists what must be in place before any persistent-database
+    unlock.
+- **GPEXE session and drills in Activities** — PR #103 (`37dadb1`), frontend only.
+  - The Activities drawer shows the whole session and each drill separately, with readable
+    metric names, and marks real conflicts.
+  - Dashboards series are named from the metric catalog.
+  - The Dashboards "Bucket" column still shows raw ids (see Separate tasks).
+- **GPEXE undo procedure** — PR #102 (`df3cc6b`): `backend/scripts/gpexe-undo-imported-session.mjs`
+  and `docs/runbooks/gpexe-undo-imported-session.md`.
+  - Undoes one imported session in a fixed order.
+  - The v13/v20 immutability triggers are disabled only inside that one transaction, and
+    the commit is refused unless they are enabled again.
+  - A JSON log is written before the commit (`pending`, then `committed`).
+  - It refuses rather than guesses when it finds:
+    - a manual correction;
+    - an activity shared with, or linked to, another event;
+    - a merged or reparented activity;
+    - two events for one GPEXE session.
+  - Disposable databases only.
+- **GPEXE uniqueness and threshold provenance** — PR #101 (`c066b3b`), migration v20
+  (`migrations_v2/202609171800_training_load_v20_gpexe_source_bindings.sql`).
+  - One active GPEXE connection per team.
+  - A trigger refuses a second event for the same GPEXE connection and `team_session:<id>`,
+    and freezes the source identity of a bound event.
+  - `training_load.metric_event_source_bindings` records, per event, the GPEXE threshold
+    set the values were imported under:
+    - the hash covers the set id and the payload;
+    - the hash version has its own column;
+    - rows cannot be changed.
+  - The writer stops with `binding_missing`, `source_reference_set_changed` or
+    `reference_hash_version_outdated` instead of mixing threshold sets.
+- **GPEXE pilot import (code only)** — PR #99 (`41e9555`), backend only:
+  `backend/src/gpexeImportMapper.js` (pure plan builder) + `backend/src/gpexeImportWriter.js`
+  (one transaction under a team advisory lock) + `backend/scripts/gpexe-import-pilot.mjs`
+  (CLI) + `backend/scripts/gpexe-pilot-disposable-run.mjs` + `backend/tests/gpexe-import.test.mjs`.
+  One GPEXE team session becomes a `training_load.metric_events` row with participants,
+  drill segments, occasions and values, plus the activity the existing
+  `training.materialize_activity_group_from_metric_event` materializes with one
+  `activity_components` row of type `drill` per segment.
+  - **Only GPEXE's own values are stored**: TIME (min), TotDist (m), SPEEDmax (km/h),
+    acceleration/deceleration events, burst/brake events (definition unconfirmed),
+    "Sprint distanca ≥25,2 km/h" (m) from the GPEXE 7 m/s speed zone, and each GPEXE power
+    zone separately (25–60, 60–75, ≥75 W/kg). Owner decision 2026-09-17: `m/min`,
+    `Acc+Dec`, `Burst&brakes`, `HMLD ≥25 W/kg` and `EXPDist ≥60 W/kg` are **not**
+    imported — they wait for a derived-metrics feature with a formula and a formula
+    version, so an OptiMove-computed sum is never stored as a value GPEXE delivered.
+  - **Identity and idempotency**: separate source identities
+    `athlete_session:<id>:full` and `athlete_session:<id>:drill:<n>`; the occasion content
+    hash covers unit, level, `aggregation_role`, `coverage` and the GPEXE source context;
+    values fetched later (drill burst/brake) become current through a `supplemented`
+    supersede path that only adds metrics while every existing value stays identical, while
+    changed, dropped or older data stays `needs_review` and a manual correction is never
+    replaced.
+  - **Verified on a disposable database only** (`optimove_tests_gpexe_*`, created and
+    dropped in the same run, with real responses for team 980 / session 186942): first
+    import 19 results, then 15 drill results supplemented with burst/brake, a repeat import
+    writing nothing, and two concurrent imports ending in the same state as one.
+    `backend/tests/gpexe-import.test.mjs` covers mapper, writer, concurrency, deadlock, the
+    dashboard source filter and the CLI guard.
+  - **Nothing was written to the local OPTIMOVE or the Supabase database**, and the CLI
+    refuses to: `--apply` requires a local `optimove_tests_gpexe_*` database carrying the
+    marker table written by `backend/tests/_gpexe-disposable-db.mjs`, and `--dry-run` (the
+    default) opens no connection at all. **No imported GPEXE data is therefore visible
+    anywhere in the app today.**
+  - Also fixed: `fetchOccasionContexts` in `backend/src/trainingLoadDashboardQuery.js` did
+    not read `entry_method`, so the dashboard source policy (manual / api_import /
+    csv_import) could never match imported values.
+  - The read-only fetch script that collects the GPEXE responses stays **outside the
+    repository** (owner decision 2026-09-17); the token never leaves the owner's own shell.
+
+- **Dashboards UX H4** — PR #97 (`70eabaf`), frontend only.
+  - **Readable labels in Advanced settings**, named after what the query engine does with
+    each stored value (`resolveFactsToRows` / `shiftDateRange` in
+    `backend/src/trainingLoadDashboardQuery.js`, value meanings in the v3 Metrics-Core and
+    v16 dashboard migrations); stored values and request bodies are unchanged. Source =
+    how a catalog metric's value was recorded (All sources, Manual entry only, API import
+    only, CSV import only, Calculated values only, One connected source); Values included
+    (`aggregation_role_policy`) = direct values / source totals / calculated totals; Total
+    coverage (`coverage_policy`) = complete / partial / unknown-coverage totals, direct
+    values pass every choice. A help text explains the terms and conflicts. For built-in
+    metrics the three filters are disabled with a note, because
+    `queryBuiltInSeriesFromContext` never applies them. Owner decision 2026-09-17 at the
+    H3 merge: meanings verified before naming.
+  - **Remaining leave-guard exits**: notification rows that open another screen and a
+    workspace switch now ask before any request (`confirmLeaveTrainingLoad(_, { discard:
+    false })`). Declined changes nothing; the draft is discarded only after the request
+    succeeded (a notification's mark-read, then `discardTrainingLoadLeaveDrafts`; a
+    workspace switch resets Training Load itself), so a failed request loses nothing.
+    Covers both an unsaved layout and an unsaved Advanced settings change. The
+    **messages panel** exit was **not reproduced** live (open, conversation, send, close,
+    outside click, Escape, phone Back all kept both drafts) and was left unchanged.
 
 - **Dashboards UX H3** — PR #95 (`d2189fa`), frontend only: the advanced widget editor
   ("Advanced settings") edits a local draft; nothing is sent before "Save changes", and
@@ -71,7 +281,8 @@ only unless a separate product decision says otherwise. H1 (PR #89), H2 (PR #93)
   get Move up/down only). An unsaved layout is never dropped silently inside Training
   Load, through the main sidebar/rail, or through browser Back: `releaseAnalysisLayoutDraft`
   / `confirmLeaveTrainingLoad` ask "Discard your unsaved layout changes?" first (a declined
-  Back restores the consumed history entry). Remaining exits → H4 (see Active phase).
+  Back restores the consumed history entry). The remaining exits (notifications, workspace
+  switch) were closed in H4 (PR #97).
 - **Dashboards UX H1** — PR #89 (`3ef6033`), frontend only: dashboard picker (search,
   groups, badges), "New dashboard"/"Rename" dialog replacing `window.prompt`, dashboard
   "⋯" and period-preset menus, guided "Add metric" panel (changes staged client-side,
@@ -100,9 +311,39 @@ only unless a separate product decision says otherwise. H1 (PR #89), H2 (PR #93)
 - This `CLAUDE.md`/`.claude/agents/` reviewer workflow (`code-reviewer`, `db-reviewer`,
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
-**Implemented ≠ deployed.** The only deploy fact checked in this update is the one above
-(`/api/health` reporting `0de6afb` on 2026-09-17); re-check the hosting target before
-asserting a deploy state later.
+**Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `0de6afb` on 2026-09-17.
+- `/api/health` reported commit `6c5b3a6` on 2026-09-18.
+- `/api/health` reported commit `96d876d` (F1) and later `cb3399a` (F2) on 2026-09-18.
+  The new GPEXE routes answered 401 when called without a login on the deployed app
+  (checked on 2026-09-18), as expected from `requireAuth` on the whole router.
+- `/api/health` reported commit `ed49031` (F3a) with `ok: true` on 2026-09-19. The
+  served frontend contains the GPEXE imports screens, and a GPEXE route answered 401
+  without a login. The tab itself was not opened on the deployed app (no signed-in
+  session there).
+- **v22 and v23 on the deployed database are inferred** from the successful start of
+  those deploys (`npm start` runs `node src/migrate.js &&` the server). The deployed
+  database itself was **not** queried.
+- **v22 and v23 are not applied to the local OPTIMOVE database**, which is at v21.
+  Applying them is a separate decision.
+- `GPEXE_IMPORT_APPLY_ENABLED` is off in both environments. No real import has been run.
+- v20 and v21 on the deployed database are **inferred** from the successful start of
+  the deploy of `6c5b3a6` (`npm start` runs `node src/migrate.js &&` the server). The
+  deployed database itself was **not** queried.
+- **v20 and v21 on the local OPTIMOVE database**: applied 2026-09-18 with the standard
+  runner (owner-approved). The steps were:
+  - a fresh backup taken immediately before, verified by a trial restore with
+    `backend/scripts/gpexe-backup-verify.mjs` and kept outside the repo;
+  - the migration run itself;
+  - a direct check afterwards:
+    - both new tables exist and are empty, and the three deletion-log triggers are
+      enabled;
+    - every table that existed before has the same row count and content digest, apart
+      from the two new `schema_migrations` rows;
+    - the catalog only gained objects; nothing existing changed or disappeared.
+  - No GPEXE data was imported.
+
+Re-check the hosting target and the database before asserting a deploy state later.
 
 ## Known baseline/environment test issues
 
@@ -118,12 +359,110 @@ pre-existing; pass/fail counts don't belong in this file
   occurrence-generation phase catches an ahead athlete's occurrence in its very next
   cycle…" fails; reproduced identically on a clean detached `origin/main` worktree
   (`3ef6033`) on 2026-09-17.
+- `frontend/tests/training-load.actions.test.mjs` — the process never exits after the
+  suite runs. It was reproduced on clean `main` on 2026-09-18, but the baseline commit
+  was not recorded. Not fixed.
 - `backend/tests/training-load-metrics-builder-edit-draft.test.mjs` — refuses to start
   unless `LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL` is set (deliberate guard, no database
   operation attempted), so a plain full backend run reports it as failed; same on
   `3ef6033`.
 
-## Separate tasks (recorded, not prioritized over the Dashboards UX slices)
+## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
+  F1, F2 and F3a are merged (see above). F3b (Settings → Teams admin setup) is the next
+  step; F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
+  environment until conditions 1–3 hold there; condition 4 is required before regular
+  production imports:
+  1. **A fresh, restore-verified backup of that environment.** This is an operational
+     gate: `docs/runbooks/gpexe-in-app-import.md` has a record table (backup path or
+     identifier, `.verify.json`, when it was verified, who confirmed it). The local
+     OPTIMOVE and Supabase are separate decisions. The app never claims a backup was
+     checked. Before regular self-service imports, a mechanism that reliably checks
+     backup freshness is to be proposed, instead of a switch left on.
+  2. **A bound on the lock waits before the COMMIT** of an approval: the approver's role
+     and grant rows, the candidate, and the team import lock. For example `lock_timeout`
+     and `idle_in_transaction_session_timeout` with a stable refusal code, and the
+     deployed request timeout confirmed. Today another approval of the same team, or a
+     transaction abandoned on a real network stall, can make an approval wait with no
+     limit.
+  3. **The undo script takes the team import lock** (`lockTeamForImport`) before it is
+     ever used on a persistent database. Today it runs only on disposable databases.
+  4. **Mandatory before regular production imports** (owner, 2026-09-19): a safe,
+     verified production procedure for results imported under a wrongly linked GPEXE
+     athlete. Unlinking only ends the link and never changes imported results; the app
+     tells the coach those results "can't be changed here — contact a platform
+     administrator". Today the only path is the controlled admin undo
+     (`docs/runbooks/gpexe-undo-imported-session.md`), rehearsed on disposable databases
+     only. The procedure must be defined and verified.
+  - Planned shape (as built in F1–F2):
+    - "Check now" fetches from GPEXE;
+    - a list of import candidates;
+    - a review of what would change;
+    - an explicit approve button.
+  - Periodic checks and notifications can later feed the same candidate queue.
+  - **One athlete** whose session data needs review stays **flagged for review**. The
+    identity and details are only in the report kept outside the repo. That athlete's
+    data must **not block** importing the other athletes.
+  - Before any real import, take a **new verified backup** of the state at that moment.
+    The 2026-09-18 backup (`...-r2.dump`, kept outside the repo) does not replace it.
+  - Not approved yet: any write of GPEXE data to the local OPTIMOVE or the deployed
+    database.
+  - Owner decisions for the plan, 2026-09-18. F1 was approved to start.
+    - **Phases:**
+      - F1: fetch, candidates and preview;
+      - F2: approval and the actual import;
+      - F3: screens;
+      - F4: the first real local import, after a fresh verified backup.
+    - **Credentials:** the GPEXE token lives only in the server environment
+      (`GPEXE_API_TOKEN`).
+    - **Who may approve:** an active platform admin, or a coach who holds an explicit
+      approver grant for that team. Only a platform admin grants and revokes those
+      grants. The server checks the right on every request and records who approved.
+      Coaches without the grant can review candidates but not approve them.
+    - **`GPEXE_IMPORT_APPLY_ENABLED`:** it blocks writing results and activities. "Check
+      now" still writes candidates and the check record. When it may be turned on: see
+      the three conditions above.
+    - **Raw GPEXE JSON retention:**
+      - kept for 90 days after import;
+      - kept for 30 days for a candidate that was never approved;
+      - the hash, source mapping, decision, approver and write report are kept.
+      - Deletion must not depend only on the server process running every day.
+      - A candidate whose raw snapshot has expired can no longer be approved; it has to
+        be checked again.
+    - **The review shows participation and the GPS measurement separately.** A missing
+      value is not a zero. "GPS was not worn" is shown only when the data confirms it or
+      a coach enters it.
+- **Athletes who trained without a GPS record** (owner, 2026-09-18). Scheduled after
+  phases F1–F3 of the in-app import. Options, none of them decided yet:
+  - participation only, with no values;
+  - a manual entry by the coach;
+  - an estimate from the team average, the position average, another athlete or a
+    similar session.
+
+  An estimate is never stored as a GPEXE measurement. It is stored as an estimate, with
+  its source and method, close to the future derived-metrics feature.
+- **GPEXE session table readability** (owner, 2026-09-18, for later). The goal is that the
+  Activities "Recorded metrics" table reads like GPEXE's own session table:
+  - short column labels; `metric_definitions.short_label` and `icon_url` already exist
+    (v10) but the table does not use them;
+  - the unit shown once in the header, not in every cell;
+  - duration as mm:ss;
+  - no empty RPE columns;
+  - a drill switch in the table.
+  - Also: the "Choose metrics" picker is unusable at about 515 px width.
+  - Importing GPEXE speed zones and max acceleration would change the import scope, so it
+    needs its own decision.
+- **Dashboards "Bucket" column shows raw ids** (found in PR #103). Fixing it needs readable
+  labels from the backend and a security review.
+- **Read the GPEXE import deletion log in the app.** Same shape as the dashboard deletion
+  log task below: today `training_load.import_deletion_log` is readable only in the
+  database.
+
+- **Small Dashboards UX follow-up** (owner, 2026-09-17, found during H4): the guided
+  "Add metric" panel (H1, `renderMetricPanelHtml`) closes without asking even when it
+  holds staged changes, and its search field is 42px tall on phones (below the 44px
+  touch-target rule).
 
 - **Fix the known failing tests above** so a full suite run can be green again and a new
   regression can't hide among known failures: the backend worker timing test, a way to run
@@ -173,15 +512,31 @@ pre-existing; pass/fail counts don't belong in this file
   the Calendar → Analysis "Choose activity" round trip. Dashboard create and the guided
   "Add metric" panel (`renderMetricPanelHtml`) were live-checked in PR #89's browser QA,
   the advanced editor with its series metric picker (`renderMetricPickerHtml`) in PR
-  #95's.
+  #95's, and the notification / workspace-switch leave guard in PR #97's.
+- **Leaving the app with unsaved Dashboards changes** (found during H4, not scheduled):
+  signing out, reloading the page or closing the tab still leaves without asking about an
+  unsaved layout or Advanced settings change (no `beforeunload` guard).
+- **An approval can wait without a limit before its COMMIT** (PR #107 reviews, not fixed).
+  It waits on the role and grant rows, the candidate row, and the team import lock. It
+  also waits when a transaction abandoned on a network stall keeps those locks until TCP
+  keepalive notices. This is condition 2 in Separate tasks.
+- **The GPEXE undo CLI cannot authenticate its operator** (PR #104). It is limited to
+  disposable databases. The runbook lists what a persistent-database unlock would need
+  first: a real authenticated identity, a narrow break-glass credential, and a second
+  person's approval.
 - `migrations/` (legacy, no `_v2` suffix) still exists alongside `migrations_v2/` — treat
   it as historical/reference only; new migrations go in `migrations_v2/`.
 
 ## Most likely next step
 
-Dashboards UX **H4** (states and polish, readable advanced policy labels, remaining
-leave-guard exits), on a new branch from fresh `origin/main` — see Active phase. The Separate tasks above wait until
-the owner schedules them.
+**F3b of the in-app GPEXE import: Settings → Teams admin setup**, with the switch left off
+and no real import. The F3a deploy was healthy on 2026-09-19 by `/api/health`, the served
+bundle and the 401 check (see above); a signed-in open of the tab on the deployed app was
+not done. F3b starts when the owner schedules it. After that, conditions
+1–3 under Separate tasks come before F4, the first real local import, and condition 4
+before regular production imports.
+
+The other Separate tasks wait until the owner schedules them.
 
 ## How to refresh this file
 
