@@ -639,6 +639,22 @@ export const emptyGpexeImportState = () => ({
   // Why each blocked session is blocked, by id|lastSeenAt: { code, categoryName }.
   blockedReasons: {},
   blockedReasonErrors: {},
+  // Approvals whose result is not confirmed yet, by candidate id: the last
+  // unknown outcome, shown again when the session is reopened.
+  uncertain: {},
+  // Athlete links: the one waiting for confirmation ({ gpexeAthleteId,
+  // athleteId, athleteName }), the one just made ({ linkId, ... }), and which
+  // athlete's row stays open while linking.
+  linkConfirm: null,
+  lastLink: null,
+  linkOpen: "",
+  // Link changes made here (linkSeq); checkLinkSeq is linkSeq when the
+  // running check started; linkCheckStartedAt is the server start time of the
+  // first check that succeeded after the last link change. A session's review
+  // is current again only if that check saw it (lastSeenAt at or after it).
+  linkSeq: 0,
+  checkLinkSeq: null,
+  linkCheckStartedAt: null,
 });
 
 export const emptyTrainingLoadState = (overrides = {}) => ({

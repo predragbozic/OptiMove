@@ -10,6 +10,7 @@ import {
   linkGpexeAthlete,
   loadGpexeTeam,
   openGpexeCandidate,
+  reviewMadeBeforeLinkChange,
   selectGpexeTeam,
   startGpexeCheck,
   unlinkGpexeAthlete,
@@ -65,8 +66,11 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
       renderTrainingLoad();
       return true;
     }
+    // A review made before a link change is never approved (the button is
+    // not offered either).
+    if (reviewMadeBeforeLinkChange(candidate, gx)) return true;
     const athletes = (candidate.preview?.athletes || []).filter((a) => !a.notImported).length;
-    const question = `Import this session for ${athletes} athlete(s)? This writes their results and the activity.${changes ? ` It also changes ${changes} result(s) that were already imported.` : ""}`;
+    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"}? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}`;
     if (!globalThis.window?.confirm?.(question)) return true;
     await approveGpexeCandidate({ acceptChanges: Boolean(changes && gx.detail.acceptChanges) }, renderTrainingLoad);
     return true;
@@ -75,19 +79,50 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     await verifyGpexeApproval(renderTrainingLoad);
     return true;
   }
+  // Linking is two steps. "Link..." only asks: it shows both sides of the
+  // link together and sends nothing; "Confirm link" sends it.
   if (type === "training-load-gpexe-link") {
     const gpexeAthleteId = action.dataset.gpexeAthleteId;
     const athleteId = fieldValue(`[data-gpexe-link-select='${gpexeAthleteId}']`);
+    gx.linkOpen = gpexeAthleteId;
+    gx.linkError = null;
     if (!athleteId) {
       gx.linkError = { status: 0, code: "choose_athlete", message: "Choose the team athlete first.", data: null };
       renderTrainingLoad();
       return true;
     }
-    await linkGpexeAthlete({ gpexeAthleteId, athleteId }, renderTrainingLoad);
+    const names = gx.detail?.candidate?.athletes || {};
+    const athleteName = names[athleteId]?.name || "";
+    if (!athleteName) {
+      gx.linkError = { status: 0, code: "unknown_athlete", message: "This athlete is not in the review any more. Close it and open it again.", data: null };
+      renderTrainingLoad();
+      return true;
+    }
+    // A name shared by two team athletes can't confirm who is meant: no
+    // confirmation until they can be told apart.
+    const sameName = Object.entries(names).filter(([id, a]) => id !== athleteId && a?.name && a.name.trim().toLowerCase() === athleteName.trim().toLowerCase());
+    if (sameName.length) {
+      gx.linkError = { status: 0, code: "ambiguous_name", message: `More than one athlete of the team is called ${athleteName}. Give them different names in Settings > Athletes first, then link.`, data: null };
+      renderTrainingLoad();
+      return true;
+    }
+    gx.linkConfirm = { gpexeAthleteId, athleteId, athleteName };
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-link-cancel") {
+    gx.linkConfirm = null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-link-confirm") {
+    const pending = gx.linkConfirm;
+    if (!pending || gx.linkBusy) return true;
+    await linkGpexeAthlete(pending, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-unlink") {
-    if (!globalThis.window?.confirm?.("Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again.")) return true;
+    if (!globalThis.window?.confirm?.("Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again. Results already imported stay where they are.")) return true;
     await unlinkGpexeAthlete(action.dataset.linkId, renderTrainingLoad);
     return true;
   }

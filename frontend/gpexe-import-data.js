@@ -62,6 +62,23 @@ export async function loadGpexeImports(render) {
   await loadGpexeTeam(render);
 }
 
+// Athlete links changed here, and this session's review was made before a
+// check that started after the change saw it: it was made with the old links
+// and must not be approved as it is. Per session, because a check only
+// refreshes the sessions inside its dates; both times are the server's.
+export function reviewMadeBeforeLinkChange(c, gx = state.trainingLoad.gpexe) {
+  if (!gx?.linkSeq) return false;
+  if (!gx.linkCheckStartedAt || !c?.lastSeenAt) return true;
+  return new Date(c.lastSeenAt).getTime() < new Date(gx.linkCheckStartedAt).getTime();
+}
+
+// Every link change: no check has seen it yet.
+function linksChanged() {
+  const gx = g();
+  gx.linkSeq += 1;
+  gx.linkCheckStartedAt = null;
+}
+
 export async function selectGpexeTeam(teamId, render) {
   const gx = g();
   if (String(teamId) === gx.teamId) return;
@@ -82,6 +99,13 @@ function resetGpexeTeamState(teamId) {
   gx.notice = "";
   gx.blockedReasons = {};
   gx.blockedReasonErrors = {};
+  gx.uncertain = {};
+  gx.linkConfirm = null;
+  gx.lastLink = null;
+  gx.linkOpen = "";
+  gx.linkSeq = 0;
+  gx.checkLinkSeq = null;
+  gx.linkCheckStartedAt = null;
 }
 
 export async function loadGpexeTeam(render) {
@@ -106,6 +130,7 @@ export async function loadGpexeTeam(render) {
     gx.status = status;
     gx.candidates = candidates.candidates;
     gx.links = links.links;
+    forgetConfirmedImports();
     void loadBlockedReasons(render);
     // The server's lastCheck is the truth: a check left while polling (the
     // coach went to another tab) or whose polling failed is taken over from
@@ -156,6 +181,17 @@ export async function loadBlockedReasons(render) {
   if (generation === gx.generation) render();
 }
 
+// A session the list now shows as imported is confirmed: its "result not
+// confirmed" mark goes.
+function forgetConfirmedImports() {
+  const gx = g();
+  for (const c of gx.candidates || []) if (c.status === "imported") delete gx.uncertain[c.id];
+  // The link notice's "check for new sessions" is done once its session's
+  // review is current; the link list keeps Unlink.
+  const linked = gx.lastLink && (gx.candidates || []).find((c) => c.id === gx.lastLink.candidateId);
+  if (linked && !reviewMadeBeforeLinkChange(linked, gx)) gx.lastLink = null;
+}
+
 export async function reloadGpexeCandidates(render) {
   const gx = g();
   const generation = gx.generation;
@@ -163,6 +199,7 @@ export async function reloadGpexeCandidates(render) {
     const { candidates } = await api(teamPath(gx.teamId, `/candidates${gx.includeSuperseded ? "?includeSuperseded=true" : ""}`));
     if (generation !== gx.generation) return;
     gx.candidates = candidates;
+    forgetConfirmedImports();
     void loadBlockedReasons(render);
   } catch (error) {
     if (generation !== gx.generation) return;
@@ -183,9 +220,11 @@ export async function startGpexeCheck({ from, to }, render) {
     const body = {};
     if (from) body.from = from;
     if (to) body.to = to;
+    const linkSeq = gx.linkSeq;
     const { check } = await api(teamPath(gx.teamId, "/checks"), { method: "POST", body: JSON.stringify(body) });
     if (generation !== gx.generation) return;
     gx.check = check;
+    gx.checkLinkSeq = linkSeq;
   } catch (error) {
     if (generation !== gx.generation) return;
     gx.checkError = errorInfo(error);
@@ -231,6 +270,12 @@ export async function pollGpexeCheck(render) {
       render();
     }
     if (generation === gx.generation && gx.check && gx.check.status !== "running") {
+      // Reviews made by a check that started after the last link change
+      // reflect the links as they are now.
+      // A check that started after the last link change: the sessions it saw
+      // (lastSeenAt from then on) have reviews made with the current links.
+      if (gx.check.status === "succeeded" && gx.linkSeq && gx.checkLinkSeq === gx.linkSeq && !gx.linkCheckStartedAt) gx.linkCheckStartedAt = gx.check.startedAt || null;
+      gx.checkLinkSeq = null;
       const [status] = await Promise.all([api(teamPath(gx.teamId, "/status")).catch(() => null), reloadGpexeCandidates(render)]);
       if (generation !== gx.generation) return;
       if (status) gx.status = status;
@@ -248,7 +293,11 @@ export async function pollGpexeCheck(render) {
 export async function openGpexeCandidate(candidateId, render) {
   const gx = g();
   const generation = gx.generation;
-  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: null };
+  // An approval whose result is still not confirmed is shown again as such.
+  const uncertain = gx.uncertain[candidateId] ? { ...gx.uncertain[candidateId] } : null;
+  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain };
+  gx.linkConfirm = null;
+  gx.linkOpen = "";
   render();
   try {
     const { candidate } = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidateId)}`));
@@ -266,7 +315,18 @@ export async function openGpexeCandidate(candidateId, render) {
 }
 
 export function closeGpexeCandidate() {
-  g().detail = null;
+  const gx = g();
+  gx.detail = null;
+  gx.linkConfirm = null;
+  gx.linkOpen = "";
+}
+
+// An unknown outcome is kept for the list and a reopened review until an
+// answer or a check confirms the import.
+function rememberOutcome(candidateId, outcome) {
+  const gx = g();
+  if (outcome?.kind === "unknown" && outcome.verified !== "imported") gx.uncertain[candidateId] = { ...outcome };
+  else if (outcome?.kind === "imported" || outcome?.verified === "imported" || outcome?.error?.code === "already_imported") delete gx.uncertain[candidateId];
 }
 
 // The approval, and what its answer means for the coach. The outcome kinds
@@ -278,6 +338,7 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
   const candidate = detail?.candidate;
   if (!candidate || detail.approving) return;
   const generation = gx.generation;
+  const checks = detail.outcome?.checks || 0;
   detail.approving = true;
   detail.verifying = false;
   detail.outcome = null;
@@ -288,6 +349,7 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     const result = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/approve`), { method: "POST", body: JSON.stringify(body) });
     if (generation !== gx.generation || gx.detail !== detail) return;
     detail.outcome = { kind: "imported", result };
+    rememberOutcome(detail.id, detail.outcome);
     if (result.candidate) detail.candidate = result.candidate;
   } catch (error) {
     if (generation !== gx.generation || gx.detail !== detail) return;
@@ -300,8 +362,9 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     } else {
       // A lost answer, a gateway error, a 503: the import may or may not be
       // in the database. Never "nothing was imported".
-      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null };
+      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null, checks };
     }
+    rememberOutcome(detail.id, detail.outcome);
   } finally {
     if (generation === gx.generation && gx.detail === detail) {
       detail.approving = false;
@@ -355,17 +418,20 @@ export async function verifyGpexeApproval(render) {
     const { candidate } = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidateId)}`));
     if (generation !== gx.generation || gx.detail !== detail) return;
     detail.candidate = candidate;
+    const checks = (detail.outcome.checks || 0) + 1;
     const importedBy = approval || candidate.approval;
-    if (candidate.status === "imported" && importedBy) detail.outcome = { ...detail.outcome, verified: "imported", approval: importedBy };
+    if (candidate.status === "imported" && importedBy) detail.outcome = { ...detail.outcome, checks, verified: "imported", approval: importedBy };
     // Never "not imported" here (owner, F3a external review): a missing
     // approval with a pending candidate - after a 503 or after a lost answer
     // alike - only means the import is not visible yet; the first approval
     // may still be finishing. Only a confirmed import is final.
-    else if (!approval && candidate.status === "pending" && !candidate.approval) detail.outcome = { ...detail.outcome, verified: "not_visible_yet" };
-    else detail.outcome = { ...detail.outcome, verified: "still_unknown" };
+    else if (!approval && candidate.status === "pending" && !candidate.approval) detail.outcome = { ...detail.outcome, checks, verified: "not_visible_yet" };
+    else detail.outcome = { ...detail.outcome, checks, verified: "still_unknown" };
+    rememberOutcome(detail.id, detail.outcome);
   } catch (error) {
     if (generation !== gx.generation || gx.detail !== detail) return;
-    detail.outcome = { ...detail.outcome, verified: "still_unknown", verifyError: errorInfo(error) };
+    detail.outcome = { ...detail.outcome, checks: (detail.outcome.checks || 0) + 1, verified: "still_unknown", verifyError: errorInfo(error) };
+    rememberOutcome(detail.id, detail.outcome);
   } finally {
     if (generation === gx.generation && gx.detail === detail) {
       detail.verifying = false;
@@ -385,18 +451,36 @@ async function reloadGpexeLinks(generation) {
   if (generation === gx.generation) gx.links = links;
 }
 
-export async function linkGpexeAthlete({ gpexeAthleteId, athleteId }, render) {
+// Only called from "Confirm link": choosing an athlete sends nothing.
+export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName }, render) {
   const gx = g();
   const generation = gx.generation;
   gx.linkError = null;
   gx.linkBusy = true;
   render();
   try {
-    await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId, athleteId }) });
-    await reloadGpexeLinks(generation);
-    if (generation === gx.generation) gx.notice = `GPEXE athlete ${gpexeAthleteId} is linked. Check for new sessions to see it in the review.`;
+    const answer = await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId, athleteId }) });
+    if (generation !== gx.generation) return;
+    // Every review on screen was made with the old links from here on.
+    linksChanged();
+    gx.linkConfirm = null;
+    gx.notice = "";
+    gx.lastLink = { linkId: answer?.link?.id || "", gpexeAthleteId, athleteId, athleteName, candidateId: gx.detail?.id || "", sessionDate: gx.detail?.candidate?.sessionStartedAt || null };
+    // The change is made; a failed re-read of the list only leaves it stale.
+    await reloadGpexeLinks(generation).catch(() => {});
   } catch (error) {
-    if (generation === gx.generation) gx.linkError = errorInfo(error);
+    if (generation === gx.generation) {
+      const info = errorInfo(error);
+      gx.linkError = info;
+      // No clear refusal (a lost answer): the change may have been made, so
+      // the reviews on screen are treated as made with the old links.
+      if (!isDefiniteRefusal(info)) {
+        linksChanged();
+        gx.linkConfirm = null;
+        gx.linkError = { ...info, message: "We can't tell whether the link was made. Check the list \"GPEXE athletes linked to this team\" below, and unlink it there if it is wrong." };
+        await reloadGpexeLinks(generation).catch(() => {});
+      }
+    }
   } finally {
     if (generation === gx.generation) {
       gx.linkBusy = false;
@@ -413,10 +497,24 @@ export async function unlinkGpexeAthlete(linkId, render) {
   render();
   try {
     await api(teamPath(gx.teamId, `/athlete-links/${encodeURIComponent(linkId)}/unlink`), { method: "POST" });
-    await reloadGpexeLinks(generation);
-    if (generation === gx.generation) gx.notice = `The link is removed. Check for new sessions to see it in the review.`;
+    if (generation !== gx.generation) return;
+    linksChanged();
+    if (gx.lastLink?.linkId === linkId) gx.lastLink = null;
+    gx.notice = "The link is removed. Check for new sessions to update the review.";
+    // The change is made; a failed re-read of the list only leaves it stale.
+    await reloadGpexeLinks(generation).catch(() => {});
   } catch (error) {
-    if (generation === gx.generation) gx.linkError = errorInfo(error);
+    if (generation === gx.generation) {
+      const info = errorInfo(error);
+      gx.linkError = info;
+      // No clear refusal (a lost answer): the change may have been made, so
+      // the reviews on screen are treated as made with the old links.
+      if (!isDefiniteRefusal(info)) {
+        linksChanged();
+        gx.linkError = { ...info, message: "We can't tell whether the link was removed. Check the list \"GPEXE athletes linked to this team\" below." };
+        await reloadGpexeLinks(generation).catch(() => {});
+      }
+    }
   } finally {
     if (generation === gx.generation) {
       gx.linkBusy = false;

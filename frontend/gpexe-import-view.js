@@ -15,22 +15,26 @@
 // kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
-import { gpexeTeamOptions } from "./gpexe-import-data.js";
+import { gpexeTeamOptions, reviewMadeBeforeLinkChange } from "./gpexe-import-data.js";
 
+// Why a session can't be approved right now, in the coach's words (blocked
+// and expired sessions explain themselves above the approve area).
 const BLOCKER_TEXT = {
-  import_switch_off: "Import writing is off in this environment",
-  superseded_by_newer_data: "Replaced by newer GPEXE data",
-  already_imported: "Already imported",
-  blocked: "Blocked - open it for the reason",
-  snapshot_expired_check_again: "GPEXE data expired - check again",
-  nothing_to_import: "Nothing new to import",
+  import_switch_off: "Importing is switched off in this environment, so it can't be approved here.",
+  superseded_by_newer_data: "GPEXE has newer data for this session. Open the newer version.",
+  already_imported: "Already imported.",
+  snapshot_expired_check_again: "The GPEXE data is too old. Check for new sessions, then review it again.",
+  nothing_to_import: "Nothing new to import - no action needed.",
 };
 
-const STATUS_TEXT = {
-  pending: "Waiting for approval",
-  blocked: "Blocked",
-  superseded: "Replaced",
-  imported: "Imported",
+// One badge per group, the same in the list and in the review.
+const GROUP_BADGE = {
+  decision: ["pending", "Waiting for approval"],
+  notyet: ["blocked", "Can't be imported yet"],
+  excluded: ["excluded", "Not imported"],
+  uptodate: ["uptodate", "Up to date"],
+  imported: ["imported", "Imported"],
+  replaced: ["superseded", "Replaced"],
 };
 
 const OUTCOME_TEXT = {
@@ -38,10 +42,57 @@ const OUTCOME_TEXT = {
   unchanged: "Unchanged",
   supplemented: "Values added",
   corrected: "Values replaced",
-  needs_review: "Conflicting version (for review)",
-  stale_resend_ignored: "Older or manual values kept",
+  needs_review: "Kept aside for review (differs from the current values)",
+  stale_resend_ignored: "Older GPEXE version - current values kept",
   not_imported: "Not imported",
 };
+
+// Counts of results, with singular and plural.
+const COUNT_TEXT = {
+  created: ["new result", "new results"],
+  unchanged: ["result unchanged", "results unchanged"],
+  supplemented: ["result with values added", "results with values added"],
+  corrected: ["result with values replaced", "results with values replaced"],
+  needs_review: ["result kept aside for review", "results kept aside for review"],
+  stale_resend_ignored: ["older GPEXE version ignored", "older GPEXE versions ignored"],
+  needs_review_already_recorded: ["result already kept aside earlier", "results already kept aside earlier"],
+  stale_resend_ignored_already_recorded: ["older GPEXE version already ignored earlier", "older GPEXE versions already ignored earlier"],
+};
+
+// Metric names for the coach, by metric key. GPEXE's own names (TotDist,
+// SPEEDmax, ...) and the keys are only in Technical details.
+const METRIC_TEXT = {
+  gpexe_time_min: "Time",
+  gpexe_total_distance: "Distance",
+  gpexe_max_speed: "Top speed",
+  gpexe_sprint_distance_7mps: "Sprint distance (above 25.2 km/h)",
+  gpexe_acceleration_events: "Accelerations (above 2.5 m/s²)",
+  gpexe_deceleration_events: "Decelerations (above 2.5 m/s²)",
+  gpexe_power_zone_25_60_distance: "Distance at 25-60 W/kg",
+  gpexe_power_zone_60_75_distance: "Distance at 60-75 W/kg",
+  gpexe_power_zone_75_plus_distance: "Distance at 75 W/kg or more",
+  gpexe_burst_events: "Bursts (GPEXE definition not confirmed yet)",
+  gpexe_brake_events: "Brakes (GPEXE definition not confirmed yet)",
+};
+
+function metricName(v) {
+  return METRIC_TEXT[v.metricKey] || "Other GPEXE value";
+}
+
+// Values in the order above (the most familiar first), unknown ones last.
+const METRIC_ORDER = Object.keys(METRIC_TEXT);
+function byMetricOrder(a, b) {
+  const rank = (v) => (METRIC_ORDER.includes(v.metricKey) ? METRIC_ORDER.indexOf(v.metricKey) : METRIC_ORDER.length);
+  return rank(a) - rank(b);
+}
+
+function plural(n, one, many) {
+  return `${n} ${Number(n) === 1 ? one : many}`;
+}
+
+function countsText(counts) {
+  return Object.entries(counts || {}).filter(([, n]) => n).map(([k, n]) => plural(n, ...(COUNT_TEXT[k] || ["other result", "other results"]))).join(", ");
+}
 
 const GPS_TEXT = {
   measured: "Measured",
@@ -54,7 +105,6 @@ const GPS_TEXT = {
 const REFUSAL_TEXT = {
   import_switch_off: "Not imported: importing is switched off in this environment.",
   not_an_approver: "Not imported: you may not approve imports for this team. Ask a platform admin to approve it or to give you the right.",
-  already_imported: "Already imported - another approval got there first. Nothing more was written.",
   superseded_by_newer_data: "Not imported: GPEXE has newer data for this session. Open the newer version.",
   blocked: "Not imported: this session must be fixed first. See what to fix above.",
   snapshot_expired_check_again: "Not imported: the GPEXE data is too old. Check for new sessions, then review it again.",
@@ -63,6 +113,10 @@ const REFUSAL_TEXT = {
   preview_changed: "Not imported: the data changed since you opened this session. Review it again, then approve.",
   internal_error: "Not imported: the server failed before writing anything. Try again later.",
 };
+
+// After this many checks without a confirmed result the coach is sent to a
+// platform admin instead of checking forever.
+const GIVE_UP_AFTER_CHECKS = 3;
 
 // Why a value was left out, in the coach's words. An unknown code is shown
 // as "other reason" and listed under Technical details.
@@ -124,7 +178,15 @@ function fmtValue(value, unit) {
   if (value === null || value === undefined) return "-";
   const n = Number(value);
   const text = Number.isFinite(n) ? n.toLocaleString("en-GB", { maximumFractionDigits: 2 }) : String(value);
-  return unit ? `${text} ${unit}` : text;
+  // "n" is a count: no unit after it.
+  return unit && unit !== "n" ? `${text} ${unit}` : text;
+}
+
+// GPEXE's own names of the metrics shown, for Technical details.
+function metricNamesTech(values) {
+  const seen = new Map();
+  for (const v of values || []) if (v?.metricKey && !seen.has(v.metricKey)) seen.set(v.metricKey, `${metricName(v)} = ${v.label || v.metricKey} (${v.metricKey})`);
+  return seen.size ? [["GPEXE metric names", [...seen.values()].join("; ")]] : [];
 }
 
 function resultLabel(result) {
@@ -165,10 +227,11 @@ export function renderGpexeImportsHtml() {
       ${renderTeamRowHtml(teams, gx.teamId)}
       ${gx.error ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.error, "Could not load GPEXE imports."))}</p>` : ""}
       ${gx.loading && !status ? `<p class="muted">Loading...</p>` : ""}
-      ${status ? renderStatusHtml(status) : ""}
       ${status ? renderNextStepHtml(gx, status) : ""}
+      ${status ? renderStatusHtml(status) : ""}
       ${status ? renderCheckHtml(gx, status) : ""}
-      ${gx.notice ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
+      ${gx.notice && !gx.detail ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
+      ${!gx.detail ? renderLastLinkHtml(gx) : ""}
       ${status ? renderCandidatesHtml(gx) : ""}
       ${status ? renderLinksHtml(gx) : ""}
       ${gx.detail ? renderCandidateDetailHtml(gx, status) : ""}
@@ -197,12 +260,11 @@ function renderStatusHtml(status) {
   return `
     <div class="gpexe-status">
       <p class="gpexe-switch ${sw.enabled ? "is-on" : "is-off"}"><strong>${sw.enabled ? "Import writing is on." : "Import writing is off."}</strong> ${escapeHtml(sw.message || "")}</p>
-      ${status.settings
-        ? `<p class="muted">Reads GPEXE team ${escapeHtml(status.settings.gpexeTeamId)}.</p>`
-        : `<p class="gpexe-warning">No GPEXE team is connected to this team yet. A platform admin connects it in Settings &gt; Teams.</p>`}
+      ${status.settings ? "" : `<p class="gpexe-warning">No GPEXE team is connected to this team yet. A platform admin connects it in Settings &gt; Teams.</p>`}
       <p class="muted">${viewer.canApprove
         ? `You can approve imports for this team (${viewer.approvalBasis === "platform_admin" ? "platform admin" : "approver grant"}).`
-        : "You can review candidates. Approving needs a platform admin or an explicit approver grant for this team."}</p>
+        : "You can review sessions. Approving needs a platform admin or an explicit approver grant for this team."}</p>
+      ${status.settings ? techHtml([["GPEXE team id", status.settings.gpexeTeamId]]) : ""}
     </div>
   `;
 }
@@ -223,12 +285,26 @@ export function candidateGroup(c, gx = state.trainingLoad.gpexe) {
     const reason = blockedReasonFor(c, gx);
     return reason && blockedCoachText(reason).excluded ? "excluded" : "notyet";
   }
-  if (c.previewStatus === "no_changes") return "uptodate";
+  if (c.previewStatus === "no_changes" || c.preview?.status === "no_changes") return "uptodate";
   return "decision";
 }
 
+// The review carries its own reason; the list uses the one loaded for it.
 function blockedReasonFor(c, gx) {
+  if (c.preview?.blocked?.code) return { code: c.preview.blocked.code, categoryName: c.preview.session?.categoryName || null };
   return gx?.blockedReasons?.[blockedReasonKey(c)] || null;
+}
+
+// An approval whose result is not confirmed yet stays marked until a check
+// (or a later answer) confirms it - also after the review is closed.
+function isUncertain(c, gx) {
+  return Boolean(gx?.uncertain?.[c.id]) && c.status !== "imported";
+}
+
+function badgeHtml(c, gx = state.trainingLoad.gpexe) {
+  if (isUncertain(c, gx)) return `<span class="gpexe-badge is-unknown">Result not confirmed</span>`;
+  const [cls, text] = GROUP_BADGE[candidateGroup(c, gx)] || [c.status, c.status];
+  return `<span class="gpexe-badge is-${escapeAttr(cls)}">${escapeHtml(text)}</span>`;
 }
 
 export function blockedReasonKey(c) {
@@ -239,6 +315,7 @@ export function blockedReasonKey(c) {
 function nextStepText(c, status, gx = state.trainingLoad.gpexe) {
   const viewer = status?.viewer || {};
   if (c.status === "imported") return "";
+  if (isUncertain(c, gx)) return "Import result not confirmed yet - open it to check the result.";
   if (c.status === "superseded") return "Replaced by newer GPEXE data. Nothing to do.";
   if (!c.snapshot?.available) return "Next: check for new sessions again (the GPEXE data is too old).";
   if (c.status === "blocked") {
@@ -248,21 +325,26 @@ function nextStepText(c, status, gx = state.trainingLoad.gpexe) {
     return text.excluded ? text.step : `Next: ${text.step.charAt(0).toLowerCase()}${text.step.slice(1)}`;
   }
   if (c.previewStatus === "no_changes") return "Nothing new to import - no action needed.";
+  if (reviewMadeBeforeLinkChange(c, gx)) return `Next: check for new sessions${c.sessionStartedAt ? ` (with dates that include ${formatDate(c.sessionStartedAt)})` : ""} - athlete links changed after this review was made.`;
   if (!status?.importSwitch?.enabled) return "Next: review it. Importing is switched off in this environment.";
   if (!viewer.canApprove) return "Next: review it. An approver must approve the import.";
-  if (c.changesToImported) return `Next: review ${c.changesToImported} change(s) to results already imported, then approve.`;
+  if (c.changesToImported) return `Next: review ${plural(c.changesToImported, "change", "changes")} to results already imported, then approve.`;
   return "Next: review it and approve the import.";
 }
 
 function renderNextStepHtml(gx, status) {
   const check = gx.check || status.lastCheck;
-  const decisions = (gx.candidates || []).filter((c) => candidateGroup(c, gx) === "decision").length;
-  const notYet = (gx.candidates || []).filter((c) => candidateGroup(c, gx) === "notyet").length;
+  const list = gx.candidates || [];
+  const uncertain = list.filter((c) => isUncertain(c, gx)).length;
+  const decisions = list.filter((c) => candidateGroup(c, gx) === "decision").length;
+  const notYet = list.filter((c) => candidateGroup(c, gx) === "notyet").length;
   let text;
   if (!status.settings) text = "A platform admin needs to connect this team to its GPEXE team (Settings > Teams).";
   else if (gx.checkStarting || check?.status === "running") text = "Checking GPEXE for new sessions...";
-  else if (decisions) text = `Next step: ${decisions} session(s) need a decision - open one below.`;
-  else if (notYet) text = `Next step: ${notYet} session(s) can't be imported yet - see what to do below.`;
+  else if (uncertain) text = `Next step: check the result of ${plural(uncertain, "import", "imports")} that could not be confirmed - open it below.`;
+  else if (list.some((c) => candidateGroup(c, gx) === "decision" && reviewMadeBeforeLinkChange(c, gx))) text = "Next step: check for new sessions - athlete links changed after a review was made.";
+  else if (decisions) text = `Next step: ${plural(decisions, "session needs", "sessions need")} a decision - open one below.`;
+  else if (notYet) text = `Next step: ${plural(notYet, "session", "sessions")} can't be imported yet - see what to do below.`;
   else text = "Next step: check for new sessions.";
   return `<p class="gpexe-next" role="status">${escapeHtml(text)}</p>`;
 }
@@ -279,14 +361,23 @@ function renderCheckHtml(gx, status) {
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-check" ${canCheck ? "" : "disabled"}>${running ? "Checking..." : "Check for new sessions"}</button>
       </div>
       <p class="muted gpexe-hint">Without dates, the last 14 days are checked (at most 31). Checking only shows what GPEXE has; nothing is imported until you approve.</p>
-      ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(gx.checkError.code === "check_already_running" ? "A check is already running for this team." : "The check could not start. Try again in a moment.")}</p>${errorTech(gx.checkError)}</div>` : ""}
+      ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check ? renderCheckSummaryHtml(check) : ""}
     </section>
   `;
 }
 
+// Why a check could not start, and the one thing to do.
+function checkErrorText(error) {
+  if (error.code === "check_already_running") return "A check is already running for this team. Wait for it to finish.";
+  if (error.code === "invalid_window") return "Check the dates: From must not be after To, To must not be in the future, and at most 31 days can be checked at once.";
+  if (error.code === "gpexe_token_missing") return "OptiMove has no access to GPEXE set up yet. Ask a platform admin to set it up.";
+  if (error.code === "gpexe_team_not_configured") return "This team is not connected to a GPEXE team yet. Ask a platform admin to connect it in Settings > Teams.";
+  return "The check could not start. Try again in a moment.";
+}
+
 function renderCheckSummaryHtml(check) {
-  const counts = `${check.sessionsSeen} session(s): ${check.candidatesNew} new, ${check.candidatesChanged} changed, ${check.candidatesUnchanged} unchanged`;
+  const counts = `${plural(check.sessionsSeen, "session", "sessions")} in GPEXE: ${check.candidatesNew} new, ${check.candidatesChanged} changed, ${check.candidatesUnchanged} unchanged`;
   if (check.status === "running") return `<p class="gpexe-check-state" role="status">Checking GPEXE ${escapeHtml(formatDate(check.window?.from))} - ${escapeHtml(formatDate(check.window?.to))}... ${escapeHtml(counts)} so far.</p>`;
   if (check.status === "failed") {
     return `<div class="gpexe-error" role="alert"><p>The last check (${escapeHtml(fmtDateTime(check.startedAt))}) did not finish. Try again in a moment.</p>${techHtml([["Code", check.error?.code], ["Server message", check.error?.message]])}</div>`;
@@ -351,9 +442,9 @@ function renderCandidateRowHtml(c, status) {
   const upToDate = group === "uptodate";
   const excluded = group === "excluded";
   if (!upToDate && !excluded && (c.status === "pending" || c.status === "blocked")) {
-    if (counts.created) facts.push(`${counts.created} new result(s)`);
-    if (c.changesToImported) facts.push(`${c.changesToImported} change(s) to imported results`);
-    if (counts.athletesNotImported) facts.push(`${counts.athletesNotImported} athlete(s) left out`);
+    if (counts.created) facts.push(plural(counts.created, "new result", "new results"));
+    if (c.changesToImported) facts.push(`${plural(c.changesToImported, "change", "changes")} to imported results`);
+    if (counts.athletesNotImported) facts.push(`${plural(counts.athletesNotImported, "athlete", "athletes")} left out`);
   }
   const next = nextStepText(c, status);
   return `
@@ -363,7 +454,7 @@ function renderCandidateRowHtml(c, status) {
           <strong>${escapeHtml(sessionTitle(c))}</strong>
           <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>
         </span>
-        <span class="gpexe-badge is-${escapeAttr(upToDate ? "uptodate" : excluded ? "excluded" : c.status)}">${escapeHtml(upToDate ? "Up to date" : excluded ? "Not imported" : group === "notyet" ? "Can't be imported yet" : STATUS_TEXT[c.status] || c.status)}</span>
+        ${badgeHtml(c)}
         ${facts.length ? `<span class="gpexe-candidate-facts">${escapeHtml(facts.join(" · "))}</span>` : ""}
         ${next ? `<span class="gpexe-candidate-next">${escapeHtml(next)}</span>` : ""}
       </button>
@@ -376,19 +467,35 @@ function renderLinksHtml(gx) {
   return `
     <section class="gpexe-panel" aria-label="Athlete links">
       <div class="gpexe-panel-head"><h3>GPEXE athletes linked to this team</h3></div>
-      <p class="muted gpexe-hint">A link is never guessed. Link a GPEXE athlete from a session's review, where GPEXE shows them.</p>
-      ${gx.linkError ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
+      <p class="muted gpexe-hint">A link is never guessed. Link a GPEXE athlete from a session's review, after finding them in GPEXE. A wrong link can be removed here before an import is approved; results already imported stay where they are.</p>
+      ${gx.linkError && !gx.detail ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
       ${!links.length ? `<p class="muted">No athlete is linked yet.</p>` : `
         <ul class="gpexe-link-list">
           ${links.map((l) => `
             <li>
-              <span><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">GPEXE ${escapeHtml(l.gpexeAthleteId)}</span></span>
+              <span><strong>${escapeHtml(l.athleteName)}</strong> <span class="muted">GPEXE athlete ${escapeHtml(l.gpexeAthleteId)}</span></span>
               <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.id)}" ${gx.linkBusy ? "disabled" : ""}>Unlink</button>
             </li>
           `).join("")}
         </ul>
       `}
     </section>
+  `;
+}
+
+// The link just made, with the way back: a wrong link is removed with the
+// existing Unlink before any import is approved.
+function renderLastLinkHtml(gx) {
+  const l = gx.lastLink;
+  if (!l) return "";
+  const dates = l.sessionDate ? ` (with dates that include ${formatDate(l.sessionDate)})` : "";
+  return `
+    <div class="gpexe-notice gpexe-last-link" role="status">
+      <p><strong>GPEXE athlete ${escapeHtml(l.gpexeAthleteId)} is now linked to ${escapeHtml(l.athleteName)}.</strong> Check for new sessions${escapeHtml(dates)} to update the review - approving waits until then.</p>
+      <p>Wrong athlete? Unlink it before an import is approved.
+        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(l.linkId)}" ${gx.linkBusy ? "disabled" : ""}>Unlink ${escapeHtml(l.athleteName)}</button>
+      </p>
+    </div>
   `;
 }
 
@@ -412,6 +519,7 @@ function renderCandidateDetailHtml(gx, status) {
         </div>
         <div class="gpexe-detail-body">
           ${gx.notice ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
+          ${renderLastLinkHtml(gx)}
           ${gx.linkError ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
           ${detail.loading ? `<p class="muted">Loading...</p>` : ""}
           ${detail.error ? `<p class="gpexe-error" role="alert">${escapeHtml(detail.error.status === 404 ? "This session is not available." : errorText(detail.error))}</p>` : ""}
@@ -426,7 +534,7 @@ function renderCandidateBodyHtml(c, detail, status) {
   const preview = c.preview;
   return `
     <p class="gpexe-detail-meta">
-      <span class="gpexe-badge is-${escapeAttr(c.status)}">${escapeHtml(STATUS_TEXT[c.status] || c.status)}</span>
+      ${badgeHtml(c)}
       <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>
       ${c.snapshot?.available ? `<span class="muted">GPEXE data kept until ${escapeHtml(formatDate(c.snapshot.expiresAt))}</span>` : ""}
     </p>
@@ -445,7 +553,7 @@ function renderCandidateBodyHtml(c, detail, status) {
 function renderApprovalRecordHtml(c) {
   if (!c.approval) return "";
   const a = c.approval;
-  const counts = Object.entries(a.import?.counts || {}).map(([k, n]) => `${n} ${OUTCOME_TEXT[k] ? OUTCOME_TEXT[k].toLowerCase() : k}`).join(", ");
+  const counts = countsText(a.import?.counts);
   return `<p class="gpexe-success">Imported ${escapeHtml(fmtDateTime(a.approvedAt))} (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
 }
 
@@ -514,6 +622,7 @@ function renderChangesHtml(preview, c) {
           </li>
         `).join("")}
       </ul>
+      ${techHtml(metricNamesTech(changes.flatMap((ch) => ch.values || [])))}
     </section>
   `;
 }
@@ -524,7 +633,7 @@ function renderValueTableHtml(values, withPrevious) {
     <div class="gpexe-values-wrap"><table class="gpexe-values">
       <thead><tr><th scope="col">Metric</th>${withPrevious ? `<th scope="col">Before</th>` : ""}<th scope="col">GPEXE</th></tr></thead>
       <tbody>
-        ${values.map((v) => `<tr><td>${escapeHtml(v.label)}</td>${withPrevious ? `<td>${escapeHtml(fmtValue(v.previous, v.unit))}</td>` : ""}<td>${escapeHtml(fmtValue(v.value, v.unit))}</td></tr>`).join("")}
+        ${[...values].sort(byMetricOrder).map((v) => `<tr><td>${escapeHtml(metricName(v))}</td>${withPrevious ? `<td>${escapeHtml(fmtValue(v.previous, v.unit))}</td>` : ""}<td>${escapeHtml(fmtValue(v.value, v.unit))}</td></tr>`).join("")}
       </tbody>
     </table></div>
   `;
@@ -532,7 +641,16 @@ function renderValueTableHtml(values, withPrevious) {
 
 function renderAthletesHtml(preview, c) {
   const athletes = preview.athletes || [];
-  const unlinkedChoices = (preview.teamAthletesWithoutGpexeRecord || []).map((a) => ({ id: a.athleteId, name: athleteName(c, a.athleteId, null) }));
+  if (!athletes.length) return "";
+  // Only team athletes without a GPEXE record here AND without a link yet can
+  // be chosen: an athlete who is already linked would be refused anyway.
+  const linked = new Set((state.trainingLoad.gpexe.links || []).map((l) => String(l.athleteId)));
+  const unlinkedChoices = (preview.teamAthletesWithoutGpexeRecord || [])
+    .filter((a) => !linked.has(String(a.athleteId)))
+    .map((a) => ({ id: a.athleteId, name: athleteName(c, a.athleteId, null) }));
+  // Two team athletes with the same name can't be told apart here.
+  const allNames = Object.values(c.athletes || {}).map((a) => (a?.name || "").trim().toLowerCase());
+  for (const o of unlinkedChoices) o.duplicate = allNames.filter((n) => n === o.name.trim().toLowerCase()).length > 1;
   return `
     <section class="gpexe-athletes" aria-label="Athletes in this session">
       <h4>Athletes in GPEXE (${athletes.length})</h4>
@@ -541,39 +659,108 @@ function renderAthletesHtml(preview, c) {
   `;
 }
 
+// What GPEXE recorded for an unlinked athlete in this session: only a help
+// to find the athlete in GPEXE. Values never prove who an athlete is.
+const LINK_CONTEXT_KEYS = ["gpexe_total_distance", "gpexe_max_speed", "gpexe_time_min"];
+
+function renderLinkContextHtml(a) {
+  const whole = (a.results || []).find((r) => r.level !== "drill");
+  const values = LINK_CONTEXT_KEYS.map((key) => whole?.values?.find((v) => v.metricKey === key)).filter((v) => v && v.value !== null && v.value !== undefined);
+  const drills = new Set((a.results || []).filter((r) => r.level === "drill").map((r) => r.drillIndex)).size;
+  if (!values.length && !drills) return `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`;
+  return `
+    <p class="muted">Recorded by GPEXE for athlete ${escapeHtml(a.gpexeAthleteId)} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
+    <ul class="gpexe-link-context">
+      ${values.map((v) => `<li><span>${escapeHtml(metricName(v))}</span> <strong>${escapeHtml(fmtValue(v.value, v.unit))}</strong></li>`).join("")}
+      ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
+    </ul>
+  `;
+}
+
+// Linking is two steps: choose the athlete (nothing is sent), then confirm
+// with both sides of the link shown together. No athlete is preselected.
+function renderLinkHtml(a, c, unlinkedChoices) {
+  const gx = state.trainingLoad.gpexe;
+  const id = a.gpexeAthleteId;
+  const pending = gx.linkConfirm && gx.linkConfirm.gpexeAthleteId === id ? gx.linkConfirm : null;
+  if (pending) {
+    return `
+      <div class="gpexe-link-confirm" role="group" aria-label="Confirm the link">
+        <p class="gpexe-link-pair"><strong>GPEXE athlete ${escapeHtml(id)}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
+        <p>Link GPEXE athlete ${escapeHtml(id)} to ${escapeHtml(pending.athleteName)}? Future GPEXE sessions for athlete ${escapeHtml(id)} will be imported as ${escapeHtml(pending.athleteName)}.</p>
+        <p class="muted">If it turns out wrong, unlink it before an import is approved. Results already imported stay where they are.</p>
+        <div class="gpexe-link-actions">
+          <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link-cancel" ${gx.linkBusy ? "disabled" : ""}>Cancel</button>
+          <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link-confirm" ${gx.linkBusy ? "disabled" : ""}>${gx.linkBusy ? "Linking..." : "Confirm link"}</button>
+        </div>
+      </div>
+    `;
+  }
+  if (!unlinkedChoices.length) {
+    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If athlete ${escapeHtml(id)} is one of them, check the links below.</p>`;
+  }
+  return `
+    <div class="gpexe-link">
+      <p><strong>Find athlete ${escapeHtml(id)} in GPEXE first. Link only if you are sure.</strong></p>
+      ${renderLinkContextHtml(a)}
+      <div class="gpexe-link-row">
+        <label><span>Link GPEXE athlete ${escapeHtml(id)} to</span>
+          <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
+            <option value="" selected>Choose an athlete of the team</option>
+            ${unlinkedChoices.map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
+          </select>
+        </label>
+        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy ? "disabled" : ""}>Link...</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSkippedHtml(a) {
+  const skipped = a.skippedValues || [];
+  if (!skipped.length) return "";
+  return `
+    <div class="gpexe-skipped">
+      <p class="muted">Left out (${skipped.length}) - a left-out value is not a zero:</p>
+      <ul>
+        ${skipped.map((s) => `<li>${escapeHtml(resultLabel(s))} · ${escapeHtml(metricName(s))} - ${escapeHtml(SKIP_TEXT[s.reason] || "other reason (see Technical details)")}</li>`).join("")}
+      </ul>
+    </div>
+  `;
+}
+
 function renderAthleteHtml(a, c, unlinkedChoices) {
+  const gx = state.trainingLoad.gpexe;
   const name = athleteName(c, a.athleteId, a.gpexeAthleteId);
   const gps = GPS_TEXT[a.gps?.status] || a.gps?.status || "";
   const outcomes = {};
   for (const r of a.results || []) outcomes[r.outcome] = (outcomes[r.outcome] || 0) + 1;
-  const outcomeText = Object.entries(outcomes).map(([k, n]) => `${n} ${(OUTCOME_TEXT[k] || k).toLowerCase()}`).join(", ");
-  const canLink = a.notImported?.code === "athlete_not_linked" && unlinkedChoices.length;
+  const outcomeText = countsText(outcomes);
+  const unlinked = a.notImported?.code === "athlete_not_linked";
   const shownResults = (a.results || []).filter((r) => r.outcome !== "not_imported" && r.outcome !== "unchanged");
+  // Kept open while the coach is linking this athlete (a re-render would
+  // otherwise close it under them).
+  const open = unlinked && gx.linkOpen === a.gpexeAthleteId;
+  const tech = [
+    ...metricNamesTech([...shownResults.flatMap((r) => r.values || []), ...(a.skippedValues || [])]),
+    ...((a.skippedValues || []).length ? [["Left-out codes", [...new Set(a.skippedValues.map((s) => s.reason))].join(", ")]] : []),
+  ];
   return `
-    <details class="gpexe-athlete ${a.blocksSession ? "is-blocking" : ""}">
+    <details class="gpexe-athlete ${a.blocksSession ? "is-blocking" : ""}" ${open ? "open" : ""}>
       <summary>
         <span><strong>${escapeHtml(name)}</strong>${a.blocksSession ? ` <span class="gpexe-badge is-blocked">Blocks the session</span>` : ""}</span>
-        <span class="muted">Participation: recorded by GPEXE · GPS: ${escapeHtml(gps)}${a.notImported ? ` · Not imported: ${escapeHtml(a.notImported.message)}` : ` · ${escapeHtml(outcomeText)}`}</span>
+        <span class="muted">Participation: recorded by GPEXE · GPS: ${escapeHtml(gps)}${a.notImported ? ` · Not imported: ${escapeHtml(a.notImported.message)}` : outcomeText ? ` · ${escapeHtml(outcomeText)}` : ""}</span>
       </summary>
       ${a.gps?.reason ? `<p class="muted">${escapeHtml(a.gps.reason.message)}</p>` : ""}
-      ${canLink ? `
-        <div class="gpexe-link-row">
-          <label><span>Link GPEXE athlete ${escapeHtml(a.gpexeAthleteId)} to</span>
-            <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(a.gpexeAthleteId)}">
-              <option value="">Choose an athlete of the team</option>
-              ${unlinkedChoices.map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}</option>`).join("")}
-            </select>
-          </label>
-          <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(a.gpexeAthleteId)}" ${state.trainingLoad.gpexe.linkBusy ? "disabled" : ""}>Link</button>
-        </div>
-      ` : ""}
+      ${unlinked ? renderLinkHtml(a, c, unlinkedChoices) : ""}
       ${shownResults.map((r) => `
         <div class="gpexe-result">
           <p>${escapeHtml(resultLabel(r))} · ${escapeHtml(OUTCOME_TEXT[r.outcome] || r.outcome)}</p>
           ${renderValueTableHtml(r.values.filter((v) => v.change !== "same" || r.outcome === "created"), r.outcome !== "created")}
         </div>
       `).join("")}
-      ${(a.skippedValues || []).length ? `<p class="muted">${a.skippedValues.length} value(s) left out: ${escapeHtml([...new Set(a.skippedValues.map((s) => SKIP_TEXT[s.reason] || "other reason"))].join(", "))}. A left-out value is not a zero.</p>${a.skippedValues.some((s) => !SKIP_TEXT[s.reason]) ? techHtml([["Left-out codes", [...new Set(a.skippedValues.map((s) => s.reason))].join(", ")]]) : ""}` : ""}
+      ${renderSkippedHtml(a)}
+      ${techHtml(tech)}
     </details>
   `;
 }
@@ -599,7 +786,7 @@ function renderOutcomeHtml(detail) {
   if (!o) return "";
   if (o.kind === "imported") {
     const r = o.result || {};
-    const counts = Object.entries(r.import?.counts || {}).map(([k, n]) => `${n} ${(OUTCOME_TEXT[k] || k).toLowerCase()}`).join(", ");
+    const counts = countsText(r.import?.counts);
     return `
       <div class="gpexe-success" role="status">
         <p><strong>Imported.</strong>${counts ? ` ${escapeHtml(counts)}.` : ""}</p>
@@ -618,12 +805,18 @@ function renderOutcomeHtml(detail) {
         <p><strong>We can't tell yet whether this session was imported.</strong> Don't enter the data by hand and don't assume either way - check the result first.</p>
         ${verified === "not_visible_yet" ? `<p>The import is not visible yet; we are still checking the result. Check again in a moment. Approving again is safe: the server never imports the same session twice.</p>` : ""}
         ${verified === "still_unknown" ? `<p>Still not clear. Check again in a moment.</p>` : ""}
+        ${(o.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${o.checks} checks.</strong> Ask a platform admin to check this import (give them the Technical details). Until then, don't enter the data by hand.</p>` : ""}
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-verify" ${detail.verifying ? "disabled" : ""}>${detail.verifying ? "Checking..." : verified ? "Check again" : "Check the result"}</button>
         ${techHtml([["HTTP status", o.error?.status || "no answer"], ["Code", o.error?.code], ["Server message", o.error?.message], ["Approval id", o.verify?.approvalId], ["Check error", o.verifyError ? `${o.verifyError.status || "no answer"} ${o.verifyError.code || ""}`.trim() : undefined]])}
       </div>
     `;
   }
   const code = o.error?.code;
+  // Another approval (or an earlier, unconfirmed one) got there first: the
+  // session is in OptiMove - a final, successful outcome.
+  if (code === "already_imported") {
+    return `<div class="gpexe-success" role="status"><p><strong>Already imported.</strong> Nothing more was written.</p>${errorTech(o.error)}</div>`;
+  }
   const reviewAgain = o.error?.data?.reviewAgain;
   return `
     <div class="gpexe-refused" role="alert">
@@ -636,18 +829,31 @@ function renderOutcomeHtml(detail) {
 
 function renderApproveHtml(c, detail, status) {
   if (c.status === "imported" || detail.outcome?.kind === "imported" || detail.outcome?.verified === "imported") return "";
+  if (detail.outcome?.error?.code === "already_imported") return "";
   if (detail.outcome?.kind === "unknown" && detail.outcome.verified !== "not_visible_yet") return "";
+  const gx = state.trainingLoad.gpexe;
+  const group = candidateGroup(c, gx);
+  // A blocked or expired session already says what to do above.
+  if (group === "excluded" || group === "notyet") return "";
+  if (group === "replaced") return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.superseded_by_newer_data)}</p>`;
+  if (group === "uptodate") return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.nothing_to_import)}</p>`;
+  // This review was made with the athlete links as they were at the last
+  // check; after a link change it must be made again before approving.
+  if (reviewMadeBeforeLinkChange(c, gx)) {
+    const day = c.sessionStartedAt ? formatDate(c.sessionStartedAt) : "";
+    return `<p class="gpexe-warning gpexe-approve-note" role="note"><strong>Athlete links changed after this review was made.</strong> Close it and check for new sessions${day ? ` (with dates that include ${escapeHtml(day)})` : ""}; approving waits until then.</p>`;
+  }
   const viewer = status?.viewer || {};
-  const blockers = c.approvalBlockers || [];
+  const blockers = (c.approvalBlockers || []).filter((b) => b !== "blocked");
   if (!viewer.canApprove) return `<p class="muted gpexe-approve-note">Approving needs a platform admin or an explicit approver grant for this team.</p>`;
-  if (blockers.length) return `<p class="muted gpexe-approve-note">Cannot be approved: ${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || b).join(" · "))}.</p>`;
+  if (blockers.length) return `<p class="muted gpexe-approve-note">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || "It can't be approved right now.").join(" "))}</p>`;
   const changes = c.changesToImported || 0;
   return `
     <div class="gpexe-approve">
       ${changes ? `
         <label class="gpexe-accept">
           <input type="checkbox" data-gpexe-accept data-action="training-load-gpexe-accept" ${detail.acceptChanges ? "checked" : ""}>
-          <span>I accept the ${changes} change(s) to results that were already imported.</span>
+          <span>I accept the ${escapeHtml(plural(changes, "change", "changes"))} to results that were already imported.</span>
         </label>
       ` : ""}
       <p class="muted">Approving imports this whole session exactly as shown. Athletes left out stay out.</p>

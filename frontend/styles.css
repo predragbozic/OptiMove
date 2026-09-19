@@ -15074,6 +15074,62 @@ button.tests-assignment-card {
   gap: 4px;
   font-size: 0.85rem;
 }
+.gpexe-link,
+.gpexe-link-confirm {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.gpexe-link p,
+.gpexe-link-confirm p {
+  margin: 0;
+}
+.gpexe-link-context {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 0.9rem;
+}
+.gpexe-link-confirm {
+  border-color: var(--accent);
+}
+.gpexe-link-pair {
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+.gpexe-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.gpexe-last-link {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+.gpexe-last-link p {
+  margin: 0;
+}
+.gpexe-skipped ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.gpexe-badge.is-unknown {
+  border-color: var(--danger);
+  font-weight: 600;
+}
 .gpexe-approve {
   display: grid;
   gap: 8px;
@@ -15159,6 +15215,7 @@ button.tests-assignment-card {
 @media (max-width: 760px) {
   .gpexe-check-row > *,
   .gpexe-link-row > *,
+  .gpexe-link-actions > *,
   .gpexe-select {
     width: 100%;
   }
