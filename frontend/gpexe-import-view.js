@@ -467,7 +467,7 @@ function renderLinksHtml(gx) {
   return `
     <section class="gpexe-panel" aria-label="Athlete links">
       <div class="gpexe-panel-head"><h3>GPEXE athletes linked to this team</h3></div>
-      <p class="muted gpexe-hint">A link is never guessed. Link a GPEXE athlete from a session's review, after finding them in GPEXE. A wrong link can be removed here before an import is approved; results already imported stay where they are.</p>
+      <p class="muted gpexe-hint">A link is never guessed. Link a GPEXE athlete from a session's review, after finding them in GPEXE. A wrong link can be removed here before an import is approved. Unlinking doesn't change results that are already imported: those can't be changed here — contact a platform administrator.</p>
       ${gx.linkError && !gx.detail ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
       ${!links.length ? `<p class="muted">No athlete is linked yet.</p>` : `
         <ul class="gpexe-link-list">
@@ -687,8 +687,8 @@ function renderLinkHtml(a, c, unlinkedChoices) {
     return `
       <div class="gpexe-link-confirm" role="group" aria-label="Confirm the link">
         <p class="gpexe-link-pair"><strong>GPEXE athlete ${escapeHtml(id)}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
-        <p>Link GPEXE athlete ${escapeHtml(id)} to ${escapeHtml(pending.athleteName)}? Future GPEXE sessions for athlete ${escapeHtml(id)} will be imported as ${escapeHtml(pending.athleteName)}.</p>
-        <p class="muted">If it turns out wrong, unlink it before an import is approved. Results already imported stay where they are.</p>
+        <p>Link GPEXE athlete ${escapeHtml(id)} to ${escapeHtml(pending.athleteName)}? After you check for new sessions and approve the import, athlete ${escapeHtml(id)}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
+        <p>You can unlink it before an import is approved. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
         <div class="gpexe-link-actions">
           <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link-cancel" ${gx.linkBusy ? "disabled" : ""}>Cancel</button>
           <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link-confirm" ${gx.linkBusy ? "disabled" : ""}>${gx.linkBusy ? "Linking..." : "Confirm link"}</button>
@@ -697,7 +697,7 @@ function renderLinkHtml(a, c, unlinkedChoices) {
     `;
   }
   if (!unlinkedChoices.length) {
-    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If athlete ${escapeHtml(id)} is one of them, check the links below.</p>`;
+    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If athlete ${escapeHtml(id)} is one of them, close this review and check "GPEXE athletes linked to this team".</p>`;
   }
   return `
     <div class="gpexe-link">
@@ -827,6 +827,13 @@ function renderOutcomeHtml(detail) {
   `;
 }
 
+// The session imports at least one athlete through a GPEXE link: a stable
+// fact of the preview (athleteId comes only from the team's links), not of
+// what was clicked in this browser. A linked athlete left out doesn't count.
+export function importsLinkedAthletes(c) {
+  return (c?.preview?.athletes || []).some((a) => a.athleteId && !a.notImported);
+}
+
 function renderApproveHtml(c, detail, status) {
   if (c.status === "imported" || detail.outcome?.kind === "imported" || detail.outcome?.verified === "imported") return "";
   if (detail.outcome?.error?.code === "already_imported") return "";
@@ -857,6 +864,7 @@ function renderApproveHtml(c, detail, status) {
         </label>
       ` : ""}
       <p class="muted">Approving imports this whole session exactly as shown. Athletes left out stay out.</p>
+      ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>` : ""}
       <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving ? "disabled" : ""}>${detail.approving ? "Importing..." : "Approve import"}</button>
     </div>
   `;

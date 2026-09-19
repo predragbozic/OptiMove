@@ -870,8 +870,11 @@ test("link: the confirmation shows the exact GPEXE id and the athlete's full nam
   await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
   let html = renderTrainingLoadCoachHtml();
   assert.match(html, /<p class="gpexe-link-pair"><strong>GPEXE athlete 104<\/strong> → <strong>Dario Petrov Example<\/strong><\/p>/);
-  assert.match(html, /<p>Link GPEXE athlete 104 to Dario Petrov Example\? Future GPEXE sessions for athlete 104 will be imported as Dario Petrov Example\.<\/p>/);
-  assert.match(html, /If it turns out wrong, unlink it before an import is approved\. Results already imported stay where they are\./);
+  // The consequence covers this session AND every session imported later.
+  assert.match(html, /<p>Link GPEXE athlete 104 to Dario Petrov Example\? After you check for new sessions and approve the import, athlete 104(?:'|&#039;)s results in this session, and in every GPEXE session imported later, will be imported as Dario Petrov Example\.<\/p>/);
+  assert.match(html, /<p>You can unlink it before an import is approved\. Unlinking doesn(?:'|&#039;)t change results that are already imported: if the link turns out wrong after an import, those results can(?:'|&#039;)t be changed here — contact a platform administrator\.<\/p>/);
+  assert.ok(!/Future GPEXE sessions/.test(html), "not only 'future' sessions");
+  assert.ok(!/move their results|correct wrongly/.test(html), "no promise of a move or correct function");
 
   await act("training-load-gpexe-link-cancel");
   assert.equal(linkPosts().length, 0, "Cancel sends nothing");
@@ -967,7 +970,7 @@ test("unlink from the link notice removes exactly the link just made (after a qu
   confirmAnswer = false;
   await act("training-load-gpexe-unlink", { linkId: "link-2" });
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/unlink")).length, 0, "declined: nothing sent");
-  assert.match(confirmQuestions.at(-1), /Results already imported stay where they are\./);
+  assert.equal(confirmQuestions.at(-1), "Unlink GPEXE athlete 104 from Dario Petrov Example? In sessions not imported yet, athlete 104 will be left out until linked again. Results already imported stay with Dario Petrov Example; if they are wrong, they can't be changed here — contact a platform administrator.", "the link just made is named even if the link list does not have it yet");
   confirmAnswer = true;
   await act("training-load-gpexe-unlink", { linkId: "link-2" });
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-links/link-2/unlink")).length, 1);
@@ -1095,6 +1098,130 @@ test("link: a lost answer closes the confirmation, treats the links as changed a
   await act("training-load-gpexe-link-confirm");
   const html = renderTrainingLoadCoachHtml();
   assert.ok(!/gpexe-link-confirm/.test(html), "the confirmation is closed");
-  assert.match(html, /We can(?:'|&#039;)t tell whether the link was made\. Check the list &quot;GPEXE athletes linked to this team&quot; below/);
+  assert.match(html, /We can(?:'|&#039;)t tell whether the link was made\. Check the list &quot;GPEXE athletes linked to this team&quot; on the GPEXE imports page, and unlink it there if it is wrong\./);
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "the link may have been made: no Approve on the old review");
+});
+
+// ---------------------------------------------------------------------------
+// ux-design-reviewer (PR #111 agent), F3a final texts: where the coach is told
+// what a link does and that results already imported can't be changed here.
+// ---------------------------------------------------------------------------
+
+const ADMIN = "can't be changed here — contact a platform administrator.";
+
+test("approve: a calm note to check the athletes shows when the session imports a linked athlete", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } }));
+  await openImports();
+  await openCandidate();
+  const html = renderTrainingLoadCoachHtml();
+  const approveArea = html.slice(html.indexOf('class="gpexe-approve"'));
+  assert.match(approveArea, /<p class="muted gpexe-approve-names">Check that each athlete is the right person\. Results imported under the wrong athlete can(?:'|&#039;)t be changed here — contact a platform administrator\.<\/p>/);
+  assert.ok(approveArea.indexOf("gpexe-approve-names") < approveArea.indexOf('data-action="training-load-gpexe-approve"'), "before the Approve button");
+  assert.ok(!/gpexe-warning/.test(approveArea.slice(0, approveArea.indexOf("</div>"))), "not styled as a warning");
+});
+
+test("approve: no athlete note when no athlete is imported through a link (unlinked or left out)", async () => {
+  resetState();
+  const d = candidateDetail();
+  const leftOut = { ...d.preview.athletes[0], notImported: { code: "athlete_not_in_team", message: "The linked OptiMove athlete is no longer an active member of the team." } };
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    onCandidate: () => ({ status: 200, body: { candidate: { ...d, preview: { ...d.preview, athletes: [leftOut, d.preview.athletes[1]] } } } }),
+  }));
+  await openImports();
+  await openCandidate();
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /data-action="training-load-gpexe-approve"/);
+  assert.ok(!/gpexe-approve-names|Check that each athlete is the right person/.test(html));
+});
+
+test("approve: the final question names how many athletes and what is written", async () => {
+  resetState();
+  confirmAnswer = false;
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } }));
+  await openImports();
+  await openCandidate();
+  await approve();
+  assert.equal(confirmQuestions.at(-1), "Import this session for 1 athlete under the names shown? This writes their results and the activity.");
+  assert.equal(approveCalls().length, 0);
+});
+
+test("unlink: the question names the GPEXE id and the athlete from the link list", async () => {
+  resetState();
+  installFetchMock(gpexeServer({}));
+  await openImports();
+  confirmAnswer = false;
+  await act("training-load-gpexe-unlink", { linkId: "link-1" });
+  assert.equal(confirmQuestions.at(-1), `Unlink GPEXE athlete 101 from Ana Example? In sessions not imported yet, athlete 101 will be left out until linked again. Results already imported stay with Ana Example; if they are wrong, they ${ADMIN}`);
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/unlink")).length, 0, "declined: nothing sent");
+  confirmAnswer = true;
+  await act("training-load-gpexe-unlink", { linkId: "link-1" });
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-links/link-1/unlink")).length, 1);
+});
+
+test("unlink: a link not in the list gets the generic question, and still only that link is sent", async () => {
+  resetState();
+  installFetchMock(gpexeServer({}));
+  await openImports();
+  confirmAnswer = false;
+  await act("training-load-gpexe-unlink", { linkId: "link-unknown" });
+  assert.equal(confirmQuestions.at(-1), `Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again. Results already imported ${ADMIN}`);
+  assert.ok(!/undefined|null/.test(confirmQuestions.at(-1)));
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/unlink")).length, 0);
+  confirmAnswer = true;
+  await act("training-load-gpexe-unlink", { linkId: "link-unknown" });
+  assert.deepEqual(fetchCalls.filter((c) => c.url.endsWith("/unlink")).map((c) => c.url), [`/api/training-load/gpexe/teams/${TEAM_A}/athlete-links/link-unknown/unlink`]);
+});
+
+test("texts shown in the review never point to a list 'below' - the link list is behind the dialog", async () => {
+  // (a) every team athlete without a record is already linked
+  resetState();
+  const d = candidateDetail();
+  installFetchMock(gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: d } }) }));
+  await openImports();
+  state.trainingLoad.gpexe.links = [{ id: "link-9", gpexeAthleteId: "109", athleteId: "ath-2", athleteName: "Bo Example" }];
+  await openCandidate();
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /If athlete 104 is one of them, close this review and check "GPEXE athletes linked to this team"\./);
+
+  // (b) a lost answer to a link and (c) to an unlink
+  resetState();
+  const base = gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) });
+  installFetchMock(async (call) => {
+    if (call.url.endsWith("/athlete-links") && call.method === "POST") return { status: 502, body: undefined };
+    if (call.url.endsWith("/unlink")) return { status: 502, body: undefined };
+    return base(call);
+  });
+  await openImports();
+  await openCandidate();
+  queried = { "[data-gpexe-link-select='104']": { value: "ath-3" } };
+  await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
+  await act("training-load-gpexe-link-confirm");
+  html = renderTrainingLoadCoachHtml();
+  const dialog = () => { const h = renderTrainingLoadCoachHtml(); return h.slice(h.indexOf('class="gpexe-detail-body"')); };
+  assert.ok(!/ below/.test(dialog().replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "").replace(/Do the step below/g, "")), "no 'below' in the dialog after a lost link answer");
+  await act("training-load-gpexe-unlink", { linkId: "link-1" });
+  assert.match(dialog(), /We can(?:'|&#039;)t tell whether the link was removed\. Check the list &quot;GPEXE athletes linked to this team&quot; on the GPEXE imports page\./);
+  assert.ok(!/linked to this team&quot; below/.test(renderTrainingLoadCoachHtml()));
+});
+test("unlink from the link notice names the pair even when the link list could not be read again", async () => {
+  resetState();
+  let linked = false;
+  const base = gpexeServer({ onCandidate: () => ({ status: 200, body: { candidate: linkDetail() } }) });
+  installFetchMock(async (call) => {
+    if (call.url.endsWith("/athlete-links") && call.method === "POST") { linked = true; return base(call); }
+    if (call.url.endsWith("/athlete-links") && call.method === "GET" && linked) return { status: 502, body: undefined };
+    return base(call);
+  });
+  await openImports();
+  await openCandidate();
+  queried = { "[data-gpexe-link-select='104']": { value: "ath-3" } };
+  await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
+  await act("training-load-gpexe-link-confirm");
+  assert.ok(!state.trainingLoad.gpexe.links.some((l) => l.id === "link-2"), "the list was not read again");
+  confirmAnswer = false;
+  await act("training-load-gpexe-unlink", { linkId: "link-2" });
+  assert.match(confirmQuestions.at(-1), /^Unlink GPEXE athlete 104 from Dario Petrov Example\? /);
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/unlink")).length, 0);
 });

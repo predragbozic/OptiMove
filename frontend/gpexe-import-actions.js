@@ -17,6 +17,19 @@ import {
   verifyGpexeApproval,
 } from "./gpexe-import-data.js";
 
+// Names the link being removed (from the loaded link list, or the link just
+// made when the list could not be read again); a generic question otherwise.
+function unlinkQuestion(gx, linkId) {
+  const fromNotice = gx.lastLink && String(gx.lastLink.linkId) === String(linkId) ? { gpexeAthleteId: gx.lastLink.gpexeAthleteId, athleteName: gx.lastLink.athleteName } : null;
+  const link = (gx.links || []).find((l) => String(l.id) === String(linkId)) || fromNotice;
+  if (!link?.gpexeAthleteId || !link?.athleteName) {
+    return "Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again. Results already imported can't be changed here — contact a platform administrator.";
+  }
+  const id = link.gpexeAthleteId;
+  const name = link.athleteName;
+  return `Unlink GPEXE athlete ${id} from ${name}? In sessions not imported yet, athlete ${id} will be left out until linked again. Results already imported stay with ${name}; if they are wrong, they can't be changed here — contact a platform administrator.`;
+}
+
 function fieldValue(selector) {
   return globalThis.document?.querySelector?.(selector)?.value || "";
 }
@@ -70,7 +83,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // not offered either).
     if (reviewMadeBeforeLinkChange(candidate, gx)) return true;
     const athletes = (candidate.preview?.athletes || []).filter((a) => !a.notImported).length;
-    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"}? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}`;
+    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}`;
     if (!globalThis.window?.confirm?.(question)) return true;
     await approveGpexeCandidate({ acceptChanges: Boolean(changes && gx.detail.acceptChanges) }, renderTrainingLoad);
     return true;
@@ -122,7 +135,7 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-unlink") {
-    if (!globalThis.window?.confirm?.("Unlink this GPEXE athlete? Their next GPEXE sessions will be left out until linked again. Results already imported stay where they are.")) return true;
+    if (!globalThis.window?.confirm?.(unlinkQuestion(gx, action.dataset.linkId))) return true;
     await unlinkGpexeAthlete(action.dataset.linkId, renderTrainingLoad);
     return true;
   }

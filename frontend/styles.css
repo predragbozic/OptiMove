@@ -15085,8 +15085,11 @@ button.tests-assignment-card {
   background: var(--surface-soft);
 }
 .gpexe-link p,
-.gpexe-link-confirm p {
+.gpexe-link-confirm p,
+.gpexe-last-link p {
   margin: 0;
+  /* A long name without spaces wraps instead of widening the dialog. */
+  overflow-wrap: anywhere;
 }
 .gpexe-link-context {
   list-style: none;

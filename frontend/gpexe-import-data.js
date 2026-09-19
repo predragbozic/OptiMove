@@ -477,7 +477,7 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
       if (!isDefiniteRefusal(info)) {
         linksChanged();
         gx.linkConfirm = null;
-        gx.linkError = { ...info, message: "We can't tell whether the link was made. Check the list \"GPEXE athletes linked to this team\" below, and unlink it there if it is wrong." };
+        gx.linkError = { ...info, message: "We can't tell whether the link was made. Check the list \"GPEXE athletes linked to this team\" on the GPEXE imports page, and unlink it there if it is wrong." };
         await reloadGpexeLinks(generation).catch(() => {});
       }
     }
@@ -511,7 +511,7 @@ export async function unlinkGpexeAthlete(linkId, render) {
       // the reviews on screen are treated as made with the old links.
       if (!isDefiniteRefusal(info)) {
         linksChanged();
-        gx.linkError = { ...info, message: "We can't tell whether the link was removed. Check the list \"GPEXE athletes linked to this team\" below." };
+        gx.linkError = { ...info, message: "We can't tell whether the link was removed. Check the list \"GPEXE athletes linked to this team\" on the GPEXE imports page." };
         await reloadGpexeLinks(generation).catch(() => {});
       }
     }
