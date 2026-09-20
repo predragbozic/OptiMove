@@ -557,7 +557,12 @@ async function importResult(client, { result, identity, participantId, segmentId
 // The per-team import lock. Every import of a team — and the in-app preview,
 // which must read the state it describes under the same lock — takes it
 // first, inside its transaction.
+// The key is built from the team id exactly as the database prints it
+// (lower-case uuid), because v24's own refusal builds the same key from
+// `owner_team_id::text`; a caller that passes an upper-case id must not end
+// up on a different lock.
 export async function lockTeamForImport(client, ownerTeamId) {
+  ownerTeamId = String(ownerTeamId).toLowerCase();
   await client.query(`select pg_advisory_xact_lock(hashtextextended($1, ${IMPORT_LOCK_SEED}))`, [`gpexe-import-team:${ownerTeamId}`]);
 }
 

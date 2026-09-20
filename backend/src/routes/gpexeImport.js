@@ -54,13 +54,15 @@ async function teamAccess(req, res) {
 router.get("/teams/:teamId/status", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
+  // The change reason is an admin's own audit note (it may name another club
+  // or team), so only a platform admin gets it back.
   const [settings, lastCheck, approval] = await Promise.all([
     service.getTeamSettings(access.teamId),
     service.latestCheck(access.teamId),
     canApproveGpexeImport({ query }, req.user.id, access.teamId),
   ]);
   res.json({
-    settings,
+    settings: settings && (access.platformAdmin ? settings : { gpexeTeamId: settings.gpexeTeamId, configuredAt: settings.configuredAt }),
     importSwitch: service.applySwitchInfo(),
     lastCheck,
     viewer: { canApprove: approval.canApprove, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin },
@@ -72,7 +74,10 @@ router.put("/teams/:teamId/settings", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
   if (!access.platformAdmin) return forbidden(res);
-  res.json({ settings: await service.setTeamSettings(access.teamId, { gpexeTeamId: req.body?.gpexeTeamId, userId: req.user.id }) });
+  // `reason` is only required when an existing connection is changed; the
+  // service decides that under its own lock.
+  const reason = typeof req.body?.reason === "string" ? req.body.reason : null;
+  res.json({ settings: await service.setTeamSettings(access.teamId, { gpexeTeamId: req.body?.gpexeTeamId, reason, userId: req.user.id }) });
 }));
 
 router.post("/teams/:teamId/checks", handle(async (req, res) => {
