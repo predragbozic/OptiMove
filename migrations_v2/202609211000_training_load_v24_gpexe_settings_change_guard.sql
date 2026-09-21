@@ -195,44 +195,25 @@ create trigger gpexe_team_settings_no_truncate
   before truncate on training_load.gpexe_team_settings
   for each statement execute function training_load.gpexe_history_no_truncate();
 
--- 9. The GPEXE team a check read is what makes that run readable afterwards,
---    so it is written once and never edited (the v20 lesson: a source
---    identity that can move stops agreeing with the data it describes).
+-- 9. What a check row says about its origin is settled when the row is
+--    written and never edited afterwards (the v20 lesson: a source identity
+--    that can move stops agreeing with the data it describes).
+--
+--    A row from before v24 has no GPEXE team, and it stays that way for
+--    good. Reconstructing it later would mean trusting another column to say
+--    when the run happened, and nothing makes that column final either - a
+--    missing origin is honest, a reconstructed one only looks like proof.
+--    Every row written since v24 carries the right value: the INSERT guard
+--    below demands it.
 create function training_load.freeze_gpexe_check_team() returns trigger as $$
-declare
-  connected text;
 begin
   -- Which team ran the check is part of what the row says: moving it would
   -- give another team a run it never made, and take a blocker off this one.
   if new.owner_team_id is distinct from old.owner_team_id then
     raise exception 'gpexe_import_checks: the OptiMove team of check % is final', old.id;
   end if;
-  if new.gpexe_team_id is not distinct from old.gpexe_team_id then
-    return new;
-  end if;
-  if old.gpexe_team_id is not null then
-    raise exception 'gpexe_import_checks: the GPEXE team of check % is final', old.id;
-  end if;
-  -- A row from before v24 may still be given the team it read, but only the
-  -- one its own team is connected to, and only under the same lock the
-  -- connection change takes. If that cannot be proven, it stays empty: an
-  -- invented origin is worse than a missing one.
-  perform training_load.hold_gpexe_team_lock(new.owner_team_id, 'check');
-  -- The value that was in force when this check ran, not the one in force
-  -- now: a team connected to another GPEXE team since then would otherwise
-  -- get an origin its old run never had. The history keeps every value with
-  -- the time it was set (v22); the current row is the fallback for a check
-  -- older than the first recorded value.
-  select h.gpexe_team_id into connected
-    from training_load.gpexe_team_settings_history h
-   where h.owner_team_id = new.owner_team_id and h.configured_at <= old.started_at
-   order by h.configured_at desc limit 1;
-  if connected is null then
-    select gpexe_team_id into connected from training_load.gpexe_team_settings where owner_team_id = new.owner_team_id;
-  end if;
-  if connected is null or new.gpexe_team_id is distinct from connected then
-    raise exception 'gpexe_import_checks: check % can only record the GPEXE team its own team read then (%)',
-      old.id, coalesce(connected, 'none');
+  if new.gpexe_team_id is distinct from old.gpexe_team_id then
+    raise exception 'gpexe_import_checks: the GPEXE team of check % is final (an empty one from before v24 stays empty)', old.id;
   end if;
   return new;
 end;

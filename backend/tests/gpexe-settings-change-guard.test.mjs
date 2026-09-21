@@ -595,7 +595,7 @@ test("17. a database rule that refuses an unlink is answered with a stable code,
   assert.equal((await api(`/teams/${t.teamId}/athlete-links/${link.id}/unlink`, { method: "POST", cookie: t.coach.cookie })).status, 200, "and the real unlink still works");
 });
 
-test("25. an old empty check row cannot be given a foreign GPEXE team, filled while the lock is held, or moved to another team", async () => {
+test("25. an old empty check row is never filled and never moved, whatever the value", async () => {
   const t = await team();
   const other = await team();
   const legacy = await legacyCheck(t);
@@ -608,25 +608,17 @@ test("25. an old empty check row cannot be given a foreign GPEXE team, filled wh
   // (1) a GPEXE team the row's own team is not connected to
   await assert.rejects(
     () => admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = '888888' where id = $1`, [legacy.id]),
-    /can only record the GPEXE team its own team read then/,
+    /is final \(an empty one from before v24 stays empty\)/,
   );
   await unchanged("a foreign GPEXE team");
 
-  // (2) the right one, but while another connection holds the team lock
-  const holder = new pg.Client({ connectionString: db.url });
-  await holder.connect();
-  try {
-    await holder.query("begin");
-    await holder.query(`select pg_advisory_xact_lock(hashtextextended($1, 21))`, [`gpexe-import-team:${t.teamId}`]);
-    await assert.rejects(
-      () => admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = $2 where id = $1`, [legacy.id, t.gpexeTeamId]),
-      /try again when it has finished/,
-    );
-  } finally {
-    await holder.query("rollback").catch(() => {});
-    await holder.end();
-  }
-  await unchanged("while the lock was held");
+  // (2) its own team's GPEXE team: refused as well - the row is not
+  // reconstructed after the fact
+  await assert.rejects(
+    () => admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = $2 where id = $1`, [legacy.id, t.gpexeTeamId]),
+    /is final \(an empty one from before v24 stays empty\)/,
+  );
+  await unchanged("its own team's GPEXE team");
 
   // (3) moving the row to another team, keeping its own GPEXE team
   await assert.rejects(
@@ -636,13 +628,6 @@ test("25. an old empty check row cannot be given a foreign GPEXE team, filled wh
   await unchanged("moving the row");
   assert.equal((await admin.query(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`, [other.teamId])).rows[0].n, 0, "and nothing appeared on the other team");
 
-  // (4) the team's own GPEXE team, with the lock free: accepted, then final
-  await admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = $2 where id = $1`, [legacy.id, t.gpexeTeamId]);
-  assert.equal((await admin.query(`select gpexe_team_id from training_load.gpexe_import_checks where id = $1`, [legacy.id])).rows[0].gpexe_team_id, t.gpexeTeamId);
-  await assert.rejects(
-    () => admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = '999999' where id = $1`, [legacy.id]),
-    /is final/,
-  );
 });
 
 test("26. a finished check of a connected team cannot be moved to another team either", async () => {
@@ -884,7 +869,7 @@ test("23. a reason made only of whitespace is refused by the database as well", 
   assert.equal((await history(t.teamId)).length, 1);
 });
 
-test("24. a new check row carries the team's own GPEXE team, and an old empty one can be filled once", async () => {
+test("24. a new check row carries the team's own GPEXE team, and an empty one from before v24 stays empty", async () => {
   const t = await team();
   await assert.rejects(
     () => admin.query(
@@ -911,56 +896,14 @@ test("24. a new check row carries the team's own GPEXE team, and an old empty on
   )).rows[0];
   assert.ok(ok.id);
 
-  // A row from before v24 (its guard did not exist then) may be filled once,
-  // and only with the GPEXE team its own team read then, under the same lock
-  // (test 25 covers what is refused).
-  const legacy = await legacyCheck(t);
-  await admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = $2 where id = $1`, [legacy.id, t.gpexeTeamId]);
-  await assert.rejects(
-    () => admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = '555555' where id = $1`, [legacy.id]),
-    /is final/,
-    "once filled, it is frozen",
-  );
-});
-
-test("25b. an old empty check row is never given a GPEXE team its own team was not reading then", async () => {
-  const t = await team();
-  const first = t.gpexeTeamId;
-  const second = t.next();
-  assert.equal((await api(`/teams/${t.teamId}/settings`, { method: "PUT", cookie: t.padmin.cookie, body: { gpexeTeamId: second, reason: "the first number was a typo" } })).status, 200);
-
-  // A run from between the two recorded values: it read the first one. The
-  // time comes from the history itself, so the two are never the same instant.
-  const legacy = await legacyCheck(t);
-  await admin.query(
-    `update training_load.gpexe_import_checks set started_at = (
-       select h.configured_at + interval '1 microsecond' from training_load.gpexe_team_settings_history h
-        where h.owner_team_id = $2 and h.gpexe_team_id = $3)
-      where id = $1`,
-    [legacy.id, t.teamId, first],
-  );
-  await assert.rejects(
-    () => admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = $2 where id = $1`, [legacy.id, second]),
-    /can only record the GPEXE team its own team read then/,
-    "the team's current GPEXE team is not what this run read",
-  );
-  assert.equal((await admin.query(`select gpexe_team_id from training_load.gpexe_import_checks where id = $1`, [legacy.id])).rows[0].gpexe_team_id, null);
-  await admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = $2 where id = $1`, [legacy.id, first]);
-  assert.equal((await admin.query(`select gpexe_team_id from training_load.gpexe_import_checks where id = $1`, [legacy.id])).rows[0].gpexe_team_id, first);
-});
-
-test("25c. an old empty check row of a team with no connection at all stays empty", async () => {
-  // A team that never had a connection: nothing recorded, now or before.
-  const t = await team({ connect: false });
+  // A row from before v24 has no GPEXE team, and it keeps none.
   const legacy = await legacyCheck(t);
   await assert.rejects(
-    () => admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = '5001' where id = $1`, [legacy.id]),
-    /\(none\)/,
-    "with nothing recorded, an origin is not invented",
+    () => admin.query(`update training_load.gpexe_import_checks set gpexe_team_id = $2 where id = $1`, [legacy.id, t.gpexeTeamId]),
+    /is final \(an empty one from before v24 stays empty\)/,
   );
   assert.equal((await admin.query(`select gpexe_team_id from training_load.gpexe_import_checks where id = $1`, [legacy.id])).rows[0].gpexe_team_id, null);
 });
-
 test("27. a check is never deleted either, so its team cannot lose the record that blocks a change", async () => {
   const t = await team();
   const check = await leftoverCheck(t);
