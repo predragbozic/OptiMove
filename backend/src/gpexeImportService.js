@@ -88,8 +88,38 @@ export function resolveCheckWindow({ from, to } = {}, now = new Date()) {
 // ---------------------------------------------------------------------------
 
 export async function getTeamSettings(teamId) {
-  const row = (await query(`select gpexe_team_id, configured_at, change_reason from training_load.gpexe_team_settings where owner_team_id = $1`, [teamId])).rows[0];
-  return row ? { gpexeTeamId: row.gpexe_team_id, configuredAt: row.configured_at, changeReason: row.change_reason } : null;
+  const row = (await query(
+    `select s.gpexe_team_id, s.configured_at, s.change_reason,
+            coalesce(nullif(u.display_name, ''), u.full_name, u.email) as configured_by_name
+       from training_load.gpexe_team_settings s join public.users u on u.id = s.configured_by_user_id
+      where s.owner_team_id = $1`,
+    [teamId],
+  )).rows[0];
+  return row
+    ? { gpexeTeamId: row.gpexe_team_id, configuredAt: row.configured_at, changeReason: row.change_reason, configuredByName: row.configured_by_name }
+    : null;
+}
+
+// Every value the connection ever had, newest first. Read-only, and read by
+// the route only for a platform admin: a row carries the admin's own note,
+// which may name another club or team (same reason the current reason is
+// admin-only in /status). The history itself is append-only in the database
+// (v22 gpexe_team_settings_history_no_update_delete), so nothing here can
+// rewrite it.
+export const SETTINGS_HISTORY_LIMIT = 50;
+
+export async function listSettingsHistory(teamId) {
+  return (await query(
+    `select h.gpexe_team_id, h.configured_at, h.change_reason,
+            coalesce(nullif(u.display_name, ''), u.full_name, u.email) as configured_by_name
+       from training_load.gpexe_team_settings_history h join public.users u on u.id = h.configured_by_user_id
+      where h.owner_team_id = $1
+      order by h.configured_at desc, h.id desc
+      limit $2`,
+    [teamId, SETTINGS_HISTORY_LIMIT],
+  )).rows.map((r) => ({
+    gpexeTeamId: r.gpexe_team_id, configuredAt: r.configured_at, changeReason: r.change_reason, configuredByName: r.configured_by_name,
+  }));
 }
 
 export const SETTINGS_LOCK_TIMEOUT_MS = 3_000;
@@ -164,7 +194,7 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
         if (current) {
           throw new GpexeImportServiceError(
             409, "gpexe_team_change_blocked",
-            `This team already has ${what} from GPEXE team ${current.gpexe_team_id}. A GPEXE athlete or session id means something only inside its own GPEXE team, so the connection can no longer be changed here. Ask a platform admin to work through the runbook.`,
+            `This team already has ${what} from GPEXE team ${current.gpexe_team_id}. A GPEXE athlete or session id means something only inside its own GPEXE team, so the connection is final.`,
           );
         }
         // No connection recorded, yet something of this team already

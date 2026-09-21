@@ -470,6 +470,44 @@ test("settings: only a platform admin connects a GPEXE team, and one GPEXE team 
   assert.equal(status.body.approvalAvailable, true);
 });
 
+test("settings history: a platform admin reads every earlier value with its reason; the team's coach does not, and another team's coach gets the same 404 as a team that does not exist", async () => {
+  const org = await createGpexePilotOrg(admin, { athleteNames: ["H1"] });
+  const coach = await coachOf(org.teamId);
+  const padmin = await platformAdmin();
+  const first = String(nextGpexeTeamId++);
+  const second = String(nextGpexeTeamId++);
+  const put = (body, cookie = padmin.cookie) => api(`/teams/${org.teamId}/settings`, { method: "PUT", cookie, body });
+  assert.equal((await put({ gpexeTeamId: first, reason: "pilot team, owner approved" })).status, 200);
+  // The same value again is idempotent: it appends nothing and leaves the
+  // reason of the value in force alone.
+  assert.equal((await put({ gpexeTeamId: first, reason: "typed again by mistake" })).status, 200);
+  assert.equal((await put({ gpexeTeamId: second, reason: "the first number was a typo" })).status, 200);
+
+  const history = await api(`/teams/${org.teamId}/settings/history`, { cookie: padmin.cookie });
+  assert.equal(history.status, 200, JSON.stringify(history.body));
+  assert.deepEqual(history.body.history.map((row) => row.gpexeTeamId), [second, first], "newest first, and the repeat wrote no row");
+  assert.deepEqual(history.body.history.map((row) => row.changeReason), ["the first number was a typo", "pilot team, owner approved"]);
+  assert.ok(history.body.history.every((row) => row.configuredByName && row.configuredAt), JSON.stringify(history.body.history));
+
+  // A coach of the team may review imports, but an admin's note may name
+  // another club or team, so it is not theirs to read.
+  const asCoach = await api(`/teams/${org.teamId}/settings/history`, { cookie: coach.cookie });
+  assert.deepEqual([asCoach.status, asCoach.body.error], [403, "forbidden"]);
+
+  const otherOrg = await createGpexePilotOrg(admin, { athleteNames: ["H2"] });
+  const otherCoach = await coachOf(otherOrg.teamId);
+  assert.equal((await api(`/teams/${org.teamId}/settings/history`, { cookie: otherCoach.cookie })).status, 404);
+
+  // The current value: the admin screen also names who set it and why; the
+  // coach's own screen still gets only the number and when.
+  const adminStatus = await api(`/teams/${org.teamId}/status`, { cookie: padmin.cookie });
+  assert.equal(adminStatus.body.settings.gpexeTeamId, second);
+  assert.equal(adminStatus.body.settings.changeReason, "the first number was a typo");
+  assert.ok(adminStatus.body.settings.configuredByName);
+  const coachStatus = await api(`/teams/${org.teamId}/status`, { cookie: coach.cookie });
+  assert.deepEqual(Object.keys(coachStatus.body.settings).sort(), ["configuredAt", "gpexeTeamId"]);
+});
+
 test("approver grants: only a platform admin grants and revokes, only to an active coach of the team, and the right follows the role", async () => {
   const team = await setupTeam();
   const status = async (who) => (await api(`/teams/${team.teamId}/status`, { cookie: who.cookie })).body.viewer;
