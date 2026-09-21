@@ -88,23 +88,114 @@ export function resolveCheckWindow({ from, to } = {}, now = new Date()) {
 // ---------------------------------------------------------------------------
 
 export async function getTeamSettings(teamId) {
-  const row = (await query(`select gpexe_team_id, configured_at from training_load.gpexe_team_settings where owner_team_id = $1`, [teamId])).rows[0];
-  return row ? { gpexeTeamId: row.gpexe_team_id, configuredAt: row.configured_at } : null;
+  const row = (await query(`select gpexe_team_id, configured_at, change_reason from training_load.gpexe_team_settings where owner_team_id = $1`, [teamId])).rows[0];
+  return row ? { gpexeTeamId: row.gpexe_team_id, configuredAt: row.configured_at, changeReason: row.change_reason } : null;
 }
 
-export async function setTeamSettings(teamId, { gpexeTeamId, userId }) {
+export const SETTINGS_LOCK_TIMEOUT_MS = 3_000;
+const CHANGE_REASON_MAX = 500;
+
+// What makes a team's GPEXE connection unchangeable. A GPEXE athlete id and a
+// GPEXE session id mean something only inside one GPEXE team, while the rows
+// below are keyed by the OptiMove team alone - so the same link or candidate
+// would silently describe a different person or session under another GPEXE
+// team. Each entry is read inside the change's own transaction.
+const CHANGE_BLOCKERS = [
+  ["a session found by a check", `select 1 from training_load.gpexe_import_candidates where owner_team_id = $1 limit 1`],
+  ["a check", `select 1 from training_load.gpexe_import_checks where owner_team_id = $1 limit 1`],
+  ["a GPEXE athlete linked to an OptiMove athlete", `select 1 from training_load.gpexe_athlete_links where owner_team_id = $1 limit 1`],
+  // Defence in depth: an approval references its candidate
+  // (v23 candidate_id ... references gpexe_import_candidates on delete
+  // restrict) and a candidate that was imported is never deleted (v22
+  // protect_gpexe_import_candidate), so the first entry always answers first
+  // and no test can make this one answer alone. It stays for the day a
+  // candidate may be purged.
+  ["an approved import", `select 1 from training_load.gpexe_import_approvals where owner_team_id = $1 limit 1`],
+  ["imported GPEXE data", `select 1 from training_load.metric_source_connections c
+     where c.source_system = 'gpexe' and c.owner_scope = 'team' and c.owner_team_id = $1
+       and (c.state = 'active' or exists (select 1 from training_load.metric_events e where e.source_connection_id = c.id)) limit 1`],
+];
+
+function changeReason(raw) {
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw new GpexeImportServiceError(400, "change_reason_required", "Changing the GPEXE team of a team that is already connected needs a reason.");
+  }
+  const reason = raw.trim();
+  if (reason.length > CHANGE_REASON_MAX) {
+    throw new GpexeImportServiceError(400, "change_reason_too_long", `A reason is at most ${CHANGE_REASON_MAX} characters.`);
+  }
+  return reason;
+}
+
+// Connecting a team to its GPEXE team, and changing that connection.
+//
+// One transaction, under the same team import lock an approval takes, so no
+// import can commit between the check below and the write. The same value
+// again writes nothing at all: no new history row, and the reason of the
+// current value is left alone (a reason can never be rewritten without a real
+// change). A different value is refused - with nothing written - as soon as
+// anything depends on the current one.
+export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId }) {
   if (typeof gpexeTeamId !== "string" || !/^[0-9]{1,12}$/.test(gpexeTeamId)) {
     throw new GpexeImportServiceError(400, "invalid_gpexe_team_id", "gpexeTeamId must be a numeric GPEXE team id.");
   }
+  const client = await pool.connect();
   try {
-    await query(
-      `insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id) values ($1,$2,$3)
-       on conflict (owner_team_id) do update set gpexe_team_id = excluded.gpexe_team_id, configured_by_user_id = excluded.configured_by_user_id, configured_at = now()`,
-      [teamId, gpexeTeamId, userId],
+    await client.query("begin");
+    // A team whose import or check is running must not make this wait forever.
+    await client.query(`set local lock_timeout = '${SETTINGS_LOCK_TIMEOUT_MS}ms'`);
+    await lockTeamForImport(client, teamId);
+    const current = (await client.query(
+      `select gpexe_team_id from training_load.gpexe_team_settings where owner_team_id = $1 for update`,
+      [teamId],
+    )).rows[0];
+
+    if (current && current.gpexe_team_id === gpexeTeamId) {
+      // Idempotent: nothing is written, so nothing is appended to the history.
+      await client.query("commit");
+      return getTeamSettings(teamId);
+    }
+
+    // A change needs a reason; a first connection may carry one and it is
+    // kept (an empty or whitespace-only one is refused either way).
+    let why = current ? changeReason(reason) : (typeof reason === "string" && reason.trim() ? changeReason(reason) : null);
+    for (const [what, sql] of CHANGE_BLOCKERS) {
+      if ((await client.query(sql, [teamId])).rowCount) {
+        if (current) {
+          throw new GpexeImportServiceError(
+            409, "gpexe_team_change_blocked",
+            `This team already has ${what} from GPEXE team ${current.gpexe_team_id}. A GPEXE athlete or session id means something only inside its own GPEXE team, so the connection can no longer be changed here. Ask a platform admin to work through the runbook.`,
+          );
+        }
+        // No connection recorded, yet something of this team already
+        // describes one: a first connection would silently adopt it.
+        throw new GpexeImportServiceError(
+          409, "gpexe_orphan_data",
+          `This team already has ${what} from a GPEXE team that is not recorded. Connecting it now would read that as the new team's own data, so it is refused. There is no procedure for clearing it yet: a platform admin has to decide what happens to that data first (docs/runbooks/gpexe-in-app-import.md, "Refusals when connecting or linking").`,
+        );
+      }
+    }
+
+    await client.query(
+      `insert into training_load.gpexe_team_settings (owner_team_id, gpexe_team_id, configured_by_user_id, change_reason) values ($1,$2,$3,$4)
+       on conflict (owner_team_id) do update set gpexe_team_id = excluded.gpexe_team_id, configured_by_user_id = excluded.configured_by_user_id,
+         configured_at = now(), change_reason = excluded.change_reason`,
+      [teamId, gpexeTeamId, userId, why],
     );
+    await client.query("commit");
   } catch (error) {
+    await client.query("rollback").catch(() => {});
     if (error.code === "23505") throw new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
-    throw error;
+    if (error.code === "55P03" || error.code === "40P01") {
+      throw new GpexeImportServiceError(409, "gpexe_change_busy", "A GPEXE check, import or connection change is running for this team. Try again when it has finished.");
+    }
+    if (error instanceof GpexeImportServiceError) throw error;
+    // Anything else (a database guard firing, a bug): a stable code, and the
+    // database's own text never reaches the caller.
+    console.error(`[gpexe] the GPEXE team of ${teamId} could not be set: ${error?.code ?? ""} ${error?.message}`);
+    throw new GpexeImportServiceError(500, "internal_error", "The GPEXE team could not be set; nothing was changed.");
+  } finally {
+    client.release();
   }
   return getTeamSettings(teamId);
 }
@@ -209,8 +300,11 @@ export async function latestCheck(teamId) {
 // Starts a check and returns it right away; the fetch runs in the
 // background (GPEXE can take minutes). `wait` is for tests and the CLI.
 export async function startCheck(teamId, { userId, window, wait = false }) {
+  // A first, unlocked read only to fail early (no GPEXE team, no token); the
+  // value the check really uses is read again under the lock below.
   const settings = await getTeamSettings(teamId);
   if (!settings) throw new GpexeImportServiceError(409, "gpexe_team_not_configured", "No GPEXE team is configured for this team yet.");
+  let gpexeTeamId = settings.gpexeTeamId;
   let client;
   try {
     client = clientFactory();
@@ -228,18 +322,42 @@ export async function startCheck(teamId, { userId, window, wait = false }) {
       where owner_team_id = $1 and status = 'running' and heartbeat_at < now() - make_interval(mins => $2)`,
     [teamId, CHECK_STALE_AFTER_MINUTES],
   );
+  // The check's own GPEXE team is decided here, in a short transaction under
+  // the same team import lock a settings change takes, and written on the
+  // check row. So a check and a change of the connection can never overlap:
+  // whichever takes the lock first wins, and a check that exists then blocks
+  // the change. No GPEXE request is made while this transaction is open.
   let row;
+  const lockClient = await pool.connect();
   try {
-    row = (await query(
-      `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, window_from, window_to) values ($1,$2,$3,$4) returning *`,
-      [teamId, userId, window.from, window.to],
+    await lockClient.query("begin");
+    await lockClient.query(`set local lock_timeout = '${SETTINGS_LOCK_TIMEOUT_MS}ms'`);
+    await lockTeamForImport(lockClient, teamId);
+    const locked = (await lockClient.query(
+      `select gpexe_team_id from training_load.gpexe_team_settings where owner_team_id = $1`,
+      [teamId],
     )).rows[0];
+    if (!locked) throw new GpexeImportServiceError(409, "gpexe_team_not_configured", "No GPEXE team is configured for this team yet.");
+    gpexeTeamId = locked.gpexe_team_id;
+    row = (await lockClient.query(
+      `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, window_from, window_to, gpexe_team_id) values ($1,$2,$3,$4,$5) returning *`,
+      [teamId, userId, window.from, window.to, gpexeTeamId],
+    )).rows[0];
+    await lockClient.query("commit");
   } catch (error) {
+    await lockClient.query("rollback").catch(() => {});
     if (error.code === "23505") throw new GpexeImportServiceError(409, "check_already_running", "A check is already running for this team.");
-    throw error;
+    if (error.code === "55P03" || error.code === "40P01") {
+      throw new GpexeImportServiceError(409, "gpexe_change_busy", "A GPEXE check, import or connection change is running for this team. Try again when it has finished.");
+    }
+    if (error instanceof GpexeImportServiceError) throw error;
+    console.error(`[gpexe] the check of ${teamId} could not be started: ${error?.code ?? ""} ${error?.message}`);
+    throw new GpexeImportServiceError(500, "internal_error", "The check could not be started; nothing was written.");
+  } finally {
+    lockClient.release();
   }
 
-  const job = runCheck(row.id, { teamId, userId, gpexeTeamId: settings.gpexeTeamId, window, gpexe: client });
+  const job = runCheck(row.id, { teamId, userId, gpexeTeamId, window, gpexe: client });
   if (wait) await job;
   else job.catch((error) => console.error(`[gpexe] check ${row.id} failed outside its own handler: ${error?.name}`));
   return checkView(wait ? (await query(`select * from training_load.gpexe_import_checks where id = $1`, [row.id])).rows[0] : row);
@@ -521,10 +639,14 @@ export async function getCandidate(teamId, candidateId) {
 // ---------------------------------------------------------------------------
 
 function mapTriggerError(error, fallbackCode) {
+  if (error instanceof GpexeImportServiceError) return error;
   if (error.code === "23505") return new GpexeImportServiceError(409, "already_linked", "This GPEXE athlete or this OptiMove athlete is already linked in this team.");
   if (error.code === "42501") return new GpexeImportServiceError(403, "forbidden", "Not allowed.");
   if (error.code === "P0001") return new GpexeImportServiceError(409, fallbackCode, "The change was refused by the database rules.");
-  return error;
+  // Any other database code (a constraint nobody mapped, a bug): a stable
+  // answer, and the database's own text stays in the log.
+  console.error(`[gpexe] ${fallbackCode}: unmapped database error ${error?.code ?? ""} ${error?.message}`);
+  return new GpexeImportServiceError(500, "internal_error", "The change failed on the server; nothing was written.");
 }
 
 export async function listAthleteLinks(teamId) {
@@ -536,26 +658,68 @@ export async function listAthleteLinks(teamId) {
   )).rows.map((r) => ({ id: r.id, gpexeAthleteId: r.gpexe_athlete_id, athleteId: r.athlete_id, athleteName: r.athlete_name, linkedAt: r.linked_at }));
 }
 
+// A link says which OptiMove athlete a GPEXE athlete number belongs to, and
+// that number means something only inside the team's own GPEXE team. So both
+// writes take the same team import lock a connection change takes: a link
+// made while a change is being decided would otherwise be invisible to its
+// guard and end up describing a different GPEXE team's athlete
+// (db-reviewer, 2026-09-20).
+async function writeUnderTeamLock(teamId, write) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query(`set local lock_timeout = '${SETTINGS_LOCK_TIMEOUT_MS}ms'`);
+    await lockTeamForImport(client, teamId);
+    const result = await write(client);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error.code === "55P03" || error.code === "40P01") {
+      throw new GpexeImportServiceError(409, "gpexe_change_busy", "A GPEXE check, import or connection change is running for this team. Try again when it has finished.");
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function linkAthlete(teamId, { gpexeAthleteId, athleteId, userId }) {
   if (typeof gpexeAthleteId !== "string" || !/^[0-9]{1,12}$/.test(gpexeAthleteId)) throw new GpexeImportServiceError(400, "invalid_gpexe_athlete_id", "gpexeAthleteId must be a numeric GPEXE athlete id.");
   try {
-    const row = (await query(
-      `insert into training_load.gpexe_athlete_links (owner_team_id, gpexe_athlete_id, athlete_id, linked_by_user_id) values ($1,$2,$3,$4) returning id`,
-      [teamId, gpexeAthleteId, athleteId, userId],
-    )).rows[0];
-    return { id: row.id };
+    return await writeUnderTeamLock(teamId, async (client) => {
+      // A GPEXE athlete number belongs to a GPEXE team: without the team's
+      // connection there is nothing it could mean.
+      const connected = (await client.query(`select 1 from training_load.gpexe_team_settings where owner_team_id = $1`, [teamId])).rowCount;
+      if (!connected) throw new GpexeImportServiceError(409, "gpexe_team_not_configured", "No GPEXE team is configured for this team yet, so a GPEXE athlete cannot be linked.");
+      const row = (await client.query(
+        `insert into training_load.gpexe_athlete_links (owner_team_id, gpexe_athlete_id, athlete_id, linked_by_user_id) values ($1,$2,$3,$4) returning id`,
+        [teamId, gpexeAthleteId, athleteId, userId],
+      )).rows[0];
+      return { id: row.id };
+    });
   } catch (error) {
+    if (error instanceof GpexeImportServiceError) throw error;
     throw mapTriggerError(error, "athlete_not_in_team");
   }
 }
 
 export async function unlinkAthlete(teamId, { linkId, userId }) {
-  const r = await query(
-    `update training_load.gpexe_athlete_links set unlinked_at = now(), unlinked_by_user_id = $3
-      where id = $1 and owner_team_id = $2 and unlinked_at is null returning id`,
-    [linkId, teamId, userId],
-  );
-  return r.rowCount === 1;
+  try {
+    return await writeUnderTeamLock(teamId, async (client) => {
+      const r = await client.query(
+        `update training_load.gpexe_athlete_links set unlinked_at = now(), unlinked_by_user_id = $3
+          where id = $1 and owner_team_id = $2 and unlinked_at is null returning id`,
+        [linkId, teamId, userId],
+      );
+      return r.rowCount === 1;
+    });
+  } catch (error) {
+    // Same as linkAthlete: a database rule that refuses this is answered with
+    // a stable code, never with the database's own text.
+    if (error instanceof GpexeImportServiceError) throw error;
+    throw mapTriggerError(error, "link_not_removed");
+  }
 }
 
 // ---------------------------------------------------------------------------

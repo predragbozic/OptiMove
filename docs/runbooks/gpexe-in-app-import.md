@@ -61,6 +61,26 @@ coordinates, who submitted a session, and roles.
    - The status route shows the right (`viewer.canApprove`). The approval
      checks it again in its own transaction, and holds it until it commits.
 
+### Refusals when connecting or linking
+
+The connection a team reads from decides what every GPEXE athlete number and
+session id in that team means, so it is only changeable while nothing depends
+on it. Both the application and the database (migration v24) refuse the rest,
+and the database refuses it whoever writes it, psql included.
+
+| Answer | What it means | What to do |
+|---|---|---|
+| 400 `change_reason_required` / `change_reason_too_long` | A change of an existing connection carries no reason, or one longer than 500 characters. | Repeat with a short reason. A first connection needs none, but one given is kept. |
+| 409 `gpexe_team_taken` | That GPEXE team already feeds another OptiMove team. | Check the number. One GPEXE team feeds one OptiMove team. |
+| 409 `gpexe_team_change_blocked` | The team already has a check, a session found by a check, an athlete link, an approval or imported GPEXE data from its current GPEXE team. | The connection stays. Moving a team to another GPEXE team is not supported; it would make existing links and sessions describe other people. |
+| 409 `gpexe_orphan_data` | No connection is recorded, yet the team already carries GPEXE data (after a restore, or a manual change). | **Not solved by this runbook.** A platform admin decides what happens to that data before the team is connected; the decision belongs with the Disconnect work, which is not designed yet. Do not disable the triggers to force it. |
+| 409 `gpexe_change_busy` | A check, an import or a connection change is running for that team. | Try again when it has finished. |
+| 409 `gpexe_team_not_configured` | An athlete link (or a check) was asked for before the team has a GPEXE team. | Connect the team first. |
+
+Deleting a connection is refused as well: there is no Disconnect yet, and the
+migration that designs it decides what happens to the candidates, links,
+approvals and imported events of that team.
+
 ## Who may do what
 
 | Action | Who |

@@ -338,8 +338,11 @@ test("check: one at a time per team; a check that stopped reporting is closed as
 
   // A running check whose server went away: no heartbeat for too long.
   const stale = (await admin.query(
-    `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, window_from, window_to, heartbeat_at, started_at)
-     values ($1,$2,'2026-09-01','2026-09-14', now() - interval '1 hour', now() - interval '1 hour') returning id`,
+    // v24: a check row records the GPEXE team it reads, so this stand-in for
+    // an abandoned run carries the team's own connection.
+    `insert into training_load.gpexe_import_checks (owner_team_id, requested_by_user_id, window_from, window_to, heartbeat_at, started_at, gpexe_team_id)
+     values ($1,$2,'2026-09-01','2026-09-14', now() - interval '1 hour', now() - interval '1 hour',
+             (select gpexe_team_id from training_load.gpexe_team_settings where owner_team_id = $1)) returning id`,
     [team.teamId, team.coach.id],
   )).rows[0].id;
   service.setGpexeClientFactory(fakeGpexe({ bundles: [] }));
@@ -678,8 +681,12 @@ test("database: history tables refuse TRUNCATE, an imported candidate is never d
   assert.equal((await admin.query(`select raw_bundle, status from training_load.gpexe_import_candidates where id = $1`, [id])).rows[0].status, "imported");
 
   const other = await createGpexePilotOrg(admin, { athleteNames: ["Q"] });
-  for (const gpexeTeamId of ["88001", "88002"]) {
-    assert.equal((await api(`/teams/${other.teamId}/settings`, { method: "PUT", cookie: team.padmin.cookie, body: { gpexeTeamId } })).status, 200);
+  // Nothing depends on this team's connection yet, so it may still be
+  // changed - with a reason, which v24 requires for a change (see
+  // gpexe-settings-change-guard.test.mjs).
+  for (const [gpexeTeamId, reason] of [["88001", null], ["88002", "connected to the wrong GPEXE team"]]) {
+    const body = reason ? { gpexeTeamId, reason } : { gpexeTeamId };
+    assert.equal((await api(`/teams/${other.teamId}/settings`, { method: "PUT", cookie: team.padmin.cookie, body })).status, 200);
   }
   const history = (await admin.query(`select gpexe_team_id from training_load.gpexe_team_settings_history where owner_team_id = $1 order by configured_at, gpexe_team_id`, [other.teamId])).rows.map((r) => r.gpexe_team_id);
   assert.deepEqual(history, ["88001", "88002"]);
