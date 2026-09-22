@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { enterDataSourcesSection } from "./data-sources-data.js";
 import { filterOrganizationSelect, syncOrganizationTeamSelect, validateFilterableSelects } from "./organization-select.js";
 import { state } from "./state.js";
 
@@ -259,6 +260,9 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
   if (type === "organization-section") {
     state.organization.section = action.dataset.section || "overview";
     state.organization.addFormOpen = false;
+    // Opening Data sources reads the chosen team again: another admin may
+    // have changed its connection or a grant since it was last read.
+    if (state.organization.section === "dataSources") enterDataSourcesSection();
     void renderOrganizationPanel({ refresh: false });
     return true;
   }

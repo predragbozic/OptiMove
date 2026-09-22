@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-19. Last `origin/main` commit checked: `ed49031` (merge of PR #110,
-`feature/gpexe-in-app-import-f3` → `main`).
+Last reviewed: 2026-09-21. Last `origin/main` commit checked: `4a60fa7` (merge of PR #113,
+`feature/gpexe-settings-change-guard` → `main`).
 
 ## Active phase
 
@@ -20,7 +20,21 @@ Alongside it, the **GPEXE import groundwork** is merged:
 
 On top of it, the **in-app GPEXE import** phases F1 (check, candidates, preview; PR #106)
 and F2 (approve and import; PR #107) are merged, and so are the coach screens F3a
-(PR #110). Next is F3b (Settings → Teams admin setup).
+(PR #110), the documentation consolidation (PR #112) and the settings change guard with
+migration v24 (PR #113).
+
+**F3b, minimal, is the active phase**: a platform-admin-only `Settings → Data sources`
+sub-tab (branch `feature/data-sources-settings-f3b`). Its scope is the administrative
+precondition for one controlled pilot and nothing more: choose a team, see and set that
+team's GPEXE connection (first connect without a reason, a change only with one, the same
+value idempotent, every v24 refusal translated into plain administrator language), and
+grant or revoke a coach's right to approve an import, each with a reason and a
+confirmation that names the coach and the team. Deliberately out of it: Disconnect,
+retention UI, the import switch, any real import, and the coach-facing "GPEXE imports"
+screen, whose rename and redesign are a separate, later job. One copy-only exception
+there, approved by the owner at the external review of PR #114: the three messages that
+named "Settings > Teams" now name "Settings > Data sources", because that is where the
+setting actually lives; nothing else on that screen was touched.
 
 All of it is code only. **`GPEXE_IMPORT_APPLY_ENABLED` is off in every environment and no
 GPEXE data has been imported into the local OPTIMOVE or the deployed database**, so
@@ -49,6 +63,29 @@ nothing imported is visible in the app.
   - Reviewed by `code-reviewer`, `mobile-qa` and the `ux-design-reviewer` agent. That
     agent was added to `main` by PR #111, which is merged; this stacked docs branch predates it.
 
+- **A team's GPEXE connection is only changeable while nothing depends on it** — PR #113
+  (`4a60fa7`, reviewed head `238de27`), migration v24
+  (`migrations_v2/202609211000_training_load_v24_gpexe_settings_change_guard.sql`).
+  - `PUT /settings` allows the first connection, an idempotent repeat of the same value,
+    and a change only while the team has no check, candidate, athlete link, approval or
+    imported GPEXE data. Otherwise: 409 `gpexe_team_change_blocked`. The guard and the
+    write are one transaction under the team import lock.
+  - `change_reason` (v24): a first connection may carry one, a change requires one
+    (trimmed, non-empty, at most 500 characters), a repeat of the same value writes no
+    history row and never overwrites the reason. The history stays append-only and
+    admin-only; rows from before v24 keep a NULL reason.
+  - The database refuses the rest whoever writes it, psql included: the settings row is
+    never moved to another team, never deleted or truncated; a first connection over
+    leftover GPEXE data is refused (409 `gpexe_orphan_data`); an athlete link needs the
+    connection; a check row carries the team's current GPEXE team and that identity is
+    final from the row's creation (a row from before v24 stays empty forever); a check
+    row is never deleted.
+  - `startCheck` takes the team lock in one short transaction, writes the check row with
+    the locked GPEXE identity, commits, and only then calls GPEXE.
+  - No Disconnect, nothing deleted or re-pointed, the import switch untouched.
+  - External review by the owner: three rounds; `db-reviewer` and `code-reviewer` READY.
+- **Documentation consolidation** — PR #112 (`a18b9cb`), docs only: it replaced the
+  stacked documentation PRs #98, #100, #105 and #109, which were closed as superseded.
 - **Reviewer rule for transactions with an external effect** — PR #108 (`636fdf3`),
   `.claude/agents/code-reviewer.md` and `db-reviewer.md` only. For a change to a
   transaction that writes important data (import, deletion, approval), the reviewers
@@ -312,6 +349,13 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `a18b9cb` (PR #112) with `ok: true` on 2026-09-21, and
+  `4a60fa7` (PR #113) with `ok: true` on 2026-09-21 after that merge.
+- **v24 on the deployed database is inferred** from the successful start of the deploy of
+  `4a60fa7` (`npm start` runs `node src/migrate.js &&` the server). The deployed database
+  itself was **not** queried.
+- **v22, v23 and v24 are not applied to the local OPTIMOVE database**, which is at v21.
+  Applying them is a separate decision.
 - `/api/health` reported commit `0de6afb` on 2026-09-17.
 - `/api/health` reported commit `6c5b3a6` on 2026-09-18.
 - `/api/health` reported commit `96d876d` (F1) and later `cb3399a` (F2) on 2026-09-18.
@@ -324,8 +368,6 @@ nothing imported is visible in the app.
 - **v22 and v23 on the deployed database are inferred** from the successful start of
   those deploys (`npm start` runs `node src/migrate.js &&` the server). The deployed
   database itself was **not** queried.
-- **v22 and v23 are not applied to the local OPTIMOVE database**, which is at v21.
-  Applying them is a separate decision.
 - `GPEXE_IMPORT_APPLY_ENABLED` is off in both environments. No real import has been run.
 - v20 and v21 on the deployed database are **inferred** from the successful start of
   the deploy of `6c5b3a6` (`npm start` runs `node src/migrate.js &&` the server). The
@@ -370,7 +412,7 @@ pre-existing; pass/fail counts don't belong in this file
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
 - **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
-  F1, F2 and F3a are merged (see above). F3b (Settings → Teams admin setup) is the next
+  F1, F2 and F3a are merged (see above). F3b (the Settings → Data sources admin screen, PR #114) is the next
   step; F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
   environment until conditions 1–3 hold there; condition 4 is required before regular
   production imports:
@@ -433,6 +475,18 @@ pre-existing; pass/fail counts don't belong in this file
     - **The review shows participation and the GPS measurement separately.** A missing
       value is not a zero. "GPS was not worn" is shown only when the data confirms it or
       a coach enters it.
+- **The coach's "GPEXE imports" screen in a workspace with no team** (owner, 2026-09-19;
+  NOT in the minimal F3b, which changed only the three "Settings > Data sources"
+  pointers on that screen). The top note
+  "GPEXE imports work one team at a time; choose the team below."
+  (`frontend/training-load-view.js`, `section === "imports"`) is wrong when the active
+  workspace has no team: there is no choice below, and it is shown together with "No team
+  in this workspace…", so two messages contradict each other. Proposal: one clear message
+  ("GPEXE imports are available in a team workspace. Switch to a team workspace using the
+  workspace menu above.") and possibly an action that opens the EXISTING workspace menu —
+  never a second team picker. `ux-design-reviewer` decides whether the tab stays visible
+  for discovery or is hidden for users with no available team workspace. This belongs
+  with the later rename/redesign of that screen.
 - **Athletes who trained without a GPS record** (owner, 2026-09-18). Scheduled after
   phases F1–F3 of the in-app import. Options, none of them decided yet:
   - participation only, with no values;
@@ -529,12 +583,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**F3b of the in-app GPEXE import: Settings → Teams admin setup**, with the switch left off
-and no real import. The F3a deploy was healthy on 2026-09-19 by `/api/health`, the served
-bundle and the 401 check (see above); a signed-in open of the tab on the deployed app was
-not done. F3b starts when the owner schedules it. After that, conditions
-1–3 under Separate tasks come before F4, the first real local import, and condition 4
-before regular production imports.
+**The minimal F3b (`Settings → Data sources`) is in progress** on
+`feature/data-sources-settings-f3b`, with the switch left off and no real import; see
+Active phase for its exact scope. After it is merged, conditions 1-3 under Separate tasks
+come before F4, the first real local import, and condition 4 before regular production
+imports. The rename and UX redesign of the coach's "GPEXE imports" screen (including the
+no-team-workspace message under Separate tasks) is its own later job.
 
 The other Separate tasks wait until the owner schedules them.
 

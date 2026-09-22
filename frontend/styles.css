@@ -15226,3 +15226,276 @@ button.tests-assignment-card {
     width: 100%;
   }
 }
+
+/* Settings -> Data sources (F3b): a platform-admin screen. One card per
+   source, the state first, every write behind a named confirmation. Carbon
+   informs the density and hierarchy; nothing from Carbon runs here.
+
+   This block must stay AFTER .plain-button (which sets min-height: 40px):
+   the 44px touch targets below tie with it on specificity and win on source
+   order alone. A new block appended after this one must not re-declare
+   min-height for these buttons. */
+.data-sources {
+  display: grid;
+  gap: 16px;
+}
+.data-sources-head h3 {
+  margin: 2px 0 4px;
+}
+.data-sources-head p {
+  margin: 0;
+  max-width: 62ch;
+}
+.data-sources-team-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+.data-sources-team-form .search-field {
+  min-width: 240px;
+  flex: 1 1 240px;
+}
+/* The shared .search-field input is 42px tall; every control on this screen
+   is a real touch target (44px) at every width, and 16px so iOS does not
+   zoom on focus. */
+.data-sources input,
+.data-sources select,
+.data-sources textarea,
+/* Beats .filterable-select-field input[type="search"]'s own 34px minimum. */
+.data-sources .filterable-select-field input[type="search"] {
+  min-height: 44px;
+  font-size: 16px;
+}
+.data-sources input[type="hidden"] {
+  min-height: 0;
+}
+.data-sources-team-form button {
+  min-height: 44px;
+}
+.data-sources-team {
+  margin: 0;
+  font-weight: 600;
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+.data-sources-empty {
+  margin: 0;
+}
+.data-sources-notice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.data-sources-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.data-sources-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.data-sources-card-head h4 {
+  margin: 0;
+}
+.data-sources-state {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+.data-sources-state.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.data-sources-switch {
+  margin: 0;
+}
+.data-sources-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 0;
+}
+.data-sources-facts dt {
+  color: var(--muted);
+}
+.data-sources-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.data-sources-primary {
+  justify-self: start;
+  min-height: 44px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.data-sources .plain-button.ghost {
+  background: transparent;
+  border-color: var(--line-strong);
+  color: var(--muted);
+  font-weight: 600;
+}
+/* Taking a right away is the one destructive button on the screen. */
+.data-sources-people .plain-button.ghost {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.data-sources-form,
+.data-sources-confirm {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.data-sources-form-title {
+  margin: 0;
+  font-weight: 600;
+}
+.data-sources-form textarea,
+.data-sources-form input,
+.data-sources-form select,
+.data-sources-confirm textarea {
+  font-size: 16px;
+  min-height: 44px;
+}
+.data-sources-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.data-sources-form-actions button {
+  min-height: 44px;
+  flex: 0 1 auto;
+}
+.data-sources-warn {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--danger);
+}
+.data-sources-confirm p {
+  margin: 0;
+}
+.data-sources-confirm-line {
+  font-size: 1.02rem;
+  overflow-wrap: anywhere;
+}
+.data-sources-error {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  background: #fdf2f2;
+}
+.data-sources-error p {
+  margin: 0;
+}
+.data-sources-tech {
+  margin-top: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.data-sources-tech summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.data-sources-tech dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+.data-sources-tech dd {
+  margin: 0;
+}
+.data-sources-people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.data-sources-people li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.data-sources-people li > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  /* A name can be an email, and a reason can be 500 characters without a
+     space: both wrap instead of widening the row on a phone. */
+  overflow-wrap: anywhere;
+}
+.data-sources-people button {
+  min-height: 44px;
+}
+.data-sources-history {
+  font-size: 0.9rem;
+}
+.data-sources-history summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.data-sources-history ul {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.data-sources-history li {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-soft);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.data-sources-history-reason {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  .data-sources-team-form .search-field,
+  .data-sources-team-form button,
+  .data-sources-primary,
+  .data-sources-form-actions button,
+  .data-sources-people button {
+    width: 100%;
+  }
+  .data-sources-people li {
+    align-items: stretch;
+  }
+  .data-sources-facts {
+    grid-template-columns: 1fr;
+    gap: 0 0;
+  }
+  .data-sources-facts dt {
+    margin-top: 8px;
+  }
+}

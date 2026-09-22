@@ -263,7 +263,7 @@ test("4. every kind of dependent data blocks the change on its own, and nothing 
     const r = await api(`/teams/${t.teamId}/settings`, { method: "PUT", cookie: t.padmin.cookie, body: { gpexeTeamId: second, reason: "team was wrong" } });
     assert.equal(r.status, 409, `${what}: ${JSON.stringify(r.body)}`);
     assert.equal(r.body.error, "gpexe_team_change_blocked", what);
-    assert.match(r.body.message, /can no longer be changed here/, what);
+    assert.match(r.body.message, /the connection is final/, what);
     assert.match(r.body.message, names[what], `${what}: the blocker for this kind of data is the one that answered`);
     const after = await settingsRow(t.teamId);
     assert.equal(after.gpexe_team_id, before.gpexe_team_id, `${what}: nothing written`);

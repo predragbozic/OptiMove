@@ -900,6 +900,17 @@ export const createInitialState = () => ({
   programTagEditor: { open: false, planId: "", programName: "", tags: [], options: [], error: "" },
   programInfo: { open: false, program: null },
   organization: { data: null, error: "", selectedClubId: "", selectedTeamId: "", section: "overview", addFormOpen: false, assignOpen: false, accessOpen: false, showArchivedAthletes: false, showArchivedTeamMembers: false, showArchivedClubMembers: false, showDisabledUsers: false, requestStatus: "all", requestAthleteId: "all", requestError: "", requestMessage: "" },
+  // Settings -> Data sources (F3b), platform admin only: which OptiMove team
+  // is being administered, its GPEXE connection, that connection's history
+  // and who may approve its imports. The forms are drafts until a
+  // confirmation is answered - nothing here is sent while it is being typed.
+  dataSources: {
+    teamId: "", loading: false, error: null, status: null, history: null, approvers: null, generation: 0, notice: "", noticeFor: "",
+    connectOpen: false, connectDraft: { gpexeTeamId: "", reason: "" }, connectConfirm: null, connectBusy: false, connectError: null,
+    grantOpen: false, grantConfirm: null, grantBusy: false, grantError: null,
+    revokeConfirm: null, revokeBusy: false, revokeError: null,
+    historyOpen: false,
+  },
   organizationEditor: { open: false, type: "", row: null },
   organizationUserManage: { open: false, userId: "", pending: false, error: "" },
   organizationInvite: { open: false, athleteId: "", pending: false, error: "", inviteUrl: "", mailtoUrl: "", copied: false },

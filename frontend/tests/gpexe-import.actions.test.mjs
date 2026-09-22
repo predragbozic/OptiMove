@@ -1020,7 +1020,7 @@ test("check: a refused start says what to do - wrong dates, no GPEXE access, no 
   const cases = [
     { status: 400, error: "invalid_window", text: /Check the dates: From must not be after To, To must not be in the future, and at most 31 days can be checked at once\./ },
     { status: 503, error: "gpexe_token_missing", text: /OptiMove has no access to GPEXE set up yet\. Ask a platform admin to set it up\./ },
-    { status: 409, error: "gpexe_team_not_configured", text: /This team is not connected to a GPEXE team yet\. Ask a platform admin to connect it in Settings &gt; Teams\./ },
+    { status: 409, error: "gpexe_team_not_configured", text: /This team is not connected to a GPEXE team yet\. Ask a platform admin to connect it in Settings &gt; Data sources\./ },
   ];
   for (const k of cases) {
     resetState();
@@ -1224,4 +1224,15 @@ test("unlink from the link notice names the pair even when the link list could n
   await act("training-load-gpexe-unlink", { linkId: "link-2" });
   assert.match(confirmQuestions.at(-1), /^Unlink GPEXE athlete 104 from Dario Petrov Example\? /);
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/unlink")).length, 0);
+});
+
+test("a team with no GPEXE connection points the coach at the tab that actually holds it", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { settings: null } } }));
+  await openImports();
+  const html = renderTrainingLoadCoachHtml();
+  // Both places that name the location, not just the refusal text a check
+  // answers with (covered above).
+  assert.match(html, /A platform admin connects it in Settings &gt; Data sources\./);
+  assert.match(html, /connect this team to its GPEXE team \(Settings &gt; Data sources\)/);
 });

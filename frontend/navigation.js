@@ -138,6 +138,10 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     ["users", "Users"],
     ["joinLinks", "Join links"],
     ["presets", "Tags & Presets"],
+    // Administering a data source is a platform-admin job (F3b). Hiding the
+    // tab is not the protection - every route behind it checks the active
+    // platform_admin role again on the server.
+    ...(data.isPlatformAdmin ? [["dataSources", "Data sources"]] : []),
   ];
   return `
     <nav class="settings-tabs" aria-label="Settings sections">

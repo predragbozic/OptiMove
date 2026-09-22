@@ -26,6 +26,8 @@ import {
   submitConfirmEmailChange as submitConfirmEmailChangeAction,
 } from "./email-change-actions.js";
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
+import { handleDataSourcesAction, submitDataSourcesForm } from "./data-sources-actions.js";
+import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests, reportDeviceTimezone } from "./tests-data.js";
 import { renderTests, renderTestsBadge } from "./tests-view.js";
@@ -545,6 +547,13 @@ async function handleContentSubmit(event) {
   if (organizationForm) {
     event.preventDefault();
     await submitOrganizationFormAction(organizationForm, { loadAthletes, renderOrganizationPanel });
+    return;
+  }
+
+  const dataSourcesForm = event.target.closest("[data-data-sources-form]");
+  if (dataSourcesForm) {
+    event.preventDefault();
+    await submitDataSourcesForm(dataSourcesForm, { render: renderDataSourcesSurface });
     return;
   }
 
@@ -1873,7 +1882,14 @@ async function loadActiveTab() {
   // !state.organization.data`. Explicit refreshes (mutations, workspace
   // switch - see onWorkspaceChanged) call renderOrganizationPanel()/
   // refreshOrganizationData() directly and are untouched by this.
-  if (state.activeTab === "organization") return renderOrganizationPanel({ refresh: false });
+  if (state.activeTab === "organization") {
+    // Coming back to Settings is the other way into Data sources (the first
+    // is its sub-tab button): read the chosen team again. This belongs on
+    // the entry event, never in renderOrganizationPanel itself - that one is
+    // also the Data sources repaint, so a reset there would loop.
+    if (state.organization.section === "dataSources") enterDataSourcesSection();
+    return renderOrganizationPanel({ refresh: false });
+  }
   if (state.activeTab === "coach-home") return loadCoachHome();
   if (state.activeTab === "athlete-home") return loadAthleteHome();
   if (state.activeTab === "weekly") return loadWeekly();
@@ -2397,6 +2413,7 @@ async function handleContentClick(event) {
   }
   if (handleCoachProfileAction(action, { renderCoachContext, renderCurrentNode })) return;
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
+  if (await handleDataSourcesAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleOrganizationAction(action, {
     loadAthletes,
     refreshOrganizationData,
@@ -2485,6 +2502,11 @@ function organizationContextKey() {
   return buildContextKey(currentUserWorkspaceContextParts());
 }
 
+// Settings -> Data sources repaints through the Settings panel it lives in.
+function renderDataSourcesSurface() {
+  void renderOrganizationPanel({ refresh: false });
+}
+
 async function renderOrganizationPanel({ refresh = true } = {}) {
   state.athletesExpanded = false;
   state.weekSelectorOpen = false;
@@ -2498,6 +2520,13 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
   const paintOrganizationPanel = async () => {
     if (state.organization.section === "presets" && !state.taxonomy.loaded) {
       await loadTaxonomyData();
+    }
+    // A team is chosen but its data is not loaded yet (the tab was opened
+    // again after a workspace or Settings reload): read it once. Every write
+    // on the screen reloads the team itself, so this never repeats.
+    const dataSources = state.dataSources;
+    if (state.organization.section === "dataSources" && dataSources.teamId && !dataSources.status && !dataSources.loading && !dataSources.error) {
+      void loadDataSources(renderDataSourcesSurface);
     }
     const data = state.organization.data || { clubs: [], teams: [], athletes: [], users: [], canCreateClub: false, canCreateTeam: false, canCreateAthlete: true, canCreateUser: true };
     normalizeOrganizationSelection(data);

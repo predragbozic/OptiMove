@@ -80,6 +80,16 @@ router.put("/teams/:teamId/settings", handle(async (req, res) => {
   res.json({ settings: await service.setTeamSettings(access.teamId, { gpexeTeamId: req.body?.gpexeTeamId, reason, userId: req.user.id }) });
 }));
 
+// What the connection was before, and why it was changed. Read-only, and
+// the same admin-only audit note as the reason in /status: a platform admin
+// only. Nothing here writes; the table itself is append-only (v22).
+router.get("/teams/:teamId/settings/history", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  if (!access.platformAdmin) return forbidden(res);
+  res.json({ history: await service.listSettingsHistory(access.teamId) });
+}));
+
 router.post("/teams/:teamId/checks", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
