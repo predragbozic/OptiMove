@@ -505,3 +505,87 @@ test("29. a full page of history says it is only the most recent values", async 
   // 50 rows came back (a full page), 49 of them are earlier values.
   assert.match(renderDataSourcesPanelHtml(), /Earlier values \(49 most recent\)/);
 });
+
+// The write of one team must never end the write of another. Test 17 only
+// proves a dropped answer does not lock the screen; this one proves the
+// opposite direction, for all three writes: a late answer for the team the
+// admin has left must not unlock the team that is on screen now.
+const ACTIVE_GRANT = { id: GRANT, userId: COACH, userName: "Ana Kovac", grantedAt: "2026-09-20T09:00:00.000Z", revokedAt: null, active: true };
+
+const STALE_FLOWS = [
+  {
+    name: "the GPEXE connection",
+    busy: "connectBusy",
+    confirm: "connectConfirm",
+    prepare: async () => {
+      await act("data-sources-connect-open");
+      await submit("connect", { gpexeTeamId: "1500", reason: "the number was wrong" });
+    },
+    save: () => act("data-sources-connect-save"),
+  },
+  {
+    name: "a granted right",
+    busy: "grantBusy",
+    confirm: "grantConfirm",
+    prepare: async (coachId) => {
+      await act("data-sources-grant-open");
+      await submit("grant", { userId: coachId, reason: "approves while the admin is away" });
+    },
+    save: () => act("data-sources-grant-save"),
+  },
+  {
+    name: "a removed right",
+    busy: "revokeBusy",
+    confirm: "revokeConfirm",
+    prepare: async () => {
+      await handleDataSourcesAction({ dataset: { action: "data-sources-revoke-open", grantId: GRANT, userName: "Ana Kovac" } }, { render });
+    },
+    save: () => submit("revoke", { reason: "left the club" }),
+  },
+];
+
+for (const flow of STALE_FLOWS) {
+  test(`30. ${flow.name}: an answer for the team the admin left does not unlock the team on screen`, async () => {
+    reset();
+    let releaseA;
+    let releaseB;
+    const gateA = new Promise((resolve) => { releaseA = resolve; });
+    const gateB = new Promise((resolve) => { releaseB = resolve; });
+    const reads = teamResponder({ approvers: [ACTIVE_GRANT] });
+    installFetch(async (call) => {
+      if (call.method === "GET") return reads(call);
+      if (call.url.includes(TEAM)) { await gateA; return { status: 200, body: { ok: true } }; }
+      await gateB;
+      return { status: 200, body: { ok: true } };
+    });
+    const writes = () => fetchCalls.filter((call) => call.method !== "GET").length;
+
+    await submit("team", { teamId: TEAM });
+    await flow.prepare(COACH_2);
+    const writeA = flow.save();
+    assert.equal(state.dataSources[flow.busy], true, "the first team's write is running");
+
+    // The admin moves to another team while that write is still in flight.
+    await submit("team", { teamId: OTHER_TEAM });
+    assert.equal(state.dataSources[flow.busy], false, "the context change releases the screen");
+    await flow.prepare("99999999-0000-4000-8000-000000000007");
+    const writeB = flow.save();
+    assert.equal(state.dataSources[flow.busy], true, "the second team's write is running");
+    const sent = writes();
+
+    releaseA();
+    await writeA;
+    assert.equal(state.dataSources[flow.busy], true, "the stale answer left the running write alone");
+
+    // And the guard it holds still refuses a second one. The confirmation
+    // is deliberately still open, so the busy flag is the only thing that
+    // can stop this second write.
+    assert.ok(state.dataSources[flow.confirm], "the confirmation is still open");
+    await flow.save();
+    assert.equal(writes(), sent, "no duplicate was sent while the write was still running");
+
+    releaseB();
+    await writeB;
+    assert.equal(state.dataSources[flow.busy], false, "only its own answer releases it");
+  });
+}

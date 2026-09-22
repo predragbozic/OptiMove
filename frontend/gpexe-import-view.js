@@ -260,7 +260,7 @@ function renderStatusHtml(status) {
   return `
     <div class="gpexe-status">
       <p class="gpexe-switch ${sw.enabled ? "is-on" : "is-off"}"><strong>${sw.enabled ? "Import writing is on." : "Import writing is off."}</strong> ${escapeHtml(sw.message || "")}</p>
-      ${status.settings ? "" : `<p class="gpexe-warning">No GPEXE team is connected to this team yet. A platform admin connects it in Settings &gt; Teams.</p>`}
+      ${status.settings ? "" : `<p class="gpexe-warning">No GPEXE team is connected to this team yet. A platform admin connects it in Settings &gt; Data sources.</p>`}
       <p class="muted">${viewer.canApprove
         ? `You can approve imports for this team (${viewer.approvalBasis === "platform_admin" ? "platform admin" : "approver grant"}).`
         : "You can review sessions. Approving needs a platform admin or an explicit approver grant for this team."}</p>
@@ -339,7 +339,7 @@ function renderNextStepHtml(gx, status) {
   const decisions = list.filter((c) => candidateGroup(c, gx) === "decision").length;
   const notYet = list.filter((c) => candidateGroup(c, gx) === "notyet").length;
   let text;
-  if (!status.settings) text = "A platform admin needs to connect this team to its GPEXE team (Settings > Teams).";
+  if (!status.settings) text = "A platform admin needs to connect this team to its GPEXE team (Settings > Data sources).";
   else if (gx.checkStarting || check?.status === "running") text = "Checking GPEXE for new sessions...";
   else if (uncertain) text = `Next step: check the result of ${plural(uncertain, "import", "imports")} that could not be confirmed - open it below.`;
   else if (list.some((c) => candidateGroup(c, gx) === "decision" && reviewMadeBeforeLinkChange(c, gx))) text = "Next step: check for new sessions - athlete links changed after a review was made.";
@@ -372,7 +372,7 @@ function checkErrorText(error) {
   if (error.code === "check_already_running") return "A check is already running for this team. Wait for it to finish.";
   if (error.code === "invalid_window") return "Check the dates: From must not be after To, To must not be in the future, and at most 31 days can be checked at once.";
   if (error.code === "gpexe_token_missing") return "OptiMove has no access to GPEXE set up yet. Ask a platform admin to set it up.";
-  if (error.code === "gpexe_team_not_configured") return "This team is not connected to a GPEXE team yet. Ask a platform admin to connect it in Settings > Teams.";
+  if (error.code === "gpexe_team_not_configured") return "This team is not connected to a GPEXE team yet. Ask a platform admin to connect it in Settings > Data sources.";
   return "The check could not start. Try again in a moment.";
 }
 

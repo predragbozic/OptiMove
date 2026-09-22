@@ -31,7 +31,10 @@ value idempotent, every v24 refusal translated into plain administrator language
 grant or revoke a coach's right to approve an import, each with a reason and a
 confirmation that names the coach and the team. Deliberately out of it: Disconnect,
 retention UI, the import switch, any real import, and the coach-facing "GPEXE imports"
-screen, whose rename and redesign are a separate, later job.
+screen, whose rename and redesign are a separate, later job. One copy-only exception
+there, approved by the owner at the external review of PR #114: the three messages that
+named "Settings > Teams" now name "Settings > Data sources", because that is where the
+setting actually lives; nothing else on that screen was touched.
 
 All of it is code only. **`GPEXE_IMPORT_APPLY_ENABLED` is off in every environment and no
 GPEXE data has been imported into the local OPTIMOVE or the deployed database**, so
@@ -409,7 +412,7 @@ pre-existing; pass/fail counts don't belong in this file
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
 - **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
-  F1, F2 and F3a are merged (see above). F3b (Settings → Teams admin setup) is the next
+  F1, F2 and F3a are merged (see above). F3b (the Settings → Data sources admin screen, PR #114) is the next
   step; F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
   environment until conditions 1–3 hold there; condition 4 is required before regular
   production imports:
@@ -473,7 +476,8 @@ pre-existing; pass/fail counts don't belong in this file
       value is not a zero. "GPS was not worn" is shown only when the data confirms it or
       a coach enters it.
 - **The coach's "GPEXE imports" screen in a workspace with no team** (owner, 2026-09-19;
-  deliberately NOT in the minimal F3b, which must not touch that screen). The top note
+  NOT in the minimal F3b, which changed only the three "Settings > Data sources"
+  pointers on that screen). The top note
   "GPEXE imports work one team at a time; choose the team below."
   (`frontend/training-load-view.js`, `section === "imports"`) is wrong when the active
   workspace has no team: there is no choice below, and it is shown together with "No team

@@ -90,10 +90,11 @@ export function resetDataSourcesForms() {
 function resetTeamState(teamId) {
   const d = ds();
   d.generation += 1;
-  // A write in flight when the team changes never gets to clear its own flag
-  // through the generation guard, and a stuck one would disable the screen's
-  // primary action for good. It is cleared here, on the context change only:
-  // closing a form must NOT unlock a write that is still running.
+  // A write in flight when the team changes never gets to clear its own
+  // flag (its finally below belongs to the old generation), and a stuck one
+  // would disable the screen's primary action for good, so the context
+  // change clears all three here. Closing a form does not: that would unlock
+  // a write that is still running.
   d.connectBusy = false;
   d.grantBusy = false;
   d.revokeBusy = false;
@@ -201,8 +202,12 @@ export async function saveGpexeConnection(render) {
     if (generation !== d.generation) return;
     d.connectError = errorInfo(error);
   } finally {
-    d.connectBusy = false;
-    if (generation === d.generation) render();
+    // Only the generation that started this write may end it: a late answer
+    // for a team the admin has left must not unlock the team on screen now.
+    if (generation === d.generation) {
+      d.connectBusy = false;
+      render();
+    }
   }
   if (generation === d.generation) await loadDataSourcesTeam(render);
 }
@@ -229,8 +234,10 @@ export async function grantApprover(render) {
     if (generation !== d.generation) return;
     d.grantError = errorInfo(error);
   } finally {
-    d.grantBusy = false;
-    if (generation === d.generation) render();
+    if (generation === d.generation) {
+      d.grantBusy = false;
+      render();
+    }
   }
   if (generation === d.generation) await loadDataSourcesTeam(render);
 }
@@ -253,8 +260,10 @@ export async function revokeApprover(render) {
     if (generation !== d.generation) return;
     d.revokeError = { ...errorInfo(error), scope: "grant" };
   } finally {
-    d.revokeBusy = false;
-    if (generation === d.generation) render();
+    if (generation === d.generation) {
+      d.revokeBusy = false;
+      render();
+    }
   }
   if (generation === d.generation) await loadDataSourcesTeam(render);
 }
