@@ -636,9 +636,6 @@ export const emptyGpexeImportState = () => ({
   polling: "",
   notice: "",
   detail: null,
-  // Why each blocked session is blocked, by id|lastSeenAt: { code, categoryName }.
-  blockedReasons: {},
-  blockedReasonErrors: {},
   // Approvals whose result is not confirmed yet, by candidate id: the last
   // unknown outcome, shown again when the session is reopened.
   uncertain: {},

@@ -127,6 +127,18 @@ approvals and imported events of that team.
    and then **rolls the transaction back**, so the preview is exactly what the
    approval would do against the same state, and nothing remains.
 
+The candidate list (`GET …/candidates`) is one query over the stored rows, however
+many candidates there are (`candidateSummary` in `backend/src/gpexeImportService.js`):
+`status` and `snapshot` come from the row's columns; `previewStatus`, `counts`,
+`changesToImported` and, since Imports phase 2b, `blockedCode`, `blockedSourceCode`,
+`sessionType` and `reasons` come from the row's stored preview
+(`backend/src/gpexeImportReasons.js`), so the list never reads a candidate's detail.
+`blockedCode` and the reason codes are source-neutral names of what the coach has to
+deal with; the adapter's own code stays in `blockedSourceCode`. The server's sentences
+stay in the single-candidate answer's `preview` (`blocked.message` and its resolution
+steps, the per-athlete `notImported` and `gps.reason` messages, the change messages);
+the list carries none of them.
+
 Only one check runs per team at a time.
 - A running check reports progress after every GPEXE request.
 - A check that stops reporting for 15 minutes — for example because the

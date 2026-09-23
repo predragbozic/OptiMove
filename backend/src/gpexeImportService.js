@@ -14,6 +14,7 @@
 import { pool, query } from "./db.js";
 import { createGpexeClient, GpexeClientError } from "./gpexeClient.js";
 import { buildGpexeImportPlan, GpexeMappingError } from "./gpexeImportMapper.js";
+import { candidateReasons } from "./gpexeImportReasons.js";
 import { blockedByMapping, buildCandidatePreview, canonicalJson, previewLocked, sha256Hex } from "./gpexeImportPreview.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
 
@@ -587,6 +588,10 @@ function candidateSummary(row) {
     supersededByCandidateId: row.superseded_by_candidate_id,
     snapshot,
     approvalBlockers: approvalBlockers(row, snapshot, preview),
+    // Phase 2b, additive: why the session is blocked and what keeps it out of
+    // "Ready to import", from the stored preview - the list needs no
+    // per-candidate read for them. Null / empty when the snapshot is gone.
+    ...candidateReasons(row.status, preview),
   };
 }
 
