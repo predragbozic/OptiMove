@@ -684,6 +684,91 @@ function mapTriggerError(error, fallbackCode) {
   return new GpexeImportServiceError(500, "internal_error", "The change failed on the server; nothing was written.");
 }
 
+// The team's source athletes (Imports phase 3a): every GPEXE athlete the
+// team's available snapshots (not purged, not expired) have seen, plus every GPEXE athlete the team has an
+// active link for, once each - what a whole-team linking screen needs.
+// Read-only, from stored data only (no GPEXE call), one SQL statement
+// whatever the number of candidates or athletes.
+//
+// "Last seen" is deterministic: the newest session by session date among
+// the team's candidates whose snapshot is still available - not purged and
+// not expired, the same rule snapshotState() applies everywhere else (v22:
+// an expired snapshot is gone for the app before the purge removes it); the
+// tie-break among rows of the same date is a current version before a
+// superseded one, then the later last_seen_at, then the larger candidate id.
+// A session the mapper refused (unsupported category, invalid statistics,
+// inconsistent data) has a preview without athletes, so it yields no
+// sighting; whether such sessions should count is an owner decision.
+//
+// Helper values for telling athletes apart come from that session's stored
+// preview (the athlete's whole-session result), and the number of drills
+// from the stored raw snapshot's own field: a value the source did not give
+// is null, never a zero. GPEXE names are never stored, so none is returned;
+// the OptiMove name comes only from the confirmed link.
+export const SOURCE_ATHLETE_UNITS = Object.freeze({ duration: "min", distance: "m", maxSpeed: "km/h" });
+const SOURCE_ATHLETE_VALUE_KEYS = { duration: "gpexe_time_min", distance: "gpexe_total_distance", maxSpeed: "gpexe_max_speed" };
+
+function sourceAthleteValues(entry, rawDrillsCount) {
+  const full = Array.isArray(entry?.results) ? entry.results.find((r) => r.level === "full") : null;
+  const byKey = new Map((full?.values || []).map((v) => [v.metricKey, v.value]));
+  const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  // The raw field arrives as text: only a plain non-negative integer counts
+  // (Number("") would be 0, an invented number).
+  const drills = typeof rawDrillsCount === "string" && /^\d{1,9}$/.test(rawDrillsCount.trim()) ? Number(rawDrillsCount.trim()) : null;
+  return {
+    duration: num(byKey.get(SOURCE_ATHLETE_VALUE_KEYS.duration)),
+    distance: num(byKey.get(SOURCE_ATHLETE_VALUE_KEYS.distance)),
+    maxSpeed: num(byKey.get(SOURCE_ATHLETE_VALUE_KEYS.maxSpeed)),
+    drillsCount: drills,
+  };
+}
+
+export async function listSourceAthletes(teamId) {
+  const rows = (await query(
+    `with sighting as (
+       select c.id as candidate_id, c.gpexe_team_session_id, c.session_started_at, c.session_label, c.status, c.last_seen_at,
+              c.preview->'session'->>'categoryName' as session_type, a.entry
+         from training_load.gpexe_import_candidates c
+         cross join lateral jsonb_array_elements(c.preview->'athletes') as a(entry)
+        where c.owner_team_id = $1 and c.raw_purged_at is null and c.raw_expires_at > now() and c.preview is not null
+     ),
+     latest as (
+       select distinct on (entry->>'gpexeAthleteId') entry->>'gpexeAthleteId' as gpexe_athlete_id, sighting.*
+         from sighting
+        order by entry->>'gpexeAthleteId', session_started_at desc nulls last, (status <> 'superseded') desc, last_seen_at desc, candidate_id desc
+     ),
+     link as (
+       select l.id as link_id, l.gpexe_athlete_id, l.athlete_id, l.linked_at,
+              coalesce(nullif(a.display_name, ''), a.full_name) as athlete_name,
+              exists (select 1 from public.athlete_memberships m
+                       where m.athlete_id = l.athlete_id and m.team_id = $1 and m.membership_type = 'team' and m.status = 'active') as athlete_active
+         from training_load.gpexe_athlete_links l
+         join public.athletes a on a.id = l.athlete_id
+        where l.owner_team_id = $1 and l.unlinked_at is null
+     )
+     select coalesce(s.gpexe_athlete_id, k.gpexe_athlete_id) as gpexe_athlete_id,
+            s.candidate_id, s.gpexe_team_session_id, s.session_started_at, s.session_label, s.session_type,
+            s.status as candidate_status, s.last_seen_at, s.entry,
+            (select c2.raw_bundle->'teamSession'->>'drills_count' from training_load.gpexe_import_candidates c2
+              where c2.id = s.candidate_id and c2.owner_team_id = $1) as raw_drills_count,
+            k.link_id, k.athlete_id, k.linked_at, k.athlete_name, k.athlete_active
+       from latest s
+       full outer join link k on k.gpexe_athlete_id = s.gpexe_athlete_id
+      order by length(coalesce(s.gpexe_athlete_id, k.gpexe_athlete_id)), coalesce(s.gpexe_athlete_id, k.gpexe_athlete_id)`,
+    [teamId],
+  )).rows;
+  return rows.map((r) => ({
+    gpexeAthleteId: r.gpexe_athlete_id,
+    status: !r.link_id ? "unlinked" : r.athlete_active ? "linked" : "linked_inactive",
+    link: r.link_id ? { id: r.link_id, athleteId: r.athlete_id, athleteName: r.athlete_name, linkedAt: r.linked_at } : null,
+    lastSeen: r.candidate_id ? {
+      candidateId: r.candidate_id, gpexeTeamSessionId: r.gpexe_team_session_id, sessionStartedAt: r.session_started_at,
+      sessionLabel: r.session_label, sessionType: r.session_type, candidateStatus: r.candidate_status, lastSeenAt: r.last_seen_at,
+    } : null,
+    values: r.candidate_id ? sourceAthleteValues(r.entry, r.raw_drills_count) : { duration: null, distance: null, maxSpeed: null, drillsCount: null },
+  }));
+}
+
 export async function listAthleteLinks(teamId) {
   return (await query(
     `select l.id, l.gpexe_athlete_id, l.athlete_id, l.linked_at, coalesce(nullif(a.display_name, ''), a.full_name) as athlete_name

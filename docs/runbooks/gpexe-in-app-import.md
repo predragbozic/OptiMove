@@ -85,7 +85,7 @@ approvals and imported events of that team.
 
 | Action | Who |
 |---|---|
-| Status, "Check now", candidates, previews, athlete links | The team's coach, its club admin, a platform admin — in a workspace that contains the team. Anyone else gets the same 404 as a team that does not exist. |
+| Status, "Check now", candidates, previews, athlete links, source athletes | The team's coach, its club admin, a platform admin — in a workspace that contains the team. Anyone else gets the same 404 as a team that does not exist. |
 | Connect the GPEXE team; grant and revoke approvers; read retention status | An active platform admin |
 | Approve a candidate, which imports it (F2) | An active platform admin, or a coach with an active grant for the team who still coaches it, in a workspace that contains the team. A team manager without the right gets 403 `not_an_approver`; anyone else the same 404. |
 
@@ -138,6 +138,25 @@ deal with; the adapter's own code stays in `blockedSourceCode`. The server's sen
 stay in the single-candidate answer's `preview` (`blocked.message` and its resolution
 steps, the per-athlete `notImported` and `gps.reason` messages, the change messages);
 the list carries none of them.
+
+`GET …/teams/:teamId/source-athletes` (Imports phase 3a) lists the team's GPEXE
+athletes once each — every athlete seen in a snapshot that is still available (not purged, not expired) plus every athlete with
+an active link — with `status` (`linked`, `unlinked`, or `linked_inactive` when the
+linked OptiMove athlete is no longer an active member of the team), the link (the
+OptiMove name comes only from it; GPEXE names are never stored, so none is returned),
+`lastSeen` and helper values for telling athletes apart (`duration` min, `distance` m,
+`maxSpeed` km/h from the whole-session result of that sighting, `drillsCount` from the
+raw snapshot's own field; a value the source did not give is `null`, never a zero).
+"Last seen" is the newest session by session date among the team's candidates whose
+snapshot is still available — not purged and not expired, the same rule the candidate
+routes apply (`snapshotState`); same date: a current version before a replaced one, then
+the later `last_seen_at`, then the larger candidate id. A session the mapper refused
+(unsupported category, invalid statistics, inconsistent data) is stored with a preview
+that names no athlete, so it yields no sighting: an athlete seen only in such sessions
+is listed only if linked (owner decision pending on whether the raw snapshot should
+count). Read-only, no GPEXE call, one SQL statement however many candidates or athletes
+(`listSourceAthletes` in `backend/src/gpexeImportService.js`); the team filter applies
+to candidates, links and memberships alike.
 
 Only one check runs per team at a time.
 - A running check reports progress after every GPEXE request.

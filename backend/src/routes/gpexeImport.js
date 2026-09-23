@@ -167,6 +167,19 @@ router.get("/teams/:teamId/approvals/:approvalId", handle(async (req, res) => {
   res.json({ approval });
 }));
 
+// The team's source athletes, once each, from stored data only (phase 3a):
+// for a whole-team linking screen. Same readers as the candidates; nothing
+// is fetched from GPEXE, nothing is written.
+router.get("/teams/:teamId/source-athletes", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  res.json({
+    athletes: await service.listSourceAthletes(access.teamId),
+    units: service.SOURCE_ATHLETE_UNITS,
+    lastSeenRule: "newest session date among the team's available snapshots (not expired, not purged); same date: current version before a replaced one, then the later sighting",
+  });
+}));
+
 router.get("/teams/:teamId/athlete-links", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
