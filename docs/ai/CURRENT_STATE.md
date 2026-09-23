@@ -1,14 +1,13 @@
 # Current state
 
-Last reviewed: 2026-09-21. Last `origin/main` commit checked: `4a60fa7` (merge of PR #113,
-`feature/gpexe-settings-change-guard` → `main`).
+Last reviewed: 2026-09-23. Last `origin/main` commit checked: `f32e262` (merge of PR #114,
+`feature/data-sources-settings-f3b` → `main`).
 
 ## Active phase
 
-**Training Load Dashboards UX redesign (H-slices)** — frontend only unless a separate
-product decision says otherwise. H1 (PR #89), H2 (PR #93), H3 (PR #95) and H4 (PR #97)
-are merged. No further slice is scheduled; the small follow-up found during H4 is recorded
-under Separate tasks.
+The **Training Load Dashboards UX redesign (H-slices)** is complete: H1 (PR #89), H2
+(PR #93), H3 (PR #95) and H4 (PR #97) are merged, no further slice is scheduled, and the
+small follow-up found during H4 is recorded under Separate tasks.
 
 Alongside it, the **GPEXE import groundwork** is merged:
 - the pilot importer (PR #99);
@@ -23,18 +22,29 @@ and F2 (approve and import; PR #107) are merged, and so are the coach screens F3
 (PR #110), the documentation consolidation (PR #112) and the settings change guard with
 migration v24 (PR #113).
 
-**F3b, minimal, is the active phase**: a platform-admin-only `Settings → Data sources`
-sub-tab (branch `feature/data-sources-settings-f3b`). Its scope is the administrative
-precondition for one controlled pilot and nothing more: choose a team, see and set that
-team's GPEXE connection (first connect without a reason, a change only with one, the same
-value idempotent, every v24 refusal translated into plain administrator language), and
-grant or revoke a coach's right to approve an import, each with a reason and a
-confirmation that names the coach and the team. Deliberately out of it: Disconnect,
-retention UI, the import switch, any real import, and the coach-facing "GPEXE imports"
-screen, whose rename and redesign are a separate, later job. One copy-only exception
-there, approved by the owner at the external review of PR #114: the three messages that
-named "Settings > Teams" now name "Settings > Data sources", because that is where the
-setting actually lives; nothing else on that screen was touched.
+**The minimal F3b is merged** (PR #114, `f32e262`): a platform-admin-only `Settings →
+Data sources` sub-tab — choose a team, see and set its GPEXE connection (first connect
+without a reason, a change only with one, the same value idempotent, every v24 refusal in
+plain administrator language), grant or revoke a coach's right to approve an import with
+a reason and a confirmation naming the coach and the team. Deliberately out of it:
+Disconnect, retention UI, the import switch, any real import.
+
+**The active phase is the source-neutral Imports track** (owner's mission, 2026-09-22;
+blueprint v3.1 accepted as the direction on 2026-09-23). GPEXE is the first data source,
+not the name of the feature; future sources (Garmin, Catapult, Polar, Kinexon, …) are
+further Source cards on the same screen, never a new top-level screen. Phase 2, the
+**Imports shell** (branch `feature/imports-shell`), is the only phase in progress: the
+coach's tab is renamed to *Imports*, the source card (GPEXE) carries "Sessions found …"
+and one *Find new sessions* button with the dates folded away, the sessions are sorted
+into *Needs attention / Ready to import / Stays out / Imported* from the fields the list
+already returns (a session with an unlinked recorded athlete, or in which nobody is
+linked yet, is never "ready" or "up to date"), the Ready header says "review only" while
+the switch is off or the viewer may not approve, and a workspace with no team shows one
+sentence plus the existing workspace menu. No completion model, no estimates, no batch
+endpoint, no migration, no change to Settings → Data sources or to the per-session
+review. Phases 2b–6 (list reasons, source-athletes endpoint, team mapping, batch import,
+completion model and roster, session context, add-later-values) wait for the owner's go
+after each merge.
 
 All of it is code only. **`GPEXE_IMPORT_APPLY_ENABLED` is off in every environment and no
 GPEXE data has been imported into the local OPTIMOVE or the deployed database**, so
@@ -349,6 +359,12 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `f32e262` (PR #114) with `ok: true` on 2026-09-22; the
+  served bundle contained the Data sources screen and the new
+  `GET …/settings/history` route answered 401 without a login. The owner accepted that
+  unauthenticated smoke as sufficient (admin/coach visibility is covered by tests and the
+  disposable-database browser QA). No Check, Connect, grant, revoke or import was run in
+  production.
 - `/api/health` reported commit `a18b9cb` (PR #112) with `ok: true` on 2026-09-21, and
   `4a60fa7` (PR #113) with `ok: true` on 2026-09-21 after that merge.
 - **v24 on the deployed database is inferred** from the successful start of the deploy of
@@ -476,8 +492,10 @@ pre-existing; pass/fail counts don't belong in this file
       value is not a zero. "GPS was not worn" is shown only when the data confirms it or
       a coach enters it.
 - **The coach's "GPEXE imports" screen in a workspace with no team** (owner, 2026-09-19;
-  NOT in the minimal F3b, which changed only the three "Settings > Data sources"
-  pointers on that screen). The top note
+  **addressed on `feature/imports-shell`, not merged yet**: one sentence, and a button
+  that opens the existing workspace menu only when the menu has another team or club
+  workspace to offer; a club or team workspace with no team says a team is missing; the
+  tab stays visible for discovery. Delete this entry when that PR is merged). The top note
   "GPEXE imports work one team at a time; choose the team below."
   (`frontend/training-load-view.js`, `section === "imports"`) is wrong when the active
   workspace has no team: there is no choice below, and it is shown together with "No team
@@ -583,12 +601,12 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**The minimal F3b (`Settings → Data sources`) is in progress** on
-`feature/data-sources-settings-f3b`, with the switch left off and no real import; see
-Active phase for its exact scope. After it is merged, conditions 1-3 under Separate tasks
-come before F4, the first real local import, and condition 4 before regular production
-imports. The rename and UX redesign of the coach's "GPEXE imports" screen (including the
-no-team-workspace message under Separate tasks) is its own later job.
+**Phase 2 of the Imports track (`feature/imports-shell`) is in progress**; see Active
+phase for its exact scope. The owner decides the next phase after each merge. Conditions
+1-3 under Separate tasks still come before the first real local import, and condition 4
+before regular production imports. The owner's decisions of 2026-09-23 on estimates,
+completion and session context (blueprint v3.1, section 14) shape Phases 5a–6 and are
+not implemented yet.
 
 The other Separate tasks wait until the owner schedules them.
 

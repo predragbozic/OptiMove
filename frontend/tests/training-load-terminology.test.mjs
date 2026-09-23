@@ -27,7 +27,7 @@ test("no Training Load confirm() prompt, note or notification hint still points 
   assert.equal(trainingLoadHint[1], "Open Athletes");
 });
 
-test("the Data & Analysis sub-nav labels are Overview / Activities / Athletes / Dashboards / GPEXE imports - never 'Results'", async () => {
+test("the Data & Analysis sub-nav labels are Overview / Activities / Athletes / Dashboards / Imports - never 'Results'", async () => {
   globalThis.document = { querySelector: () => null, querySelectorAll: () => [], body: { classList: { contains: () => false } } };
   globalThis.window = { confirm: () => true, matchMedia: () => ({ matches: false }) };
   const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
@@ -37,5 +37,5 @@ test("the Data & Analysis sub-nav labels are Overview / Activities / Athletes / 
   state.trainingLoad.section = "overview";
   const html = renderTrainingLoadCoachHtml();
   const labels = [...html.matchAll(/class="training-load-subnav-tab[^"]*"[^>]*>([^<]+)<\/button>/g)].map((m) => m[1]);
-  assert.deepEqual(labels, ["Overview", "Activities", "Athletes", "Dashboards", "GPEXE imports"]);
+  assert.deepEqual(labels, ["Overview", "Activities", "Athletes", "Dashboards", "Imports"]);
 });

@@ -1,10 +1,11 @@
-// GPEXE import from the app, phase F3a: actions of the "GPEXE imports" view.
+// Imports (Training Load -> Data & Analysis): actions of the Imports view.
 // Called from handleTrainingLoadAction for every "training-load-gpexe-*"
 // action. Controls that only carry a value (the check's dates, the athlete
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
 import { state } from "./state.js";
 import {
+  reloadGpexeCandidates,
   approveGpexeCandidate,
   closeGpexeCandidate,
   linkGpexeAthlete,
@@ -60,8 +61,11 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     // While an approval is running its answer must be seen - it may be the
     // only place an uncertain outcome is reported.
     if (gx.detail?.approving || gx.detail?.verifying) return true;
-    closeGpexeCandidate();
+    const refresh = closeGpexeCandidate();
     renderTrainingLoad();
+    // The session was imported but the list still shows it as pending:
+    // read the list again so it moves under Imported.
+    if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-accept") {

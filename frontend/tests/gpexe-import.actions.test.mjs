@@ -73,7 +73,9 @@ function status({ enabled = false, canApprove = true, settings = { gpexeTeamId: 
 function candidateSummary(overrides = {}) {
   return {
     id: "cand-1", gpexeTeamSessionId: "7001", label: "FULL TRAINING 14.09.", sessionStartedAt: "2026-09-14T16:08:12Z",
-    status: "pending", previewStatus: "ready", counts: { created: 4, athletesNotImported: 1 }, changesToImported: 0,
+    // A clean session by default: every recorded athlete linked. Tests that
+    // need a left-out athlete say so.
+    status: "pending", previewStatus: "ready", counts: { created: 4, athletesNotImported: 0 }, changesToImported: 0,
     snapshot: { available: true, expiresAt: "2026-10-14T00:00:00Z" }, approvalBlockers: [], ...overrides,
   };
 }
@@ -147,12 +149,12 @@ test("GPEXE imports: a Data & Analysis sub-tab that loads status, candidates and
   installFetchMock(gpexeServer({}));
   await openImports();
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /data-section="imports"[^>]*>GPEXE imports</);
+  assert.match(html, /data-section="imports"[^>]*>Imports</);
   assert.equal(state.trainingLoad.lastDataAnalysisSection, "imports");
   assert.equal(state.trainingLoad.gpexe.teamId, TEAM_A);
   const urls = fetchCalls.map((c) => c.url);
   for (const path of ["/status", "/candidates", "/athlete-links"]) assert.ok(urls.includes(`/api/training-load/gpexe/teams/${TEAM_A}${path}`), path);
-  assert.match(html, /Import writing is off\./);
+  assert.match(html, /Importing is switched off in this environment\./);
   assert.match(html, /checks and previews are saved, but no result or activity can be written/);
   assert.ok(!/backup/i.test(html), "the screen never says anything about a backup");
   assert.match(html, /training-load-filter-button[^>]*disabled/, "the shell filter does not apply here");
@@ -366,7 +368,7 @@ test("check now: sends the chosen window, follows the check until it ends, then 
   assert.equal(polls, 2);
   assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
   assert.ok(fetchCalls.filter((c) => c.url.includes("/candidates")).length > before, "candidates reloaded after the check");
-  assert.match(renderTrainingLoadCoachHtml(), /2 sessions in GPEXE: 1 new, 0 changed, 1 unchanged/);
+  assert.match(renderTrainingLoadCoachHtml(), /2 sessions in GPEXE: 1 not seen by OptiMove before, 0 changed, 1 unchanged/);
 });
 
 test("workspace switch: the GPEXE view starts over, and a check still being followed for the old workspace stops", async () => {
@@ -466,7 +468,7 @@ test("check: leaving the tab mid-check and coming back resumes it, and a finishe
   serverCheck = { ...serverCheck, status: "succeeded", finishedAt: "2026-09-18T10:00:00Z", sessionsSeen: 1, candidatesNew: 1 };
   await openImports();
   assert.equal(state.trainingLoad.gpexe.check.status, "succeeded");
-  assert.ok(/data-action="training-load-gpexe-check" >Check for new sessions/.test(renderTrainingLoadCoachHtml()), "the check button is enabled again");
+  assert.ok(/data-action="training-load-gpexe-check" >Find new sessions/.test(renderTrainingLoadCoachHtml()), "the check button is enabled again");
 });
 
 test("check: a failed poll does not leave Check now disabled", async () => {
@@ -477,7 +479,7 @@ test("check: a failed poll does not leave Check now disabled", async () => {
   }));
   await openImports();
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: render });
-  assert.ok(/data-action="training-load-gpexe-check" >Check for new sessions/.test(renderTrainingLoadCoachHtml()));
+  assert.ok(/data-action="training-load-gpexe-check" >Find new sessions/.test(renderTrainingLoadCoachHtml()));
 });
 
 test("approve: the dialog cannot be closed while the approval is running, so its answer is never lost", async () => {
@@ -569,19 +571,22 @@ test("main screen speaks to the coach: check for new sessions, needs a decision,
   await openImports();
   await new Promise((resolve) => setImmediate(resolve));
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 2 sessions need a decision - open one below\./);
-  assert.ok(html.indexOf('class="gpexe-next"') < html.indexOf('class="gpexe-status"'), "the next step comes first");
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 2 items need attention · 1 session is ready to import\./);
+  assert.ok(html.indexOf('class="imports-source"') < html.indexOf('class="gpexe-next"'), "the source card comes first, then the next step");
+  assert.ok(html.indexOf('class="gpexe-next"') < html.indexOf('Needs attention ('), "the next step comes before the buckets");
   const mainScreen = html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
   assert.ok(!/GPEXE team 980|Reads GPEXE team/.test(mainScreen), "the GPEXE team id is only in Technical details");
   assert.match(html, /<dt>GPEXE team id<\/dt><dd>980<\/dd>/);
   assert.ok(!/candidates/i.test(mainScreen.replace(/data-[a-z-]+="[^"]*"/g, "")), "no 'candidates' jargon");
-  assert.match(html, />Check for new sessions</);
-  assert.match(html, /<h3>Needs a decision \(2\)<\/h3>/);
-  assert.match(html, /<h3>Can't be imported yet \(1\)<\/h3>/);
-  assert.match(html, /<h3>Imported \(1\)<\/h3>/);
-  assert.match(html, /Training A[\s\S]*Next: review it and approve the import\./);
-  assert.match(html, /Training B[\s\S]*Next: review 2 changes to results already imported, then approve\./);
-  assert.match(html, /Match C[\s\S]*Next: open it to see why it can&#039;t be imported yet\./);
+  assert.match(html, />Find new sessions</);
+  assert.match(html, /<h3>Needs attention \(2\)<\/h3>/);
+  assert.match(html, /<h3>Ready to import \(1\)<\/h3>/);
+  assert.match(html, /<summary>Imported \(1\)<\/summary>/);
+  const readyRow = html.slice(html.indexOf('data-candidate-id="c-new"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-new"')));
+  assert.ok(!/gpexe-candidate-next/.test(readyRow), "a ready session carries no step - there is nothing to decide");
+  assert.match(html, /Training B[\s\S]*2 changes to results already imported - review and accept them, then import\./);
+  assert.match(html, /Match C[\s\S]*Open it to see what is in the way\./);
+  assert.ok(!/Show replaced versions/.test(mainScreen), "the replaced-versions switch lives under Technical details only");
   for (const code of ["preview_changed", "changes_need_acceptance", "import_outcome_unknown", "already_imported", "snapshot_expired_check_again"]) {
     assert.ok(!html.includes(code), `no API code on the main screen: ${code}`);
   }
@@ -601,7 +606,7 @@ test("blocked steps speak to the coach: no field names or runbook paths in the m
   await openCandidate();
   const html = renderTrainingLoadCoachHtml();
   const ol = html.slice(html.indexOf("<ol>"), html.indexOf("</ol>"));
-  assert.match(ol, /Make Ana Example an active member of the team again, then check for new sessions\. Or ask a platform admin to undo the earlier import\./);
+  assert.match(ol, /Make Ana Example an active member of the team again, then find new sessions\. Or ask a platform admin to undo the earlier import\./);
   assert.ok(!/previousAthleteId|docs\/runbooks|Check now/.test(ol), ol);
   assert.match(html, /Technical details[\s\S]*restore_team_membership: [\s\S]*docs\/runbooks\/gpexe-undo-imported-session\.md/);
 });
@@ -631,9 +636,9 @@ test("blocked sessions: the coach reads why and what to do; the server's message
     { code: "unsupported_category", message: 'team_session 8002 category "OFFICIAL MATCH" is not importable in the pilot.', session: { categoryName: "OFFICIAL MATCH" },
       reason: /&quot;OFFICIAL MATCH&quot; sessions are not imported from GPEXE\./, step: /No action needed - it stays out of OptiMove\./ },
     { code: "thresholds_not_valid_for_session", message: "thresholds 1473 (valid 2025-01-01 – open) do not cover session start 2024-12-01T10:00:00.000Z.",
-      reason: /thresholds \(speed and power zones\) are missing or don(?:'|&#039;)t cover this session(?:'|&#039;)s date\./, step: /Check the team thresholds in GPEXE, then check for new sessions\./ },
+      reason: /thresholds \(speed and power zones\) are missing or don(?:'|&#039;)t cover this session(?:'|&#039;)s date\./, step: /Check the team thresholds in GPEXE, then find new sessions\./ },
     { code: "track_missing", message: "track 9005 for athlete 104 was not fetched.",
-      reason: /GPEXE sent incomplete or inconsistent data for this session\./, step: /Check for new sessions again later\./ },
+      reason: /GPEXE sent incomplete or inconsistent data for this session\./, step: /Find new sessions again later\./ },
     { code: "binding_conflict", message: "event 3f2c... is bound to a different threshold set.",
       reason: /conflicts with data already in OptiMove/, step: /Ask a platform admin to look at it/ },
   ];
@@ -655,20 +660,25 @@ test("blocked sessions: the coach reads why and what to do; the server's message
   }
 });
 
-test("an up-to-date session reads as up to date, not as waiting with athletes left out", async () => {
+test("nothing new: a session whose linked athletes are imported is under Imported; one in which nobody is linked yet asks for links instead of reading as done", async () => {
   resetState();
   const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
   installFetchMock(async (call) => {
-    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-same", label: "Training E", previewStatus: "no_changes", counts: { created: 0, unchanged: 5, athletesNotImported: 3 } })] } };
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
+      candidateSummary({ id: "c-same", label: "Training E", previewStatus: "no_changes", counts: { created: 0, unchanged: 5, athletesNotImported: 0 } }),
+      candidateSummary({ id: "c-nolink", label: "Training F", previewStatus: "no_changes", counts: { created: 0, unchanged: 0, athletesNotImported: 3 } }),
+    ] } };
     return base(call);
   });
   await openImports();
   const html = renderTrainingLoadCoachHtml();
-  const group = html.slice(html.indexOf("Up to date - nothing new (1)"));
-  assert.match(group, /<span class="gpexe-badge is-uptodate">Up to date<\/span>/);
-  assert.match(group, /Nothing new to import - no action needed\./);
-  assert.ok(!/left out|Waiting for approval/.test(group.slice(0, group.indexOf("</details>"))));
-  assert.match(html, /<h3>Needs a decision \(0\)<\/h3>/);
+  const imported = html.slice(html.indexOf("<summary>Imported (1)</summary>"));
+  assert.match(imported, /Training E[\s\S]*nothing new/);
+  assert.ok(!/Training F/.test(imported.slice(0, imported.indexOf("</details>"))), "a session with nobody linked is not 'done'");
+  const attention = html.slice(html.indexOf("Needs attention (1)"), html.indexOf("Ready to import ("));
+  assert.match(attention, /Training F[\s\S]*No linked athlete in this session yet - link the athletes from its review, then find new sessions\./);
+  assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
+  assert.ok(!/Up to date/.test(html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "no 'up to date' group any more");
 });
 
 test("blocked sessions in the list: a session that stays out for good is not a decision and asks for nothing; every other block shows the detail's own step", async () => {
@@ -702,19 +712,19 @@ test("blocked sessions in the list: a session that stays out for good is not a d
   let html = renderTrainingLoadCoachHtml();
 
   // The match: its own collapsed group, badge "Not imported", no call to act.
-  assert.match(html, /<h3>Needs a decision \(1\)<\/h3>/, "only the approvable session is a decision");
-  assert.match(html, /<summary>Stays out of OptiMove \(1\)<\/summary>/);
-  const out = html.slice(html.indexOf("<summary>Stays out of OptiMove"));
-  assert.match(out, /Session c-match[\s\S]*Not imported[\s\S]*No action needed - it stays out of OptiMove\./);
-  assert.ok(!/fix|Next:/.test(out.slice(0, out.indexOf("</details>"))), "the excluded session asks for nothing");
+  assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "only the approvable session is ready");
+  assert.match(html, /<summary>Stays out \(1\)<\/summary>/);
+  const out = html.slice(html.indexOf("<summary>Stays out"));
+  assert.match(out, /Session types OptiMove does not import\. Nothing to do\.[\s\S]*Session c-match/);
+  assert.ok(!/fix|Next:|gpexe-candidate-next/.test(out.slice(0, out.indexOf("</details>"))), "the excluded session asks for nothing");
 
-  // Every other block: "Can't be imported yet", and the row's next step is
-  // exactly the detail's "What to do".
-  assert.match(html, /<h3>Can't be imported yet \(5\)<\/h3>/);
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 session needs a decision/);
+  // Every other block is in Needs attention, and the row's step is exactly
+  // the detail's "What to do".
+  assert.match(html, /<h3>Needs attention \(5\)<\/h3>/);
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 5 items need attention · 1 session is ready to import\./);
   for (const id of ["c-thr", "c-stats", "c-none", "c-data", "c-conf"]) {
     const row = html.slice(html.indexOf(`data-candidate-id="${id}"`), html.indexOf("</button>", html.indexOf(`data-candidate-id="${id}"`)));
-    const rowStep = row.match(/<span class="gpexe-candidate-next">Next: ([^<]+)<\/span>/)?.[1];
+    const rowStep = row.match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];
     assert.ok(rowStep, `${id}: a next step in the list`);
     await openCandidate(id);
     const detailHtml = renderTrainingLoadCoachHtml();
@@ -748,7 +758,7 @@ test("when nothing needs a decision but some sessions can't be imported yet, the
   });
   await openImports();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.match(renderTrainingLoadCoachHtml(), /class="gpexe-next"[^>]*>Next step: 1 session can&#039;t be imported yet - see what to do below\./);
+  assert.match(renderTrainingLoadCoachHtml(), /class="gpexe-next"[^>]*>Next step: 1 item needs attention - see below\./);
 });
 
 test("after a check ends, a newly blocked session's reason is loaded and painted (not left on 'Loading why...')", async () => {
@@ -774,7 +784,7 @@ test("after a check ends, a newly blocked session's reason is loaded and painted
   // What the coach would see at each paint: the screen must be painted at
   // least once AFTER the reason arrived, or it stays on "Loading why...".
   let paintedWithReason = false;
-  const paint = () => { if (/Stays out of OptiMove/.test(renderTrainingLoadCoachHtml())) paintedWithReason = true; };
+  const paint = () => { if (/Stays out \(/.test(renderTrainingLoadCoachHtml())) paintedWithReason = true; };
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: paint });
   for (let i = 0; i < 20 && !paintedWithReason; i += 1) await new Promise((resolve) => setImmediate(resolve));
   assert.ok(paintedWithReason, "a paint happened after the blocked reason was loaded");
@@ -871,7 +881,7 @@ test("link: the confirmation shows the exact GPEXE id and the athlete's full nam
   let html = renderTrainingLoadCoachHtml();
   assert.match(html, /<p class="gpexe-link-pair"><strong>GPEXE athlete 104<\/strong> → <strong>Dario Petrov Example<\/strong><\/p>/);
   // The consequence covers this session AND every session imported later.
-  assert.match(html, /<p>Link GPEXE athlete 104 to Dario Petrov Example\? After you check for new sessions and approve the import, athlete 104(?:'|&#039;)s results in this session, and in every GPEXE session imported later, will be imported as Dario Petrov Example\.<\/p>/);
+  assert.match(html, /<p>Link GPEXE athlete 104 to Dario Petrov Example\? After you find new sessions and approve the import, athlete 104(?:'|&#039;)s results in this session, and in every GPEXE session imported later, will be imported as Dario Petrov Example\.<\/p>/);
   assert.match(html, /<p>You can unlink it before an import is approved\. Unlinking doesn(?:'|&#039;)t change results that are already imported: if the link turns out wrong after an import, those results can(?:'|&#039;)t be changed here — contact a platform administrator\.<\/p>/);
   assert.ok(!/Future GPEXE sessions/.test(html), "not only 'future' sessions");
   assert.ok(!/move their results|correct wrongly/.test(html), "no promise of a move or correct function");
@@ -909,7 +919,7 @@ test("link: after linking the old review can't be approved until a new check, an
 
   let html = renderTrainingLoadCoachHtml();
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "no Approve on a review made before the link");
-  assert.match(html, /Athlete links changed after this review was made\.<\/strong> Close it and check for new sessions/);
+  assert.match(html, /Athlete links changed after this review was made\.<\/strong> Close it and find new sessions/);
   assert.match(html, /GPEXE athlete 104 is now linked to Dario Petrov Example\./);
   assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-2"[^>]*>Unlink Dario Petrov Example<\/button>/, "the way back is right there");
 
@@ -921,8 +931,8 @@ test("link: after linking the old review can't be approved until a new check, an
   // and the list says what to do.
   await act("training-load-gpexe-close");
   html = renderTrainingLoadCoachHtml();
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: check for new sessions - athlete links changed after a review was made\./);
-  assert.match(html, /Next: check for new sessions \(with dates that include [0-9.]+\) - athlete links changed after this review was made\./);
+  assert.match(html, /class="gpexe-next"[^>]*>Find new sessions again[^:]*: athlete links changed after these reviews were made\. The dates are set above\./);
+  assert.match(html, /imports-bucket-note">Find new sessions again \(with dates that include [0-9.]+\) first - athlete links changed after these reviews were made\./);
   await openCandidate();
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(renderTrainingLoadCoachHtml()));
 
@@ -976,7 +986,7 @@ test("unlink from the link notice removes exactly the link just made (after a qu
   assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-links/link-2/unlink")).length, 1);
   const html = renderTrainingLoadCoachHtml();
   assert.ok(!/is now linked to/.test(html));
-  assert.match(html, /The link is removed\. Check for new sessions to update the review\./);
+  assert.match(html, /The link is removed\. Find new sessions to update the review\./);
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "an unlink changes the links too");
 });
 
@@ -999,7 +1009,8 @@ test("uncertain outcome: it stays visible after the review is closed - in the li
   assert.match(row, /<span class="gpexe-badge is-unknown">Result not confirmed<\/span>/);
   assert.match(row, /Import result not confirmed yet - open it to check the result\./);
   assert.ok(!/Waiting for approval/.test(row), "not shown as simply waiting");
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: check the result of 1 import that could not be confirmed/);
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 item needs attention - see below\./);
+  assert.match(html, /Import result not confirmed yet - open it to check the result\./);
 
   await openCandidate();
   html = renderTrainingLoadCoachHtml();
@@ -1018,7 +1029,7 @@ test("uncertain outcome: it stays visible after the review is closed - in the li
 
 test("check: a refused start says what to do - wrong dates, no GPEXE access, no GPEXE team", async () => {
   const cases = [
-    { status: 400, error: "invalid_window", text: /Check the dates: From must not be after To, To must not be in the future, and at most 31 days can be checked at once\./ },
+    { status: 400, error: "invalid_window", text: /Check the dates: From must not be after To, To must not be in the future, and at most 31 days can be searched at once\./ },
     { status: 503, error: "gpexe_token_missing", text: /OptiMove has no access to GPEXE set up yet\. Ask a platform admin to set it up\./ },
     { status: 409, error: "gpexe_team_not_configured", text: /This team is not connected to a GPEXE team yet\. Ask a platform admin to connect it in Settings &gt; Data sources\./ },
   ];
@@ -1029,7 +1040,7 @@ test("check: a refused start says what to do - wrong dates, no GPEXE access, no 
     await act("training-load-gpexe-check");
     const html = renderTrainingLoadCoachHtml();
     assert.match(html, k.text, k.error);
-    assert.ok(!/Try again in a moment/.test(html.slice(html.indexOf('aria-label="Check GPEXE"'))), `${k.error}: not a generic "try again"`);
+    assert.ok(!/Try again in a moment/.test(html.slice(html.indexOf('aria-label="Data source GPEXE"'))), `${k.error}: not a generic "try again"`);
   }
 });
 
@@ -1098,7 +1109,7 @@ test("link: a lost answer closes the confirmation, treats the links as changed a
   await act("training-load-gpexe-link-confirm");
   const html = renderTrainingLoadCoachHtml();
   assert.ok(!/gpexe-link-confirm/.test(html), "the confirmation is closed");
-  assert.match(html, /We can(?:'|&#039;)t tell whether the link was made\. Check the list &quot;GPEXE athletes linked to this team&quot; on the GPEXE imports page, and unlink it there if it is wrong\./);
+  assert.match(html, /We can(?:'|&#039;)t tell whether the link was made\. Check the list &quot;GPEXE athletes linked to this team&quot; on the Imports page, and unlink it there if it is wrong\./);
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(html), "the link may have been made: no Approve on the old review");
 });
 
@@ -1202,7 +1213,7 @@ test("texts shown in the review never point to a list 'below' - the link list is
   const dialog = () => { const h = renderTrainingLoadCoachHtml(); return h.slice(h.indexOf('class="gpexe-detail-body"')); };
   assert.ok(!/ below/.test(dialog().replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "").replace(/Do the step below/g, "")), "no 'below' in the dialog after a lost link answer");
   await act("training-load-gpexe-unlink", { linkId: "link-1" });
-  assert.match(dialog(), /We can(?:'|&#039;)t tell whether the link was removed\. Check the list &quot;GPEXE athletes linked to this team&quot; on the GPEXE imports page\./);
+  assert.match(dialog(), /We can(?:'|&#039;)t tell whether the link was removed\. Check the list &quot;GPEXE athletes linked to this team&quot; on the Imports page\./);
   assert.ok(!/linked to this team&quot; below/.test(renderTrainingLoadCoachHtml()));
 });
 test("unlink from the link notice names the pair even when the link list could not be read again", async () => {
@@ -1234,5 +1245,263 @@ test("a team with no GPEXE connection points the coach at the tab that actually 
   // Both places that name the location, not just the refusal text a check
   // answers with (covered above).
   assert.match(html, /A platform admin connects it in Settings &gt; Data sources\./);
-  assert.match(html, /connect this team to its GPEXE team \(Settings &gt; Data sources\)/);
+  assert.match(html, /connect this team to a data source \(Settings &gt; Data sources\)/);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2 shell (Imports, source-neutral): the no-team message, the Ready
+// header in review-only states, and what stays under Technical details.
+// ---------------------------------------------------------------------------
+
+test("Imports: with no team in the workspace there is one sentence and the existing workspace menu - no second team picker", async () => {
+  resetState();
+  installFetchMock(async (call) => {
+    if (call.url === "/api/organization") return { status: 200, body: { teams: [], clubs: [], athletes: [] } };
+    return { status: 404, body: { error: "notFound" } };
+  });
+  // A coach who also has a team workspace to switch to: the button opens
+  // the existing workspace menu.
+  state.currentUser = { ...(state.currentUser || {}), activeWorkspace: { type: "private_coach", scopeId: null }, availableWorkspaces: [{ type: "private_coach" }, { type: "team", scopeId: TEAM_A }] };
+  await openImports();
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /Imports work in a team or club workspace\. Switch to one from the workspace menu\./);
+  assert.match(html, /data-action="workspace-toggle"[^>]*>Choose a workspace</);
+  assert.ok(!/No team in this workspace/.test(html), "the old, second message is gone");
+  assert.ok(!/gpexe-select|data-org-select-filter/.test(html), "no team picker of its own");
+  assert.ok(!/the team is chosen below/.test(html), "the filter note does not promise a team picker");
+
+  // A coach with no team or club workspace at all: told so, no dead button.
+  state.currentUser = { ...state.currentUser, availableWorkspaces: [{ type: "private_coach" }] };
+  html = renderTrainingLoadCoachHtml();
+  assert.match(html, /This account has no team or club workspace yet - ask your club or platform admin to add you to a team\./);
+  assert.ok(!/workspace-toggle/.test(html), "no button that would open nothing");
+});
+
+test("Imports: the Ready header says 'review only' while importing is switched off, and when the viewer may not approve", async () => {
+  for (const [teamStatus, phrase] of [
+    [{ enabled: false, canApprove: true }, /Review only - importing waits until it is turned on in this environment\./],
+    [{ enabled: true, canApprove: false }, /Review only - an approver imports these \(a platform admin, or a coach with approval rights for this team\)\./],
+  ]) {
+    resetState();
+    installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: teamStatus } }));
+    await openImports();
+    const html = renderTrainingLoadCoachHtml();
+    const ready = html.slice(html.indexOf("Ready to import ("), html.indexOf("</section>", html.indexOf("Ready to import (")));
+    assert.match(ready, phrase);
+  }
+  // A viewer who may approve, with the switch on: no note at all.
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true, canApprove: true } } }));
+  await openImports();
+  const html = renderTrainingLoadCoachHtml();
+  assert.ok(!/imports-bucket-note/.test(html), "no review-only note for an approver with the switch on");
+});
+
+test("Imports: the source card shows the source name, the connection, when sessions were found and one button; ids, statuses and the server's sentence stay under Technical details", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false } } }));
+  await openImports();
+  const html = renderTrainingLoadCoachHtml();
+  const card = html.slice(html.indexOf('class="gpexe-panel imports-source"'), html.indexOf("</section>", html.indexOf('class="gpexe-panel imports-source"')));
+  assert.match(card, /<h3>GPEXE<\/h3>/);
+  assert.match(card, /imports-state is-on">Connected</);
+  assert.match(card, /Sessions from the last successful search are listed below\./, "no search recorded, but sessions are listed");
+  assert.match(card, /data-action="training-load-gpexe-check"[^>]*>Find new sessions</);
+  assert.match(card, /<summary>Choose dates<\/summary>/);
+  const open = card.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
+  assert.ok(!/980|approvalBasis|team_grant|pending|Show replaced versions/.test(open), "nothing technical in the open");
+  assert.match(card, /<dt>GPEXE team id<\/dt><dd>980<\/dd>/);
+  assert.match(card, /<dt>Server message<\/dt><dd>Import writing is switched off in this environment/);
+  assert.match(card, /<details class="gpexe-tech">[\s\S]*Show replaced versions/);
+});
+
+test("Imports: while importing is off, or the viewer may not approve, the next step never says 'import' - it says review", async () => {
+  for (const [teamStatus, phrase] of [
+    [{ enabled: false, canApprove: true }, /Next step: 1 session can be reviewed\. Importing waits until it is turned on in this environment\./],
+    [{ enabled: true, canApprove: false }, /Next step: 1 session can be reviewed\. An approver imports these \(a platform admin, or a coach with approval rights for this team\)\./],
+    [{ enabled: true, canApprove: true }, /Next step: 1 session is ready to import - open one to import it\./],
+  ]) {
+    resetState();
+    installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: teamStatus } }));
+    await openImports();
+    assert.match(renderTrainingLoadCoachHtml(), phrase);
+  }
+});
+
+test("Imports: a search that found nothing says so with its dates; a running or failed search never denies the sessions listed below", async () => {
+  resetState();
+  const empty = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [] } };
+    if (call.url.endsWith("/status")) return { status: 200, body: { ...status({ enabled: true }), lastCheck: { id: "chk-0", status: "succeeded", window: { from: "2026-09-01", to: "2026-09-14" }, finishedAt: "2026-09-14T10:00:00Z", sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0 } } };
+    return empty(call);
+  });
+  await openImports();
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /No sessions in GPEXE for [0-9.]+ - [0-9.]+\. Choose other dates and find again\./);
+  assert.ok(!/Nothing found yet/.test(html), "a finished search is not 'nothing yet'");
+
+  resetState();
+  installFetchMock(async (call) => {
+    if (call.url.endsWith("/status")) return { status: 200, body: { ...status({ enabled: true }), lastCheck: { id: "chk-f", status: "failed", window: { from: "2026-09-01", to: "2026-09-14" }, startedAt: "2026-09-14T10:00:00Z", error: { code: "gpexe_unreachable", message: "x" } } } };
+    return gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } })(call);
+  });
+  await openImports();
+  html = renderTrainingLoadCoachHtml();
+  assert.match(html, /Sessions from the last successful search are listed below\./);
+  assert.ok(!/No sessions found yet/.test(html), "the failed search does not deny the listed sessions");
+  assert.match(html, /did not finish\. Try again in a moment\./);
+});
+
+test("Imports: a stale review after a link change says so on its row, and the dates for finding it again are filled in and opened", async () => {
+  resetState();
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-left", label: "Training L", sessionStartedAt: "2026-09-14T16:08:12Z", counts: { created: 4, athletesNotImported: 2 } })] } };
+    return base(call);
+  });
+  await openImports();
+  await openCandidate("c-left");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link", gpexeAthleteId: "104" }), { renderTrainingLoad: render });
+  state.trainingLoad.gpexe.linkConfirm = { gpexeAthleteId: "104", athleteId: "ath-2", athleteName: "Bo Example" };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link-confirm" }), { renderTrainingLoad: render });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /Athlete links changed after this review - find new sessions with dates that include 14\.09\.2026 to see it again\./);
+  assert.match(html, /class="gpexe-next"[^>]*>Find new sessions again \(with dates that include 14\.09\.2026\): athlete links changed after these reviews were made\. The dates are set above\./);
+  assert.match(html, /<details class="imports-dates" open>/);
+  assert.match(html, /data-gpexe-field="from" value="2026-09-14"/);
+  assert.match(html, /data-gpexe-field="to" value="2026-09-14"/);
+});
+
+test("Imports: a team with no connection shows neither the dates nor a search hint - only the one sentence and the Next step", async () => {
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { settings: null } } }));
+  await openImports();
+  const html = renderTrainingLoadCoachHtml();
+  const card = html.slice(html.indexOf('class="gpexe-panel imports-source"'), html.indexOf("</section>", html.indexOf('class="gpexe-panel imports-source"')));
+  assert.match(card, /imports-state is-off">Not connected</);
+  assert.ok(!/Choose dates|last 14 days|data-gpexe-field/.test(card), "no search controls for an unconnected team");
+  assert.match(html, /A platform admin needs to connect this team to a data source \(Settings &gt; Data sources\)\./);
+  assert.ok(!/Nothing is ready to import\. Find new sessions/.test(html), "no second, impossible instruction");
+});
+
+// The owner's Ready rule, through the real render path with an explicit
+// fixture (the suite's default session is deliberately clean; this is the
+// one place the unlinked case is proved).
+test("Imports: a pending session with an unlinked recorded athlete is Needs attention, never Ready - and a row with two reasons shows both", async () => {
+  resetState();
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
+      candidateSummary({ id: "c-left", label: "Training L", counts: { created: 3, athletesNotImported: 1 } }),
+      candidateSummary({ id: "c-both", label: "Training M", counts: { created: 2, athletesNotImported: 2 }, changesToImported: 1 }),
+      candidateSummary({ id: "c-mix", label: "Training G", previewStatus: "no_changes", counts: { created: 0, unchanged: 5, athletesNotImported: 3 } }),
+    ] } };
+    return base(call);
+  });
+  await openImports();
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /<h3>Needs attention \(3\)<\/h3>/);
+  assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
+  const ready = html.slice(html.indexOf("Ready to import ("), html.indexOf("</section>", html.indexOf("Ready to import (")));
+  assert.ok(!/Training L|Training M|Training G/.test(ready), "none of them is ready");
+  assert.match(html, /Training L[\s\S]*1 recorded athlete is left out - open it to see who and why\./);
+  const both = html.slice(html.indexOf('data-candidate-id="c-both"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-both"')));
+  assert.match(both, /1 change to imported results/);
+  assert.match(both, /2 athletes left out/);
+  // Some imported, some unlinked: "left out", never "nobody linked yet".
+  assert.match(html, /Training G[\s\S]*3 recorded athletes are left out - open it to see who and why\./);
+  assert.ok(!/Training G[\s\S]{0,400}No linked athlete in this session yet/.test(html));
+});
+
+test("Imports: a club workspace without a team gets no dead 'Choose a workspace' button - it is told a team is missing", async () => {
+  resetState();
+  installFetchMock(async (call) => {
+    if (call.url === "/api/organization") return { status: 200, body: { teams: [], clubs: [{ id: "club-1", name: "Club" }], athletes: [] } };
+    return { status: 404, body: { error: "notFound" } };
+  });
+  state.currentUser = { ...(state.currentUser || {}), activeWorkspace: { type: "club", scopeId: "club-1" }, availableWorkspaces: [{ type: "club", scopeId: "club-1" }] };
+  await openImports();
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /This club has no team yet\. Add one in Settings &gt; Teams, then come back here\./);
+  assert.ok(!/workspace-toggle/.test(html), "the header menu would not open for one workspace");
+
+  // Only one workspace, and it is a team or club: the header menu never
+  // opens, so no button either.
+  state.currentUser = { ...state.currentUser, activeWorkspace: { type: "private_coach", scopeId: null }, availableWorkspaces: [{ type: "club", scopeId: "club-1" }] };
+  html = renderTrainingLoadCoachHtml();
+  assert.ok(!/workspace-toggle/.test(html), "one workspace: the menu has nothing to offer");
+});
+
+test("Imports: the pre-filled dates never exceed the 31-day search limit, and a stale session without a date does not claim the dates are set", async () => {
+  resetState();
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
+      candidateSummary({ id: "c-old", label: "Training old", sessionStartedAt: "2026-08-01T10:00:00Z", snapshot: { available: false, expiresAt: "2026-08-31T00:00:00Z" } }),
+      candidateSummary({ id: "c-left", label: "Training L", sessionStartedAt: "2026-09-14T16:08:12Z", counts: { created: 4, athletesNotImported: 2 } }),
+    ] } };
+    return base(call);
+  });
+  await openImports();
+  let html = renderTrainingLoadCoachHtml();
+  // The expired session alone sets the dates.
+  assert.match(html, /data-gpexe-field="from" value="2026-08-01"/);
+  assert.match(html, /data-gpexe-field="to" value="2026-08-01"/);
+  assert.match(html, /The dates are set to include the sessions that need finding again \(01\.08\.2026\)\./);
+
+  // After a link change the stale review of 14 Sep joins: 1 Aug - 14 Sep is
+  // 45 days, so the latest 31 are set and the hint says so.
+  await openCandidate("c-left");
+  state.trainingLoad.gpexe.linkConfirm = { gpexeAthleteId: "104", athleteId: "ath-2", athleteName: "Bo Example" };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link-confirm" }), { renderTrainingLoad: render });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
+  html = renderTrainingLoadCoachHtml();
+  assert.match(html, /data-gpexe-field="from" value="2026-08-15"/);
+  assert.match(html, /data-gpexe-field="to" value="2026-09-14"/);
+  assert.match(html, /latest 31 days of the sessions that need finding again \(15\.08\.2026 - 14\.09\.2026\); search the earlier ones afterwards\./);
+
+  // A stale session with no start date: the sentence does not point at dates that are not set.
+  resetState();
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-nodate", label: "Training N", sessionStartedAt: null, counts: { created: 1, athletesNotImported: 1 } })] } };
+    return base(call);
+  });
+  await openImports();
+  await openCandidate("c-nodate");
+  state.trainingLoad.gpexe.linkConfirm = { gpexeAthleteId: "104", athleteId: "ath-2", athleteName: "Bo Example" };
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link-confirm" }), { renderTrainingLoad: render });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
+  html = renderTrainingLoadCoachHtml();
+  assert.match(html, /Find new sessions again: athlete links changed after these reviews were made\./);
+  assert.ok(!/The dates are set above/.test(html), "next step: " + (html.match(/class="gpexe-next"[^>]*>([^<]*)/) || [])[1]);
+  assert.ok(!/<details class="imports-dates" open>/.test(html), "hint: " + (html.match(/gpexe-hint">([^<]*)/) || [])[1]);
+});
+
+test("Imports: the notice after an import never points to a bucket the row is not in, and is gone after another review is opened", async () => {
+  resetState();
+  let listReads = 0;
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    onApprove: () => ({ status: 200, body: { approval: { id: "apr-1" }, import: { counts: { created: 4 } }, candidate: candidateDetail({ summary: { status: "imported" } }) } }),
+  }));
+  const server = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    // After the import, the list read fails once: the row stays pending on screen.
+    if (/\/candidates(\?|$)/.test(url) && listReads++ >= 1) return { ok: false, status: 500, statusText: "", json: async () => ({ error: "internal_error" }) };
+    return server(url, options);
+  };
+  await openImports();
+  await openCandidate("cand-1");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-approve" }), { renderTrainingLoad: render });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /is imported\. The list is being refreshed\./);
+  assert.ok(!/listed under Imported below/.test(html), "the list does not show it as imported yet");
+
+  // Opening another review clears the old notice.
+  globalThis.fetch = server;
+  await openCandidate("cand-1");
+  assert.equal(state.trainingLoad.gpexe.notice, "");
 });

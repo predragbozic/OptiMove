@@ -1541,7 +1541,7 @@ const DATA_ANALYSIS_SUBVIEWS = [
   { section: "today", label: "Activities" },
   { section: "results", label: "Athletes" },
   { section: "analysis", label: "Dashboards" },
-  { section: "imports", label: "GPEXE imports" },
+  { section: "imports", label: "Imports" },
 ];
 
 function renderDataAnalysisSubNavHtml(section) {
@@ -1583,7 +1583,7 @@ export function renderTrainingLoadCoachHtml() {
           : `<button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>`}
       </div>
       ${section === "analysis" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">Club, team and athlete filters are not available for Dashboards yet.</p>` : ""}
-      ${section === "imports" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">GPEXE imports work one team at a time; choose the team below.</p>` : ""}
+      ${section === "imports" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">Club, team and athlete filters do not apply to Imports.</p>` : ""}
       ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section) : ""}
       ${section === "overview" ? renderTrainingLoadOverviewHtml() : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}

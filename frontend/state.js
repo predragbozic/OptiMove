@@ -615,7 +615,7 @@ export const emptyExternalScheduleDetail = (overrides = {}) => ({
   ...overrides,
 });
 
-// Data & Analysis -> "GPEXE imports" (section key "imports", phase F3a). One
+// Data & Analysis -> "Imports" (section key "imports"; GPEXE is the first source). One
 // team at a time; `generation` drops answers for a team no longer shown.
 // `detail` is the open candidate; its `outcome` is the approval's answer:
 // imported / refused (nothing written) / unknown (COMMIT not confirmed).
