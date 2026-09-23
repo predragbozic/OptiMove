@@ -191,6 +191,12 @@ test("check: candidates and a preview are saved while the import switch is off, 
   assert.equal(summary.previewStatus, "ready");
   assert.ok(!summary.approvalBlockers.includes("approval_not_available_yet"), "F2: approval exists");
   assert.ok(summary.approvalBlockers.includes("import_switch_off"));
+  // Phase 2b: what keeps it out of "Ready" comes with the list (104 unlinked,
+  // 103 on two tracks, 105 marked invalid), nothing blocks the session.
+  assert.deepEqual([summary.blockedCode, summary.blockedSourceCode, summary.sessionType], [null, null, "FULL TRAINING"]);
+  assert.deepEqual(summary.reasons, [
+    { code: "athletes_not_linked", count: 1 }, { code: "athletes_need_manual_review", count: 1 }, { code: "athletes_marked_invalid_by_source", count: 1 },
+  ]);
 
   const { rows: [counts] } = { rows: [await writtenRows(team.teamId)] };
   const { all_values: valuesAfter, ...teamRows } = counts;
@@ -304,8 +310,13 @@ test("check: a session the importer cannot take is saved as blocked, with the re
   await checkNow(team);
   const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   assert.equal(summary.status, "blocked");
-  const preview = (await api(`/teams/${team.teamId}/candidates/${summary.id}`, { cookie: team.coach.cookie })).body.candidate.preview;
-  assert.equal(preview.blocked.code, "unsupported_category");
+  // The list row already says why, in neutral terms; the adapter's code and
+  // the session type come with it, the server's sentence does not.
+  assert.deepEqual([summary.blockedCode, summary.blockedSourceCode, summary.sessionType, summary.reasons], ["unsupported_session_type", "unsupported_category", "OFFICIAL MATCH", []]);
+  assert.equal(summary.preview, undefined, "the list carries no preview");
+  const candidate = (await api(`/teams/${team.teamId}/candidates/${summary.id}`, { cookie: team.coach.cookie })).body.candidate;
+  assert.equal(candidate.preview.blocked.code, "unsupported_category");
+  assert.deepEqual([candidate.blockedCode, candidate.sessionType], ["unsupported_session_type", "OFFICIAL MATCH"], "the detail carries the same fields");
 });
 
 test("check: GPEXE refusing the token fails the check with a stable code, and the token appears nowhere", async () => {
@@ -376,6 +387,7 @@ test("retention: an expired snapshot is gone for the app before the purge, the p
   const expired = (await api(`/teams/${team.teamId}/candidates/${summary.id}`, { cookie: team.coach.cookie })).body.candidate;
   assert.deepEqual([expired.snapshot.available, expired.snapshot.reason, expired.preview], [false, "expired", null]);
   assert.ok(expired.approvalBlockers.includes("snapshot_expired_check_again"));
+  assert.deepEqual([expired.blockedCode, expired.blockedSourceCode, expired.sessionType, expired.reasons], [null, null, null, []], "an expired snapshot claims no reason");
   const padmin = await platformAdmin();
   const watching = (await api(`/retention`, { cookie: padmin.cookie })).body.retention;
   assert.ok(watching.expiredNotPurged >= 1);
@@ -651,6 +663,7 @@ test("preview: an athlete imported before and now left out blocks the session, a
   await checkNow(team);
   const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   assert.equal(summary.status, "blocked");
+  assert.deepEqual([summary.blockedCode, summary.blockedSourceCode], ["earlier_import_left_behind", "identities_missing_from_source"]);
   const preview = (await api(`/teams/${team.teamId}/candidates/${summary.id}`, { cookie: team.coach.cookie })).body.candidate.preview;
   assert.equal(preview.blocked.code, "identities_missing_from_source");
   assert.deepEqual(preview.blocked.gpexeAthleteIds, ["101"]);
@@ -673,6 +686,10 @@ test("preview: an athlete imported before and now left out blocks the session, a
   // No longer blocked; 101 and 102 were imported already and are unchanged.
   assert.equal(after.status, "pending");
   assert.equal(after.previewStatus, "no_changes");
+  // 101 and 102 are linked and imported; 104 stays unlinked, 103 and 105
+  // keep their data reasons: "nothing new" is not "nobody linked".
+  assert.equal(after.blockedCode, null);
+  assert.deepEqual(after.reasons.map((r) => r.code), ["athletes_not_linked", "athletes_need_manual_review", "athletes_marked_invalid_by_source"]);
 });
 
 test("access: the club admin sees the team in the club's workspace, not in another club's", async () => {
@@ -986,6 +1003,7 @@ test("approve: every change to an already imported result is listed and must be 
   const candidate = await pendingCandidate(team);
   assert.equal(candidate.changesToImported, 1);
   assert.equal(candidate.preview.counts.changesToImported, 1);
+  assert.deepEqual(candidate.reasons.at(-1), { code: "changes_to_imported_results", count: 1 }, "the list's last reason is the change to accept");
   const [change] = candidate.preview.changesToImported;
   assert.equal(change.gpexeAthleteId, "101");
   assert.equal(change.externalId, fullId);
@@ -1714,4 +1732,108 @@ test("approve: the COMMIT went through but its answer never comes — bounded, t
   assert.deepEqual(await poolSettled(), { inUse: 0, openTx: 0, waiting: 0 });
   assert.equal((await approvalsOf(candidate.id)).length, 1);
   assert.equal((await writtenRows(team.teamId)).events, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Imports phase 2b: the list carries the reasons the inbox needs for its
+// four buckets, from the same query it already runs.
+// ---------------------------------------------------------------------------
+
+// Every SQL statement the server runs while `fn` runs: through pool.query
+// and through a checked-out client (pool.connect) alike.
+async function countQueries(fn) {
+  const originalQuery = appPool.query;
+  const originalConnect = appPool.connect;
+  let n = 0;
+  appPool.query = function counted(...args) {
+    n += 1;
+    return originalQuery.apply(this, args);
+  };
+  appPool.connect = function countedConnect(cb) {
+    // pool.query itself connects with a callback; that path is already
+    // counted at pool.query. Only a client handed out as a promise is spied.
+    if (typeof cb === "function") return originalConnect.call(this, cb);
+    return originalConnect.call(this).then((client) => {
+      const clientQuery = client.query;
+      client.query = function countedClientQuery(...qargs) {
+        n += 1;
+        return clientQuery.apply(this, qargs);
+      };
+      const release = client.release;
+      client.release = function restoringRelease(...rargs) {
+        client.query = clientQuery;
+        client.release = release;
+        return release.apply(this, rargs);
+      };
+      return client;
+    });
+  };
+  try {
+    await fn();
+  } finally {
+    appPool.query = originalQuery;
+    appPool.connect = originalConnect;
+  }
+  return n;
+}
+
+test("countQueries (test helper): a query through a checked-out client is counted too", async () => {
+  const n = await countQueries(async () => {
+    const client = await appPool.connect();
+    try {
+      await client.query("select 1");
+    } finally {
+      client.release();
+    }
+  });
+  assert.equal(n, 1);
+});
+
+test("candidates list: blocked code and reasons come with the list, and the list runs the same number of queries for one candidate as for several", async () => {
+  const team = await setupTeam();
+  // One session first: 101 and 102 linked and measured, 104 unlinked, 103 on
+  // two tracks, 105 marked invalid.
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7201 })] }));
+  await checkNow(team);
+  const one = await countQueries(async () => {
+    const r = await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.candidates.length, 1);
+  });
+
+  // Then a match (blocked, stays out), a session in which nobody is linked
+  // (only athlete 104 recorded) and a session GPEXE marks invalid.
+  const [, a102] = standardAthletes();
+  const only104 = makeBundle({ sessionId: 7202, gpexeTeamId: 77, athletes: [{ ...structuredClone(a102), id: 104, tracks: [9105] }] });
+  const invalid = sessionBundle({ sessionId: 7204 });
+  invalid.teamSession.is_stats_valid = false;
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [
+    sessionBundle({ sessionId: 7201 }), sessionBundle({ sessionId: 7203, category: "OFFICIAL MATCH" }), only104, invalid,
+  ] }));
+  await checkNow(team);
+
+  let list;
+  const several = await countQueries(async () => {
+    const r = await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie });
+    assert.equal(r.status, 200);
+    list = r.body.candidates;
+  });
+  assert.equal(list.length, 4);
+  assert.equal(several, one, `the list must not read per candidate (one candidate: ${one} queries, four: ${several})`);
+
+  const by = Object.fromEntries(list.map((c) => [c.gpexeTeamSessionId, c]));
+  assert.deepEqual([by["7201"].status, by["7201"].blockedCode, by["7201"].reasons.map((r) => r.code)],
+    ["pending", null, ["athletes_not_linked", "athletes_need_manual_review", "athletes_marked_invalid_by_source"]]);
+  assert.deepEqual([by["7203"].status, by["7203"].blockedCode, by["7203"].blockedSourceCode, by["7203"].sessionType, by["7203"].reasons],
+    ["blocked", "unsupported_session_type", "unsupported_category", "OFFICIAL MATCH", []]);
+  assert.deepEqual([by["7202"].status, by["7202"].previewStatus, by["7202"].blockedCode, by["7202"].reasons],
+    ["pending", "no_changes", null, [{ code: "no_linked_athlete", count: 1 }]]);
+  assert.deepEqual([by["7204"].status, by["7204"].blockedCode, by["7204"].blockedSourceCode],
+    ["blocked", "source_marks_session_invalid", "session_stats_invalid"]);
+  // No server sentence rides on the list: the coach's words are the app's.
+  for (const c of list) {
+    assert.equal(c.preview, undefined);
+    assert.ok(!("blockedMessage" in c) && !("message" in c), c.gpexeTeamSessionId);
+    assert.ok(Array.isArray(c.reasons));
+  }
 });

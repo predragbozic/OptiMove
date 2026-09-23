@@ -76,8 +76,23 @@ function candidateSummary(overrides = {}) {
     // A clean session by default: every recorded athlete linked. Tests that
     // need a left-out athlete say so.
     status: "pending", previewStatus: "ready", counts: { created: 4, athletesNotImported: 0 }, changesToImported: 0,
-    snapshot: { available: true, expiresAt: "2026-10-14T00:00:00Z" }, approvalBlockers: [], ...overrides,
+    snapshot: { available: true, expiresAt: "2026-10-14T00:00:00Z" }, approvalBlockers: [],
+    // Phase 2b: the list's own reasons.
+    blockedCode: null, blockedSourceCode: null, sessionType: "FULL TRAINING", reasons: [], ...overrides,
   };
+}
+
+// The neutral blocked code the server derives from each adapter code
+// (backend/src/gpexeImportReasons.js); a test that serves a blocked session
+// serves both, as the server does.
+const NEUTRAL = {
+  unsupported_category: "unsupported_session_type", identities_missing_from_source: "earlier_import_left_behind",
+  thresholds_not_valid_for_session: "source_thresholds_unavailable", thresholds_missing: "source_thresholds_unavailable",
+  session_stats_invalid: "source_marks_session_invalid", no_importable_participants: "no_importable_athlete",
+  track_missing: "source_data_inconsistent", binding_conflict: "conflicts_with_existing_data",
+};
+function blockedSummary(sourceCode, over = {}) {
+  return { status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"], blockedCode: NEUTRAL[sourceCode], blockedSourceCode: sourceCode, ...over };
 }
 
 function candidateDetail(overrides = {}) {
@@ -561,8 +576,10 @@ test("main screen speaks to the coach: check for new sessions, needs a decision,
     if (/\/candidates(\?|$)/.test(call.url)) {
       return { status: 200, body: { candidates: [
         candidateSummary({ id: "c-new", label: "Training A" }),
-        candidateSummary({ id: "c-chg", label: "Training B", changesToImported: 2 }),
-        candidateSummary({ id: "c-blk", label: "Match C", status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] }),
+        candidateSummary({ id: "c-chg", label: "Training B", changesToImported: 2, reasons: [{ code: "changes_to_imported_results", count: 2 }] }),
+        // A blocked row whose answer carries no code (an older server): the
+        // row still asks to be opened, never a raw code.
+        candidateSummary({ id: "c-blk", label: "Match C", status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"], blockedCode: undefined }),
         candidateSummary({ id: "c-imp", label: "Training D", status: "imported", approvalBlockers: ["already_imported"] }),
       ] } };
     }
@@ -597,7 +614,7 @@ test("blocked steps speak to the coach: no field names or runbook paths in the m
   const serverStep = 'Make the OptiMove athlete (previousAthleteId) an active member of the team again, then press "Check now". Or a platform admin undoes the earlier import of this session (docs/runbooks/gpexe-undo-imported-session.md; for a persistent database that needs its own approval first), and the session is checked again.';
   installFetchMock(gpexeServer({
     onCandidate: () => ({ status: 200, body: { candidate: candidateDetail({
-      summary: { status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] },
+      summary: blockedSummary("identities_missing_from_source"),
       blocked: { code: "identities_missing_from_source", message: "Results imported earlier would be left behind.", gpexeAthleteIds: ["101"],
         resolution: [{ gpexeAthleteId: "101", previousAthleteId: "ath-1", cause: "athlete_not_in_team", action: "restore_team_membership", step: serverStep }] },
     }) } }),
@@ -645,7 +662,7 @@ test("blocked sessions: the coach reads why and what to do; the server's message
   for (const k of cases) {
     resetState();
     installFetchMock(gpexeServer({
-      onCandidate: () => ({ status: 200, body: { candidate: { ...candidateDetail({ summary: { status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"], label: "GPEXE OFFICIAL MATCH 2026-09-16T17:00:00" } }),
+      onCandidate: () => ({ status: 200, body: { candidate: { ...candidateDetail({ summary: blockedSummary(k.code, { label: "GPEXE OFFICIAL MATCH 2026-09-16T17:00:00", sessionType: k.session?.categoryName || null }) }),
         preview: { ...candidateDetail().preview, status: "blocked", blocked: { code: k.code, message: k.message }, session: k.session || {}, athletes: [], teamAthletesWithoutGpexeRecord: [] } } } }),
     }));
     await openImports();
@@ -666,7 +683,7 @@ test("nothing new: a session whose linked athletes are imported is under Importe
   installFetchMock(async (call) => {
     if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
       candidateSummary({ id: "c-same", label: "Training E", previewStatus: "no_changes", counts: { created: 0, unchanged: 5, athletesNotImported: 0 } }),
-      candidateSummary({ id: "c-nolink", label: "Training F", previewStatus: "no_changes", counts: { created: 0, unchanged: 0, athletesNotImported: 3 } }),
+      candidateSummary({ id: "c-nolink", label: "Training F", previewStatus: "no_changes", counts: { created: 0, unchanged: 0, athletesNotImported: 3 }, reasons: [{ code: "no_linked_athlete", count: 3 }] }),
     ] } };
     return base(call);
   });
@@ -681,7 +698,7 @@ test("nothing new: a session whose linked athletes are imported is under Importe
   assert.ok(!/Up to date/.test(html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "no 'up to date' group any more");
 });
 
-test("blocked sessions in the list: a session that stays out for good is not a decision and asks for nothing; every other block shows the detail's own step", async () => {
+test("blocked sessions in the list: sorted from the list's own code with no detail read; a session that stays out for good asks for nothing, every other block shows the detail's own step", async () => {
   resetState();
   const blockedCases = {
     "c-match": { code: "unsupported_category", message: 'team_session 8002 category "OFFICIAL MATCH" is not importable in the pilot.', categoryName: "OFFICIAL MATCH" },
@@ -696,13 +713,13 @@ test("blocked sessions in the list: a session that stays out for good is not a d
     if (/\/candidates(\?|$)/.test(call.url)) {
       return { status: 200, body: { candidates: [
         candidateSummary({ id: "c-ok", label: "Training OK" }),
-        ...Object.keys(blockedCases).map((id) => candidateSummary({ id, label: `Session ${id}`, status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"], lastSeenAt: "2026-09-18T10:00:00Z" })),
+        ...Object.keys(blockedCases).map((id) => candidateSummary({ id, label: `Session ${id}`, ...blockedSummary(blockedCases[id].code, { sessionType: blockedCases[id].categoryName || null }), lastSeenAt: "2026-09-18T10:00:00Z" })),
       ] } };
     }
     const m = call.url.match(/\/candidates\/(c-[a-z]+)$/);
     if (m && blockedCases[m[1]]) {
       const k = blockedCases[m[1]];
-      const detail = candidateDetail({ summary: { id: m[1], status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] } });
+      const detail = candidateDetail({ summary: { id: m[1], ...blockedSummary(k.code, { sessionType: k.categoryName || null }) } });
       return { status: 200, body: { candidate: { ...detail, preview: { ...detail.preview, status: "blocked", blocked: { code: k.code, message: k.message }, session: { categoryName: k.categoryName || null }, athletes: [], teamAthletesWithoutGpexeRecord: [] } } } };
     }
     return base(call);
@@ -710,6 +727,7 @@ test("blocked sessions in the list: a session that stays out for good is not a d
   await openImports();
   await new Promise((resolve) => setImmediate(resolve));
   let html = renderTrainingLoadCoachHtml();
+  assert.equal(fetchCalls.filter((c) => /\/candidates\/[^/?]+$/.test(c.url)).length, 0, "the list is sorted without reading any session's detail");
 
   // The match: its own collapsed group, badge "Not imported", no call to act.
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "only the approvable session is ready");
@@ -749,19 +767,15 @@ test("when nothing needs a decision but some sessions can't be imported yet, the
   resetState();
   const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
   installFetchMock(async (call) => {
-    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-thr", status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] })] } };
-    if (call.url.endsWith("/candidates/c-thr")) {
-      const d = candidateDetail();
-      return { status: 200, body: { candidate: { ...d, id: "c-thr", status: "blocked", preview: { ...d.preview, status: "blocked", blocked: { code: "thresholds_missing", message: "x" }, athletes: [] } } } };
-    }
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-thr", ...blockedSummary("thresholds_missing") })] } };
     return base(call);
   });
   await openImports();
-  await new Promise((resolve) => setImmediate(resolve));
   assert.match(renderTrainingLoadCoachHtml(), /class="gpexe-next"[^>]*>Next step: 1 item needs attention - see below\./);
+  assert.match(renderTrainingLoadCoachHtml(), /Check the team thresholds in GPEXE, then find new sessions\./);
 });
 
-test("after a check ends, a newly blocked session's reason is loaded and painted (not left on 'Loading why...')", async () => {
+test("after a check ends, a newly blocked session is sorted from the list answer alone - no detail read", async () => {
   resetState();
   let afterCheck = false;
   const base = gpexeServer({
@@ -772,23 +786,17 @@ test("after a check ends, a newly blocked session's reason is loaded and painted
   });
   installFetchMock(async (call) => {
     if (/\/candidates(\?|$)/.test(call.url)) {
-      return { status: 200, body: { candidates: afterCheck ? [candidateSummary({ id: "c-m", label: "GPEXE OFFICIAL MATCH", status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"] })] : [] } };
-    }
-    if (call.url.endsWith("/candidates/c-m")) {
-      const d = candidateDetail();
-      return { status: 200, body: { candidate: { ...d, id: "c-m", status: "blocked", preview: { ...d.preview, status: "blocked", blocked: { code: "unsupported_category", message: "x" }, session: { categoryName: "OFFICIAL MATCH" }, athletes: [] } } } };
+      return { status: 200, body: { candidates: afterCheck ? [candidateSummary({ id: "c-m", label: "GPEXE OFFICIAL MATCH", ...blockedSummary("unsupported_category", { sessionType: "OFFICIAL MATCH" }) })] : [] } };
     }
     return base(call);
   });
   await openImports();
-  // What the coach would see at each paint: the screen must be painted at
-  // least once AFTER the reason arrived, or it stays on "Loading why...".
-  let paintedWithReason = false;
-  const paint = () => { if (/Stays out \(/.test(renderTrainingLoadCoachHtml())) paintedWithReason = true; };
+  let paintedOut = false;
+  const paint = () => { if (/Stays out \(1\)/.test(renderTrainingLoadCoachHtml())) paintedOut = true; };
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-check" }), { renderTrainingLoad: paint });
-  for (let i = 0; i < 20 && !paintedWithReason; i += 1) await new Promise((resolve) => setImmediate(resolve));
-  assert.ok(paintedWithReason, "a paint happened after the blocked reason was loaded");
-  assert.ok(fetchCalls.filter((c) => c.url.endsWith("/candidates/c-m")).length === 1, "the reason is read once");
+  for (let i = 0; i < 20 && !paintedOut; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(paintedOut, "the match is under Stays out as soon as the list after the check is painted");
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/candidates/c-m")).length, 0, "no detail read for it");
 });
 
 // ---------------------------------------------------------------------------
@@ -1357,7 +1365,7 @@ test("Imports: a stale review after a link change says so on its row, and the da
   resetState();
   const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
   installFetchMock(async (call) => {
-    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-left", label: "Training L", sessionStartedAt: "2026-09-14T16:08:12Z", counts: { created: 4, athletesNotImported: 2 } })] } };
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-left", label: "Training L", sessionStartedAt: "2026-09-14T16:08:12Z", counts: { created: 4, athletesNotImported: 2 }, reasons: [{ code: "athletes_not_linked", count: 2 }] })] } };
     return base(call);
   });
   await openImports();
@@ -1394,9 +1402,9 @@ test("Imports: a pending session with an unlinked recorded athlete is Needs atte
   const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
   installFetchMock(async (call) => {
     if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
-      candidateSummary({ id: "c-left", label: "Training L", counts: { created: 3, athletesNotImported: 1 } }),
-      candidateSummary({ id: "c-both", label: "Training M", counts: { created: 2, athletesNotImported: 2 }, changesToImported: 1 }),
-      candidateSummary({ id: "c-mix", label: "Training G", previewStatus: "no_changes", counts: { created: 0, unchanged: 5, athletesNotImported: 3 } }),
+      candidateSummary({ id: "c-left", label: "Training L", counts: { created: 3, athletesNotImported: 1 }, reasons: [{ code: "athletes_not_linked", count: 1 }] }),
+      candidateSummary({ id: "c-both", label: "Training M", counts: { created: 2, athletesNotImported: 2 }, changesToImported: 1, reasons: [{ code: "athletes_not_linked", count: 2 }, { code: "changes_to_imported_results", count: 1 }] }),
+      candidateSummary({ id: "c-mix", label: "Training G", previewStatus: "no_changes", counts: { created: 0, unchanged: 5, athletesNotImported: 3 }, reasons: [{ code: "athletes_not_linked", count: 1 }, { code: "athletes_need_manual_review", count: 1 }, { code: "athletes_marked_invalid_by_source", count: 1 }] }),
     ] } };
     return base(call);
   });
@@ -1406,13 +1414,74 @@ test("Imports: a pending session with an unlinked recorded athlete is Needs atte
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   const ready = html.slice(html.indexOf("Ready to import ("), html.indexOf("</section>", html.indexOf("Ready to import (")));
   assert.ok(!/Training L|Training M|Training G/.test(ready), "none of them is ready");
-  assert.match(html, /Training L[\s\S]*1 recorded athlete is left out - open it to see who and why\./);
+  assert.match(html, /Training L[\s\S]*1 recorded athlete is not linked yet - link them from its review, then find new sessions\./);
   const both = html.slice(html.indexOf('data-candidate-id="c-both"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-both"')));
-  assert.match(both, /1 change to imported results/);
-  assert.match(both, /2 athletes left out/);
-  // Some imported, some unlinked: "left out", never "nobody linked yet".
-  assert.match(html, /Training G[\s\S]*3 recorded athletes are left out - open it to see who and why\./);
-  assert.ok(!/Training G[\s\S]{0,400}No linked athlete in this session yet/.test(html));
+  assert.match(both, /2 athletes not linked · 1 change to imported results/, "every reason is a fact on the row, in the list's order");
+  assert.match(both, /2 recorded athletes are not linked yet - link them/, "the step is the first reason's");
+  // Some imported, some unlinked: the reasons, never "nobody linked yet".
+  const mix = html.slice(html.indexOf('data-candidate-id="c-mix"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-mix"')));
+  assert.match(mix, /1 athlete not linked · 1 athlete needs manual review · 1 athlete marked not valid/);
+  assert.match(mix, /1 recorded athlete is not linked yet - link them from its review, then find new sessions\./);
+  assert.ok(!/No linked athlete in this session yet/.test(mix));
+  // A list answer without reasons (older server) still keeps such a session
+  // out of Ready, from the counts it carries.
+  resetState();
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-old", label: "Training O", counts: { created: 3, athletesNotImported: 1 }, reasons: undefined })] } };
+    return base(call);
+  });
+  await openImports();
+  const old = renderTrainingLoadCoachHtml();
+  assert.match(old, /<h3>Needs attention \(1\)<\/h3>/);
+  assert.match(old, /Training O[\s\S]*1 recorded athlete is left out - open it to see who and why\./);
+});
+
+test("Imports: every kind of row is sorted into its bucket from the list answer alone - zero detail reads, and no raw code on the screen", async () => {
+  resetState();
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
+      candidateSummary({ id: "r-clean", label: "Training clean" }),
+      candidateSummary({ id: "a-link", label: "Training unlinked", counts: { created: 2, athletesNotImported: 1 }, reasons: [{ code: "athletes_not_linked", count: 1 }] }),
+      candidateSummary({ id: "a-team", label: "Training left team", counts: { created: 2, athletesNotImported: 1 }, reasons: [{ code: "athletes_not_in_team", count: 1 }] }),
+      candidateSummary({ id: "a-data", label: "Training two tracks", counts: { created: 2, athletesNotImported: 2 }, reasons: [{ code: "athletes_need_manual_review", count: 1 }, { code: "athletes_marked_invalid_by_source", count: 1 }] }),
+      candidateSummary({ id: "a-thr", label: "Training thresholds", ...blockedSummary("thresholds_missing") }),
+      candidateSummary({ id: "a-earlier", label: "Training earlier import", ...blockedSummary("identities_missing_from_source") }),
+      candidateSummary({ id: "a-other", label: "Training unknown block", status: "blocked", previewStatus: "blocked", approvalBlockers: ["blocked"], blockedCode: "other", blockedSourceCode: "something_new" }),
+      candidateSummary({ id: "o-match", label: "Match", ...blockedSummary("unsupported_category", { sessionType: "OFFICIAL MATCH" }) }),
+      candidateSummary({ id: "i-same", label: "Training same", previewStatus: "no_changes", counts: { created: 0, unchanged: 5, athletesNotImported: 0 } }),
+      candidateSummary({ id: "i-done", label: "Training done", status: "imported", importedAt: "2026-09-15T10:00:00Z", approvalBlockers: ["already_imported"] }),
+      candidateSummary({ id: "h-old", label: "Training replaced", status: "superseded", approvalBlockers: ["superseded_by_newer_data"] }),
+      candidateSummary({ id: "a-exp", label: "Training expired", sessionStartedAt: "2026-08-20T10:00:00Z", snapshot: { available: false, reason: "expired", expiresAt: "2026-09-19T00:00:00Z" }, previewStatus: null, counts: null, changesToImported: null, sessionType: null }),
+    ] } };
+    return base(call);
+  });
+  await openImports();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fetchCalls.filter((c) => /\/candidates\/[^/?]+$/.test(c.url)).length, 0, "no session detail was read");
+  const html = renderTrainingLoadCoachHtml();
+  assert.match(html, /<h3>Needs attention \(7\)<\/h3>/);
+  assert.match(html, /<h3>Ready to import \(1\)<\/h3>/);
+  assert.match(html, /<summary>Stays out \(1\)<\/summary>/);
+  assert.match(html, /<summary>Imported \(2\)<\/summary>/);
+  assert.ok(!/Training replaced/.test(html), "a replaced version is hidden");
+  const row = (id) => html.slice(html.indexOf(`data-candidate-id="${id}"`), html.indexOf("</button>", html.indexOf(`data-candidate-id="${id}"`)));
+  const step = (id) => row(id).match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];
+  assert.equal(step("a-link"), "1 recorded athlete is not linked yet - link them from its review, then find new sessions.");
+  assert.equal(step("a-team"), "1 linked athlete is no longer in the team - open it to see who.");
+  // Two source anomalies share this reason: the row names no single cause.
+  assert.equal(step("a-data"), "1 athlete needs manual review - open it to see who and why.");
+  assert.ok(!/more than one track/.test(row("a-data")));
+  assert.match(row("a-data"), /1 athlete needs manual review · 1 athlete marked not valid/);
+  assert.equal(step("a-thr"), "Check the team thresholds in GPEXE, then find new sessions.");
+  assert.equal(step("a-earlier"), "Do the step below for each athlete, then find new sessions.");
+  assert.equal(step("a-other"), "Ask a platform admin to look at it (give them the Technical details).");
+  assert.equal(step("a-exp"), "Needs a fresh search - find new sessions with dates that include 20.08.2026.");
+  assert.ok(!/gpexe-candidate-next/.test(row("r-clean")), "a ready row carries no step");
+  const mainScreen = html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
+  for (const code of ["thresholds_missing", "identities_missing_from_source", "something_new", "unsupported_category", "source_thresholds_unavailable", "earlier_import_left_behind", "athletes_not_linked", "no_changes"]) {
+    assert.ok(!mainScreen.includes(code), `no code on the screen: ${code}`);
+  }
 });
 
 test("Imports: a club workspace without a team gets no dead 'Choose a workspace' button - it is told a team is missing", async () => {
@@ -1440,7 +1509,7 @@ test("Imports: the pre-filled dates never exceed the 31-day search limit, and a 
   installFetchMock(async (call) => {
     if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [
       candidateSummary({ id: "c-old", label: "Training old", sessionStartedAt: "2026-08-01T10:00:00Z", snapshot: { available: false, expiresAt: "2026-08-31T00:00:00Z" } }),
-      candidateSummary({ id: "c-left", label: "Training L", sessionStartedAt: "2026-09-14T16:08:12Z", counts: { created: 4, athletesNotImported: 2 } }),
+      candidateSummary({ id: "c-left", label: "Training L", sessionStartedAt: "2026-09-14T16:08:12Z", counts: { created: 4, athletesNotImported: 2 }, reasons: [{ code: "athletes_not_linked", count: 2 }] }),
     ] } };
     return base(call);
   });
@@ -1465,7 +1534,7 @@ test("Imports: the pre-filled dates never exceed the 31-day search limit, and a 
   // A stale session with no start date: the sentence does not point at dates that are not set.
   resetState();
   installFetchMock(async (call) => {
-    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-nodate", label: "Training N", sessionStartedAt: null, counts: { created: 1, athletesNotImported: 1 } })] } };
+    if (/\/candidates(\?|$)/.test(call.url)) return { status: 200, body: { candidates: [candidateSummary({ id: "c-nodate", label: "Training N", sessionStartedAt: null, counts: { created: 1, athletesNotImported: 1 }, reasons: [{ code: "athletes_not_linked", count: 1 }] })] } };
     return base(call);
   });
   await openImports();

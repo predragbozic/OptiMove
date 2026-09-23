@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-23. Last `origin/main` commit checked: `f32e262` (merge of PR #114,
-`feature/data-sources-settings-f3b` → `main`).
+Last reviewed: 2026-09-23. Last `origin/main` commit checked: `10d035a` (merge of PR #115,
+`feature/imports-shell` → `main`).
 
 ## Active phase
 
@@ -33,16 +33,19 @@ Disconnect, retention UI, the import switch, any real import.
 blueprint v3.1 accepted as the direction on 2026-09-23). GPEXE is the first data source,
 not the name of the feature; future sources (Garmin, Catapult, Polar, Kinexon, …) are
 further Source cards on the same screen, never a new top-level screen. Phase 2, the
-**Imports shell** (branch `feature/imports-shell`), is the only phase in progress: the
-coach's tab is renamed to *Imports*, the source card (GPEXE) carries "Sessions found …"
-and one *Find new sessions* button with the dates folded away, the sessions are sorted
-into *Needs attention / Ready to import / Stays out / Imported* from the fields the list
-already returns (a session with an unlinked recorded athlete, or in which nobody is
-linked yet, is never "ready" or "up to date"), the Ready header says "review only" while
-the switch is off or the viewer may not approve, and a workspace with no team shows one
-sentence plus the existing workspace menu. No completion model, no estimates, no batch
-endpoint, no migration, no change to Settings → Data sources or to the per-session
-review. Phases 2b–6 (list reasons, source-athletes endpoint, team mapping, batch import,
+**Imports shell**, is merged (PR #115, see below). **Phase 2b, candidate list reasons**
+(branch `feature/imports-list-reasons`), is the only phase in progress: the candidate
+list answer additionally carries `blockedCode` (source-neutral: unsupported session type,
+earlier import left behind, source thresholds unavailable, source marks session invalid,
+no importable athlete, source data inconsistent, conflicts with existing data, other),
+`blockedSourceCode` (the adapter's own code, for Technical details), `sessionType` and
+`reasons` (one `{ code, count }` per kind: no linked athlete, athletes not linked / not in
+team / needing manual review / marked invalid by the source, changes to imported
+results), all derived from the stored preview the list query already reads — no new
+SQL, no migration, and a contract test proves the list runs the same number of queries
+for one candidate as for several. The Imports inbox sorts every row from the list alone;
+the per-blocked-session detail read (`loadBlockedReasons`) is gone. No server sentence
+rides on the list. Phases 3a–6 (source-athletes endpoint, team mapping, batch import,
 completion model and roster, session context, add-later-values) wait for the owner's go
 after each merge.
 
@@ -52,6 +55,19 @@ nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **Imports Phase 2: the Imports shell** — PR #115 (`10d035a`, reviewed head `20c4273`),
+  frontend only: the coach's tab is *Imports*; one Source card per source (GPEXE) with
+  the connection state, "Sessions found …", one *Find new sessions* button and the dates
+  folded away (opened and pre-filled, clipped to 31 days, only when a session needs
+  other dates); the sessions sorted into *Needs attention / Ready to import / Stays out /
+  Imported* from the fields the list returns (a session with an unlinked recorded
+  athlete, or in which nobody is linked yet, is never "ready" or "up to date"); the Ready
+  header and the next step say "review only" while the switch is off or the viewer may
+  not approve; Ready locked after a link change until the sessions are found again; a
+  workspace with no team shows one sentence plus the existing workspace menu (button
+  only when the menu has another team or club to offer). Ids, statuses and server
+  sentences only under Technical details. Reviewed by `code-reviewer`,
+  `ux-design-reviewer` and `mobile-qa`; browser QA on a disposable schema clone.
 - **In-app GPEXE import F3a: coach screens** — PR #110 (`ed49031`, reviewed head
   `4d36781`), frontend only: a "GPEXE imports" sub-tab in Training Load → Data &
   Analysis (`frontend/gpexe-import-{data,view,actions}.js`) on the F1/F2 routes.
@@ -359,6 +375,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `10d035a` (PR #115) with `ok: true` on 2026-09-23; the
+  served bundle contained the Imports screen (the "Find new sessions" button, the four
+  bucket headings, the no-team sentence; the old "Check GPEXE" text gone) and a GPEXE
+  route answered 401 without a login. No search or import was run in production.
 - `/api/health` reported commit `f32e262` (PR #114) with `ok: true` on 2026-09-22; the
   served bundle contained the Data sources screen and the new
   `GET …/settings/history` route answered 401 without a login. The owner accepted that
@@ -428,8 +448,7 @@ pre-existing; pass/fail counts don't belong in this file
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
 - **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
-  F1, F2 and F3a are merged (see above). F3b (the Settings → Data sources admin screen, PR #114) is the next
-  step; F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
+  F1, F2, F3a and F3b are merged (see above); F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
   environment until conditions 1–3 hold there; condition 4 is required before regular
   production imports:
   1. **A fresh, restore-verified backup of that environment.** This is an operational
@@ -491,20 +510,11 @@ pre-existing; pass/fail counts don't belong in this file
     - **The review shows participation and the GPS measurement separately.** A missing
       value is not a zero. "GPS was not worn" is shown only when the data confirms it or
       a coach enters it.
-- **The coach's "GPEXE imports" screen in a workspace with no team** (owner, 2026-09-19;
-  **addressed on `feature/imports-shell`, not merged yet**: one sentence, and a button
-  that opens the existing workspace menu only when the menu has another team or club
-  workspace to offer; a club or team workspace with no team says a team is missing; the
-  tab stays visible for discovery. Delete this entry when that PR is merged). The top note
-  "GPEXE imports work one team at a time; choose the team below."
-  (`frontend/training-load-view.js`, `section === "imports"`) is wrong when the active
-  workspace has no team: there is no choice below, and it is shown together with "No team
-  in this workspace…", so two messages contradict each other. Proposal: one clear message
-  ("GPEXE imports are available in a team workspace. Switch to a team workspace using the
-  workspace menu above.") and possibly an action that opens the EXISTING workspace menu —
-  never a second team picker. `ux-design-reviewer` decides whether the tab stays visible
-  for discovery or is hidden for users with no available team workspace. This belongs
-  with the later rename/redesign of that screen.
+- **Small Imports follow-ups** (found in PR #115, not scheduled): a hand-typed date in
+  the source card's *Choose dates* is lost on a repaint (pre-existing); the review modal's
+  badges still use the old vocabulary ("Waiting for approval"), to be aligned with the
+  buckets; `errorInfo`/`fmtDateTime` are duplicated between the coach
+  (`gpexe-import-*.js`) and admin (`data-sources-*.js`) screens.
 - **Athletes who trained without a GPS record** (owner, 2026-09-18). Scheduled after
   phases F1–F3 of the in-app import. Options, none of them decided yet:
   - participation only, with no values;
@@ -601,8 +611,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**Phase 2 of the Imports track (`feature/imports-shell`) is in progress**; see Active
-phase for its exact scope. The owner decides the next phase after each merge. Conditions
+**Phase 2b of the Imports track (`feature/imports-list-reasons`) is in progress**; see
+Active phase for its exact scope. The owner decides the next phase after each merge. Conditions
 1-3 under Separate tasks still come before the first real local import, and condition 4
 before regular production imports. The owner's decisions of 2026-09-23 on estimates,
 completion and session context (blueprint v3.1, section 14) shape Phases 5a–6 and are

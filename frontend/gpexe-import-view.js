@@ -426,11 +426,51 @@ export function inboxBucket(c, gx = state.trainingLoad.gpexe) {
   if (group === "excluded") return "out";
   if (isUncertain(c, gx)) return "attention";
   if (group === "notyet") return "attention";
-  // "Nothing new" is true only when somebody was imported; a session in
-  // which no athlete is linked yet writes nothing and must not read as done.
-  if (group === "uptodate") return c.counts?.athletesNotImported ? "attention" : "imported";
-  if (c.counts?.athletesNotImported || c.changesToImported) return "attention";
+  // What keeps a session out of Ready comes with the list (reasons). "Nothing
+  // new" is true only when somebody was imported; a session in which no
+  // athlete is linked yet writes nothing and must not read as done.
+  if (group === "uptodate") return rowReasons(c).length ? "attention" : "imported";
+  if (rowReasons(c).length) return "attention";
   return "ready";
+}
+
+// The list's reasons (one per kind, with a count). A summary without them
+// (an answer from before phase 2b) falls back to the counts it does carry.
+function rowReasons(c) {
+  if (Array.isArray(c.reasons)) return c.reasons;
+  const out = [];
+  if (c.counts?.athletesNotImported) out.push({ code: "athletes_left_out", count: c.counts.athletesNotImported });
+  if (c.changesToImported) out.push({ code: "changes_to_imported_results", count: c.changesToImported });
+  return out;
+}
+
+// The one step for a list reason, and the short fact the row shows for it.
+function reasonStep(r) {
+  const n = r.count || 0;
+  switch (r.code) {
+    case "no_linked_athlete": return "No linked athlete in this session yet - link the athletes from its review, then find new sessions.";
+    case "athletes_not_linked": return `${plural(n, "recorded athlete is", "recorded athletes are")} not linked yet - link them from its review, then find new sessions.`;
+    case "athletes_not_in_team": return `${plural(n, "linked athlete is", "linked athletes are")} no longer in the team - open it to see who.`;
+    case "athletes_need_manual_review": return `${plural(n, "athlete needs", "athletes need")} manual review - open it to see who and why.`;
+    case "athletes_marked_invalid_by_source": return `${plural(n, "athlete's statistics are", "athletes' statistics are")} marked not valid in the source data - open it to see who.`;
+    case "changes_to_imported_results": return `${plural(n, "change", "changes")} to results already imported - review and accept them, then import.`;
+    case "athletes_left_out": return `${plural(n, "recorded athlete is", "recorded athletes are")} left out - open it to see who and why.`;
+    default: return "Open it to see what to do.";
+  }
+}
+
+function reasonFact(r) {
+  const n = r.count || 0;
+  switch (r.code) {
+    case "no_linked_athlete": return "no linked athlete";
+    case "athletes_not_linked": return `${plural(n, "athlete", "athletes")} not linked`;
+    case "athletes_not_in_team": return `${plural(n, "athlete", "athletes")} not in the team`;
+    case "athletes_need_manual_review": return `${plural(n, "athlete needs", "athletes need")} manual review`;
+    case "athletes_marked_invalid_by_source": return `${plural(n, "athlete", "athletes")} marked not valid`;
+    case "changes_to_imported_results": return `${plural(n, "change", "changes")} to imported results`;
+    case "athletes_left_out": return `${plural(n, "athlete", "athletes")} left out`;
+    default: return "";
+  }
 }
 
 // Ready sessions are not importable as they are while the links changed
@@ -484,19 +524,12 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
 function attentionText(c, status, gx = state.trainingLoad.gpexe) {
   if (isUncertain(c, gx)) return "Import result not confirmed yet - open it to check the result.";
   if (!c.snapshot?.available) return `Needs a fresh search - find new sessions${c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : ""}.`;
-  if (c.status === "blocked") {
-    const reason = blockedReasonFor(c, gx);
-    if (!reason) return gx?.blockedReasonErrors?.[blockedReasonKey(c)] ? "Open it to see what is in the way." : "Loading what is in the way...";
-    const text = blockedCoachText(reason);
-    return text.step;
-  }
+  if (c.status === "blocked") return c.blockedCode ? blockedCoachText(c).step : "Open it to see what is in the way.";
   if (reviewMadeBeforeLinkChange(c, gx)) return `Athlete links changed after this review - find new sessions${c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : ""} to see it again.`;
-  // "Nothing new" with athletes left out: if somebody was imported, the
-  // truth is "N left out", not "nobody linked yet".
-  if (candidateGroup(c, gx) === "uptodate" && !c.counts?.unchanged) return "No linked athlete in this session yet - link the athletes from its review, then find new sessions.";
-  if (c.counts?.athletesNotImported) return `${plural(c.counts.athletesNotImported, "recorded athlete is", "recorded athletes are")} left out - open it to see who and why.`;
-  if (c.changesToImported) return `${plural(c.changesToImported, "change", "changes")} to results already imported - review and accept them, then import.`;
-  return "Open it to see what to do.";
+  // The first reason is the coach's own step (linking comes first); the
+  // row's facts name every reason.
+  const [first] = rowReasons(c);
+  return first ? reasonStep(first) : "Open it to see what to do.";
 }
 
 function renderBucketsHtml(gx, status) {
@@ -553,9 +586,8 @@ function renderSessionRowHtml(c, status, kind) {
   if (kind === "ready" || kind === "attention") {
     if (counts.created) facts.push(plural(counts.created, "new result", "new results"));
     if (kind === "ready" && counts.unchanged) facts.push(plural(counts.unchanged, "result unchanged", "results unchanged"));
-    // Both reasons stay visible even though the step sentence names one.
-    if (kind === "attention" && c.changesToImported) facts.push(`${plural(c.changesToImported, "change", "changes")} to imported results`);
-    if (kind === "attention" && counts.athletesNotImported) facts.push(`${plural(counts.athletesNotImported, "athlete", "athletes")} left out`);
+    // Every reason stays visible even though the step sentence names one.
+    if (kind === "attention") for (const r of rowReasons(c)) if (reasonFact(r)) facts.push(reasonFact(r));
   }
   if (kind === "imported") {
     if (c.importedAt) facts.push(`imported ${fmtDateTime(c.importedAt)}`);
@@ -584,24 +616,15 @@ function renderSessionRowHtml(c, status, kind) {
 //              same one the detail shows);
 //   excluded - it stays out of OptiMove for good (e.g. a match): no action;
 //   uptodate / imported / replaced.
-// A blocked session's reason is not in the list answer; it comes from the
-// session's own detail (gx.blockedReasons, loaded by the data module).
+// A blocked session's reason comes with the list (blockedCode, phase 2b), so
+// the list is sorted without reading any session's detail.
 export function candidateGroup(c, gx = state.trainingLoad.gpexe) {
   if (c.status === "imported") return "imported";
   if (c.status === "superseded") return "replaced";
   if (!c.snapshot?.available) return "notyet";
-  if (c.status === "blocked") {
-    const reason = blockedReasonFor(c, gx);
-    return reason && blockedCoachText(reason).excluded ? "excluded" : "notyet";
-  }
+  if (c.status === "blocked") return blockedCoachText(c).excluded ? "excluded" : "notyet";
   if (c.previewStatus === "no_changes" || c.preview?.status === "no_changes") return "uptodate";
   return "decision";
-}
-
-// The review carries its own reason; the list uses the one loaded for it.
-function blockedReasonFor(c, gx) {
-  if (c.preview?.blocked?.code) return { code: c.preview.blocked.code, categoryName: c.preview.session?.categoryName || null };
-  return gx?.blockedReasons?.[blockedReasonKey(c)] || null;
 }
 
 // An approval whose result is not confirmed yet stays marked until a check
@@ -614,10 +637,6 @@ function badgeHtml(c, gx = state.trainingLoad.gpexe) {
   if (isUncertain(c, gx)) return `<span class="gpexe-badge is-unknown">Result not confirmed</span>`;
   const [cls, text] = GROUP_BADGE[candidateGroup(c, gx)] || [c.status, c.status];
   return `<span class="gpexe-badge is-${escapeAttr(cls)}">${escapeHtml(text)}</span>`;
-}
-
-export function blockedReasonKey(c) {
-  return `${c.id}|${c.lastSeenAt || ""}`;
 }
 
 function renderLinksHtml(gx) {
@@ -715,45 +734,40 @@ function renderApprovalRecordHtml(c) {
   return `<p class="gpexe-success">Imported ${escapeHtml(fmtDateTime(a.approvedAt))} (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
 }
 
-// Why a session is blocked, in the coach's words, with the one step to take.
-// The server's own message (which can carry GPEXE ids and field names) is
-// only in Technical details.
-const DATA_PROBLEM = new Set([
-  "session_missing", "invalid_timestamp", "timestamp_semantics_changed", "invalid_timezone", "mixed_timezones",
-  "invalid_drills_count", "drill_index_out_of_range", "duplicate_drill_row", "track_missing", "track_athlete_mismatch", "more_missing",
-]);
-const THRESHOLDS = new Set(["thresholds_missing", "thresholds_wrong_team", "thresholds_not_valid_for_session", "thresholds_payload_incomplete"]);
-
-// `reason` is { code, categoryName }. `excluded` marks a session that stays
-// out of OptiMove for good - nothing to fix, no decision.
-function blockedCoachText(reason) {
-  const code = reason.code;
-  if (code === "identities_missing_from_source") {
+// The coach's reason and step for a blocked session, from the list's neutral
+// blockedCode (phase 2b); the adapter's own code and the server's sentence
+// stay in Technical details. `c` is a list row or the review's candidate.
+// `excluded` marks a session that stays out of OptiMove for good - nothing
+// to fix, no decision.
+function blockedCoachText(c) {
+  const code = c.blockedCode;
+  if (code === "earlier_import_left_behind") {
     return { reason: "Some athletes' results from this session were imported before, but would now be left out.", step: "Do the step below for each athlete, then find new sessions." };
   }
-  if (code === "unsupported_category") {
-    const category = reason.categoryName;
+  if (code === "unsupported_session_type") {
+    const category = c.sessionType;
     return { excluded: true, reason: `${category ? `"${category}" sessions are` : "This type of session is"} not imported from GPEXE.`, step: "No action needed - it stays out of OptiMove." };
   }
-  if (THRESHOLDS.has(code)) {
+  if (code === "source_thresholds_unavailable") {
     return { reason: "The team's GPEXE thresholds (speed and power zones) are missing or don't cover this session's date.", step: "Check the team thresholds in GPEXE, then find new sessions." };
   }
-  if (code === "session_stats_invalid") {
+  if (code === "source_marks_session_invalid") {
     return { reason: "GPEXE marks this session's statistics as not valid.", step: "Fix the session in GPEXE, then find new sessions." };
   }
-  if (code === "no_importable_participants") {
+  if (code === "no_importable_athlete") {
     return { reason: "No athlete in this session can be imported.", step: "Link the athletes to OptiMove athletes or fix their data in GPEXE, then find new sessions." };
   }
-  if (DATA_PROBLEM.has(code)) {
+  if (code === "source_data_inconsistent") {
     return { reason: "GPEXE sent incomplete or inconsistent data for this session.", step: "Find new sessions again later. If it stays like this, ask a platform admin (give them the Technical details)." };
   }
+  // conflicts_with_existing_data, other, or no code at all.
   return { reason: "This session conflicts with data already in OptiMove and can't be imported automatically.", step: "Ask a platform admin to look at it (give them the Technical details)." };
 }
 
 function renderBlockedHtml(preview, c) {
   if (!preview.blocked) return "";
   const steps = preview.blocked.resolution || [];
-  const text = blockedCoachText({ code: preview.blocked.code, categoryName: preview.session?.categoryName });
+  const text = blockedCoachText(c);
   return `
     <div class="gpexe-blocked" role="note">
       <p><strong>${text.excluded ? "Not imported." : "Can't be imported yet."}</strong> ${escapeHtml(text.reason)}</p>
