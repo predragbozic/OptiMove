@@ -15499,3 +15499,91 @@ button.tests-assignment-card {
     margin-top: 8px;
   }
 }
+
+/* Imports (Training Load -> Data & Analysis), phase 2 shell: the source card
+   and the four buckets. Source-neutral: a second source is a second card. */
+.imports-empty {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+.imports-empty p {
+  margin: 0;
+}
+.imports-source-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.imports-source-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.imports-state {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+.imports-state.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.imports-found {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.imports-find-row {
+  align-items: flex-start;
+}
+.imports-dates {
+  min-width: 0;
+}
+.imports-dates > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--muted);
+  list-style: none;
+}
+.imports-dates > summary::-webkit-details-marker {
+  display: none;
+}
+.imports-dates > summary::after {
+  content: "\25B8";
+  margin-left: 8px;
+}
+.imports-dates[open] > summary::after {
+  content: "\25BE";
+}
+.imports-dates-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 6px;
+}
+/* A long session title must wrap inside the row's 1fr column. */
+.gpexe-candidate-main {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.imports-bucket-note {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--text);
+}
+@media (max-width: 760px) {
+  .imports-find-row > * {
+    width: 100%;
+  }
+  .imports-dates-fields > * {
+    width: 100%;
+  }
+}

@@ -1,5 +1,5 @@
-// GPEXE import from the app, phase F3a: the data side of the "GPEXE imports"
-// view in Training Load -> Data & Analysis. Every call goes to the existing
+// Imports (Training Load -> Data & Analysis), the data side. GPEXE is the
+// first data source; every call here goes to its routes. Every call goes to the existing
 // F1/F2 routes under /api/training-load/gpexe/teams/:teamId (see
 // docs/runbooks/gpexe-in-app-import.md); nothing here decides what may be
 // imported - the server does, again, on every request.
@@ -186,7 +186,7 @@ export async function loadBlockedReasons(render) {
 function forgetConfirmedImports() {
   const gx = g();
   for (const c of gx.candidates || []) if (c.status === "imported") delete gx.uncertain[c.id];
-  // The link notice's "check for new sessions" is done once its session's
+  // The link notice's "find new sessions" is done once its session's
   // review is current; the link list keeps Unlink.
   const linked = gx.lastLink && (gx.candidates || []).find((c) => c.id === gx.lastLink.candidateId);
   if (linked && !reviewMadeBeforeLinkChange(linked, gx)) gx.lastLink = null;
@@ -208,7 +208,7 @@ export async function reloadGpexeCandidates(render) {
   render();
 }
 
-// "Check for new sessions": starts a background check on the server, then polls it
+// "Find new sessions": starts a background check on the server, then polls it
 // until it is no longer running.
 export async function startGpexeCheck({ from, to }, render) {
   const gx = g();
@@ -298,6 +298,7 @@ export async function openGpexeCandidate(candidateId, render) {
   gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain };
   gx.linkConfirm = null;
   gx.linkOpen = "";
+  gx.notice = "";
   render();
   try {
     const { candidate } = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidateId)}`));
@@ -314,11 +315,28 @@ export async function openGpexeCandidate(candidateId, render) {
   }
 }
 
+// Returns true when the list should be read again: the session was imported
+// from this review but the list on screen does not show it as imported yet.
 export function closeGpexeCandidate() {
   const gx = g();
+  // A session imported from this review moves to the collapsed Imported
+  // bucket: say so, or its row seems to vanish. The sentence only claims the
+  // list shows it when the list really does.
+  const d = gx.detail;
+  let refresh = false;
+  if (d?.outcome?.kind === "imported" || d?.outcome?.verified === "imported" || d?.outcome?.error?.code === "already_imported") {
+    const label = (d.candidate?.label || "The session").replace(/\s+\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z?$/, "");
+    const row = (gx.candidates || []).find((c) => c.id === d.id);
+    if (row?.status === "imported") gx.notice = `${label} is imported - listed under Imported below.`;
+    else {
+      gx.notice = `${label} is imported. The list is being refreshed.`;
+      refresh = true;
+    }
+  }
   gx.detail = null;
   gx.linkConfirm = null;
   gx.linkOpen = "";
+  return refresh;
 }
 
 // An unknown outcome is kept for the list and a reopened review until an
@@ -420,7 +438,10 @@ export async function verifyGpexeApproval(render) {
     detail.candidate = candidate;
     const checks = (detail.outcome.checks || 0) + 1;
     const importedBy = approval || candidate.approval;
-    if (candidate.status === "imported" && importedBy) detail.outcome = { ...detail.outcome, checks, verified: "imported", approval: importedBy };
+    if (candidate.status === "imported" && importedBy) {
+      detail.outcome = { ...detail.outcome, checks, verified: "imported", approval: importedBy };
+      void reloadGpexeCandidates(render);
+    }
     // Never "not imported" here (owner, F3a external review): a missing
     // approval with a pending candidate - after a 503 or after a lost answer
     // alike - only means the import is not visible yet; the first approval
@@ -477,7 +498,7 @@ export async function linkGpexeAthlete({ gpexeAthleteId, athleteId, athleteName 
       if (!isDefiniteRefusal(info)) {
         linksChanged();
         gx.linkConfirm = null;
-        gx.linkError = { ...info, message: "We can't tell whether the link was made. Check the list \"GPEXE athletes linked to this team\" on the GPEXE imports page, and unlink it there if it is wrong." };
+        gx.linkError = { ...info, message: "We can't tell whether the link was made. Check the list \"GPEXE athletes linked to this team\" on the Imports page, and unlink it there if it is wrong." };
         await reloadGpexeLinks(generation).catch(() => {});
       }
     }
@@ -500,7 +521,7 @@ export async function unlinkGpexeAthlete(linkId, render) {
     if (generation !== gx.generation) return;
     linksChanged();
     if (gx.lastLink?.linkId === linkId) gx.lastLink = null;
-    gx.notice = "The link is removed. Check for new sessions to update the review.";
+    gx.notice = "The link is removed. Find new sessions to update the review.";
     // The change is made; a failed re-read of the list only leaves it stale.
     await reloadGpexeLinks(generation).catch(() => {});
   } catch (error) {
@@ -511,7 +532,7 @@ export async function unlinkGpexeAthlete(linkId, render) {
       // the reviews on screen are treated as made with the old links.
       if (!isDefiniteRefusal(info)) {
         linksChanged();
-        gx.linkError = { ...info, message: "We can't tell whether the link was removed. Check the list \"GPEXE athletes linked to this team\" on the GPEXE imports page." };
+        gx.linkError = { ...info, message: "We can't tell whether the link was removed. Check the list \"GPEXE athletes linked to this team\" on the Imports page." };
         await reloadGpexeLinks(generation).catch(() => {});
       }
     }
