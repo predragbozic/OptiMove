@@ -658,6 +658,10 @@ export const emptyGpexeImportState = () => ({
   // confirmation step, the sending flag and the per-pair results of the
   // last confirm.
   sourceAthletes: null,
+  // Set when only the source-athletes read failed: the inbox stays, the
+  // Link athletes screen waits for a successful read.
+  sourceAthletesError: null,
+  sourceAthletesRetrying: false,
   mapping: { open: false, choices: {}, confirming: false, sending: false, results: null, error: null },
 });
 

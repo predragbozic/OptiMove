@@ -105,6 +105,8 @@ function resetGpexeTeamState(teamId) {
   gx.checkLinkSeq = null;
   gx.linkCheckStartedAt = null;
   gx.sourceAthletes = null;
+  gx.sourceAthletesError = null;
+  gx.sourceAthletesRetrying = false;
   gx.mapping = emptyMapping();
 }
 
@@ -125,34 +127,53 @@ export async function loadGpexeTeam(render) {
   gx.error = null;
   render();
   try {
-    const [status, candidates, links, sourceAthletes] = await Promise.all([
+    // The source athletes (the Link athletes screen) are a helper read: a
+    // failure there degrades that screen only and never takes the inbox down.
+    const sourceAthletesRead = api(teamPath(teamId, "/source-athletes"))
+      .then((answer) => ({ athletes: answer.athletes }))
+      .catch((error) => ({ error: errorInfo(error) }));
+    const [status, candidates, links] = await Promise.all([
       api(teamPath(teamId, "/status")),
       api(teamPath(teamId, `/candidates${gx.includeSuperseded ? "?includeSuperseded=true" : ""}`)),
       api(teamPath(teamId, "/athlete-links")),
-      api(teamPath(teamId, "/source-athletes")),
     ]);
     if (generation !== gx.generation) return;
     gx.status = status;
     gx.candidates = candidates.candidates;
     gx.links = links.links;
-    gx.sourceAthletes = sourceAthletes.athletes;
-    forgetConfirmedImports();
-    // The server's lastCheck is the truth: a check left while polling (the
-    // coach went to another tab) or whose polling failed is taken over from
-    // it, and followed again if it is still running.
-    const last = status.lastCheck;
-    if (last && (!gx.check || gx.check.id === last.id || gx.check.status !== "running")) gx.check = last;
-    else if (!last) gx.check = null;
-    if (gx.check?.status === "running") void pollGpexeCheck(render);
+    // The inbox is painted as soon as the mandatory data is here: a slow
+    // helper read must not hold it back either.
+    gx.loading = false;
+    finishLoad(gx, status, render);
+    const sourceAthletes = await sourceAthletesRead;
+    if (generation !== gx.generation) return;
+    applySourceAthletesRead(gx, sourceAthletes);
+    render();
+    return;
   } catch (error) {
     if (generation !== gx.generation) return;
     gx.error = errorInfo(error);
   } finally {
-    if (generation === gx.generation) {
+    // The error path: the try painted nothing yet.
+    if (generation === gx.generation && gx.loading) {
       gx.loading = false;
       render();
     }
   }
+}
+
+// What follows a successful mandatory load: the check bookkeeping and the
+// first paint.
+function finishLoad(gx, status, render) {
+  forgetConfirmedImports();
+  // The server's lastCheck is the truth: a check left while polling (the
+  // coach went to another tab) or whose polling failed is taken over from
+  // it, and followed again if it is still running.
+  const last = status.lastCheck;
+  if (last && (!gx.check || gx.check.id === last.id || gx.check.status !== "running")) gx.check = last;
+  else if (!last) gx.check = null;
+  render();
+  if (gx.check?.status === "running") void pollGpexeCheck(render);
 }
 
 // A session the list now shows as imported is confirmed: its "result not
@@ -439,17 +460,46 @@ export async function verifyGpexeApproval(render) {
 // Athlete links
 // ---------------------------------------------------------------------------
 
+// A successful read replaces the list and clears the error; a failed one
+// keeps whatever list there was and records the error, so the way in is
+// disabled with a reason until a read succeeds.
+function applySourceAthletesRead(gx, read) {
+  if (read.error) {
+    gx.sourceAthletesError = read.error;
+    return;
+  }
+  gx.sourceAthletes = read.athletes;
+  gx.sourceAthletesError = null;
+}
+
+// "Try again" on the links panel: only the source athletes are read; the
+// button is busy meanwhile, so the click is seen and never doubled.
+export async function reloadGpexeSourceAthletes(render) {
+  const gx = g();
+  const generation = gx.generation;
+  if (!gx.teamId || gx.sourceAthletesRetrying) return;
+  gx.sourceAthletesRetrying = true;
+  render();
+  const read = await api(teamPath(gx.teamId, "/source-athletes"))
+    .then((answer) => ({ athletes: answer.athletes }))
+    .catch((error) => ({ error: errorInfo(error) }));
+  if (generation !== gx.generation) return;
+  gx.sourceAthletesRetrying = false;
+  applySourceAthletesRead(gx, read);
+  render();
+}
+
 // The links and the source athletes change together; a failed re-read of
 // either only leaves it stale (the caller decides what to say).
 async function reloadGpexeLinks(generation) {
   const gx = g();
   const [links, sourceAthletes] = await Promise.all([
     api(teamPath(gx.teamId, "/athlete-links")),
-    api(teamPath(gx.teamId, "/source-athletes")).catch(() => null),
+    api(teamPath(gx.teamId, "/source-athletes")).then((answer) => ({ athletes: answer.athletes })).catch((error) => ({ error: errorInfo(error) })),
   ]);
   if (generation !== gx.generation) return;
   gx.links = links.links;
-  if (sourceAthletes) gx.sourceAthletes = sourceAthletes.athletes;
+  applySourceAthletesRead(gx, sourceAthletes);
   if (gx.mapping?.open) pruneTeamMappingChoices(gx);
 }
 

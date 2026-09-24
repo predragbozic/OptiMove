@@ -15225,6 +15225,13 @@ button.tests-assignment-card {
 .imports-links-facts {
   margin: 0 0 6px;
 }
+/* The "list not available" block: the sentence, then the button. */
+.imports-links-unavailable {
+  margin: 0 0 8px;
+}
+.imports-links-unavailable p {
+  margin: 0 0 8px;
+}
 .gpexe-map-summary {
   margin: 0 0 8px;
   font-weight: 600;

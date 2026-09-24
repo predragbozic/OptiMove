@@ -160,7 +160,11 @@ function gpexeServer({ onApprove, onCandidate, onApproval, teamStatus = {}, chec
     if (!m) return { status: 404, body: { error: "notFound" } };
     const [, team, rest] = m;
     if (rest === "/status") return { status: 200, body: status(teamStatus[team] || {}) };
-    if (rest === "/source-athletes") return { status: 200, body: { athletes: typeof sourceAthletes === "function" ? sourceAthletes(call) : sourceAthletes || DEFAULT_SOURCE_ATHLETES, units: { duration: "min", distance: "m", maxSpeed: "km/h" }, lastSeenRule: "newest session date" } };
+    if (rest === "/source-athletes") {
+      const answer = typeof sourceAthletes === "function" ? sourceAthletes(call) : sourceAthletes || DEFAULT_SOURCE_ATHLETES;
+      if (answer && answer.status) return answer;
+      return { status: 200, body: { athletes: answer, units: { duration: "min", distance: "m", maxSpeed: "km/h" }, lastSeenRule: "newest session date" } };
+    }
     if (rest === "/athlete-links" && call.method === "GET" && links) return { status: 200, body: { links: typeof links === "function" ? links(call) : links } };
     if (rest === "/athlete-links" && call.method === "POST" && onLink) return onLink(call);
     if (rest.startsWith("/candidates?") || rest === "/candidates") return { status: 200, body: { candidates: [candidateSummary({ label: `session of ${team}` })] } };
@@ -1883,4 +1887,109 @@ test("Link athletes: a choice the re-read list no longer supports (another coach
   // Closing asks nothing: there is no staged choice any more.
   await act("training-load-gpexe-map-close");
   assert.equal(confirmQuestions.length, 0);
+});
+
+test("Link athletes: a failed source-athletes read degrades only that screen - the inbox, Find new sessions and the links stay; Link athletes is off with the reason; the next successful read clears it", async () => {
+  resetState();
+  let sourcesFail = true;
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    sourceAthletes: () => (sourcesFail ? { status: 500, body: { error: "internal_error", message: "boom" } } : [...DEFAULT_SOURCE_ATHLETES, sourceAthlete()]),
+  }));
+  await openImports();
+  let html = renderTrainingLoadCoachHtml();
+  // 1-2: the inbox and the search are there, no page-level error.
+  assert.equal(state.trainingLoad.gpexe.error, null, "no page-level error");
+  assert.ok(!/class="gpexe-error"/.test(html), "no page-level error block");
+  assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the candidates are listed");
+  assert.match(html, /data-action="training-load-gpexe-check" >Find new sessions</, "the search is available");
+  assert.match(html, /<strong>Ana Example<\/strong> <span class="muted">GPEXE athlete 101<\/span>/, "the links are listed");
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 session is ready to import - open one to import it\./, "the next step is not about linking");
+  // 3: Link athletes is off, and the coach reads why - in the coach's words.
+  assert.match(html, /data-action="training-load-gpexe-map-open" disabled>Link athletes<\/button>/);
+  assert.match(html, /The list of GPEXE athletes is not available right now, so Link athletes is off\. The sessions, the search and the links below still work\./);
+  assert.match(html, /data-action="training-load-gpexe-sources-retry" >Try again<\/button>/);
+  assert.ok(!/No GPEXE athlete has been seen yet/.test(html), "a failed read is not 'nothing seen'");
+  assert.ok(!/internal_error|boom/.test(html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "the code only under Technical details");
+  await act("training-load-gpexe-map-open");
+  assert.ok(!/gpexe-map"/.test(renderTrainingLoadCoachHtml()), "a stale click opens nothing");
+  // 4-5: the next successful read clears the error and the screen works.
+  sourcesFail = false;
+  await act("training-load-gpexe-sources-retry");
+  html = renderTrainingLoadCoachHtml();
+  assert.ok(!/is not available right now/.test(html), "the error is gone");
+  assert.match(html, /data-action="training-load-gpexe-map-open" >Link athletes \(1\)<\/button>/);
+  assert.equal(state.trainingLoad.gpexe.sourceAthletesError, null);
+  await act("training-load-gpexe-map-open");
+  assert.match(mappingHtml(), /<p class="gpexe-map-summary">1 linked · 1 not linked<\/p>/);
+  assert.match(mappingHtml(), /data-gpexe-athlete-id="104" aria-label="Link GPEXE athlete 104 to"/);
+  // A later failure while a list is already there keeps the list and the screen (stale, not gone).
+  await act("training-load-gpexe-map-close");
+  sourcesFail = true;
+  await act("training-load-gpexe-sources-retry");
+  html = renderTrainingLoadCoachHtml();
+  assert.match(html, /data-action="training-load-gpexe-map-open" >Link athletes \(1\)<\/button>/, "the last good list stays usable");
+  assert.ok(!/is not available right now/.test(html));
+});
+
+test("Link athletes: a stalled source-athletes read never delays the inbox - the mandatory data is painted as soon as it is here", async () => {
+  resetState();
+  let releaseSources;
+  const gate = new Promise((resolve) => { releaseSources = resolve; });
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (call.url.endsWith("/source-athletes")) { await gate; return { status: 500, body: { error: "internal_error", message: "late" } }; }
+    return base(call);
+  });
+  const loading = openImports();
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the inbox is painted while the helper read is still pending");
+  assert.ok(!/>Loading\.\.\.</.test(html), "no 'Loading...' held by the helper read");
+  assert.match(html, /data-action="training-load-gpexe-map-open" disabled>Link athletes<\/button>/);
+  assert.equal(state.trainingLoad.gpexe.loading, false);
+  releaseSources();
+  await loading;
+  html = renderTrainingLoadCoachHtml();
+  assert.match(html, /is not available right now/, "the late failure is shown where it belongs");
+  assert.match(html, /<h3>Ready to import \(1\)<\/h3>/);
+});
+
+test("Link athletes: a source-athletes answer for the old team never lands in the new team's state (load and Try again)", async () => {
+  resetState();
+  let releaseA;
+  const gateA = new Promise((resolve) => { releaseA = resolve; });
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true }, [TEAM_B]: { enabled: true } } });
+  installFetchMock(async (call) => {
+    if (call.url.includes(`/teams/${TEAM_A}/source-athletes`)) { await gateA; return { status: 500, body: { error: "internal_error", message: "old team" } }; }
+    return base(call);
+  });
+  const first = openImports();
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-team" }, { value: TEAM_B }), { renderTrainingLoad: render });
+  releaseA();
+  await first;
+  const gx = state.trainingLoad.gpexe;
+  assert.equal(gx.teamId, TEAM_B);
+  assert.equal(gx.sourceAthletesError, null, "the old team's failure is dropped");
+  assert.ok(Array.isArray(gx.sourceAthletes), "the new team's list is there");
+
+  // Try again for team B, then a switch back to A before the answer.
+  let releaseB;
+  const gateB = new Promise((resolve) => { releaseB = resolve; });
+  installFetchMock(async (call) => {
+    if (call.url.includes(`/teams/${TEAM_B}/source-athletes`)) { await gateB; return { status: 500, body: { error: "internal_error", message: "late B" } }; }
+    return base(call);
+  });
+  gx.sourceAthletes = null;
+  gx.sourceAthletesError = { status: 500, code: "internal_error", message: "x", data: null };
+  const retry = act("training-load-gpexe-sources-retry");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(renderTrainingLoadCoachHtml(), /data-action="training-load-gpexe-sources-retry" disabled>Trying again\.\.\.<\/button>/, "busy while pending");
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-team" }, { value: TEAM_A }), { renderTrainingLoad: render });
+  releaseB();
+  await retry;
+  assert.equal(state.trainingLoad.gpexe.teamId, TEAM_A);
+  assert.equal(state.trainingLoad.gpexe.sourceAthletesError, null, "team B's late failure never reaches team A");
+  assert.equal(state.trainingLoad.gpexe.sourceAthletesRetrying, false);
 });

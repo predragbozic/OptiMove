@@ -656,6 +656,13 @@ function renderLinksHtml(gx) {
         <button type="button" class="${unlinked ? "primary-button" : "plain-button"} gpexe-button" data-action="training-load-gpexe-map-open" ${gx.sourceAthletes ? "" : "disabled"}>Link athletes${unlinked ? ` (${unlinked})` : ""}</button>
       </div>
       ${facts.length ? `<p class="imports-links-facts">${escapeHtml(facts.join(" · "))}.</p>` : ""}
+      ${gx.sourceAthletesError && !gx.sourceAthletes ? `
+        <div class="gpexe-warning imports-links-unavailable" role="status">
+          <p>The list of GPEXE athletes is not available right now, so Link athletes is off. The sessions, the search and the links below still work.</p>
+          <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-sources-retry" ${gx.sourceAthletesRetrying ? "disabled" : ""}>${gx.sourceAthletesRetrying ? "Trying again..." : "Try again"}</button>
+          ${errorTech(gx.sourceAthletesError)}
+        </div>
+      ` : ""}
       <p class="muted gpexe-hint">A link is never guessed: find the athlete in GPEXE first, then link the whole team under Link athletes or one athlete from a session's review. A wrong link can be removed here before an import is approved. Unlinking doesn't change results that are already imported: those can't be changed here — contact a platform administrator.</p>
       ${gx.linkError && !gx.detail ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
       ${!links.length ? `<p class="muted">No athlete is linked yet.</p>` : `

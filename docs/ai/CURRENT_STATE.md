@@ -46,9 +46,13 @@ athletes with the same name cannot be chosen; nothing is preselected, choices ar
 in state so a repaint never loses them), *Confirm N links* shows every pair with the
 consequences, *Link N athletes* sends them one by one through the existing link route and
 shows one result per pair (linked / not linked with the reason / not confirmed when the
-answer was lost); *Unlink* is right there with the same question as elsewhere. Any link
+answer was lost), then reads the links and the source athletes again once, after the
+whole sequence; *Unlink* is right there with the same question as elsewhere. Any link
 made or possibly made marks the reviews on screen as made with the old links ("Find new
-sessions…"). No name comes from the source; ids and codes only under Technical details.
+sessions…"). The source-athletes read is a helper read: if it alone fails, the inbox, the
+search and the links stay, *Link athletes* is off with a plain reason and a *Try again*,
+and the next successful read clears it. No name comes from the source; ids and codes only
+under Technical details.
 No backend change, no migration, no batch import. Phases 4–6 (batch import, completion
 model and roster, session context, add-later-values) wait for the owner's go after each
 merge.
@@ -580,6 +584,9 @@ pre-existing; pass/fail counts don't belong in this file
   leading-zero id could not be checked from this workstation (the local OPTIMOVE database
   is at v21 and has no GPEXE tables); the ids the app stores come from GPEXE numbers and
   from preview entries, so none is expected.
+- **Link athletes progress** (ux-design-reviewer on Phase 3b, 2026-09-24, optional, not a
+  blocker): while a long batch is sent one pair at a time the button only says
+  "Linking..."; a counter ("Linking 3 of 20...") would help on big teams.
 - **Small Imports follow-ups** (found in PR #115, not scheduled): a hand-typed date in
   the source card's *Choose dates* is lost on a repaint (pre-existing); the review modal's
   badges still use the old vocabulary ("Waiting for approval"), to be aligned with the

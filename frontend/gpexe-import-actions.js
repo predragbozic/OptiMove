@@ -6,6 +6,7 @@
 import { state } from "./state.js";
 import {
   reloadGpexeCandidates,
+  reloadGpexeSourceAthletes,
   approveGpexeCandidate,
   backFromTeamMappingConfirm,
   chooseTeamMapping,
@@ -154,8 +155,14 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   // the action, so a repaint never loses a choice); "Confirm" shows every
   // pair; "Link N athletes" sends them one by one.
   if (type === "training-load-gpexe-map-open") {
+    // Not without the list: the button is disabled, this only guards a stale click.
+    if (!gx.sourceAthletes) return true;
     openTeamMapping();
     renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-sources-retry") {
+    await reloadGpexeSourceAthletes(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-map-close") {
