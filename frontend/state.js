@@ -663,6 +663,18 @@ export const emptyGpexeImportState = () => ({
   sourceAthletesError: null,
   sourceAthletesRetrying: false,
   mapping: { open: false, choices: {}, confirming: false, sending: false, results: null, error: null },
+  // Batch import (Imports phase 4b): the Ready sessions chosen for one
+  // POST /imports, by candidate id -> the previewHash of the list row that
+  // was chosen (an opaque token, never shown); the confirmation step; the
+  // request in flight; the last answer (results + summary) until Done; a
+  // lost answer (unknown: the ids sent, the error, how many checks); the
+  // sentence about choices dropped after a reload; a refusal of the whole
+  // request.
+  batch: { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null },
+  // The local sessions calendar: the month shown ("" = the newest found
+  // session's month, or today's) and the day the list is filtered to ("" =
+  // every day). Local to Imports; never the shared Training Load week.
+  calendar: { month: "", day: "" },
 });
 
 export const emptyTrainingLoadState = (overrides = {}) => ({

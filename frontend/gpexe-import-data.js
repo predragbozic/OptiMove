@@ -77,6 +77,7 @@ function linksChanged() {
   const gx = g();
   gx.linkSeq += 1;
   gx.linkCheckStartedAt = null;
+  pruneBatchSelection(gx);
 }
 
 export async function selectGpexeTeam(teamId, render) {
@@ -89,6 +90,8 @@ export async function selectGpexeTeam(teamId, render) {
 function resetGpexeTeamState(teamId) {
   const gx = g();
   gx.generation += 1;
+  gx.batch = emptyBatch();
+  gx.calendar = { month: "", day: "" };
   gx.teamId = teamId;
   gx.status = null;
   gx.candidates = null;
@@ -112,6 +115,10 @@ function resetGpexeTeamState(teamId) {
 
 function emptyMapping() {
   return { open: false, choices: {}, confirming: false, sending: false, results: null, error: null };
+}
+
+function emptyBatch() {
+  return { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null };
 }
 
 export async function loadGpexeTeam(render) {
@@ -166,6 +173,7 @@ export async function loadGpexeTeam(render) {
 // first paint.
 function finishLoad(gx, status, render) {
   forgetConfirmedImports();
+  pruneBatchSelection(gx);
   // The server's lastCheck is the truth: a check left while polling (the
   // coach went to another tab) or whose polling failed is taken over from
   // it, and followed again if it is still running.
@@ -195,6 +203,7 @@ export async function reloadGpexeCandidates(render) {
     if (generation !== gx.generation) return;
     gx.candidates = candidates;
     forgetConfirmedImports();
+    pruneBatchSelection(gx);
   } catch (error) {
     if (generation !== gx.generation) return;
     gx.error = errorInfo(error);
@@ -763,4 +772,358 @@ export async function unlinkGpexeAthlete(linkId, render) {
       render();
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// The inbox's rules (shared by the view and the batch selection)
+// ---------------------------------------------------------------------------
+
+// Which group a session belongs in, from what the coach actually has to do:
+//   decision - it can be reviewed and approved;
+//   notyet   - it can't be imported until a step is taken (the step is the
+//              same one the detail shows);
+//   excluded - it stays out of OptiMove for good (e.g. a match): no action;
+//   uptodate / imported / replaced.
+// A blocked session's reason comes with the list (blockedCode, phase 2b), so
+// the list is sorted without reading any session's detail.
+export function candidateGroup(c, gx = g()) {
+  if (c.status === "imported") return "imported";
+  if (c.status === "superseded") return "replaced";
+  if (!c.snapshot?.available) return "notyet";
+  if (c.status === "blocked") return c.blockedCode === "unsupported_session_type" ? "excluded" : "notyet";
+  if (c.previewStatus === "no_changes" || c.preview?.status === "no_changes") return "uptodate";
+  return "decision";
+}
+
+// An approval whose result is not confirmed yet stays marked until a check
+// (or a later answer) confirms it - also after the review is closed.
+export function isUncertain(c, gx = g()) {
+  return Boolean(gx?.uncertain?.[c.id]) && c.status !== "imported";
+}
+
+// The list's reasons (one per kind, with a count). A summary without them
+// (an answer from before phase 2b) falls back to the counts it does carry.
+export function rowReasons(c) {
+  if (Array.isArray(c.reasons)) return c.reasons;
+  const out = [];
+  if (c.counts?.athletesNotImported) out.push({ code: "athletes_left_out", count: c.counts.athletesNotImported });
+  if (c.changesToImported) out.push({ code: "changes_to_imported_results", count: c.changesToImported });
+  return out;
+}
+
+// Which bucket a session is in. Built on candidateGroup (which the review
+// still uses) plus the two facts the list already carries: athletes left
+// out and changes to imported results.
+//   ready     - nothing to decide; importable as found (from its review, or
+//               in a batch);
+//   attention - the coach has one step to take, named on the row;
+//   out       - stays out of OptiMove for good; nothing to do;
+//   imported  - in OptiMove, or nothing new for it;
+//   hidden    - a replaced version (listed only with the switch under the
+//               source's Technical details).
+export function inboxBucket(c, gx = g()) {
+  const group = candidateGroup(c, gx);
+  if (group === "replaced") return "hidden";
+  if (group === "imported") return "imported";
+  if (group === "excluded") return "out";
+  if (isUncertain(c, gx)) return "attention";
+  if (group === "notyet") return "attention";
+  // What keeps a session out of Ready comes with the list (reasons). "Nothing
+  // new" is true only when somebody was imported; a session in which no
+  // athlete is linked yet writes nothing and must not read as done.
+  if (group === "uptodate") return rowReasons(c).length ? "attention" : "imported";
+  if (rowReasons(c).length) return "attention";
+  return "ready";
+}
+
+// ---------------------------------------------------------------------------
+// Batch import (Imports phase 4b)
+// ---------------------------------------------------------------------------
+
+// The server's own ceiling (BATCH_APPROVE_MAX in gpexeImportService.js).
+export const BATCH_MAX = 10;
+const PREVIEW_HASH = /^[0-9a-f]{64}$/;
+
+// Whether this coach may import at all right now: the switch is on and
+// the server says they may approve. Otherwise the Ready bucket is review
+// only, and nothing can be chosen.
+export function batchAllowed(gx = g()) {
+  const status = gx.status;
+  return Boolean(status?.importSwitch?.enabled && status?.viewer?.canApprove);
+}
+
+// A session that can go into a batch: a clean Ready one whose review is
+// current (no link change since) and whose list row carries the preview
+// hash the server binds the import to. Anything else is reviewed one by
+// one, or not at all.
+export function batchSelectable(c, gx = g()) {
+  if (!batchAllowed(gx)) return false;
+  if (inboxBucket(c, gx) !== "ready") return false;
+  if (c.status !== "pending" || reviewMadeBeforeLinkChange(c, gx)) return false;
+  return typeof c.previewHash === "string" && PREVIEW_HASH.test(c.previewHash);
+}
+
+// Every session that can be chosen, in the order the list shows them.
+export function batchSelectableList(gx = g()) {
+  return (gx.candidates || []).filter((c) => batchSelectable(c, gx));
+}
+
+// The rows the list shows under the local date filter (all of them without one).
+export function calendarFiltered(list, gx = g()) {
+  const day = gx.calendar?.day;
+  if (!day) return list;
+  return list.filter((c) => calendarDayKey(c.sessionStartedAt) === day);
+}
+
+// The chosen sessions in the list's order, each with the hash chosen with
+// it (never a hash read later: a changed session is dropped, not resent).
+export function batchSelection(gx = g()) {
+  const selected = gx.batch?.selected || {};
+  return (gx.candidates || []).filter((c) => Object.hasOwn(selected, c.id)).map((c) => ({ candidateId: c.id, previewHash: selected[c.id], candidate: c }));
+}
+
+export function batchSelectedCount(gx = g()) {
+  return Object.keys(gx.batch?.selected || {}).length;
+}
+
+// Checking a row: staged only, nothing is sent. Refused (false) when the
+// session cannot be chosen or the batch is full.
+export function toggleBatchPick(candidateId, checked) {
+  const gx = g();
+  const selected = gx.batch.selected;
+  if (!checked) {
+    if (!Object.hasOwn(selected, candidateId)) return false;
+    delete selected[candidateId];
+  } else {
+    if (Object.hasOwn(selected, candidateId)) return false;
+    const c = (gx.candidates || []).find((x) => x.id === candidateId);
+    if (!c || !batchSelectable(c, gx) || batchSelectedCount(gx) >= BATCH_MAX) return false;
+    selected[candidateId] = c.previewHash;
+  }
+  gx.batch.dropped = "";
+  gx.batch.error = null;
+  return true;
+}
+
+// "Select all" / "Select first N": the visible sessions that can be chosen
+// (a local date filter never adds a hidden one), in the list's order, until
+// the batch is full. Already chosen ones stay chosen.
+export function selectBatchVisible(visible) {
+  const gx = g();
+  let room = BATCH_MAX - batchSelectedCount(gx);
+  let added = 0;
+  for (const c of visible) {
+    if (room <= 0) break;
+    if (Object.hasOwn(gx.batch.selected, c.id) || !batchSelectable(c, gx)) continue;
+    gx.batch.selected[c.id] = c.previewHash;
+    room -= 1;
+    added += 1;
+  }
+  if (added) {
+    gx.batch.dropped = "";
+    gx.batch.error = null;
+  }
+  return added;
+}
+
+export function clearBatchSelection() {
+  const gx = g();
+  const had = batchSelectedCount(gx);
+  gx.batch.selected = {};
+  gx.batch.dropped = "";
+  gx.batch.error = null;
+  return had;
+}
+
+// After a load, a reload or a link change: a chosen session that is no
+// longer Ready, or whose preview was recomputed (another hash), leaves the
+// selection - with a sentence, never silently. Nothing chosen is ever
+// resent with a newer hash.
+export function pruneBatchSelection(gx = g()) {
+  const selected = gx.batch?.selected;
+  if (!selected) return 0;
+  const byId = new Map((gx.candidates || []).map((c) => [c.id, c]));
+  let dropped = 0;
+  for (const [id, hash] of Object.entries(selected)) {
+    const c = byId.get(id);
+    if (!c || !batchSelectable(c, gx) || c.previewHash !== hash) {
+      delete selected[id];
+      dropped += 1;
+    }
+  }
+  if (dropped) {
+    gx.batch.dropped = `${dropped === 1 ? "1 selected session was" : `${dropped} selected sessions were`} removed from the selection: ${dropped === 1 ? "it" : "they"} changed or ${dropped === 1 ? "is" : "are"} no longer ready. Choose again if needed.`;
+    if (!batchSelectedCount(gx)) gx.batch.confirming = false;
+  }
+  return dropped;
+}
+
+export function openBatchReview() {
+  const gx = g();
+  if (!batchSelectedCount(gx) || gx.batch.sending) return false;
+  gx.batch.confirming = true;
+  gx.batch.error = null;
+  return true;
+}
+
+// Back (and closing the confirmation): the selection stays, and so does a
+// refusal's reason - shown under the Ready bucket until the next choice.
+export function closeBatchReview() {
+  const gx = g();
+  if (gx.batch.sending) return false;
+  gx.batch.confirming = false;
+  return true;
+}
+
+// One request for the whole selection, in the list's order, each session
+// with the hash it was chosen with. The answer is one result per session;
+// then the list is read again ONCE, and the selection is checked against it
+// (imported and already imported sessions leave it; a refused one stays
+// only while it is still Ready with the same hash - a changed one is
+// never resent).
+export async function sendBatch(render) {
+  const gx = g();
+  if (gx.batch.sending || !gx.batch.confirming) return;
+  const generation = gx.generation;
+  const items = batchSelection(gx);
+  if (!items.length) {
+    gx.batch.confirming = false;
+    render();
+    return;
+  }
+  const candidateIds = items.map((i) => i.candidateId);
+  const previewHashes = Object.fromEntries(items.map((i) => [i.candidateId, i.previewHash]));
+  gx.batch.sending = true;
+  gx.batch.error = null;
+  gx.batch.results = null;
+  gx.batch.summary = null;
+  gx.batch.unknown = null;
+  render();
+  try {
+    const answer = await api(teamPath(gx.teamId, "/imports"), { method: "POST", body: JSON.stringify({ candidateIds, previewHashes }) });
+    if (generation !== gx.generation) return;
+    const results = Array.isArray(answer?.results) ? answer.results : [];
+    gx.batch.results = results;
+    gx.batch.summary = answer?.summary || null;
+    for (const r of results) {
+      // The same marks the single review uses: an unconfirmed result stays
+      // marked on the row and in a reopened review until it is confirmed.
+      if (r.outcome === "import_outcome_unknown") {
+        gx.uncertain[r.candidateId] = { kind: "unknown", error: { status: 503, code: r.code || "import_outcome_unknown", message: "", data: { verify: r.verify || null } }, verify: r.verify || null, checks: 0 };
+      } else if (r.outcome === "imported" || r.outcome === "already_imported") delete gx.uncertain[r.candidateId];
+      // The server has decided about every session it tried: it leaves the
+      // selection here, whatever the reload says (a refused session is only
+      // chosen again from the fresh list). A session not tried, or refused
+      // because the server failed, waits for the reload's verdict.
+      if (r.outcome !== "not_attempted" && !(r.outcome === "refused" && r.code === "internal_error")) delete gx.batch.selected[r.candidateId];
+    }
+    gx.batch.confirming = false;
+  } catch (error) {
+    if (generation !== gx.generation) return;
+    const info = errorInfo(error);
+    if (isDefiniteRefusal(info)) {
+      // The whole request was refused before anything was tried: the
+      // confirmation stays open with the reason, Back closes it, and the
+      // reason stays under the Ready bucket until the next choice.
+      gx.batch.error = info;
+    } else {
+      // No answer: the sessions may or may not be imported, some or all.
+      // Never "failed". Every one is marked as not confirmed; the list is
+      // read again once and only what it shows as imported is confirmed.
+      gx.batch.unknown = { candidateIds, error: info, checks: 0 };
+      for (const id of candidateIds) gx.uncertain[id] = { kind: "unknown", error: info, verify: null, checks: 0 };
+      gx.batch.confirming = false;
+    }
+  } finally {
+    if (generation === gx.generation) {
+      gx.batch.sending = false;
+      render();
+    }
+  }
+  // A refusal because a session is not available any more (404) or the
+  // selection is out of date (400) is followed by one reload too, so the
+  // stale row leaves the selection with its sentence; the other refusals
+  // (the switch, the right) change nothing in the list.
+  if (generation !== gx.generation) return;
+  if (gx.batch.error && gx.batch.error.status !== 404 && gx.batch.error.status !== 400) return;
+  // Once: the list decides what stays selected and which unconfirmed
+  // sessions are now shown as imported.
+  await reloadGpexeCandidates(render);
+}
+
+// "Check again" after a lost answer: the list is read once more; sessions
+// it shows as imported are confirmed, the rest stay unconfirmed. No batch
+// is ever sent again by itself.
+export async function checkBatchAgain(render) {
+  const gx = g();
+  if (!gx.batch.unknown || gx.batch.checking) return;
+  const generation = gx.generation;
+  gx.batch.checking = true;
+  render();
+  await reloadGpexeCandidates(render);
+  if (generation !== gx.generation) return;
+  gx.batch.unknown = { ...gx.batch.unknown, checks: (gx.batch.unknown.checks || 0) + 1 };
+  gx.batch.checking = false;
+  render();
+}
+
+// The result panel closes; the per-session "not confirmed" marks stay
+// (the rows and a reopened review still show them) until confirmed.
+export function finishBatchResults() {
+  const gx = g();
+  if (gx.batch.sending || gx.batch.checking) return false;
+  gx.batch.results = null;
+  gx.batch.summary = null;
+  gx.batch.unknown = null;
+  gx.batch.error = null;
+  gx.batch.confirming = false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// The local sessions calendar (Imports phase 4b)
+// ---------------------------------------------------------------------------
+
+// The day a session belongs to, on the same local clock the row's date and
+// time use (never toISOString, which can move a late session to the next
+// UTC day). "" when the value is not a date.
+export function calendarDayKey(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const two = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+export function calendarMonthKey(value) {
+  const key = calendarDayKey(value);
+  return key ? key.slice(0, 7) : "";
+}
+
+// The month on screen: the one chosen with Prev/Next, else the month of the
+// newest session found, else this month.
+export function calendarMonthShown(gx = g(), now = new Date()) {
+  if (gx.calendar?.month) return gx.calendar.month;
+  const days = (gx.candidates || []).filter((c) => candidateGroup(c, gx) !== "replaced").map((c) => calendarDayKey(c.sessionStartedAt)).filter(Boolean).sort();
+  if (days.length) return days[days.length - 1].slice(0, 7);
+  return calendarMonthKey(now);
+}
+
+// Prev/Next: local only, no request.
+export function moveCalendarMonth(delta) {
+  const gx = g();
+  const [y, m] = calendarMonthShown(gx).split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  gx.calendar.month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// A marked day filters the list to that day; the same day again, or "Show
+// all dates", removes the filter. Never the dates of "Find new sessions".
+export function setCalendarDay(day) {
+  const gx = g();
+  gx.calendar.day = gx.calendar.day === day ? "" : day;
+}
+
+export function clearCalendarDay() {
+  g().calendar.day = "";
 }

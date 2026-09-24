@@ -15,7 +15,28 @@
 // kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
-import { gpexeTeamOptions, reviewMadeBeforeLinkChange, stagedTeamMapping, teamAthleteChoices, teamHasActiveAthletes } from "./gpexe-import-data.js";
+import {
+  BATCH_MAX,
+  batchAllowed,
+  batchSelectable,
+  batchSelection,
+  calendarDayKey,
+  calendarFiltered,
+  calendarMonthShown,
+  candidateGroup,
+  gpexeTeamOptions,
+  inboxBucket,
+  isUncertain,
+  reviewMadeBeforeLinkChange,
+  rowReasons,
+  stagedTeamMapping,
+  teamAthleteChoices,
+  teamHasActiveAthletes,
+} from "./gpexe-import-data.js";
+
+// The bucket rules live in the data module (the batch selection needs them
+// there); they stay exported from here for the shell and the tests.
+export { candidateGroup, inboxBucket };
 
 // Why a session can't be approved right now, in the coach's words (blocked
 // and expired sessions explain themselves above the approve area).
@@ -260,15 +281,17 @@ export function renderGpexeImportsHtml() {
       ${status ? renderNextStepHtml(gx, status, IMPORT_SOURCES[0]) : ""}
       ${gx.notice && !gx.detail ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
       ${!gx.detail ? renderLastLinkHtml(gx) : ""}
+      ${status ? renderCalendarHtml(gx) : ""}
       ${status ? renderBucketsHtml(gx, status) : ""}
       ${status ? renderLinksHtml(gx) : ""}
       ${gx.detail ? renderCandidateDetailHtml(gx, status) : ""}
       ${!gx.detail && gx.mapping?.open ? renderTeamMappingHtml(gx, teams) : ""}
+      ${!gx.detail && !gx.mapping?.open ? renderBatchOverlayHtml(gx) : ""}
     </div>
   `;
 }
 
-function renderTeamRowHtml(teams, teamId) {
+function renderTeamRowHtml(teams, teamId, gx = state.trainingLoad.gpexe) {
   if (teams.length === 1) {
     const team = teams[0];
     return `<div class="gpexe-team-row"><span class="gpexe-team-label">Team</span><strong>${escapeHtml(team.name)}</strong>${team.club_name ? `<span class="muted"> · ${escapeHtml(team.club_name)}</span>` : ""}</div>`;
@@ -276,7 +299,7 @@ function renderTeamRowHtml(teams, teamId) {
   return `
     <label class="gpexe-team-row">
       <span class="gpexe-team-label">Team</span>
-      <select class="gpexe-select" data-action="training-load-gpexe-team" aria-label="Team">
+      <select class="gpexe-select" data-action="training-load-gpexe-team" aria-label="Team" ${gx.batch?.sending ? "disabled" : ""}>
         ${teams.map((team) => renderOption(team.id, team.club_name ? `${team.name} (${team.club_name})` : team.name, teamId)).join("")}
       </select>
     </label>
@@ -410,41 +433,6 @@ function renderCheckSummaryHtml(check, source = IMPORT_SOURCES[0]) {
 // The inbox: four buckets, from what the coach has to do
 // ---------------------------------------------------------------------------
 
-// Which bucket a session is in. Built on candidateGroup (which the review
-// still uses) plus the two facts the list already carries: athletes left
-// out and changes to imported results.
-//   ready     - nothing to decide; importable as found (from its review
-//               today; in a batch later);
-//   attention - the coach has one step to take, named on the row;
-//   out       - stays out of OptiMove for good; nothing to do;
-//   imported  - in OptiMove, or nothing new for it;
-//   hidden    - a replaced version (listed only with the switch under the
-//               source's Technical details).
-export function inboxBucket(c, gx = state.trainingLoad.gpexe) {
-  const group = candidateGroup(c, gx);
-  if (group === "replaced") return "hidden";
-  if (group === "imported") return "imported";
-  if (group === "excluded") return "out";
-  if (isUncertain(c, gx)) return "attention";
-  if (group === "notyet") return "attention";
-  // What keeps a session out of Ready comes with the list (reasons). "Nothing
-  // new" is true only when somebody was imported; a session in which no
-  // athlete is linked yet writes nothing and must not read as done.
-  if (group === "uptodate") return rowReasons(c).length ? "attention" : "imported";
-  if (rowReasons(c).length) return "attention";
-  return "ready";
-}
-
-// The list's reasons (one per kind, with a count). A summary without them
-// (an answer from before phase 2b) falls back to the counts it does carry.
-function rowReasons(c) {
-  if (Array.isArray(c.reasons)) return c.reasons;
-  const out = [];
-  if (c.counts?.athletesNotImported) out.push({ code: "athletes_left_out", count: c.counts.athletesNotImported });
-  if (c.changesToImported) out.push({ code: "changes_to_imported_results", count: c.changesToImported });
-  return out;
-}
-
 // The one step for a list reason, and the short fact the row shows for it.
 function reasonStep(r) {
   const n = r.count || 0;
@@ -516,7 +504,7 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   else if (attention && ready.length) text = `Next step: ${plural(attention, "item needs", "items need")} attention · ${readyText}.`;
   else if (attention) text = `Next step: ${plural(attention, "item needs", "items need")} attention - see below.`;
   else if (ready.length && reviewOnly) text = `Next step: ${plural(ready.length, "session can", "sessions can")} be reviewed. ${reviewOnly.replace(/^Review only - /, "").replace(/^\w/, (ch) => ch.toUpperCase())}`;
-  else if (ready.length) text = `Next step: ${readyText} - open one to import it.`;
+  else if (ready.length) text = `Next step: ${readyText} - tick the ones to import, or open one to review it.`;
   else if (!list.length && check?.status === "succeeded") text = `No sessions in ${source.name} for ${formatDate(check.window?.from)} - ${formatDate(check.window?.to)}. Choose other dates and find again.`;
   else if (!list.length) text = "Nothing found yet. Find new sessions to see what the source has.";
   else text = "Nothing needs attention. Find new sessions to see what's new.";
@@ -536,7 +524,9 @@ function attentionText(c, status, gx = state.trainingLoad.gpexe) {
 }
 
 function renderBucketsHtml(gx, status) {
-  const list = gx.candidates || [];
+  const all = gx.candidates || [];
+  const day = gx.calendar?.day || "";
+  const list = calendarFiltered(all, gx);
   const of = (name) => list.filter((c) => inboxBucket(c, gx) === name);
   const ready = of("ready");
   const attention = of("attention");
@@ -546,7 +536,10 @@ function renderBucketsHtml(gx, status) {
   let readyNote = "";
   if (readyLocked(ready, gx)) readyNote = `${findAgainText(ready.filter((c) => reviewMadeBeforeLinkChange(c, gx)))} first - athlete links changed after these reviews were made.`;
   else readyNote = reviewOnlyText(status);
-  const rows = (items, kind) => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind)).join("")}</ul>`;
+  // A Ready bucket locked by a link change (some reviews are stale) is
+  // locked as a whole: its one line is the instruction, no checkbox.
+  const pickable = batchAllowed(gx) && !readyLocked(ready, gx);
+  const rows = (items, kind) => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, kind === "ready" && pickable)).join("")}</ul>`;
   return `
     ${attention.length ? `
       <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
@@ -557,7 +550,10 @@ function renderBucketsHtml(gx, status) {
     <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Ready to import">
       <div class="gpexe-panel-head"><h3>Ready to import (${ready.length})</h3></div>
       ${readyNote && ready.length ? `<p class="imports-bucket-note">${escapeHtml(readyNote)}</p>` : ""}
-      ${ready.length ? rows(ready, "ready") : `<p class="muted">Nothing is ready to import.</p>`}
+      ${gx.batch?.dropped ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.batch.dropped)}</p>` : ""}
+      ${gx.batch?.error && !gx.batch.confirming ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(gx.batch.error))}</p>${errorTech(gx.batch.error)}</div>` : ""}
+      ${readyLocked(ready, gx) ? "" : renderSelectBarHtml(gx, ready)}
+      ${ready.length ? rows(ready, "ready") : `<p class="muted">${day ? "No session of this day is ready to import." : "Nothing is ready to import."}</p>`}
     </section>
     ${out.length ? `
       <details class="gpexe-panel gpexe-group imports-bucket">
@@ -582,8 +578,10 @@ function renderBucketsHtml(gx, status) {
 }
 
 // One line per session: what it is, when, and - only where the coach has to
-// do something - the one step. No ids, no hashes, no internal statuses.
-function renderSessionRowHtml(c, status, kind) {
+// do something - the one step. No ids, no hashes, no internal statuses. A
+// Ready row that can go into a batch gets a checkbox beside the row (the
+// row itself still opens the review); choosing only stages it.
+function renderSessionRowHtml(c, status, kind, pick = false) {
   const counts = c.counts || {};
   const facts = [];
   if (kind === "ready" || kind === "attention") {
@@ -597,9 +595,17 @@ function renderSessionRowHtml(c, status, kind) {
     else facts.push("nothing new");
   }
   const step = kind === "attention" ? attentionText(c, status) : "";
-  const badge = isUncertain(c, state.trainingLoad.gpexe) ? `<span class="gpexe-badge is-unknown">Result not confirmed</span>` : "";
+  const gx = state.trainingLoad.gpexe;
+  const badge = isUncertain(c, gx) ? `<span class="gpexe-badge is-unknown">Result not confirmed</span>` : "";
+  let box = "";
+  if (pick && batchSelectable(c, gx)) {
+    const checked = Object.hasOwn(gx.batch.selected, c.id);
+    const full = !checked && Object.keys(gx.batch.selected).length >= BATCH_MAX;
+    box = `<label class="imports-pick"><input type="checkbox" data-action="training-load-gpexe-pick" data-candidate-id="${escapeAttr(c.id)}" aria-label="Select ${escapeAttr(sessionTitle(c))} ${escapeAttr(fmtDateTime(c.sessionStartedAt))}" ${checked ? "checked" : ""} ${full || gx.batch.sending ? "disabled" : ""}></label>`;
+  }
   return `
-    <li>
+    <li class="${box ? "imports-pick-row" : ""}">
+      ${box}
       <button type="button" class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(c.id)}">
         <span class="gpexe-candidate-main">
           <strong>${escapeHtml(sessionTitle(c))}</strong>
@@ -613,27 +619,252 @@ function renderSessionRowHtml(c, status, kind) {
   `;
 }
 
-// Which group a session belongs in, from what the coach actually has to do:
-//   decision - it can be reviewed and approved;
-//   notyet   - it can't be imported until a step is taken (the step is the
-//              same one the detail shows);
-//   excluded - it stays out of OptiMove for good (e.g. a match): no action;
-//   uptodate / imported / replaced.
-// A blocked session's reason comes with the list (blockedCode, phase 2b), so
-// the list is sorted without reading any session's detail.
-export function candidateGroup(c, gx = state.trainingLoad.gpexe) {
-  if (c.status === "imported") return "imported";
-  if (c.status === "superseded") return "replaced";
-  if (!c.snapshot?.available) return "notyet";
-  if (c.status === "blocked") return blockedCoachText(c).excluded ? "excluded" : "notyet";
-  if (c.previewStatus === "no_changes" || c.preview?.status === "no_changes") return "uptodate";
-  return "decision";
+// ---------------------------------------------------------------------------
+// Batch import (Imports phase 4b): choosing Ready sessions, the confirmation,
+// the result. Nothing is sent before "Import N sessions"; then exactly one
+// request for the whole selection.
+// ---------------------------------------------------------------------------
+
+// The selection summary and its controls, above the Ready rows. "Select
+// all" when every visible session fits; "Select first N" when they don't -
+// the list's order decides which, never a hidden one.
+function renderSelectBarHtml(gx, visibleReady) {
+  if (!batchAllowed(gx)) return "";
+  const selectable = visibleReady.filter((c) => batchSelectable(c, gx));
+  const total = Object.keys(gx.batch.selected).length;
+  if (!selectable.length && !total) return "";
+  const visibleSelected = visibleReady.filter((c) => Object.hasOwn(gx.batch.selected, c.id)).length;
+  const hidden = total - visibleSelected;
+  const room = Math.max(0, BATCH_MAX - total);
+  const unselected = selectable.filter((c) => !Object.hasOwn(gx.batch.selected, c.id));
+  const all = room === 0 || unselected.length <= room;
+  const left = all ? 0 : unselected.length - room;
+  const busy = gx.batch.sending ? "disabled" : "";
+  return `
+    <div class="imports-select-bar" role="group" aria-label="Import several sessions">
+      <p class="imports-select-summary" role="status"><strong>${total} selected</strong> · maximum ${BATCH_MAX}${hidden ? ` · ${plural(hidden, "selected session is", "selected sessions are")} hidden by the date filter` : ""}${room === 0 ? " · maximum reached, import these first" : ""}</p>
+      <div class="imports-select-actions">
+        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-select" ${unselected.length && room ? "" : "disabled"} ${busy}>${all ? "Select all" : `Select first ${room}`}</button>
+        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-clear" ${total ? "" : "disabled"} ${busy}>Clear selection</button>
+        <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-review" ${total ? "" : "disabled"} ${busy}>Review ${total ? plural(total, "session", "sessions") : "sessions"}</button>
+      </div>
+      ${left ? `<p class="muted imports-select-left">${plural(left, "more session stays", "more sessions stay")} for the next batch.</p>` : ""}
+    </div>
+  `;
 }
 
-// An approval whose result is not confirmed yet stays marked until a check
-// (or a later answer) confirms it - also after the review is closed.
-function isUncertain(c, gx) {
-  return Boolean(gx?.uncertain?.[c.id]) && c.status !== "imported";
+// What the batch answer means for one session, in the coach's words, and
+// the one thing to do next. Every code is the server's stable one.
+function batchOutcomeText(r) {
+  const o = r.outcome;
+  if (o === "imported") return { cls: "is-imported", text: r.commitConfirmation === "verified_after_commit_error" ? "Imported (the confirmation arrived late, but the import is in OptiMove)." : "Imported." };
+  if (o === "already_imported") return { cls: "is-imported", text: "Already imported, nothing more was written." };
+  if (o === "import_outcome_unknown") return { cls: "is-unknown", text: "Import result not confirmed - check it before doing anything else. Don't enter the data by hand and don't assume either way.", check: true };
+  if (o === "not_attempted") return { cls: "is-skipped", text: "Not tried because the batch stopped." };
+  const code = r.code;
+  if (code === "preview_changed") return { cls: "is-refused", text: "Session changed - review it again.", open: r.reviewAgain?.candidateId || r.candidateId, openLabel: "Review again" };
+  if (code === "changes_need_acceptance") return { cls: "is-refused", text: "Open and review the changes individually.", open: r.candidateId, openLabel: "Open" };
+  if (code === "superseded_by_newer_data") return { cls: "is-refused", text: "Not imported: GPEXE has newer data for this session - open the newer version.", open: r.reviewAgain?.candidateId, openLabel: "Open the newer version" };
+  if (code === "not_ready") return { cls: "is-refused", text: "Not imported: it is not ready any more - see its row under Needs attention.", open: r.candidateId, openLabel: "Open" };
+  if (code === "blocked") return { cls: "is-refused", text: "Not imported: this session must be fixed first - open it to see what.", open: r.candidateId, openLabel: "Open" };
+  if (code === "snapshot_expired_check_again") return { cls: "is-refused", text: "Not imported: the GPEXE data is too old. Find new sessions, then import it." };
+  if (code === "nothing_to_import") return { cls: "is-refused", text: "Nothing to import: GPEXE has nothing new for this session." };
+  if (code === "import_switch_off") return { cls: "is-refused", text: "Not imported: importing was switched off in this environment." };
+  if (code === "not_an_approver") return { cls: "is-refused", text: "Not imported: you may not approve imports for this team any more. Ask a platform admin." };
+  if (code === "internal_error") return { cls: "is-refused", text: "Not imported: the server failed before writing anything. Try again later." };
+  if (code === "notFound") return { cls: "is-refused", text: "Not imported: this session is not available." };
+  return { cls: "is-refused", text: "Not imported: the server refused it. Open the session to see what to do.", open: r.candidateId, openLabel: "Open" };
+}
+
+// The sentence of the whole refusal (nothing was tried), by the server's code.
+function batchRefusalText(error) {
+  const code = error?.code;
+  if (code === "import_switch_off") return "Not imported: importing is switched off in this environment.";
+  if (code === "not_an_approver") return "Not imported: you may not approve imports for this team. Ask a platform admin to approve them or to give you the right.";
+  if (error?.status === 404) return "Not imported: one of the sessions is not available in this team any more. Find new sessions, then choose again.";
+  if (code === "internal_error") return "Not imported: the server failed before writing anything. Try again later.";
+  if (error?.status === 400) return "Not imported: the selection is out of date. Choose the sessions again.";
+  return "Not imported: the server refused the request. Nothing was imported.";
+}
+
+function batchSummaryText(summary) {
+  if (!summary) return "";
+  const parts = [];
+  if (summary.imported) parts.push(plural(summary.imported, "imported", "imported"));
+  if (summary.alreadyImported) parts.push(`${summary.alreadyImported} already imported`);
+  if (summary.refused) parts.push(`${summary.refused} not imported`);
+  if (summary.unknown) parts.push(`${summary.unknown} not confirmed`);
+  if (summary.notAttempted) parts.push(`${summary.notAttempted} not tried`);
+  return parts.join(" · ");
+}
+
+function batchSessionLine(c, candidateId) {
+  if (!c) return `<strong>Session</strong> <span class="muted">(no longer in the list)</span>`;
+  return `<strong>${escapeHtml(sessionTitle(c))}</strong> <span class="muted">${escapeHtml(fmtDateTime(c.sessionStartedAt))}</span>`;
+}
+
+function renderBatchOverlayHtml(gx) {
+  const b = gx.batch;
+  if (!b.confirming && !b.results && !b.unknown) return "";
+  const busy = b.sending || b.checking ? "disabled" : "";
+  let title;
+  let body;
+  if (b.results || b.unknown) {
+    title = b.unknown ? "Import result not confirmed" : "Import result";
+    body = renderBatchResultsHtml(gx);
+  } else {
+    const items = batchSelection(gx);
+    title = `Import ${plural(items.length, "session", "sessions")}`;
+    body = renderBatchReviewHtml(gx, items);
+  }
+  const close = b.results || b.unknown ? "training-load-gpexe-batch-done" : "training-load-gpexe-batch-back";
+  return `
+    <div class="builder-athlete-overlay gpexe-detail-overlay">
+      <button type="button" class="builder-athlete-backdrop" data-action="${close}" aria-label="Close" ${busy}></button>
+      <section class="panel builder-athlete-picker gpexe-detail imports-batch" role="dialog" aria-modal="true" aria-label="${escapeAttr(title)}">
+        <div class="builder-section-panel-head">
+          <h3>${escapeHtml(title)}</h3>
+          <button type="button" class="plain-button icon-button builder-athlete-picker-cancel" data-action="${close}" aria-label="Close" ${busy}>&times;</button>
+        </div>
+        <div class="gpexe-detail-body">${body}</div>
+      </section>
+    </div>
+  `;
+}
+
+// The confirmation: every chosen session by name and time, what happens,
+// and the one button. No id, hash or code in the open; the ids only under
+// Technical details, the hashes nowhere.
+function renderBatchReviewHtml(gx, items) {
+  const b = gx.batch;
+  const busy = b.sending ? "disabled" : "";
+  return `
+    <p><strong>Import these sessions exactly as found in the last search.</strong></p>
+    <ul class="imports-batch-list">
+      ${items.map(({ candidate: c }) => `<li>${batchSessionLine(c)}${c?.counts?.created ? `<span class="gpexe-candidate-facts">${escapeHtml(plural(c.counts.created, "new result", "new results"))}</span>` : ""}</li>`).join("")}
+    </ul>
+    <p class="muted">The sessions are imported one by one and the result is shown for each. A session that can't be imported does not stop the others - the batch is not all-or-nothing.</p>
+    <p class="muted">Athletes are imported under the names shown in each session's review. Results imported under the wrong athlete can't be changed here — contact a platform administrator.</p>
+    ${b.error ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(b.error))}</p>${errorTech(b.error)}</div>` : ""}
+    ${techHtml([["Candidate ids", items.map((i) => i.candidateId).join(", ")]])}
+    <div class="gpexe-link-actions imports-batch-actions">
+      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-back" ${busy}>Back</button>
+      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-send" ${busy || b.error ? "disabled" : ""}>${b.sending ? "Importing..." : `Import ${plural(items.length, "session", "sessions")}`}</button>
+    </div>
+  `;
+}
+
+// One line per session with what happened to it. After a lost answer:
+// only what the list shows as imported is confirmed; the rest is "not
+// confirmed", never "failed".
+function renderBatchResultsHtml(gx) {
+  const b = gx.batch;
+  const byId = new Map((gx.candidates || []).map((c) => [c.id, c]));
+  const busy = b.checking ? "disabled" : "";
+  if (b.unknown) {
+    const u = b.unknown;
+    const rows = u.candidateIds.map((id) => {
+      const c = byId.get(id);
+      const imported = c?.status === "imported";
+      return `<li class="${imported ? "is-imported" : "is-unknown"}">${batchSessionLine(c, id)}<span class="imports-batch-outcome">${imported ? "Imported - confirmed by the list." : "Not confirmed yet."}</span></li>`;
+    });
+    const confirmed = u.candidateIds.filter((id) => byId.get(id)?.status === "imported").length;
+    return `
+      <div class="gpexe-unknown" role="alert">
+        <p><strong>The answer to the import did not arrive.</strong> Some of these sessions may already be imported. Don't enter their data by hand and don't assume either way - check the result.</p>
+        <p>${confirmed} of ${u.candidateIds.length} confirmed as imported so far. The rest are not confirmed; nothing is sent again by itself. Sessions that stay unconfirmed keep the mark "Result not confirmed" in the list; open one to check it.</p>
+        ${(u.checks || 0) >= GIVE_UP_AFTER_CHECKS ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> Ask a platform admin to check these imports (give them the Technical details). Until then, don't enter the data by hand.</p>` : ""}
+        ${techHtml([["HTTP status", u.error?.status || "no answer"], ["Code", u.error?.code], ["Server message", u.error?.message], ["Candidate ids", u.candidateIds.join(", ")]])}
+      </div>
+      <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
+      <div class="gpexe-link-actions imports-batch-actions">
+        <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-check" ${busy}>${b.checking ? "Checking..." : "Check again"}</button>
+        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-done" ${busy}>Done</button>
+      </div>
+    `;
+  }
+  const rows = (b.results || []).map((r) => {
+    const t = batchOutcomeText(r);
+    const c = byId.get(r.candidateId);
+    const button = t.check
+      ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-open" data-candidate-id="${escapeAttr(r.candidateId)}">Check result</button>`
+      : t.open ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-batch-open" data-candidate-id="${escapeAttr(t.open)}">${escapeHtml(t.openLabel)}</button>` : "";
+    return `<li class="${t.cls}">${batchSessionLine(c, r.candidateId)}<span class="imports-batch-outcome">${escapeHtml(t.text)}</span>${button}${techHtml([["Outcome", r.outcome], ["Code", r.code], ["Approval id", r.approvalId], ["Candidate id", r.candidateId]])}</li>`;
+  });
+  const summary = batchSummaryText(b.summary);
+  const still = batchSelection(gx).length;
+  return `
+    ${summary ? `<p class="imports-batch-summary" role="status">${escapeHtml(summary)}.</p>` : ""}
+    <ul class="imports-batch-list imports-batch-results">${rows.join("")}</ul>
+    ${(b.summary?.imported || b.summary?.alreadyImported) ? `<p class="muted">Imported sessions are listed under Imported below. A wrong link can't be changed here — contact a platform administrator.</p>` : ""}
+    ${still ? `<p class="muted">${escapeHtml(plural(still, "session that was not imported is", "sessions that were not imported are"))} still ticked. After Done, Review ${escapeHtml(plural(still, "session", "sessions"))} opens the confirmation to import ${still === 1 ? "it" : "them"} again.</p>` : ""}
+    <div class="gpexe-link-actions imports-batch-actions">
+      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-batch-done">Done</button>
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// The local sessions calendar (Imports phase 4b)
+// ---------------------------------------------------------------------------
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// A month of the sessions OptiMove has already found, from the list alone
+// (every session whatever its bucket, replaced versions aside). A marked
+// day filters the list to that day; Prev/Next only turn the page. The
+// From/To dates of "Find new sessions" are a different thing and stay as
+// they are.
+function renderCalendarHtml(gx) {
+  const list = (gx.candidates || []).filter((c) => candidateGroup(c, gx) !== "replaced");
+  const counts = new Map();
+  for (const c of list) {
+    const key = calendarDayKey(c.sessionStartedAt);
+    if (key) counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const listed = (gx.candidates || []).filter((c) => inboxBucket(c, gx) !== "hidden");
+  const shown = calendarFiltered(listed, gx);
+  const month = calendarMonthShown(gx);
+  const [y, m] = month.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const lead = (new Date(y, m - 1, 1).getDay() + 6) % 7;
+  const today = calendarDayKey(new Date());
+  const selected = gx.calendar?.day || "";
+  const cells = [];
+  for (let i = 0; i < lead; i += 1) cells.push(`<span class="imports-cal-day is-blank" aria-hidden="true"></span>`);
+  for (let d = 1; d <= daysInMonth; d += 1) {
+    const key = `${month}-${String(d).padStart(2, "0")}`;
+    const n = counts.get(key) || 0;
+    const name = `${d} ${MONTH_NAMES[m - 1]}`;
+    const isToday = key === today;
+    const isSelected = key === selected;
+    const flags = [isToday ? "today" : "", isSelected ? "showing this day" : ""].filter(Boolean);
+    if (n) {
+      const label = `${name}, ${plural(n, "session", "sessions")} found${flags.length ? `, ${flags.join(", ")}` : ""}`;
+      cells.push(`<button type="button" class="imports-cal-day is-marked${isToday ? " is-today" : ""}${isSelected ? " is-selected" : ""}" data-action="training-load-gpexe-cal-day" data-day="${key}" aria-label="${escapeAttr(label)}" aria-pressed="${isSelected ? "true" : "false"}"><span class="imports-cal-num">${d}</span><span class="imports-cal-mark" aria-hidden="true">${n > 1 ? `<span class="imports-cal-count">${n}</span>` : `<span class="imports-cal-dot"></span>`}</span></button>`);
+    } else {
+      cells.push(`<span class="imports-cal-day${isToday ? " is-today" : ""}" aria-label="${escapeAttr(`${name}, nothing found yet${isToday ? ", today" : ""}`)}"><span class="imports-cal-num">${d}</span></span>`);
+    }
+  }
+  return `
+    <section class="gpexe-panel imports-calendar" aria-label="Sessions calendar">
+      <div class="gpexe-panel-head imports-cal-head">
+        <h3>Sessions calendar</h3>
+        <div class="imports-cal-nav">
+          <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-prev" aria-label="Previous month">&lsaquo;</button>
+          <strong class="imports-cal-month" aria-live="polite">${escapeHtml(`${MONTH_NAMES[m - 1]} ${y}`)}</strong>
+          <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-next" aria-label="Next month">&rsaquo;</button>
+        </div>
+      </div>
+      <p class="muted imports-cal-note">Markers show sessions already found by OptiMove. Other dates may not have been searched yet.</p>
+      <div class="imports-cal-grid" role="group" aria-label="${escapeAttr(`${MONTH_NAMES[m - 1]} ${y}`)}">
+        ${WEEKDAY_NAMES.map((w) => `<span class="imports-cal-weekday" aria-hidden="true">${w}</span>`).join("")}
+        ${cells.join("")}
+      </div>
+      ${selected ? `<p class="imports-cal-filter" role="status">Showing the sessions of ${escapeHtml(formatDate(selected))} only (${shown.length} of ${listed.length}). <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-cal-all">Show all dates</button></p>` : ""}
+    </section>
+  `;
 }
 
 function badgeHtml(c, gx = state.trainingLoad.gpexe) {

@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-24. Last `origin/main` commit checked: `b8214ef` (merge of PR #119,
-`feature/imports-team-mapping` → `main`).
+Last reviewed: 2026-09-24. Last `origin/main` commit checked: `655b56f` (merge of PR #120,
+`feature/imports-batch-approve` → `main`).
 
 ## Active phase
 
@@ -38,41 +38,74 @@ read-only source-athletes endpoint, PR #117) and the guard PR before Phase 3b (o
 canonical GPEXE athlete id, archived teams answer 404; PR #118) and Phase 3b (the
 whole-team *Link athletes* screen, PR #119) are merged and deployed (see below).
 
-**The step in progress is Phase 4a, server-side batch approval** (branch
-`feature/imports-batch-approve`, backend + tests + docs, no migration, no screen):
-`POST /api/training-load/gpexe/teams/:teamId/imports` with `{ candidateIds, previewHashes }`
-approves up to **10** clean "Ready" candidates of one team, one after another, each
-through the existing single approval (`approveCandidate`: its own transaction, locks,
-recomputed preview and COMMIT check) — several atomic approvals, **not all-or-nothing**.
-Clean Ready = pending, snapshot available, a ready preview with no change to an imported
-result and no reason on it. Each candidate carries the preview hash the approver saw
-(the list now returns `previewHash`, additive), so a preview recomputed after the list
-was read is refused as `preview_changed` — this extends the owner's proposed body
-`{ candidateIds }` after the code review found that binding to the stored hash could
-import a preview nobody saw. Never with `acceptChanges`. One result per candidate in the order asked
-(`imported`, `already_imported`, `refused` with a stable code, `import_outcome_unknown`
-with the approval id and `verify`, `not_attempted`) plus a summary; a refusal does not
-stop the next candidate, an unknown outcome, a lost right, the switch turned off or a
-server failure does; repeating the request is safe. The limit of 10 is the owner's
-ceiling without stronger evidence (runbook: "Approving several candidates at once").
+**Phase 4a (server-side batch approval, PR #120) is merged and deployed** (see below).
 
-**Phase 4b (planned, not started): the Imports screen for batch import, plus a
-source-neutral session calendar** (owner, 2026-09-24). The calendar:
-- uses the existing candidates list — no new endpoint, no GPEXE call per month;
-- marks every date with at least one session already found (a dot plus a slightly
-  stressed date; a small session count when a day has several, if it stays readable on a
-  phone), for every candidate of the source whatever its bucket (Ready, Needs attention,
-  Imported);
-- a tap on a marked date filters the shown sessions to that day, locally;
-- the From/To range still drives *Find new sessions* and stays limited to 31 days;
-- says "Markers show sessions already found by OptiMove. Other dates may not have been
-  searched yet." — a date without a marker is never presented as proof the source has no
-  session;
-- is not colour-only: each marked day has an `aria-label` such as "21 September, 2
-  sessions found";
-- has no horizontal overflow at 360/375 px and keeps each day a large enough touch
-  target;
-- leaves the Dashboards and Activities calendars unchanged.
+**The step in progress is Phase 4b, the Imports screen for batch import plus a
+source-neutral session calendar** (branch `feature/imports-batch-ui`, frontend only; no
+backend, database, migration or Settings → Data sources change):
+- **Choosing Ready sessions.** Only a clean Ready session with a valid `previewHash`
+  from the list gets a checkbox (the row still opens the review); nothing is chosen in
+  advance; without the right to approve, or with the switch off, the bucket is review
+  only and nothing can be chosen; Needs attention, Imported, Stays out, a stale review
+  (link change since) and a session with changes to imported results never enter a batch.
+  The selection holds `{ candidateId, previewHash }` from the list row that was chosen;
+  after every load, reload or link change a chosen session that is no longer Ready or
+  whose preview was recomputed (another hash) is dropped with a sentence; a team or
+  workspace change clears it. "N selected · maximum 10" is always shown; *Select all*
+  when the visible sessions fit, else *Select first N* with how many stay for the next
+  batch (the list's order, never a session hidden by the date filter); *Clear selection*;
+  *Review N sessions*.
+- **previewHash rules (owner, 2026-09-24):** the hash is never shown to the coach; the UI
+  keeps it as an opaque token with the last loaded candidate version; the batch sends
+  exactly that version's hash; a candidate without a valid `previewHash` is not
+  selectable as Ready; `preview_changed` returns the session to a review-again state and
+  is never resent by itself.
+- **The confirmation** lists every chosen session by name and time (with its "new
+  results" count; the list carries no athlete count, so none is invented), says "Import
+  these sessions exactly as found in the last search." and that the sessions are imported
+  one by one with one result each (not all-or-nothing); candidate ids only under
+  Technical details, hashes nowhere; Back keeps the selection; *Import N sessions* sends
+  ONE `POST …/imports` `{ candidateIds, previewHashes }` (no client loop); the dialog
+  cannot be closed while the request runs.
+- **The result**, one line per session until Done: imported · already imported (nothing
+  more written) · session changed, review it again · open and review changes
+  individually · not imported with the next step by the stable code · import result not
+  confirmed with *Check result* (the single review's check, `gx.uncertain` mark) · not
+  tried because the batch stopped. After the answer the list is read again once;
+  imported and already-imported sessions leave the selection; a refused one stays only
+  while the new list shows it Ready with the same hash. A lost answer to the whole
+  request is "Result not confirmed" (never "failed" or "nothing imported"): every sent
+  session is marked, the list is read once and only what it shows as imported is
+  confirmed, *Check again* reads it again, nothing is sent again by itself, and the marks
+  survive closing the panel within the browser session (the single-import pattern).
+- **Sessions calendar** (local to Imports; Activities and Dashboards calendars untouched):
+  built from the candidates list alone, no endpoint and no GPEXE call on a month change;
+  every date with at least one found session, whatever its bucket, gets a marker (a dot
+  and a stressed date, the count when a day has several) and a spoken label such as "21
+  September, 2 sessions found"; today and the filtered day are told apart without colour
+  alone; the text "Markers show sessions already found by OptiMove. Other dates may not
+  have been searched yet." is shown verbatim, and a date without a marker never means the
+  source has no session; a marked day filters the list locally (*Show all dates* clears
+  it) without touching From/To or *Find new sessions* (31-day limit unchanged) or the
+  shared Training Load week; the day key uses the same local clock as the row's date and
+  time (never `toISOString`), tested with a session close to midnight; the first month is
+  the newest found session's, else this month; Prev/Next send no request; seven columns
+  fit at 360/375 px with no horizontal overflow and 44 px-high cells.
+- **Recovery:** generation guard for a workspace change during the request and the
+  reload (the old team's answer never lands in the new state); the team select is off
+  while the request runs and asks first while sessions are chosen but not imported; a
+  double click sends nothing; a session changed between the list and the confirmation
+  gets `preview_changed` from the server; leaving Training Load with a selection or with
+  a running import asks first (`confirmLeaveTrainingLoad`; the state itself survives a
+  move inside the app, a workspace switch resets it — with a page reload the only exits
+  that lose a running batch's result, the reload being the pre-existing gap Dashboards
+  has too). A whole-request refusal keeps the confirmation open with the reason; Back
+  leaves the reason under the Ready bucket until the next choice. A Ready bucket locked
+  by a link change offers no checkbox and no selection bar (its one line is the
+  instruction). Two product choices left to the owner: whether the calendar should be a
+  collapsible panel on phones (it sits above the buckets, ~350–400 px tall at 375 px),
+  and whether non-stale Ready sessions should stay batch-importable while others are
+  stale.
 
 Phases 5–6 (completion model and roster, session context, add-later-values) wait for the
 owner's go after each merge.
@@ -93,6 +126,16 @@ nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **Imports Phase 4a: server-side batch approve** — PR #120 (`655b56f`, reviewed head
+  `5e881aa`), backend + tests + docs, no migration: `POST
+  /api/training-load/gpexe/teams/:teamId/imports` `{ candidateIds, previewHashes }`
+  approves up to 10 clean Ready candidates one after another, each through the existing
+  `approveCandidate` (its own transaction, locks, recomputed preview and COMMIT check) —
+  several atomic approvals, not all-or-nothing; the candidate list gained `previewHash`.
+  Owner decision at the merge: `previewHashes` stays required, an optimistic-concurrency
+  token binding the batch to the preview the coach received. Reviewed by `code-reviewer`,
+  `security-reviewer` and `db-reviewer`; external review by the owner. Runbook:
+  "Approving several candidates at once".
 - **Imports Phase 3b: the whole-team *Link athletes* screen** — PR #119 (`b8214ef`,
   reviewed head `d690b79`), frontend only: opened from the Imports page, it lists every
   GPEXE athlete of the team once (`GET …/source-athletes`) with the last session's helper
@@ -464,6 +507,9 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `655b56f` (PR #120) with `ok: true` on 2026-09-24; the new
+  batch route answered 401 without a login (POST with an empty body and a non-existent
+  team id). No batch, search, link or import was run in production.
 - `/api/health` reported commit `b8214ef` (PR #119) with `ok: true` on 2026-09-24; the
   served bundle contained the *Link athletes* screen (with *Try again* and the
   out-of-date warning), and the GPEXE `status`, `candidates`, `athlete-links` and
@@ -729,8 +775,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**Phase 4a of the Imports track (`feature/imports-batch-approve`, server-side batch
-approval) is in progress**; see Active phase for its exact scope and the Phase 4b plan. The owner decides the next phase after each merge. Conditions
+**Phase 4b of the Imports track (`feature/imports-batch-ui`, the batch import screen and
+the sessions calendar) is in progress**; see Active phase for its exact scope. The owner decides the next phase after each merge. Conditions
 1-3 under Separate tasks still come before the first real local import, and condition 4
 before regular production imports. The owner's decisions of 2026-09-23 on estimates,
 completion and session context (blueprint v3.1, section 14) shape Phases 5a–6 and are

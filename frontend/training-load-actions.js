@@ -205,8 +205,33 @@ function discardAnalysisLayoutDraft() {
 // (resetTrainingLoadForWorkspaceChange) or reloads the page.
 export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   if (state.activeTab !== "training-load") return true;
+  // Imports (phase 4b): an import of several sessions that is still running
+  // must not be lost unseen, and a selection made but not imported is asked
+  // about. Both live in state and survive a move inside the app; a
+  // workspace switch resets Training Load, so that is the case that loses
+  // them.
+  if (!importsBatchMayBeLeft(_nextTab)) return false;
   if (!discard) return analysisEditorMayBeDiscarded() && analysisLayoutMayBeDiscarded();
   return releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft();
+}
+
+function importsBatchMayBeLeft(nextTab) {
+  const batch = state.trainingLoad.gpexe?.batch;
+  if (!batch) return true;
+  const ask = (question) => Boolean(globalThis.window?.confirm?.(question));
+  // A workspace switch or a notification (nextTab null) resets Training
+  // Load: that exit loses the result; a move inside the app keeps it.
+  if (batch.sending) {
+    return ask(nextTab === null
+      ? "An import of several sessions is still running. If you switch workspace now, its result is lost. Leave anyway?"
+      : "An import of several sessions is still running. Its result will be under Imports when it finishes. Leave anyway?");
+  }
+  // A click on the Training load item itself reloads the tab and keeps the
+  // Imports state: nothing to ask.
+  if (nextTab === "training-load") return true;
+  const chosen = Object.keys(batch.selected || {}).length;
+  if (chosen && !batch.results && !batch.unknown) return ask(`You selected ${chosen} ${chosen === 1 ? "session" : "sessions"} for import but did not import ${chosen === 1 ? "it" : "them"} yet. Leave anyway?`);
+  return true;
 }
 
 export function discardTrainingLoadLeaveDrafts() {

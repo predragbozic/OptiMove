@@ -1366,7 +1366,7 @@ test("Imports: while importing is off, or the viewer may not approve, the next s
   for (const [teamStatus, phrase] of [
     [{ enabled: false, canApprove: true }, /Next step: 1 session can be reviewed\. Importing waits until it is turned on in this environment\./],
     [{ enabled: true, canApprove: false }, /Next step: 1 session can be reviewed\. An approver imports these \(a platform admin, or a coach with approval rights for this team\)\./],
-    [{ enabled: true, canApprove: true }, /Next step: 1 session is ready to import - open one to import it\./],
+    [{ enabled: true, canApprove: true }, /Next step: 1 session is ready to import - tick the ones to import, or open one to review it\./],
   ]) {
     resetState();
     installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: teamStatus } }));
@@ -1904,7 +1904,7 @@ test("Link athletes: a failed source-athletes read degrades only that screen - t
   assert.match(html, /<h3>Ready to import \(1\)<\/h3>/, "the candidates are listed");
   assert.match(html, /data-action="training-load-gpexe-check" >Find new sessions</, "the search is available");
   assert.match(html, /<strong>Ana Example<\/strong> <span class="muted">GPEXE athlete 101<\/span>/, "the links are listed");
-  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 session is ready to import - open one to import it\./, "the next step is not about linking");
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 1 session is ready to import - tick the ones to import, or open one to review it\./, "the next step is not about linking");
   // 3: Link athletes is off, and the coach reads why - in the coach's words.
   assert.match(html, /data-action="training-load-gpexe-map-open" disabled>Link athletes<\/button>/);
   assert.match(html, /The list of GPEXE athletes is not available right now, so Link athletes is off\. The sessions, the search and the links below still work\./);
