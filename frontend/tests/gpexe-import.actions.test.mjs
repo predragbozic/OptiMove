@@ -6,6 +6,7 @@
 // confused, and that changes to imported results must be accepted first.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { reviewMadeBeforeLinkChange } from "../gpexe-import-data.js";
 
 let queried = {};
 let confirmAnswer = true;
@@ -39,7 +40,38 @@ setGpexePollDelayForTests(() => Promise.resolve());
 const TEAM_A = "aaaaaaaa-0000-4000-8000-000000000001";
 const TEAM_B = "bbbbbbbb-0000-4000-8000-000000000002";
 const HASH = "a".repeat(64);
-const ORG = { teams: [{ id: TEAM_A, name: "First Team", club_name: "Club" }, { id: TEAM_B, name: "U19", club_name: "Club" }], clubs: [], athletes: [] };
+// The organization data the page already loads: the teams, and the team's
+// athletes with their memberships (what "Link athletes" offers to choose).
+const member = (teamId) => ({ teamId, membershipType: "team", status: "active" });
+const ORG = {
+  teams: [{ id: TEAM_A, name: "First Team", club_name: "Club" }, { id: TEAM_B, name: "U19", club_name: "Club" }],
+  clubs: [],
+  athletes: [
+    { id: "ath-1", name: "Ana Example", memberships: [member(TEAM_A)] },
+    { id: "ath-2", name: "Bo Example", memberships: [member(TEAM_A)] },
+    { id: "ath-3", name: "Dario Petrov Example", memberships: [member(TEAM_A)] },
+    { id: "ath-4", name: "Sam Same", memberships: [member(TEAM_A)] },
+    { id: "ath-5", name: "Sam Same", memberships: [member(TEAM_A)] },
+    { id: "ath-6", name: "Former Member", memberships: [{ teamId: TEAM_A, membershipType: "team", status: "inactive" }] },
+    { id: "ath-9", name: "Other Team Athlete", memberships: [member(TEAM_B)] },
+  ],
+};
+
+// One source athlete as GET /source-athletes returns it (phase 3a).
+function sourceAthlete(overrides = {}) {
+  return {
+    gpexeAthleteId: "104", status: "unlinked", link: null,
+    lastSeen: { candidateId: "cand-1", gpexeTeamSessionId: "7001", sessionStartedAt: "2026-09-14T16:08:12Z", sessionLabel: "FULL TRAINING", sessionType: "FULL TRAINING", candidateStatus: "pending", lastSeenAt: "2026-09-18T10:00:00Z", evidence: "preview", sessionDrillsCount: 2 },
+    values: { duration: 74, distance: 5230, maxSpeed: 29.5 },
+    ...overrides,
+  };
+}
+// The default answer names only the linked athlete 101: a page with an
+// unlinked GPEXE athlete makes "link them" the next step, which the tests
+// of the other next steps do not want. The Link athletes tests add 104.
+const DEFAULT_SOURCE_ATHLETES = [
+  sourceAthlete({ gpexeAthleteId: "101", status: "linked", link: { id: "link-1", athleteId: "ath-1", athleteName: "Ana Example", linkedAt: "2026-09-10T10:00:00Z" }, values: { duration: 40, distance: 3000, maxSpeed: 27 } }),
+];
 
 function fakeAction(dataset, extra = {}) {
   return { dataset, ...extra };
@@ -121,13 +153,16 @@ function candidateDetail(overrides = {}) {
 
 // A GPEXE server fake: per-team status/candidates/links, and handlers for
 // candidate detail and approve.
-function gpexeServer({ onApprove, onCandidate, onApproval, teamStatus = {}, checks } = {}) {
+function gpexeServer({ onApprove, onCandidate, onApproval, teamStatus = {}, checks, sourceAthletes, onLink, links } = {}) {
   return async (call) => {
     if (call.url === "/api/organization") return { status: 200, body: ORG };
     const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/.*)$/);
     if (!m) return { status: 404, body: { error: "notFound" } };
     const [, team, rest] = m;
     if (rest === "/status") return { status: 200, body: status(teamStatus[team] || {}) };
+    if (rest === "/source-athletes") return { status: 200, body: { athletes: typeof sourceAthletes === "function" ? sourceAthletes(call) : sourceAthletes || DEFAULT_SOURCE_ATHLETES, units: { duration: "min", distance: "m", maxSpeed: "km/h" }, lastSeenRule: "newest session date" } };
+    if (rest === "/athlete-links" && call.method === "GET" && links) return { status: 200, body: { links: typeof links === "function" ? links(call) : links } };
+    if (rest === "/athlete-links" && call.method === "POST" && onLink) return onLink(call);
     if (rest.startsWith("/candidates?") || rest === "/candidates") return { status: 200, body: { candidates: [candidateSummary({ label: `session of ${team}` })] } };
     if (rest === "/athlete-links" && call.method === "GET") return { status: 200, body: { links: [{ id: "link-1", gpexeAthleteId: "101", athleteId: "ath-1", athleteName: "Ana Example" }] } };
     if (rest === "/athlete-links" && call.method === "POST") return { status: 201, body: { link: { id: "link-2" } } };
@@ -693,7 +728,7 @@ test("nothing new: a session whose linked athletes are imported is under Importe
   assert.match(imported, /Training E[\s\S]*nothing new/);
   assert.ok(!/Training F/.test(imported.slice(0, imported.indexOf("</details>"))), "a session with nobody linked is not 'done'");
   const attention = html.slice(html.indexOf("Needs attention (1)"), html.indexOf("Ready to import ("));
-  assert.match(attention, /Training F[\s\S]*No linked athlete in this session yet - link the athletes from its review, then find new sessions\./);
+  assert.match(attention, /Training F[\s\S]*No linked athlete in this session yet - link the athletes under Link athletes \(below\), then find new sessions\./);
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   assert.ok(!/Up to date/.test(html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "no 'up to date' group any more");
 });
@@ -1414,14 +1449,14 @@ test("Imports: a pending session with an unlinked recorded athlete is Needs atte
   assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   const ready = html.slice(html.indexOf("Ready to import ("), html.indexOf("</section>", html.indexOf("Ready to import (")));
   assert.ok(!/Training L|Training M|Training G/.test(ready), "none of them is ready");
-  assert.match(html, /Training L[\s\S]*1 recorded athlete is not linked yet - link them from its review, then find new sessions\./);
+  assert.match(html, /Training L[\s\S]*1 recorded athlete is not linked yet - link them under Link athletes \(below\), then find new sessions\./);
   const both = html.slice(html.indexOf('data-candidate-id="c-both"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-both"')));
   assert.match(both, /2 athletes not linked · 1 change to imported results/, "every reason is a fact on the row, in the list's order");
-  assert.match(both, /2 recorded athletes are not linked yet - link them/, "the step is the first reason's");
+  assert.match(both, /2 recorded athletes are not linked yet - link them under Link athletes \(below\)/, "the step is the first reason's");
   // Some imported, some unlinked: the reasons, never "nobody linked yet".
   const mix = html.slice(html.indexOf('data-candidate-id="c-mix"'), html.indexOf("</button>", html.indexOf('data-candidate-id="c-mix"')));
   assert.match(mix, /1 athlete not linked · 1 athlete needs manual review · 1 athlete marked not valid/);
-  assert.match(mix, /1 recorded athlete is not linked yet - link them from its review, then find new sessions\./);
+  assert.match(mix, /1 recorded athlete is not linked yet - link them under Link athletes \(below\), then find new sessions\./);
   assert.ok(!/No linked athlete in this session yet/.test(mix));
   // A list answer without reasons (older server) still keeps such a session
   // out of Ready, from the counts it carries.
@@ -1467,7 +1502,7 @@ test("Imports: every kind of row is sorted into its bucket from the list answer 
   assert.ok(!/Training replaced/.test(html), "a replaced version is hidden");
   const row = (id) => html.slice(html.indexOf(`data-candidate-id="${id}"`), html.indexOf("</button>", html.indexOf(`data-candidate-id="${id}"`)));
   const step = (id) => row(id).match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];
-  assert.equal(step("a-link"), "1 recorded athlete is not linked yet - link them from its review, then find new sessions.");
+  assert.equal(step("a-link"), "1 recorded athlete is not linked yet - link them under Link athletes (below), then find new sessions.");
   assert.equal(step("a-team"), "1 linked athlete is no longer in the team - open it to see who.");
   // Two source anomalies share this reason: the row names no single cause.
   assert.equal(step("a-data"), "1 athlete needs manual review - open it to see who and why.");
@@ -1573,4 +1608,279 @@ test("Imports: the notice after an import never points to a bucket the row is no
   globalThis.fetch = server;
   await openCandidate("cand-1");
   assert.equal(state.trainingLoad.gpexe.notice, "");
+});
+
+// ---------------------------------------------------------------------------
+// Whole-team linking ("Link athletes", Imports phase 3b): every GPEXE athlete
+// the team's snapshots have seen, once, with the last session's values as a
+// help; the coach chooses, nothing is sent until Confirm; one result per
+// pair; Unlink right there.
+// ---------------------------------------------------------------------------
+
+async function openMapping() {
+  await openImports();
+  await act("training-load-gpexe-map-open");
+}
+
+function chooseFor(gpexeAthleteId, value) {
+  return handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-map-choose", gpexeAthleteId }, { value }), { renderTrainingLoad: render });
+}
+
+function mappingHtml() {
+  const html = renderTrainingLoadCoachHtml();
+  const start = html.indexOf('class="panel builder-athlete-picker gpexe-detail gpexe-map"');
+  assert.ok(start > 0, "the Link athletes screen is open");
+  return html.slice(start);
+}
+
+test("Link athletes: the way in shows how many are not linked; the screen lists every GPEXE athlete once with the last session's values, no name for an unlinked one, ids only under Technical details, and sends nothing", async () => {
+  resetState();
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    sourceAthletes: [
+      ...DEFAULT_SOURCE_ATHLETES,
+      sourceAthlete(),
+      sourceAthlete({ gpexeAthleteId: "105", lastSeen: { ...sourceAthlete().lastSeen, candidateId: "cand-m", gpexeTeamSessionId: "7005", sessionType: "OFFICIAL MATCH", candidateStatus: "blocked", evidence: "raw_snapshot", sessionDrillsCount: null }, values: { duration: null, distance: null, maxSpeed: null } }),
+      sourceAthlete({ gpexeAthleteId: "102", status: "linked_inactive", link: { id: "link-6", athleteId: "ath-6", athleteName: "Former Member", linkedAt: "2026-09-01T10:00:00Z" }, lastSeen: null, values: { duration: null, distance: null, maxSpeed: null } }),
+    ],
+  }));
+  await openImports();
+  let html = renderTrainingLoadCoachHtml();
+  assert.match(html, /data-action="training-load-gpexe-map-open"[^>]*>Link athletes \(2\)<\/button>/);
+  assert.match(html, /<p class="imports-links-facts">1 link points to an athlete no longer in the team\.<\/p>/, "the count is on the button, only the other fact is a line");
+  assert.match(html, /class="gpexe-next"[^>]*>Next step: 2 GPEXE athletes are not linked - use Link athletes \(below\), then find new sessions\./);
+  assert.ok(!/gpexe-map"/.test(html), "closed until opened");
+
+  await act("training-load-gpexe-map-open");
+  html = mappingHtml();
+  assert.match(html, /aria-label="Link GPEXE athletes - First Team"/);
+  assert.match(html, /<p class="gpexe-map-summary">1 linked · 2 not linked · 1 no longer in the team<\/p>/);
+  assert.match(html, /<h4>Not linked \(2\)<\/h4>[\s\S]*<h4>Linked to an athlete no longer in the team \(1\)<\/h4>[\s\S]*<h4>Linked \(1\)<\/h4>/, "the work first");
+  // The unlinked row: number, last session, values, no name anywhere.
+  const row104 = html.slice(html.indexOf('data-gpexe-athlete-id="104"') - 900, html.indexOf('data-gpexe-athlete-id="104"'));
+  assert.match(row104, /<strong>GPEXE athlete 104<\/strong>/);
+  assert.match(row104, /Last seen 14\.09\.2026 18:08 · FULL TRAINING/, "the same title and time as the inbox row");
+  assert.match(row104, /Time 74 min · Distance 5,230 m · Top speed 29\.5 km\/h · Drills 2/);
+  // The raw-only row: the values GPEXE did not give are "—", never 0, and the row says where it was seen.
+  const row105 = html.slice(html.indexOf('data-gpexe-athlete-id="105"') - 900, html.indexOf('data-gpexe-athlete-id="105"'));
+  assert.match(row105, /this session can(?:'|&#039;)t be imported, so it gives no values/);
+  assert.ok(!/OFFICIAL MATCH/.test(row105.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "the raw session type stays in Technical details");
+  assert.match(row105, /Time — · Distance — · Top speed — · Drills —/);
+  assert.ok(!/Time 0|Distance 0|Drills 0/.test(row105));
+  // The linked row: the name from the link and Unlink; the inactive one says so.
+  assert.match(html, /<strong>Ana Example<\/strong>[\s\S]{0,200}GPEXE athlete 101 · Last seen 14\.09\.2026 18:08 · FULL TRAINING/);
+  assert.match(html, /<strong>Former Member<\/strong>[\s\S]{0,200}GPEXE athlete 102 · no longer in the team · Not seen in any session that is still available\./);
+  assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-1"/);
+  assert.match(html, /data-action="training-load-gpexe-unlink" data-link-id="link-6"/);
+  // Choices: the team's active athletes not yet linked; same-name athletes cannot be chosen; nothing preselected.
+  assert.match(html, /data-gpexe-athlete-id="104" aria-label="Link GPEXE athlete 104 to"/);
+  const select = html.match(/<select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="104"[^>]*>([\s\S]*?)<\/select>/)[1];
+  assert.match(select, /<option value="" selected>Not now<\/option>/);
+  assert.ok(!/ath-1"/.test(select), "Ana is linked already");
+  assert.ok(!/ath-6"|ath-9"/.test(select), "not an active member of this team");
+  assert.match(select, /<option value="ath-4"[^>]*disabled[^>]*>Sam Same \(same name as another athlete\)<\/option>/);
+  assert.match(select, /<option value="ath-3"[^>]*>Dario Petrov Example<\/option>/);
+  assert.equal((select.match(/selected/g) || []).length, 1);
+  // Ids only under Technical details.
+  const open = html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "").replace(/data-[a-z-]+="[^"]*"/g, "");
+  assert.ok(!/cand-1|cand-m|link-1|raw_snapshot|linked_inactive|7001/.test(open), "no id or code in the open text");
+  assert.match(html, /<dt>Candidate id<\/dt><dd>cand-m<\/dd>/);
+  assert.match(html, /data-action="training-load-gpexe-map-confirm" disabled>Review links<\/button>/);
+  assert.match(html, /Choosing sends nothing: the links are made only when you press Link on the next step\./);
+  assert.equal(linkPosts().length, 0);
+});
+
+test("Link athletes: choosing stages only, Confirm shows every pair, Back keeps the choices, Link sends them one by one with exactly those bodies, and afterwards the reviews wait for a new search", async () => {
+  resetState();
+  const linkedNow = [];
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    sourceAthletes: () => [...DEFAULT_SOURCE_ATHLETES, ...(linkedNow.includes("104") ? [] : [sourceAthlete()]), ...(linkedNow.includes("105") ? [] : [sourceAthlete({ gpexeAthleteId: "105", values: { duration: 61, distance: 4100, maxSpeed: 25.1 } })]),
+      ...linkedNow.map((id) => sourceAthlete({ gpexeAthleteId: id, status: "linked", link: { id: `link-${id}`, athleteId: id === "104" ? "ath-3" : "ath-2", athleteName: id === "104" ? "Dario Petrov Example" : "Bo Example" } }))],
+    onLink: (call) => { linkedNow.push(call.body.gpexeAthleteId); return { status: 201, body: { link: { id: `link-${call.body.gpexeAthleteId}` } } }; },
+  }));
+  await openMapping();
+  await chooseFor("104", "ath-3");
+  await chooseFor("105", "ath-2");
+  assert.equal(linkPosts().length, 0, "choosing sends nothing");
+  const paints = renders;
+  await chooseFor("104", "ath-3");
+  assert.equal(renders, paints, "an unchanged value (a click on the select) repaints nothing");
+  let html = mappingHtml();
+  assert.match(html, /data-gpexe-athlete-id="104"[^>]*>[\s\S]*?<option value="ath-3" selected/, "a repaint keeps the choice");
+  assert.match(html, /data-action="training-load-gpexe-map-confirm" >Review 2 links<\/button>/);
+
+  await act("training-load-gpexe-map-confirm");
+  html = mappingHtml();
+  assert.match(html, /<strong>Link 2 athletes\?<\/strong>/);
+  assert.match(html, /<strong>GPEXE athlete 104<\/strong> → <strong>Dario Petrov Example<\/strong>/);
+  assert.match(html, /<strong>GPEXE athlete 105<\/strong> → <strong>Bo Example<\/strong>/);
+  assert.match(html, /in the sessions already found and in every session found later/);
+  assert.ok(!/other GPEXE athlete/.test(html), "both unlinked athletes are chosen: nothing stays out");
+  assert.match(html, /can(?:'|&#039;)t be changed here — contact a platform administrator/);
+  assert.equal(linkPosts().length, 0, "the confirmation sends nothing");
+
+  await act("training-load-gpexe-map-back");
+  html = mappingHtml();
+  assert.match(html, /<option value="ath-3" selected/, "Back keeps the choices");
+  await act("training-load-gpexe-map-confirm");
+  await act("training-load-gpexe-map-send");
+  assert.deepEqual(linkPosts().map((c) => c.body), [{ gpexeAthleteId: "104", athleteId: "ath-3" }, { gpexeAthleteId: "105", athleteId: "ath-2" }]);
+  html = mappingHtml();
+  assert.match(html, /<h4>Result<\/h4>/);
+  assert.match(html, /GPEXE athlete 104 → Dario Petrov Example<\/strong>: linked/);
+  assert.match(html, /GPEXE athlete 105 → Bo Example<\/strong>: linked/);
+  assert.match(html, /Find new sessions to update the reviews - approving waits until then\./);
+  assert.equal(confirmQuestions.length, 0, "no browser dialog");
+  // The reviews on screen were made with the old links.
+  const gx = state.trainingLoad.gpexe;
+  assert.equal(gx.linkSeq, 1);
+  assert.ok(reviewMadeBeforeLinkChange(gx.candidates[0], gx));
+  assert.deepEqual(gx.mapping.choices, {}, "the linked pairs leave the staged choices");
+  assert.equal(gx.lastLink, null, "no single-link notice for a batch");
+  assert.match(renderTrainingLoadCoachHtml(), /2 athletes are linked\. Find new sessions to update the reviews - approving waits until then\./);
+
+  await act("training-load-gpexe-map-done");
+  html = mappingHtml();
+  assert.match(html, /<p class="gpexe-map-summary">3 linked · 0 not linked<\/p>/, "the list was read again");
+  assert.match(html, /<strong>Dario Petrov Example<\/strong>[\s\S]{0,200}GPEXE athlete 104/);
+});
+
+test("Link athletes: the same athlete chosen twice is refused before anything is sent; a server refusal keeps that pair staged while a lost answer counts as possibly made", async () => {
+  resetState();
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    sourceAthletes: [...DEFAULT_SOURCE_ATHLETES, sourceAthlete(), sourceAthlete({ gpexeAthleteId: "105" }), sourceAthlete({ gpexeAthleteId: "106" })],
+    onLink: (call) => {
+      if (call.body.gpexeAthleteId === "105") return { status: 409, body: { error: "already_linked", message: "This GPEXE athlete or this OptiMove athlete is already linked in this team." } };
+      if (call.body.gpexeAthleteId === "106") throw new TypeError("Failed to fetch");
+      return { status: 201, body: { link: { id: "link-104" } } };
+    },
+  }));
+  await openMapping();
+  await chooseFor("104", "ath-3");
+  await act("training-load-gpexe-map-confirm");
+  let html = mappingHtml();
+  assert.match(html, /2 other GPEXE athletes stay not linked \(Not now\); their sessions keep needing attention until they are linked\./, "the sheet says what stays out");
+  await act("training-load-gpexe-map-back");
+  await chooseFor("105", "ath-3");
+  await act("training-load-gpexe-map-confirm");
+  html = mappingHtml();
+  assert.match(html, /Dario Petrov Example is chosen for GPEXE athletes 104 and 105\. One athlete can be linked to one GPEXE athlete only\./);
+  assert.ok(!/<h4>Result<\/h4>|Link 2 athletes\?/.test(html));
+  assert.equal(linkPosts().length, 0);
+
+  await chooseFor("105", "ath-2");
+  await chooseFor("106", "ath-4");
+  await act("training-load-gpexe-map-confirm");
+  html = mappingHtml();
+  assert.match(html, /More than one athlete of the team is called Sam Same\./, "a same-name athlete cannot be confirmed");
+  await chooseFor("106", "ath-5");
+  await act("training-load-gpexe-map-confirm");
+  assert.match(mappingHtml(), /More than one athlete of the team is called Sam Same\./);
+  await chooseFor("106", "");
+  await act("training-load-gpexe-map-confirm");
+  await act("training-load-gpexe-map-send");
+  html = mappingHtml();
+  assert.match(html, /GPEXE athlete 104 → Dario Petrov Example<\/strong>: linked/);
+  assert.match(html, /GPEXE athlete 105 → Bo Example<\/strong>: not linked: this GPEXE athlete, or the athlete you chose, is already linked\. Press Done to see the current list, then choose another athlete or Not now\./);
+  assert.match(html, /<dt>Code<\/dt><dd>already_linked<\/dd>/, "the code only under Technical details");
+  const gx = state.trainingLoad.gpexe;
+  assert.deepEqual(gx.mapping.choices, { 105: "ath-2" }, "the refused pair stays staged");
+  assert.equal(gx.linkSeq, 1);
+
+  // A lost answer: the link may exist; the pair leaves the staged choices and the reviews wait.
+  await act("training-load-gpexe-map-done");
+  await chooseFor("105", "");
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    sourceAthletes: [...DEFAULT_SOURCE_ATHLETES, sourceAthlete({ gpexeAthleteId: "106" })],
+    onLink: () => { throw new TypeError("Failed to fetch"); },
+  }));
+  await chooseFor("106", "ath-3");
+  await act("training-load-gpexe-map-confirm");
+  await act("training-load-gpexe-map-send");
+  html = mappingHtml();
+  assert.match(html, /GPEXE athlete 106 → Dario Petrov Example<\/strong>: not confirmed - the answer was lost, so we can(?:'|&#039;)t tell whether the link was made\. Press Done: if GPEXE athlete 106 now appears under Linked, it was\./);
+  assert.equal(state.trainingLoad.gpexe.linkSeq, 2, "possibly made: the reviews are stale");
+  assert.equal(state.trainingLoad.gpexe.mapping.choices["106"], undefined);
+  assert.match(renderTrainingLoadCoachHtml(), /1 link is not confirmed \(the answer was lost\) - open Link athletes to check whether it was made\. Find new sessions to update the reviews - approving waits until then\./);
+  assert.ok(!/0 athletes are linked/.test(renderTrainingLoadCoachHtml()), "never a false 'nothing was linked'");
+});
+
+test("Link athletes: closing with choices asks first (declined keeps them); Unlink from the screen asks the same question as elsewhere and reads the list again; no linkable athlete left says so", async () => {
+  resetState();
+  const links = [{ id: "link-1", gpexeAthleteId: "101", athleteId: "ath-1", athleteName: "Ana Example" }];
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, links: () => links, sourceAthletes: [...DEFAULT_SOURCE_ATHLETES, sourceAthlete()] }));
+  await openMapping();
+  await chooseFor("104", "ath-3");
+  confirmAnswer = false;
+  await act("training-load-gpexe-map-close");
+  assert.equal(confirmQuestions.at(-1), "Leave without linking the athletes you chose? Nothing was sent.");
+  assert.match(mappingHtml(), /<option value="ath-3" selected/, "declined: still open with the choice");
+  confirmAnswer = true;
+  await act("training-load-gpexe-map-close");
+  assert.ok(!/gpexe-map"/.test(renderTrainingLoadCoachHtml()), "closed");
+  assert.deepEqual(state.trainingLoad.gpexe.mapping.choices, {});
+  assert.equal(linkPosts().length, 0);
+
+  // Unlink from the screen.
+  await act("training-load-gpexe-map-open");
+  await act("training-load-gpexe-unlink", { linkId: "link-1" });
+  assert.equal(confirmQuestions.at(-1), "Unlink GPEXE athlete 101 from Ana Example? In sessions not imported yet, athlete 101 will be left out until linked again. Results already imported stay with Ana Example; if they are wrong, they can't be changed here — contact a platform administrator.");
+  assert.equal(fetchCalls.filter((c) => c.url.endsWith("/athlete-links/link-1/unlink")).length, 1);
+  assert.ok(fetchCalls.filter((c) => c.url.endsWith("/source-athletes")).length >= 2, "the source athletes were read again after the change");
+  assert.equal(state.trainingLoad.gpexe.linkSeq, 1);
+
+  // Every active athlete linked: the screen says so instead of an empty picker.
+  resetState();
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    sourceAthletes: [sourceAthlete({ gpexeAthleteId: "107" })],
+    links: [1, 2, 3, 4, 5].map((n) => ({ id: `l${n}`, gpexeAthleteId: `10${n}`, athleteId: `ath-${n}`, athleteName: ORG.athletes[n - 1].name })),
+  }));
+  await openMapping();
+  const html = mappingHtml();
+  assert.match(html, /Every active athlete of the team is already linked\. Add the athlete to the team in Settings &gt; Athletes first, or unlink the wrong one below\./);
+  assert.ok(!/data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="107"/.test(html), "no dead select when there is nobody to choose");
+  assert.match(html, /No athlete to choose\./);
+});
+
+test("Link athletes: a team with no active athlete is told to add them, not to look for a wrong link", async () => {
+  resetState();
+  const base = gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true } }, sourceAthletes: [sourceAthlete({ gpexeAthleteId: "104" })], links: [] });
+  installFetchMock(async (call) => {
+    if (call.url === "/api/organization") return { status: 200, body: { ...ORG, athletes: ORG.athletes.filter((a) => !a.memberships.some((m) => m.teamId === TEAM_A && m.status === "active")) } };
+    return base(call);
+  });
+  await openMapping();
+  const html = mappingHtml();
+  assert.match(html, /This team has no active athletes yet\. Add them in Settings &gt; Athletes, then come back to link\./);
+  assert.ok(!/Every active athlete of the team is already linked/.test(html));
+});
+
+test("Link athletes: a choice the re-read list no longer supports (another coach linked first) leaves the staging, so Review never counts an invisible choice", async () => {
+  resetState();
+  const linkedNow = [];
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    sourceAthletes: () => linkedNow.includes("105")
+      ? [...DEFAULT_SOURCE_ATHLETES, sourceAthlete({ gpexeAthleteId: "105", status: "linked", link: { id: "link-x", athleteId: "ath-4", athleteName: "Sam Same" } })]
+      : [...DEFAULT_SOURCE_ATHLETES, sourceAthlete({ gpexeAthleteId: "105" })],
+    onLink: () => { linkedNow.push("105"); return { status: 409, body: { error: "already_linked", message: "already" } }; },
+  }));
+  await openMapping();
+  await chooseFor("105", "ath-2");
+  await act("training-load-gpexe-map-confirm");
+  await act("training-load-gpexe-map-send");
+  let html = mappingHtml();
+  assert.match(html, /GPEXE athlete 105 → Bo Example<\/strong>: not linked: this GPEXE athlete, or the athlete you chose, is already linked/);
+  assert.deepEqual(state.trainingLoad.gpexe.mapping.choices, {}, "the re-read shows 105 linked: the stale choice is dropped");
+  await act("training-load-gpexe-map-done");
+  html = mappingHtml();
+  assert.match(html, /data-action="training-load-gpexe-map-confirm" disabled>Review links<\/button>/);
+  assert.ok(!/data-gpexe-athlete-id="105"/.test(html.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "105 is linked now: no chooser for it");
+  // Closing asks nothing: there is no staged choice any more.
+  await act("training-load-gpexe-map-close");
+  assert.equal(confirmQuestions.length, 0);
 });

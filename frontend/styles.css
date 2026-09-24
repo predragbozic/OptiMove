@@ -15215,6 +15215,73 @@ button.tests-assignment-card {
 .gpexe-tech dd {
   margin: 0;
 }
+/* Whole-team linking ("Link athletes", Imports phase 3b): one row per GPEXE
+   athlete, the choice next to it; the select carries the action so a repaint
+   never loses a choice. Same overlay as the session review. */
+.imports-links-head {
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.imports-links-facts {
+  margin: 0 0 6px;
+}
+.gpexe-map-summary {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.gpexe-map-group {
+  margin-top: 12px;
+}
+.gpexe-map-group h4 {
+  margin: 0 0 6px;
+}
+.gpexe-map-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.gpexe-map-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
+  gap: 6px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.gpexe-map-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.gpexe-map-values {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.gpexe-map-choice {
+  display: grid;
+  gap: 4px;
+  justify-items: stretch;
+}
+.gpexe-map-choice > span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.gpexe-map-row .gpexe-tech {
+  grid-column: 1 / -1;
+}
+.gpexe-map-confirm ul,
+.gpexe-map-results ul {
+  margin: 6px 0 10px;
+  padding-left: 18px;
+}
+.gpexe-map-actions {
+  margin-top: 14px;
+}
 @media (max-width: 760px) {
   .gpexe-check-row > *,
   .gpexe-link-row > *,
@@ -15224,6 +15291,39 @@ button.tests-assignment-card {
   }
   .gpexe-date input {
     width: 100%;
+  }
+  .gpexe-map-row {
+    grid-template-columns: 1fr;
+  }
+  .imports-links-head .gpexe-button {
+    width: 100%;
+  }
+  /* A whole team's list scrolls inside the dialog: the actions stay pinned
+     to the bottom of the dialog on phones (the Dashboards layout-bar
+     pattern), so Close / Review are never a long scroll away. */
+  .gpexe-map .gpexe-map-actions,
+  .gpexe-map .gpexe-map-confirm .gpexe-link-actions,
+  .gpexe-map .gpexe-map-results .gpexe-link-actions {
+    position: sticky;
+    bottom: 0;
+    margin-top: 10px;
+    padding: 10px 0 4px;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    /* One row of two equal buttons, so the pinned bar covers as little of
+       the short phone dialog as possible. */
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .gpexe-map .gpexe-map-actions > *,
+  .gpexe-map .gpexe-map-confirm .gpexe-link-actions > *,
+  .gpexe-map .gpexe-map-results .gpexe-link-actions > * {
+    width: auto;
+    min-width: 0;
+  }
+  .gpexe-map .gpexe-map-results .gpexe-link-actions {
+    grid-template-columns: 1fr;
   }
 }
 

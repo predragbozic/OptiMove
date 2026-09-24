@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-24. Last `origin/main` commit checked: `8d2841b` (merge of PR #117,
-`feature/source-athletes-endpoint` → `main`).
+Last reviewed: 2026-09-24. Last `origin/main` commit checked: `ca6d48f` (merge of PR #118,
+`fix/gpexe-import-access-guards` → `main`).
 
 ## Active phase
 
@@ -33,23 +33,35 @@ Disconnect, retention UI, the import switch, any real import.
 blueprint v3.1 accepted as the direction on 2026-09-23). GPEXE is the first data source,
 not the name of the feature; future sources (Garmin, Catapult, Polar, Kinexon, …) are
 further Source cards on the same screen, never a new top-level screen. Phase 2 (the
-Imports shell, PR #115), Phase 2b (candidate list reasons, PR #116) and Phase 3a (the
-read-only source-athletes endpoint, PR #117) are merged and deployed (see below). **The
-step in progress is the small backend guard PR before Phase 3b** (branch
-`fix/gpexe-import-access-guards`, owner's sequence of 2026-09-24): one canonical GPEXE
-athlete id everywhere it enters (`"0"` or digits without a leading zero, at most 12 — the
-link route answers `400 invalid_gpexe_athlete_id` and writes nothing, the mapper refuses a
-snapshot row with a non-canonical id as `invalid_athlete_id`, the source-athletes list
-takes only canonical ids from previews and raw rows; a link row is listed as stored — the
-v22 database check is wider — so the deployed `gpexe_athlete_links` must be checked
-read-only for a non-canonical id before Phase 3b: `select count(*) from
-training_load.gpexe_athlete_links where gpexe_athlete_id !~ '^(0|[1-9][0-9]{0,11})$'`),
-and an archived team that answers the same 404 as a missing one on every GPEXE
-route — to its coach, its club admin and a platform admin, the administrative routes
-included, because they share `resolveGpexeTeamAccess`. No migration (the v22 database
-check stays the wider `^[0-9]{1,12}$`), no frontend change, no data change. Only then
-Phase 3b (the whole-team linking screen); Phases 4–6 (batch import, completion model and
-roster, session context, add-later-values) wait for the owner's go after each merge.
+Imports shell, PR #115), Phase 2b (candidate list reasons, PR #116), Phase 3a (the
+read-only source-athletes endpoint, PR #117) and the guard PR before Phase 3b (one
+canonical GPEXE athlete id, archived teams answer 404; PR #118) are merged and deployed
+(see below). **The step in progress is Phase 3b, the whole-team linking screen** (branch
+`feature/imports-team-mapping`, frontend only): a *Link athletes* screen opened from the
+Imports page lists every GPEXE athlete of the team once (`GET …/source-athletes`) with the
+last session's helper values (Time, Distance, Top speed, Drills — "—" where the source gave
+none), grouped *Not linked / Linked to an athlete no longer in the team / Linked*; the
+coach chooses a team athlete per GPEXE athlete (active members not yet linked; two
+athletes with the same name cannot be chosen; nothing is preselected, choices are staged
+in state so a repaint never loses them), *Confirm N links* shows every pair with the
+consequences, *Link N athletes* sends them one by one through the existing link route and
+shows one result per pair (linked / not linked with the reason / not confirmed when the
+answer was lost); *Unlink* is right there with the same question as elsewhere. Any link
+made or possibly made marks the reviews on screen as made with the old links ("Find new
+sessions…"). No name comes from the source; ids and codes only under Technical details.
+No backend change, no migration, no batch import. Phases 4–6 (batch import, completion
+model and roster, session context, add-later-values) wait for the owner's go after each
+merge.
+
+**Production-readiness checks recorded by the owner (2026-09-24), not gates for
+development:** before the first real use of athlete linking and before
+`GPEXE_IMPORT_APPLY_ENABLED` is turned on, the deployed `gpexe_athlete_links` must be
+checked read-only for a non-canonical id (`select count(*) from
+training_load.gpexe_athlete_links where gpexe_athlete_id !~ '^(0|[1-9][0-9]{0,11})$'`,
+expected 0 — it could not be run from the development workstation, which has no path to
+the deployed database); and a "Check now" already running when its team is archived still
+completes and writes candidates (the background job does not re-resolve access) — to be
+fixed before regular production imports (see condition 5 under Separate tasks).
 
 All of it is code only. **`GPEXE_IMPORT_APPLY_ENABLED` is off in every environment and no
 GPEXE data has been imported into the local OPTIMOVE or the deployed database**, so
@@ -57,6 +69,18 @@ nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **GPEXE guards before Phase 3b** — PR #118 (`ca6d48f`, reviewed head `19c7866`),
+  backend only: one canonical GPEXE athlete id wherever it enters (`"0"` or digits without
+  a leading zero, at most 12; `GPEXE_ATHLETE_ID_PATTERN` in `gpexeImportMapper.js`) — the
+  link route answers `400 invalid_gpexe_athlete_id` before any lock or write, the mapper
+  refuses a snapshot row with a non-canonical id (`invalid_athlete_id`, inconsistent
+  source data), the source-athletes list takes only canonical ids from previews and raw
+  rows (bound as a parameter); a link row written before the rule is listed as stored. An
+  archived team resolves to the same 404 as a missing one on every GPEXE route, for its
+  coach, its club admin and a platform admin (Settings → Data sources therefore shows an
+  archived team as not available). No migration: the v22 check stays the wider
+  `^[0-9]{1,12}$`. Reviewed by `code-reviewer` and `security-reviewer`; external review by
+  the owner.
 - **Imports Phase 3a: read-only source-athletes endpoint** — PR #117 (`8d2841b`, reviewed
   head `2731ed2`): `GET /api/training-load/gpexe/teams/:teamId/source-athletes` lists the
   team's GPEXE athletes once each — every athlete seen in a snapshot that is still
@@ -400,6 +424,9 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `ca6d48f` (PR #118) with `ok: true` on 2026-09-24 (three
+  consecutive checks); the GPEXE routes answered 401 without a login. No search or import
+  was run in production.
 - `/api/health` reported commit `8d2841b` (PR #117) with `ok: true` on 2026-09-24 (three
   consecutive checks); the new source-athletes route answered 401 without a login. No
   search or import was run in production.
@@ -504,6 +531,11 @@ pre-existing; pass/fail counts don't belong in this file
      administrator". Today the only path is the controlled admin undo
      (`docs/runbooks/gpexe-undo-imported-session.md`), rehearsed on disposable databases
      only. The procedure must be defined and verified.
+  5. **Mandatory before regular production imports** (owner, 2026-09-24): a "Check now"
+     that is already running when its team is archived still completes and writes its
+     candidates — the background job does not re-resolve access (PR #118 closed the routes
+     only). Not a blocker for the guard PR or Phase 3b; must be fixed before regular
+     production imports are switched on.
   - Planned shape (as built in F1–F2):
     - "Check now" fetches from GPEXE;
     - a list of import candidates;
@@ -649,8 +681,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**The guard PR before Phase 3b (`fix/gpexe-import-access-guards`) is in progress**; see
-Active phase for its exact scope. The owner decides the next phase after each merge. Conditions
+**Phase 3b of the Imports track (`feature/imports-team-mapping`, the whole-team linking
+screen) is in progress**; see Active phase for its exact scope. The owner decides the next phase after each merge. Conditions
 1-3 under Separate tasks still come before the first real local import, and condition 4
 before regular production imports. The owner's decisions of 2026-09-23 on estimates,
 completion and session context (blueprint v3.1, section 14) shape Phases 5a–6 and are

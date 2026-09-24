@@ -104,6 +104,12 @@ function resetGpexeTeamState(teamId) {
   gx.linkSeq = 0;
   gx.checkLinkSeq = null;
   gx.linkCheckStartedAt = null;
+  gx.sourceAthletes = null;
+  gx.mapping = emptyMapping();
+}
+
+function emptyMapping() {
+  return { open: false, choices: {}, confirming: false, sending: false, results: null, error: null };
 }
 
 export async function loadGpexeTeam(render) {
@@ -119,15 +125,17 @@ export async function loadGpexeTeam(render) {
   gx.error = null;
   render();
   try {
-    const [status, candidates, links] = await Promise.all([
+    const [status, candidates, links, sourceAthletes] = await Promise.all([
       api(teamPath(teamId, "/status")),
       api(teamPath(teamId, `/candidates${gx.includeSuperseded ? "?includeSuperseded=true" : ""}`)),
       api(teamPath(teamId, "/athlete-links")),
+      api(teamPath(teamId, "/source-athletes")),
     ]);
     if (generation !== gx.generation) return;
     gx.status = status;
     gx.candidates = candidates.candidates;
     gx.links = links.links;
+    gx.sourceAthletes = sourceAthletes.athletes;
     forgetConfirmedImports();
     // The server's lastCheck is the truth: a check left while polling (the
     // coach went to another tab) or whose polling failed is taken over from
@@ -431,10 +439,188 @@ export async function verifyGpexeApproval(render) {
 // Athlete links
 // ---------------------------------------------------------------------------
 
+// The links and the source athletes change together; a failed re-read of
+// either only leaves it stale (the caller decides what to say).
 async function reloadGpexeLinks(generation) {
   const gx = g();
-  const { links } = await api(teamPath(gx.teamId, "/athlete-links"));
-  if (generation === gx.generation) gx.links = links;
+  const [links, sourceAthletes] = await Promise.all([
+    api(teamPath(gx.teamId, "/athlete-links")),
+    api(teamPath(gx.teamId, "/source-athletes")).catch(() => null),
+  ]);
+  if (generation !== gx.generation) return;
+  gx.links = links.links;
+  if (sourceAthletes) gx.sourceAthletes = sourceAthletes.athletes;
+  if (gx.mapping?.open) pruneTeamMappingChoices(gx);
+}
+
+// ---------------------------------------------------------------------------
+// Whole-team linking ("Link athletes", phase 3b)
+// ---------------------------------------------------------------------------
+
+// The team's athletes a GPEXE athlete can be linked to: active members of
+// the team (from the organization data the page already has) who are not
+// linked yet. Two athletes with the same name are marked: they cannot be
+// told apart here, so neither can be chosen.
+function teamActiveAthletes(gx) {
+  const teamId = String(gx.teamId || "");
+  return (state.trainingLoad.orgPickerData?.athletes || []).filter((a) =>
+    (a.memberships || []).some((m) => m.membershipType === "team" && String(m.teamId) === teamId && m.status === "active"));
+}
+
+export function teamHasActiveAthletes(gx = g()) {
+  return teamActiveAthletes(gx).length > 0;
+}
+
+export function teamAthleteChoices(gx = g()) {
+  const all = teamActiveAthletes(gx);
+  const names = new Map();
+  for (const a of all) {
+    const key = String(a.name || "").trim().toLowerCase();
+    names.set(key, (names.get(key) || 0) + 1);
+  }
+  const linked = new Set((gx.links || []).map((l) => String(l.athleteId)));
+  return all
+    .filter((a) => !linked.has(String(a.id)))
+    .map((a) => ({ id: String(a.id), name: a.name || "Athlete", duplicate: (names.get(String(a.name || "").trim().toLowerCase()) || 0) > 1 }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function openTeamMapping() {
+  const gx = g();
+  gx.mapping = { ...emptyMapping(), open: true };
+  gx.linkError = null;
+}
+
+// Returns true when the screen had staged choices (the caller asked first).
+export function closeTeamMapping() {
+  const gx = g();
+  const had = Object.keys(gx.mapping.choices).length > 0;
+  gx.mapping = emptyMapping();
+  return had;
+}
+
+// A choice is only staged; nothing is sent.
+// Staged choices that the re-read list no longer supports (the GPEXE
+// athlete is not unlinked any more, or the athlete is not linkable any
+// more - e.g. another coach linked one of them first) are dropped: the list
+// is the truth, and "Review N links" never counts an invisible choice.
+export function pruneTeamMappingChoices(gx = g()) {
+  const unlinked = new Set((gx.sourceAthletes || []).filter((a) => a.status === "unlinked").map((a) => a.gpexeAthleteId));
+  const linkable = new Set(teamAthleteChoices(gx).map((c) => c.id));
+  const choices = {};
+  for (const [id, athleteId] of Object.entries(gx.mapping.choices || {})) if (unlinked.has(id) && linkable.has(athleteId)) choices[id] = athleteId;
+  gx.mapping = { ...gx.mapping, choices };
+}
+
+export function chooseTeamMapping(gpexeAthleteId, athleteId) {
+  const gx = g();
+  const choices = { ...gx.mapping.choices };
+  if (athleteId) choices[gpexeAthleteId] = String(athleteId);
+  else delete choices[gpexeAthleteId];
+  gx.mapping = { ...gx.mapping, choices, error: null, results: null };
+}
+
+// The pairs to confirm, checked against the team's roster: every chosen
+// athlete must still be linkable, tell-apart-able by name, and chosen once.
+// Returns { pairs } or { error } - nothing is sent here.
+export function stagedTeamMapping(gx = g()) {
+  const choices = gx.mapping.choices || {};
+  const ids = Object.keys(choices).sort((a, b) => a.length - b.length || (a < b ? -1 : 1));
+  if (!ids.length) return { error: "Choose at least one athlete first." };
+  const byId = new Map(teamAthleteChoices(gx).map((c) => [c.id, c]));
+  const pairs = [];
+  const seen = new Map();
+  for (const gpexeAthleteId of ids) {
+    const athleteId = choices[gpexeAthleteId];
+    const choice = byId.get(athleteId);
+    if (!choice) return { error: `The athlete chosen for GPEXE athlete ${gpexeAthleteId} is not linkable any more (already linked, or no longer in the team). Choose again.` };
+    if (choice.duplicate) return { error: `More than one athlete of the team is called ${choice.name}. Give them different names in Settings > Athletes first, then link.` };
+    if (seen.has(athleteId)) return { error: `${choice.name} is chosen for GPEXE athletes ${seen.get(athleteId)} and ${gpexeAthleteId}. One athlete can be linked to one GPEXE athlete only.` };
+    seen.set(athleteId, gpexeAthleteId);
+    pairs.push({ gpexeAthleteId, athleteId, athleteName: choice.name });
+  }
+  return { pairs };
+}
+
+export function confirmTeamMapping() {
+  const gx = g();
+  const staged = stagedTeamMapping(gx);
+  if (staged.error) {
+    gx.mapping = { ...gx.mapping, error: staged.error, confirming: false };
+    return false;
+  }
+  gx.mapping = { ...gx.mapping, error: null, confirming: true, results: null };
+  return true;
+}
+
+export function backFromTeamMappingConfirm() {
+  const gx = g();
+  gx.mapping = { ...gx.mapping, confirming: false };
+}
+
+// Sends the confirmed pairs one by one through the existing link route, and
+// keeps one result per pair: linked, refused (a clear answer from the
+// server), or unknown (no clear answer - the link may exist). A pair that
+// was linked or is unknown leaves the staged choices; a refused one stays,
+// so the coach can choose again. Any link made or possibly made marks every
+// review on screen as made with the old links.
+export async function sendTeamMapping(render) {
+  const gx = g();
+  const generation = gx.generation;
+  if (gx.mapping.sending) return;
+  const staged = stagedTeamMapping(gx);
+  if (staged.error) {
+    // The choices changed under the sheet: back to the list, with the reason.
+    gx.mapping = { ...gx.mapping, error: staged.error, confirming: false, sending: false };
+    render();
+    return;
+  }
+  gx.mapping = { ...gx.mapping, sending: true, error: null };
+  gx.linkError = null;
+  render();
+  const results = [];
+  let changed = false;
+  for (const pair of staged.pairs) {
+    try {
+      const answer = await api(teamPath(gx.teamId, "/athlete-links"), { method: "POST", body: JSON.stringify({ gpexeAthleteId: pair.gpexeAthleteId, athleteId: pair.athleteId }) });
+      results.push({ ...pair, outcome: "linked", linkId: answer?.link?.id || "" });
+      changed = true;
+    } catch (error) {
+      const info = errorInfo(error);
+      if (isDefiniteRefusal(info)) results.push({ ...pair, outcome: "refused", error: info });
+      else {
+        results.push({ ...pair, outcome: "unknown", error: info });
+        changed = true;
+      }
+    }
+    if (generation !== gx.generation) return;
+  }
+  if (changed) {
+    linksChanged();
+    gx.lastLink = null;
+  }
+  if (results.length) {
+    // A refusal too: the server's list is the truth about what is linkable.
+    await reloadGpexeLinks(generation).catch(() => {});
+    if (generation !== gx.generation) return;
+  }
+  const choices = { ...gx.mapping.choices };
+  for (const r of results) if (r.outcome !== "refused") delete choices[r.gpexeAthleteId];
+  const linkedCount = results.filter((r) => r.outcome === "linked").length;
+  const unknownCount = results.filter((r) => r.outcome === "unknown").length;
+  gx.mapping = { ...gx.mapping, choices, confirming: false, sending: false, results };
+  pruneTeamMappingChoices(gx);
+  const findAgain = "Find new sessions to update the reviews - approving waits until then.";
+  const notConfirmed = unknownCount === 1 ? "1 link is not confirmed" : `${unknownCount} links are not confirmed`;
+  if (linkedCount && unknownCount) gx.notice = `${linkedCount === 1 ? "1 athlete is" : `${linkedCount} athletes are`} linked; ${notConfirmed} - open Link athletes to check. ${findAgain}`;
+  else if (linkedCount) gx.notice = `${linkedCount === 1 ? "1 athlete is" : `${linkedCount} athletes are`} linked. ${findAgain}`;
+  else if (unknownCount) gx.notice = `${notConfirmed} (the answer was lost) - open Link athletes to check whether it was made. ${findAgain}`;
+  render();
+}
+
+export function finishTeamMappingResults() {
+  const gx = g();
+  gx.mapping = { ...gx.mapping, results: null };
 }
 
 // Only called from "Confirm link": choosing an athlete sends nothing.

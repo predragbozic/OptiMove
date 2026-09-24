@@ -7,12 +7,19 @@ import { state } from "./state.js";
 import {
   reloadGpexeCandidates,
   approveGpexeCandidate,
+  backFromTeamMappingConfirm,
+  chooseTeamMapping,
   closeGpexeCandidate,
+  closeTeamMapping,
+  confirmTeamMapping,
+  finishTeamMappingResults,
   linkGpexeAthlete,
   loadGpexeTeam,
   openGpexeCandidate,
+  openTeamMapping,
   reviewMadeBeforeLinkChange,
   selectGpexeTeam,
+  sendTeamMapping,
   startGpexeCheck,
   unlinkGpexeAthlete,
   verifyGpexeApproval,
@@ -141,6 +148,48 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-unlink") {
     if (!globalThis.window?.confirm?.(unlinkQuestion(gx, action.dataset.linkId))) return true;
     await unlinkGpexeAthlete(action.dataset.linkId, renderTrainingLoad);
+    return true;
+  }
+  // Whole-team linking (phase 3b). Choosing only stages (the select carries
+  // the action, so a repaint never loses a choice); "Confirm" shows every
+  // pair; "Link N athletes" sends them one by one.
+  if (type === "training-load-gpexe-map-open") {
+    openTeamMapping();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-map-close") {
+    if (gx.mapping.sending) return true;
+    if (Object.keys(gx.mapping.choices).length && !globalThis.window?.confirm?.("Leave without linking the athletes you chose? Nothing was sent.")) return true;
+    closeTeamMapping();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-map-choose") {
+    // A click on the select reaches here too: an unchanged value repaints nothing.
+    if ((gx.mapping.choices[action.dataset.gpexeAthleteId] || "") === (action.value || "")) return true;
+    chooseTeamMapping(action.dataset.gpexeAthleteId, action.value || "");
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-map-confirm") {
+    confirmTeamMapping();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-map-back") {
+    backFromTeamMappingConfirm();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-map-send") {
+    if (!gx.mapping.confirming || gx.mapping.sending) return true;
+    await sendTeamMapping(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-map-done") {
+    finishTeamMappingResults();
+    renderTrainingLoad();
     return true;
   }
   return false;
