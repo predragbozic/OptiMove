@@ -51,6 +51,7 @@ test("blocked: the neutral code, the adapter's own code and the session type; no
     ["no_importable_participants", BLOCKED_CODES.no_importable_athlete],
     ["track_missing", BLOCKED_CODES.source_data_inconsistent],
     ["mixed_timezones", BLOCKED_CODES.source_data_inconsistent],
+    ["invalid_athlete_id", BLOCKED_CODES.source_data_inconsistent],
     ["duplicate_event", BLOCKED_CODES.conflicts_with_existing_data],
     ["binding_conflict", BLOCKED_CODES.conflicts_with_existing_data],
     ["brand_new_code", BLOCKED_CODES.other],

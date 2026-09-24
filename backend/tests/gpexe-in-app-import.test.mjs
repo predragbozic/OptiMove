@@ -2207,3 +2207,120 @@ test("source athletes: a refused candidate whose raw athleteSessions is not an a
   r = await api(`/teams/${team.teamId}/source-athletes`, { cookie: team.coach.cookie });
   assert.deepEqual(r.body.athletes.map((a) => a.gpexeAthleteId), [...withLinksAndPreview, "207"]);
 });
+
+// ---------------------------------------------------------------------------
+// Guards before Phase 3b: one canonical GPEXE athlete id everywhere, and an
+// archived team that does not exist for the GPEXE routes.
+// ---------------------------------------------------------------------------
+
+test("athlete id: the link route takes only a canonical id ('0' or digits without a leading zero, at most 12), refuses the rest with a stable 400 and writes nothing", async () => {
+  const team = await setupTeam();
+  const linkRows = async () => (await admin.query(`select count(*)::int as n from training_load.gpexe_athlete_links where owner_team_id = $1`, [team.teamId])).rows[0].n;
+  const before = await linkRows();
+  for (const bad of ["0104", "", "-1", "1.5", "abc", "1234567890123", " 104", "104 ", "00", null, 104]) {
+    const r = await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: team.coach.cookie, body: { gpexeAthleteId: bad, athleteId: team.ids.d } });
+    assert.deepEqual([r.status, r.body.error], [400, "invalid_gpexe_athlete_id"], JSON.stringify(bad));
+  }
+  assert.equal(await linkRows(), before, "a refusal writes no row");
+  // Valid: a plain number, the smallest id, twelve digits.
+  for (const [id, athleteId] of [["104", team.ids.d], ["0", team.ids.e], ["123456789012", team.ids.f]]) {
+    if (athleteId === team.ids.f) await api(`/teams/${team.teamId}/athlete-links/${(await api(`/teams/${team.teamId}/athlete-links`, { cookie: team.coach.cookie })).body.links.find((l) => l.gpexeAthleteId === "105").id}/unlink`, { method: "POST", cookie: team.coach.cookie });
+    const r = await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: team.coach.cookie, body: { gpexeAthleteId: id, athleteId } });
+    assert.equal(r.status, 201, `${id}: ${JSON.stringify(r.body)}`);
+  }
+  assert.equal(await linkRows(), before + 3);
+});
+
+test("athlete id: the source-athletes raw fallback ignores a non-canonical id and keeps the canonical ones; a raw row with such an id refuses the whole session as inconsistent source data", async () => {
+  const team = await setupTeam();
+  const [, a102] = standardAthletes();
+  // A refused match whose raw rows name 208 (canonical) and "0208" (not).
+  const match = makeBundle({ sessionId: 7330, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [{ ...structuredClone(a102), id: 208, tracks: [9208] }] });
+  match.athleteSessions.push({ ...structuredClone(match.athleteSessions[0]), id: 999002, athlete: "0208" });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [match] }));
+  await checkNow(team);
+  let ids = (await sourceAthletes(team)).athletes.map((a) => a.gpexeAthleteId);
+  assert.deepEqual(ids, ["101", "102", "103", "105", "208"], "208 from the raw rows, never 0208");
+
+  // A training whose raw rows carry athlete "0104" (as text) instead of 104:
+  // the mapper refuses the session (source data inconsistent); nothing is
+  // reinterpreted as athlete 104, and the source-athletes list never shows
+  // "0104" - not from a preview, not from the raw fallback.
+  const training = makeBundle({ sessionId: 7331, gpexeTeamId: 77, start: "2026-09-13T18:00:00", athletes: sessionAthletes() });
+  for (const row of training.athleteSessions) if (row.athlete === 104) row.athlete = "0104";
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [training] }));
+  await checkNow(team);
+  const refused = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates.find((c) => c.gpexeTeamSessionId === "7331");
+  assert.deepEqual([refused.status, refused.blockedSourceCode, refused.blockedCode], ["blocked", "invalid_athlete_id", "source_data_inconsistent"]);
+  const detail = (await api(`/teams/${team.teamId}/candidates/${refused.id}`, { cookie: team.coach.cookie })).body.candidate;
+  assert.deepEqual(detail.preview.athletes, [], "a refused session names no athlete in its preview");
+  ids = (await sourceAthletes(team)).athletes.map((a) => a.gpexeAthleteId);
+  assert.ok(!ids.includes("0104") && !ids.includes("104"), ids.join(","));
+  // The canonical athletes of that refused training are raw-only sightings.
+  assert.deepEqual(ids, ["101", "102", "103", "105", "208"]);
+  const by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.deepEqual([by["101"].lastSeen.gpexeTeamSessionId, by["101"].lastSeen.evidence], ["7331", "raw_snapshot"]);
+
+  // Defence in depth for the preview branch: a stored preview entry whose id
+  // is not canonical (only reachable by hand today, the mapper refuses such
+  // rows) is ignored too, never listed and never read as another athlete.
+  const clean = makeBundle({ sessionId: 7332, gpexeTeamId: 77, start: "2026-09-14T18:00:00", athletes: sessionAthletes() });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [clean] }));
+  await checkNow(team);
+  const cleanRow = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates.find((c) => c.gpexeTeamSessionId === "7332");
+  assert.ok((await sourceAthletes(team)).athletes.some((a) => a.gpexeAthleteId === "104" && a.lastSeen.evidence === "preview"));
+  await admin.query(
+    `update training_load.gpexe_import_candidates
+        set preview = jsonb_set(preview, '{athletes}', (select jsonb_agg(case when e->>'gpexeAthleteId' = '104' then jsonb_set(e, '{gpexeAthleteId}', '"0104"') else e end) from jsonb_array_elements(preview->'athletes') e))
+      where id = $1`, [cleanRow.id]);
+  ids = (await sourceAthletes(team)).athletes.map((a) => a.gpexeAthleteId);
+  assert.ok(!ids.includes("0104"), ids.join(","));
+  assert.ok(!ids.includes("104"), "104 is not invented back from 0104");
+});
+
+test("athlete id: a link row written before the rule (the v22 check still admits '0104') is listed as stored, and no '104' is synthesised from it - the residual to check in the deployed database before Phase 3b", async () => {
+  const team = await setupTeam();
+  // Straight into the table, as a pre-PR row would be; the route refuses it.
+  await admin.query(`insert into training_load.gpexe_athlete_links (owner_team_id, gpexe_athlete_id, athlete_id, linked_by_user_id) values ($1,'0104',$2,$3)`, [team.teamId, team.ids.d, team.coach.id]);
+  const body = await sourceAthletes(team);
+  const legacy = body.athletes.find((a) => a.gpexeAthleteId === "0104");
+  assert.deepEqual([legacy?.status, legacy?.link?.athleteId, legacy?.lastSeen], ["linked", team.ids.d, null], "shown as stored, never hidden");
+  assert.ok(!body.athletes.some((a) => a.gpexeAthleteId === "104"), "nothing is synthesised from the legacy id");
+  assert.equal(body.athletes.filter((a) => a.gpexeAthleteId === "0104").length, 1);
+});
+
+test("archived team: the GPEXE routes answer the same 404 as a missing team - to its coach, its club admin and a platform admin - and nothing is started; the active team keeps working", async () => {
+  const team = await setupTeam();
+  const clubAdmin = await makeUser("club admin");
+  await admin.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [clubAdmin, team.clubId]);
+  await setWorkspace(clubAdmin, "club", team.clubId);
+  const clubAdminCookie = await cookieFor(clubAdmin);
+  const viewers = [["coach", team.coach.cookie], ["club admin", clubAdminCookie], ["platform admin", team.padmin.cookie]];
+  const reads = [`/teams/${team.teamId}/status`, `/teams/${team.teamId}/candidates`, `/teams/${team.teamId}/source-athletes`, `/teams/${team.teamId}/athlete-links`, `/teams/${team.teamId}/approvers`];
+  for (const [who, cookie] of viewers) for (const path of reads) assert.equal((await api(path, { cookie })).status, 200, `${who} ${path} while active`);
+  assert.equal((await api(`/teams/${team.teamId}/settings/history`, { cookie: team.padmin.cookie })).status, 200);
+  const checksBefore = (await admin.query(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`, [team.teamId])).rows[0].n;
+
+  await admin.query(`update public.teams set is_active = false where id = $1`, [team.teamId]);
+  for (const [who, cookie] of viewers) {
+    for (const path of reads) {
+      const r = await api(path, { cookie });
+      assert.deepEqual([r.status, r.body], [404, { error: "notFound" }], `${who} ${path} while archived`);
+    }
+    const started = await api(`/teams/${team.teamId}/checks`, { method: "POST", cookie, body: {} });
+    assert.deepEqual([started.status, started.body], [404, { error: "notFound" }], `${who} check while archived`);
+    const linked = await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie, body: { gpexeAthleteId: "300", athleteId: team.ids.d } });
+    assert.deepEqual([linked.status, linked.body], [404, { error: "notFound" }], `${who} link while archived`);
+  }
+  // The administrative routes go through the same resolver: 404 for the platform admin too.
+  for (const [method, path, body] of [["GET", `/teams/${team.teamId}/settings/history`], ["PUT", `/teams/${team.teamId}/settings`, { gpexeTeamId: "77" }], ["POST", `/teams/${team.teamId}/approvers`, { userId: team.coach.id, reason: "x" }]]) {
+    const r = await api(path, { method, cookie: team.padmin.cookie, body });
+    assert.deepEqual([r.status, r.body], [404, { error: "notFound" }], `${method} ${path} while archived`);
+  }
+  assert.equal((await admin.query(`select count(*)::int as n from training_load.gpexe_import_checks where owner_team_id = $1`, [team.teamId])).rows[0].n, checksBefore, "no check was started");
+  assert.equal((await admin.query(`select count(*)::int as n from training_load.gpexe_athlete_links where owner_team_id = $1 and gpexe_athlete_id = '300'`, [team.teamId])).rows[0].n, 0, "no link was written");
+
+  // Restored: everything answers again.
+  await admin.query(`update public.teams set is_active = true where id = $1`, [team.teamId]);
+  for (const [who, cookie] of viewers) assert.equal((await api(`/teams/${team.teamId}/status`, { cookie })).status, 200, `${who} after restore`);
+});

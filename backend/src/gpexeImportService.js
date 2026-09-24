@@ -13,7 +13,7 @@
 // backup.
 import { pool, query } from "./db.js";
 import { createGpexeClient, GpexeClientError } from "./gpexeClient.js";
-import { buildGpexeImportPlan, GpexeMappingError } from "./gpexeImportMapper.js";
+import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
 import { blockedByMapping, buildCandidatePreview, canonicalJson, previewLocked, sha256Hex } from "./gpexeImportPreview.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
@@ -704,8 +704,9 @@ function mapTriggerError(error, fallbackCode) {
 // available preview at all, with lastSeen from the newest available refused
 // session (candidateStatus "blocked", evidence "raw_snapshot") and no helper
 // values. It never replaces a preview sighting or its values, and it obeys
-// the same availability, team and tie-break rules. Only a valid GPEXE
-// athlete id is accepted from the raw row.
+// the same availability, team and tie-break rules. Only a canonical GPEXE
+// athlete id (GPEXE_ATHLETE_ID_PATTERN) is accepted, from a preview entry and
+// from a raw row alike; anything else is ignored, never reinterpreted.
 //
 // Helper values for telling athletes apart are the athlete's own
 // whole-session result of that sighting (from the stored preview); the number
@@ -752,6 +753,7 @@ export async function listSourceAthletes(teamId) {
               'preview' as evidence
          from available c
          cross join lateral jsonb_array_elements(c.preview->'athletes') as a(entry)
+        where a.entry->>'gpexeAthleteId' ~ $2
      ),
      latest as (
        select distinct on (gpexe_athlete_id) *
@@ -774,7 +776,7 @@ export async function listSourceAthletes(teamId) {
          ) as r(row)
         where c.status = 'blocked'
           and r.row->>'teamsession' = c.gpexe_team_session_id
-          and r.row->>'athlete' ~ '^[0-9]{1,12}$'
+          and r.row->>'athlete' ~ $2
           and not exists (select 1 from sighting p where p.gpexe_athlete_id = r.row->>'athlete')
      ),
      latest_raw as (
@@ -805,7 +807,9 @@ export async function listSourceAthletes(teamId) {
        from seen s
        full outer join link k on k.gpexe_athlete_id = s.gpexe_athlete_id
       order by length(coalesce(s.gpexe_athlete_id, k.gpexe_athlete_id)), coalesce(s.gpexe_athlete_id, k.gpexe_athlete_id)`,
-    [teamId],
+    // $2: the one canonical-id rule, bound as a parameter so the SQL text
+    // never carries an interpolated value.
+    [teamId, GPEXE_ATHLETE_ID_PATTERN],
   )).rows;
   return rows.map((r) => ({
     gpexeAthleteId: r.gpexe_athlete_id,
@@ -856,7 +860,9 @@ async function writeUnderTeamLock(teamId, write) {
 }
 
 export async function linkAthlete(teamId, { gpexeAthleteId, athleteId, userId }) {
-  if (typeof gpexeAthleteId !== "string" || !/^[0-9]{1,12}$/.test(gpexeAthleteId)) throw new GpexeImportServiceError(400, "invalid_gpexe_athlete_id", "gpexeAthleteId must be a numeric GPEXE athlete id.");
+  // Refused before any lock or write: "0104" would otherwise become a second
+  // athlete next to "104".
+  if (!isCanonicalGpexeAthleteId(gpexeAthleteId)) throw new GpexeImportServiceError(400, "invalid_gpexe_athlete_id", "gpexeAthleteId must be a canonical numeric GPEXE athlete id: \"0\" or digits without a leading zero, at most 12.");
   try {
     return await writeUnderTeamLock(teamId, async (client) => {
       // A GPEXE athlete number belongs to a GPEXE team: without the team's

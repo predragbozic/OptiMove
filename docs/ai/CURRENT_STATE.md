@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-23. Last `origin/main` commit checked: `12d57ff` (merge of PR #116,
-`feature/imports-list-reasons` → `main`).
+Last reviewed: 2026-09-24. Last `origin/main` commit checked: `8d2841b` (merge of PR #117,
+`feature/source-athletes-endpoint` → `main`).
 
 ## Active phase
 
@@ -32,29 +32,24 @@ Disconnect, retention UI, the import switch, any real import.
 **The active phase is the source-neutral Imports track** (owner's mission, 2026-09-22;
 blueprint v3.1 accepted as the direction on 2026-09-23). GPEXE is the first data source,
 not the name of the feature; future sources (Garmin, Catapult, Polar, Kinexon, …) are
-further Source cards on the same screen, never a new top-level screen. Phase 2, the
-**Imports shell** (PR #115), and Phase 2b, **candidate list reasons** (PR #116), are
-merged (see below). **Phase 3a, the read-only source-athletes endpoint** (branch
-`feature/source-athletes-endpoint`), is the only phase in progress:
-`GET /api/training-load/gpexe/teams/:teamId/source-athletes` lists the team's GPEXE
-athletes once each — every athlete seen in a snapshot that is still available (not purged, not expired) plus every athlete with an
-active link — with `status` (`linked` / `unlinked` / `linked_inactive`), the link (the
-OptiMove name only from it; no GPEXE name, it is never stored), a deterministic
-`lastSeen` (newest session date among the candidates whose snapshot is still available —
-not purged, not expired, as `snapshotState` decides everywhere else; same date: current
-before replaced, then the later sighting, then the larger id; `evidence` `preview` or
-`raw_snapshot`, and the session's own `sessionDrillsCount`) and the athlete's helper
-values from that sighting (`duration`, `distance`, `maxSpeed` from the whole-session
-result; missing = `null`, never a zero). A session the mapper refused stores a preview
-without athletes; its raw snapshot is a fallback only (owner decision (b), 2026-09-24):
-it adds an athlete no available preview names, as `unlinked` with `candidateStatus:
-"blocked"`, `evidence: "raw_snapshot"` and null values, never replacing a preview
-sighting. Same readers and 404 as the candidates; no GPEXE call, no write, no link, no
-migration; one SQL statement whatever the number of candidates or athletes, with a
-contract test on the query count and security tests for the team's coach, another
-team's coach and a user without access. Phases 3b–6 (team mapping screen, batch import,
-completion model and roster, session context, add-later-values) wait for the owner's go
-after each merge.
+further Source cards on the same screen, never a new top-level screen. Phase 2 (the
+Imports shell, PR #115), Phase 2b (candidate list reasons, PR #116) and Phase 3a (the
+read-only source-athletes endpoint, PR #117) are merged and deployed (see below). **The
+step in progress is the small backend guard PR before Phase 3b** (branch
+`fix/gpexe-import-access-guards`, owner's sequence of 2026-09-24): one canonical GPEXE
+athlete id everywhere it enters (`"0"` or digits without a leading zero, at most 12 — the
+link route answers `400 invalid_gpexe_athlete_id` and writes nothing, the mapper refuses a
+snapshot row with a non-canonical id as `invalid_athlete_id`, the source-athletes list
+takes only canonical ids from previews and raw rows; a link row is listed as stored — the
+v22 database check is wider — so the deployed `gpexe_athlete_links` must be checked
+read-only for a non-canonical id before Phase 3b: `select count(*) from
+training_load.gpexe_athlete_links where gpexe_athlete_id !~ '^(0|[1-9][0-9]{0,11})$'`),
+and an archived team that answers the same 404 as a missing one on every GPEXE
+route — to its coach, its club admin and a platform admin, the administrative routes
+included, because they share `resolveGpexeTeamAccess`. No migration (the v22 database
+check stays the wider `^[0-9]{1,12}$`), no frontend change, no data change. Only then
+Phase 3b (the whole-team linking screen); Phases 4–6 (batch import, completion model and
+roster, session context, add-later-values) wait for the owner's go after each merge.
 
 All of it is code only. **`GPEXE_IMPORT_APPLY_ENABLED` is off in every environment and no
 GPEXE data has been imported into the local OPTIMOVE or the deployed database**, so
@@ -62,6 +57,21 @@ nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **Imports Phase 3a: read-only source-athletes endpoint** — PR #117 (`8d2841b`, reviewed
+  head `2731ed2`): `GET /api/training-load/gpexe/teams/:teamId/source-athletes` lists the
+  team's GPEXE athletes once each — every athlete seen in a snapshot that is still
+  available (not purged, not expired) plus every athlete with an active link — with
+  `status` (`linked` / `unlinked` / `linked_inactive`), the link (the OptiMove name only
+  from it; no GPEXE name, it is never stored), a deterministic `lastSeen` (newest session
+  date; same date: current before replaced, then the later sighting, then the larger id;
+  `evidence` `preview` or `raw_snapshot`; the session's own `sessionDrillsCount`) and the
+  athlete's `values` (`duration`, `distance`, `maxSpeed`; missing = `null`). A refused
+  session's raw snapshot is a fallback only: it adds an athlete no available preview
+  names, never replacing a preview sighting (owner decision (b)); the array guard sits
+  inside the `jsonb_array_elements` argument. One SQL statement whatever the number of
+  candidates or athletes (contract test); same readers and 404 as the candidates; security
+  and isolation tests. Reviewed by `code-reviewer` and `security-reviewer`; external
+  review by the owner (three rounds).
 - **Imports Phase 2b: candidate list reasons** — PR #116 (`12d57ff`, reviewed head
   `a94f01b`): every candidate summary additionally carries `blockedCode` (source-neutral),
   `blockedSourceCode` (the adapter's own code, for Technical details), `sessionType` and
@@ -390,6 +400,9 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `8d2841b` (PR #117) with `ok: true` on 2026-09-24 (three
+  consecutive checks); the new source-athletes route answered 401 without a login. No
+  search or import was run in production.
 - `/api/health` reported commit `12d57ff` (PR #116) with `ok: true` on 2026-09-23; the
   served bundle carried the new row sentences and none of the removed detail-read code,
   and a GPEXE route answered 401 without a login. No search or import was run in
@@ -529,12 +542,12 @@ pre-existing; pass/fail counts don't belong in this file
     - **The review shows participation and the GPS measurement separately.** A missing
       value is not a zero. "GPS was not worn" is shown only when the data confirms it or
       a coach enters it.
-- **Two small GPEXE follow-ups before or with Phase 3b** (owner, 2026-09-24): a
-  leading-zero GPEXE athlete id (`"0104"`) is accepted by the link route
-  (`^[0-9]{1,12}$`, pre-existing) and would list as a second source athlete next to
-  `"104"` — tighten to `^(0|[1-9][0-9]{0,11})$`; and `resolveGpexeTeamAccess` reaches an
-  archived team through its club workspace (no `is_active` check on the team; shared by
-  every GPEXE route, pre-existing).
+- **Tighten the v22 database check on `gpexe_athlete_links.gpexe_athlete_id`** to the
+  canonical pattern (`^(0|[1-9][0-9]{0,11})$`) — a migration, separate decision; the
+  application rule is enforced by the guard PR. Whether the deployed database holds any
+  leading-zero id could not be checked from this workstation (the local OPTIMOVE database
+  is at v21 and has no GPEXE tables); the ids the app stores come from GPEXE numbers and
+  from preview entries, so none is expected.
 - **Small Imports follow-ups** (found in PR #115, not scheduled): a hand-typed date in
   the source card's *Choose dates* is lost on a repaint (pre-existing); the review modal's
   badges still use the old vocabulary ("Waiting for approval"), to be aligned with the
@@ -636,8 +649,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**Phase 3a of the Imports track (`feature/source-athletes-endpoint`) is in progress**;
-see Active phase for its exact scope. The owner decides the next phase after each merge. Conditions
+**The guard PR before Phase 3b (`fix/gpexe-import-access-guards`) is in progress**; see
+Active phase for its exact scope. The owner decides the next phase after each merge. Conditions
 1-3 under Separate tasks still come before the first real local import, and condition 4
 before regular production imports. The owner's decisions of 2026-09-23 on estimates,
 completion and session context (blueprint v3.1, section 14) shape Phases 5a–6 and are
