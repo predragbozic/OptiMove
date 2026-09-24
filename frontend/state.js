@@ -652,6 +652,17 @@ export const emptyGpexeImportState = () => ({
   linkSeq: 0,
   checkLinkSeq: null,
   linkCheckStartedAt: null,
+  // Whole-team linking (Imports phase 3b): the team's source athletes from
+  // GET /source-athletes, and the "Link athletes" screen - the athletes
+  // chosen so far by GPEXE id (nothing is sent until Confirm), the
+  // confirmation step, the sending flag and the per-pair results of the
+  // last confirm.
+  sourceAthletes: null,
+  // Set when only the source-athletes read failed: the inbox stays, the
+  // Link athletes screen waits for a successful read.
+  sourceAthletesError: null,
+  sourceAthletesRetrying: false,
+  mapping: { open: false, choices: {}, confirming: false, sending: false, results: null, error: null },
 });
 
 export const emptyTrainingLoadState = (overrides = {}) => ({

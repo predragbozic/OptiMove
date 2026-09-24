@@ -6,13 +6,21 @@
 import { state } from "./state.js";
 import {
   reloadGpexeCandidates,
+  reloadGpexeSourceAthletes,
   approveGpexeCandidate,
+  backFromTeamMappingConfirm,
+  chooseTeamMapping,
   closeGpexeCandidate,
+  closeTeamMapping,
+  confirmTeamMapping,
+  finishTeamMappingResults,
   linkGpexeAthlete,
   loadGpexeTeam,
   openGpexeCandidate,
+  openTeamMapping,
   reviewMadeBeforeLinkChange,
   selectGpexeTeam,
+  sendTeamMapping,
   startGpexeCheck,
   unlinkGpexeAthlete,
   verifyGpexeApproval,
@@ -139,8 +147,62 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-unlink") {
+    // In the Link athletes screen, not while the list may be out of date: the
+    // button is disabled, this only guards a stale click.
+    if (gx.mapping.open && gx.sourceAthletesError) return true;
     if (!globalThis.window?.confirm?.(unlinkQuestion(gx, action.dataset.linkId))) return true;
     await unlinkGpexeAthlete(action.dataset.linkId, renderTrainingLoad);
+    return true;
+  }
+  // Whole-team linking (phase 3b). Choosing only stages (the select carries
+  // the action, so a repaint never loses a choice); "Confirm" shows every
+  // pair; "Link N athletes" sends them one by one.
+  if (type === "training-load-gpexe-map-open") {
+    // Not without the list, nor while it may be out of date: the button is
+    // disabled, this only guards a stale click.
+    if (!gx.sourceAthletes || gx.sourceAthletesError) return true;
+    openTeamMapping();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-sources-retry") {
+    await reloadGpexeSourceAthletes(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-map-close") {
+    if (gx.mapping.sending) return true;
+    if (Object.keys(gx.mapping.choices).length && !globalThis.window?.confirm?.("Leave without linking the athletes you chose? Nothing was sent.")) return true;
+    closeTeamMapping();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-map-choose") {
+    // Nothing is staged from a list that may be out of date (the select is disabled).
+    if (gx.sourceAthletesError) return true;
+    // A click on the select reaches here too: an unchanged value repaints nothing.
+    if ((gx.mapping.choices[action.dataset.gpexeAthleteId] || "") === (action.value || "")) return true;
+    chooseTeamMapping(action.dataset.gpexeAthleteId, action.value || "");
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-map-confirm") {
+    confirmTeamMapping();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-map-back") {
+    backFromTeamMappingConfirm();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-map-send") {
+    if (!gx.mapping.confirming || gx.mapping.sending) return true;
+    await sendTeamMapping(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-map-done") {
+    finishTeamMappingResults();
+    renderTrainingLoad();
     return true;
   }
   return false;

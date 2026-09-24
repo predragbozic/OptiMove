@@ -15,7 +15,7 @@
 // kept in a collapsed "Technical details" block.
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
-import { gpexeTeamOptions, reviewMadeBeforeLinkChange } from "./gpexe-import-data.js";
+import { gpexeTeamOptions, reviewMadeBeforeLinkChange, stagedTeamMapping, teamAthleteChoices, teamHasActiveAthletes } from "./gpexe-import-data.js";
 
 // Why a session can't be approved right now, in the coach's words (blocked
 // and expired sessions explain themselves above the approve area).
@@ -263,6 +263,7 @@ export function renderGpexeImportsHtml() {
       ${status ? renderBucketsHtml(gx, status) : ""}
       ${status ? renderLinksHtml(gx) : ""}
       ${gx.detail ? renderCandidateDetailHtml(gx, status) : ""}
+      ${!gx.detail && gx.mapping?.open ? renderTeamMappingHtml(gx, teams) : ""}
     </div>
   `;
 }
@@ -448,8 +449,8 @@ function rowReasons(c) {
 function reasonStep(r) {
   const n = r.count || 0;
   switch (r.code) {
-    case "no_linked_athlete": return "No linked athlete in this session yet - link the athletes from its review, then find new sessions.";
-    case "athletes_not_linked": return `${plural(n, "recorded athlete is", "recorded athletes are")} not linked yet - link them from its review, then find new sessions.`;
+    case "no_linked_athlete": return "No linked athlete in this session yet - link the athletes under Link athletes (below), then find new sessions.";
+    case "athletes_not_linked": return `${plural(n, "recorded athlete is", "recorded athletes are")} not linked yet - link them under Link athletes (below), then find new sessions.`;
     case "athletes_not_in_team": return `${plural(n, "linked athlete is", "linked athletes are")} no longer in the team - open it to see who.`;
     case "athletes_need_manual_review": return `${plural(n, "athlete needs", "athletes need")} manual review - open it to see who and why.`;
     case "athletes_marked_invalid_by_source": return `${plural(n, "athlete's statistics are", "athletes' statistics are")} marked not valid in the source data - open it to see who.`;
@@ -504,12 +505,14 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   const ready = list.filter((c) => inboxBucket(c, gx) === "ready");
   const attention = list.filter((c) => inboxBucket(c, gx) === "attention").length;
   const stale = list.filter((c) => (inboxBucket(c, gx) === "ready" || inboxBucket(c, gx) === "attention") && reviewMadeBeforeLinkChange(c, gx));
+  const unlinkedAthletes = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
   const reviewOnly = reviewOnlyText(status);
   const readyText = reviewOnly ? plural(ready.length, "session is", "sessions are") + " ready for review" : plural(ready.length, "session is", "sessions are") + " ready to import";
   let text;
   if (!status.settings) text = "A platform admin needs to connect this team to a data source (Settings > Data sources).";
   else if (gx.checkStarting || check?.status === "running") text = "Finding new sessions...";
   else if (stale.length) text = `${findAgainText(stale)}: athlete links changed after these reviews were made.${datesNeededFor(list, gx) ? " The dates are set above." : ""}`;
+  else if (unlinkedAthletes) text = `Next step: ${plural(unlinkedAthletes, "GPEXE athlete is", "GPEXE athletes are")} not linked - use Link athletes (below), then find new sessions.`;
   else if (attention && ready.length) text = `Next step: ${plural(attention, "item needs", "items need")} attention · ${readyText}.`;
   else if (attention) text = `Next step: ${plural(attention, "item needs", "items need")} attention - see below.`;
   else if (ready.length && reviewOnly) text = `Next step: ${plural(ready.length, "session can", "sessions can")} be reviewed. ${reviewOnly.replace(/^Review only - /, "").replace(/^\w/, (ch) => ch.toUpperCase())}`;
@@ -639,12 +642,35 @@ function badgeHtml(c, gx = state.trainingLoad.gpexe) {
   return `<span class="gpexe-badge is-${escapeAttr(cls)}">${escapeHtml(text)}</span>`;
 }
 
+// "Try again" for the source-athletes list, busy while it runs.
+function retryButtonHtml(gx) {
+  return `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-sources-retry" ${gx.sourceAthletesRetrying ? "disabled" : ""}>${gx.sourceAthletesRetrying ? "Trying again..." : "Try again"}</button>`;
+}
+
 function renderLinksHtml(gx) {
   const links = gx.links || [];
+  const unlinked = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
+  const inactive = (gx.sourceAthletes || []).filter((a) => a.status === "linked_inactive").length;
+  // The count of athletes to link is on the button; only the other fact is a line.
+  const facts = [];
+  if (inactive) facts.push(plural(inactive, "link points", "links point") + " to an athlete no longer in the team");
   return `
     <section class="gpexe-panel" aria-label="Athlete links">
-      <div class="gpexe-panel-head"><h3>GPEXE athletes linked to this team</h3></div>
-      <p class="muted gpexe-hint">A link is never guessed. Link a GPEXE athlete from a session's review, after finding them in GPEXE. A wrong link can be removed here before an import is approved. Unlinking doesn't change results that are already imported: those can't be changed here — contact a platform administrator.</p>
+      <div class="gpexe-panel-head imports-links-head">
+        <h3>GPEXE athletes linked to this team</h3>
+        <button type="button" class="${unlinked ? "primary-button" : "plain-button"} gpexe-button" data-action="training-load-gpexe-map-open" ${gx.sourceAthletes && !gx.sourceAthletesError ? "" : "disabled"}>Link athletes${unlinked ? ` (${unlinked})` : ""}</button>
+      </div>
+      ${facts.length ? `<p class="imports-links-facts">${escapeHtml(facts.join(" · "))}.</p>` : ""}
+      ${gx.sourceAthletesError ? `
+        <div class="gpexe-warning imports-links-unavailable" role="status">
+          <p>${gx.sourceAthletes
+            ? "The list of GPEXE athletes could not be refreshed, so it may be out of date. Link athletes is off until it is read again; the sessions and the search still work."
+            : "The list of GPEXE athletes is not available right now, so Link athletes is off. The sessions, the search and the links below still work."}</p>
+          ${retryButtonHtml(gx)}
+          ${errorTech(gx.sourceAthletesError)}
+        </div>
+      ` : ""}
+      <p class="muted gpexe-hint">A link is never guessed: find the athlete in GPEXE first, then link the whole team under Link athletes or one athlete from a session's review. A wrong link can be removed here before an import is approved. Unlinking doesn't change results that are already imported: those can't be changed here — contact a platform administrator.</p>
       ${gx.linkError && !gx.detail ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
       ${!links.length ? `<p class="muted">No athlete is linked yet.</p>` : `
         <ul class="gpexe-link-list">
@@ -657,6 +683,197 @@ function renderLinksHtml(gx) {
         </ul>
       `}
     </section>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// Whole-team linking ("Link athletes", phase 3b)
+// ---------------------------------------------------------------------------
+
+const MAP_VALUE_LABELS = [["duration", "Time", "min"], ["distance", "Distance", "m"], ["maxSpeed", "Top speed", "km/h"]];
+
+// The helper values of the athlete's last sighting, "—" where the source
+// gave none; they help to find the athlete in GPEXE and prove nothing.
+function mapValuesText(a) {
+  const parts = MAP_VALUE_LABELS.map(([key, label, unit]) => `${label} ${a.values?.[key] === null || a.values?.[key] === undefined ? "—" : fmtValue(a.values[key], unit)}`);
+  const drills = a.lastSeen?.sessionDrillsCount;
+  parts.push(`Drills ${drills === null || drills === undefined ? "—" : drills}`);
+  return parts.join(" · ");
+}
+
+// The same title and date-time as the inbox row of that session, so the
+// coach can match them; the session type stays in Technical details.
+function mapLastSeenText(a) {
+  const s = a.lastSeen;
+  if (!s) return "Not seen in any session that is still available.";
+  const when = s.sessionStartedAt ? fmtDateTime(s.sessionStartedAt) : "";
+  const title = sessionTitle({ label: s.sessionLabel, gpexeTeamSessionId: s.gpexeTeamSessionId });
+  const raw = s.evidence === "raw_snapshot" ? " · this session can't be imported, so it gives no values" : "";
+  return `Last seen ${[when, title].filter(Boolean).join(" · ")}${raw}`;
+}
+
+function renderMapRowHtml(a, gx, choices) {
+  const id = a.gpexeAthleteId;
+  const chosen = gx.mapping.choices[id] || "";
+  const tech = techHtml([
+    ["GPEXE athlete id", id],
+    ["Status", a.status],
+    ["Session type", a.lastSeen?.sessionType],
+    ["Evidence", a.lastSeen?.evidence],
+    ["Session id", a.lastSeen?.gpexeTeamSessionId],
+    ["Candidate id", a.lastSeen?.candidateId],
+    ["Candidate status", a.lastSeen?.candidateStatus],
+    ["Link id", a.link?.id],
+  ]);
+  if (a.status === "unlinked") {
+    return `
+      <li class="gpexe-map-row is-unlinked">
+        <div class="gpexe-map-main">
+          <strong>GPEXE athlete ${escapeHtml(id)}</strong>
+          <span class="muted">${escapeHtml(mapLastSeenText(a))}</span>
+          <span class="gpexe-map-values">${escapeHtml(mapValuesText(a))}</span>
+        </div>
+        ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link GPEXE athlete ${escapeAttr(id)} to" ${gx.mapping.sending || gx.sourceAthletesError ? "disabled" : ""}>
+            <option value="" ${chosen ? "" : "selected"}>Not now</option>
+            ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
+          </select>
+        </label>` : `<p class="muted gpexe-map-choice">No athlete to choose.</p>`}
+        ${tech}
+      </li>
+    `;
+  }
+  const inactive = a.status === "linked_inactive";
+  return `
+    <li class="gpexe-map-row ${inactive ? "is-inactive" : "is-linked"}">
+      <div class="gpexe-map-main">
+        <strong>${escapeHtml(a.link?.athleteName || "Athlete")}</strong>
+        <span class="muted">GPEXE athlete ${escapeHtml(id)}${inactive ? " · no longer in the team" : ""} · ${escapeHtml(mapLastSeenText(a))}</span>
+        <span class="gpexe-map-values">${escapeHtml(mapValuesText(a))}</span>
+      </div>
+      <div class="gpexe-map-choice">
+        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(a.link?.id || "")}" ${gx.linkBusy || gx.mapping.sending || gx.sourceAthletesError ? "disabled" : ""}>Unlink</button>
+      </div>
+      ${tech}
+    </li>
+  `;
+}
+
+function mapOutcomeText(r) {
+  if (r.outcome === "linked") return "linked";
+  if (r.outcome === "unknown") return `not confirmed - the answer was lost, so we can't tell whether the link was made. Press Done: if GPEXE athlete ${r.gpexeAthleteId} now appears under Linked, it was.`;
+  const code = r.error?.code;
+  if (code === "already_linked") return "not linked: this GPEXE athlete, or the athlete you chose, is already linked. Press Done to see the current list, then choose another athlete or Not now.";
+  if (code === "athlete_not_in_team") return "not linked: the athlete is no longer an active member of the team";
+  if (code === "invalid_gpexe_athlete_id") return "not linked: this is not a valid GPEXE athlete id";
+  if (code === "gpexe_team_not_configured") return "not linked: the team is not connected to GPEXE";
+  if (r.error?.status === 404) return "not linked: the team is not available in your current workspace";
+  return "not linked: the server refused it";
+}
+
+function renderTeamMappingHtml(gx, teams) {
+  const m = gx.mapping;
+  const team = teams.find((t) => String(t.id) === String(gx.teamId));
+  const title = `Link GPEXE athletes${team ? ` - ${team.name}` : ""}`;
+  const list = gx.sourceAthletes || [];
+  const unlinked = list.filter((a) => a.status === "unlinked");
+  const linked = list.filter((a) => a.status === "linked");
+  const inactive = list.filter((a) => a.status === "linked_inactive");
+  const choices = teamAthleteChoices(gx);
+  const stagedCount = Object.keys(m.choices).length;
+  const busy = m.sending ? "disabled" : "";
+  // The list may be out of date (a re-read failed after a change): it stays
+  // as context, marked, and every new link/unlink/review/send is off until
+  // Try again succeeds. Close, Back and Done still work.
+  const stale = Boolean(gx.sourceAthletesError);
+  const off = m.sending || stale ? "disabled" : "";
+  const staleHtml = stale ? `
+      <div class="gpexe-warning imports-links-unavailable" role="status">
+        <p>This list could not be refreshed after the last change, so it may be out of date: an athlete you just linked may still show as not linked. Linking and unlinking are off until it is read again.</p>
+        ${retryButtonHtml(gx)}
+        ${errorTech(gx.sourceAthletesError)}
+      </div>
+  ` : "";
+  const staged = m.confirming ? stagedTeamMapping(gx) : null;
+  const rows = (items) => `<ul class="gpexe-map-list">${items.map((a) => renderMapRowHtml(a, gx, choices)).join("")}</ul>`;
+  let body;
+  if (m.results) {
+    body = `
+      <section class="gpexe-map-results" aria-label="Result">
+        <h4>Result</h4>
+        <ul>
+          ${m.results.map((r) => `<li><strong>GPEXE athlete ${escapeHtml(r.gpexeAthleteId)} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r))}${r.error ? errorTech(r.error) : ""}</li>`).join("")}
+        </ul>
+        ${m.results.some((r) => r.outcome !== "refused") ? `<p>Find new sessions to update the reviews - approving waits until then. A wrong link can be removed with Unlink before an import is approved.</p>` : ""}
+        ${staleHtml}
+        <div class="gpexe-link-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-done">Done</button></div>
+      </section>
+    `;
+  } else if (m.confirming && staged?.pairs) {
+    body = `
+      <section class="gpexe-link-confirm gpexe-map-confirm" role="group" aria-label="Confirm the links">
+        <p><strong>Link ${plural(staged.pairs.length, "athlete", "athletes")}?</strong></p>
+        <ul>${staged.pairs.map((p) => `<li class="gpexe-link-pair"><strong>GPEXE athlete ${escapeHtml(p.gpexeAthleteId)}</strong> → <strong>${escapeHtml(p.athleteName)}</strong></li>`).join("")}</ul>
+        ${unlinked.length > staged.pairs.length ? `<p class="muted">${escapeHtml(plural(unlinked.length - staged.pairs.length, "other GPEXE athlete stays", "other GPEXE athletes stay"))} not linked (Not now); their sessions keep needing attention until they are linked.</p>` : ""}
+        <p>Once you find new sessions and approve an import, each GPEXE athlete's results are imported as the athlete chosen here — in the sessions already found and in every session found later.</p>
+        <p>You can unlink before an import is approved. Unlinking doesn't change results that are already imported: if a link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
+        <div class="gpexe-link-actions">
+          <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-map-back" ${busy}>Back</button>
+          <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-send" ${off}>${m.sending ? "Linking..." : `Link ${plural(staged.pairs.length, "athlete", "athletes")}`}</button>
+        </div>
+      </section>
+    `;
+  } else {
+    body = `
+      <p class="muted gpexe-hint">A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing. Choosing sends nothing: the links are made only when you press Link on the next step.</p>
+      ${!gx.sourceAthletes ? `<p class="muted">Loading...</p>` : ""}
+      ${gx.sourceAthletes && !list.length ? `<p class="muted">No GPEXE athlete has been seen yet. Find new sessions first.</p>` : ""}
+      ${staleHtml}
+      ${m.error ? `<p class="gpexe-error" role="alert">${escapeHtml(m.error)}</p>` : ""}
+      ${gx.linkError ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
+      ${unlinked.length ? `
+        <section class="gpexe-map-group" aria-label="Not linked">
+          <h4>Not linked (${unlinked.length})</h4>
+          ${!choices.length ? `<p class="muted">${teamHasActiveAthletes(gx) ? "Every active athlete of the team is already linked. Add the athlete to the team in Settings &gt; Athletes first, or unlink the wrong one below." : "This team has no active athletes yet. Add them in Settings &gt; Athletes, then come back to link."}</p>` : ""}
+          ${rows(unlinked)}
+        </section>
+      ` : ""}
+      ${inactive.length ? `
+        <section class="gpexe-map-group" aria-label="No longer in the team">
+          <h4>Linked to an athlete no longer in the team (${inactive.length})</h4>
+          <p class="muted">Nothing to do if the athlete has left the team. Unlink only if the link was wrong; results already imported stay as they are.</p>
+          ${rows(inactive)}
+        </section>
+      ` : ""}
+      ${linked.length ? `
+        <section class="gpexe-map-group" aria-label="Linked">
+          <h4>Linked (${linked.length})</h4>
+          ${rows(linked)}
+        </section>
+      ` : ""}
+    `;
+  }
+  const footer = !m.results && !m.confirming ? `
+    <div class="gpexe-link-actions gpexe-map-actions">
+      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-map-close" ${busy}>Close</button>
+      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-confirm" ${stagedCount && !off ? "" : "disabled"}>Review ${stagedCount ? plural(stagedCount, "link", "links") : "links"}</button>
+    </div>
+  ` : "";
+  return `
+    <div class="builder-athlete-overlay gpexe-detail-overlay">
+      <button type="button" class="builder-athlete-backdrop" data-action="training-load-gpexe-map-close" aria-label="Close" ${busy}></button>
+      <section class="panel builder-athlete-picker gpexe-detail gpexe-map" role="dialog" aria-modal="true" aria-label="${escapeAttr(title)}">
+        <div class="builder-section-panel-head">
+          <h3>${escapeHtml(title)}</h3>
+          <button type="button" class="plain-button icon-button builder-athlete-picker-cancel" data-action="training-load-gpexe-map-close" aria-label="Close" ${busy}>&times;</button>
+        </div>
+        <div class="gpexe-detail-body">
+          <p class="gpexe-map-summary">${escapeHtml([`${linked.length} linked`, `${unlinked.length} not linked`, ...(inactive.length ? [`${inactive.length} no longer in the team`] : [])].join(" · "))}</p>
+          ${body}
+          ${footer}
+        </div>
+      </section>
+    </div>
   `;
 }
 
