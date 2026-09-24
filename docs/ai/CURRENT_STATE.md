@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-24. Last `origin/main` commit checked: `ca6d48f` (merge of PR #118,
-`fix/gpexe-import-access-guards` → `main`).
+Last reviewed: 2026-09-24. Last `origin/main` commit checked: `b8214ef` (merge of PR #119,
+`feature/imports-team-mapping` → `main`).
 
 ## Active phase
 
@@ -35,31 +35,47 @@ not the name of the feature; future sources (Garmin, Catapult, Polar, Kinexon, �
 further Source cards on the same screen, never a new top-level screen. Phase 2 (the
 Imports shell, PR #115), Phase 2b (candidate list reasons, PR #116), Phase 3a (the
 read-only source-athletes endpoint, PR #117) and the guard PR before Phase 3b (one
-canonical GPEXE athlete id, archived teams answer 404; PR #118) are merged and deployed
-(see below). **The step in progress is Phase 3b, the whole-team linking screen** (branch
-`feature/imports-team-mapping`, frontend only): a *Link athletes* screen opened from the
-Imports page lists every GPEXE athlete of the team once (`GET …/source-athletes`) with the
-last session's helper values (Time, Distance, Top speed, Drills — "—" where the source gave
-none), grouped *Not linked / Linked to an athlete no longer in the team / Linked*; the
-coach chooses a team athlete per GPEXE athlete (active members not yet linked; two
-athletes with the same name cannot be chosen; nothing is preselected, choices are staged
-in state so a repaint never loses them), *Confirm N links* shows every pair with the
-consequences, *Link N athletes* sends them one by one through the existing link route and
-shows one result per pair (linked / not linked with the reason / not confirmed when the
-answer was lost), then reads the links and the source athletes again once, after the
-whole sequence; *Unlink* is right there with the same question as elsewhere. Any link
-made or possibly made marks the reviews on screen as made with the old links ("Find new
-sessions…"). The source-athletes read is a helper read: if it alone fails, the inbox, the
-search and the links stay, *Link athletes* is off with a plain reason and a *Try again*,
-and the next successful read clears it. A failed re-read after a link or an unlink keeps
-the last list as context but marks it as possibly out of date (a just-linked athlete could
-still look "not linked"): the result of the sequence stays visible, every new link/unlink/
-review/send in the screen and the way in are off, *Try again* is in both places, and a
-successful retry reads the links and the list again, drops stale choices and gives the
-actions back. No name comes from the source; ids and codes only under Technical details.
-No backend change, no migration, no batch import. Phases 4–6 (batch import, completion
-model and roster, session context, add-later-values) wait for the owner's go after each
-merge.
+canonical GPEXE athlete id, archived teams answer 404; PR #118) and Phase 3b (the
+whole-team *Link athletes* screen, PR #119) are merged and deployed (see below).
+
+**The step in progress is Phase 4a, server-side batch approval** (branch
+`feature/imports-batch-approve`, backend + tests + docs, no migration, no screen):
+`POST /api/training-load/gpexe/teams/:teamId/imports` with `{ candidateIds, previewHashes }`
+approves up to **10** clean "Ready" candidates of one team, one after another, each
+through the existing single approval (`approveCandidate`: its own transaction, locks,
+recomputed preview and COMMIT check) — several atomic approvals, **not all-or-nothing**.
+Clean Ready = pending, snapshot available, a ready preview with no change to an imported
+result and no reason on it. Each candidate carries the preview hash the approver saw
+(the list now returns `previewHash`, additive), so a preview recomputed after the list
+was read is refused as `preview_changed` — this extends the owner's proposed body
+`{ candidateIds }` after the code review found that binding to the stored hash could
+import a preview nobody saw. Never with `acceptChanges`. One result per candidate in the order asked
+(`imported`, `already_imported`, `refused` with a stable code, `import_outcome_unknown`
+with the approval id and `verify`, `not_attempted`) plus a summary; a refusal does not
+stop the next candidate, an unknown outcome, a lost right, the switch turned off or a
+server failure does; repeating the request is safe. The limit of 10 is the owner's
+ceiling without stronger evidence (runbook: "Approving several candidates at once").
+
+**Phase 4b (planned, not started): the Imports screen for batch import, plus a
+source-neutral session calendar** (owner, 2026-09-24). The calendar:
+- uses the existing candidates list — no new endpoint, no GPEXE call per month;
+- marks every date with at least one session already found (a dot plus a slightly
+  stressed date; a small session count when a day has several, if it stays readable on a
+  phone), for every candidate of the source whatever its bucket (Ready, Needs attention,
+  Imported);
+- a tap on a marked date filters the shown sessions to that day, locally;
+- the From/To range still drives *Find new sessions* and stays limited to 31 days;
+- says "Markers show sessions already found by OptiMove. Other dates may not have been
+  searched yet." — a date without a marker is never presented as proof the source has no
+  session;
+- is not colour-only: each marked day has an `aria-label` such as "21 September, 2
+  sessions found";
+- has no horizontal overflow at 360/375 px and keeps each day a large enough touch
+  target;
+- leaves the Dashboards and Activities calendars unchanged.
+
+Phases 5–6 (completion model and roster, session context, add-later-values) wait for the
+owner's go after each merge.
 
 **Production-readiness checks recorded by the owner (2026-09-24), not gates for
 development:** before the first real use of athlete linking and before
@@ -77,6 +93,22 @@ nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **Imports Phase 3b: the whole-team *Link athletes* screen** — PR #119 (`b8214ef`,
+  reviewed head `d690b79`), frontend only: opened from the Imports page, it lists every
+  GPEXE athlete of the team once (`GET …/source-athletes`) with the last session's helper
+  values (Time, Distance, Top speed, Drills — "—" where the source gave none), grouped
+  *Not linked / Linked to an athlete no longer in the team / Linked*. The coach chooses a
+  team athlete per GPEXE athlete (active members not yet linked; same-name athletes
+  cannot be chosen; nothing preselected; choices staged in state), *Review N links* shows
+  every pair with the consequences, *Link N athletes* sends them one by one through the
+  existing link route with one result per pair (linked / not linked with the reason / not
+  confirmed when the answer was lost), then reads the links and the list again once;
+  *Unlink* is right there. The source-athletes read is a helper read: its failure alone
+  never takes the inbox down (*Link athletes* off with a reason and *Try again*); a failed
+  re-read after a link or unlink marks the last list as possibly out of date and turns
+  every new link/unlink/review/send off until *Try again* succeeds. Reviewed by
+  `code-reviewer`, `ux-design-reviewer` and `mobile-qa`; external review by the owner
+  (three rounds).
 - **GPEXE guards before Phase 3b** — PR #118 (`ca6d48f`, reviewed head `19c7866`),
   backend only: one canonical GPEXE athlete id wherever it enters (`"0"` or digits without
   a leading zero, at most 12; `GPEXE_ATHLETE_ID_PATTERN` in `gpexeImportMapper.js`) — the
@@ -432,6 +464,11 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `b8214ef` (PR #119) with `ok: true` on 2026-09-24; the
+  served bundle contained the *Link athletes* screen (with *Try again* and the
+  out-of-date warning), and the GPEXE `status`, `candidates`, `athlete-links` and
+  `source-athletes` routes answered 401 without a login. No search, link, unlink or import
+  was run in production.
 - `/api/health` reported commit `ca6d48f` (PR #118) with `ok: true` on 2026-09-24 (three
   consecutive checks); the GPEXE routes answered 401 without a login. No search or import
   was run in production.
@@ -692,8 +729,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**Phase 3b of the Imports track (`feature/imports-team-mapping`, the whole-team linking
-screen) is in progress**; see Active phase for its exact scope. The owner decides the next phase after each merge. Conditions
+**Phase 4a of the Imports track (`feature/imports-batch-approve`, server-side batch
+approval) is in progress**; see Active phase for its exact scope and the Phase 4b plan. The owner decides the next phase after each merge. Conditions
 1-3 under Separate tasks still come before the first real local import, and condition 4
 before regular production imports. The owner's decisions of 2026-09-23 on estimates,
 completion and session context (blueprint v3.1, section 14) shape Phases 5a–6 and are

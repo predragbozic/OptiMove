@@ -12,7 +12,7 @@ events and activities, and only while `GPEXE_IMPORT_APPLY_ENABLED` is on
 Code:
 - `backend/src/gpexeClient.js` — the read-only GPEXE client;
 - `backend/src/gpexeImportPreview.js` — the preview;
-- `backend/src/gpexeImportService.js` — checks, candidates, retention, and the approval (`approveCandidate`);
+- `backend/src/gpexeImportService.js` — checks, candidates, retention, the approval (`approveCandidate`) and the batch approval (`approveCandidates`, Imports phase 4a);
 - `backend/src/gpexeImportAccess.js` — who may do what;
 - `backend/src/routes/gpexeImport.js` — the routes, under `/api/training-load/gpexe`;
 - `backend/src/gpexeRetentionCli.js` — the retention CLI.
@@ -22,6 +22,7 @@ Schema: `migrations_v2/202609191000_training_load_v22_gpexe_in_app_import.sql` (
 
 Proof:
 - `backend/tests/gpexe-in-app-import.test.mjs` — on a disposable database, through the real server;
+- `backend/tests/gpexe-batch-approve.test.mjs` — the batch approval, the same way;
 - `backend/tests/gpexe-client.test.mjs` — no network.
 
 ## Environment
@@ -397,6 +398,94 @@ first take the same team import lock as the approval
 (`gpexeImportWriter.lockTeamForImport`), so an undo and an approval of the
 same team cannot run at the same time. Found in the F2 database review;
 recorded as a precondition, not changed in F2.
+
+## Approving several candidates at once (Imports phase 4a)
+
+`POST /api/training-load/gpexe/teams/:teamId/imports` with
+`{ "candidateIds": [...], "previewHashes": { "<candidateId>": "<previewHash>" } }`
+approves and imports several **clean "Ready"** candidates of one team in one request.
+**It is several single approvals, one after another — not one transaction and not
+all-or-nothing.** Each candidate goes through `approveCandidate` exactly as above: its
+own transaction, the approver's right `FOR SHARE`, the candidate `FOR UPDATE`, the team
+import lock, the recomputed preview and its hash, the approval row, and the COMMIT with
+its outcome check. The batch writes nothing itself and never calls GPEXE: it imports the
+stored snapshots.
+
+**The body.** `candidateIds` is required: 1 to **10** distinct candidate ids (UUIDs;
+the same id in another letter case is a duplicate). `previewHashes` is required too:
+for each of those ids, exactly once, the hash of the preview the approver saw — the
+candidate list's `previewHash` (added to every list row in phase 4a). That is the same
+binding as the single approval's `previewHash`: a preview recomputed after the list was
+read (for example a link changed and the sessions were found again, which rewrites the
+preview of the same candidate) is refused as `preview_changed` and never imported
+unseen. No other field. Stable 400s, with nothing attempted: `invalid_body`,
+`candidate_ids_required` (missing, not a list, empty), `invalid_candidate_id`,
+`duplicate_candidate_id`, `too_many_candidates`, `preview_hashes_required`,
+`preview_hashes_mismatch` (an id missing, extra or named twice), `invalid_preview_hash`,
+`unknown_field`, and `accept_changes_not_allowed` — a change to an already imported
+result is accepted only one candidate at a time, after its review.
+
+A malformed candidate id is a **400** here, while a malformed id in a route path gets
+the same 404 as a missing one. This is deliberate (owner's requirement for the batch
+body): the ids are fields of the body, checked before anything is read, and a string
+that is not an id names nothing in any team. A well-formed id that is missing or
+another team's still gets the one `404 notFound` for the whole request.
+
+**Before any candidate**, in this order, each with nothing attempted: the team's review
+access (the same 404 as every GPEXE route), the body (400), the import switch (the
+single approval's 409 `import_switch_off`), the caller's approver right (the single
+approval's 403 `not_an_approver`, read live), and every id being a candidate of this
+team (otherwise `404 notFound`, the same as a missing one — another team's candidate is
+never named or imported). A server failure there is `500 internal_error`, without the
+database's text.
+
+**Which candidates are imported.** Just before its approval, each candidate's stored row
+must be a clean "Ready" one: `pending`, snapshot available, its stored preview still
+the one the approver saw, a `ready` preview with no change to an already imported
+result and no reason on it (every athlete it would import is linked, in the team, and
+needs no manual step — the same `reasons` the list shows). The approval is then sent
+with that hash and `acceptChanges: false`, and `approveCandidate` checks all of it
+again under its locks. Anything else is refused for
+that candidate only.
+
+**Two layers for the preview hash.** The entry test compares the stored
+preview hash with the one sent for that candidate, and the approval is sent with the
+hash the approver saw; `approveCandidate` compares it again under the candidate lock, so
+the two layers are independent.
+
+**The answer** is `200` with one result per candidate, in the order asked, and a
+summary (`requested`, `imported`, `alreadyImported`, `refused`, `unknown`,
+`notAttempted`). Each result has `candidateId`, `outcome`, `code` and `approvalId`, and
+only known safe details, never a server message:
+
+| `outcome` | `code` | Meaning | Details |
+|---|---|---|---|
+| `imported` | `null` | Imported and committed (or verified after an unconfirmed COMMIT). | `approvalId`, `commitConfirmation` |
+| `already_imported` | `already_imported` | Imported before (perhaps by this same request sent earlier, or another approval at the same time). Nothing new was written; treat it as success. | `approvalId` when readable |
+| `refused` | `superseded_by_newer_data`, `blocked`, `snapshot_expired_check_again`, `nothing_to_import`, `not_ready`, `changes_need_acceptance`, `preview_changed`, `notFound` | Not imported, for certain; the batch goes on with the next candidate. `preview_changed` also when the preview is not the one the approver saw. | `reviewAgain`, `changesToImported`, `reasons`, `blockedCode` |
+| `refused` | `import_switch_off`, `not_an_approver`, `internal_error` | Not imported, for certain; the switch was turned off, the right was lost, or the server failed **before** a COMMIT — **the batch stops**. | — |
+| `import_outcome_unknown` | `import_outcome_unknown` | The COMMIT was sent but not confirmed and the import could not be found yet. **It may or may not be imported. The batch stops.** | `approvalId`, `verify` (as in the 503 above) |
+| `not_attempted` | `null` | The batch stopped before this candidate. Nothing was tried. | — |
+
+`summary.refused` counts both kinds of refusal; whether the batch stopped is read from
+the stopping `code` and the `not_attempted` results after it.
+
+**Repeating the same request is safe**: an imported candidate answers
+`already_imported` (from the stored status, or from the single approval's own check
+under the candidate lock), never a second import; the rest are approved normally. After
+an `import_outcome_unknown`, follow "When the outcome is uncertain" for that candidate,
+or simply send the same request again.
+
+**Limit: 10 candidates per request** (owner's ceiling without stronger evidence,
+2026-09-24). Without lock contention the request lasts about the sum of its approvals;
+an unconfirmed COMMIT can add 15 s + 5 s once, after which the batch stops. In the tests
+two small approvals took well under half a second in total; a real session has more
+athletes and drills. **The limit does not bound the worst case**: the open risk above
+(unbounded lock waits before a COMMIT) applies to every candidate of a batch, so under
+lock contention a batch can still wait without limit — now up to 10 times in one
+request. Only condition 2 (a bound on the pre-COMMIT lock waits) bounds that, and it
+matters more once batch approval is the usual path. Raising the limit needs measured
+approval times on real sessions and a confirmed deployed request timeout.
 
 ## Turning the import switch on (operational gate)
 
