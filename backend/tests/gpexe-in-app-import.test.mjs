@@ -2160,3 +2160,50 @@ test("source athletes: the raw fallback never replaces a preview sighting or its
   assert.deepEqual([by["206"].status, by["206"].lastSeen.gpexeTeamSessionId, by["206"].lastSeen.evidence, by["206"].lastSeen.candidateStatus, by["206"].values], ["unlinked", "7322", "raw_snapshot", "blocked", { duration: null, distance: null, maxSpeed: null }]);
   assert.ok(!/name/i.test(JSON.stringify(by["206"])), "no name on the raw-only row");
 });
+
+test("source athletes: a refused candidate whose raw athleteSessions is not an array (object, string, number, null, missing) yields no raw-only athlete and never an error; links and preview sightings stay", async () => {
+  const team = await setupTeam();
+  const [, a102] = standardAthletes();
+  const training = makeBundle({ sessionId: 7323, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
+  const match = makeBundle({ sessionId: 7324, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [{ ...structuredClone(a102), id: 207, tracks: [9207] }] });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [training, match] }));
+  await checkNow(team);
+  const refused = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates.find((c) => c.gpexeTeamSessionId === "7324");
+  assert.equal(refused.status, "blocked");
+  const original = (await admin.query(`select raw_bundle->'athleteSessions' as rows from training_load.gpexe_import_candidates where id = $1`, [refused.id])).rows[0].rows;
+  // One raw row per part (whole session and each drill), all of athlete 207.
+  assert.ok(Array.isArray(original) && original.length >= 1 && original.every((row) => String(row.athlete) === "207"));
+
+  const withLinksAndPreview = ["101", "102", "103", "104", "105"];
+  const expect = async (label) => {
+    const r = await api(`/teams/${team.teamId}/source-athletes`, { cookie: team.coach.cookie });
+    assert.equal(r.status, 200, `${label}: ${JSON.stringify(r.body)}`);
+    assert.deepEqual(r.body.athletes.map((a) => a.gpexeAthleteId), withLinksAndPreview, label);
+    const by = Object.fromEntries(r.body.athletes.map((a) => [a.gpexeAthleteId, a]));
+    assert.deepEqual([by["101"].status, by["101"].lastSeen.gpexeTeamSessionId, by["101"].lastSeen.evidence, by["101"].values.distance], ["linked", "7323", "preview", 3000], label);
+    assert.deepEqual([by["104"].status, by["104"].lastSeen.evidence], ["unlinked", "preview"], label);
+  };
+
+  // The valid array: the raw-only athlete is listed.
+  let r = await api(`/teams/${team.teamId}/source-athletes`, { cookie: team.coach.cookie });
+  assert.deepEqual(r.body.athletes.map((a) => a.gpexeAthleteId), [...withLinksAndPreview, "207"]);
+
+  const shapes = [
+    ["object", `jsonb_set(raw_bundle, '{athleteSessions}', '{"athlete": 207, "teamsession": 7324}')`],
+    ["string", `jsonb_set(raw_bundle, '{athleteSessions}', '"207"')`],
+    ["number", `jsonb_set(raw_bundle, '{athleteSessions}', '207')`],
+    ["null", `jsonb_set(raw_bundle, '{athleteSessions}', 'null')`],
+    ["missing", `raw_bundle - 'athleteSessions'`],
+  ];
+  for (const [label, expr] of shapes) {
+    await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = ${expr} where id = $1`, [refused.id]);
+    const stored = (await admin.query(`select jsonb_typeof(raw_bundle->'athleteSessions') as t from training_load.gpexe_import_candidates where id = $1`, [refused.id])).rows[0].t;
+    assert.equal(stored, label === "missing" ? null : label === "null" ? "null" : label, label);
+    await expect(label);
+  }
+
+  // The array again: the raw-only athlete is back.
+  await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{athleteSessions}', $2::jsonb) where id = $1`, [refused.id, JSON.stringify(original)]);
+  r = await api(`/teams/${team.teamId}/source-athletes`, { cookie: team.coach.cookie });
+  assert.deepEqual(r.body.athletes.map((a) => a.gpexeAthleteId), [...withLinksAndPreview, "207"]);
+});

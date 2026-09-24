@@ -765,9 +765,14 @@ export async function listSourceAthletes(teamId) {
               c.raw_bundle->'teamSession'->>'category_name' as session_type, r.row->>'athlete' as gpexe_athlete_id, null::jsonb as entry,
               'raw_snapshot' as evidence
          from available c
-         cross join lateral jsonb_array_elements(c.raw_bundle->'athleteSessions') as r(row)
+         -- The guard sits inside the function's argument: a LATERAL function
+         -- runs before the WHERE clause, so a non-array value would raise
+         -- there instead of being filtered. Anything but an array is treated
+         -- as no rows.
+         cross join lateral jsonb_array_elements(
+           case when jsonb_typeof(c.raw_bundle->'athleteSessions') = 'array' then c.raw_bundle->'athleteSessions' else '[]'::jsonb end
+         ) as r(row)
         where c.status = 'blocked'
-          and jsonb_typeof(c.raw_bundle->'athleteSessions') = 'array'
           and r.row->>'teamsession' = c.gpexe_team_session_id
           and r.row->>'athlete' ~ '^[0-9]{1,12}$'
           and not exists (select 1 from sighting p where p.gpexe_athlete_id = r.row->>'athlete')
