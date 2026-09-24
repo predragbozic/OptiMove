@@ -2,7 +2,9 @@
 // approver grants and retention of the raw snapshots (phase F1), and
 // approving a candidate, which imports it (phase F2, approveCandidate).
 // Only approveCandidate writes measurements, events or activities; the
-// preview is a rolled-back dry run.
+// preview is a rolled-back dry run. Approving several clean candidates at
+// once (Imports phase 4a, approveCandidates) calls approveCandidate for each
+// one in turn and writes nothing itself.
 //
 // GPEXE_IMPORT_APPLY_ENABLED (owner decision 2026-09-18) blocks writing
 // results and activities, i.e. approving. It does not block checks: a check
@@ -12,6 +14,7 @@
 // docs/runbooks/gpexe-in-app-import.md); nothing here checks or claims a
 // backup.
 import { pool, query } from "./db.js";
+import { canApproveGpexeImport } from "./gpexeImportAccess.js";
 import { createGpexeClient, GpexeClientError } from "./gpexeClient.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId } from "./gpexeImportMapper.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
@@ -579,6 +582,9 @@ function candidateSummary(row) {
     sessionStartedAt: row.session_started_at,
     status: row.status,
     previewStatus: preview?.status ?? null,
+    // The hash of the stored preview this summary describes (Imports phase
+    // 4a): a batch approval sends it back, so it imports only what was seen.
+    previewHash: preview ? row.preview_hash : null,
     counts: preview?.counts ?? null,
     // The approval must carry acceptChanges = true when this is > 0.
     changesToImported: preview ? (preview.changesToImported?.length ?? 0) : null,
@@ -1236,4 +1242,214 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // A connection whose COMMIT went unanswered is not trusted again.
     if (!released) client.release(commitUncertain ? true : undefined);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Batch approval (Imports phase 4a)
+// ---------------------------------------------------------------------------
+
+// At most this many candidates per request. Each candidate is its own
+// approval (approveCandidate: its own transaction, locks, recomputed
+// preview and COMMIT), run one after another on the request, so the
+// request lasts about the sum of its approvals. An unconfirmed COMMIT can
+// add COMMIT_ANSWER_TIMEOUT_MS + UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS once, and
+// then the batch stops. Ten is the owner's ceiling without stronger
+// evidence (decision 2026-09-24), and keeps a request well inside a minute
+// at the approval times measured in the tests; see the runbook.
+export const BATCH_APPROVE_MAX = 10;
+
+const CANDIDATE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The body of POST /teams/:teamId/imports:
+//   { candidateIds: [...], previewHashes: { <candidateId>: <previewHash> } }
+// 1 to BATCH_APPROVE_MAX distinct candidate ids, and for each exactly one
+// preview hash - the one the approver saw (the list's previewHash), as the
+// single approval requires; nothing else. acceptChanges is refused on
+// purpose: a change to an already imported result is accepted only one
+// candidate at a time, after its review. A malformed id is a 400 here, not
+// the 404 a malformed path id gets: it is a field of the body, checked
+// before anything is read, and says nothing about any team's candidates.
+// Returns [{ candidateId, previewHash }] in the order asked.
+export function parseBatchApproveBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw refusal(400, "invalid_body", "The body must be { candidateIds: [...], previewHashes: { <candidateId>: <previewHash> } }.");
+  }
+  if (Object.hasOwn(body, "acceptChanges")) {
+    throw refusal(400, "accept_changes_not_allowed", "Changes to already imported results are accepted one candidate at a time, not in a batch.");
+  }
+  const unknown = Object.keys(body).filter((key) => key !== "candidateIds" && key !== "previewHashes");
+  if (unknown.length) throw refusal(400, "unknown_field", `Unknown field: ${unknown[0].slice(0, 40)}.`);
+  const ids = body.candidateIds;
+  if (!Array.isArray(ids) || !ids.length) throw refusal(400, "candidate_ids_required", "candidateIds must be a non-empty list of candidate ids.");
+  if (ids.length > BATCH_APPROVE_MAX) {
+    throw refusal(400, "too_many_candidates", `At most ${BATCH_APPROVE_MAX} candidates can be imported in one request.`);
+  }
+  if (!ids.every((id) => typeof id === "string" && CANDIDATE_ID.test(id))) {
+    throw refusal(400, "invalid_candidate_id", "Every candidate id must be a candidate's id.");
+  }
+  const normal = ids.map((id) => id.toLowerCase());
+  if (new Set(normal).size !== normal.length) throw refusal(400, "duplicate_candidate_id", "Each candidate may be listed once.");
+  const hashes = body.previewHashes;
+  if (!hashes || typeof hashes !== "object" || Array.isArray(hashes)) {
+    throw refusal(400, "preview_hashes_required", "previewHashes must give, for every candidate, the hash of the preview you saw.");
+  }
+  const byId = new Map();
+  for (const [key, value] of Object.entries(hashes)) {
+    const id = key.toLowerCase();
+    if (!normal.includes(id) || byId.has(id)) {
+      throw refusal(400, "preview_hashes_mismatch", "previewHashes must name exactly the candidates in candidateIds, once each.");
+    }
+    if (typeof value !== "string" || !HASH.test(value)) throw refusal(400, "invalid_preview_hash", "Every preview hash must be the hash of the preview you saw.");
+    byId.set(id, value);
+  }
+  if (byId.size !== normal.length) throw refusal(400, "preview_hashes_mismatch", "previewHashes must name exactly the candidates in candidateIds, once each.");
+  return { candidates: normal.map((candidateId) => ({ candidateId, previewHash: byId.get(candidateId) })) };
+}
+
+// A refusal that holds for every remaining candidate (the switch was turned
+// off, the approver lost the right) or a failure of the server stops the
+// batch; any other refusal concerns its candidate only.
+const BATCH_STOP_CODES = new Set(["import_switch_off", "not_an_approver", "internal_error"]);
+
+function batchResult(candidateId, outcome, code = null, extra = {}) {
+  return { candidateId, outcome, code, approvalId: null, ...extra };
+}
+
+// Only known, safe detail fields of a refusal; never a message.
+function refusedResult(candidateId, code, details = {}) {
+  const { reviewAgain: again, changesToImported, reasons, blockedCode } = details;
+  return batchResult(candidateId, "refused", code, {
+    ...(again ? { reviewAgain: again } : {}),
+    ...(changesToImported !== undefined ? { changesToImported } : {}),
+    ...(reasons ? { reasons } : {}),
+    ...(blockedCode !== undefined ? { blockedCode } : {}),
+  });
+}
+
+// Why a candidate is not a clean "Ready" one, from its stored row, or null
+// when it is: pending, snapshot available, its stored preview still the one
+// the approver saw (previewHash), a ready preview with no change to an
+// already imported result and no reason at all (every athlete it would
+// import is linked, in the team and needs no manual step). This is only the
+// entry test; approveCandidate checks everything again under its locks,
+// against the same hash.
+function batchIneligibility(teamId, candidateId, row, previewHash) {
+  if (row.status === "imported") return batchResult(candidateId, "already_imported", "already_imported", { approvalId: row.approval_id ?? null });
+  if (row.status === "superseded") return refusedResult(candidateId, "superseded_by_newer_data", { reviewAgain: reviewAgain(teamId, row.superseded_by_candidate_id) });
+  if (row.status === "blocked") return refusedResult(candidateId, "blocked", { blockedCode: candidateReasons(row.status, snapshotState(row).available ? row.preview : null).blockedCode });
+  if (row.status !== "pending") return refusedResult(candidateId, "not_ready");
+  if (!snapshotState(row).available) return refusedResult(candidateId, "snapshot_expired_check_again");
+  const preview = row.preview;
+  if (!preview || typeof row.preview_hash !== "string" || !HASH.test(row.preview_hash)) return refusedResult(candidateId, "not_ready");
+  // Recomputed since the approver saw it (e.g. a later check after a link
+  // changed): whatever it says now, it was not seen.
+  if (row.preview_hash !== previewHash) return refusedResult(candidateId, "preview_changed", { reviewAgain: reviewAgain(teamId, candidateId) });
+  if (preview.status === "no_changes") return refusedResult(candidateId, "nothing_to_import");
+  if (preview.status !== "ready") return refusedResult(candidateId, "not_ready", { reviewAgain: reviewAgain(teamId, candidateId) });
+  const changesToImported = preview.changesToImported?.length ?? 0;
+  if (changesToImported > 0) return refusedResult(candidateId, "changes_need_acceptance", { changesToImported, reviewAgain: reviewAgain(teamId, candidateId) });
+  const { reasons } = candidateReasons(row.status, preview);
+  if (reasons.length) return refusedResult(candidateId, "not_ready", { reasons, reviewAgain: reviewAgain(teamId, candidateId) });
+  return null;
+}
+
+async function approvalIdOf(teamId, candidateId) {
+  try {
+    const row = (await query(`select id from training_load.gpexe_import_approvals where candidate_id = $1 and owner_team_id = $2`, [candidateId, teamId])).rows[0];
+    return row?.id ?? null;
+  } catch (error) {
+    console.error(`[gpexe] reading the approval of imported candidate ${candidateId} failed: ${error?.message}`);
+    return null;
+  }
+}
+
+// One candidate of a batch: the entry test on its stored row, then the
+// single approval itself (approveCandidate), bound to the preview hash the
+// approver saw, never accepting changes. Never throws: every outcome is a
+// result.
+async function approveOneOfBatch(teamId, { candidateId, previewHash }, userId) {
+  let early;
+  try {
+    const row = (await query(
+      `select c.status, c.preview, c.preview_hash, c.raw_expires_at, c.raw_purged_at, c.superseded_by_candidate_id,
+              (select a.id from training_load.gpexe_import_approvals a where a.candidate_id = c.id) as approval_id
+         from training_load.gpexe_import_candidates c where c.id = $1 and c.owner_team_id = $2`,
+      [candidateId, teamId],
+    )).rows[0];
+    early = row ? batchIneligibility(teamId, candidateId, row, previewHash) : refusedResult(candidateId, "notFound");
+  } catch (error) {
+    console.error(`[gpexe] batch: reading candidate ${candidateId} failed: ${error?.code ?? ""} ${error?.message}`);
+    return refusedResult(candidateId, "internal_error");
+  }
+  if (early) return early;
+  try {
+    const done = await approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges: false });
+    return batchResult(candidateId, "imported", null, { approvalId: done.approval.id, commitConfirmation: done.commitConfirmation });
+  } catch (error) {
+    if (!(error instanceof GpexeImportServiceError)) {
+      // approveCandidate maps everything inside its transaction; this is what
+      // happens before it (e.g. no database connection): nothing was sent.
+      console.error(`[gpexe] batch: approving candidate ${candidateId} failed: ${error?.code ?? ""} ${error?.message}`);
+      return refusedResult(candidateId, "internal_error");
+    }
+    if (error.code === "already_imported") return batchResult(candidateId, "already_imported", "already_imported", { approvalId: await approvalIdOf(teamId, candidateId) });
+    if (error.code === "import_outcome_unknown") {
+      const verify = error.details?.verify ?? null;
+      return batchResult(candidateId, "import_outcome_unknown", "import_outcome_unknown", { approvalId: verify?.approvalId ?? null, verify });
+    }
+    return refusedResult(candidateId, error.code, error.details || {});
+  }
+}
+
+function batchSummary(results) {
+  const count = (outcome) => results.filter((r) => r.outcome === outcome).length;
+  return {
+    requested: results.length,
+    imported: count("imported"),
+    alreadyImported: count("already_imported"),
+    refused: count("refused"),
+    unknown: count("import_outcome_unknown"),
+    notAttempted: count("not_attempted"),
+  };
+}
+
+// Approves and imports clean "Ready" candidates of one team (each with the
+// preview hash the approver saw), in the order given, one after another - each through approveCandidate, in its own
+// transaction; the batch is NOT all-or-nothing. A refusal of one candidate
+// does not stop the next; an unknown outcome, a lost right, the switch
+// turned off or a server failure stops the batch, and the rest are
+// not_attempted. Repeating the same request is safe: an imported candidate
+// answers already_imported and nothing is written twice.
+//
+// Before any candidate: the import switch (the single approval's 409), the
+// caller's approver right (its 403), and every id must be a candidate of
+// this team (else the same 404 as a missing one, nothing attempted).
+export async function approveCandidates(teamId, candidates, { userId }) {
+  const candidateIds = candidates.map((c) => c.candidateId);
+  if (!applyEnabled()) throw refusal(409, "import_switch_off", applySwitchInfo().message);
+  try {
+    const right = await canApproveGpexeImport({ query }, userId, teamId);
+    if (!right.canApprove) throw refusal(403, "not_an_approver", "You may not approve GPEXE imports for this team.");
+    const owned = (await query(
+      `select id from training_load.gpexe_import_candidates where owner_team_id = $2 and id = any($1::uuid[])`,
+      [candidateIds, teamId],
+    )).rows;
+    if (owned.length !== candidateIds.length) throw refusal(404, "notFound", "Not found.");
+  } catch (error) {
+    if (error instanceof GpexeImportServiceError) throw error;
+    console.error(`[gpexe] batch approval of team ${teamId} could not start: ${error?.code ?? ""} ${error?.message}`);
+    throw refusal(500, "internal_error", "The batch could not be started; nothing was imported.");
+  }
+  const results = [];
+  let stopped = false;
+  for (const candidate of candidates) {
+    if (stopped) {
+      results.push(batchResult(candidate.candidateId, "not_attempted"));
+      continue;
+    }
+    const result = await approveOneOfBatch(teamId, candidate, userId);
+    results.push(result);
+    if (result.outcome === "import_outcome_unknown" || (result.outcome === "refused" && BATCH_STOP_CODES.has(result.code))) stopped = true;
+  }
+  return { results, summary: batchSummary(results) };
 }

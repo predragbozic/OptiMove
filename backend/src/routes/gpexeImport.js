@@ -155,6 +155,24 @@ router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req,
   res.json({ ...result, candidate, ...(candidateReadError ? { candidateReadError } : {}) });
 }));
 
+// Approve several clean "Ready" candidates of the team in one request
+// (Imports phase 4a). Body: { candidateIds: [...], previewHashes: { id:
+// hash } }, 1 to service.BATCH_APPROVE_MAX distinct ids, each with the
+// preview hash the approver saw (the list's previewHash); acceptChanges is
+// refused. Each candidate is approved on its own, in order, through the
+// single approval (its own transaction, locks, recomputed preview and
+// COMMIT check); the batch is not all-or-nothing. 200 with one result per candidate
+// (imported, already_imported, refused, import_outcome_unknown,
+// not_attempted) and a summary; a bad body 400, the switch off 409, a
+// caller who may not approve 403, a candidate that is not this team's 404 -
+// each with nothing attempted.
+router.post("/teams/:teamId/imports", handle(async (req, res) => {
+  const access = await teamAccess(req, res);
+  if (!access) return;
+  const { candidates } = service.parseBatchApproveBody(req.body);
+  res.json(await service.approveCandidates(access.teamId, candidates, { userId: req.user.id }));
+}));
+
 // One approval of the team, by id. With the candidate, this is how an
 // approval whose outcome was uncertain (503 import_outcome_unknown) is
 // checked. Another team's approval is the same 404 as a missing one.
