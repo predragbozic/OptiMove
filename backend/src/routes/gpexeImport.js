@@ -176,7 +176,7 @@ router.get("/teams/:teamId/source-athletes", handle(async (req, res) => {
   res.json({
     athletes: await service.listSourceAthletes(access.teamId),
     units: service.SOURCE_ATHLETE_UNITS,
-    lastSeenRule: "newest session date among the team's available snapshots (not expired, not purged); same date: current version before a replaced one, then the later sighting",
+    lastSeenRule: "newest session date among the team's available snapshots (not expired, not purged); same date: current version before a replaced one, then the later sighting; a refused session's raw snapshot counts only for an athlete no available preview names (evidence raw_snapshot)",
   });
 }));
 

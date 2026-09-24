@@ -696,46 +696,91 @@ function mapTriggerError(error, fallbackCode) {
 // an expired snapshot is gone for the app before the purge removes it); the
 // tie-break among rows of the same date is a current version before a
 // superseded one, then the later last_seen_at, then the larger candidate id.
-// A session the mapper refused (unsupported category, invalid statistics,
-// inconsistent data) has a preview without athletes, so it yields no
-// sighting; whether such sessions should count is an owner decision.
 //
-// Helper values for telling athletes apart come from that session's stored
-// preview (the athlete's whole-session result), and the number of drills
-// from the stored raw snapshot's own field: a value the source did not give
-// is null, never a zero. GPEXE names are never stored, so none is returned;
-// the OptiMove name comes only from the confirmed link.
+// A session the mapper refused (unsupported category, invalid statistics,
+// inconsistent data) is stored blocked with a preview that names no athlete.
+// Its raw snapshot's athleteSessions[].athlete is used only as a fallback
+// (owner decision (b), 2026-09-24): it adds a GPEXE athlete who appears in no
+// available preview at all, with lastSeen from the newest available refused
+// session (candidateStatus "blocked", evidence "raw_snapshot") and no helper
+// values. It never replaces a preview sighting or its values, and it obeys
+// the same availability, team and tie-break rules. Only a valid GPEXE
+// athlete id is accepted from the raw row.
+//
+// Helper values for telling athletes apart are the athlete's own
+// whole-session result of that sighting (from the stored preview); the number
+// of drills is a property of the session (lastSeen.sessionDrillsCount, from
+// the raw snapshot's own field). A value the source did not give is null,
+// never a zero. GPEXE names are never stored, so none is returned; the
+// OptiMove name comes only from the confirmed link.
 export const SOURCE_ATHLETE_UNITS = Object.freeze({ duration: "min", distance: "m", maxSpeed: "km/h" });
 const SOURCE_ATHLETE_VALUE_KEYS = { duration: "gpexe_time_min", distance: "gpexe_total_distance", maxSpeed: "gpexe_max_speed" };
 
-function sourceAthleteValues(entry, rawDrillsCount) {
+const NO_VALUES = Object.freeze({ duration: null, distance: null, maxSpeed: null });
+
+// The athlete's whole-session values of one preview entry; null entry (a
+// raw-only sighting, or no sighting) gives nulls.
+function sourceAthleteValues(entry) {
   const full = Array.isArray(entry?.results) ? entry.results.find((r) => r.level === "full") : null;
   const byKey = new Map((full?.values || []).map((v) => [v.metricKey, v.value]));
   const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-  // The raw field arrives as text: only a plain non-negative integer counts
-  // (Number("") would be 0, an invented number).
-  const drills = typeof rawDrillsCount === "string" && /^\d{1,9}$/.test(rawDrillsCount.trim()) ? Number(rawDrillsCount.trim()) : null;
   return {
     duration: num(byKey.get(SOURCE_ATHLETE_VALUE_KEYS.duration)),
     distance: num(byKey.get(SOURCE_ATHLETE_VALUE_KEYS.distance)),
     maxSpeed: num(byKey.get(SOURCE_ATHLETE_VALUE_KEYS.maxSpeed)),
-    drillsCount: drills,
   };
+}
+
+// The session's drill count from the raw snapshot's own field, which
+// arrives as text: only a plain non-negative integer counts (Number("")
+// would be 0, an invented number).
+function sessionDrillsCount(raw) {
+  return typeof raw === "string" && /^\d{1,9}$/.test(raw.trim()) ? Number(raw.trim()) : null;
 }
 
 export async function listSourceAthletes(teamId) {
   const rows = (await query(
-    `with sighting as (
+    `with available as (
        select c.id as candidate_id, c.gpexe_team_session_id, c.session_started_at, c.session_label, c.status, c.last_seen_at,
-              c.preview->'session'->>'categoryName' as session_type, a.entry
+              c.preview, c.raw_bundle
          from training_load.gpexe_import_candidates c
-         cross join lateral jsonb_array_elements(c.preview->'athletes') as a(entry)
         where c.owner_team_id = $1 and c.raw_purged_at is null and c.raw_expires_at > now() and c.preview is not null
      ),
+     sighting as (
+       select c.candidate_id, c.gpexe_team_session_id, c.session_started_at, c.session_label, c.status, c.last_seen_at,
+              c.preview->'session'->>'categoryName' as session_type, a.entry->>'gpexeAthleteId' as gpexe_athlete_id, a.entry,
+              'preview' as evidence
+         from available c
+         cross join lateral jsonb_array_elements(c.preview->'athletes') as a(entry)
+     ),
      latest as (
-       select distinct on (entry->>'gpexeAthleteId') entry->>'gpexeAthleteId' as gpexe_athlete_id, sighting.*
+       select distinct on (gpexe_athlete_id) *
          from sighting
-        order by entry->>'gpexeAthleteId', session_started_at desc nulls last, (status <> 'superseded') desc, last_seen_at desc, candidate_id desc
+        order by gpexe_athlete_id, session_started_at desc nulls last, (status <> 'superseded') desc, last_seen_at desc, candidate_id desc
+     ),
+     -- Fallback: athletes named only by the raw rows of a refused (blocked)
+     -- session, never seen in any available preview.
+     raw_sighting as (
+       select c.candidate_id, c.gpexe_team_session_id, c.session_started_at, c.session_label, c.status, c.last_seen_at,
+              c.raw_bundle->'teamSession'->>'category_name' as session_type, r.row->>'athlete' as gpexe_athlete_id, null::jsonb as entry,
+              'raw_snapshot' as evidence
+         from available c
+         cross join lateral jsonb_array_elements(c.raw_bundle->'athleteSessions') as r(row)
+        where c.status = 'blocked'
+          and jsonb_typeof(c.raw_bundle->'athleteSessions') = 'array'
+          and r.row->>'teamsession' = c.gpexe_team_session_id
+          and r.row->>'athlete' ~ '^[0-9]{1,12}$'
+          and not exists (select 1 from sighting p where p.gpexe_athlete_id = r.row->>'athlete')
+     ),
+     latest_raw as (
+       select distinct on (gpexe_athlete_id) *
+         from raw_sighting
+        order by gpexe_athlete_id, session_started_at desc nulls last, last_seen_at desc, candidate_id desc
+     ),
+     seen as (
+       select * from latest
+       union all
+       select * from latest_raw
      ),
      link as (
        select l.id as link_id, l.gpexe_athlete_id, l.athlete_id, l.linked_at,
@@ -748,11 +793,11 @@ export async function listSourceAthletes(teamId) {
      )
      select coalesce(s.gpexe_athlete_id, k.gpexe_athlete_id) as gpexe_athlete_id,
             s.candidate_id, s.gpexe_team_session_id, s.session_started_at, s.session_label, s.session_type,
-            s.status as candidate_status, s.last_seen_at, s.entry,
+            s.status as candidate_status, s.last_seen_at, s.entry, s.evidence,
             (select c2.raw_bundle->'teamSession'->>'drills_count' from training_load.gpexe_import_candidates c2
               where c2.id = s.candidate_id and c2.owner_team_id = $1) as raw_drills_count,
             k.link_id, k.athlete_id, k.linked_at, k.athlete_name, k.athlete_active
-       from latest s
+       from seen s
        full outer join link k on k.gpexe_athlete_id = s.gpexe_athlete_id
       order by length(coalesce(s.gpexe_athlete_id, k.gpexe_athlete_id)), coalesce(s.gpexe_athlete_id, k.gpexe_athlete_id)`,
     [teamId],
@@ -764,8 +809,9 @@ export async function listSourceAthletes(teamId) {
     lastSeen: r.candidate_id ? {
       candidateId: r.candidate_id, gpexeTeamSessionId: r.gpexe_team_session_id, sessionStartedAt: r.session_started_at,
       sessionLabel: r.session_label, sessionType: r.session_type, candidateStatus: r.candidate_status, lastSeenAt: r.last_seen_at,
+      evidence: r.evidence, sessionDrillsCount: sessionDrillsCount(r.raw_drills_count),
     } : null,
-    values: r.candidate_id ? sourceAthleteValues(r.entry, r.raw_drills_count) : { duration: null, distance: null, maxSpeed: null, drillsCount: null },
+    values: r.candidate_id && r.entry ? sourceAthleteValues(r.entry) : { ...NO_VALUES },
   }));
 }
 

@@ -144,17 +144,22 @@ athletes once each — every athlete seen in a snapshot that is still available 
 an active link — with `status` (`linked`, `unlinked`, or `linked_inactive` when the
 linked OptiMove athlete is no longer an active member of the team), the link (the
 OptiMove name comes only from it; GPEXE names are never stored, so none is returned),
-`lastSeen` and helper values for telling athletes apart (`duration` min, `distance` m,
-`maxSpeed` km/h from the whole-session result of that sighting, `drillsCount` from the
-raw snapshot's own field; a value the source did not give is `null`, never a zero).
-"Last seen" is the newest session by session date among the team's candidates whose
-snapshot is still available — not purged and not expired, the same rule the candidate
-routes apply (`snapshotState`); same date: a current version before a replaced one, then
-the later `last_seen_at`, then the larger candidate id. A session the mapper refused
-(unsupported category, invalid statistics, inconsistent data) is stored with a preview
-that names no athlete, so it yields no sighting: an athlete seen only in such sessions
-is listed only if linked (owner decision pending on whether the raw snapshot should
-count). Read-only, no GPEXE call, one SQL statement however many candidates or athletes
+`lastSeen` (with `evidence`, `candidateStatus` and the session's own
+`sessionDrillsCount` from the raw snapshot's field) and the athlete's own helper values
+for telling athletes apart (`values`: `duration` min, `distance` m, `maxSpeed` km/h from
+the whole-session result of that sighting; a value the source did not give is `null`,
+never a zero). "Last seen" is the newest session by session date among the team's
+candidates whose snapshot is still available — not purged and not expired, the same rule
+the candidate routes apply (`snapshotState`); same date: a current version before a
+replaced one, then the later `last_seen_at`, then the larger candidate id. A session the
+mapper refused (unsupported category, invalid statistics, inconsistent data) is stored
+blocked with a preview that names no athlete; its raw snapshot's `athleteSessions[]`
+is used only as a fallback (owner decision (b), 2026-09-24): it adds a GPEXE athlete no
+available preview names, with `lastSeen` from the newest available refused session
+(`candidateStatus: "blocked"`, `evidence: "raw_snapshot"`) and all values `null`; it
+never replaces a preview sighting (`evidence: "preview"`) or its values, obeys the same
+availability, team and tie-break rules, and takes only a valid GPEXE athlete id. Read-only,
+no GPEXE call, one SQL statement however many candidates or athletes
 (`listSourceAthletes` in `backend/src/gpexeImportService.js`); the team filter applies
 to candidates, links and memberships alike.
 

@@ -42,17 +42,17 @@ active link — with `status` (`linked` / `unlinked` / `linked_inactive`), the l
 OptiMove name only from it; no GPEXE name, it is never stored), a deterministic
 `lastSeen` (newest session date among the candidates whose snapshot is still available —
 not purged, not expired, as `snapshotState` decides everywhere else; same date: current
-before replaced, then the later sighting, then the larger id) and helper
+before replaced, then the later sighting, then the larger id; `evidence` `preview` or
+`raw_snapshot`, and the session's own `sessionDrillsCount`) and the athlete's helper
 values from that sighting (`duration`, `distance`, `maxSpeed` from the whole-session
-result, `drillsCount` from the raw snapshot's own field; missing = `null`, never a
-zero). Same readers and 404 as the candidates; no GPEXE call, no write, no link, no
+result; missing = `null`, never a zero). A session the mapper refused stores a preview
+without athletes; its raw snapshot is a fallback only (owner decision (b), 2026-09-24):
+it adds an athlete no available preview names, as `unlinked` with `candidateStatus:
+"blocked"`, `evidence: "raw_snapshot"` and null values, never replacing a preview
+sighting. Same readers and 404 as the candidates; no GPEXE call, no write, no link, no
 migration; one SQL statement whatever the number of candidates or athletes, with a
 contract test on the query count and security tests for the team's coach, another
-team's coach and a user without access. **Open owner decision** (code-reviewer MEDIUM):
-a session the mapper refused (unsupported category, invalid statistics, inconsistent
-data) has a preview without athletes, so athletes seen only in such sessions are listed
-only if linked; counting their raw snapshot instead needs a decision (see Separate
-tasks). Phases 3b–6 (team mapping screen, batch import,
+team's coach and a user without access. Phases 3b–6 (team mapping screen, batch import,
 completion model and roster, session context, add-later-values) wait for the owner's go
 after each merge.
 
@@ -529,16 +529,12 @@ pre-existing; pass/fail counts don't belong in this file
     - **The review shows participation and the GPS measurement separately.** A missing
       value is not a zero. "GPS was not worn" is shown only when the data confirms it or
       a coach enters it.
-- **Source athletes seen only in mapper-refused sessions** (code-reviewer on Phase 3a,
-  2026-09-23, decision pending): `GET …/source-athletes` derives sightings from the
-  stored preview's athletes; a session the mapper refused (`blockedByMapping`: unsupported
-  category, invalid statistics, inconsistent data) stores a preview with no athletes, so a
-  GPEXE athlete seen only there is absent unless linked. Options: (a) keep, documented in
-  the runbook (current); (b) union the raw snapshot's `athleteSessions[].athlete` for such
-  rows (values null, `candidateStatus: blocked`), same team filter. A leading-zero GPEXE
-  athlete id (`"0104"`) is accepted by the link route (`^[0-9]{1,12}$`, pre-existing)
-  and would list as a second athlete next to `"104"`; tighten to `^(0|[1-9][0-9]{0,11})$`
-  in a later small change.
+- **Two small GPEXE follow-ups before or with Phase 3b** (owner, 2026-09-24): a
+  leading-zero GPEXE athlete id (`"0104"`) is accepted by the link route
+  (`^[0-9]{1,12}$`, pre-existing) and would list as a second source athlete next to
+  `"104"` — tighten to `^(0|[1-9][0-9]{0,11})$`; and `resolveGpexeTeamAccess` reaches an
+  archived team through its club workspace (no `is_active` check on the team; shared by
+  every GPEXE route, pre-existing).
 - **Small Imports follow-ups** (found in PR #115, not scheduled): a hand-typed date in
   the source card's *Choose dates* is lost on a repaint (pre-existing); the review modal's
   badges still use the old vocabulary ("Waiting for approval"), to be aligned with the
