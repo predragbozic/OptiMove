@@ -1837,3 +1837,373 @@ test("candidates list: blocked code and reasons come with the list, and the list
     assert.ok(Array.isArray(c.reasons));
   }
 });
+
+// ---------------------------------------------------------------------------
+// Imports phase 3a: the team's source athletes, read-only, from stored data.
+// ---------------------------------------------------------------------------
+
+async function sourceAthletes(team, cookie = team.coach.cookie) {
+  const r = await api(`/teams/${team.teamId}/source-athletes`, { cookie });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return r.body;
+}
+
+test("source athletes: once each, with status, the link's name only, a deterministic last sighting and helper values; a value the source did not give is null", async () => {
+  const team = await setupTeam();
+  // A GPEXE athlete linked before any check ever saw them.
+  assert.equal((await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: team.coach.cookie, body: { gpexeAthleteId: "199", athleteId: team.ids.d } })).status, 201);
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7301 })] }));
+  await checkNow(team);
+  const body = await sourceAthletes(team);
+  assert.deepEqual(body.units, { duration: "min", distance: "m", maxSpeed: "km/h" });
+  assert.match(body.lastSeenRule, /newest session date/);
+  assert.deepEqual(body.athletes.map((a) => a.gpexeAthleteId), ["101", "102", "103", "104", "105", "199"], "once each, in id order");
+
+  const by = Object.fromEntries(body.athletes.map((a) => [a.gpexeAthleteId, a]));
+  const [candidate] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
+  const detail = (await api(`/teams/${team.teamId}/candidates/${candidate.id}`, { cookie: team.coach.cookie })).body.candidate;
+  const stored = Object.fromEntries(detail.preview.athletes.map((a) => [a.gpexeAthleteId, a]));
+  const storedValue = (gpexeId, key) => stored[gpexeId].results.find((r) => r.level === "full").values.find((v) => v.metricKey === key).value;
+
+  // Linked and measured: the link, the OptiMove name from it, the session, the values.
+  assert.equal(by["101"].status, "linked");
+  assert.deepEqual([by["101"].link.athleteId, by["101"].link.athleteName], [team.ids.a, "A101"]);
+  assert.deepEqual([by["101"].lastSeen.candidateId, by["101"].lastSeen.gpexeTeamSessionId, by["101"].lastSeen.candidateStatus], [candidate.id, "7301", "pending"]);
+  assert.equal(by["101"].lastSeen.sessionStartedAt, candidate.sessionStartedAt);
+  assert.deepEqual(by["101"].values, {
+    duration: storedValue("101", "gpexe_time_min"), distance: storedValue("101", "gpexe_total_distance"), maxSpeed: storedValue("101", "gpexe_max_speed"),
+  });
+  assert.deepEqual([by["101"].lastSeen.evidence, by["101"].lastSeen.sessionDrillsCount], ["preview", 2], "the drill count is the session's, next to the sighting");
+  assert.equal(by["101"].values.distance, 3000);
+  assert.equal(by["101"].values.duration, 40);
+
+  // Recorded but not linked: no link, no name anywhere, values still there.
+  assert.equal(by["104"].status, "unlinked");
+  assert.equal(by["104"].link, null);
+  assert.equal(by["104"].values.distance, storedValue("104", "gpexe_total_distance"));
+  assert.equal(by["104"].lastSeen.candidateId, candidate.id);
+
+  // Two tracks / invalid statistics: linked, seen, but the source gave no
+  // whole-session value the preview could keep - null, never 0. The drill
+  // count is the session's own field.
+  for (const id of ["103", "105"]) {
+    assert.equal(by[id].status, "linked", id);
+    assert.equal(by[id].lastSeen.candidateId, candidate.id, id);
+    assert.deepEqual(by[id].values, { duration: null, distance: null, maxSpeed: null }, id);
+    assert.equal(by[id].lastSeen.sessionDrillsCount, 2, id);
+  }
+
+  // Linked, never seen: the link, nothing else.
+  assert.equal(by["199"].status, "linked");
+  assert.equal(by["199"].link.athleteId, team.ids.d);
+  assert.equal(by["199"].lastSeen, null);
+  assert.deepEqual(by["199"].values, { duration: null, distance: null, maxSpeed: null });
+
+  // No GPEXE name field exists, and no OptiMove name outside a link.
+  const text = JSON.stringify(body.athletes);
+  assert.ok(!/"name"|gpexeName|athlete_name|"E"|"D"/.test(text.replace(/"athleteName":"[^"]*"/g, "")), "names only inside link.athleteName");
+  for (const a of body.athletes) assert.deepEqual(Object.keys(a).sort(), ["gpexeAthleteId", "lastSeen", "link", "status", "values"]);
+});
+
+test("source athletes: the last sighting is the newest session date; on the same date a current version beats a replaced one", async () => {
+  const team = await setupTeam();
+  const older = makeBundle({ sessionId: 7302, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
+  const newer = makeBundle({ sessionId: 7303, gpexeTeamId: 77, start: "2026-09-12T18:00:00", athletes: sessionAthletes() });
+  // The fake lists the newer session first: the order GPEXE answers in must not matter.
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [newer, older] }));
+  await checkNow(team);
+  let by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.equal(by["101"].lastSeen.gpexeTeamSessionId, "7303");
+  assert.equal(by["104"].lastSeen.gpexeTeamSessionId, "7303");
+
+  // A later check sees only the older session again: the newer date still wins.
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [older] }));
+  await checkNow(team);
+  by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.equal(by["101"].lastSeen.gpexeTeamSessionId, "7303");
+
+  // The newer session changes content: its old candidate is replaced, and
+  // the sighting is the current version (same date, same session).
+  const changed = makeBundle({ sessionId: 7303, gpexeTeamId: 77, start: "2026-09-12T18:00:00", athletes: sessionAthletes({ distance101: 3333 }) });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [changed] }));
+  await checkNow(team);
+  const all = (await api(`/teams/${team.teamId}/candidates?includeSuperseded=true`, { cookie: team.coach.cookie })).body.candidates;
+  const current = all.find((c) => c.gpexeTeamSessionId === "7303" && c.status !== "superseded");
+  const replaced = all.find((c) => c.gpexeTeamSessionId === "7303" && c.status === "superseded");
+  assert.ok(current && replaced);
+  by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.deepEqual([by["101"].lastSeen.candidateId, by["101"].lastSeen.candidateStatus, by["101"].values.distance], [current.id, "pending", 3333]);
+  assert.equal((await sourceAthletes(team)).athletes.filter((a) => a.gpexeAthleteId === "101").length, 1, "still once");
+
+  // A purged snapshot is no sighting any more: the next available one is.
+  await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = null, preview = null, raw_purged_at = now() where id = $1`, [current.id]);
+  await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = null, preview = null, raw_purged_at = now() where id = $1`, [replaced.id]);
+  by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.equal(by["101"].lastSeen.gpexeTeamSessionId, "7302");
+});
+
+test("source athletes: an expired but not yet purged snapshot is no sighting (the app's retention rule), and a raw drill count that is not a plain integer is null", async () => {
+  const team = await setupTeam();
+  const older = makeBundle({ sessionId: 7313, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
+  const newer = makeBundle({ sessionId: 7314, gpexeTeamId: 77, start: "2026-09-12T18:00:00", athletes: sessionAthletes() });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [older, newer] }));
+  await checkNow(team);
+  let by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.equal(by["101"].lastSeen.gpexeTeamSessionId, "7314");
+
+  // The newer snapshot's 30 days are over, the purge has not run: for the
+  // app it is gone (GET candidates/:id shows no preview), so it is no
+  // sighting here either.
+  await admin.query(`update training_load.gpexe_import_candidates set raw_expires_at = now() - interval '1 minute' where owner_team_id = $1 and gpexe_team_session_id = '7314'`, [team.teamId]);
+  const expired = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates.find((c) => c.gpexeTeamSessionId === "7314");
+  assert.equal(expired.snapshot.available, false);
+  by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.equal(by["101"].lastSeen.gpexeTeamSessionId, "7313");
+
+  // A degenerate raw drills_count (empty text) is null, not 0.
+  await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{teamSession,drills_count}', '""') where owner_team_id = $1 and gpexe_team_session_id = '7313'`, [team.teamId]);
+  by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.equal(by["101"].lastSeen.sessionDrillsCount, null);
+  assert.equal(by["101"].values.distance, 3000, "the athlete's values are untouched");
+
+  // Both expired: seen nowhere, still linked.
+  await admin.query(`update training_load.gpexe_import_candidates set raw_expires_at = now() - interval '1 minute' where owner_team_id = $1`, [team.teamId]);
+  by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.deepEqual([by["101"].status, by["101"].lastSeen, by["101"].values], ["linked", null, { duration: null, distance: null, maxSpeed: null }]);
+  assert.equal(by["104"], undefined, "an unlinked athlete with no available sighting is not listed");
+});
+
+test("source athletes: a link whose OptiMove athlete is no longer an active member of the team is linked_inactive, and the link is still shown", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7304 })] }));
+  await checkNow(team);
+  await admin.query(`update public.athlete_memberships set status = 'inactive' where athlete_id = $1 and team_id = $2`, [team.ids.a, team.teamId]);
+  const by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.equal(by["101"].status, "linked_inactive");
+  assert.deepEqual([by["101"].link.athleteId, by["101"].link.athleteName], [team.ids.a, "A101"]);
+  assert.equal(by["102"].status, "linked");
+  // Unlinking ends it: the athlete is simply unlinked.
+  const link = (await api(`/teams/${team.teamId}/athlete-links`, { cookie: team.coach.cookie })).body.links.find((l) => l.gpexeAthleteId === "101");
+  await api(`/teams/${team.teamId}/athlete-links/${link.id}/unlink`, { method: "POST", cookie: team.coach.cookie });
+  const after = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
+  assert.deepEqual([after["101"].status, after["101"].link], ["unlinked", null]);
+});
+
+test("source athletes: the team's coach reads them; another team's coach, a user with no role, an admin in the wrong club workspace and a malformed id get the same 404; no login gets 401; nothing of another team leaks", async () => {
+  const team = await setupTeam();
+  const other = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7305 })] }));
+  await checkNow(team);
+  // The other team's GPEXE athlete 201 exists only there.
+  const [, a102] = standardAthletes();
+  const otherBundle = makeBundle({ sessionId: 7306, gpexeTeamId: 78, athletes: [{ ...structuredClone(a102), id: 201, tracks: [9201] }] });
+  // ... and a refused session (a match) whose only athlete, 205, is raw-only.
+  const otherMatch = makeBundle({ sessionId: 7316, gpexeTeamId: 78, category: "OFFICIAL MATCH", athletes: [{ ...structuredClone(a102), id: 205, tracks: [9205] }] });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [otherBundle, otherMatch] }));
+  await checkNow(other);
+
+  const mine = await sourceAthletes(team);
+  const theirs = await sourceAthletes(other);
+  assert.deepEqual(mine.athletes.map((a) => a.gpexeAthleteId), ["101", "102", "103", "104", "105"]);
+  assert.deepEqual(theirs.athletes.map((a) => a.gpexeAthleteId), ["101", "102", "103", "105", "201", "205"], "the other team's links, its own sighting and its own raw-only athlete");
+  assert.equal(theirs.athletes.find((a) => a.gpexeAthleteId === "205").lastSeen.evidence, "raw_snapshot");
+  assert.equal(theirs.athletes.find((a) => a.gpexeAthleteId === "101").lastSeen, null, "team A's sighting of 101 is not team B's");
+  // The identifiers the answer really carries are disjoint between the two
+  // teams, and each answer lists every athlete once (a lost team filter on
+  // the links would double the rows both teams linked).
+  const ids = (body, pick) => new Set(body.athletes.map(pick).filter(Boolean));
+  for (const pick of [(a) => a.link?.id, (a) => a.link?.athleteId, (a) => a.lastSeen?.candidateId]) {
+    const a = ids(mine, pick);
+    const b = ids(theirs, pick);
+    assert.ok(a.size > 0 && b.size > 0);
+    assert.ok([...a].every((id) => !b.has(id)), "disjoint");
+  }
+  assert.equal(mine.athletes.length, new Set(mine.athletes.map((a) => a.gpexeAthleteId)).size);
+  assert.equal(theirs.athletes.length, new Set(theirs.athletes.map((a) => a.gpexeAthleteId)).size);
+  for (const a of theirs.athletes) if (a.link) assert.ok(other.athleteIds.includes(a.link.athleteId), "only the other team's own athletes");
+  for (const a of mine.athletes) if (a.link) assert.ok(team.athleteIds.includes(a.link.athleteId));
+
+  // Another team's coach: the same body as a team that does not exist.
+  const outsider = await coachOf(other.teamId, "other coach");
+  const foreign = await api(`/teams/${team.teamId}/source-athletes`, { cookie: outsider.cookie });
+  assert.deepEqual([foreign.status, foreign.body], [404, { error: "notFound" }]);
+  // A signed-in user with no role at all.
+  const nobody = await makeUser("nobody");
+  await setWorkspace(nobody, "private_coach", null);
+  assert.deepEqual((await api(`/teams/${team.teamId}/source-athletes`, { cookie: await cookieFor(nobody) })).status, 404);
+  // The other club's admin, in that club's workspace: not a workspace that contains the team.
+  const otherAdmin = await makeUser("other club admin");
+  await admin.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [otherAdmin, other.clubId]);
+  await setWorkspace(otherAdmin, "club", other.clubId);
+  const otherAdminCookie = await cookieFor(otherAdmin);
+  assert.equal((await api(`/teams/${team.teamId}/source-athletes`, { cookie: otherAdminCookie })).status, 404);
+  assert.equal((await api(`/teams/${other.teamId}/source-athletes`, { cookie: otherAdminCookie })).status, 200, "the same admin reads their own club's team");
+  // An admin of BOTH clubs, active in the other club's workspace: may manage
+  // the team, but is not in a workspace that contains it - 404, as for the
+  // candidates; in the team's own club workspace the same admin reads it.
+  await admin.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [otherAdmin, team.clubId]);
+  assert.equal((await api(`/teams/${team.teamId}/source-athletes`, { cookie: otherAdminCookie })).status, 404, "not in a workspace that contains the team");
+  await setWorkspace(otherAdmin, "club", team.clubId);
+  assert.equal((await api(`/teams/${team.teamId}/source-athletes`, { cookie: otherAdminCookie })).status, 200);
+  assert.equal((await api(`/teams/${team.teamId}/source-athletes`, { cookie: team.padmin.cookie })).status, 200, "a platform admin in the platform workspace reads it");
+  for (const path of [`/teams/not-a-uuid/source-athletes`, `/teams/00000000-0000-4000-8000-000000000000/source-athletes`]) {
+    const r = await api(path, { cookie: team.coach.cookie });
+    assert.deepEqual([r.status, r.body.error], [404, "notFound"], path);
+  }
+  assert.equal((await api(`/teams/${team.teamId}/source-athletes`)).status, 401);
+});
+
+test("source athletes: the number of SQL statements does not grow with the number of candidates or source athletes", async () => {
+  const team = await setupTeam();
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7307 })] }));
+  await checkNow(team);
+  let sql = [];
+  const originalQuery = appPool.query;
+  appPool.query = function captured(text, ...rest) {
+    if (typeof text === "string" && /source_athletes|jsonb_array_elements\(c\.preview/.test(text)) sql.push(text);
+    return originalQuery.call(this, text, ...rest);
+  };
+  let few;
+  try {
+    few = await countQueries(async () => {
+      const body = await sourceAthletes(team);
+      assert.equal(body.athletes.length, 5);
+    });
+  } finally {
+    appPool.query = originalQuery;
+  }
+
+  // Five more sessions, three new GPEXE athletes, two more links.
+  const [, a102] = standardAthletes();
+  const extra = (sessionId, ids) => makeBundle({ sessionId, gpexeTeamId: 77, start: `2026-09-0${(sessionId % 5) + 1}T18:00:00`, athletes: [...sessionAthletes(), ...ids.map((id) => ({ ...structuredClone(a102), id, tracks: [9300 + id] }))] });
+  const refused = makeBundle({ sessionId: 7317, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-07T18:00:00", athletes: [...sessionAthletes(), { ...structuredClone(a102), id: 304, tracks: [9604] }] });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [extra(7308, [301]), extra(7309, [301, 302]), extra(7310, [303]), extra(7311, []), extra(7312, [301, 302, 303]), refused] }));
+  await checkNow(team);
+  for (const [gpexeAthleteId, athleteId] of [["301", team.ids.d], ["302", team.ids.e]]) {
+    assert.equal((await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: team.coach.cookie, body: { gpexeAthleteId, athleteId } })).status, 201);
+  }
+  assert.equal((await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates.length, 7);
+  const many = await countQueries(async () => {
+    const body = await sourceAthletes(team);
+    assert.equal(body.athletes.length, 9);
+    assert.equal(body.athletes.find((a) => a.gpexeAthleteId === "304").lastSeen.evidence, "raw_snapshot");
+  });
+  assert.equal(many, few, `the same number of statements for 1 candidate / 5 athletes and 7 candidates / 9 athletes (few=${few} many=${many})`);
+
+  // The plan of the one statement, for the review packet (no assertion on
+  // its shape - only that it is one statement and parametrized).
+  assert.equal(sql.length, 1, "exactly one source-athletes statement per request");
+  assert.ok(sql[0].includes("$1") && !sql[0].includes(team.teamId), "parametrized");
+  if (process.env.GPEXE_PLAN_OUT) {
+    const plan = (await admin.query(`explain (analyze, buffers, format text) ${sql[0]}`, [team.teamId])).rows.map((r) => r["QUERY PLAN"]).join("\n");
+    (await import("node:fs")).writeFileSync(process.env.GPEXE_PLAN_OUT, plan);
+  }
+});
+
+test("source athletes: an athlete named only by a refused session's raw snapshot is listed as unlinked with evidence raw_snapshot and no values; an invalid raw id is ignored; expired or purged, it is gone", async () => {
+  const team = await setupTeam();
+  const [, a102] = standardAthletes();
+  // A match: the mapper refuses it, the stored preview names no athlete; only
+  // athlete 204 is recorded in it. A second raw row carries an invalid id.
+  const match = makeBundle({ sessionId: 7320, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-13T18:00:00", athletes: [{ ...structuredClone(a102), id: 204, tracks: [9204] }] });
+  match.athleteSessions.push({ ...structuredClone(match.athleteSessions[0]), id: 999001, athlete: "not-an-id" });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [match] }));
+  await checkNow(team);
+  const [candidate] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
+  assert.deepEqual([candidate.status, candidate.blockedCode], ["blocked", "unsupported_session_type"]);
+
+  let body = await sourceAthletes(team);
+  assert.deepEqual(body.athletes.map((a) => a.gpexeAthleteId), ["101", "102", "103", "105", "204"], "the links, plus the raw-only athlete; no invalid id");
+  const a204 = body.athletes.find((a) => a.gpexeAthleteId === "204");
+  assert.equal(a204.status, "unlinked");
+  assert.equal(a204.link, null);
+  assert.deepEqual(a204.values, { duration: null, distance: null, maxSpeed: null });
+  assert.deepEqual([a204.lastSeen.candidateId, a204.lastSeen.gpexeTeamSessionId, a204.lastSeen.candidateStatus, a204.lastSeen.evidence, a204.lastSeen.sessionType, a204.lastSeen.sessionDrillsCount],
+    [candidate.id, "7320", "blocked", "raw_snapshot", "OFFICIAL MATCH", 2]);
+  assert.match(body.lastSeenRule, /raw_snapshot/);
+  // No name of any kind rides on a raw-only row (the client drops
+  // athlete_name before storage; the SQL reads only the id and the session).
+  assert.deepEqual(Object.keys(a204).sort(), ["gpexeAthleteId", "lastSeen", "link", "status", "values"]);
+  assert.ok(!/name/i.test(JSON.stringify(a204)), JSON.stringify(a204));
+  // A linked athlete with no sighting at all stays without one.
+  assert.equal(body.athletes.find((a) => a.gpexeAthleteId === "101").lastSeen, null);
+
+  // Expired, not purged: gone. Purged: gone.
+  await admin.query(`update training_load.gpexe_import_candidates set raw_expires_at = now() - interval '1 minute' where id = $1`, [candidate.id]);
+  body = await sourceAthletes(team);
+  assert.equal(body.athletes.find((a) => a.gpexeAthleteId === "204"), undefined, "expired");
+  await admin.query(`update training_load.gpexe_import_candidates set raw_expires_at = now() + interval '1 day' where id = $1`, [candidate.id]);
+  assert.ok((await sourceAthletes(team)).athletes.some((a) => a.gpexeAthleteId === "204"), "back while available");
+  await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = null, preview = null, raw_purged_at = now() where id = $1`, [candidate.id]);
+  body = await sourceAthletes(team);
+  assert.equal(body.athletes.find((a) => a.gpexeAthleteId === "204"), undefined, "purged");
+});
+
+test("source athletes: the raw fallback never replaces a preview sighting or its values, even when the refused session is newer", async () => {
+  const team = await setupTeam();
+  const [, a102] = standardAthletes();
+  const training = makeBundle({ sessionId: 7321, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
+  // A newer match recorded 101 (seen in the training's preview) and 206 (seen nowhere else).
+  const match = makeBundle({ sessionId: 7322, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [...sessionAthletes({ distance101: 5000 }), { ...structuredClone(a102), id: 206, tracks: [9206] }] });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [match, training] }));
+  await checkNow(team);
+  const list = (await sourceAthletes(team)).athletes;
+  // The list itself, once each: a fallback without its "not exists" would
+  // list 101-105 twice (a keyed object would hide that).
+  assert.deepEqual(list.map((a) => a.gpexeAthleteId), ["101", "102", "103", "104", "105", "206"]);
+  const by = Object.fromEntries(list.map((a) => [a.gpexeAthleteId, a]));
+  // 101: the preview sighting of 10 Sep with its values, not the raw row of 12 Sep.
+  assert.deepEqual([by["101"].lastSeen.gpexeTeamSessionId, by["101"].lastSeen.evidence, by["101"].lastSeen.candidateStatus, by["101"].values.distance], ["7321", "preview", "pending", 3000]);
+  // 104 (unlinked, in the training's preview): the same rule.
+  assert.deepEqual([by["104"].status, by["104"].lastSeen.gpexeTeamSessionId, by["104"].lastSeen.evidence], ["unlinked", "7321", "preview"]);
+  // 206: only the match's raw row names it.
+  assert.deepEqual([by["206"].status, by["206"].lastSeen.gpexeTeamSessionId, by["206"].lastSeen.evidence, by["206"].lastSeen.candidateStatus, by["206"].values], ["unlinked", "7322", "raw_snapshot", "blocked", { duration: null, distance: null, maxSpeed: null }]);
+  assert.ok(!/name/i.test(JSON.stringify(by["206"])), "no name on the raw-only row");
+});
+
+test("source athletes: a refused candidate whose raw athleteSessions is not an array (object, string, number, null, missing) yields no raw-only athlete and never an error; links and preview sightings stay", async () => {
+  const team = await setupTeam();
+  const [, a102] = standardAthletes();
+  const training = makeBundle({ sessionId: 7323, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
+  const match = makeBundle({ sessionId: 7324, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [{ ...structuredClone(a102), id: 207, tracks: [9207] }] });
+  service.setGpexeClientFactory(fakeGpexe({ bundles: [training, match] }));
+  await checkNow(team);
+  const refused = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates.find((c) => c.gpexeTeamSessionId === "7324");
+  assert.equal(refused.status, "blocked");
+  const original = (await admin.query(`select raw_bundle->'athleteSessions' as rows from training_load.gpexe_import_candidates where id = $1`, [refused.id])).rows[0].rows;
+  // One raw row per part (whole session and each drill), all of athlete 207.
+  assert.ok(Array.isArray(original) && original.length >= 1 && original.every((row) => String(row.athlete) === "207"));
+
+  const withLinksAndPreview = ["101", "102", "103", "104", "105"];
+  const expect = async (label) => {
+    const r = await api(`/teams/${team.teamId}/source-athletes`, { cookie: team.coach.cookie });
+    assert.equal(r.status, 200, `${label}: ${JSON.stringify(r.body)}`);
+    assert.deepEqual(r.body.athletes.map((a) => a.gpexeAthleteId), withLinksAndPreview, label);
+    const by = Object.fromEntries(r.body.athletes.map((a) => [a.gpexeAthleteId, a]));
+    assert.deepEqual([by["101"].status, by["101"].lastSeen.gpexeTeamSessionId, by["101"].lastSeen.evidence, by["101"].values.distance], ["linked", "7323", "preview", 3000], label);
+    assert.deepEqual([by["104"].status, by["104"].lastSeen.evidence], ["unlinked", "preview"], label);
+  };
+
+  // The valid array: the raw-only athlete is listed.
+  let r = await api(`/teams/${team.teamId}/source-athletes`, { cookie: team.coach.cookie });
+  assert.deepEqual(r.body.athletes.map((a) => a.gpexeAthleteId), [...withLinksAndPreview, "207"]);
+
+  const shapes = [
+    ["object", `jsonb_set(raw_bundle, '{athleteSessions}', '{"athlete": 207, "teamsession": 7324}')`],
+    ["string", `jsonb_set(raw_bundle, '{athleteSessions}', '"207"')`],
+    ["number", `jsonb_set(raw_bundle, '{athleteSessions}', '207')`],
+    ["null", `jsonb_set(raw_bundle, '{athleteSessions}', 'null')`],
+    ["missing", `raw_bundle - 'athleteSessions'`],
+  ];
+  for (const [label, expr] of shapes) {
+    await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = ${expr} where id = $1`, [refused.id]);
+    const stored = (await admin.query(`select jsonb_typeof(raw_bundle->'athleteSessions') as t from training_load.gpexe_import_candidates where id = $1`, [refused.id])).rows[0].t;
+    assert.equal(stored, label === "missing" ? null : label === "null" ? "null" : label, label);
+    await expect(label);
+  }
+
+  // The array again: the raw-only athlete is back.
+  await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{athleteSessions}', $2::jsonb) where id = $1`, [refused.id, JSON.stringify(original)]);
+  r = await api(`/teams/${team.teamId}/source-athletes`, { cookie: team.coach.cookie });
+  assert.deepEqual(r.body.athletes.map((a) => a.gpexeAthleteId), [...withLinksAndPreview, "207"]);
+});
