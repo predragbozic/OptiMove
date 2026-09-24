@@ -61,7 +61,7 @@ const SOURCE_CODE_TO_BLOCKED = new Map([
   ["session_stats_invalid", BLOCKED_CODES.source_marks_session_invalid],
   ["no_importable_participants", BLOCKED_CODES.no_importable_athlete],
   ...["session_missing", "invalid_timestamp", "timestamp_semantics_changed", "invalid_timezone", "mixed_timezones", "invalid_drills_count",
-    "drill_index_out_of_range", "duplicate_drill_row", "track_missing", "track_athlete_mismatch", "more_missing"]
+    "drill_index_out_of_range", "duplicate_drill_row", "track_missing", "track_athlete_mismatch", "more_missing", "invalid_athlete_id"]
     .map((c) => [c, BLOCKED_CODES.source_data_inconsistent]),
   ...["ambiguous_source_connection", "source_connection_conflict", "binding_conflict", "binding_event_mismatch", "binding_missing",
     "context_missing", "duplicate_event", "duplicate_segment", "event_changed", "event_conflict", "identity_lock_failed",

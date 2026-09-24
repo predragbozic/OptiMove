@@ -31,6 +31,17 @@ export const GPEXE_SOURCE_SYSTEM = "gpexe";
 // Only categories whose meaning is confirmed for the pilot are importable.
 const ACTIVITY_TYPE_BY_CATEGORY = new Map([["FULL TRAINING", "training_session"]]);
 
+// The one rule for a GPEXE athlete id, wherever it enters (the raw rows of
+// a snapshot, the link route, the source-athletes SQL): "0" or a number
+// without a leading zero, at most 12 digits. "104" is an id; "0104" is not
+// the same athlete written differently - it is refused, never normalised.
+export const GPEXE_ATHLETE_ID_PATTERN = "^(0|[1-9][0-9]{0,11})$";
+export const GPEXE_ATHLETE_ID_RE = new RegExp(GPEXE_ATHLETE_ID_PATTERN);
+
+export function isCanonicalGpexeAthleteId(value) {
+  return typeof value === "string" && GPEXE_ATHLETE_ID_RE.test(value);
+}
+
 export class GpexeMappingError extends Error {
   constructor(code, message) {
     super(message);
@@ -287,6 +298,9 @@ export function buildGpexeImportPlan(bundle, { metricSpecs = GPEXE_METRIC_SPECS 
   const byAthlete = new Map();
   for (const row of rows) {
     const athleteId = String(row.athlete);
+    // A row whose athlete id is not canonical is data the importer cannot
+    // attribute; the session is refused rather than the id reinterpreted.
+    if (!isCanonicalGpexeAthleteId(athleteId)) throw new GpexeMappingError("invalid_athlete_id", `athlete_session ${row.id} has athlete ${JSON.stringify(row.athlete)}, not a canonical GPEXE athlete id.`);
     if (!byAthlete.has(athleteId)) byAthlete.set(athleteId, []);
     byAthlete.get(athleteId).push(row);
   }

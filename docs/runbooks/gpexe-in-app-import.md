@@ -81,11 +81,26 @@ Deleting a connection is refused as well: there is no Disconnect yet, and the
 migration that designs it decides what happens to the candidates, links,
 approvals and imported events of that team.
 
+## One GPEXE athlete id
+
+A GPEXE athlete id is `"0"` or digits without a leading zero, at most 12
+(`GPEXE_ATHLETE_ID_PATTERN` in `backend/src/gpexeImportMapper.js`), wherever it enters:
+the link route refuses anything else with `400 invalid_gpexe_athlete_id` before any lock or
+write; the mapper refuses a snapshot whose row carries a non-canonical athlete id
+(`invalid_athlete_id`, shown as inconsistent source data); the source-athletes list takes
+only canonical ids from a preview entry or a raw row. `"0104"` is never read as athlete
+`104`. The database check on `gpexe_athlete_links.gpexe_athlete_id` is the wider
+`^[0-9]{1,12}$` (v22) and was left as is — no migration; tightening it is a separate
+decision. A link row written before this rule is therefore listed as stored (never
+hidden, never rewritten); before Phase 3b check the deployed table read-only:
+`select count(*) from training_load.gpexe_athlete_links where gpexe_athlete_id !~
+'^(0|[1-9][0-9]{0,11})$'` — the expected answer is 0.
+
 ## Who may do what
 
 | Action | Who |
 |---|---|
-| Status, "Check now", candidates, previews, athlete links, source athletes | The team's coach, its club admin, a platform admin — in a workspace that contains the team. Anyone else gets the same 404 as a team that does not exist. |
+| Status, "Check now", candidates, previews, athlete links, source athletes | The team's coach, its club admin, a platform admin — in a workspace that contains the team, and only while the team is active. Anyone else, and anyone for an archived team (the platform admin included, on the administrative routes too), gets the same 404 as a team that does not exist. |
 | Connect the GPEXE team; grant and revoke approvers; read retention status | An active platform admin |
 | Approve a candidate, which imports it (F2) | An active platform admin, or a coach with an active grant for the team who still coaches it, in a workspace that contains the team. A team manager without the right gets 403 `not_an_approver`; anyone else the same 404. |
 
@@ -158,7 +173,7 @@ is used only as a fallback (owner decision (b), 2026-09-24): it adds a GPEXE ath
 available preview names, with `lastSeen` from the newest available refused session
 (`candidateStatus: "blocked"`, `evidence: "raw_snapshot"`) and all values `null`; it
 never replaces a preview sighting (`evidence: "preview"`) or its values, obeys the same
-availability, team and tie-break rules, and takes only a valid GPEXE athlete id. Read-only,
+availability, team and tie-break rules, and takes only a canonical GPEXE athlete id. Read-only,
 no GPEXE call, one SQL statement however many candidates or athletes
 (`listSourceAthletes` in `backend/src/gpexeImportService.js`); the team filter applies
 to candidates, links and memberships alike.

@@ -3,7 +3,8 @@
 //   * Review (settings status, "Check now", candidates, previews, athlete
 //     links): whoever manages the team — its team_coach, the admin of its
 //     club, or a platform admin — acting in a workspace that contains the
-//     team. Anything else gets the same 404 as a team that does not exist
+//     team, and only while the team is active. Anything else - an archived
+//     team included - gets the same 404 as a team that does not exist
 //     (ADR-006).
 //   * Configure the GPEXE team, grant and revoke approver rights, read the
 //     retention status: an active platform admin only.
@@ -15,7 +16,10 @@ import { canManageTeamById, holdsClubAdminRole, isPlatformAdministrator } from "
 import { resolveActiveWorkspace } from "./workspace.js";
 
 export async function resolveGpexeTeamAccess(req, teamId, { query }) {
-  const team = (await query(`select id, club_id from public.teams where id = $1`, [teamId])).rows[0];
+  // An archived team is the same 404 as a missing one, for its coach, its
+  // club admin and a platform admin alike - every GPEXE route, including
+  // the administrative ones, goes through here.
+  const team = (await query(`select id, club_id from public.teams where id = $1 and coalesce(is_active, true)`, [teamId])).rows[0];
   if (!team) return null;
   if (!canManageTeamById(req.authz, team.id)) return null;
   const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
