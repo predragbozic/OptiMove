@@ -51,8 +51,12 @@ whole sequence; *Unlink* is right there with the same question as elsewhere. Any
 made or possibly made marks the reviews on screen as made with the old links ("Find new
 sessions…"). The source-athletes read is a helper read: if it alone fails, the inbox, the
 search and the links stay, *Link athletes* is off with a plain reason and a *Try again*,
-and the next successful read clears it. No name comes from the source; ids and codes only
-under Technical details.
+and the next successful read clears it. A failed re-read after a link or an unlink keeps
+the last list as context but marks it as possibly out of date (a just-linked athlete could
+still look "not linked"): the result of the sequence stays visible, every new link/unlink/
+review/send in the screen and the way in are off, *Try again* is in both places, and a
+successful retry reads the links and the list again, drops stale choices and gives the
+actions back. No name comes from the source; ids and codes only under Technical details.
 No backend change, no migration, no batch import. Phases 4–6 (batch import, completion
 model and roster, session context, add-later-values) wait for the owner's go after each
 merge.

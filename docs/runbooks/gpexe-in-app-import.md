@@ -159,7 +159,10 @@ Imports → "Link athletes") is built on this list: one row per GPEXE athlete wi
 session's helper values, a choice of the team's active, not-yet-linked athletes (same-name
 athletes cannot be chosen), a confirmation of every pair, and one result per pair sent
 through `POST …/athlete-links`; Unlink uses `POST …/athlete-links/:id/unlink`. A link is
-never guessed and nothing is sent before the confirmation.
+never guessed and nothing is sent before the confirmation. After a link or an unlink the
+links and this list are read again together; if that re-read fails, the screen keeps the
+last list marked as possibly out of date and turns every new link/unlink off until *Try
+again* succeeds.
 
 `GET …/teams/:teamId/source-athletes` (Imports phase 3a) lists the team's GPEXE
 athletes once each — every athlete seen in a snapshot that is still available (not purged, not expired) plus every athlete with

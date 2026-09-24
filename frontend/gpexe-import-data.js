@@ -472,35 +472,50 @@ function applySourceAthletesRead(gx, read) {
   gx.sourceAthletesError = null;
 }
 
-// "Try again" on the links panel: only the source athletes are read; the
-// button is busy meanwhile, so the click is seen and never doubled.
+// "Try again" on the links panel or in the Link athletes screen: the links
+// and the source athletes are read again; the button is busy meanwhile, so
+// the click is seen and never doubled. A success clears the error, drops the
+// choices the fresh list no longer supports and gives the actions back.
 export async function reloadGpexeSourceAthletes(render) {
   const gx = g();
   const generation = gx.generation;
   if (!gx.teamId || gx.sourceAthletesRetrying) return;
   gx.sourceAthletesRetrying = true;
   render();
-  const read = await api(teamPath(gx.teamId, "/source-athletes"))
-    .then((answer) => ({ athletes: answer.athletes }))
-    .catch((error) => ({ error: errorInfo(error) }));
+  await reloadGpexeLinks(generation);
   if (generation !== gx.generation) return;
   gx.sourceAthletesRetrying = false;
-  applySourceAthletesRead(gx, read);
   render();
 }
 
-// The links and the source athletes change together; a failed re-read of
-// either only leaves it stale (the caller decides what to say).
+// While the list may be out of date (a re-read failed after a change), no
+// new link, unlink, review or send is accepted: a just-linked athlete could
+// still look "not linked" and be linked again from stale state.
+const STALE_LIST_MESSAGE = "The list could not be refreshed after the last change, so it may be out of date. Press Try again first.";
+
+function sourceListStale(gx) {
+  return Boolean(gx.sourceAthletesError);
+}
+
+// The links and the source athletes change together and are read again
+// together. A failed re-read of either leaves the list as it was, marked:
+// the error is recorded, so the way in and every new linking action are off
+// until a read succeeds (the caller says what happened to the change itself).
 async function reloadGpexeLinks(generation) {
   const gx = g();
   const [links, sourceAthletes] = await Promise.all([
-    api(teamPath(gx.teamId, "/athlete-links")),
+    api(teamPath(gx.teamId, "/athlete-links")).then((answer) => ({ links: answer.links })).catch((error) => ({ error: errorInfo(error) })),
     api(teamPath(gx.teamId, "/source-athletes")).then((answer) => ({ athletes: answer.athletes })).catch((error) => ({ error: errorInfo(error) })),
   ]);
   if (generation !== gx.generation) return;
-  gx.links = links.links;
+  if (!links.error) gx.links = links.links;
   applySourceAthletesRead(gx, sourceAthletes);
-  if (gx.mapping?.open) pruneTeamMappingChoices(gx);
+  if (links.error) gx.sourceAthletesError = links.error;
+  if (gx.mapping?.open) {
+    pruneTeamMappingChoices(gx);
+    // The "press Try again first" reason is gone with the fresh list.
+    if (!sourceListStale(gx) && gx.mapping.error === STALE_LIST_MESSAGE) gx.mapping = { ...gx.mapping, error: null };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -594,6 +609,10 @@ export function stagedTeamMapping(gx = g()) {
 
 export function confirmTeamMapping() {
   const gx = g();
+  if (sourceListStale(gx)) {
+    gx.mapping = { ...gx.mapping, error: STALE_LIST_MESSAGE, confirming: false };
+    return false;
+  }
   const staged = stagedTeamMapping(gx);
   if (staged.error) {
     gx.mapping = { ...gx.mapping, error: staged.error, confirming: false };
@@ -618,9 +637,10 @@ export async function sendTeamMapping(render) {
   const gx = g();
   const generation = gx.generation;
   if (gx.mapping.sending) return;
-  const staged = stagedTeamMapping(gx);
+  const staged = sourceListStale(gx) ? { error: STALE_LIST_MESSAGE } : stagedTeamMapping(gx);
   if (staged.error) {
-    // The choices changed under the sheet: back to the list, with the reason.
+    // The choices changed under the sheet (or the list went stale): back to
+    // the list, with the reason.
     gx.mapping = { ...gx.mapping, error: staged.error, confirming: false, sending: false };
     render();
     return;

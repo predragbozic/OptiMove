@@ -147,6 +147,9 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-unlink") {
+    // In the Link athletes screen, not while the list may be out of date: the
+    // button is disabled, this only guards a stale click.
+    if (gx.mapping.open && gx.sourceAthletesError) return true;
     if (!globalThis.window?.confirm?.(unlinkQuestion(gx, action.dataset.linkId))) return true;
     await unlinkGpexeAthlete(action.dataset.linkId, renderTrainingLoad);
     return true;
@@ -155,8 +158,9 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   // the action, so a repaint never loses a choice); "Confirm" shows every
   // pair; "Link N athletes" sends them one by one.
   if (type === "training-load-gpexe-map-open") {
-    // Not without the list: the button is disabled, this only guards a stale click.
-    if (!gx.sourceAthletes) return true;
+    // Not without the list, nor while it may be out of date: the button is
+    // disabled, this only guards a stale click.
+    if (!gx.sourceAthletes || gx.sourceAthletesError) return true;
     openTeamMapping();
     renderTrainingLoad();
     return true;
@@ -173,6 +177,8 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     return true;
   }
   if (type === "training-load-gpexe-map-choose") {
+    // Nothing is staged from a list that may be out of date (the select is disabled).
+    if (gx.sourceAthletesError) return true;
     // A click on the select reaches here too: an unchanged value repaints nothing.
     if ((gx.mapping.choices[action.dataset.gpexeAthleteId] || "") === (action.value || "")) return true;
     chooseTeamMapping(action.dataset.gpexeAthleteId, action.value || "");

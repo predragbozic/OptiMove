@@ -1923,13 +1923,93 @@ test("Link athletes: a failed source-athletes read degrades only that screen - t
   await act("training-load-gpexe-map-open");
   assert.match(mappingHtml(), /<p class="gpexe-map-summary">1 linked · 1 not linked<\/p>/);
   assert.match(mappingHtml(), /data-gpexe-athlete-id="104" aria-label="Link GPEXE athlete 104 to"/);
-  // A later failure while a list is already there keeps the list and the screen (stale, not gone).
+  // A later failure while a list is already there keeps the list as context,
+  // marked: it may be out of date, so the way in is off until a read succeeds.
   await act("training-load-gpexe-map-close");
   sourcesFail = true;
   await act("training-load-gpexe-sources-retry");
   html = renderTrainingLoadCoachHtml();
-  assert.match(html, /data-action="training-load-gpexe-map-open" >Link athletes \(1\)<\/button>/, "the last good list stays usable");
-  assert.ok(!/is not available right now/.test(html));
+  assert.match(html, /data-action="training-load-gpexe-map-open" disabled>Link athletes \(1\)<\/button>/, "the last good list stays as context, the way in is off");
+  assert.match(html, /could not be refreshed, so it may be out of date\. Link athletes is off until it is read again/);
+  assert.match(html, /data-action="training-load-gpexe-sources-retry" >Try again<\/button>/);
+  await act("training-load-gpexe-map-open");
+  assert.ok(!/gpexe-map"/.test(renderTrainingLoadCoachHtml()), "a stale click opens nothing while the list may be out of date");
+});
+
+test("Link athletes: a link made but the refresh failed - the result stays, the cached list is marked out of date, no new link/unlink until Try again succeeds; the Unlink refresh uses the same guard", async () => {
+  resetState();
+  confirmAnswer = true;
+  const linkedNow = [];
+  let sourcesFail = false;
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: { enabled: true } },
+    links: () => [
+      { id: "link-1", gpexeAthleteId: "101", athleteId: "ath-1", athleteName: "Ana Example" },
+      ...linkedNow.map((id) => ({ id: `link-${id}`, gpexeAthleteId: id, athleteId: "ath-3", athleteName: "Dario Petrov Example" })),
+    ],
+    sourceAthletes: () => {
+      if (sourcesFail) return { status: 500, body: { error: "internal_error", message: "refresh failed" } };
+      return [
+        ...DEFAULT_SOURCE_ATHLETES,
+        linkedNow.includes("104")
+          ? sourceAthlete({ status: "linked", link: { id: "link-104", athleteId: "ath-3", athleteName: "Dario Petrov Example", linkedAt: "2026-09-24T10:00:00Z" } })
+          : sourceAthlete(),
+      ];
+    },
+    onLink: (call) => { linkedNow.push(call.body.gpexeAthleteId); return { status: 201, body: { link: { id: `link-${call.body.gpexeAthleteId}` } } }; },
+  }));
+  const gx = () => state.trainingLoad.gpexe;
+  // 1-2: the link succeeds; the final links read succeeds, the source-athletes refresh fails.
+  await openMapping();
+  await chooseFor("104", "ath-3");
+  await act("training-load-gpexe-map-confirm");
+  sourcesFail = true;
+  await act("training-load-gpexe-map-send");
+  assert.deepEqual(linkedNow, ["104"], "the link was made");
+  assert.equal(gx().links.length, 2, "the links read succeeded");
+  assert.ok(gx().sourceAthletesError, "the failed refresh is recorded");
+  // 3: the result stays visible, with the warning and Try again right there.
+  let html = mappingHtml();
+  assert.match(html, /GPEXE athlete 104 → Dario Petrov Example<\/strong>: linked/);
+  assert.match(html, /could not be refreshed after the last change, so it may be out of date: an athlete you just linked may still show as not linked/);
+  assert.match(html, /data-action="training-load-gpexe-sources-retry" >Try again<\/button>/);
+  // 4: after Done the cached list still shows 104 as not linked - marked, and nothing new can be linked or unlinked.
+  await act("training-load-gpexe-map-done");
+  html = mappingHtml();
+  assert.match(html, /<p class="gpexe-map-summary">1 linked · 1 not linked<\/p>/, "the cached list stays as context");
+  assert.match(html, /could not be refreshed after the last change/);
+  assert.match(html, /data-gpexe-athlete-id="104" aria-label="Link GPEXE athlete 104 to" disabled>/, "no new choice");
+  assert.match(html, /data-action="training-load-gpexe-map-confirm" disabled>Review links<\/button>/, "no review");
+  assert.match(html, /data-link-id="link-1" disabled>Unlink<\/button>/, "no unlink");
+  const callsBefore = fetchCalls.length;
+  await chooseFor("104", "ath-2");
+  assert.deepEqual(gx().mapping.choices, {}, "a stale change stages nothing");
+  await act("training-load-gpexe-map-confirm");
+  assert.equal(gx().mapping.confirming, false, "no review on a list that may be out of date");
+  assert.match(mappingHtml(), /Press Try again first\./);
+  await act("training-load-gpexe-unlink", { linkId: "link-1" });
+  assert.equal(fetchCalls.length, callsBefore, "nothing was sent");
+  assert.match(renderTrainingLoadCoachHtml(), /data-action="training-load-gpexe-map-open" disabled>Link athletes \(1\)<\/button>/, "the way in behind the screen is off too");
+  // 5-6: Try again succeeds - the athlete is under Linked, the warning is gone, the actions are back.
+  sourcesFail = false;
+  await act("training-load-gpexe-sources-retry");
+  html = mappingHtml();
+  assert.equal(gx().sourceAthletesError, null);
+  assert.equal(gx().sourceAthletesRetrying, false);
+  assert.ok(!/could not be refreshed/.test(html), "the warning is gone");
+  assert.match(html, /<p class="gpexe-map-summary">2 linked · 0 not linked<\/p>/);
+  assert.match(html, /<h4>Linked \(2\)<\/h4>/);
+  assert.ok(!/<h4>Not linked/.test(html), "104 is not under Not linked any more");
+  assert.match(html, /data-link-id="link-104" >Unlink<\/button>/, "Unlink works again");
+  assert.match(html, /data-action="training-load-gpexe-map-close" >Close<\/button>/);
+  // 7: the Unlink refresh uses the same guard.
+  sourcesFail = true;
+  await act("training-load-gpexe-unlink", { linkId: "link-104" });
+  assert.ok(fetchCalls.some((c) => c.url.endsWith("/athlete-links/link-104/unlink")), "the unlink was sent");
+  html = mappingHtml();
+  assert.match(html, /could not be refreshed after the last change/);
+  assert.match(html, /data-link-id="link-1" disabled>Unlink<\/button>/);
+  assert.match(renderTrainingLoadCoachHtml(), /data-action="training-load-gpexe-map-open" disabled>/);
 });
 
 test("Link athletes: a stalled source-athletes read never delays the inbox - the mandatory data is painted as soon as it is here", async () => {

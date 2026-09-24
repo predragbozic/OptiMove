@@ -642,6 +642,11 @@ function badgeHtml(c, gx = state.trainingLoad.gpexe) {
   return `<span class="gpexe-badge is-${escapeAttr(cls)}">${escapeHtml(text)}</span>`;
 }
 
+// "Try again" for the source-athletes list, busy while it runs.
+function retryButtonHtml(gx) {
+  return `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-sources-retry" ${gx.sourceAthletesRetrying ? "disabled" : ""}>${gx.sourceAthletesRetrying ? "Trying again..." : "Try again"}</button>`;
+}
+
 function renderLinksHtml(gx) {
   const links = gx.links || [];
   const unlinked = (gx.sourceAthletes || []).filter((a) => a.status === "unlinked").length;
@@ -653,13 +658,15 @@ function renderLinksHtml(gx) {
     <section class="gpexe-panel" aria-label="Athlete links">
       <div class="gpexe-panel-head imports-links-head">
         <h3>GPEXE athletes linked to this team</h3>
-        <button type="button" class="${unlinked ? "primary-button" : "plain-button"} gpexe-button" data-action="training-load-gpexe-map-open" ${gx.sourceAthletes ? "" : "disabled"}>Link athletes${unlinked ? ` (${unlinked})` : ""}</button>
+        <button type="button" class="${unlinked ? "primary-button" : "plain-button"} gpexe-button" data-action="training-load-gpexe-map-open" ${gx.sourceAthletes && !gx.sourceAthletesError ? "" : "disabled"}>Link athletes${unlinked ? ` (${unlinked})` : ""}</button>
       </div>
       ${facts.length ? `<p class="imports-links-facts">${escapeHtml(facts.join(" · "))}.</p>` : ""}
-      ${gx.sourceAthletesError && !gx.sourceAthletes ? `
+      ${gx.sourceAthletesError ? `
         <div class="gpexe-warning imports-links-unavailable" role="status">
-          <p>The list of GPEXE athletes is not available right now, so Link athletes is off. The sessions, the search and the links below still work.</p>
-          <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-sources-retry" ${gx.sourceAthletesRetrying ? "disabled" : ""}>${gx.sourceAthletesRetrying ? "Trying again..." : "Try again"}</button>
+          <p>${gx.sourceAthletes
+            ? "The list of GPEXE athletes could not be refreshed, so it may be out of date. Link athletes is off until it is read again; the sessions and the search still work."
+            : "The list of GPEXE athletes is not available right now, so Link athletes is off. The sessions, the search and the links below still work."}</p>
+          ${retryButtonHtml(gx)}
           ${errorTech(gx.sourceAthletesError)}
         </div>
       ` : ""}
@@ -727,7 +734,7 @@ function renderMapRowHtml(a, gx, choices) {
           <span class="gpexe-map-values">${escapeHtml(mapValuesText(a))}</span>
         </div>
         ${choices.length ? `<label class="gpexe-map-choice"><span>Link to</span>
-          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link GPEXE athlete ${escapeAttr(id)} to" ${gx.mapping.sending ? "disabled" : ""}>
+          <select class="gpexe-select" data-action="training-load-gpexe-map-choose" data-gpexe-athlete-id="${escapeAttr(id)}" aria-label="Link GPEXE athlete ${escapeAttr(id)} to" ${gx.mapping.sending || gx.sourceAthletesError ? "disabled" : ""}>
             <option value="" ${chosen ? "" : "selected"}>Not now</option>
             ${choices.map((o) => `<option value="${escapeAttr(o.id)}" ${chosen === o.id ? "selected" : ""} ${o.duplicate ? "disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
           </select>
@@ -745,7 +752,7 @@ function renderMapRowHtml(a, gx, choices) {
         <span class="gpexe-map-values">${escapeHtml(mapValuesText(a))}</span>
       </div>
       <div class="gpexe-map-choice">
-        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(a.link?.id || "")}" ${gx.linkBusy || gx.mapping.sending ? "disabled" : ""}>Unlink</button>
+        <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-unlink" data-link-id="${escapeAttr(a.link?.id || "")}" ${gx.linkBusy || gx.mapping.sending || gx.sourceAthletesError ? "disabled" : ""}>Unlink</button>
       </div>
       ${tech}
     </li>
@@ -775,6 +782,18 @@ function renderTeamMappingHtml(gx, teams) {
   const choices = teamAthleteChoices(gx);
   const stagedCount = Object.keys(m.choices).length;
   const busy = m.sending ? "disabled" : "";
+  // The list may be out of date (a re-read failed after a change): it stays
+  // as context, marked, and every new link/unlink/review/send is off until
+  // Try again succeeds. Close, Back and Done still work.
+  const stale = Boolean(gx.sourceAthletesError);
+  const off = m.sending || stale ? "disabled" : "";
+  const staleHtml = stale ? `
+      <div class="gpexe-warning imports-links-unavailable" role="status">
+        <p>This list could not be refreshed after the last change, so it may be out of date: an athlete you just linked may still show as not linked. Linking and unlinking are off until it is read again.</p>
+        ${retryButtonHtml(gx)}
+        ${errorTech(gx.sourceAthletesError)}
+      </div>
+  ` : "";
   const staged = m.confirming ? stagedTeamMapping(gx) : null;
   const rows = (items) => `<ul class="gpexe-map-list">${items.map((a) => renderMapRowHtml(a, gx, choices)).join("")}</ul>`;
   let body;
@@ -786,6 +805,7 @@ function renderTeamMappingHtml(gx, teams) {
           ${m.results.map((r) => `<li><strong>GPEXE athlete ${escapeHtml(r.gpexeAthleteId)} → ${escapeHtml(r.athleteName)}</strong>: ${escapeHtml(mapOutcomeText(r))}${r.error ? errorTech(r.error) : ""}</li>`).join("")}
         </ul>
         ${m.results.some((r) => r.outcome !== "refused") ? `<p>Find new sessions to update the reviews - approving waits until then. A wrong link can be removed with Unlink before an import is approved.</p>` : ""}
+        ${staleHtml}
         <div class="gpexe-link-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-done">Done</button></div>
       </section>
     `;
@@ -799,7 +819,7 @@ function renderTeamMappingHtml(gx, teams) {
         <p>You can unlink before an import is approved. Unlinking doesn't change results that are already imported: if a link turns out wrong after an import, those results can't be changed here — contact a platform administrator.</p>
         <div class="gpexe-link-actions">
           <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-map-back" ${busy}>Back</button>
-          <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-send" ${busy}>${m.sending ? "Linking..." : `Link ${plural(staged.pairs.length, "athlete", "athletes")}`}</button>
+          <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-send" ${off}>${m.sending ? "Linking..." : `Link ${plural(staged.pairs.length, "athlete", "athletes")}`}</button>
         </div>
       </section>
     `;
@@ -808,6 +828,7 @@ function renderTeamMappingHtml(gx, teams) {
       <p class="muted gpexe-hint">A link is never guessed. Choose an athlete only when you are sure who a GPEXE athlete is - the values of the last session help you find them in GPEXE and prove nothing. Choosing sends nothing: the links are made only when you press Link on the next step.</p>
       ${!gx.sourceAthletes ? `<p class="muted">Loading...</p>` : ""}
       ${gx.sourceAthletes && !list.length ? `<p class="muted">No GPEXE athlete has been seen yet. Find new sessions first.</p>` : ""}
+      ${staleHtml}
       ${m.error ? `<p class="gpexe-error" role="alert">${escapeHtml(m.error)}</p>` : ""}
       ${gx.linkError ? `<p class="gpexe-error" role="alert">${escapeHtml(errorText(gx.linkError, "The link could not be changed."))}</p>` : ""}
       ${unlinked.length ? `
@@ -835,7 +856,7 @@ function renderTeamMappingHtml(gx, teams) {
   const footer = !m.results && !m.confirming ? `
     <div class="gpexe-link-actions gpexe-map-actions">
       <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-map-close" ${busy}>Close</button>
-      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-confirm" ${stagedCount && !busy ? "" : "disabled"}>Review ${stagedCount ? plural(stagedCount, "link", "links") : "links"}</button>
+      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-map-confirm" ${stagedCount && !off ? "" : "disabled"}>Review ${stagedCount ? plural(stagedCount, "link", "links") : "links"}</button>
     </div>
   ` : "";
   return `
