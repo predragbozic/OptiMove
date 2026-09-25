@@ -12,6 +12,7 @@ Only functions, triggers and one index; no table, column or row of v25 changes.
   `training.lock_roster_completions(ids[], exclusive)` — transaction advisory
   locks. Every writer that can change a roster takes them **shared**; Complete
   takes them **exclusive** before it recomputes the roster.
+- `training.lock_activity_decider` redefined: every basis also holds the team's club (active) `FOR SHARE` (order team → club → role → user), so archiving the parent club waits for any decision in flight and refuses every basis afterwards. The rollback restores the v25 definition.
 - `training.roster_record_change(...)` — the one place a roster change becomes
   a completion change (`complete → needs_review`, a new cause on
   `needs_review`, or, for a coach decision, a revision bump that also creates
@@ -57,7 +58,8 @@ activity rows `FOR UPDATE`; a link writer after its activity row; a
 membership change after its membership row and `lock_roster_team(shared)`),
 and none takes an earlier lock of the list afterwards, so there is no cycle.
 Roster commands set `lock_timeout = 15s` (answer `503 roster_busy`, nothing
-written). The GPEXE approval's own unbounded waits (Separate tasks, condition
+written); the COMMIT's answer is awaited at most 15 s and the check after an
+uncertain COMMIT at most 5 s (answer `503 outcome_unknown`). The GPEXE approval's own unbounded waits (Separate tasks, condition
 2) are unchanged; a writer that waits behind a paused Complete waits as long
 as that Complete.
 
@@ -83,7 +85,8 @@ one transaction, only:
 2. with a fresh, restore-verified backup of that database;
 3. with the owner's approval for that database.
 
-It removes only v26's functions, triggers and index. Decisions, requests,
+It removes only v26's functions, triggers and index, and restores the v25
+`lock_activity_decider`. Decisions, requests,
 completions and their log stay (history); the v25 read keeps reading them.
 From then on a complete session is no longer downgraded by a trigger; the
 read's fingerprint comparison still reports it as needs review

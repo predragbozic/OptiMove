@@ -64,7 +64,9 @@ built (contract section 11):
   `requestKey` (idempotent across the alias set), optimistic concurrency, one transaction with
   the contract's lock order, stable error codes only.
 - Needs the owner's external review (migration, authorization, canonical identity,
-  concurrency, audit) before any merge.
+  concurrency, audit) before any merge. First round on `d2ed73b` (PR #123): NOT READY — a
+  COMMIT without a time bound (HIGH) and a club archive that did not wait for a team
+  coach's or platform admin's decision (MEDIUM); both fixed in the next commit on the branch.
 
 Not in 5a2: the roster screen (5a3), manual values and estimates (5b), later-measurement
 confirmation (5c).

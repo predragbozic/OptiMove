@@ -45,6 +45,9 @@
 --        source observations: open / resolve               -> record_unusable | change_pending
 --        membership periods opened or closed over a completed session of the team -> roster_changed
 --      A guard (optimove.roster_change_active) stops re-entry.
+--   6. training.lock_activity_decider (v25) redefined: every basis also holds
+--      the team's club (active) FOR SHARE, so archiving the parent club waits
+--      for any in-flight decision (section 6 at the end).
 --   4. Audit and integrity that raw SQL cannot bypass:
 --      - every completion revision has exactly one log row (unique index on
 --        (activity_id, revision), and a deferred check at commit);
@@ -713,3 +716,51 @@ $$ language plpgsql;
 create trigger activity_athlete_decisions_one_current_in_alias_set
   before insert on training.activity_athlete_decisions
   for each row execute function training.check_activity_athlete_decision_alias_set();
+
+-- ---------------------------------------------------------------------------
+-- 6. The right to decide also holds the team's club (external review of
+--    PR #123, MEDIUM). v25 held the club row only for club_admin, so
+--    archiving the parent club did not wait for a team coach's or a
+--    platform admin's decision in flight. Now every basis holds, in this
+--    order: team (active) -> its club (active) -> role row -> user row, all
+--    FOR SHARE. No cycle: archiving a club is one UPDATE of the club row
+--    (organization.js DELETE /clubs/:id; no trigger on clubs or teams),
+--    archiving a team one UPDATE of the team row, a role change one UPDATE
+--    of the role row; none of them then waits for another row this function
+--    holds. An archived club refuses every basis (42501).
+-- ---------------------------------------------------------------------------
+create or replace function training.lock_activity_decider(p_user_id uuid, p_team_id uuid, p_basis varchar)
+returns varchar as $$
+declare
+  v_club_id uuid;
+begin
+  if p_basis is null or p_basis not in ('team_coach', 'club_admin', 'platform_admin') then
+    raise exception 'lock_activity_decider: unknown basis %', p_basis using errcode = 'invalid_parameter_value';
+  end if;
+  select club_id into v_club_id from public.teams where id = p_team_id and coalesce(is_active, true) for share;
+  if not found then
+    raise exception 'user % may not decide on the roster of team %', p_user_id, p_team_id using errcode = 'insufficient_privilege';
+  end if;
+  perform 1 from public.clubs where id = v_club_id and coalesce(is_active, true) for share;
+  if not found then
+    raise exception 'user % may not decide on the roster of team %: its club is archived', p_user_id, p_team_id using errcode = 'insufficient_privilege';
+  end if;
+  if p_basis = 'team_coach' then
+    perform 1 from public.user_team_roles r join public.users u on u.id = r.user_id
+     where r.user_id = p_user_id and r.team_id = p_team_id and r.role = 'team_coach' and r.is_active = true and u.is_active = true
+       for share of r, u;
+  elsif p_basis = 'club_admin' then
+    perform 1 from public.user_club_roles r join public.users u on u.id = r.user_id
+     where r.user_id = p_user_id and r.club_id = v_club_id and r.role = 'club_admin' and r.is_active = true and u.is_active = true
+       for share of r, u;
+  else
+    perform 1 from public.user_global_roles r join public.users u on u.id = r.user_id
+     where r.user_id = p_user_id and r.role = 'platform_admin' and r.is_active = true and u.is_active = true
+       for share of r, u;
+  end if;
+  if not found then
+    raise exception 'user % may not decide on the roster of team % as %', p_user_id, p_team_id, p_basis using errcode = 'insufficient_privilege';
+  end if;
+  return p_basis;
+end;
+$$ language plpgsql;

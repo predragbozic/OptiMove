@@ -10,7 +10,8 @@
 --     be downgraded by later changes);
 --   * a fresh, restore-verified backup exists;
 --   * the owner approved this database specifically.
--- It removes only functions, triggers and one index. Every row stays: coach
+-- It removes only functions, triggers and one index, and restores the v25
+-- definition of training.lock_activity_decider. Every row stays: coach
 -- decisions, requests, completions and their log remain as history and the
 -- v25 roster read keeps reading them. A session left "complete" is then no
 -- longer downgraded by a trigger; the read's fingerprint comparison (v25,
@@ -63,6 +64,42 @@ drop function if exists training.roster_record_change(uuid[], uuid[], varchar, u
 drop function if exists training.activity_roster_needs_state(uuid);
 drop function if exists training.lock_roster_completions(uuid[], boolean);
 drop function if exists training.lock_roster_team(uuid, boolean);
+
+-- v26 redefined lock_activity_decider (club held for every basis); put the
+-- v25 definition back.
+create or replace function training.lock_activity_decider(p_user_id uuid, p_team_id uuid, p_basis varchar)
+returns varchar as $fn$
+declare
+  v_club_id uuid;
+begin
+  if p_basis is null or p_basis not in ('team_coach', 'club_admin', 'platform_admin') then
+    raise exception 'lock_activity_decider: unknown basis %', p_basis using errcode = 'invalid_parameter_value';
+  end if;
+  select club_id into v_club_id from public.teams where id = p_team_id and coalesce(is_active, true) for share;
+  if not found then
+    raise exception 'user % may not decide on the roster of team %', p_user_id, p_team_id using errcode = 'insufficient_privilege';
+  end if;
+  if p_basis = 'team_coach' then
+    perform 1 from public.user_team_roles r join public.users u on u.id = r.user_id
+     where r.user_id = p_user_id and r.team_id = p_team_id and r.role = 'team_coach' and r.is_active = true and u.is_active = true
+       for share of r, u;
+  elsif p_basis = 'club_admin' then
+    perform 1 from public.user_club_roles r join public.users u on u.id = r.user_id
+      join public.clubs c on c.id = r.club_id
+     where r.user_id = p_user_id and r.club_id = v_club_id and r.role = 'club_admin' and r.is_active = true
+       and u.is_active = true and coalesce(c.is_active, true)
+       for share of r, u, c;
+  else
+    perform 1 from public.user_global_roles r join public.users u on u.id = r.user_id
+     where r.user_id = p_user_id and r.role = 'platform_admin' and r.is_active = true and u.is_active = true
+       for share of r, u;
+  end if;
+  if not found then
+    raise exception 'user % may not decide on the roster of team % as %', p_user_id, p_team_id, p_basis using errcode = 'insufficient_privilege';
+  end if;
+  return p_basis;
+end;
+$fn$ language plpgsql;
 
 delete from public.schema_migrations
  where migration_name = 'migrations_v2/202609252000_training_load_v26_activity_roster_decisions.sql';

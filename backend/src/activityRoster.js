@@ -220,8 +220,11 @@ export async function resolveRosterTarget(client, ctx, activityId) {
     }
     throw notFound();
   }
+  // An archived team, or a team of an archived club, has no roster to show
+  // or change: the identical 404.
   const team = (await one(
-    `select id, club_id from public.teams where id = $1 and coalesce(is_active, true)`,
+    `select t.id, t.club_id from public.teams t join public.clubs c on c.id = t.club_id
+      where t.id = $1 and coalesce(t.is_active, true) and coalesce(c.is_active, true)`,
     [activity.owner_team_id],
   ))[0];
   const basis = rosterBasisForWorkspace(ctx.workspace, ctx.authz, team);

@@ -207,10 +207,45 @@ async function lockAliasSet(client, activityId) {
 }
 
 // Test seams only (backend/tests/activity-roster-5a2.test.mjs): pause a
-// real command at a known point of its transaction. Never set in the app.
+// real command at a known point of its transaction, replace its COMMIT,
+// make the check after an uncertain COMMIT fail or hang, and shorten the two
+// bounds below. Never set in the app.
 let testHooks = {};
 export function setRosterCommandTestHooks(hooks) {
   testHooks = hooks ?? {};
+}
+
+// The COMMIT outcome, the same pattern as the GPEXE approval
+// (gpexeImportService.js): the answer to the COMMIT is awaited at most
+// COMMIT_ANSWER_TIMEOUT_MS; past that, or on any error that is not the
+// server's own refusal, the outcome is unknown: the connection is destroyed
+// FIRST (which also ends a COMMIT still waiting on it), then the request row
+// is looked for on a new connection, the whole check bounded by
+// UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS. Neither path leaves a pool connection
+// or an open transaction behind.
+export const COMMIT_ANSWER_TIMEOUT_MS = 15_000;
+export const UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS = 5_000;
+
+export const NOTHING_SAVED = "Nothing was saved. Try again.";
+export const OUTCOME_UNKNOWN = "Not sure the change was saved. Try again with the same requestKey; it will not be saved twice.";
+
+// A COMMIT the server itself answered with a refusal (a deferred check, a
+// serialization failure): a certain rollback. Uncertain instead: a
+// connection class (08xxx), an operator intervention / shutdown (57Pxx),
+// 40003 statement_completion_unknown, a socket or driver error (ECONNRESET,
+// EPIPE, ... - string codes, but not a server answer) and a timeout.
+export function commitCertainlyRefused(error) {
+  if (!(error instanceof pg.DatabaseError)) return false;
+  const code = String(error.code ?? "");
+  return !/^(08|57P)/.test(code) && code !== "40003";
+}
+
+function withinBound(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function completionFromRow(row) {
@@ -223,6 +258,7 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
   const client = await pool.connect();
   let commitSent = false;
   let broken = false;
+  let released = false;
   let canonicalId = null;
   // A connection that dies while checked out (a terminated backend, a
   // network loss) emits 'error' on the client; without a listener that
@@ -298,7 +334,9 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
     );
     if (testHooks.beforeCommit) await testHooks.beforeCommit({ client, operation, canonicalId });
     commitSent = true;
-    await client.query("commit");
+    const committing = Promise.resolve().then(() => (testHooks.commit ? testHooks.commit(client) : client.query("commit")));
+    committing.catch(() => {}); // a COMMIT that loses the race may still fail later
+    await withinBound(committing, testHooks.commitTimeoutMs ?? COMMIT_ANSWER_TIMEOUT_MS);
     if (testHooks.afterCommit) await testHooks.afterCommit({ client, operation, canonicalId });
     return { status: 200, body: result };
   } catch (error) {
@@ -309,36 +347,76 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
       }
       throw error;
     }
-    // The COMMIT was sent and failed. Only an answer FROM THE SERVER that
-    // refuses it (a pg DatabaseError, e.g. a deferred check, outside the
-    // connection classes 08xxx / 57Pxx) is a certain rollback. A driver or
-    // socket error (ECONNRESET, EPIPE, ETIMEDOUT - string codes too) or no
-    // answer may or may not have been applied: look for the request on
-    // another connection; a retry with the same requestKey is safe either way.
     console.error(`[roster] commit of ${operation} on activity ${activityId} failed: ${error?.code ?? ""} ${error?.message}`);
-    if (error instanceof pg.DatabaseError && !/^(08|57P)/.test(String(error.code ?? ""))) {
+    if (commitCertainlyRefused(error)) {
       await client.query("rollback").catch(() => { broken = true; });
-      throw error;
+      throw new RosterError(500, "internal_error", NOTHING_SAVED);
     }
-    broken = true;
-    const found = await findStoredResult(canonicalId, requestKey, hash, ctx.userId).catch(() => null);
-    if (found) return { status: 200, body: found, verifiedAfterCommitError: true };
-    throw new RosterError(503, "outcome_unknown", "Not sure the change was saved. Try again with the same requestKey; it will not be saved twice.");
-  } finally {
+    // Unknown outcome: the connection is not trusted any more. Destroy it
+    // before the check (never return it to the pool).
+    released = true;
     client.removeListener("error", onClientError);
-    client.release(broken ? true : undefined);
+    client.on("error", () => {});
+    client.release(true);
+    let found = null;
+    try {
+      found = await findStoredResult(canonicalId, requestKey, hash, ctx.userId, testHooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS);
+    } catch (checkError) {
+      console.error(`[roster] checking ${operation} on activity ${activityId} after an unconfirmed COMMIT failed: ${checkError?.message}`);
+    }
+    if (found) return { status: 200, body: found, verifiedAfterCommitError: true };
+    throw new RosterError(503, "outcome_unknown", OUTCOME_UNKNOWN);
+  } finally {
+    if (!released) {
+      client.removeListener("error", onClientError);
+      client.release(broken ? true : undefined);
+    }
   }
 }
 
-async function findStoredResult(canonicalId, requestKey, hash, userId) {
+// Is the request committed? Bounded as a whole: getting a connection and the
+// query share one deadline; a connection that arrives after the deadline is
+// destroyed at once, and one whose query did not answer in time is
+// destroyed instead of returned.
+async function findStoredResult(canonicalId, requestKey, hash, userId, ms) {
   if (!canonicalId) return null;
-  const row = (await pool.query(
-    `select request_hash, performed_by_user_id, result from training.activity_roster_requests
-      where activity_id in (select activity_id from training.activity_alias_ids(training.resolve_canonical_activity_id($1)))
-        and request_key = $2`,
-    [canonicalId, requestKey],
-  )).rows[0];
-  return row && row.request_hash === hash && String(row.performed_by_user_id) === String(userId) ? row.result : null;
+  const deadline = Date.now() + ms;
+  const left = () => Math.max(1, deadline - Date.now());
+  const connecting = pool.connect();
+  let checker;
+  try {
+    checker = await withinBound(connecting, left());
+  } catch (error) {
+    connecting.then((late) => late.release(true), () => {});
+    throw error;
+  }
+  let bad = false;
+  const onCheckerError = () => { bad = true; };
+  checker.on("error", onCheckerError);
+  try {
+    if (testHooks.checkFault) {
+      const fault = Promise.resolve().then(() => testHooks.checkFault(checker));
+      fault.catch(() => {});
+      await withinBound(fault, left());
+    }
+    const answer = checker.query({
+      text: `select request_hash, performed_by_user_id, result from training.activity_roster_requests
+              where activity_id in (select activity_id from training.activity_alias_ids(training.resolve_canonical_activity_id($1)))
+                and request_key = $2`,
+      values: [canonicalId, requestKey],
+      query_timeout: left(),
+    });
+    answer.catch(() => {});
+    const row = (await withinBound(answer, left())).rows[0];
+    return row && row.request_hash === hash && String(row.performed_by_user_id) === String(userId) ? row.result : null;
+  } catch (error) {
+    bad = true;
+    throw error;
+  } finally {
+    checker.removeListener("error", onCheckerError);
+    if (bad) checker.on("error", () => {});
+    checker.release(bad ? true : undefined);
+  }
 }
 
 // ---------------------------------------------------------------------------

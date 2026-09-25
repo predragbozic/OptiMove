@@ -1891,3 +1891,253 @@ test("62b. a socket error on a COMMIT that never reached the server is outcome_u
   }
   assert.equal((await q(`select count(*)::int as n from training.activity_athlete_decisions where activity_id = $1`, [s.activityId]))[0].n, 0);
 });
+
+// ---------------------------------------------------------------------------
+// 63-67. External review of PR #123 (HIGH): the COMMIT and the check after an
+// uncertain COMMIT are bounded; the uncertain connection is destroyed before
+// the check; 40003 is an unknown outcome; a certain rollback and an unknown
+// outcome say different things; nothing leaks (pool, open transaction).
+// ---------------------------------------------------------------------------
+const NOTHING_SAVED_TEXT = "Nothing was saved. Try again.";
+
+// No checked-out pool client and no transaction left open on the disposable
+// database (a destroyed connection's backend may need a moment to go).
+async function assertNoLeak(label) {
+  let open = [];
+  for (let i = 0; i < 300; i += 1) {
+    open = await q(`select pid, state from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and state like 'idle in transaction%'`);
+    if (open.length === 0 && appPool.totalCount === appPool.idleCount) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.fail(`${label}: leak — ${open.length} idle-in-transaction backend(s), pool total ${appPool.totalCount} idle ${appPool.idleCount}`);
+}
+
+const decisionsOn = async (activityId) => (await q(`select count(*)::int as n from training.activity_athlete_decisions where activity_id = $1`, [activityId]))[0].n;
+
+async function withHooks(hooks, fn) {
+  commands.setRosterCommandTestHooks(hooks);
+  try {
+    return await fn();
+  } finally {
+    commands.setRosterCommandTestHooks(null);
+  }
+}
+
+function databaseError(code, message) {
+  const e = new pg.DatabaseError(message, message.length, "error");
+  e.code = code;
+  e.severity = "ERROR";
+  return e;
+}
+
+test("63. a COMMIT whose answer never comes is bounded: the connection is destroyed, the check runs, 503 outcome_unknown, nothing written, nothing leaked", async () => {
+  const s = await plainSession("Commit hangs", 1);
+  const started = Date.now();
+  const res = await withHooks({ commit: () => new Promise(() => {}), commitTimeoutMs: 300 }, () => put(s.activityId, s.athletes[0], s.coach.cookie, dnp()));
+  const elapsed = Date.now() - started;
+  assert.deepEqual([res.status, res.body.error, res.body.message], [503, "outcome_unknown", commands.OUTCOME_UNKNOWN], res.text);
+  assert.ok(elapsed < 300 + commands.UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS, `bounded (${elapsed} ms)`);
+  await assertNoLeak("hung COMMIT");
+  assert.equal(await decisionsOn(s.activityId), 0, "the destroyed connection's transaction is gone");
+});
+
+test("64. a COMMIT that was applied but whose answer never comes is found by the bounded check: 200 with the stored result, one row", async () => {
+  const s = await plainSession("Commit applied hangs", 1);
+  const body = pnv();
+  const res = await withHooks({ commit: async (c) => { await c.query("commit"); await new Promise(() => {}); }, commitTimeoutMs: 300 },
+    () => put(s.activityId, s.athletes[0], s.coach.cookie, body));
+  assert.equal(res.status, 200, res.text);
+  const stored = (await q(`select result from training.activity_roster_requests where activity_id = $1`, [s.activityId]))[0].result;
+  assert.deepEqual(res.body, stored);
+  assert.equal(await decisionsOn(s.activityId), 1);
+  await assertNoLeak("applied, answer lost");
+  assert.deepEqual((await put(s.activityId, s.athletes[0], s.coach.cookie, body)).body, stored, "the retry is the same answer");
+});
+
+test("65. SQLSTATE 40003 statement_completion_unknown on COMMIT is an unknown outcome, never 'nothing was saved'", async () => {
+  // Not applied: nothing found -> 503.
+  const s = await plainSession("Commit 40003", 1);
+  const lost = await withHooks({ commit: async () => { throw databaseError("40003", "statement completion unknown"); } },
+    () => put(s.activityId, s.athletes[0], s.coach.cookie, dnp()));
+  assert.deepEqual([lost.status, lost.body.error], [503, "outcome_unknown"], lost.text);
+  assert.notEqual(lost.body.message, NOTHING_SAVED_TEXT);
+  await assertNoLeak("40003 not applied");
+  assert.equal(await decisionsOn(s.activityId), 0);
+  // Applied: found -> 200.
+  const t = await plainSession("Commit 40003 applied", 1);
+  const kept = await withHooks({ commit: async (c) => { await c.query("commit"); throw databaseError("40003", "statement completion unknown"); } },
+    () => put(t.activityId, t.athletes[0], t.coach.cookie, dnp()));
+  assert.equal(kept.status, 200, kept.text);
+  assert.equal(await decisionsOn(t.activityId), 1);
+  // The classification itself.
+  assert.equal(commands.commitCertainlyRefused(databaseError("40003", "x")), false);
+  assert.equal(commands.commitCertainlyRefused(databaseError("08006", "x")), false);
+  assert.equal(commands.commitCertainlyRefused(databaseError("57P01", "x")), false);
+  assert.equal(commands.commitCertainlyRefused(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })), false);
+  assert.equal(commands.commitCertainlyRefused(new Error("no answer within 15000 ms")), false);
+  assert.equal(commands.commitCertainlyRefused(databaseError("23514", "deferred check")), true);
+  assert.equal(commands.commitCertainlyRefused(databaseError("40001", "serialization")), true);
+});
+
+test("66. the check after an uncertain COMMIT is bounded as a whole: a hanging check answers 503 in time and its connection is destroyed", async () => {
+  const s = await plainSession("Check hangs", 1);
+  const started = Date.now();
+  const res = await withHooks({
+    commit: async () => { throw Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }); },
+    checkFault: (c) => c.query("select pg_sleep(2)"),
+    checkTimeoutMs: 300,
+  }, () => put(s.activityId, s.athletes[0], s.coach.cookie, dnp()));
+  const elapsed = Date.now() - started;
+  assert.deepEqual([res.status, res.body.error], [503, "outcome_unknown"], res.text);
+  assert.ok(elapsed < 1500, `the check stopped at its bound (${elapsed} ms), not after the 2 s query`);
+  await assertNoLeak("hanging check");
+  assert.equal(await decisionsOn(s.activityId), 0);
+});
+
+test("67. a certain rollback says 'Nothing was saved'; an unknown outcome says it is not sure — two different answers", async () => {
+  const s = await plainSession("Messages", 1);
+  // (a) Failed before the COMMIT.
+  await q(`create function pg_temp_fail_before() returns trigger as $$ begin raise exception 'internal detail'; end $$ language plpgsql`);
+  await q(`create trigger zz_fail_before before insert on training.activity_roster_requests for each row execute function pg_temp_fail_before()`);
+  let before;
+  try {
+    before = await put(s.activityId, s.athletes[0], s.coach.cookie, dnp());
+  } finally {
+    await q(`drop trigger zz_fail_before on training.activity_roster_requests`);
+    await q(`drop function pg_temp_fail_before()`);
+  }
+  // (b) The server refused the COMMIT (a deferred check).
+  await q(`create function pg_temp_fail_commit() returns trigger as $$ begin raise exception 'internal detail'; end $$ language plpgsql`);
+  await q(`create constraint trigger zz_fail_commit after insert on training.activity_roster_requests deferrable initially deferred for each row execute function pg_temp_fail_commit()`);
+  let refused;
+  try {
+    refused = await put(s.activityId, s.athletes[0], s.coach.cookie, dnp());
+  } finally {
+    await q(`drop trigger zz_fail_commit on training.activity_roster_requests`);
+    await q(`drop function pg_temp_fail_commit()`);
+  }
+  // (c) The connection was lost on the COMMIT.
+  const unknown = await withHooks({ commit: async () => { throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" }); } },
+    () => put(s.activityId, s.athletes[0], s.coach.cookie, dnp()));
+  for (const res of [before, refused]) {
+    assert.deepEqual([res.status, res.body.error, res.body.message], [500, "internal_error", NOTHING_SAVED_TEXT], res.text);
+    assert.ok(!/internal detail/.test(res.text));
+  }
+  assert.deepEqual([unknown.status, unknown.body.error, unknown.body.message], [503, "outcome_unknown", commands.OUTCOME_UNKNOWN]);
+  assert.notEqual(unknown.body.message, NOTHING_SAVED_TEXT);
+  assert.equal(await decisionsOn(s.activityId), 0);
+  await assertNoLeak("messages");
+});
+
+// ---------------------------------------------------------------------------
+// 68-71. External review of PR #123 (MEDIUM): archiving the parent club waits
+// for a decision in flight on every basis, and refuses after the archive.
+// Lock order of lock_activity_decider: team -> club -> role -> user.
+// ---------------------------------------------------------------------------
+test("68. archiving the parent club waits for an in-flight decision of a team coach and of a platform admin", async () => {
+  for (const basis of ["team_coach", "platform_admin"]) {
+    const s = await plainSession(`Club wait ${basis}`, 1);
+    const who = basis === "team_coach" ? s.coach : await platformAdmin(`Admin ${basis}`);
+    const paused = gate();
+    const reached = gate();
+    commands.setRosterCommandTestHooks({ beforeCommit: async () => { reached.open(); await paused.promise; } });
+    const request = put(s.activityId, s.athletes[0], who.cookie, dnp());
+    await reached.promise;
+    const settings = await newClient();
+    const archiving = settings.query(`update public.clubs set is_active = false where id = $1`, [s.clubId]).then(() => Date.now());
+    try {
+      await waitForLockWaiters(/^update public\.clubs/);
+      const releasedAt = Date.now();
+      paused.open();
+      const res = await request;
+      assert.equal(res.status, 200, `${basis}: ${res.text}`);
+      assert.equal(res.body.decision.decidedBy.basis, basis);
+      assert.ok((await archiving) >= releasedAt, `${basis}: the club archive finished only after the decision committed`);
+    } finally {
+      commands.setRosterCommandTestHooks(null);
+      paused.open();
+      await settings.end();
+    }
+    assert.equal(await decisionsOn(s.activityId), 1);
+  }
+});
+
+test("69. a decision that arrives while the club archive is uncommitted waits for it, then is refused with nothing written", async () => {
+  for (const basis of ["team_coach", "club_admin", "platform_admin"]) {
+    const s = await plainSession(`Archive first ${basis}`, 1);
+    const who = basis === "team_coach" ? s.coach : basis === "club_admin" ? await clubAdminOf(s.clubId) : await platformAdmin(`Admin first ${basis}`);
+    const settings = await newClient();
+    await settings.query("begin");
+    await settings.query(`update public.clubs set is_active = false where id = $1`, [s.clubId]);
+    const request = put(s.activityId, s.athletes[0], who.cookie, dnp());
+    try {
+      await waitForLockWaiters(/lock_activity_decider/);
+      await settings.query("commit");
+    } finally {
+      await settings.end();
+    }
+    const res = await request;
+    assert.deepEqual([res.status, res.body.error], [403, "not_a_team_coach"], `${basis}: ${res.text}`);
+    assert.equal(await decisionsOn(s.activityId), 0, basis);
+  }
+});
+
+test("70. after the parent club is archived: every command and the read answer the identical 404, and the database refuses every basis", async () => {
+  const s = await plainSession("Club archived", 1);
+  const clubAdmin = await clubAdminOf(s.clubId);
+  const padmin = await platformAdmin("Admin archived club");
+  await put(s.activityId, s.athletes[0], s.coach.cookie, pnv());
+  await q(`update public.clubs set is_active = false where id = $1`, [s.clubId]);
+  const before = await rowCounts();
+  const notFoundText = JSON.stringify({ error: "notFound" });
+  for (const who of [s.coach, clubAdmin, padmin]) {
+    for (const res of [
+      await roster(s.activityId, who.cookie),
+      await put(s.activityId, s.athletes[0], who.cookie, dnp({ expectedDecisionId: crypto.randomUUID() })),
+      await bulk(s.activityId, who.cookie, { kind: "participated_no_values", athletes: [{ athleteId: s.athletes[0], expectedDecisionId: null }], requestKey: key() }),
+      await complete(s.activityId, who.cookie, { expectedRevision: 1, expectedFingerprint: "a".repeat(64), requestKey: key() }),
+      await reopen(s.activityId, who.cookie, { expectedRevision: 1, reason: "x", requestKey: key() }),
+    ]) {
+      assert.deepEqual([res.status, res.text], [404, notFoundText], `${who.id}: ${res.text}`);
+    }
+  }
+  for (const [userId, basis] of [[s.coach.id, "team_coach"], [clubAdmin.id, "club_admin"], [padmin.id, "platform_admin"]]) {
+    await assert.rejects(q(`select training.lock_activity_decider($1, $2, $3)`, [userId, s.teamId, basis]), (e) => e.code === "42501" && /club is archived/.test(e.message), basis);
+  }
+  // And raw SQL cannot record a decision for that team any more.
+  await assert.rejects(inTx(async (c) => {
+    const req = crypto.randomUUID();
+    const d = (await c.query(`select id from training.activity_athlete_decisions where activity_id = $1 and superseded_by_decision_id is null`, [s.activityId])).rows[0].id;
+    const id = crypto.randomUUID();
+    await c.query(`update training.activity_athlete_decisions set superseded_by_decision_id = $2, superseded_at = now() where id = $1`, [d, id]);
+    await c.query(`insert into training.activity_athlete_decisions (id, activity_id, athlete_id, owner_team_id, request_id, decision_kind, reason_key, decided_by_user_id, decided_by_basis)
+                   values ($1,$2,$3,$4,$5,'did_not_participate','illness',$6,'platform_admin')`, [id, s.activityId, s.athletes[0], s.teamId, req, padmin.id]);
+  }), /club is archived/);
+  assert.deepEqual(await rowCounts(), before);
+});
+
+test("71. a decision in flight, a team archive and a club archive together: both archives wait, nothing deadlocks, all finish", async () => {
+  const s = await plainSession("No deadlock", 1);
+  const paused = gate();
+  const reached = gate();
+  commands.setRosterCommandTestHooks({ beforeCommit: async () => { reached.open(); await paused.promise; } });
+  const request = put(s.activityId, s.athletes[0], s.coach.cookie, dnp());
+  await reached.promise;
+  const a = await newClient();
+  const b = await newClient();
+  const teamArchive = a.query(`update public.teams set is_active = false where id = $1`, [s.teamId]);
+  const clubArchive = b.query(`update public.clubs set is_active = false where id = $1`, [s.clubId]);
+  try {
+    await waitForLockWaiters(/^update public\.(teams|clubs)/, 2);
+    paused.open();
+    assert.equal((await request).status, 200);
+    await Promise.all([teamArchive, clubArchive]);
+  } finally {
+    commands.setRosterCommandTestHooks(null);
+    paused.open();
+    await a.end();
+    await b.end();
+  }
+  assert.deepEqual((await q(`select t.is_active as team, c.is_active as club from public.teams t join public.clubs c on c.id = t.club_id where t.id = $1`, [s.teamId]))[0], { team: false, club: false });
+  assert.equal(await decisionsOn(s.activityId), 1);
+});

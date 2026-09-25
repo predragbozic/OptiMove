@@ -238,7 +238,10 @@ function rosterCommandRoute(run) {
         return res.status(error.status).json({ error: error.code, message: error.message, ...(error.details ?? {}) });
       }
       console.error(`[roster] ${req.method} ${req.path} failed: ${error?.code ?? ""} ${error?.message}`);
-      res.status(500).json({ error: "internal_error", message: "Not sure the change was saved. Try again with the same requestKey; it will not be saved twice." });
+      // Everything that reaches here failed before the COMMIT: a certain
+      // rollback. A COMMIT the server refused is a RosterError with the same
+      // text; an unknown COMMIT outcome is 503 outcome_unknown.
+      res.status(500).json({ error: "internal_error", message: "Nothing was saved. Try again." });
     }
   };
 }
