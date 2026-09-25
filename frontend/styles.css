@@ -15787,8 +15787,30 @@ button.tests-assignment-card {
 /* The calendar: seven columns that always fit; a marked day is a button
    with a dot (or the count) under the number, the day filtered to is
    pressed, today is outlined - none of it by colour alone. */
-.imports-cal-head {
+.imports-calendar > summary {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.imports-cal-brief {
+  font-weight: 400;
+}
+/* The fold's marker, as on the screen's other folds - in front, so it never wraps onto a line of its own on a phone. */
+.imports-calendar > summary::before {
+  content: "\25B8";
+  margin-right: 6px;
+  font-size: 0.9em;
+}
+.imports-calendar[open] > summary::before {
+  content: "\25BE";
+}
+.imports-calendar > summary::-webkit-details-marker {
+  display: none;
 }
 .imports-cal-nav {
   display: flex;
@@ -15893,7 +15915,7 @@ button.tests-assignment-card {
   .imports-select-actions > * {
     width: 100%;
   }
-  .imports-cal-head .imports-cal-nav {
+  .imports-calendar .imports-cal-nav {
     width: 100%;
     justify-content: space-between;
   }

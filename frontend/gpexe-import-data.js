@@ -91,7 +91,7 @@ function resetGpexeTeamState(teamId) {
   const gx = g();
   gx.generation += 1;
   gx.batch = emptyBatch();
-  gx.calendar = { month: "", day: "" };
+  gx.calendar = { month: "", day: "", open: null };
   gx.teamId = teamId;
   gx.status = null;
   gx.candidates = null;
@@ -188,7 +188,9 @@ function finishLoad(gx, status, render) {
 // confirmed" mark goes.
 function forgetConfirmedImports() {
   const gx = g();
-  for (const c of gx.candidates || []) if (c.status === "imported") delete gx.uncertain[c.id];
+  // A replaced session (a later search found other content) was never
+  // imported either: its mark is resolved as well.
+  for (const c of gx.candidates || []) if (c.status === "imported" || c.status === "superseded") delete gx.uncertain[c.id];
   // The link notice's "find new sessions" is done once its session's
   // review is current; the link list keeps Unlink.
   const linked = gx.lastLink && (gx.candidates || []).find((c) => c.id === gx.lastLink.candidateId);
@@ -832,6 +834,10 @@ export function inboxBucket(c, gx = g()) {
   // new" is true only when somebody was imported; a session in which no
   // athlete is linked yet writes nothing and must not read as done.
   if (group === "uptodate") return rowReasons(c).length ? "attention" : "imported";
+  // A review made before a link change (owner decision 2026-09-25): the
+  // session needs a new search, so it is an attention item on its own; the
+  // other, fresh Ready sessions stay importable.
+  if (reviewMadeBeforeLinkChange(c, gx)) return "attention";
   if (rowReasons(c).length) return "attention";
   return "ready";
 }
@@ -1126,4 +1132,38 @@ export function setCalendarDay(day) {
 
 export function clearCalendarDay() {
   g().calendar.day = "";
+}
+
+// Whether the calendar panel is open: as the coach left it; otherwise open
+// on a desktop, folded on a phone (the list is the day's work), and open
+// while a day is filtered so the "Show all dates" line is in sight.
+export function calendarOpen(gx = g()) {
+  const open = gx.calendar?.open;
+  if (open === true || open === false) return open;
+  if (gx.calendar?.day) return true;
+  return !globalThis.window?.matchMedia?.("(max-width: 760px)")?.matches;
+}
+
+// The panel was opened or folded (the <details> element's own "toggle"
+// event, app.js): its state is kept for the next repaint. Local only - no
+// request, no change to the search dates, the shared week or the filtered day.
+export function calendarToggled(open) {
+  g().calendar.open = Boolean(open);
+}
+
+// Leaving the page (reload, close, another site) while an import is running
+// or an outcome is not confirmed would lose the only local view of that
+// outcome: the browser is asked to warn first. Never while nothing is
+// pending. (The server still never imports a session twice.)
+export function importsUnloadShouldWarn(gx = g()) {
+  // The app's own navigations (sign-out, a switch to or from athlete mode)
+  // are deliberate and already done on the server: never asked about.
+  if (state.deliberateNavigation) return false;
+  if (gx?.batch?.sending || gx?.batch?.unknown) return true;
+  // A mark counts while its session is listed and still unresolved; a mark
+  // whose session the list no longer shows (replaced by newer data, hidden)
+  // cannot be resolved on this screen and must not block leaving forever.
+  const marked = Object.keys(gx?.uncertain || {});
+  if (!marked.length) return false;
+  return (gx.candidates || []).some((c) => marked.includes(c.id) && c.status !== "imported" && c.status !== "superseded");
 }

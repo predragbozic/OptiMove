@@ -46,8 +46,12 @@ backend, database, migration or Settings → Data sources change):
 - **Choosing Ready sessions.** Only a clean Ready session with a valid `previewHash`
   from the list gets a checkbox (the row still opens the review); nothing is chosen in
   advance; without the right to approve, or with the switch off, the bucket is review
-  only and nothing can be chosen; Needs attention, Imported, Stays out, a stale review
-  (link change since) and a session with changes to imported results never enter a batch.
+  only and nothing can be chosen; Needs attention, Imported, Stays out and a session with
+  changes to imported results never enter a batch. A session reviewed before a link
+  change is a Needs-attention item of its own (owner decision 2026-09-25) with the step
+  "Find new sessions again (with dates that include …)"; the other, fresh Ready sessions
+  stay selectable and importable, so the Ready bucket never shows a session that looks
+  ready but has no checkbox because of another stale one.
   The selection holds `{ candidateId, previewHash }` from the list row that was chosen;
   after every load, reload or link change a chosen session that is no longer Ready or
   whose preview was recomputed (another hash) is dropped with a sentence; a team or
@@ -90,7 +94,13 @@ backend, database, migration or Settings → Data sources change):
   shared Training Load week; the day key uses the same local clock as the row's date and
   time (never `toISOString`), tested with a session close to midnight; the first month is
   the newest found session's, else this month; Prev/Next send no request; seven columns
-  fit at 360/375 px with no horizontal overflow and 44 px-high cells.
+  fit at 360/375 px with no horizontal overflow and 44 px-high cells. The panel is
+  foldable (owner decision 2026-09-25): open on a desktop, folded by default at ≤760 px
+  where the list is the day's work, opened by default while a day is filtered; the folded
+  summary reads "Sessions calendar · September · 8 sessions on 5 days" ("nothing found
+  yet" for an empty month) with the screen's usual ▸/▾ marker; the day filter's line sits
+  under the panel so it stays in sight when folded; opening sends no request and changes
+  neither From/To, the shared week nor the filtered day.
 - **Recovery:** generation guard for a workspace change during the request and the
   reload (the old team's answer never lands in the new state); the team select is off
   while the request runs and asks first while sessions are chosen but not imported; a
@@ -100,12 +110,16 @@ backend, database, migration or Settings → Data sources change):
   move inside the app, a workspace switch resets it — with a page reload the only exits
   that lose a running batch's result, the reload being the pre-existing gap Dashboards
   has too). A whole-request refusal keeps the confirmation open with the reason; Back
-  leaves the reason under the Ready bucket until the next choice. A Ready bucket locked
-  by a link change offers no checkbox and no selection bar (its one line is the
-  instruction). Two product choices left to the owner: whether the calendar should be a
-  collapsible panel on phones (it sits above the buckets, ~350–400 px tall at 375 px),
-  and whether non-stale Ready sessions should stay batch-importable while others are
-  stale.
+  leaves the reason under the Ready bucket until the next choice. **Reload/close guard:** a `beforeunload` listener (`app.js` →
+  `handleTrainingLoadBeforeUnload`) calls `preventDefault()` and sets `returnValue` — the
+  browser's own dialog, no custom text — while a batch is being sent, while a lost
+  answer's outcome is unconfirmed, or while any listed session carries the "Result not
+  confirmed" mark (a mark on a session replaced by newer data is resolved, since it was
+  never imported); nothing is blocked otherwise, and never for the app's own deliberate
+  navigations (sign-out, a switch to or from athlete mode). Deliberately closing the tab despite the
+  browser's warning, and a browser or OS shutdown, can still lose the local view of the
+  outcome; the server never imports a session twice (no automatic retry and no
+  sessionStorage in this PR).
 
 Phases 5–6 (completion model and roster, session context, add-later-values) wait for the
 owner's go after each merge.

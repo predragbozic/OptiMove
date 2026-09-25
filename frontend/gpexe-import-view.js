@@ -23,6 +23,7 @@ import {
   calendarDayKey,
   calendarFiltered,
   calendarMonthShown,
+  calendarOpen,
   candidateGroup,
   gpexeTeamOptions,
   inboxBucket,
@@ -462,12 +463,6 @@ function reasonFact(r) {
   }
 }
 
-// Ready sessions are not importable as they are while the links changed
-// after their review: the bucket is locked as a whole, with one line.
-function readyLocked(list, gx) {
-  return list.some((c) => inboxBucket(c, gx) === "ready" && reviewMadeBeforeLinkChange(c, gx));
-}
-
 function findAgainText(list) {
   const dates = list.map((c) => c.sessionStartedAt).filter(Boolean).sort();
   if (!dates.length) return "Find new sessions again";
@@ -499,7 +494,7 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   let text;
   if (!status.settings) text = "A platform admin needs to connect this team to a data source (Settings > Data sources).";
   else if (gx.checkStarting || check?.status === "running") text = "Finding new sessions...";
-  else if (stale.length) text = `${findAgainText(stale)}: athlete links changed after these reviews were made.${datesNeededFor(list, gx) ? " The dates are set above." : ""}`;
+  else if (stale.length) text = `${findAgainText(stale)}: athlete links changed after ${stale.length === 1 ? "this review was" : "these reviews were"} made.${datesNeededFor(list, gx) ? " The dates are set above." : ""}${ready.length ? ` ${readyText.replace(/^\w/, (ch) => ch.toUpperCase())} now.` : ""}`;
   else if (unlinkedAthletes) text = `Next step: ${plural(unlinkedAthletes, "GPEXE athlete is", "GPEXE athletes are")} not linked - use Link athletes (below), then find new sessions.`;
   else if (attention && ready.length) text = `Next step: ${plural(attention, "item needs", "items need")} attention · ${readyText}.`;
   else if (attention) text = `Next step: ${plural(attention, "item needs", "items need")} attention - see below.`;
@@ -516,7 +511,7 @@ function attentionText(c, status, gx = state.trainingLoad.gpexe) {
   if (isUncertain(c, gx)) return "Import result not confirmed yet - open it to check the result.";
   if (!c.snapshot?.available) return `Needs a fresh search - find new sessions${c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : ""}.`;
   if (c.status === "blocked") return c.blockedCode ? blockedCoachText(c).step : "Open it to see what is in the way.";
-  if (reviewMadeBeforeLinkChange(c, gx)) return `Athlete links changed after this review - find new sessions${c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : ""} to see it again.`;
+  if (reviewMadeBeforeLinkChange(c, gx)) return `${findAgainText([c])} - athlete links changed after this review was made.`;
   // The first reason is the coach's own step (linking comes first); the
   // row's facts name every reason.
   const [first] = rowReasons(c);
@@ -533,12 +528,8 @@ function renderBucketsHtml(gx, status) {
   const out = of("out");
   const imported = of("imported");
   const replaced = list.filter((c) => candidateGroup(c, gx) === "replaced");
-  let readyNote = "";
-  if (readyLocked(ready, gx)) readyNote = `${findAgainText(ready.filter((c) => reviewMadeBeforeLinkChange(c, gx)))} first - athlete links changed after these reviews were made.`;
-  else readyNote = reviewOnlyText(status);
-  // A Ready bucket locked by a link change (some reviews are stale) is
-  // locked as a whole: its one line is the instruction, no checkbox.
-  const pickable = batchAllowed(gx) && !readyLocked(ready, gx);
+  const readyNote = reviewOnlyText(status);
+  const pickable = batchAllowed(gx);
   const rows = (items, kind) => `<ul class="gpexe-candidate-list">${items.map((c) => renderSessionRowHtml(c, status, kind, kind === "ready" && pickable)).join("")}</ul>`;
   return `
     ${attention.length ? `
@@ -552,7 +543,7 @@ function renderBucketsHtml(gx, status) {
       ${readyNote && ready.length ? `<p class="imports-bucket-note">${escapeHtml(readyNote)}</p>` : ""}
       ${gx.batch?.dropped ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.batch.dropped)}</p>` : ""}
       ${gx.batch?.error && !gx.batch.confirming ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(gx.batch.error))}</p>${errorTech(gx.batch.error)}</div>` : ""}
-      ${readyLocked(ready, gx) ? "" : renderSelectBarHtml(gx, ready)}
+      ${renderSelectBarHtml(gx, ready)}
       ${ready.length ? rows(ready, "ready") : `<p class="muted">${day ? "No session of this day is ready to import." : "Nothing is ready to import."}</p>`}
     </section>
     ${out.length ? `
@@ -847,23 +838,29 @@ function renderCalendarHtml(gx) {
       cells.push(`<span class="imports-cal-day${isToday ? " is-today" : ""}" aria-label="${escapeAttr(`${name}, nothing found yet${isToday ? ", today" : ""}`)}"><span class="imports-cal-num">${d}</span></span>`);
     }
   }
+  // The folded summary says the month and how much it holds, so a phone
+  // coach knows without opening; opening sends nothing and changes nothing.
+  const inMonth = listed.filter((c) => calendarDayKey(c.sessionStartedAt).startsWith(`${month}-`));
+  const daysInUse = new Set(inMonth.map((c) => calendarDayKey(c.sessionStartedAt))).size;
+  const brief = inMonth.length ? `${plural(inMonth.length, "session", "sessions")} on ${plural(daysInUse, "day", "days")}` : "nothing found yet";
+  const open = calendarOpen(gx);
+  // The day filter's line sits under the panel, so it stays in sight when
+  // the calendar is folded.
   return `
-    <section class="gpexe-panel imports-calendar" aria-label="Sessions calendar">
-      <div class="gpexe-panel-head imports-cal-head">
-        <h3>Sessions calendar</h3>
-        <div class="imports-cal-nav">
-          <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-prev" aria-label="Previous month">&lsaquo;</button>
-          <strong class="imports-cal-month" aria-live="polite">${escapeHtml(`${MONTH_NAMES[m - 1]} ${y}`)}</strong>
-          <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-next" aria-label="Next month">&rsaquo;</button>
-        </div>
+    <details class="gpexe-panel imports-calendar" data-rendered-open="${open ? "1" : "0"}" ${open ? "open" : ""}>
+      <summary class="imports-cal-summary"><span class="imports-cal-title">Sessions calendar</span><span class="muted imports-cal-brief"> · ${escapeHtml(MONTH_NAMES[m - 1])} · ${escapeHtml(brief)}</span></summary>
+      <div class="imports-cal-nav">
+        <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-prev" aria-label="Previous month">&lsaquo;</button>
+        <strong class="imports-cal-month" aria-live="polite">${escapeHtml(`${MONTH_NAMES[m - 1]} ${y}`)}</strong>
+        <button type="button" class="plain-button gpexe-button imports-cal-turn" data-action="training-load-gpexe-cal-next" aria-label="Next month">&rsaquo;</button>
       </div>
       <p class="muted imports-cal-note">Markers show sessions already found by OptiMove. Other dates may not have been searched yet.</p>
       <div class="imports-cal-grid" role="group" aria-label="${escapeAttr(`${MONTH_NAMES[m - 1]} ${y}`)}">
         ${WEEKDAY_NAMES.map((w) => `<span class="imports-cal-weekday" aria-hidden="true">${w}</span>`).join("")}
         ${cells.join("")}
       </div>
-      ${selected ? `<p class="imports-cal-filter" role="status">Showing the sessions of ${escapeHtml(formatDate(selected))} only (${shown.length} of ${listed.length}). <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-cal-all">Show all dates</button></p>` : ""}
-    </section>
+    </details>
+    ${selected ? `<p class="imports-cal-filter" role="status">Showing the sessions of ${escapeHtml(formatDate(selected))} only (${shown.length} of ${listed.length}). <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-cal-all">Show all dates</button></p>` : ""}
   `;
 }
 

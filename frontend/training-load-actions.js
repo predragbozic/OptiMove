@@ -1,6 +1,6 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
-import { loadGpexeImports } from "./gpexe-import-data.js";
+import { importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
   captureTrainingLoadAthleteWeeklyMutationContext,
@@ -231,6 +231,19 @@ function importsBatchMayBeLeft(nextTab) {
   if (nextTab === "training-load") return true;
   const chosen = Object.keys(batch.selected || {}).length;
   if (chosen && !batch.results && !batch.unknown) return ask(`You selected ${chosen} ${chosen === 1 ? "session" : "sessions"} for import but did not import ${chosen === 1 ? "it" : "them"} yet. Leave anyway?`);
+  return true;
+}
+
+// app.js's "beforeunload" listener. While a batch import is running, or an
+// outcome (a lost answer, an unconfirmed session) is not confirmed yet, the
+// standard browser dialog asks before the page is left; the text is the
+// browser's own (a custom one would not be shown). Otherwise nothing is
+// blocked. Returns whether it asked.
+export function handleTrainingLoadBeforeUnload(event) {
+  if (!importsUnloadShouldWarn()) return false;
+  event.preventDefault();
+  // Legacy browsers read the flag from returnValue; the string is not shown.
+  event.returnValue = "An import is still running or its result is not confirmed.";
   return true;
 }
 

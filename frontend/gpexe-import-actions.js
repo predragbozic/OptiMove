@@ -299,5 +299,6 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     renderTrainingLoad();
     return true;
   }
+
   return false;
 }

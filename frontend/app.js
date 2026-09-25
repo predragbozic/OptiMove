@@ -63,7 +63,8 @@ import { renderCoachHomeHtml } from "./coach-home.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
+import { calendarToggled as importsCalendarToggled } from "./gpexe-import-data.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import { els } from "./dom.js";
@@ -401,6 +402,18 @@ function bindEvents() {
   els.content.addEventListener("submit", handleContentSubmit);
   els.content.addEventListener("input", handleContentInput);
   els.content.addEventListener("change", handleContentChange);
+  // Imports (phase 4b): the sessions calendar is a <details>; the browser
+  // opens and folds it itself, and its own "toggle" event (it does not
+  // bubble, hence the capture) keeps that state for the next repaint. A
+  // click handler would race the browser's toggle.
+  els.content.addEventListener("toggle", (event) => {
+    const panel = event.target;
+    if (!panel?.classList?.contains("imports-calendar")) return;
+    // Inserting an open <details> fires "toggle" too: only a change from
+    // what was rendered is the coach's own choice.
+    if (panel.open === (panel.dataset.renderedOpen === "1")) return;
+    importsCalendarToggled(panel.open);
+  }, true);
   // hotfix/mobile-messages-test-regression: #messagePanel lives in the
   // topbar's <header>, not inside #content, so the search input's `input`
   // events can never reach the listener above - a separate, equally
@@ -469,6 +482,9 @@ function bindEvents() {
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
   window.addEventListener("popstate", handleBrowserBack);
+  // Imports (phase 4b): a running batch import or an unconfirmed outcome
+  // asks (the browser's own dialog) before a reload or close.
+  window.addEventListener("beforeunload", handleTrainingLoadBeforeUnload);
 }
 
 async function loadSession() {
@@ -1321,6 +1337,8 @@ async function signOut() {
     // Explicit even though the reload below tears it down anyway - the
     // athlete Back-button guard must never be nominally active post-logout.
     window.removeEventListener("popstate", handleBrowserBack);
+    // A deliberate navigation: the Imports reload/close guard does not ask.
+    state.deliberateNavigation = true;
     state.currentUser = null;
     // Defensive, not load-bearing: window.location.replace("/") below
     // already reloads the page (a fresh module evaluation resets

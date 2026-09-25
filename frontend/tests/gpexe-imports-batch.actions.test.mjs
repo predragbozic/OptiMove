@@ -23,11 +23,11 @@ function installFetchMock(responder) {
   };
 }
 
-const { handleTrainingLoadAction, confirmLeaveTrainingLoad, resetTrainingLoadForWorkspaceChange } = await import("../training-load-actions.js");
+const { handleTrainingLoadAction, confirmLeaveTrainingLoad, handleTrainingLoadBeforeUnload, resetTrainingLoadForWorkspaceChange } = await import("../training-load-actions.js");
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
-const { setGpexePollDelayForTests, calendarDayKey } = await import("../gpexe-import-data.js");
+const { setGpexePollDelayForTests, calendarDayKey, calendarToggled, importsUnloadShouldWarn } = await import("../gpexe-import-data.js");
 
 setGpexePollDelayForTests(() => Promise.resolve());
 
@@ -470,9 +470,16 @@ test("10b. the whole request refused before anything was tried (the switch turne
   assert.ok(!/Not imported: importing is switched off/.test(page), "the next choice clears the reason");
 });
 
-test("10c. a Ready bucket locked by a link change offers no checkbox and no selection bar - its one line is the instruction", async () => {
+test("10c. a session reviewed before a link change goes to Needs attention with its own step; a fresh Ready session stays selectable and importable", async () => {
   resetState();
-  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2, { lastSeenAt: "2026-09-25T10:00:00Z" })] }));
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: {} },
+    candidates: [ready(1), ready(2, { lastSeenAt: "2026-09-25T10:00:00Z" })],
+    onImports: (call) => {
+      assert.deepEqual(call.body.candidateIds, ["cand-2"], "only the fresh session is sent");
+      return result({ imported: 1 }, [{ candidateId: "cand-2", outcome: "imported", code: null, approvalId: "appr-2", commitConfirmation: "confirmed" }]);
+    },
+  }));
   await openImports();
   await pick("cand-1");
   gx().linkSeq = 1;
@@ -480,10 +487,101 @@ test("10c. a Ready bucket locked by a link change offers no checkbox and no sele
   await act("training-load-gpexe-superseded");
   await act("training-load-gpexe-superseded");
   const page = html();
-  assert.match(page, /Find new sessions again[^<]*first - athlete links changed after these reviews were made\./);
-  assert.equal(checkboxes(page).length, 0, "no checkbox while the bucket is locked");
-  assert.ok(!/imports-select-bar/.test(page), "no selection bar either");
+  assert.match(page, /Needs attention \(1\)[\s\S]*?<strong>FULL TRAINING 1<\/strong>[\s\S]*?Find new sessions again \(with dates that include 01\.09\.2026\) - athlete links changed after this review was made\./);
+  assert.match(page, /<h3>Ready to import \(1\)<\/h3>/);
+  assert.match(page, /class="gpexe-next"[^>]*>Find new sessions again \(with dates that include 01\.09\.2026\): athlete links changed after this review was made\.[^<]* 1 session is ready to import now\./, "the next step also names what can be imported now");
+  assert.ok(!/imports-bucket-note/.test(page), "no lock note on the Ready bucket");
+  assert.deepEqual(checkboxes(page).map((b) => b.id), ["cand-2"], "the fresh session has its checkbox, the stale one none");
   assert.deepEqual(gx().batch.selected, {}, "the stale choice was dropped");
+  assert.match(page, /1 selected session was removed from the selection/);
+  await pick("cand-2");
+  await act("training-load-gpexe-batch-review");
+  await act("training-load-gpexe-batch-send");
+  assert.equal(importPosts().length, 1);
+  assert.match(dialog(), /FULL TRAINING 2<\/strong>[\s\S]*?Imported\./);
+});
+
+test("10d. the browser is asked before a reload or close only while an import runs or an outcome is not confirmed", async () => {
+  resetState();
+  const unload = () => {
+    const event = { prevented: false, returnValue: undefined, preventDefault() { this.prevented = true; } };
+    const asked = handleTrainingLoadBeforeUnload(event);
+    return { asked, prevented: event.prevented, returnValue: event.returnValue };
+  };
+  let calls = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: {} },
+    candidates: () => { calls += 1; return [ready(1, calls >= 3 ? { status: "imported", importedAt: "2026-09-25T12:00:00Z" } : {}), ready(2)]; },
+    onImports: async () => { await gate; return result({ unknown: 1, refused: 1 }, [{ candidateId: "cand-1", outcome: "import_outcome_unknown", code: "import_outcome_unknown", approvalId: "appr-1", verify: { candidateId: "cand-1", approvalId: "appr-1", approvalHref: "/a", candidateHref: "/c", imported: "i", notImported: "n", retry: "r" } }, { candidateId: "cand-2", outcome: "not_attempted", code: null, approvalId: null }]); },
+  }));
+  await openImports();
+  // 1. nothing pending: the page may be left.
+  assert.deepEqual(unload(), { asked: false, prevented: false, returnValue: undefined });
+  await pick("cand-1");
+  assert.equal(unload().asked, false, "a selection alone is not an unconfirmed outcome");
+  // 2. the request runs.
+  await act("training-load-gpexe-batch-review");
+  const sending = act("training-load-gpexe-batch-send");
+  await new Promise((resolve) => setImmediate(resolve));
+  let u = unload();
+  assert.deepEqual([u.asked, u.prevented, typeof u.returnValue], [true, true, "string"]);
+  release();
+  await sending;
+  // 4. one session not confirmed (import_outcome_unknown): still asked, also after Done.
+  assert.equal(unload().asked, true);
+  await act("training-load-gpexe-batch-done");
+  assert.equal(unload().asked, true, "the unconfirmed mark alone keeps asking");
+  // 5. the list confirms the import: the mark goes and nothing asks.
+  await act("training-load-gpexe-superseded");
+  await act("training-load-gpexe-superseded");
+  assert.deepEqual(gx().uncertain, {});
+  assert.deepEqual(unload(), { asked: false, prevented: false, returnValue: undefined });
+
+  // 3. a lost answer to the whole request asks too.
+  resetState();
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1)], onImports: () => { throw new TypeError("Failed to fetch"); } }));
+  await openImports();
+  await pick("cand-1");
+  await act("training-load-gpexe-batch-review");
+  await act("training-load-gpexe-batch-send");
+  assert.ok(gx().batch.unknown);
+  assert.equal(unload().asked, true);
+  await act("training-load-gpexe-batch-done");
+  assert.equal(unload().asked, true, "the session's own mark keeps asking after Done");
+  // The app's own deliberate navigation (sign-out, athlete mode) is never asked about.
+  state.deliberateNavigation = true;
+  assert.equal(unload().asked, false);
+  delete state.deliberateNavigation;
+  // A lost answer alone (no mark yet) asks as well.
+  assert.equal(importsUnloadShouldWarn({ batch: { unknown: { candidateIds: [] } }, uncertain: {}, candidates: [] }), true);
+});
+
+test("10e. a mark on a session that a later search replaced (never imported) no longer blocks leaving", async () => {
+  resetState();
+  let replaced = false;
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: {} },
+    candidates: () => (replaced ? [ready(1, { id: "cand-1b", previewHash: hashOf(11) })] : [ready(1)]),
+    onImports: () => { throw new TypeError("Failed to fetch"); },
+  }));
+  await openImports();
+  await pick("cand-1");
+  await act("training-load-gpexe-batch-review");
+  await act("training-load-gpexe-batch-send");
+  await act("training-load-gpexe-batch-done");
+  assert.ok(gx().uncertain["cand-1"]);
+  assert.equal(importsUnloadShouldWarn(), true);
+  // A later search replaced cand-1 with new content (the list hides replaced versions).
+  replaced = true;
+  await act("training-load-gpexe-superseded");
+  await act("training-load-gpexe-superseded");
+  assert.equal(importsUnloadShouldWarn(), false, "an unresolvable mark does not block leaving forever");
+  // Shown with the replaced versions, the mark is resolved outright.
+  installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1, { status: "superseded", supersededByCandidateId: "cand-1b" }), ready(1, { id: "cand-1b", previewHash: hashOf(11) })] }));
+  await act("training-load-gpexe-superseded");
+  assert.equal(gx().uncertain["cand-1"], undefined);
 });
 
 test("12. while the request runs the team cannot be changed (the select is off, a stale change is refused); a workspace reset meanwhile never receives the old team's answer", async () => {
@@ -559,7 +657,8 @@ test("13. the calendar marks every day with a found session, whatever its bucket
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: list }));
   await openImports();
   const page = html();
-  assert.match(page, /<h3>Sessions calendar<\/h3>/);
+  assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="1" open>/, "open on a desktop");
+  assert.match(page, /<summary class="imports-cal-summary"><span class="imports-cal-title">Sessions calendar<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span><\/summary>/);
   assert.match(page, /Markers show sessions already found by OptiMove\. Other dates may not have been searched yet\./);
   assert.match(page, /<strong class="imports-cal-month" aria-live="polite">September 2026<\/strong>/, "the month of the newest session found");
   assert.match(page, /data-day="2026-09-21" aria-label="21 September, 2 sessions found" aria-pressed="false"><span class="imports-cal-num">21<\/span><span class="imports-cal-mark" aria-hidden="true"><span class="imports-cal-count">2<\/span>/);
@@ -697,4 +796,48 @@ test("leaving Training Load with a selection or a running import asks first; dec
   release();
   await sending;
   assert.equal(confirmLeaveTrainingLoad("weekly"), true, "a result waiting behind Done asks nothing");
+});
+
+test("19. on a phone the calendar is folded by default with the month and a short count in its summary; opening it sends nothing and changes neither the dates, the shared week nor the filtered day; a filtered day opens it", async () => {
+  resetState();
+  const desktopMatchMedia = globalThis.window.matchMedia;
+  globalThis.window.matchMedia = (q) => ({ matches: q === "(max-width: 760px)" });
+  try {
+    installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(21), ready(14), ready(13, { sessionStartedAt: "2026-09-14T09:00:00Z" })] }));
+    await openImports();
+    let page = html();
+    assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "folded on a phone");
+    assert.match(page, /Sessions calendar<\/span><span class="muted imports-cal-brief"> · September · 3 sessions on 2 days<\/span>/);
+    const calls = fetchCalls.length;
+    // The browser opens the <details> itself; its "toggle" event keeps the state (app.js).
+    calendarToggled(true);
+    page = html();
+    assert.match(page, /<details class="gpexe-panel imports-calendar" data-rendered-open="1" open>/);
+    assert.equal(fetchCalls.length, calls, "no request");
+    assert.match(page, /data-gpexe-field="from" value=""/);
+    assert.equal(state.trainingLoad.dataAnalysisWeekStart, "");
+    assert.equal(gx().calendar.day, "");
+    calendarToggled(false);
+    assert.match(html(), /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >/, "folded again");
+    assert.equal(fetchCalls.length, calls);
+    // Opened, then a day filtered: it stays open across the repaint.
+    calendarToggled(true);
+    await act("training-load-gpexe-cal-day", { day: "2026-09-21" });
+    assert.match(html(), /<details class="gpexe-panel imports-calendar" data-rendered-open="1" open>/, "a repaint keeps the coach's choice");
+    await act("training-load-gpexe-cal-all");
+    // A day filter opens it by default (the coach did not fold it after that).
+    gx().calendar.open = null;
+    await act("training-load-gpexe-cal-day", { day: "2026-09-14" });
+    assert.match(html(), /<details class="gpexe-panel imports-calendar" data-rendered-open="1" open>/);
+    assert.match(html(), /Showing the sessions of 14\.09\.2026 only \(2 of 3\)\./);
+    // Prev: a month without sessions says so in the summary.
+    await act("training-load-gpexe-cal-prev");
+    assert.match(html(), /imports-cal-brief"> · August · nothing found yet</);
+    // The day filter's line stays in sight when the calendar is folded.
+    await act("training-load-gpexe-cal-next");
+    calendarToggled(false);
+    assert.match(html(), /<details class="gpexe-panel imports-calendar" data-rendered-open="0" >[\s\S]*?<\/details>\s*<p class="imports-cal-filter" role="status">Showing the sessions of 14\.09\.2026 only/);
+  } finally {
+    globalThis.window.matchMedia = desktopMatchMedia;
+  }
 });

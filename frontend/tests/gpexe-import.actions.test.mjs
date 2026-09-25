@@ -978,8 +978,9 @@ test("link: after linking the old review can't be approved until a new check, an
   // and the list says what to do.
   await act("training-load-gpexe-close");
   html = renderTrainingLoadCoachHtml();
-  assert.match(html, /class="gpexe-next"[^>]*>Find new sessions again[^:]*: athlete links changed after these reviews were made\. The dates are set above\./);
-  assert.match(html, /imports-bucket-note">Find new sessions again \(with dates that include [0-9.]+\) first - athlete links changed after these reviews were made\./);
+  assert.match(html, /class="gpexe-next"[^>]*>Find new sessions again[^:]*: athlete links changed after this review was made\. The dates are set above\./);
+  assert.match(html, /Needs attention \(1\)[\s\S]*?Find new sessions again \(with dates that include [0-9.]+\) - athlete links changed after this review was made\./, "the stale session is an attention item with its own step");
+  assert.match(html, /<h3>Ready to import \(0\)<\/h3>/);
   await openCandidate();
   assert.ok(!/data-action="training-load-gpexe-approve"/.test(renderTrainingLoadCoachHtml()));
 
@@ -1414,8 +1415,8 @@ test("Imports: a stale review after a link change says so on its row, and the da
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link-confirm" }), { renderTrainingLoad: render });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
   const html = renderTrainingLoadCoachHtml();
-  assert.match(html, /Athlete links changed after this review - find new sessions with dates that include 14\.09\.2026 to see it again\./);
-  assert.match(html, /class="gpexe-next"[^>]*>Find new sessions again \(with dates that include 14\.09\.2026\): athlete links changed after these reviews were made\. The dates are set above\./);
+  assert.match(html, /Find new sessions again \(with dates that include 14\.09\.2026\) - athlete links changed after this review was made\./);
+  assert.match(html, /class="gpexe-next"[^>]*>Find new sessions again \(with dates that include 14\.09\.2026\): athlete links changed after this review was made\. The dates are set above\./);
   assert.match(html, /<details class="imports-dates" open>/);
   assert.match(html, /data-gpexe-field="from" value="2026-09-14"/);
   assert.match(html, /data-gpexe-field="to" value="2026-09-14"/);
@@ -1582,7 +1583,7 @@ test("Imports: the pre-filled dates never exceed the 31-day search limit, and a 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-link-confirm" }), { renderTrainingLoad: render });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-gpexe-close" }), { renderTrainingLoad: render });
   html = renderTrainingLoadCoachHtml();
-  assert.match(html, /Find new sessions again: athlete links changed after these reviews were made\./);
+  assert.match(html, /Find new sessions again: athlete links changed after this review was made\./);
   assert.ok(!/The dates are set above/.test(html), "next step: " + (html.match(/class="gpexe-next"[^>]*>([^<]*)/) || [])[1]);
   assert.ok(!/<details class="imports-dates" open>/.test(html), "hint: " + (html.match(/gpexe-hint">([^<]*)/) || [])[1]);
 });

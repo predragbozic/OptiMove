@@ -672,9 +672,11 @@ export const emptyGpexeImportState = () => ({
   // request.
   batch: { selected: {}, confirming: false, sending: false, checking: false, results: null, summary: null, unknown: null, dropped: "", error: null },
   // The local sessions calendar: the month shown ("" = the newest found
-  // session's month, or today's) and the day the list is filtered to ("" =
-  // every day). Local to Imports; never the shared Training Load week.
-  calendar: { month: "", day: "" },
+  // session's month, or today's), the day the list is filtered to ("" =
+  // every day), and whether the panel is open (null = the default: open on
+  // a desktop, folded on a phone, open while a day is filtered). Local to
+  // Imports; never the shared Training Load week.
+  calendar: { month: "", day: "", open: null },
 });
 
 export const emptyTrainingLoadState = (overrides = {}) => ({
