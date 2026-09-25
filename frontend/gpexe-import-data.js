@@ -830,14 +830,15 @@ export function inboxBucket(c, gx = g()) {
   if (group === "excluded") return "out";
   if (isUncertain(c, gx)) return "attention";
   if (group === "notyet") return "attention";
+  // A review made before a link change (owner decision 2026-09-25): the
+  // session needs a new search, so it is an attention item on its own - also
+  // when that old review said "nothing new", which the new links may change.
+  // The other, fresh Ready sessions stay importable.
+  if (reviewMadeBeforeLinkChange(c, gx)) return "attention";
   // What keeps a session out of Ready comes with the list (reasons). "Nothing
   // new" is true only when somebody was imported; a session in which no
   // athlete is linked yet writes nothing and must not read as done.
   if (group === "uptodate") return rowReasons(c).length ? "attention" : "imported";
-  // A review made before a link change (owner decision 2026-09-25): the
-  // session needs a new search, so it is an attention item on its own; the
-  // other, fresh Ready sessions stay importable.
-  if (reviewMadeBeforeLinkChange(c, gx)) return "attention";
   if (rowReasons(c).length) return "attention";
   return "ready";
 }

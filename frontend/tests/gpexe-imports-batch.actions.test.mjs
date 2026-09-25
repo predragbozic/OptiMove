@@ -841,3 +841,27 @@ test("19. on a phone the calendar is folded by default with the month and a shor
     globalThis.window.matchMedia = desktopMatchMedia;
   }
 });
+
+test("10f. a 'nothing new' session reviewed before a link change is a Needs-attention item (find it again); a fresh 'nothing new' session stays Imported / up to date", async () => {
+  resetState();
+  installFetchMock(gpexeServer({
+    teamStatus: { [TEAM_A]: {} },
+    candidates: [
+      ready(1, { previewStatus: "no_changes", counts: { unchanged: 4, athletesNotImported: 0 } }),
+      ready(2, { previewStatus: "no_changes", counts: { unchanged: 4, athletesNotImported: 0 }, lastSeenAt: "2026-09-25T10:00:00Z" }),
+    ],
+  }));
+  await openImports();
+  gx().linkSeq = 1;
+  gx().linkCheckStartedAt = "2026-09-25T09:00:00Z"; // only cand-2 was seen by a check after the link change
+  const page = html();
+  const attention = page.slice(page.indexOf('aria-label="Needs attention"'), page.indexOf('aria-label="Ready to import"'));
+  assert.match(attention, /<h3>Needs attention \(1\)<\/h3>/);
+  assert.match(attention, /data-candidate-id="cand-1"[\s\S]*?Find new sessions again \(with dates that include 01\.09\.2026\) - athlete links changed after this review was made\./, "the stale 'nothing new' session is an attention item with its step");
+  assert.ok(!attention.includes('data-candidate-id="cand-2"'));
+  const imported = page.slice(page.indexOf("<summary>Imported ("));
+  assert.match(imported, /^<summary>Imported \(1\)<\/summary>/, "only the fresh one is up to date");
+  assert.match(imported, /data-candidate-id="cand-2"[\s\S]*?nothing new/);
+  assert.ok(!imported.includes('data-candidate-id="cand-1"'), "the stale one is not shown as done");
+  assert.equal(checkboxes(page).length, 0, "neither is a batch candidate");
+});
