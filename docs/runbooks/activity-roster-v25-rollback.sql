@@ -25,6 +25,7 @@ drop function if exists training.protect_activity_source_observation();
 
 drop table if exists training.activity_completion_log;
 drop function if exists training.protect_activity_completion_log();
+drop function if exists training.check_activity_completion_log_links();
 drop table if exists training.activity_completions;
 drop function if exists training.protect_activity_completion();
 

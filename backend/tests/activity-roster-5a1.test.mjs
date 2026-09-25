@@ -678,7 +678,7 @@ test("18. the canonical activity and every alias give the same roster", async ()
   await assert.rejects(insertDecision({ activityId: merged, athleteId: a1, teamId, userId: coach.id }), /superseded/);
 });
 
-test("19. a measured athlete who joined after the session is listed apart and does not block", async () => {
+test("19. a measured athlete who joined after the session is listed apart as recorded outside the roster and does not block", async () => {
   const team = await gpexeTeam("Joined");
   const coach = await coachOf(team.teamId);
   // 102 joined the team on 20 Sep, after the 14 Sep session; still active.
@@ -688,10 +688,28 @@ test("19. a measured athlete who joined after the session is listed apart and do
   const r = await roster(summary.activityId, coach.cookie);
   assert.equal(r.status, 200, r.text);
   assert.equal(byName(r.body, team.names[102]), undefined, "not on that date's roster");
-  assert.deepEqual(r.body.joinedAfterSession.map((a) => a.name), [team.names[102]]);
-  assert.equal(r.body.joinedAfterSession[0].state, "measured");
-  assert.equal(r.body.counts.joinedAfterSession, 1);
+  assert.deepEqual(r.body.recordedOutsideRoster.map((a) => a.name), [team.names[102]]);
+  assert.equal(r.body.recordedOutsideRoster[0].state, "measured");
+  assert.equal(r.body.counts.recordedOutsideRoster, 1);
+  assert.equal(r.body.joinedAfterSession, undefined, "the old, inaccurate name is gone");
   assert.equal(r.body.counts.needsState, 1, "only 103 (not imported) needs a state");
+});
+
+test("19b. a measured athlete who left the team before the session is also recorded outside the roster, with no invented reason", async () => {
+  const team = await gpexeTeam("Left before");
+  const coach = await coachOf(team.teamId);
+  const summary = await importDirect(team, bundleFor(6106));
+  // 101's team membership ended on 10 Sep, before the 14 Sep session.
+  const m = (await q(`select id from public.athlete_memberships where athlete_id = $1 and team_id = $2`, [team.ids[101], team.teamId]))[0].id;
+  await archiveMembership(m, "2026-09-10T00:00:00Z");
+  const r = await roster(summary.activityId, coach.cookie);
+  assert.equal(r.status, 200, r.text);
+  assert.equal(byName(r.body, team.names[101]), undefined, "not on that date's roster");
+  assert.equal(r.body.recordedOutsideRoster.length, 1);
+  const row = r.body.recordedOutsideRoster[0];
+  assert.deepEqual(Object.keys(row).sort(), ["athleteId", "name", "state", "stateLabel", "values"], "no joined/left reason is claimed");
+  assert.deepEqual([row.name, row.state], [team.names[101], "measured"]);
+  assert.equal(r.body.counts.recordedOutsideRoster, 1);
 });
 
 test("20. the roster read writes nothing to any new table and never runs GPEXE", async () => {
@@ -1275,6 +1293,8 @@ function guards(f) {
     { name: "completion: complete carries who, basis, when and fingerprint", refused: /violates check constraint/, attempt: { sql: `update ${completions} set status = 'complete', revision = revision + 1, completed_by_user_id = $2, completed_by_basis = 'team_coach' where activity_id = $1`, params: [f.activityId, f.coach.id] }, off: dropCheck(completions, "'complete'") },
     { name: "completion: never deleted", refused: /never deleted/, attempt: { sql: `delete from ${completions} where activity_id = $1`, params: [f.activityId] }, off: t(completions, "activity_completions_protect") },
     { name: "completion: only a canonical team session", refused: /not team-owned/, attempt: { sql: `insert into ${completions} (activity_id, owner_team_id, status) values ($1,$2,'not_complete')`, params: [f.clubActivity, f.teamId] }, off: t(completions, "activity_completions_protect") },
+    { name: "completion log: only a canonical team session (a superseded activity id is refused)", refused: /was superseded/, attempt: { sql: `insert into ${log} (activity_id, revision, to_status, cause) values ($1,1,'not_complete','roster_changed')`, params: [f.supersededActivity] }, off: t(log, "activity_completion_log_protect") },
+    { name: "completion log: its request belongs to its activity or alias set (at commit)", refused: /does not belong to activity/, attempt: { sql: `insert into ${log} (activity_id, request_id, revision, to_status, cause) values ($1,$2,1,'not_complete','decision_changed')`, params: [f.otherActivity, f.requestId], commit: true }, off: t(log, "activity_completion_log_check_links") },
     { name: "completion log: append-only", refused: /activity_completion_log is append-only/, attempt: { sql: `update ${log} set cause = 'completed' where id = $1`, params: [f.logId] }, off: t(log, "activity_completion_log_protect") },
     { name: "completion log: no truncate", refused: /activity_completion_log keeps history/, attempt: { sql: `truncate ${log}` }, off: t(log, "activity_completion_log_no_truncate") },
     { name: "observation: only resolved, once", refused: /only resolved, once/, attempt: { sql: `update ${observations} set reason_code = 'other' where id = $1`, params: [f.observationId] }, off: t(observations, "activity_source_observations_append_only") },
@@ -1288,6 +1308,22 @@ function guards(f) {
   ];
 }
 
+// A team activity already merged into `survivorId` (a superseded alias).
+async function supersededInto(survivorId, teamId, { beforeMerge } = {}) {
+  const aliasId = await makeActivity({ teamId, name: "Merged away" });
+  if (beforeMerge) await beforeMerge(aliasId);
+  const client = await newClient();
+  try {
+    await client.query("begin");
+    await client.query(`select set_config('training.allow_supersede_write', 'on', true)`);
+    await client.query(`update training.activities set superseded_by_activity_id = $2, lifecycle_state = 'superseded' where id = $1`, [aliasId, survivorId]);
+    await client.query("commit");
+  } finally {
+    await client.end();
+  }
+  return aliasId;
+}
+
 async function runAttempt(client, attempt) {
   if (attempt.guc) await client.query(`select set_config('optimove.membership_period_write', 'on', true)`);
   await client.query(attempt.sql, attempt.params ?? []);
@@ -1297,6 +1333,7 @@ async function runAttempt(client, attempt) {
 test("34/35. raw SQL cannot bypass the append-only, identity and integrity rules, and each guard is what refuses it", async () => {
   const f = await integrityFixture();
   f.clubActivity = await makeActivity({ ownerScope: "club", clubId: f.clubId });
+  f.supersededActivity = await supersededInto(f.otherActivity, f.teamId);
   const foreign = await makeTeam("Foreign");
   f.foreignTeamId = foreign.teamId;
   f.foreignConnectionId = (await q(`insert into training_load.metric_source_connections (source_system, owner_scope, owner_team_id) values ('test-src','team',$1) returning id`, [foreign.teamId]))[0].id;
@@ -1329,6 +1366,29 @@ test("34/35. raw SQL cannot bypass the append-only, identity and integrity rules
     [[...NEW_TABLES, "public.athlete_memberships"]],
   ))[0].n;
   assert.equal(disabled, 0, "every guard is back after the rolled-back proofs");
+});
+
+test("35c. a completion log row may carry the request of an activity merged into its own (same alias set)", async () => {
+  const f = await integrityFixture();
+  let aliasRequestId = null;
+  await supersededInto(f.otherActivity, f.teamId, {
+    beforeMerge: async (aliasId) => {
+      const decisionId = await insertDecision({ activityId: aliasId, athleteId: f.secondAthleteId, teamId: f.teamId, userId: f.coach.id });
+      aliasRequestId = (await q(`select request_id from training.activity_athlete_decisions where id = $1`, [decisionId]))[0].request_id;
+    },
+  });
+  const client = await newClient();
+  try {
+    await client.query("begin");
+    await client.query(
+      `insert into training.activity_completion_log (activity_id, request_id, revision, to_status, cause) values ($1,$2,1,'not_complete','decision_changed')`,
+      [f.otherActivity, aliasRequestId],
+    );
+    await assert.doesNotReject(client.query("set constraints all immediate"), "the request's activity is in the log row's alias set");
+  } finally {
+    await client.query("rollback");
+    await client.end();
+  }
 });
 
 test("35b. manual_values and estimated decisions are refused until 5b, by the decision trigger", async () => {

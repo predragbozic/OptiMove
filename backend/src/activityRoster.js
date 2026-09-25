@@ -322,8 +322,10 @@ export async function getActivityRoster(ctx, activityId) {
       };
     }).sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")) || a.athleteId.localeCompare(b.athleteId));
 
-    // Recorded by a source, but not a member of the team at the session's
-    // start: listed apart, never blocking.
+    // Recorded by a source, but not on this session's roster (no membership
+    // period of the team covers the session): listed apart, never blocking.
+    // Deliberately no finer reason (joined later, left earlier, never a
+    // member): nothing here proves which one it is.
     const outsideIds = [...new Set(facts.filter((f) => MEASURED_METHODS.has(f.entryMethod)).map((f) => f.athleteId))]
       .filter((id) => !rosterIds.has(id));
     const outsideNames = outsideIds.length
@@ -332,7 +334,7 @@ export async function getActivityRoster(ctx, activityId) {
         [outsideIds],
       )).map((r) => [String(r.id), r.name]))
       : new Map();
-    const joinedAfterSession = outsideIds
+    const recordedOutsideRoster = outsideIds
       .map((athleteId) => ({ athleteId, name: outsideNames.get(athleteId) ?? null, state: "measured", stateLabel: ROSTER_STATE_LABELS.measured, values: valuesView(factsByAthlete.get(athleteId) ?? []) }))
       .sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")) || a.athleteId.localeCompare(b.athleteId));
 
@@ -360,7 +362,7 @@ export async function getActivityRoster(ctx, activityId) {
       total: athletes.length,
       needsState: athletes.filter((a) => a.group === "needs_state").length,
       needsReview: athletes.filter((a) => a.group === "needs_review").length,
-      joinedAfterSession: joinedAfterSession.length,
+      recordedOutsideRoster: recordedOutsideRoster.length,
     };
     return {
       activity: {
@@ -376,7 +378,7 @@ export async function getActivityRoster(ctx, activityId) {
       viewer: { basis },
       completion,
       athletes: athletes.map(({ decisionIds, occasionIds, ...rest }) => rest),
-      joinedAfterSession,
+      recordedOutsideRoster,
       reasons: reasons.map((r) => ({ key: r.key, label: r.label })),
       counts,
       canComplete: counts.total > 0 && counts.needsState === 0 && completion.status !== "complete",

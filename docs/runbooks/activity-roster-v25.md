@@ -62,5 +62,5 @@ gap is lost: v25 backfills one open period from `starts_at`, and the athlete
 appears on rosters inside that gap (over-inclusion, never omission; the coach
 answers with *Did not participate* · Other). `valid_from` is the moment the
 athlete was added in OptiMove, not a sporting join date: a session from before
-that moment lists its measured athletes under *Recorded, but joined the team
-after this date*.
+that moment lists its measured athletes under *Recorded, but not on this
+session's roster*.

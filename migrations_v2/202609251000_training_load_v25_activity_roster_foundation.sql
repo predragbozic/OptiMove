@@ -595,9 +595,9 @@ begin
   if tg_op <> 'INSERT' then
     raise exception 'activity_completion_log is append-only (% refused)', tg_op;
   end if;
-  if not exists (select 1 from training.activities where id = new.activity_id and owner_scope = 'team') then
-    raise exception 'activity_completion_log: activity % is not a team session', new.activity_id;
-  end if;
+  -- A log row belongs to the canonical team session it describes, like
+  -- every other row that points at an activity.
+  perform training.assert_canonical_team_activity(new.activity_id, null, 'activity_completion_log');
   return new;
 end;
 $$ language plpgsql;
@@ -608,6 +608,30 @@ create trigger activity_completion_log_protect
 create trigger activity_completion_log_no_truncate
   before truncate on training.activity_completion_log
   for each statement execute function training.roster_history_no_truncate();
+
+-- At commit (the request row is written last, as for decisions): a log row's
+-- request belongs to the same activity or to its canonical alias set.
+create function training.check_activity_completion_log_links() returns trigger as $$
+declare
+  req_activity uuid;
+begin
+  if new.request_id is null then
+    return null;
+  end if;
+  select activity_id into req_activity from training.activity_roster_requests where id = new.request_id;
+  if req_activity is null
+     or (req_activity is distinct from new.activity_id
+         and training.resolve_canonical_activity_id(req_activity) is distinct from training.resolve_canonical_activity_id(new.activity_id)) then
+    raise exception 'activity_completion_log: request % does not belong to activity % or its alias set', new.request_id, new.activity_id;
+  end if;
+  return null;
+end;
+$$ language plpgsql;
+
+create constraint trigger activity_completion_log_check_links
+  after insert on training.activity_completion_log
+  deferrable initially deferred
+  for each row execute function training.check_activity_completion_log_links();
 
 -- ---------------------------------------------------------------------------
 -- 8. Source observations — written by an import adapter, source-neutral.

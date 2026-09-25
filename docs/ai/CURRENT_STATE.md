@@ -68,7 +68,7 @@ What 5a1 contains:
 - **`GET /api/training-activity/:activityId/roster`**, read-only: the team's roster on the
   session date with a derived state per athlete (Measured from effective imported values,
   never from `participation_status`; Measured · change waiting; No usable device record;
-  Unknown; a decision's state), the folded *joined after this date* list, counts and the
+  Unknown; a decision's state), the folded *recorded, but not on this session's roster* list, counts and the
   completion status. Identical 404 for everyone outside the active-workspace path;
   `409 roster_not_applicable` for a session that is not team-owned.
 - **The GPEXE approval** records a source-neutral `record_unusable` observation, in the approval's
@@ -764,7 +764,7 @@ pre-existing; pass/fail counts don't belong in this file
 - **Rosters of sessions from before athletes were added in OptiMove** (Phase 5a1). A
   membership period starts at `starts_at`, the moment the athlete was added in OptiMove, not
   a sporting join date. A GPEXE session older than that lists its measured athletes under
-  *Recorded, but joined the team after this date* and leaves the roster short. Importing older
+  *Recorded, but not on this session's roster* and leaves the roster short. Importing older
   sessions therefore needs either correct membership start dates or a decision on how a
   roster before the first membership should read.
 - **A membership archived and restored before v25 lost its gap** (Settings revives the same
