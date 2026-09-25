@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-24. Last `origin/main` commit checked: `655b56f` (merge of PR #120,
-`feature/imports-batch-approve` → `main`).
+Last reviewed: 2026-09-25. Last `origin/main` commit checked: `73f181b` (merge of PR #121,
+`feature/imports-batch-ui` → `main`).
 
 ## Active phase
 
@@ -38,91 +38,49 @@ read-only source-athletes endpoint, PR #117) and the guard PR before Phase 3b (o
 canonical GPEXE athlete id, archived teams answer 404; PR #118) and Phase 3b (the
 whole-team *Link athletes* screen, PR #119) are merged and deployed (see below).
 
-**Phase 4a (server-side batch approval, PR #120) is merged and deployed** (see below).
+**Phase 4a (server-side batch approval, PR #120) and Phase 4b (the batch import screen and
+the sessions calendar, PR #121) are merged and deployed** (see below).
 
-**The step in progress is Phase 4b, the Imports screen for batch import plus a
-source-neutral session calendar** (branch `feature/imports-batch-ui`, frontend only; no
-backend, database, migration or Settings → Data sources change):
-- **Choosing Ready sessions.** Only a clean Ready session with a valid `previewHash`
-  from the list gets a checkbox (the row still opens the review); nothing is chosen in
-  advance; without the right to approve, or with the switch off, the bucket is review
-  only and nothing can be chosen; Needs attention, Imported, Stays out and a session with
-  changes to imported results never enter a batch. A session reviewed before a link
-  change is a Needs-attention item of its own (owner decision 2026-09-25) with the step
-  "Find new sessions again (with dates that include …)"; the other, fresh Ready sessions
-  stay selectable and importable, so the Ready bucket never shows a session that looks
-  ready but has no checkbox because of another stale one.
-  The selection holds `{ candidateId, previewHash }` from the list row that was chosen;
-  after every load, reload or link change a chosen session that is no longer Ready or
-  whose preview was recomputed (another hash) is dropped with a sentence; a team or
-  workspace change clears it. "N selected · maximum 10" is always shown; *Select all*
-  when the visible sessions fit, else *Select first N* with how many stay for the next
-  batch (the list's order, never a session hidden by the date filter); *Clear selection*;
-  *Review N sessions*.
-- **previewHash rules (owner, 2026-09-24):** the hash is never shown to the coach; the UI
-  keeps it as an opaque token with the last loaded candidate version; the batch sends
-  exactly that version's hash; a candidate without a valid `previewHash` is not
-  selectable as Ready; `preview_changed` returns the session to a review-again state and
-  is never resent by itself.
-- **The confirmation** lists every chosen session by name and time (with its "new
-  results" count; the list carries no athlete count, so none is invented), says "Import
-  these sessions exactly as found in the last search." and that the sessions are imported
-  one by one with one result each (not all-or-nothing); candidate ids only under
-  Technical details, hashes nowhere; Back keeps the selection; *Import N sessions* sends
-  ONE `POST …/imports` `{ candidateIds, previewHashes }` (no client loop); the dialog
-  cannot be closed while the request runs.
-- **The result**, one line per session until Done: imported · already imported (nothing
-  more written) · session changed, review it again · open and review changes
-  individually · not imported with the next step by the stable code · import result not
-  confirmed with *Check result* (the single review's check, `gx.uncertain` mark) · not
-  tried because the batch stopped. After the answer the list is read again once;
-  imported and already-imported sessions leave the selection; a refused one stays only
-  while the new list shows it Ready with the same hash. A lost answer to the whole
-  request is "Result not confirmed" (never "failed" or "nothing imported"): every sent
-  session is marked, the list is read once and only what it shows as imported is
-  confirmed, *Check again* reads it again, nothing is sent again by itself, and the marks
-  survive closing the panel within the browser session (the single-import pattern).
-- **Sessions calendar** (local to Imports; Activities and Dashboards calendars untouched):
-  built from the candidates list alone, no endpoint and no GPEXE call on a month change;
-  every date with at least one found session, whatever its bucket, gets a marker (a dot
-  and a stressed date, the count when a day has several) and a spoken label such as "21
-  September, 2 sessions found"; today and the filtered day are told apart without colour
-  alone; the text "Markers show sessions already found by OptiMove. Other dates may not
-  have been searched yet." is shown verbatim, and a date without a marker never means the
-  source has no session; a marked day filters the list locally (*Show all dates* clears
-  it) without touching From/To or *Find new sessions* (31-day limit unchanged) or the
-  shared Training Load week; the day key uses the same local clock as the row's date and
-  time (never `toISOString`), tested with a session close to midnight; the first month is
-  the newest found session's, else this month; Prev/Next send no request; seven columns
-  fit at 360/375 px with no horizontal overflow and 44 px-high cells. The panel is
-  foldable (owner decision 2026-09-25): open on a desktop, folded by default at ≤760 px
-  where the list is the day's work, opened by default while a day is filtered; the folded
-  summary reads "Sessions calendar · September · 8 sessions on 5 days" ("nothing found
-  yet" for an empty month) with the screen's usual ▸/▾ marker; the day filter's line sits
-  under the panel so it stays in sight when folded; opening sends no request and changes
-  neither From/To, the shared week nor the filtered day.
-- **Recovery:** generation guard for a workspace change during the request and the
-  reload (the old team's answer never lands in the new state); the team select is off
-  while the request runs and asks first while sessions are chosen but not imported; a
-  double click sends nothing; a session changed between the list and the confirmation
-  gets `preview_changed` from the server; leaving Training Load with a selection or with
-  a running import asks first (`confirmLeaveTrainingLoad`; the state itself survives a
-  move inside the app, a workspace switch resets it — with a page reload the only exits
-  that lose a running batch's result, the reload being the pre-existing gap Dashboards
-  has too). A whole-request refusal keeps the confirmation open with the reason; Back
-  leaves the reason under the Ready bucket until the next choice. **Reload/close guard:** a `beforeunload` listener (`app.js` →
-  `handleTrainingLoadBeforeUnload`) calls `preventDefault()` and sets `returnValue` — the
-  browser's own dialog, no custom text — while a batch is being sent, while a lost
-  answer's outcome is unconfirmed, or while any listed session carries the "Result not
-  confirmed" mark (a mark on a session replaced by newer data is resolved, since it was
-  never imported); nothing is blocked otherwise, and never for the app's own deliberate
-  navigations (sign-out, a switch to or from athlete mode). Deliberately closing the tab despite the
-  browser's warning, and a browser or OS shutdown, can still lose the local view of the
-  outcome; the server never imports a session twice (no automatic retry and no
-  sessionStorage in this PR).
+**The step in progress is Phase 5a1, the session roster foundation** (branch
+`feature/activity-roster-foundation-5a1`; backend, migration v25 and docs; no frontend). The
+contract is `docs/ai/phase5a-discovery-and-contract.md`, approved by the owner on 2026-09-25
+with three decisions:
+- **O1 (a):** an athlete who took part but has no values can be resolved as
+  `participated_no_values`, labelled **"Participated · no device data"** everywhere (it has to
+  hold for a match and for sources that are not GPS).
+- **O2:** team coach, club admin and platform admin may decide on a team's roster; the
+  recorded basis (`decided_by_basis`) is the path of the ACTIVE workspace (team workspace →
+  `team_coach`, club workspace → `club_admin`, platform workspace → `platform_admin`), never
+  `platform_admin` only because the user also holds that role.
+- **The completion downgrade triggers move from 5a1 to 5a2**, together with the complete and
+  reopen commands. 5a1 has no write command that can set a session complete, so there is
+  nothing to downgrade yet; the roster read already compares the stored fingerprint of a
+  complete session and reports "needs review" without writing.
 
-Phases 5–6 (completion model and roster, session context, add-later-values) wait for the
-owner's go after each merge.
+What 5a1 contains:
+- **Migration v25**: membership history (`public.athlete_membership_periods`, written by a
+  trigger on `athlete_memberships`, backfilled once; Settings unchanged; a membership's
+  athlete, club, team and type can no longer change); `training.activity_roster()`; the
+  reason catalog; the tables the 5a2 commands will write (requests, decisions, completions,
+  completion log) with their integrity and append-only rules; source observations;
+  `training.lock_activity_decider(user, team, basis)`. Runbook and rollback:
+  `docs/runbooks/activity-roster-v25.md`.
+- **`GET /api/training-activity/:activityId/roster`**, read-only: the team's roster on the
+  session date with a derived state per athlete (Measured from effective imported values,
+  never from `participation_status`; Measured · change waiting; No usable device record;
+  Unknown; a decision's state), the folded *joined after this date* list, counts and the
+  completion status. Identical 404 for everyone outside the active-workspace path;
+  `409 roster_not_applicable` for a session that is not team-owned.
+- **The GPEXE approval** records a source-neutral `record_unusable` observation, in the approval's
+  transaction, for a linked roster athlete whose record GPEXE marks unusable, and resolves it
+  when a later import writes that athlete.
+- **The admin undo** removes and counts those observations and stops with
+  `roster_decisions_exist` when a coach has already worked on the session's roster.
+
+Not in 5a1: any write route for decisions or completion (5a2), the roster screen (5a3),
+manual values and estimates (5b), later-measurement confirmation (5c).
+
+Every later phase (5a2, 5a3, 5b, 5c, then 6) waits for the owner's go after each merge.
 
 **Production-readiness checks recorded by the owner (2026-09-24), not gates for
 development:** before the first real use of athlete linking and before
@@ -140,6 +98,26 @@ nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **Imports Phase 4b: batch import screen and sessions calendar** — PR #121 (`73f181b`,
+  reviewed head `8ac1172`), frontend only:
+  - Only a clean Ready session with a valid `previewHash` from the list can be chosen (at most
+    10); the selection keeps each session's hash as an opaque token, is pruned after every
+    load, and a session reviewed before a link change is a Needs-attention item of its own
+    while fresh Ready sessions stay importable (owner decision 2026-09-25; a stale
+    `no_changes` session also goes to Needs attention).
+  - One confirmation, one `POST …/imports`, one result line per session until Done; a lost
+    answer is "Result not confirmed" with *Check again*, never resent by itself.
+  - A source-neutral sessions calendar local to Imports, built from the candidates list alone
+    (markers with a dot and a count, spoken labels, the verbatim "Markers show sessions
+    already found by OptiMove. Other dates may not have been searched yet.", a local day
+    filter with *Show all dates*, local-date day keys); folded by default at ≤760 px with a
+    "Sessions calendar · <Month> · N sessions on M days" summary.
+  - A `beforeunload` guard (the browser's own dialog) while a batch is being sent or an
+    outcome is unconfirmed; deliberate app navigations (sign-out, athlete-mode switch) are
+    not blocked. Closing the tab despite the warning can still lose the local view of the
+    outcome; the server never imports twice.
+  - Reviewed by `code-reviewer`, `ux-design-reviewer` and `mobile-qa`; browser QA at
+    360/375 px on a disposable schema clone; external review by the owner.
 - **Imports Phase 4a: server-side batch approve** — PR #120 (`655b56f`, reviewed head
   `5e881aa`), backend + tests + docs, no migration: `POST
   /api/training-load/gpexe/teams/:teamId/imports` `{ candidateIds, previewHashes }`
@@ -521,6 +499,10 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- `/api/health` reported commit `73f181b` (PR #121) after that merge on 2026-09-25; the
+  smoke was unauthenticated only (no search, link, unlink or import in production).
+- **The local OPTIMOVE database is at v21**, re-checked read-only on 2026-09-25 (the last
+  recorded migration is v21); v22–v25 are not applied there.
 - `/api/health` reported commit `655b56f` (PR #120) with `ok: true` on 2026-09-24; the new
   batch route answered 401 without a login (POST with an empty body and a non-existent
   team id). No batch, search, link or import was run in production.
@@ -693,15 +675,10 @@ pre-existing; pass/fail counts don't belong in this file
   badges still use the old vocabulary ("Waiting for approval"), to be aligned with the
   buckets; `errorInfo`/`fmtDateTime` are duplicated between the coach
   (`gpexe-import-*.js`) and admin (`data-sources-*.js`) screens.
-- **Athletes who trained without a GPS record** (owner, 2026-09-18). Scheduled after
-  phases F1–F3 of the in-app import. Options, none of them decided yet:
-  - participation only, with no values;
-  - a manual entry by the coach;
-  - an estimate from the team average, the position average, another athlete or a
-    similar session.
-
-  An estimate is never stored as a GPEXE measurement. It is stored as an estimate, with
-  its source and method, close to the future derived-metrics feature.
+- **Athletes who trained without a GPS record** — decided (owner, 2026-09-23 and
+  2026-09-25) and planned as Phase 5: "Participated · no device data" (5a), manual values and
+  estimates stored as estimates with mandatory provenance (5b). See
+  `docs/ai/phase5a-discovery-and-contract.md`.
 - **GPEXE session table readability** (owner, 2026-09-18, for later). The goal is that the
   Activities "Recorded metrics" table reads like GPEXE's own session table:
   - short column labels; `metric_definitions.short_label` and `icon_url` already exist
@@ -784,17 +761,26 @@ pre-existing; pass/fail counts don't belong in this file
   disposable databases. The runbook lists what a persistent-database unlock would need
   first: a real authenticated identity, a narrow break-glass credential, and a second
   person's approval.
+- **Rosters of sessions from before athletes were added in OptiMove** (Phase 5a1). A
+  membership period starts at `starts_at`, the moment the athlete was added in OptiMove, not
+  a sporting join date. A GPEXE session older than that lists its measured athletes under
+  *Recorded, but joined the team after this date* and leaves the roster short. Importing older
+  sessions therefore needs either correct membership start dates or a decision on how a
+  roster before the first membership should read.
+- **A membership archived and restored before v25 lost its gap** (Settings revives the same
+  row); the athlete appears on rosters inside that gap. Over-inclusion only; the coach can
+  answer *Did not participate* · Other.
 - `migrations/` (legacy, no `_v2` suffix) still exists alongside `migrations_v2/` — treat
   it as historical/reference only; new migrations go in `migrations_v2/`.
 
 ## Most likely next step
 
-**Phase 4b of the Imports track (`feature/imports-batch-ui`, the batch import screen and
-the sessions calendar) is in progress**; see Active phase for its exact scope. The owner decides the next phase after each merge. Conditions
-1-3 under Separate tasks still come before the first real local import, and condition 4
-before regular production imports. The owner's decisions of 2026-09-23 on estimates,
-completion and session context (blueprint v3.1, section 14) shape Phases 5a–6 and are
-not implemented yet.
+**Phase 5a1** (`feature/activity-roster-foundation-5a1`) goes through the owner's external
+review: it is a migration (v25), an authorization contract, canonical identity and the
+approval transaction. Merging it applies v25 to the deployed database on the next deploy.
+5a2 (decision and completion commands with the downgrade triggers) waits for the owner's go.
+Conditions 1–3 under Separate tasks still come before the first real local import, and
+conditions 4–5 before regular production imports.
 
 The other Separate tasks wait until the owner schedules them.
 

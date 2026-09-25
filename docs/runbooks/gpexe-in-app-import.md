@@ -301,7 +301,18 @@ therefore come from one state.
 5. Records the approval (`training_load.gpexe_import_approvals`: who, on which
    basis and grant, which content and preview, the accepted changes, the
    event, activity and batch written, and the importer's counts). Marks the
-   candidate `imported` and keeps its snapshot 90 more days. Commits.
+   candidate `imported` and keeps its snapshot 90 more days.
+6. Records what the session roster needs to know (v25, Phase 5a1;
+   `backend/src/activitySourceObservations.js`): for a **linked** GPEXE athlete
+   whose record GPEXE itself marks unusable (two tracks or several
+   whole-session rows → `needs_manual_review`; statistics not valid →
+   `marked_invalid_by_source`) and who is on the session's roster on that
+   date, an open `training.activity_source_observations` row
+   (`record_unusable`, ids only in `adapter_ref`: the approval, the candidate
+   and the adapter's reason code; never a name). An athlete this import wrote
+   resolves his open one. An unlinked GPEXE athlete is never turned into an
+   OptiMove athlete, and nothing here touches a coach's roster decision. Then
+   commits.
 
 Lock order: role and grant rows → candidate → team import lock → the
 importer's own order. A check running at the same time only takes the team

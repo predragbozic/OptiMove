@@ -23,11 +23,13 @@
 //
 // It refuses, rather than guessing, whenever the session is entangled with
 // anything else: a manual correction, an activity that also carries another
-// event or was merged/reparented, or two events claiming the same GPEXE
-// session. Every entry point checks that it is talking to a disposable
+// event or was merged/reparented, two events claiming the same GPEXE
+// session, or coach work on the session's roster (v25 decisions, requests or
+// completion: stable reason roster_decisions_exist). Every entry point checks that it is talking to a disposable
 // database, not only the CLI wrapper.
 //
 // What it removes, in this order (everything for that one event):
+//   activity_source_observations (v25, import by-products) ->
 //   activity_component_metric_segment_links -> activity_components ->
 //   activity_participant_metric_participant_links -> activity_participants ->
 //   activity_metric_event_links -> activities (only when the activity has no
@@ -42,13 +44,15 @@
 //
 // Two rows are protected by design and are the reason this needs a written
 // procedure at all: metric_values (v13 metric_values_immutable) and the event
-// binding (v20). Both triggers are disabled INSIDE the transaction and
+// binding (v20); since v25 also the session's source observations, whose
+// append-only trigger refuses a delete. These triggers (PROTECTED_TRIGGERS)
+// are disabled INSIDE the transaction and
 // re-enabled before it commits, so the protection is never off outside this
 // one statement sequence. ALTER TABLE ... DISABLE TRIGGER is transactional in
 // Postgres, so a rollback — from an error, a refusal, a dry run, or a lost
 // connection — restores them without anything having to run; the explicit
 // re-enable plus assertTriggersEnabled() covers the committing path, and the
-// commit is refused if any of the three is not enabled again.
+// commit is refused if any of them is not enabled again.
 // A manual correction anywhere in the session stops the undo: removing
 // someone's hand-entered value is a separate decision.
 //
@@ -81,7 +85,14 @@ const PROTECTED_TRIGGERS = [
   ["training_load.metric_values", "metric_values_immutable"],
   ["training_load.metric_event_source_bindings", "metric_event_source_bindings_immutable"],
   ["training_load.metric_event_source_bindings", "metric_event_source_bindings_no_delete"],
+  // v25: an import's source observations are its by-products and go with it.
+  ["training.activity_source_observations", "activity_source_observations_append_only"],
 ];
+
+// The stable reason the undo stops when a coach has already worked on the
+// session's roster (v25 decisions, requests, completion): that is coach
+// work, not an import by-product, and removing it is a separate decision.
+export const ROSTER_DECISIONS_EXIST = "roster_decisions_exist";
 
 export async function collectScope(client, { eventId }) {
   await assertDisposableClient(client);
@@ -151,6 +162,21 @@ export async function collectScope(client, { eventId }) {
             or exists (select 1 from training.activity_participant_reparent_log r where r.from_activity_id = a.id or r.to_activity_id = a.id))`,
   );
   const batchIds = [...new Set(occasions.map((r) => r.import_batch_id).filter(Boolean))];
+  // v25: the roster rows of every reached activity and of its whole alias
+  // set. Observations are removed with the import; coach work stops it.
+  const rosterAliases = `
+    select aa.activity_id
+      from (select distinct training.resolve_canonical_activity_id(r.activity_id) as canonical_id from (${reachedActivities}) r) c
+      cross join lateral training.activity_alias_ids(c.canonical_id) aa`;
+  const coachRosterWork = (await one(
+    `select (select count(*)::int from training.activity_athlete_decisions where activity_id in (${rosterAliases})) as decisions,
+            (select count(*)::int from training.activity_roster_requests where activity_id in (${rosterAliases})) as requests,
+            (select count(*)::int from training.activity_completions where activity_id in (${rosterAliases})) as completions,
+            (select count(*)::int from training.activity_completion_log where activity_id in (${rosterAliases})) as completion_log`,
+  ))[0];
+  const observationIds = (await one(
+    `select id from training.activity_source_observations where activity_id in (${rosterAliases})`,
+  )).map((r) => r.id);
   return {
     eventId,
     eventConnectionId: event.source_connection_id,
@@ -169,10 +195,12 @@ export async function collectScope(client, { eventId }) {
     activities,
     batchIds,
     manualOccasionIds: occasions.filter((r) => r.entry_method === "manual").map((r) => r.id),
+    coachRosterWork,
+    observationIds,
   };
 }
 
-// The commit is only allowed once the database itself confirms all three
+// The commit is only allowed once the database itself confirms that all the
 // protections are back on (tgenabled 'O' = enabled).
 export async function assertTriggersEnabled(client) {
   // Matched on schema, table AND trigger name: a same-named trigger on another
@@ -209,6 +237,12 @@ function assertUndoable(scope) {
   if (scope.otherEventLinks?.length) {
     const first = scope.otherEventLinks[0];
     throw new Error(`refusing: activity ${first.activity_id} is also linked to metric event ${first.metric_event_id} (${first.link_status}) — an activity is only removed when this session is its single source.`);
+  }
+  const work = scope.coachRosterWork;
+  if (work && (work.decisions || work.requests || work.completions || work.completion_log)) {
+    const error = new Error(`refusing (${ROSTER_DECISIONS_EXIST}): a coach has already worked on this session's roster (${work.decisions} decision(s), ${work.requests} request(s), ${work.completions} completion row(s), ${work.completion_log} completion log row(s)) — removing coach work is a separate, logged decision.`);
+    error.code = ROSTER_DECISIONS_EXIST;
+    throw error;
   }
   if (scope.entangledActivities?.length) {
     const first = scope.entangledActivities[0];
@@ -259,6 +293,9 @@ export async function undoImportedSession(client, requested, { performedByUserId
 
     for (const [table, trigger] of PROTECTED_TRIGGERS) await client.query(`alter table ${table} disable trigger ${trigger}`);
     const activityIds = scope.activities.map((a) => a.id);
+    if (scope.observationIds.length) {
+      await run("activity_source_observations", `delete from training.activity_source_observations where id = any($1::uuid[])`, [scope.observationIds]);
+    }
     if (activityIds.length) {
       await run("activity_component_metric_segment_links", `delete from training.activity_component_metric_segment_links l using training.activity_components c where c.id = l.activity_component_id and c.activity_id = any($1::uuid[])`, [activityIds]);
       await run("activity_components", `delete from training.activity_components where activity_id = any($1::uuid[])`, [activityIds]);
