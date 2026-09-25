@@ -22,6 +22,7 @@ import {
   acceptMatchSuggestion, dismissMatchSuggestion, reparentActivityParticipant, mergeActivityParticipants,
 } from "../trainingActivityMaterialize.js";
 import { getCanonicalActivityResults, listActivities } from "../trainingActivityResults.js";
+import { getActivityRoster, RosterError } from "../activityRoster.js";
 
 const router = Router();
 
@@ -193,6 +194,27 @@ router.get("/:activityId", async (req, res, next) => {
     res.json(result);
   } catch (error) {
     respondToServiceError(res, next, error);
+  }
+});
+
+// The team roster of a session on its date (Phase 5a1, read-only; see
+// activityRoster.js). A malformed id, a missing activity and every caller
+// outside the active-workspace path get the same 404; stable codes only.
+router.get("/:activityId/roster", async (req, res, next) => {
+  try {
+    if (!validUuid(req.params.activityId)) return res.status(404).json({ error: "notFound" });
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const roster = await getActivityRoster({ userId: req.user.id, authz: req.authz, workspace }, req.params.activityId.toLowerCase());
+    res.json(roster);
+  } catch (error) {
+    if (error instanceof RosterError) {
+      if (error.status === 404) return res.status(404).json({ error: "notFound" });
+      return res.status(error.status).json({ error: error.code, message: error.message });
+    }
+    // Logged only. Unlike respondToServiceError above, this route never
+    // forwards a database message to the client.
+    console.error(`[roster] read of activity ${req.params.activityId} failed: ${error?.code ?? ""} ${error?.message}`);
+    res.status(500).json({ error: "internal_error", message: "The roster could not be read." });
   }
 });
 

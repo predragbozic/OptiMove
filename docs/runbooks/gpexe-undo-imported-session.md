@@ -70,6 +70,10 @@ only for this event, never "every link of the activity": if a foreign link were
 somehow still there, removing the activity fails on its foreign key and the
 whole run rolls back. The order:
 
+0. `training.activity_source_observations` of the session's activity and its
+   alias set (v25, Phase 5a1): an import's by-products (the roster's "No usable
+   device record"); they are counted like every other removed row, in the
+   result and in `import_deletion_log.removed_counts`
 1. `activity_component_metric_segment_links`
 2. `activity_components`
 3. `activity_participant_metric_participant_links`
@@ -95,6 +99,13 @@ A later import of the same session reuses them.
 
 ## What stops the run
 
+- **Coach work on the session's roster** (v25, Phase 5a1). Any
+  `activity_athlete_decisions`, `activity_roster_requests`,
+  `activity_completions` or `activity_completion_log` row on the activity or
+  its alias set stops the run with the stable reason `roster_decisions_exist`
+  (the error's `code`). That is a coach's decision, not an import by-product;
+  a sanctioned, logged admin step that clears it is to be defined before
+  condition 4 (the wrong-link production procedure) is closed.
 - **A manual correction.** If any occasion of the session was entered by hand
   (`entry_method = 'manual'`), the run refuses. Removing someone's hand-entered
   value is a separate decision, not a side effect of undoing an import.
@@ -143,16 +154,19 @@ node backend/scripts/gpexe-undo-imported-session.mjs \
 
 ## The protections come back on, including when the run fails
 
-`ALTER TABLE ... DISABLE TRIGGER` is transactional in Postgres, so the two
-immutability protections are restored by three independent things:
+`ALTER TABLE ... DISABLE TRIGGER` is transactional in Postgres, so the
+protections the run switches off (`PROTECTED_TRIGGERS` in the script: the
+metric-value and binding immutability triggers and, since v25, the
+append-only trigger of `training.activity_source_observations`) are restored
+by three independent things:
 
 1. **Rollback restores them by itself** — an error, a refusal, a dry run, a
    killed process or a lost connection all abort the transaction, and the
    trigger state goes back with it. Nothing has to run for this to happen.
 2. **The run switches them back on explicitly** before it commits.
-3. **The commit is refused unless the database confirms all three are enabled
-   again** (`pg_trigger.tgenabled = 'O'`); if any is still off, the run throws
-   and the whole transaction, removal included, is rolled back.
+3. **The commit is refused unless the database confirms every one of them is
+   enabled again** (`pg_trigger.tgenabled = 'O'`); if any is still off, the run
+   throws and the whole transaction, removal included, is rolled back.
 
 While the triggers are off, the transaction holds a lock on those two tables,
 so no other session can write to them in that window — and no other session

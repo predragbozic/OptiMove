@@ -20,6 +20,7 @@ import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCa
 import { candidateReasons } from "./gpexeImportReasons.js";
 import { blockedByMapping, buildCandidatePreview, canonicalJson, previewLocked, sha256Hex } from "./gpexeImportPreview.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
+import { recordImportObservations } from "./activitySourceObservations.js";
 
 export const RAW_RETENTION_UNAPPROVED_DAYS = 30;
 export const RAW_RETENTION_IMPORTED_DAYS = 90;
@@ -1115,6 +1116,27 @@ const HASH = /^[0-9a-f]{64}$/;
 //   5. the approval row and the candidate becoming 'imported' (its snapshot
 //      kept 90 more days); commit.
 // Nothing is written before step 3, and nothing survives a refusal.
+// What the roster learns from a preview (Phase 5a1): an athlete is
+// "unusable" only when GPEXE's own data says so (two tracks, statistics not
+// valid, several whole-session rows) AND the GPEXE athlete is linked to an
+// OptiMove athlete; an unlinked source athlete is never turned into one. An
+// athlete is "imported" when this import wrote or already had his results.
+const GPEXE_UNUSABLE_REASON = { needs_manual_review: "needs_manual_review", not_valid: "marked_invalid_by_source" };
+export function gpexeRosterObservations(preview) {
+  const unusable = [];
+  const imported = [];
+  for (const athlete of preview?.athletes ?? []) {
+    if (!athlete.athleteId) continue;
+    const reasonCode = GPEXE_UNUSABLE_REASON[athlete.gps?.status];
+    if (reasonCode) {
+      unusable.push({ athleteId: athlete.athleteId, reasonCode, adapterReason: athlete.gps?.reason?.code ?? null });
+    } else if (!athlete.notImported && (athlete.results ?? []).some((r) => r.outcome && r.outcome !== "not_imported")) {
+      imported.push(athlete.athleteId);
+    }
+  }
+  return { unusable, imported };
+}
+
 export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges }) {
   if (typeof previewHash !== "string" || !HASH.test(previewHash)) {
     throw refusal(400, "invalid_preview_hash", "previewHash must be the hash of the preview you reviewed.");
@@ -1203,6 +1225,16 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
         where id = $1`,
       [candidateId, RAW_RETENTION_IMPORTED_DAYS],
     );
+    // Phase 5a1: the roster's "No usable device record", in this same
+    // transaction (after the team import lock): a linked athlete whose GPEXE
+    // record the import left out as unusable gets an open observation; an
+    // athlete this import did write resolves his.
+    await recordImportObservations(client, {
+      activityId: summary.activityId,
+      sourceConnectionId: summary.connectionId,
+      ...gpexeRosterObservations(fresh.preview),
+      adapterRef: { approvalId: approval.id, candidateId },
+    });
     const result = {
       outcome: "imported",
       commitConfirmation: "confirmed",

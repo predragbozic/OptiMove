@@ -1977,7 +1977,9 @@ test("source athletes: a link whose OptiMove athlete is no longer an active memb
   const team = await setupTeam();
   service.setGpexeClientFactory(fakeGpexe({ bundles: [sessionBundle({ sessionId: 7304 })] }));
   await checkNow(team);
-  await admin.query(`update public.athlete_memberships set status = 'inactive' where athlete_id = $1 and team_id = $2`, [team.ids.a, team.teamId]);
+  // 'archived' is how Settings ends a membership (the real status check has
+  // only active / paused / archived; the fixture now has that check too).
+  await admin.query(`update public.athlete_memberships set status = 'archived', archived_at = now() where athlete_id = $1 and team_id = $2`, [team.ids.a, team.teamId]);
   const by = Object.fromEntries((await sourceAthletes(team)).athletes.map((a) => [a.gpexeAthleteId, a]));
   assert.equal(by["101"].status, "linked_inactive");
   assert.deepEqual([by["101"].link.athleteId, by["101"].link.athleteName], [team.ids.a, "A101"]);

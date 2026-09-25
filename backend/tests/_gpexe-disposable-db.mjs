@@ -47,6 +47,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202609191000_training_load_v22_gpexe_in_app_import.sql",
   "202609201000_training_load_v23_gpexe_import_approval.sql",
   "202609211000_training_load_v24_gpexe_settings_change_guard.sql",
+  "202609251000_training_load_v25_activity_roster_foundation.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to
@@ -127,14 +128,34 @@ const LEGACY_FIXTURE_SQL = `
     relationship_type text not null default 'coach',
     is_active boolean not null default true
   );
+  -- Same shape as the real table (migrations/20260801_athlete_memberships.sql):
+  -- v25 records membership periods from starts_at / archived_at / updated_at.
   create table public.athlete_memberships (
     id uuid primary key default gen_random_uuid(),
-    athlete_id uuid not null references public.athletes(id),
-    club_id uuid references public.clubs(id),
-    team_id uuid references public.teams(id),
-    membership_type varchar not null,
-    status varchar not null default 'active'
+    athlete_id uuid not null references public.athletes(id) on delete cascade,
+    club_id uuid not null references public.clubs(id) on delete cascade,
+    team_id uuid references public.teams(id) on delete cascade,
+    membership_type varchar(20) not null,
+    status varchar(20) not null default 'active',
+    starts_at timestamptz not null default now(),
+    ends_at timestamptz,
+    archived_at timestamptz,
+    archived_by_user_id uuid references public.users(id) on delete set null,
+    archive_reason text,
+    created_by_user_id uuid references public.users(id) on delete set null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint athlete_memberships_type_check check (membership_type in ('club', 'team')),
+    constraint athlete_memberships_status_check check (status in ('active', 'paused', 'archived')),
+    constraint athlete_memberships_team_shape_check check (
+      (membership_type = 'club' and team_id is null) or (membership_type = 'team' and team_id is not null)
+    ),
+    constraint athlete_memberships_team_club_fkey foreign key (team_id, club_id) references public.teams(id, club_id)
   );
+  create unique index athlete_memberships_one_active_club_idx on public.athlete_memberships (athlete_id, club_id)
+    where status = 'active' and membership_type = 'club';
+  create unique index athlete_memberships_one_active_team_idx on public.athlete_memberships (athlete_id, team_id)
+    where status = 'active' and membership_type = 'team';
   create table public.athlete_invites (id uuid primary key default gen_random_uuid(), context_type text);
   create table public.account_email_change_tokens (id uuid primary key default gen_random_uuid());
 
@@ -179,13 +200,27 @@ const LEGACY_FIXTURE_SQL = `
     add column updated_at timestamptz not null default now();
 `;
 
+// The runner records a migration as "<folder name>/<file>", so the copies
+// live in a folder named migrations_v2 (the name a real deploy records):
+// a database created with some of the files can be brought up to date later
+// from another temporary copy without re-running what it already has.
+async function migrationsFolder() {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-gpexe-migrations-"));
+  const migrationsDir = path.join(tempRoot, "migrations_v2");
+  await fsp.mkdir(migrationsDir);
+  return { tempRoot, migrationsDir };
+}
+
 function assertDisposableName(name, url) {
   if (!DISPOSABLE_DB_NAME_PATTERN.test(name) || name.toLowerCase() === "optimove" || /monitoring2/i.test(url)) {
     throw new Error(`SAFETY: refusing a database name that is not a disposable GPEXE test database: ${name}`);
   }
 }
 
-export async function createGpexeDisposableDb({ baseDatabaseUrl, label }) {
+// `migrations` applies only the first files of GPEXE_TEST_MIGRATIONS (e.g. to
+// write rows as they were before a migration); applyGpexeTestMigrations then
+// brings the database up to date through the real runner.
+export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migrations = GPEXE_TEST_MIGRATIONS }) {
   if (!baseDatabaseUrl) throw new Error("baseDatabaseUrl (DATABASE_URL) is required to reach the local Postgres server.");
   const base = new URL(baseDatabaseUrl);
   const adminUrl = new URL(base);
@@ -205,14 +240,14 @@ export async function createGpexeDisposableDb({ baseDatabaseUrl, label }) {
     await admin.end();
   }
 
-  const migrationsDir = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-gpexe-migrations-"));
+  const { tempRoot, migrationsDir } = await migrationsFolder();
   const client = new pg.Client({ connectionString: url.toString() });
   await client.connect();
   try {
     const own = await client.query("select current_database() as db");
     assert.equal(own.rows[0].db, name, "SAFETY: connection landed on an unexpected database");
     await client.query(LEGACY_FIXTURE_SQL);
-    for (const file of GPEXE_TEST_MIGRATIONS) {
+    for (const file of migrations) {
       await fsp.copyFile(path.resolve(__dirname, "../../migrations_v2", file), path.join(migrationsDir, file));
     }
     await runner.runMigrations({ databaseUrl: url.toString(), migrationsRoot: migrationsDir });
@@ -220,7 +255,7 @@ export async function createGpexeDisposableDb({ baseDatabaseUrl, label }) {
     await client.query(`insert into ${DISPOSABLE_MARKER_TABLE} (purpose) values ('gpexe-pilot')`);
   } finally {
     await client.end();
-    await fsp.rm(migrationsDir, { recursive: true, force: true });
+    await fsp.rm(tempRoot, { recursive: true, force: true });
   }
 
   async function drop() {
@@ -234,6 +269,20 @@ export async function createGpexeDisposableDb({ baseDatabaseUrl, label }) {
     }
   }
   return { name, url: url.toString(), drop };
+}
+
+export async function applyGpexeTestMigrations(databaseUrl, migrations = GPEXE_TEST_MIGRATIONS) {
+  const name = new URL(databaseUrl).pathname.slice(1);
+  assertDisposableName(name, databaseUrl);
+  const { tempRoot, migrationsDir } = await migrationsFolder();
+  try {
+    for (const file of migrations) {
+      await fsp.copyFile(path.resolve(__dirname, "../../migrations_v2", file), path.join(migrationsDir, file));
+    }
+    return await runner.runMigrations({ databaseUrl, migrationsRoot: migrationsDir });
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  }
 }
 
 // Minimal org fixture the importer needs: a user, club, team, and athletes
