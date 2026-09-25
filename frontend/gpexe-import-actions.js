@@ -9,6 +9,19 @@ import {
   reloadGpexeSourceAthletes,
   approveGpexeCandidate,
   backFromTeamMappingConfirm,
+  batchSelectableList,
+  calendarFiltered,
+  checkBatchAgain,
+  clearBatchSelection,
+  clearCalendarDay,
+  closeBatchReview,
+  finishBatchResults,
+  moveCalendarMonth,
+  openBatchReview,
+  selectBatchVisible,
+  sendBatch,
+  setCalendarDay,
+  toggleBatchPick,
   chooseTeamMapping,
   closeGpexeCandidate,
   closeTeamMapping,
@@ -48,6 +61,19 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
   const gx = state.trainingLoad.gpexe;
 
   if (type === "training-load-gpexe-team") {
+    // A team change resets the batch state: not while an import is running
+    // (the select is disabled; this guards a stale change), and only after
+    // a question while sessions are chosen but not imported.
+    if (String(action.value) === gx.teamId) return true;
+    if (gx.batch.sending) {
+      renderTrainingLoad();
+      return true;
+    }
+    const chosen = Object.keys(gx.batch.selected).length;
+    if (chosen && !gx.batch.results && !gx.batch.unknown && !globalThis.window?.confirm?.(`You selected ${chosen} ${chosen === 1 ? "session" : "sessions"} for import but did not import ${chosen === 1 ? "it" : "them"} yet. Change the team anyway? The selection is lost.`)) {
+      renderTrainingLoad();
+      return true;
+    }
     await selectGpexeTeam(action.value, renderTrainingLoad);
     return true;
   }
@@ -205,5 +231,74 @@ export async function handleGpexeImportAction(action, { renderTrainingLoad }) {
     renderTrainingLoad();
     return true;
   }
+  // Batch import (phase 4b). A checkbox fires click, input and change with
+  // the same value: the first one changes the selection, the others find
+  // nothing to change. Nothing is sent before "Import N sessions".
+  if (type === "training-load-gpexe-pick") {
+    const id = action.dataset.candidateId;
+    const checked = Boolean(action.checked);
+    const changed = toggleBatchPick(id, checked);
+    // A refused pick (the batch is full, a stale row) leaves the box
+    // ticked in the DOM: repaint so it shows the real selection.
+    if (changed || checked !== Object.hasOwn(gx.batch.selected, id)) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-batch-select") {
+    if (gx.batch.sending) return true;
+    selectBatchVisible(calendarFiltered(batchSelectableList(gx), gx));
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-batch-clear") {
+    if (gx.batch.sending) return true;
+    clearBatchSelection();
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-batch-review") {
+    if (openBatchReview()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-batch-back") {
+    if (closeBatchReview()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-batch-send") {
+    // A second click while the request runs sends nothing (sendBatch
+    // refuses it too).
+    if (gx.batch.sending || !gx.batch.confirming) return true;
+    await sendBatch(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-batch-check") {
+    await checkBatchAgain(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-batch-done") {
+    if (finishBatchResults()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-batch-open") {
+    // The result stays; the review opens over it and it is back on close.
+    await openGpexeCandidate(action.dataset.candidateId, renderTrainingLoad);
+    return true;
+  }
+  // The local sessions calendar: no request for any of these.
+  if (type === "training-load-gpexe-cal-prev" || type === "training-load-gpexe-cal-next") {
+    moveCalendarMonth(type.endsWith("prev") ? -1 : 1);
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-cal-day") {
+    setCalendarDay(action.dataset.day || "");
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-cal-all") {
+    clearCalendarDay();
+    renderTrainingLoad();
+    return true;
+  }
+
   return false;
 }

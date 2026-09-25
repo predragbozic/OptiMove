@@ -15694,3 +15694,256 @@ button.tests-assignment-card {
     width: 100%;
   }
 }
+
+/* Imports phase 4b: choosing Ready sessions for one batch import, the
+   confirmation and result dialogs, and the local sessions calendar. */
+.imports-select-bar {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.imports-select-summary {
+  margin: 0;
+}
+.imports-select-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.imports-select-left {
+  margin: 0;
+}
+/* The checkbox sits beside the row button (the row still opens the review). */
+.imports-pick-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: stretch;
+}
+.imports-pick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.imports-pick input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  cursor: pointer;
+}
+.imports-pick input:disabled {
+  cursor: not-allowed;
+}
+.imports-pick:has(input:disabled) {
+  cursor: not-allowed;
+}
+.imports-batch-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.imports-batch-list li {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+.imports-batch-results li {
+  border-left-width: 4px;
+}
+.imports-batch-results li.is-imported {
+  border-left-color: var(--success, #2e7d32);
+}
+.imports-batch-results li.is-refused {
+  border-left-color: var(--danger, #c62828);
+}
+.imports-batch-results li.is-unknown {
+  border-left-color: var(--warning, #ef6c00);
+}
+.imports-batch-results li.is-skipped {
+  border-left-color: var(--line-strong);
+}
+.imports-batch-outcome {
+  font-weight: 600;
+}
+.imports-batch-summary {
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.imports-batch-actions {
+  margin-top: 14px;
+}
+/* The calendar: seven columns that always fit; a marked day is a button
+   with a dot (or the count) under the number, the day filtered to is
+   pressed, today is outlined - none of it by colour alone. */
+.imports-calendar > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.imports-cal-brief {
+  font-weight: 400;
+}
+/* The fold's marker, as on the screen's other folds - in front, so it never wraps onto a line of its own on a phone. */
+.imports-calendar > summary::before {
+  content: "\25B8";
+  margin-right: 6px;
+  font-size: 0.9em;
+}
+.imports-calendar[open] > summary::before {
+  content: "\25BE";
+}
+.imports-calendar > summary::-webkit-details-marker {
+  display: none;
+}
+.imports-cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.imports-cal-turn {
+  min-width: 44px;
+  padding: 0;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+.imports-cal-month {
+  min-width: 9.5em;
+  text-align: center;
+}
+.imports-cal-note {
+  margin: 0;
+}
+.imports-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+  /* A month is a compact block, not a full-width table on a desktop. */
+  max-width: 520px;
+}
+.imports-cal-weekday {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 2px 0;
+}
+.imports-cal-day {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.95rem;
+}
+.imports-cal-day.is-blank {
+  min-height: 0;
+}
+.imports-cal-day.is-marked {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--surface-soft);
+  border-color: var(--line);
+  cursor: pointer;
+}
+.imports-cal-day.is-marked:hover {
+  border-color: var(--line-strong);
+}
+.imports-cal-day.is-today {
+  border-style: dashed;
+  border-color: var(--line-strong);
+}
+.imports-cal-day.is-today .imports-cal-num {
+  text-decoration: underline;
+}
+.imports-cal-day.is-selected {
+  background: var(--text);
+  color: var(--surface);
+  border-color: var(--text);
+}
+.imports-cal-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 12px;
+}
+.imports-cal-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.imports-cal-count {
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 1px 5px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+}
+.imports-cal-filter {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+@media (max-width: 760px) {
+  .imports-select-actions > * {
+    width: 100%;
+  }
+  .imports-calendar .imports-cal-nav {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .imports-cal-day {
+    font-size: 0.9rem;
+    padding: 3px 0;
+  }
+  .imports-cal-count {
+    font-size: 0.75rem;
+  }
+  /* The dialogs' actions stay pinned to the bottom on phones, as the Link
+     athletes screen does. */
+  .imports-batch .imports-batch-actions {
+    position: sticky;
+    bottom: 0;
+    margin-top: 10px;
+    padding: 10px 0 4px;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .imports-batch .imports-batch-actions > * {
+    width: auto;
+    min-width: 0;
+  }
+  .imports-batch .imports-batch-actions > :only-child {
+    grid-column: 1 / -1;
+  }
+}

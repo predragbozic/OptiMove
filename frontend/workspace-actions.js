@@ -129,10 +129,14 @@ export async function handleWorkspaceAction(action, handlers = {}) {
       const wasAthleteMode = isAthleteMode();
       const nowAthlete = data.activeWorkspace?.type === "athlete";
       if (nowAthlete && !wasAthleteMode) {
+        // A deliberate navigation, already done on the server: the Imports
+        // reload/close guard does not ask.
+        state.deliberateNavigation = true;
         window.location.assign("/athlete");
         return true;
       }
       if (!nowAthlete && wasAthleteMode) {
+        state.deliberateNavigation = true;
         window.location.assign("/");
         return true;
       }
