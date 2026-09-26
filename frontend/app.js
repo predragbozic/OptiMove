@@ -64,6 +64,7 @@ import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData } from "./
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { calendarToggled as importsCalendarToggled } from "./gpexe-import-data.js";
+import { activityRosterDisclosureToggled } from "./activity-roster-actions.js";
 import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
@@ -408,6 +409,10 @@ function bindEvents() {
   // click handler would race the browser's toggle.
   els.content.addEventListener("toggle", (event) => {
     const panel = event.target;
+    if (panel?.dataset?.rosterDisclosure) {
+      activityRosterDisclosureToggled(panel);
+      return;
+    }
     if (!panel?.classList?.contains("imports-calendar")) return;
     // Inserting an open <details> fires "toggle" too: only a change from
     // what was rendered is the coach's own choice.

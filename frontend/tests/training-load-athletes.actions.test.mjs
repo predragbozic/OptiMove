@@ -310,6 +310,7 @@ test("'View in Activities' switches to Activities already on the right day/activ
   resetState();
   installFetchMock(async (call) => {
     if (call.url.startsWith("/api/training-load/calendar")) return { status: 200, body: calendarActivityPayload("2026-09-07", "2026-09-13", {}) };
+    if (call.url.endsWith("/roster")) return { status: 200, body: { activity: { id: "act-1", name: "Activity" }, canonicalActivityId: "act-1", athletes: [], recordedOutsideRoster: [], counts: { total: 0, needsState: 0, needsReview: 0, recordedOutsideRoster: 0 }, completion: { status: "not_complete" }, reasons: [] } };
     if (call.url.startsWith("/api/training-activity/")) return { status: 200, body: { facts: [], components: [] } };
     return { status: 404, body: {} };
   });
@@ -322,8 +323,32 @@ test("'View in Activities' switches to Activities already on the right day/activ
   assert.equal(state.trainingLoad.calendar.weekStart, "2026-09-07", "Monday-anchored week containing the target date");
   assert.equal(state.trainingLoad.dataAnalysisWeekStart, "2026-09-07", "the shared week is kept in sync by this hand-off too");
 
-  const activityDetailCalls = fetchCalls.filter((c) => c.url.startsWith("/api/training-activity/"));
+  const activityDetailCalls = fetchCalls.filter((c) => c.url === "/api/training-activity/act-1");
+  const rosterCalls = fetchCalls.filter((c) => c.url === "/api/training-activity/act-1/roster");
   assert.equal(activityDetailCalls.length, 1, "exactly one activity-detail fetch for the ONE target activity, never N+1");
+  assert.equal(rosterCalls.length, 1, "the hand-off loads the target roster too");
+});
+
+test("Athletes hand-off clears the previous roster immediately and only accepts the target roster", async () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  cal.roster.activityId = "act-old";
+  cal.roster.data = { activity: { id: "act-old" }, canonicalActivityId: "act-old", athletes: [{ athleteId: "old", name: "Old athlete" }], counts: { total: 1, needsState: 0, needsReview: 0 } };
+  cal.roster.applicable = true;
+  const deferreds = installDeferredFetchMock();
+
+  const handoff = handleTrainingLoadAction(fakeAction({ action: "training-load-results-view-activity-in-calendar", activityId: "act-new", date: "2026-09-09" }), { renderTrainingLoad });
+  assert.equal(cal.selectedActivityId, "act-new");
+  assert.equal(cal.roster.activityId, "act-new");
+  assert.equal(cal.roster.data, null, "the old roster is gone before any target response arrives");
+
+  for (const d of deferreds) {
+    if (d.call.url.startsWith("/api/training-load/calendar")) d.resolve({ status: 200, body: calendarActivityPayload("2026-09-07", "2026-09-13", {}) });
+    else if (d.call.url.endsWith("/roster")) d.resolve({ status: 200, body: { activity: { id: "act-new", name: "New" }, canonicalActivityId: "act-new", athletes: [], recordedOutsideRoster: [], counts: { total: 0, needsState: 0, needsReview: 0, recordedOutsideRoster: 0 }, completion: { status: "not_complete" }, reasons: [] } });
+    else d.resolve({ status: 200, body: { facts: [], components: [] } });
+  }
+  await handoff;
+  assert.equal(cal.roster.data.activity.id, "act-new");
 });
 
 // -------------------- Workspace-switch reset covers the new state --------------------

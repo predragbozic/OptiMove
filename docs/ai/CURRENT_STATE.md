@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-25. Last `origin/main` commit checked: `cc4b0cc` (merge of PR #122,
-`feature/activity-roster-foundation-5a1` → `main`).
+Last reviewed: 2026-09-26. Last `origin/main` commit checked: `8aa0de8` (merge of PR #123,
+`feature/activity-roster-decisions-5a2` → `main`).
 
 ## Active phase
 
@@ -47,29 +47,22 @@ owner on 2026-09-25 (O1 (a) "Participated · no device data"; O2 team coach + cl
 platform admin, recorded as the path of the ACTIVE workspace; the downgrade triggers moved to
 5a2).
 
-**The step in progress is Phase 5a2, roster decisions and completion** (branch
-`feature/activity-roster-decisions-5a2`; backend, migration v26 and docs; no frontend). As
-built (contract section 11):
-- **Migration v26** (`migrations_v2/202609252000_training_load_v26_activity_roster_decisions.sql`,
-  functions, triggers and one index only): the automatic `complete → needs_review` on every
-  roster input (decisions, occasions, current occasions, participant and event links,
-  reparent, participant merge, activity supersede, source observations, membership periods
-  over a completed session's date), one completion-log row per revision, the audit and basis
-  rules raw SQL cannot skip, and two advisory locks that make Complete serialize with every
-  roster writer. Runbook and rollback: `docs/runbooks/activity-roster-v26.md`.
-- **Five write routes** (`backend/src/activityRosterCommands.js`): `PUT` / `DELETE
-  …/roster/:athleteId/decision`, `POST …/roster/decisions` (bulk, 1–60, all or nothing),
-  `POST …/roster/complete` (`expectedRevision` + `expectedFingerprint`, the read's new
-  `rosterFingerprint`), `POST …/roster/reopen` (with a required reason). Every write has a
-  `requestKey` (idempotent across the alias set), optimistic concurrency, one transaction with
-  the contract's lock order, stable error codes only.
-- Needs the owner's external review (migration, authorization, canonical identity,
-  concurrency, audit) before any merge. First round on `d2ed73b` (PR #123): NOT READY — a
-  COMMIT without a time bound (HIGH) and a club archive that did not wait for a team
-  coach's or platform admin's decision (MEDIUM); both fixed in the next commit on the branch.
+**The step in progress is Phase 5a3a, the read-only Activity roster shell** (branch
+`feature/activity-roster-shell-5a3a`; frontend and docs only). Its final UX contract is
+`docs/ai/phase5a3-roster-ux-draft.md`: a Roster tab on a team activity, source-neutral metric
+columns, Needs a state / Needs review / Done filters, read-only athlete rows and the separate
+folded "Recorded, but not on this session's roster" group. No roster write, bulk decision,
+Complete/Reopen control, manual value or estimate belongs to 5a3a.
 
-Not in 5a2: the roster screen (5a3), manual values and estimates (5b), later-measurement
-confirmation (5c).
+5a3a is implemented (draft PR). Reviewed statically by `code-reviewer`, `ux-design-reviewer`
+and `mobile-qa`; their findings were fixed and the last narrow checks found no BLOCKER, HIGH
+or MEDIUM. **Browser and mobile QA has not been done** (the browser pane was blocked in the
+implementing session): visual quality is not confirmed, and a manual check on desktop and at
+360/375/390 px is required before the PR can be marked ready or merged.
+
+The remaining UI is split into 5a3b (individual and bulk decisions), 5a3c (Complete and
+Needs review) and 5a3d (mobile polish and cross-navigation). Manual values and estimates
+remain 5b; later-measurement confirmation remains 5c.
 
 Every later phase (5a2, 5a3, 5b, 5c, then 6) waits for the owner's go after each merge.
 
@@ -89,6 +82,13 @@ nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **Phase 5a2: roster decisions and completion** — PR #123 (`8aa0de8`, reviewed head
+  `048b78e`), backend + migration v26 + docs: five idempotent roster write routes,
+  optimistic concurrency and the contract lock order; automatic `complete → needs_review`
+  on every roster input; bounded COMMIT-answer and outcome-check waits; and an archived club
+  that waits for an in-flight decision before later reads/writes become the same 404. Deploy
+  was healthy on `8aa0de8`; v26 on the deployed database is inferred from the server starting
+  after the migration step, not from direct SQL. External review by the owner.
 - **Phase 5a1: session roster foundation** — PR #122 (`cc4b0cc`), backend + migration v25 +
   docs: membership history (`public.athlete_membership_periods`), `training.activity_roster()`,
   the reason catalog, the decision / request / completion / completion-log / observation
@@ -779,10 +779,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**Phase 5a2** (`feature/activity-roster-decisions-5a2`) goes through the owner's external
-review: migration v26, the write authorization, canonical identity, concurrency and audit.
-Merging it applies v26 to the deployed database on the next deploy. 5a3 (the roster screen)
-waits for the owner's go.
+**Phase 5a3a** (`feature/activity-roster-shell-5a3a`, draft PR) needs the manual browser
+check on desktop and at 360/375/390 px before it is marked ready; then the owner decides on
+the merge. 5a3b (individual and bulk decisions) waits for the owner's go.
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
