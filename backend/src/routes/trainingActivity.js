@@ -23,6 +23,9 @@ import {
 } from "../trainingActivityMaterialize.js";
 import { getCanonicalActivityResults, listActivities } from "../trainingActivityResults.js";
 import { getActivityRoster, RosterError } from "../activityRoster.js";
+import {
+  clearAthleteDecision, completeRoster, decideAthlete, decideAthletesBulk, reopenRoster,
+} from "../activityRosterCommands.js";
 
 const router = Router();
 
@@ -217,6 +220,42 @@ router.get("/:activityId/roster", async (req, res, next) => {
     res.status(500).json({ error: "internal_error", message: "The roster could not be read." });
   }
 });
+
+// Roster commands (Phase 5a2; see activityRosterCommands.js). Same 404 as
+// the read for everything outside the active-workspace path; stable codes
+// only — a database message is logged, never sent.
+function rosterCommandRoute(run) {
+  return async (req, res) => {
+    try {
+      if (!validUuid(req.params.activityId)) return res.status(404).json({ error: "notFound" });
+      const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+      const ctx = { userId: req.user.id, authz: req.authz, workspace };
+      const outcome = await run(ctx, req.params.activityId.toLowerCase(), req);
+      res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+      if (error instanceof RosterError) {
+        if (error.status === 404) return res.status(404).json({ error: "notFound" });
+        return res.status(error.status).json({ error: error.code, message: error.message, ...(error.details ?? {}) });
+      }
+      console.error(`[roster] ${req.method} ${req.path} failed: ${error?.code ?? ""} ${error?.message}`);
+      // Everything that reaches here failed before the COMMIT: a certain
+      // rollback. A COMMIT the server refused is a RosterError with the same
+      // text; an unknown COMMIT outcome is 503 outcome_unknown.
+      res.status(500).json({ error: "internal_error", message: "Nothing was saved. Try again." });
+    }
+  };
+}
+
+router.put("/:activityId/roster/:athleteId/decision", rosterCommandRoute((ctx, activityId, req) =>
+  decideAthlete(ctx, activityId, req.params.athleteId, req.body)));
+router.delete("/:activityId/roster/:athleteId/decision", rosterCommandRoute((ctx, activityId, req) =>
+  clearAthleteDecision(ctx, activityId, req.params.athleteId, req.body)));
+router.post("/:activityId/roster/decisions", rosterCommandRoute((ctx, activityId, req) =>
+  decideAthletesBulk(ctx, activityId, req.body)));
+router.post("/:activityId/roster/complete", rosterCommandRoute((ctx, activityId, req) =>
+  completeRoster(ctx, activityId, req.body)));
+router.post("/:activityId/roster/reopen", rosterCommandRoute((ctx, activityId, req) =>
+  reopenRoster(ctx, activityId, req.body)));
 
 // ------------------------------------------------------------
 // Match suggestions

@@ -48,6 +48,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202609201000_training_load_v23_gpexe_import_approval.sql",
   "202609211000_training_load_v24_gpexe_settings_change_guard.sql",
   "202609251000_training_load_v25_activity_roster_foundation.sql",
+  "202609252000_training_load_v26_activity_roster_decisions.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

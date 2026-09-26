@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-25. Last `origin/main` commit checked: `73f181b` (merge of PR #121,
-`feature/imports-batch-ui` → `main`).
+Last reviewed: 2026-09-25. Last `origin/main` commit checked: `cc4b0cc` (merge of PR #122,
+`feature/activity-roster-foundation-5a1` → `main`).
 
 ## Active phase
 
@@ -41,44 +41,35 @@ whole-team *Link athletes* screen, PR #119) are merged and deployed (see below).
 **Phase 4a (server-side batch approval, PR #120) and Phase 4b (the batch import screen and
 the sessions calendar, PR #121) are merged and deployed** (see below).
 
-**The step in progress is Phase 5a1, the session roster foundation** (branch
-`feature/activity-roster-foundation-5a1`; backend, migration v25 and docs; no frontend). The
-contract is `docs/ai/phase5a-discovery-and-contract.md`, approved by the owner on 2026-09-25
-with three decisions:
-- **O1 (a):** an athlete who took part but has no values can be resolved as
-  `participated_no_values`, labelled **"Participated · no device data"** everywhere (it has to
-  hold for a match and for sources that are not GPS).
-- **O2:** team coach, club admin and platform admin may decide on a team's roster; the
-  recorded basis (`decided_by_basis`) is the path of the ACTIVE workspace (team workspace →
-  `team_coach`, club workspace → `club_admin`, platform workspace → `platform_admin`), never
-  `platform_admin` only because the user also holds that role.
-- **The completion downgrade triggers move from 5a1 to 5a2**, together with the complete and
-  reopen commands. 5a1 has no write command that can set a session complete, so there is
-  nothing to downgrade yet; the roster read already compares the stored fingerprint of a
-  complete session and reports "needs review" without writing.
+**Phase 5a1 (the session roster foundation) is merged and deployed** (PR #122, `cc4b0cc`; see
+Last completed). The contract is `docs/ai/phase5a-discovery-and-contract.md`, approved by the
+owner on 2026-09-25 (O1 (a) "Participated · no device data"; O2 team coach + club admin +
+platform admin, recorded as the path of the ACTIVE workspace; the downgrade triggers moved to
+5a2).
 
-What 5a1 contains:
-- **Migration v25**: membership history (`public.athlete_membership_periods`, written by a
-  trigger on `athlete_memberships`, backfilled once; Settings unchanged; a membership's
-  athlete, club, team and type can no longer change); `training.activity_roster()`; the
-  reason catalog; the tables the 5a2 commands will write (requests, decisions, completions,
-  completion log) with their integrity and append-only rules; source observations;
-  `training.lock_activity_decider(user, team, basis)`. Runbook and rollback:
-  `docs/runbooks/activity-roster-v25.md`.
-- **`GET /api/training-activity/:activityId/roster`**, read-only: the team's roster on the
-  session date with a derived state per athlete (Measured from effective imported values,
-  never from `participation_status`; Measured · change waiting; No usable device record;
-  Unknown; a decision's state), the folded *recorded, but not on this session's roster* list, counts and the
-  completion status. Identical 404 for everyone outside the active-workspace path;
-  `409 roster_not_applicable` for a session that is not team-owned.
-- **The GPEXE approval** records a source-neutral `record_unusable` observation, in the approval's
-  transaction, for a linked roster athlete whose record GPEXE marks unusable, and resolves it
-  when a later import writes that athlete.
-- **The admin undo** removes and counts those observations and stops with
-  `roster_decisions_exist` when a coach has already worked on the session's roster.
+**The step in progress is Phase 5a2, roster decisions and completion** (branch
+`feature/activity-roster-decisions-5a2`; backend, migration v26 and docs; no frontend). As
+built (contract section 11):
+- **Migration v26** (`migrations_v2/202609252000_training_load_v26_activity_roster_decisions.sql`,
+  functions, triggers and one index only): the automatic `complete → needs_review` on every
+  roster input (decisions, occasions, current occasions, participant and event links,
+  reparent, participant merge, activity supersede, source observations, membership periods
+  over a completed session's date), one completion-log row per revision, the audit and basis
+  rules raw SQL cannot skip, and two advisory locks that make Complete serialize with every
+  roster writer. Runbook and rollback: `docs/runbooks/activity-roster-v26.md`.
+- **Five write routes** (`backend/src/activityRosterCommands.js`): `PUT` / `DELETE
+  …/roster/:athleteId/decision`, `POST …/roster/decisions` (bulk, 1–60, all or nothing),
+  `POST …/roster/complete` (`expectedRevision` + `expectedFingerprint`, the read's new
+  `rosterFingerprint`), `POST …/roster/reopen` (with a required reason). Every write has a
+  `requestKey` (idempotent across the alias set), optimistic concurrency, one transaction with
+  the contract's lock order, stable error codes only.
+- Needs the owner's external review (migration, authorization, canonical identity,
+  concurrency, audit) before any merge. First round on `d2ed73b` (PR #123): NOT READY — a
+  COMMIT without a time bound (HIGH) and a club archive that did not wait for a team
+  coach's or platform admin's decision (MEDIUM); both fixed in the next commit on the branch.
 
-Not in 5a1: any write route for decisions or completion (5a2), the roster screen (5a3),
-manual values and estimates (5b), later-measurement confirmation (5c).
+Not in 5a2: the roster screen (5a3), manual values and estimates (5b), later-measurement
+confirmation (5c).
 
 Every later phase (5a2, 5a3, 5b, 5c, then 6) waits for the owner's go after each merge.
 
@@ -98,6 +89,13 @@ nothing imported is visible in the app.
 
 ## Last completed, merged phases
 
+- **Phase 5a1: session roster foundation** — PR #122 (`cc4b0cc`), backend + migration v25 +
+  docs: membership history (`public.athlete_membership_periods`), `training.activity_roster()`,
+  the reason catalog, the decision / request / completion / completion-log / observation
+  tables with their integrity and append-only rules, `training.lock_activity_decider`, the
+  read-only `GET /api/training-activity/:activityId/roster`, `record_unusable` observations
+  from the GPEXE approval, and the undo's `roster_decisions_exist` rule. Runbook:
+  `docs/runbooks/activity-roster-v25.md`. External review by the owner.
 - **Imports Phase 4b: batch import screen and sessions calendar** — PR #121 (`73f181b`,
   reviewed head `8ac1172`), frontend only:
   - Only a clean Ready session with a valid `previewHash` from the list can be chosen (at most
@@ -499,10 +497,16 @@ nothing imported is visible in the app.
   `mobile-qa`, `security-reviewer`) — merged as part of the PR #77 history.
 
 **Implemented ≠ deployed.** The deploy and database facts checked for this file:
+- PR #122 (`cc4b0cc`) is deployed (owner, 2026-09-25). **v25 on the deployed database is
+  inferred** from the successful server start of that deploy (`npm start` runs
+  `node src/migrate.js &&` the server); the deployed database was not queried.
+- **The local OPTIMOVE database is still at v21** (owner, 2026-09-25): v22–v26 are not applied
+  there, and the 5a2 work neither migrated it nor wrote to it (every 5a2 test runs on disposable
+  `optimove_tests_gpexe_*` databases).
+  It was last re-checked read-only on 2026-09-25 before PR #122 (the last recorded migration
+  is v21).
 - `/api/health` reported commit `73f181b` (PR #121) after that merge on 2026-09-25; the
   smoke was unauthenticated only (no search, link, unlink or import in production).
-- **The local OPTIMOVE database is at v21**, re-checked read-only on 2026-09-25 (the last
-  recorded migration is v21); v22–v25 are not applied there.
 - `/api/health` reported commit `655b56f` (PR #120) with `ok: true` on 2026-09-24; the new
   batch route answered 401 without a login (POST with an empty body and a non-existent
   team id). No batch, search, link or import was run in production.
@@ -775,10 +779,10 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**Phase 5a1** (`feature/activity-roster-foundation-5a1`) goes through the owner's external
-review: it is a migration (v25), an authorization contract, canonical identity and the
-approval transaction. Merging it applies v25 to the deployed database on the next deploy.
-5a2 (decision and completion commands with the downgrade triggers) waits for the owner's go.
+**Phase 5a2** (`feature/activity-roster-decisions-5a2`) goes through the owner's external
+review: migration v26, the write authorization, canonical identity, concurrency and audit.
+Merging it applies v26 to the deployed database on the next deploy. 5a3 (the roster screen)
+waits for the owner's go.
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 

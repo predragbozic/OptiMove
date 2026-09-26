@@ -284,7 +284,7 @@ async function rowCounts(tables = NEW_TABLES) {
 // ---------------------------------------------------------------------------
 before(async () => {
   db = await createGpexeDisposableDb({
-    baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "roster", migrations: GPEXE_TEST_MIGRATIONS.filter((f) => f !== V25),
+    baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "roster", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V25)),
   });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
@@ -738,11 +738,14 @@ test("20. the roster read writes nothing to any new table and never runs GPEXE",
   service.setGpexeClientFactory(() => { gpexeCalls += 1; throw new Error("no GPEXE in a read"); });
   try {
     const before = await rowCounts();
+    // Since v26 (5a2) the decision above created the session's completion
+    // row (not_complete, revision 1); the reads must not add or change one.
+    const completionsBefore = (await q(`select count(*)::int as n from training.activity_completions where activity_id = $1`, [summary.activityId]))[0].n;
     for (const cookie of [coach.cookie, padmin.cookie, coach.cookie]) {
       assert.equal((await roster(summary.activityId, cookie)).status, 200);
     }
     assert.deepEqual(await rowCounts(), before);
-    assert.equal((await q(`select count(*)::int as n from training.activity_completions where activity_id = $1`, [summary.activityId]))[0].n, 0, "no completion row from a read");
+    assert.equal((await q(`select count(*)::int as n from training.activity_completions where activity_id = $1`, [summary.activityId]))[0].n, completionsBefore, "no completion row from a read");
     assert.equal(gpexeCalls, 0);
   } finally {
     service.setGpexeClientFactory(null);
@@ -1090,7 +1093,8 @@ test("31/32. coach work on the roster stops the undo with roster_decisions_exist
   const client = await newClient();
   try {
     const scope = await collectScope(client, { eventId: summary.eventId });
-    assert.deepEqual(scope.coachRosterWork, { decisions: 1, requests: 1, completions: 0, completion_log: 0 });
+    // v26 (5a2): the decision also created the completion row and its log row.
+    assert.deepEqual(scope.coachRosterWork, { decisions: 1, requests: 1, completions: 1, completion_log: 1 });
     await assert.rejects(
       undoImportedSession(client, scope, { performedByUserId: team.userId, reason: "should stop", apply: true }),
       (e) => e.code === ROSTER_DECISIONS_EXIST && /roster_decisions_exist/.test(e.message),
@@ -1219,24 +1223,12 @@ async function integrityFixture() {
      values ($1,$2,$3,'record_unusable','needs_manual_review') returning id`, [activityId, athleteId, connectionId],
   ))[0].id;
   const periodId = (await q(`select id from public.athlete_membership_periods where membership_id = $1`, [membershipId]))[0].id;
-  // A completion row written as 5a2 will (the basis re-checked by the trigger).
-  const client = await newClient();
-  try {
-    await client.query("begin");
-    await client.query(
-      `insert into training.activity_completions (activity_id, owner_team_id, status, revision) values ($1,$2,'not_complete',1)`,
-      [activityId, teamId],
-    );
-    await client.query(
-      `insert into training.activity_completion_log (activity_id, request_id, revision, from_status, to_status, cause, performed_by_user_id)
-       values ($1,$2,1,null,'not_complete','decision_changed',$3)`,
-      [activityId, requestId, coach.id],
-    );
-    await client.query("commit");
-  } finally {
-    await client.end();
-  }
-  const logId = (await q(`select id from training.activity_completion_log where activity_id = $1`, [activityId]))[0].id;
+  // Since v26 (5a2) the decisions create the completion row and its log
+  // rows. The second athlete gets a decision too, so nobody on this roster
+  // needs a state and v26's "complete only over a resolved roster" rule does
+  // not stand in front of the v25 basis guard proved below.
+  await insertDecision({ activityId, athleteId: secondAthleteId, teamId, userId: coach.id, kind: "participated_no_values" });
+  const logId = (await q(`select id from training.activity_completion_log where activity_id = $1 order by revision limit 1`, [activityId]))[0].id;
   return { clubId, teamId, coach, athleteId, secondAthleteId, outsider, membershipId, activityId, otherActivity, decisionId, requestId, connectionId, observationId, periodId, logId };
 }
 
@@ -1280,11 +1272,17 @@ function guards(f) {
     { name: "membership: identity never changes", refused: /never change/, attempt: { sql: `update public.athlete_memberships set athlete_id = $2 where id = $1`, params: [f.membershipId, f.outsider] }, off: t("public.athlete_memberships", "athlete_memberships_protect_identity") },
     { name: "decision: athlete on the roster", refused: /not on the roster/, attempt: decisionInsert({ athleteId: f.outsider }), off: t(decisions, "activity_athlete_decisions_check") },
     { name: "decision: reason required for did_not_participate", refused: /violates check constraint/, attempt: decisionInsert({ reason: null }), off: dropCheck(decisions, "did_not_participate") },
-    { name: "decision: one current per activity and athlete", refused: /activity_athlete_decisions_one_current/, attempt: decisionInsert({ activityId: f.activityId }), off: `drop index training.activity_athlete_decisions_one_current` },
+    // v26 adds a trigger that refuses the same statement first (one current
+    // decision in the whole alias set); it is switched off in both steps so
+    // this proves the v25 index. The v26 trigger is proved in the 5a2 suite.
+    { name: "decision: one current per activity and athlete", refused: /activity_athlete_decisions_one_current/, attempt: { ...decisionInsert({ activityId: f.activityId }), pre: t(decisions, "activity_athlete_decisions_one_current_in_alias_set") }, off: `drop index training.activity_athlete_decisions_one_current` },
     { name: "decision: no update of the kind", refused: /only gets superseded/, attempt: { sql: `update ${decisions} set decision_kind = 'participated_no_values', reason_key = null where id = $1`, params: [f.decisionId] }, off: t(decisions, "activity_athlete_decisions_check") },
     { name: "decision: no delete", refused: /a decision is superseded, never deleted/, attempt: { sql: `delete from ${decisions} where id = $1`, params: [f.decisionId] }, off: t(decisions, "activity_athlete_decisions_check") },
     { name: "decision: no truncate", refused: /activity_athlete_decisions keeps history/, attempt: { sql: `truncate ${decisions}` }, off: t(decisions, "activity_athlete_decisions_no_truncate") },
-    { name: "decision: its request belongs to its activity (at commit)", refused: /does not belong to activity/, attempt: decisionInsert({ athleteId: f.secondAthleteId, requestId: f.requestId, commit: true }), off: t(decisions, "activity_athlete_decisions_check_links") },
+    // Since v26 the decision also writes a completion log row carrying the
+    // same request, whose own deferred check refuses the same commit; the
+    // proof takes both link checks away.
+    { name: "decision: its request belongs to its activity (at commit)", refused: /does not belong to activity/, attempt: decisionInsert({ athleteId: f.secondAthleteId, requestId: f.requestId, commit: true }), off: `${t(decisions, "activity_athlete_decisions_check_links")}; ${t(log, "activity_completion_log_check_links")}` },
     { name: "request: append-only", refused: /activity_roster_requests is append-only/, attempt: { sql: `update training.activity_roster_requests set result = '{}' where id = $1`, params: [f.requestId] }, off: t("training.activity_roster_requests", "activity_roster_requests_protect") },
     { name: "request (and the tables that point at it): no truncate", refused: /keeps history; TRUNCATE refused/, attempt: { sql: `truncate training.activity_roster_requests cascade` }, off: `${t("training.activity_roster_requests", "activity_roster_requests_no_truncate")}; ${t(decisions, "activity_athlete_decisions_no_truncate")}; ${t(log, "activity_completion_log_no_truncate")}` },
     { name: "completion: revision bumps by one", refused: /bumps the revision by one/, attempt: { sql: `update ${completions} set revision = revision + 2 where activity_id = $1`, params: [f.activityId] }, off: t(completions, "activity_completions_protect") },
@@ -1292,9 +1290,13 @@ function guards(f) {
     { name: "completion: complete only through a basis the user holds", refused: /may not decide/, attempt: { sql: `update ${completions} set status = 'complete', revision = revision + 1, completed_by_user_id = $2, completed_by_basis = 'club_admin', completed_at = now(), input_fingerprint = repeat('b', 64) where activity_id = $1`, params: [f.activityId, f.coach.id] }, off: t(completions, "activity_completions_protect") },
     { name: "completion: complete carries who, basis, when and fingerprint", refused: /violates check constraint/, attempt: { sql: `update ${completions} set status = 'complete', revision = revision + 1, completed_by_user_id = $2, completed_by_basis = 'team_coach' where activity_id = $1`, params: [f.activityId, f.coach.id] }, off: dropCheck(completions, "'complete'") },
     { name: "completion: never deleted", refused: /never deleted/, attempt: { sql: `delete from ${completions} where activity_id = $1`, params: [f.activityId] }, off: t(completions, "activity_completions_protect") },
-    { name: "completion: only a canonical team session", refused: /not team-owned/, attempt: { sql: `insert into ${completions} (activity_id, owner_team_id, status) values ($1,$2,'not_complete')`, params: [f.clubActivity, f.teamId] }, off: t(completions, "activity_completions_protect") },
-    { name: "completion log: only a canonical team session (a superseded activity id is refused)", refused: /was superseded/, attempt: { sql: `insert into ${log} (activity_id, revision, to_status, cause) values ($1,1,'not_complete','roster_changed')`, params: [f.supersededActivity] }, off: t(log, "activity_completion_log_protect") },
-    { name: "completion log: its request belongs to its activity or alias set (at commit)", refused: /does not belong to activity/, attempt: { sql: `insert into ${log} (activity_id, request_id, revision, to_status, cause) values ($1,$2,1,'not_complete','decision_changed')`, params: [f.otherActivity, f.requestId], commit: true }, off: t(log, "activity_completion_log_check_links") },
+    // revision 1: since v26 a completion row is created at revision 1.
+    { name: "completion: only a canonical team session", refused: /not team-owned/, attempt: { sql: `insert into ${completions} (activity_id, owner_team_id, status, revision) values ($1,$2,'not_complete',1)`, params: [f.clubActivity, f.teamId] }, off: t(completions, "activity_completions_protect") },
+    // v26's log rules (a log row describes an existing completion revision)
+    // also refuse these two log rows; they are switched off in both steps so
+    // the v25 guards are what is proved here (v26's rules: the 5a2 suite).
+    { name: "completion log: only a canonical team session (a superseded activity id is refused)", refused: /was superseded/, attempt: { sql: `insert into ${log} (activity_id, revision, to_status, cause) values ($1,1,'not_complete','roster_changed')`, params: [f.supersededActivity], pre: t(log, "activity_completion_log_rules") }, off: t(log, "activity_completion_log_protect") },
+    { name: "completion log: its request belongs to its activity or alias set (at commit)", refused: /does not belong to activity/, attempt: { sql: `insert into ${log} (activity_id, request_id, revision, to_status, cause) values ($1,$2,1,'not_complete','decision_changed')`, params: [f.otherActivity, f.requestId], commit: true, pre: t(log, "activity_completion_log_rules") }, off: t(log, "activity_completion_log_check_links") },
     { name: "completion log: append-only", refused: /activity_completion_log is append-only/, attempt: { sql: `update ${log} set cause = 'completed' where id = $1`, params: [f.logId] }, off: t(log, "activity_completion_log_protect") },
     { name: "completion log: no truncate", refused: /activity_completion_log keeps history/, attempt: { sql: `truncate ${log}` }, off: t(log, "activity_completion_log_no_truncate") },
     { name: "observation: only resolved, once", refused: /only resolved, once/, attempt: { sql: `update ${observations} set reason_code = 'other' where id = $1`, params: [f.observationId] }, off: t(observations, "activity_source_observations_append_only") },
@@ -1325,6 +1327,7 @@ async function supersededInto(survivorId, teamId, { beforeMerge } = {}) {
 }
 
 async function runAttempt(client, attempt) {
+  if (attempt.pre) await client.query(attempt.pre);
   if (attempt.guc) await client.query(`select set_config('optimove.membership_period_write', 'on', true)`);
   await client.query(attempt.sql, attempt.params ?? []);
   if (attempt.commit) await client.query(`set constraints all immediate`);
@@ -1380,6 +1383,9 @@ test("35c. a completion log row may carry the request of an activity merged into
   const client = await newClient();
   try {
     await client.query("begin");
+    // v26's log rules would refuse this hand-written row first (it describes
+    // no completion revision); this test is about v25's alias-set link check.
+    await client.query(`alter table training.activity_completion_log disable trigger activity_completion_log_rules`);
     await client.query(
       `insert into training.activity_completion_log (activity_id, request_id, revision, to_status, cause) values ($1,$2,1,'not_complete','decision_changed')`,
       [f.otherActivity, aliasRequestId],
