@@ -1,6 +1,8 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import { importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
+import { handleActivityRosterAction, loadRosterForOpenActivity } from "./activity-roster-actions.js";
+import { resetActivityRoster } from "./activity-roster-data.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
   captureTrainingLoadAthleteWeeklyMutationContext,
@@ -616,6 +618,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   const type = action.dataset.action;
   if (!type?.startsWith("training-load-")) return false;
   if (type.startsWith("training-load-gpexe-")) return handleGpexeImportAction(action, { renderTrainingLoad });
+  if (type.startsWith("training-load-roster-")) return handleActivityRosterAction(action, { render: renderTrainingLoad });
 
   // -------------------- Athlete: Home card / session list --------------------
 
@@ -1650,6 +1653,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     cal.selectedDate = today;
     cal.selectedActivityId = null;
     cal.selectedComponentId = null;
+    resetActivityRoster(null);
     syncDataAnalysisSharedWeek(cal.weekStart, "calendar");
     if (cal.monthMode) cal.monthCursor = monthStartIso(today);
     renderTrainingLoad();
@@ -1683,6 +1687,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // that's no longer on screen.
     cal.selectedActivityId = null;
     cal.selectedComponentId = null;
+    resetActivityRoster(null);
     const newWeekStart = weekMondayIso(date);
     if (newWeekStart !== cal.weekStart) {
       cal.weekStart = newWeekStart;
@@ -1707,6 +1712,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     cal.selectedActivityId = activityId;
     cal.selectedComponentId = null;
     cal.activityDetailTab = "overview";
+    resetActivityRoster(activityId);
     cal.metricPicker.selectedIds = null;
     cal.resultsSort = { column: "athlete", direction: "asc" };
     // Item 4 (mobile): after picking a specific activity, an EXPANDED
@@ -1724,7 +1730,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // show generic "Metric" placeholders (no real label/unit/icon) until
     // the coach happened to open the metric picker at least once.
     void loadCalendarMetricDefinitions().then(renderTrainingLoad);
-    await loadActivityDetail(activityId, renderTrainingLoad);
+    await Promise.all([
+      loadActivityDetail(activityId, renderTrainingLoad),
+      loadRosterForOpenActivity(activityId, renderTrainingLoad),
+    ]);
     renderTrainingLoad();
     return true;
   }
@@ -1732,11 +1741,14 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const cal = state.trainingLoad.calendar;
     cal.selectedActivityId = null;
     cal.selectedComponentId = null;
+    resetActivityRoster(null);
     renderTrainingLoad();
     return true;
   }
   if (type === "training-load-calendar-select-detail-tab") {
-    state.trainingLoad.calendar.activityDetailTab = action.dataset.tlCalendarDetailTab;
+    const cal = state.trainingLoad.calendar;
+    cal.activityDetailTab = action.dataset.tlCalendarDetailTab;
+    cal.roster.userPickedTab = true;
     renderTrainingLoad();
     return true;
   }
@@ -1888,6 +1900,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       cal.selectedComponentId = null;
       cal.selectedResultsAthleteId = null;
       cal.activityDetail = { activityId: null, data: null, loading: false, error: "" };
+      resetActivityRoster(null);
       renderTrainingLoad();
       await Promise.all([
         loadTrainingLoadCalendarWeek(renderTrainingLoad),
@@ -2255,12 +2268,15 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     cal.selectedDate = action.dataset.date;
     cal.selectedActivityId = action.dataset.activityId;
     cal.selectedComponentId = null;
+    cal.activityDetailTab = "overview";
+    resetActivityRoster(action.dataset.activityId);
     syncDataAnalysisSharedWeek(cal.weekStart, "calendar");
     setTrainingLoadSection("today");
     renderTrainingLoad();
     await Promise.all([
       loadTrainingLoadCalendarWeek(renderTrainingLoad),
       loadActivityDetail(action.dataset.activityId, renderTrainingLoad),
+      loadRosterForOpenActivity(action.dataset.activityId, renderTrainingLoad),
     ]);
     renderTrainingLoad();
     return true;
@@ -2654,6 +2670,7 @@ export function resetTrainingLoadForWorkspaceChange() {
   cal.monthMode = false; cal.monthData = null; cal.monthError = ""; cal.monthLoading = false; cal.monthCursor = "";
   cal.selectedActivityId = null; cal.selectedComponentId = null; cal.selectedResultsAthleteId = null;
   cal.activityDetail = { activityId: null, data: null, loading: false, error: "" };
+  resetActivityRoster(null);
   cal.metricPicker = { open: false, search: "", selectedIds: null, definitions: null, loading: false, error: "" };
   invalidateTrainingLoadAnalysis();
   state.trainingLoad.analysis = emptyTrainingLoadAnalysisState();

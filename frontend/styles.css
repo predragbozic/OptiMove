@@ -12980,6 +12980,345 @@ button.tests-assignment-card {
   font-size: 13px;
 }
 
+/* Phase 5a3a — source-neutral, read-only activity roster. */
+.tl-roster {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.tl-roster-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tl-roster-header h4,
+.tl-roster-header p,
+.tl-roster-row-body p,
+.tl-roster-outside-body p {
+  margin: 0;
+}
+
+.tl-roster-header > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tl-roster-status {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tl-roster-status.is-needs_review {
+  color: var(--tlc-warning);
+  background: var(--tlc-warning-soft);
+  border-color: var(--tlc-warning-border);
+}
+
+.tl-roster-filters {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.tl-roster-filter {
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tl-roster-filter.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.tl-roster-table {
+  display: grid;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.tl-roster-table-head,
+.tl-roster-outside-head,
+.tl-roster-row-summary {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.35fr) minmax(155px, 1.25fr) repeat(var(--tl-roster-metrics), minmax(92px, 0.8fr));
+  gap: 10px;
+  align-items: center;
+}
+
+.tl-roster-table.has-no-metrics .tl-roster-table-head,
+.tl-roster-outside-head.has-no-metrics,
+.tl-roster-row.has-no-metrics .tl-roster-row-summary {
+  grid-template-columns: minmax(150px, 1.35fr) minmax(155px, 1.25fr);
+}
+
+.tl-roster-table-head {
+  padding: 8px 12px;
+  color: var(--muted);
+  background: var(--surface-soft, #f7f8fa);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tl-roster-outside-head {
+  padding: 8px 12px;
+  color: var(--muted);
+  background: var(--surface-soft, #f7f8fa);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tl-roster-group h5 {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--muted);
+  background: var(--surface-soft, #f7f8fa);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.tl-roster-row {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.tl-roster-row:last-child {
+  border-bottom: 0;
+}
+
+.tl-roster-row-summary {
+  position: relative;
+  min-height: 48px;
+  padding: 8px 34px 8px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tl-roster-row-summary::-webkit-details-marker,
+.tl-roster-outside > summary::-webkit-details-marker,
+.tl-roster-technical > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tl-roster-row-summary::after,
+.tl-roster-outside > summary::after,
+.tl-roster-technical > summary::after {
+  content: "▸";
+  position: absolute;
+  right: 12px;
+  transition: transform 120ms ease;
+}
+
+.tl-roster-row[open] > .tl-roster-row-summary::after,
+.tl-roster-outside[open] > summary::after,
+.tl-roster-technical[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.tl-roster-athlete-name {
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.tl-roster-athlete-name small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.tl-roster-state,
+.tl-roster-cell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tl-roster-state {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tl-roster-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-roster-row-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.tl-roster-all-values,
+.tl-roster-technical dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.tl-roster-all-values > div,
+.tl-roster-technical dl > div {
+  min-width: 0;
+  padding: 8px;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface-soft, #f7f8fa);
+}
+
+.tl-roster-all-values dt,
+.tl-roster-technical dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tl-roster-all-values dd,
+.tl-roster-technical dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.tl-roster-technical > summary,
+.tl-roster-outside > summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 36px 8px 12px;
+  list-style: none;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.tl-roster-technical {
+  border-top: 1px solid var(--line);
+}
+
+.tl-roster-technical dl {
+  padding: 0 0 4px;
+}
+
+.tl-roster-outside {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.tl-roster-outside-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.tl-roster-outside-body > .tl-roster-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.tl-roster-message {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tl-roster-message p {
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .tl-activity-detail-tabs {
+    overflow-x: hidden;
+    flex-wrap: wrap;
+  }
+  .tl-activity-detail-tab {
+    flex: 1 1 calc(33.333% - 2px);
+    min-width: 0;
+    min-height: 44px;
+    padding-inline: 8px;
+  }
+  .tl-roster-header {
+    display: grid;
+  }
+  .tl-roster-status {
+    justify-self: start;
+  }
+  .tl-roster-filter {
+    min-height: 44px;
+  }
+  .tl-roster-message .plain-button {
+    min-height: 44px;
+  }
+  .tl-roster-table {
+    border: 0;
+    overflow: visible;
+    gap: 8px;
+  }
+  .tl-roster-table-head,
+  .tl-roster-group h5 {
+    display: none;
+  }
+  .tl-roster-group {
+    display: grid;
+    gap: 8px;
+  }
+  .tl-roster-row {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .tl-roster-row-summary {
+    grid-template-columns: 1fr;
+    gap: 5px;
+    min-height: 44px;
+    padding: 10px 36px 10px 12px;
+  }
+  .tl-roster-row.has-no-metrics .tl-roster-row-summary {
+    grid-template-columns: 1fr;
+  }
+  .tl-roster-outside-head {
+    display: none;
+  }
+  .tl-roster-cell::before {
+    content: attr(data-label) ": ";
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .tl-roster-all-values,
+  .tl-roster-technical dl {
+    grid-template-columns: 1fr;
+  }
+}
+
 .tl-source-kind {
   font-size: 11px;
   font-weight: 700;
@@ -13240,12 +13579,8 @@ button.tests-assignment-card {
     flex-direction: column;
     align-items: flex-start;
   }
-  /* mobile-qa finding, measured/confirmed in a real browser (not just
-     estimated from CSS): the 4-segment control's own natural content
-     width overflows its container at 360-375px with no scroll affordance,
-     risking a hidden, undiscoverable "Sources" segment. Wrapping to a 2x2
-     grid at this breakpoint guarantees every segment stays visible,
-     rather than relying on a scroll a user might never find. */
+  /* Keep every activity-detail tab visible without a hidden horizontal
+     scroll affordance on narrow phones. */
   .tl-activity-detail-tabs {
     flex-wrap: wrap;
   }
