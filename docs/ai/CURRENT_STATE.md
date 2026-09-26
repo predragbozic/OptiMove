@@ -54,11 +54,13 @@ columns, Needs a state / Needs review / Done filters, read-only athlete rows and
 folded "Recorded, but not on this session's roster" group. No roster write, bulk decision,
 Complete/Reopen control, manual value or estimate belongs to 5a3a.
 
-5a3a is implemented (draft PR). Reviewed statically by `code-reviewer`, `ux-design-reviewer`
-and `mobile-qa`; their findings were fixed and the last narrow checks found no BLOCKER, HIGH
-or MEDIUM. **Browser and mobile QA has not been done** (the browser pane was blocked in the
-implementing session): visual quality is not confirmed, and a manual check on desktop and at
-360/375/390 px is required before the PR can be marked ready or merged.
+5a3a is implemented in PR #124 (ready for review, not merged). Reviewed statically by
+`code-reviewer`, `ux-design-reviewer` and `mobile-qa`; their findings were fixed and the last
+narrow checks found no BLOCKER, HIGH or MEDIUM. **Browser QA passed on 2026-09-26** (owner),
+on desktop and in the mobile view: no horizontal overflow, clipped text or wrong layout. It
+was done on a static harness that renders this branch's real render functions with prepared
+roster data — not against a running backend, so it is neither a production nor a complete
+integration QA.
 
 The remaining UI is split into 5a3b (individual and bulk decisions), 5a3c (Complete and
 Needs review) and 5a3d (mobile polish and cross-navigation). Manual values and estimates
@@ -597,6 +599,11 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
 
+- **Roster scalability check with 60 athletes** (owner, 2026-09-26, after PR #124's browser
+  QA): the 25-athlete roster used in QA was only a test scenario, not a product limit. The
+  roster must support every athlete of a team; check the roster with 60 athletes (layout,
+  filters, reading speed) as a future scalability test. Not a merge blocker for 5a3a.
+
 - **In-app GPEXE import — conditions before the switch is turned on** (owner, 2026-09-18).
   F1, F2, F3a and F3b are merged (see above); F4 is the first real local import. `GPEXE_IMPORT_APPLY_ENABLED` stays off in an
   environment until conditions 1–3 hold there; condition 4 is required before regular
@@ -779,9 +786,8 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-**Phase 5a3a** (`feature/activity-roster-shell-5a3a`, draft PR) needs the manual browser
-check on desktop and at 360/375/390 px before it is marked ready; then the owner decides on
-the merge. 5a3b (individual and bulk decisions) waits for the owner's go.
+The owner's decision on merging **PR #124** (Phase 5a3a, read-only roster tab), then
+**Phase 5a3b** (individual and bulk decisions).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
