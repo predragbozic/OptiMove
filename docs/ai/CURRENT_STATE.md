@@ -109,8 +109,18 @@ F3c (source authentication and connection): `docs/ai/gpexe-f3c-auth-discovery.md
 facts and unknowns (U1–U8 open), the `e03` vs `server3` endpoint map, the
 `source_credential_connections` / `source_team_bindings` / audit model with the lock scope for
 club-owned connections, the security contract, the five-state status model, the split
-F3c1–F3c4, the owner decisions and the owner's guidelines (section 7a). The owner-run read-only
-checks of section 8 are a precondition for F3c1. **F3c1 has not started.**
+F3c1–F3c4, the owner decisions and the owner's guidelines (section 7a). **The owner-run
+read-only capture of `e03-ui` is done (2026-09-27, section 8a, sanitized):** the UI calls
+`e03.gpexe.com` through `POST /ui/v2/` (health `GET /ping/`) with a JWT scheme plus a
+cookie/session mechanism, credentialed CORS limited to the `e03-ui` origin, GPEXE version 9.11.7,
+Team ID 980, no request to `server3`, no rate-limit headers; token lifetime, the number of teams
+the account sees, the `server3`/`e03` account relation and cross-host token validity stay
+unknown (the last intentionally untested). The UI's JWT and session cookie are the web app's own
+authentication and are never copied, stored or replayed by OptiMove; the importer's
+`Authorization: Token` REST access and the old `server3` `/api-token-auth/` flow are not proven
+compatible; a dedicated GPEXE API account with an official server-to-server token remains the
+goal. U7 resolved, U8 partly, U1–U6 open for F3c2 discovery (section 8b). **F3c1 (schema,
+encryption, audit) is GO within section 8c's boundaries and has not started.**
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -863,9 +873,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's read-only checks of `docs/ai/gpexe-f3c-auth-discovery.md` section 8 (U1–U8), then
-the owner's go for **F3c1** (schema, encryption, audit — add beside), then F3c2–F3c4, then
-**Phase 5a3c** (Complete and Needs review).
+The owner's go for **F3c1** (schema, encryption, audit — add beside; GO recorded in
+`docs/ai/gpexe-f3c-auth-discovery.md` section 8c), the F3c2 auth discovery of section 8b in
+parallel, then F3c2–F3c4, then **Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
