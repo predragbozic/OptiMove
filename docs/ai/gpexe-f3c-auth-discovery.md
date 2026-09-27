@@ -375,6 +375,14 @@ Until answered, F3c2 assumes a token that may stop at any time, one host (`e03`)
 
 ## 8c. GO / NO-GO for F3c1 (schema, encryption, audit)
 
+*As built (owner order 2026-09-27, PR "F3c1"):* the F3c1 row of section 6 was narrowed. Delivered:
+the three tables, the integrity rules of section 3, the ascending bound-team order function, the
+per-team lock taken by the binding triggers, the crypto module, the rollback and the tests. Moved
+to F3c2: the sweep over all bound teams of a connection (Connect / Reconnect / Disconnect), the
+two overlapping-Reconnect concurrency tests, the fake-source marker-token test and the start-up
+key check (the key is read only on use). F3c2 must lock the connection row before reading
+`source_connection_bound_team_ids()`.
+
 **GO, with the boundaries below.** F3c1 is source-neutral and does not depend on the open auth
 questions: it adds the tables beside `gpexe_team_settings` (D6), the encryption helper with key
 id and rotation, the audit table, the lock helper and the integrity rules of section 3, and no

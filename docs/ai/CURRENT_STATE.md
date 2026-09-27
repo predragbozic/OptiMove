@@ -1,7 +1,7 @@
 # Current state
 
-Last reviewed: 2026-09-27. Last `origin/main` commit checked: `7e4d92d` (merge of PR #125,
-`feature/activity-roster-decisions-ui-5a3b` → `main`).
+Last reviewed: 2026-09-27. Last `origin/main` commit checked: `4949b79` (merge of PR #127,
+`docs/gpexe-f3c-capture-results` → `main`; PR #126 `bd98b5b` before it).
 
 ## Active phase
 
@@ -119,8 +119,37 @@ unknown (the last intentionally untested). The UI's JWT and session cookie are t
 authentication and are never copied, stored or replayed by OptiMove; the importer's
 `Authorization: Token` REST access and the old `server3` `/api-token-auth/` flow are not proven
 compatible; a dedicated GPEXE API account with an official server-to-server token remains the
-goal. U7 resolved, U8 partly, U1–U6 open for F3c2 discovery (section 8b). **F3c1 (schema,
-encryption, audit) is GO within section 8c's boundaries and has not started.**
+goal. U7 resolved, U8 partly, U1–U6 open for F3c2 discovery (section 8b). PR #126
+(`bd98b5b`, the discovery document) and PR #127 (`4949b79`, the sanitized capture results and
+the GO) are merged and deployed (`/api/health` served `4949b79`).
+
+**The active step is F3c1 — source-neutral schema, encryption foundation and audit** (branch
+`feature/source-connections-f3c1`, in review; external review required: migration and
+credential storage). It adds migration v27
+(`migrations_v2/202609271000_training_load_v27_source_credential_connections.sql`): three
+tables in `training_load` **beside** `gpexe_team_settings` — `source_credential_connections`
+(club- or team-owned, `host_key` from the code allowlist with `e03` the only key, a display
+label, a mandatory open `credential_kind`, the four credential parts null-together or complete,
+the five states bound to their facts, identity immutable once bound),
+`source_team_bindings` (one active binding per team and source, one active OptiMove team per
+source team across every connection, team inside the connection's owner, rows end but never disappear, an optional
+provenance pointer to the legacy GPEXE settings row that is never changed) and
+`source_connection_audit` (append-only; who, when, action, outcome, reason, error code and a
+flat sanitized object whose keys may never name a secret); `source_connection_bound_team_ids()`
+gives the ascending lock order F3c2 will use, and creating or ending a binding takes that team's
+import lock inside the trigger (try-lock style, v24 `hold_gpexe_team_lock`). **Narrowed by the
+owner's order of 2026-09-27 against the discovery document's F3c1 row:** the sweep over all bound
+teams of a connection, its two concurrency tests and the start-up key check move to F3c2 (which
+must lock the connection row before reading the bound-team order). `backend/src/sourceCredentialCrypto.js` is
+AES-256-GCM with a random nonce, an auth tag, a key version and AAD binding the ciphertext to
+its row; the key ring `SOURCE_CREDENTIAL_KEYS` is read only when a credential is encrypted or
+decrypted, so the server starts without it. `backend/src/sourceHosts.js` holds the allowlist
+and the two credential kinds (owner decision 2026-09-27: `api_token` entered by the
+administrator is preferred, `exchanged_token` from a one-time exchange is the fallback with the
+password never stored or logged; F3c1 supports both and chooses neither). Runbook:
+`docs/runbooks/source-connections-v27.md`; rollback rehearsed on a disposable database. **No
+route, no UI, no GPEXE call, no cut-over, no row for team 980, no Render change; the migration
+was not applied to any persistent database.**
 
 Review record of 5a3b: `code-reviewer`, `ux-design-reviewer` and `mobile-qa` (static), each with narrow
 re-reviews after the fixes (see the PR). Browser QA by the main session on a static harness that
@@ -873,9 +902,9 @@ pre-existing; pass/fail counts don't belong in this file
 
 ## Most likely next step
 
-The owner's go for **F3c1** (schema, encryption, audit — add beside; GO recorded in
-`docs/ai/gpexe-f3c-auth-discovery.md` section 8c), the F3c2 auth discovery of section 8b in
-parallel, then F3c2–F3c4, then **Phase 5a3c** (Complete and Needs review).
+The owner's external review and merge decision on the **F3c1** PR, the F3c2 auth discovery of
+`docs/ai/gpexe-f3c-auth-discovery.md` section 8b in parallel, then F3c2–F3c4, then
+**Phase 5a3c** (Complete and Needs review).
 Conditions 1–3 under Separate tasks still come before the first real local import, and
 conditions 4–5 before regular production imports.
 
