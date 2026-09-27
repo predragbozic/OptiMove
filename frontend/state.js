@@ -844,9 +844,20 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
     // ("outside", "tech", "row:<athleteId>") across repaints.
     // `userPickedTab` stops the automatic switch to the Roster tab once the
     // coach chose a tab for this session.
+    // Phase 5a3b (writes): `selected` = athlete ids ticked for a group
+    // decision; `picker` = the one open reason list / state sheet; `confirm`
+    // = the one inline confirmation; `changing` = the row whose Change is
+    // unfolded; `busy` = athlete ids with a write in flight; `unconfirmed`
+    // = the one command whose answer was lost (same requestKey on Check
+    // result); `notices` = the outcome texts (top and per row); `writeLock`
+    // = 403/404/superseded, every write control off; `previousStates` =
+    // each athlete's state from the last successful read, to mark rows that
+    // changed under the coach; `retryBulk` = the rest of a refused bulk.
     roster: {
       activityId: null, data: null, loading: false, error: null, applicable: null,
       filter: null, openDisclosures: [], closedDisclosures: [], autoTabFor: null, userPickedTab: false,
+      selected: [], picker: null, confirm: null, changing: null, busy: {}, unconfirmed: null,
+      notices: { top: null, rows: {}, selection: [] }, writeLock: null, refreshFailed: false, previousStates: {}, changedRows: [], retryBulk: null, retry: null,
     },
     // Metric picker (item 8) — pure frontend view-state for THIS visit,
     // never persisted server-side (no dashboard-preferences table in this

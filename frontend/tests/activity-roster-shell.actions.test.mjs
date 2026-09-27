@@ -25,6 +25,7 @@ function rosterPayload(overrides = {}) {
   const base = {
     activity: { id: "act-1", name: "Full training", occurredLocalDate: "2026-09-18", startedAt: "2026-09-18T15:00:00Z", timezone: "Europe/Belgrade" },
     canonicalActivityId: "act-1",
+    viewer: { basis: "team_coach" },
     completion: { status: "needs_review" },
     reasons: [{ key: "illness", label: "Illness" }],
     counts: { total: 3, needsState: 1, needsReview: 1, recordedOutsideRoster: 1 },
@@ -80,7 +81,6 @@ test("read-only roster uses response metrics and neutral source wording without 
   assert.ok(!html.includes("joined later"));
   assert.ok(!html.includes("left earlier"));
   assert.ok(!html.includes("gpexe flagged"), "raw source code never becomes the visible name");
-  assert.ok(!html.includes("Set state"), "5a3a is read-only");
   assert.ok(rosterValueColumns(roster.data.athletes).some((column) => column.label === "Average HR"));
 });
 
@@ -200,8 +200,7 @@ test("zero measured metrics keeps a two-column roster and a folded absence names
   const html = renderActivityRosterHtml(roster);
   assert.match(html, /tl-roster-table has-no-metrics/);
   assert.match(html, /Illness — Coach One/);
-  assert.match(html, /Review the roster and the data recorded for this session/);
-  assert.doesNotMatch(html, /Each state is saved/);
+  assert.match(html, /Each state is saved as soon as you choose it/);
 });
 
 test("phone tab label is compact while its accessible label keeps the meaning", () => {

@@ -1,7 +1,7 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import { importsUnloadShouldWarn, loadGpexeImports } from "./gpexe-import-data.js";
-import { handleActivityRosterAction, loadRosterForOpenActivity } from "./activity-roster-actions.js";
+import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
@@ -213,6 +213,9 @@ export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   // workspace switch resets Training Load, so that is the case that loses
   // them.
   if (!importsBatchMayBeLeft(_nextTab)) return false;
+  // Phase 5a3b: a roster write in flight or a result not confirmed is the
+  // only local view of that outcome (same protection as an Imports result).
+  if (!rosterMayBeLeft()) return false;
   if (!discard) return analysisEditorMayBeDiscarded() && analysisLayoutMayBeDiscarded();
   return releaseAnalysisEditorDraft() && releaseAnalysisLayoutDraft();
 }
@@ -242,7 +245,7 @@ function importsBatchMayBeLeft(nextTab) {
 // browser's own (a custom one would not be shown). Otherwise nothing is
 // blocked. Returns whether it asked.
 export function handleTrainingLoadBeforeUnload(event) {
-  if (!importsUnloadShouldWarn()) return false;
+  if (!importsUnloadShouldWarn() && !rosterUnloadShouldWarn()) return false;
   event.preventDefault();
   // Legacy browsers read the flag from returnValue; the string is not shown.
   event.returnValue = "An import is still running or its result is not confirmed.";
@@ -1646,6 +1649,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-calendar-today") {
+    if (!rosterMayBeLeft()) return true;
     const cal = state.trainingLoad.calendar;
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const today = localDateIsoInTimeZone(timezone);
@@ -1679,6 +1683,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-calendar-select-day") {
+    if (!rosterMayBeLeft()) return true;
     const cal = state.trainingLoad.calendar;
     const date = action.dataset.date;
     cal.selectedDate = date;
@@ -1709,10 +1714,15 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const cal = state.trainingLoad.calendar;
     const activityId = action.dataset.activityId;
     if (!activityId) return true;
+    // Phase 5a3b: closing a session with a roster write in flight or a
+    // result not confirmed asks first (section 7's leave protection).
+    if (activityId !== cal.selectedActivityId && !rosterMayBeLeft()) return true;
+    // The same session again keeps its roster state (a write in flight, a
+    // result not confirmed); the roster read below then acts as a refresh.
+    if (activityId !== cal.selectedActivityId) resetActivityRoster(activityId);
     cal.selectedActivityId = activityId;
     cal.selectedComponentId = null;
     cal.activityDetailTab = "overview";
-    resetActivityRoster(activityId);
     cal.metricPicker.selectedIds = null;
     cal.resultsSort = { column: "athlete", direction: "asc" };
     // Item 4 (mobile): after picking a specific activity, an EXPANDED
@@ -1738,6 +1748,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-calendar-clear-activity") {
+    if (!rosterMayBeLeft()) return true;
     const cal = state.trainingLoad.calendar;
     cal.selectedActivityId = null;
     cal.selectedComponentId = null;
@@ -1893,6 +1904,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // selection is cleared exactly like a workspace switch already does
     // (resetTrainingLoadForWorkspaceChange's own reasoning).
     const cal = state.trainingLoad.calendar;
+    if (cal.weekStart && !rosterMayBeLeft()) return true;
     if (cal.weekStart) {
       cal.data = null;
       cal.monthData = null;
@@ -2264,12 +2276,14 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // yet this session, even though the shared week already has a real
     // value from Athletes' own side (Phase B only syncs on an actual
     // nav-button click, not on initial bootstrap).
+    if (action.dataset.activityId !== cal.selectedActivityId && !rosterMayBeLeft()) return true;
+    // Same rule as select-activity: the same session keeps its roster state.
+    if (action.dataset.activityId !== cal.selectedActivityId) resetActivityRoster(action.dataset.activityId);
     cal.weekStart = weekMondayIso(action.dataset.date);
     cal.selectedDate = action.dataset.date;
     cal.selectedActivityId = action.dataset.activityId;
     cal.selectedComponentId = null;
     cal.activityDetailTab = "overview";
-    resetActivityRoster(action.dataset.activityId);
     syncDataAnalysisSharedWeek(cal.weekStart, "calendar");
     setTrainingLoadSection("today");
     renderTrainingLoad();
