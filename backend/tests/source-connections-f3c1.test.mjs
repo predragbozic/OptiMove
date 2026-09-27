@@ -157,11 +157,10 @@ test("1. v27 applies on v26, the rollback returns exactly the v26 catalog and ke
     assert.deepEqual((await k.query(`select owner_team_id, gpexe_team_id, configured_by_user_id, configured_at from training_load.gpexe_team_settings`)).rows, legacyBefore);
     assert.equal((await k.query(`select count(*)::int as n from training_load.gpexe_team_settings_history`)).rows[0].n, historyBefore);
 
-    // A row written under v27 exists, then the rollback drops v27 objects only.
-    const conn = (await k.query(
-      `insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id)
-       values ('gpexe','club',$1,'e03','Rollback test','api_token',$2) returning id`, [club, user])).rows[0].id;
-    await k.query(`insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis) values ($1,'create','ok',$2,'platform_admin')`, [conn, user]);
+    // The seeded host catalog holds e03 only; server3 is deliberately absent.
+    assert.deepEqual((await k.query(`select source_system, host_key, state from training_load.source_host_catalog order by 1, 2`)).rows, [{ source_system: "gpexe", host_key: "e03", state: "approved" }]);
+
+    // While every v27 table is still empty the rollback drops v27 objects only.
     await k.query(await fsp.readFile(ROLLBACK_SQL, "utf8"));
     assert.deepEqual(await catalogDigest(k), v26, "the rollback leaves exactly the v26 catalog");
     assert.equal((await k.query(`select count(*)::int as n from public.schema_migrations where migration_name like $1`, [`%${V27}`])).rows[0].n, 0);
@@ -170,9 +169,28 @@ test("1. v27 applies on v26, the rollback returns exactly the v26 catalog and ke
 
     await applyGpexeTestMigrations(m.url, [...UP_TO_V26, V27]);
     assert.deepEqual(await catalogDigest(k), v27, "v27 applies again, identically");
-    await k.query(await fsp.readFile(ROLLBACK_SQL, "utf8"));
 
-    // A v27 broken at its very last statement leaves nothing and is not recorded.
+    // After first use the rollback refuses and drops nothing: forward only.
+    const conn = (await k.query(
+      `insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id)
+       values ('gpexe','club',$1,'e03','Rollback test','api_token',$2) returning id`, [club, user])).rows[0].id;
+    await k.query(`insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis) values ($1,'create','ok',$2,'platform_admin')`, [conn, user]);
+    await assert.rejects(k.query(await fsp.readFile(ROLLBACK_SQL, "utf8")), /v27 rollback refused: source_credential_connections=1 source_team_bindings=0 source_connection_audit=1/);
+    await k.query("rollback").catch(() => {});
+    assert.deepEqual(await catalogDigest(k), v27, "a refused rollback drops nothing");
+    assert.equal((await k.query(`select count(*)::int as n from training_load.source_connection_audit`)).rows[0].n, 1, "the audit row is still there");
+    assert.equal((await k.query(`select count(*)::int as n from public.schema_migrations where migration_name like $1`, [`%${V27}`])).rows[0].n, 1);
+  } finally {
+    await k.end();
+    await m.drop();
+  }
+
+  // A v27 broken at its very last statement leaves nothing and is not recorded (fresh v26 database).
+  const m2 = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v27fail", migrations: UP_TO_V26 });
+  const k2 = new pg.Client({ connectionString: m2.url });
+  await k2.connect();
+  try {
+    const v26b = await catalogDigest(k2);
     const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "optimove-v27-fail-"));
     const dir = path.join(tempRoot, "migrations_v2");
     await fsp.mkdir(dir);
@@ -180,16 +198,17 @@ test("1. v27 applies on v26, the rollback returns exactly the v26 catalog and ke
       for (const f of UP_TO_V26) await fsp.copyFile(path.resolve(__dirname, "../../migrations_v2", f), path.join(dir, f));
       const broken = `${await fsp.readFile(path.resolve(__dirname, "../../migrations_v2", V27), "utf8")}\nselect 1 / 0;\n`;
       await fsp.writeFile(path.join(dir, V27), broken, "utf8");
-      await assert.rejects(runner.runMigrations({ databaseUrl: m.url, migrationsRoot: dir }), /ABORT while applying .*v27_source_credential_connections.sql.*22012/);
+      await assert.rejects(runner.runMigrations({ databaseUrl: m2.url, migrationsRoot: dir }), /ABORT while applying .*v27_source_credential_connections.sql.*22012/);
     } finally {
       await fsp.rm(tempRoot, { recursive: true, force: true });
     }
-    assert.deepEqual(await catalogDigest(k), v26, "a failed v27 leaves nothing behind");
-    assert.equal((await k.query(`select count(*)::int as n from public.schema_migrations where migration_name like $1`, [`%${V27}`])).rows[0].n, 0);
-    assert.equal((await k.query(`select to_regclass('training_load.source_credential_connections') as r`)).rows[0].r, null);
+    assert.deepEqual(await catalogDigest(k2), v26b, "a failed v27 leaves nothing behind");
+    assert.equal((await k2.query(`select count(*)::int as n from public.schema_migrations where migration_name like $1`, [`%${V27}`])).rows[0].n, 0);
+    assert.equal((await k2.query(`select to_regclass('training_load.source_credential_connections') as r`)).rows[0].r, null);
+    assert.equal((await k2.query(`select to_regclass('training_load.source_host_catalog') as r`)).rows[0].r, null);
   } finally {
-    await k.end();
-    await m.drop();
+    await k2.end();
+    await m2.drop();
   }
 });
 
@@ -203,7 +222,8 @@ test("2. the migration file carries no key, no URL and no transaction control; t
     assert.doesNotMatch(doc, /source team per connection/i, "the documented invariant is the global one");
   }
   const rollback = (await fsp.readFile(ROLLBACK_SQL, "utf8")).split(/\r?\n/).filter((l) => !l.trim().startsWith("--")).join("\n");
-  assert.doesNotMatch(rollback, /create table|insert into|select .* from training_load\.source_credential_connections|decrypt|copy /i, "the rollback holds only drops and the schema_migrations delete");
+  assert.doesNotMatch(rollback, /create table|insert into|decrypt|copy /i, "the rollback holds only the emptiness guard, drops and the schema_migrations delete");
+  assert.match(rollback, /rollback refused/, "the rollback refuses once any v27 table has a row");
 });
 
 // ---------------------------------------------------------------------------
@@ -219,12 +239,36 @@ test("3. connection ownership: exactly one owner, club or team; never user or sy
   assert.equal(teamOwned.owner_team_id, fx.team);
 });
 
-test("4. host_key is the allowlist key 'e03' only; a URL, another host or a case variant is refused; the label is never empty", async () => {
-  for (const bad of ["server3", "https://e03.gpexe.com/", "E03", "e03 ", ""]) {
-    await refused(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id) values ('gpexe','club',$1,$2,'x','api_token',$3)`, [fx.club, bad, fx.admin], /host_key_allowlist/);
+test("4. host_key must be an APPROVED catalog key: unknown keys, URLs and case variants are refused, two approved keys serve different connections, a retired key is refused, and a host never changes under a stored credential", async () => {
+  for (const bad of ["server3", "https://e03.gpexe.com/", "E03", "e03 ", "", "e03/../x"]) {
+    await refused(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id) values ('gpexe','club',$1,$2,'x','api_token',$3)`, [fx.club, bad, fx.admin], /host_key_format|not in the catalog|host_in_catalog/);
   }
+  // A second confirmed server is one catalog ROW (data), not a structure change.
+  await c.query(`insert into training_load.source_host_catalog (source_system, host_key, label, note) values ('gpexe','e99','GPEXE e99 (test only)','test-only row of the disposable database')`);
+  const a = await connection({ host_key: "e03" });
+  const b = await connection({ host_key: "e99" });
+  assert.notEqual(a.host_key, b.host_key);
+  // The catalog key is per source: another source cannot borrow it.
+  await refused(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id) values ('catapult','club',$1,'e03','x','api_token',$2)`, [fx.club, fx.admin], /not in the catalog|host_in_catalog/);
+  // A retired key takes no new connection; existing ones stay (F3c2 answers host_not_allowed for them).
+  await c.query(`update training_load.source_host_catalog set state = 'retired' where source_system = 'gpexe' and host_key = 'e99'`);
+  await refused(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id) values ('gpexe','club',$1,'e99','x','api_token',$2)`, [fx.club, fx.admin], /is retired/);
+  assert.equal((await q(`select host_key from training_load.source_credential_connections where id = $1`, [b.id]))[0].host_key, "e99");
+  await c.query(`update training_load.source_host_catalog set state = 'approved' where source_system = 'gpexe' and host_key = 'e99'`);
+  // The catalog itself keeps every key.
+  await refused(`delete from training_load.source_host_catalog where host_key = 'e99'`, [], /DELETE refused/);
+  await refused(`update training_load.source_host_catalog set host_key = 'e98' where host_key = 'e99'`, [], /host key is immutable/);
+  // A host change under a stored credential is refused; wiping in the same statement passes; once bound the host is frozen for good.
+  const rec = encrypted(a);
+  await c.query(`update training_load.source_credential_connections set credential_ciphertext = $2, credential_nonce = $3, credential_auth_tag = $4, credential_key_version = $5, state = 'linked_untested' where id = $1`, [a.id, rec.ciphertext, rec.nonce, rec.authTag, rec.keyVersion]);
+  await refused(`update training_load.source_credential_connections set host_key = 'e99' where id = $1`, [a.id], /credential context changed while its ciphertext stayed/);
+  await c.query(`update training_load.source_credential_connections set host_key = 'e99', credential_ciphertext = null, credential_nonce = null, credential_auth_tag = null, credential_key_version = null, state = 'not_connected' where id = $1`, [a.id]);
+  await c.query(`update training_load.source_credential_connections set host_key = 'e03' where id = $1`, [a.id]);
+  const pinned = await bind(a, fx.team);
+  await refused(`update training_load.source_credential_connections set host_key = 'e99' where id = $1`, [a.id], /has been bound: owner, source and host are immutable/);
+  await c.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'test' where id = $1`, [pinned.id, fx.admin]);
   await refused(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id) values ('gpexe','club',$1,'e03','   ','api_token',$2)`, [fx.club, fx.admin], /account_label_check/);
-  await refused(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id) values ('GPEXE','club',$1,'e03','x','api_token',$2)`, [fx.club, fx.admin], /source_system_format/);
+  await refused(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id) values ('GPEXE','club',$1,'e03','x','api_token',$2)`, [fx.club, fx.admin], /source_system_format|not in the catalog/);
 });
 
 test("5. credential_kind is mandatory and open: api_token and exchanged_token both store, a malformed kind or a missing one is refused", async () => {
@@ -380,7 +424,7 @@ test("13. owner, source and host of a connection are immutable once it has ever 
   const b = await bind(conn, f.team, { source_team_id: "400", bound_by_user_id: f.admin });
   await refused(`update training_load.source_credential_connections set owner_club_id = $2 where id = $1`, [conn.id, f.otherClub], /has been bound: owner, source and host are immutable/);
   await refused(`update training_load.source_credential_connections set owner_scope = 'team', owner_club_id = null, owner_team_id = $2 where id = $1`, [conn.id, f.team], /immutable/);
-  await refused(`update training_load.source_credential_connections set source_system = 'catapult' where id = $1`, [conn.id], /immutable/);
+  await refused(`update training_load.source_credential_connections set source_system = 'catapult' where id = $1`, [conn.id], /immutable|not in the catalog/);
   await refused(`update training_load.source_credential_connections set id = $2 where id = $1`, [conn.id, crypto.randomUUID()], /id is immutable/);
   // credential_kind: free while no credential is stored, frozen while one is.
   await c.query(`update training_load.source_credential_connections set credential_kind = 'exchanged_token' where id = $1`, [conn.id]);
@@ -413,7 +457,7 @@ test("14. the audit is append-only, names who/when/what/outcome/reason/object, r
   await refused(`update training_load.source_connection_audit set reason = 'edited' where id = $1`, [row.id], /append-only/);
   await refused(`delete from training_load.source_connection_audit where id = $1`, [row.id], /append-only/);
   await refused(`truncate training_load.source_connection_audit`, [], /TRUNCATE refused/);
-  for (const key of ["token", "Authorization", "PASSWORD", "Set-Cookie", "cookie", "jwt", "Bearer", "api_key", "apiKey", "X-Auth-Token", "sessionId", "username", "ciphertext", "credential", "keys", "key", "signing_key", "Encryption_Key", "device_key", "x_credential_kind", "credential_kind_x"]) {
+  for (const key of ["token", "Authorization", "PASSWORD", "Set-Cookie", "cookie", "jwt", "Bearer", "api_key", "apiKey", "X-Auth-Token", "sessionId", "username", "ciphertext", "credential", "keys", "key", "signing_key", "Encryption_Key", "device_key", "x_credential_kind", "credential_kind_x", "signingKey", "private-key", "deviceKey", "auth", "Auth.Token", "privateKey", "refreshToken", "pwd", "access token", "accesstoken", "authtoken", "sessionid", "passcode", "Xauth"]) {
     await c.query("begin");
     const err = await c.query(
       `insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis, metadata) values ($1,'test','ok',$2,'platform_admin',$3)`,
@@ -424,7 +468,7 @@ test("14. the audit is append-only, names who/when/what/outcome/reason/object, r
     assert.match(err.message, /metadata_no_secret_keys/);
   }
   await refused(`insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis, metadata) values ($1,'test','ok',$2,'platform_admin','["a"]')`, [conn.id, f.admin], /metadata_is_object/);
-  await c.query(`insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis, metadata) values ($1,'test','ok',$2,'platform_admin','{"host_key":"e03","status":401,"attempt":2,"credential_kind":"api_token","monkey":"business"}')`, [conn.id, f.admin]);
+  await c.query(`insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis, metadata) values ($1,'test','ok',$2,'platform_admin','{"host_key":"e03","hostKey":"e03","status":401,"attempt":2,"credential_kind":"api_token","credentialKind":"api_token","monkey":"business","keyboard":"qwerty","donkey":1,"authorName":"n","sourceTeamId":"980","turkey":true}')`, [conn.id, f.admin]);
   await refused(`insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis, metadata) values ($1,'test','ok',$2,'platform_admin','{"headers":{"token":"MARKER"}}')`, [conn.id, f.admin], /metadata_no_secret_keys/);
   await refused(`insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis, metadata) values ($1,'test','ok',$2,'platform_admin','{"list":[1,2]}')`, [conn.id, f.admin], /metadata_no_secret_keys/);
   await refused(`insert into training_load.source_connection_audit (connection_id, action, outcome, performed_by_user_id, basis) values ($1,'test','ok',$2,'team_coach')`, [conn.id, f.admin], /basis_check|audit_actor/);
@@ -522,11 +566,80 @@ test("17. creating or ending a binding takes the team's import lock try-lock sty
   }
 });
 
-test("18. the database host allowlist and the code allowlist are the same set", async () => {
-  const def = (await q(`select pg_get_constraintdef(oid) as d from pg_constraint where conname = 'source_credential_connections_host_key_allowlist'`))[0].d;
-  const inDb = [...def.matchAll(/'([a-z0-9_-]+)'/g)].map((m) => m[1]).sort();
-  const { SOURCE_HOSTS } = await import("../src/sourceHosts.js");
-  const inCode = [...new Set(Object.values(SOURCE_HOSTS).flatMap((hosts) => Object.keys(hosts)))].sort();
-  assert.deepEqual(inDb, inCode);
-  assert.deepEqual(inDb, ["e03"]);
+test("18. every approved key the migration seeds resolves in the backend catalog to an exact https host, and the backend resolves nothing else", async () => {
+  const seeded = (await q(`select source_system, host_key from training_load.source_host_catalog where state = 'approved' and note not like 'test-only%' order by 1, 2`));
+  const { sourceHost, resolvableHostKeys, SOURCE_HOSTS } = await import("../src/sourceHosts.js");
+  assert.deepEqual(seeded, [{ source_system: "gpexe", host_key: "e03" }]);
+  for (const row of seeded) assert.match(sourceHost(row.source_system, row.host_key).baseUrl, /^https:\/\/[a-z0-9.-]+\/$/);
+  assert.deepEqual(resolvableHostKeys("gpexe"), ["e03"], "server3 is not resolvable until confirmed");
+  assert.deepEqual(Object.keys(SOURCE_HOSTS), ["gpexe"]);
+});
+
+// ---------------------------------------------------------------------------
+// 9. A team never leaves the club it is bound through
+// ---------------------------------------------------------------------------
+test("19. moving a team to another club is refused while it has an active binding to its club's connection, allowed after the binding ended or for a team-owned connection, and serialized with a binding insert in both orders", async () => {
+  const f = await fixture();
+  const conn = await connection({ owner_club_id: f.club, created_by_user_id: f.admin });
+  const b = await bind(conn, f.team, { bound_by_user_id: f.admin });
+  await refused(`update public.teams set club_id = $2 where id = $1`, [f.team, f.otherClub], /bound through connection .* end that binding before moving the team/);
+  // A team-owned connection does not pin the club; a team with no binding moves freely.
+  const teamConn = await connection({ owner_scope: "team", owner_club_id: null, owner_team_id: f.team2, created_by_user_id: f.admin });
+  await bind(teamConn, f.team2, { bound_by_user_id: f.admin });
+  await c.query(`update public.teams set club_id = $2 where id = $1`, [f.team2, f.otherClub]);
+  await c.query(`update public.teams set club_id = $2 where id = $1`, [f.team2, f.club]);
+  // Ended binding: the move is allowed again.
+  await c.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'moving' where id = $1`, [b.id, f.admin]);
+  await c.query(`update public.teams set club_id = $2 where id = $1`, [f.team, f.otherClub]);
+  await c.query(`update public.teams set club_id = $2 where id = $1`, [f.team, f.club]);
+
+  // Concurrency, order 1: a binding insert is in flight. Its trigger holds the team row FOR SHARE,
+  // so the move WAITS on that row (an UPDATE locks its row before its BEFORE trigger runs), and
+  // once the binding commits the guard sees it and refuses. Serialized, never interleaved.
+  const other = new pg.Client({ connectionString: db.url });
+  await other.connect();
+  try {
+    await other.query("begin");
+    await other.query(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id) values ($1,$2,'gpexe','710',$3)`, [f.team, conn.id, f.admin]);
+    const mover = new pg.Client({ connectionString: db.url });
+    await mover.connect();
+    try {
+      const moving = mover.query(`update public.teams set club_id = $2 where id = $1`, [f.team, f.otherClub]).then(() => null, (e) => e);
+      let waiting = false;
+      for (let i = 0; i < 50 && !waiting; i += 1) {
+        await new Promise((r) => setTimeout(r, 100));
+        waiting = (await q(`select 1 from pg_stat_activity where wait_event_type = 'Lock' and query like 'update public.teams set club_id%'`)).length > 0;
+      }
+      assert.ok(waiting, "the move waits for the binding transaction instead of interleaving with it");
+      await other.query("commit");
+      const err = await moving;
+      assert.ok(err, "after the binding committed the move is refused");
+      assert.match(err.message, /end that binding before moving the team/);
+    } finally {
+      await mover.end();
+    }
+    const b2 = (await q(`select id from training_load.source_team_bindings where team_id = $1 and state = 'active'`, [f.team]))[0].id;
+    await c.query(`update training_load.source_team_bindings set state = 'ended', ended_at = now(), ended_by_user_id = $2, end_reason = 'x' where id = $1`, [b2, f.admin]);
+    // Order 2: the move is in flight (holds the team's try-lock) -> the binding insert, whose
+    // trigger takes the try-lock first, is refused at once with "try again".
+    await other.query("begin");
+    await other.query(`update public.teams set club_id = $2 where id = $1`, [f.team, f.otherClub]);
+    await refused(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id) values ($1,$2,'gpexe','711',$3)`, [f.team, conn.id, f.admin], /try again when it has finished/);
+    await other.query("commit");
+    // After the move committed, the team is in another club: the club connection refuses it outright.
+    await refused(`insert into training_load.source_team_bindings (team_id, connection_id, source_system, source_team_id, bound_by_user_id) values ($1,$2,'gpexe','711',$3)`, [f.team, conn.id, f.admin], /not in the club that owns/);
+    await c.query(`update public.teams set club_id = $2 where id = $1`, [f.team, f.club]);
+    // Mutation proof: without the guard trigger the move goes through next to an active binding.
+    await bind(conn, f.team, { bound_by_user_id: f.admin, source_team_id: "712" });
+    await c.query("begin");
+    try {
+      await c.query(`alter table public.teams disable trigger teams_source_binding_guard_move`);
+      await c.query(`update public.teams set club_id = $2 where id = $1`, [f.team, f.otherClub]);
+    } finally {
+      await c.query("rollback");
+    }
+    await refused(`update public.teams set club_id = $2 where id = $1`, [f.team, f.otherClub], /end that binding before moving the team/);
+  } finally {
+    await other.end();
+  }
 });

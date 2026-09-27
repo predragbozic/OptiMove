@@ -7,15 +7,17 @@ Tests: `backend/tests/source-connections-f3c1.test.mjs`, `backend/tests/source-c
 
 ## What it adds
 
-Three tables in `training_load`, added **beside** the existing GPEXE settings (D6). Nothing
-existing is changed and no row is created: after v27 all three tables are empty, also on a
-database that already carries the GPEXE team setting for team 980.
+Four tables in `training_load`, added **beside** the existing GPEXE settings (D6). Nothing
+existing is changed and no connection, binding or audit row is created: after v27 those three
+tables are empty, also on a database that already carries the GPEXE team setting for team 980.
+The only seeded data is one host catalog row.
 
 | Table | Holds | Never holds |
 |---|---|---|
-| `source_credential_connections` | a club- or team-owned account for one source (`source_system`, `host_key` from the code allowlist, a display `account_label`, the mandatory `credential_kind`), the encrypted credential (ciphertext, nonce, auth tag, key version — all four or none), the stored state and its facts | a plaintext credential, a username, a URL, a key |
+| `source_host_catalog` | the approved server keys per source (`gpexe` / `e03` seeded, state `approved`), a label and a note; rows are never deleted or renamed, only retired | a URL, a credential; `server3` (not approved until a dedicated API account and Team ID 980 are confirmed there) |
+| `source_credential_connections` | a club- or team-owned account for one source (`source_system`, `host_key` = an **approved** catalog key, a display `account_label`, the mandatory `credential_kind`), the encrypted credential (ciphertext, nonce, auth tag, key version — all four or none), the stored state and its facts | a plaintext credential, a username, a URL, a key |
 | `source_team_bindings` | which source team an OptiMove team reads through which connection; one active binding per team and source; one active OptiMove team per source team across every connection of every club (v22's global rule carried over); rows end, never disappear; an optional provenance pointer to the legacy `gpexe_team_settings` row | a change to `gpexe_team_settings` or its history |
-| `source_connection_audit` | who, when, which action, outcome, reason, error code and a flat JSON object of sanitized facts | any value under a secret-like key, in any letter case (`training_load.jsonb_names_a_secret`); an update, delete or truncate |
+| `source_connection_audit` | who, when, which action, outcome, reason, error code and a flat JSON object of sanitized facts | any value under a secret-like key in any spelling — camelCase, hyphens, dots and case are normalised first (`training_load.normalize_key_name`, `key_name_is_secret`), so `signingKey`, `private-key`, `deviceKey` and `auth` are refused while `monkey`, `host_key` and `credential_kind` pass; an update, delete or truncate |
 
 Also `training_load.source_connection_bound_team_ids(connection)`: the active bound team ids of a
 connection in ascending order, the order a later credential change (F3c2) locks them in with
@@ -38,6 +40,42 @@ belong to F3c2, where Reconnect exists; test 17 here proves the per-team backsto
 statement to change them. This is a single-statement guard: the database cannot check the AEAD,
 so restoring old ciphertext bytes after a context change still fails at decryption. Writers and
 rotation scripts re-encrypt; they never restore bytes.
+
+### Several GPEXE servers: the host catalog
+
+GPEXE may run a different server for different organisations. A connection names its server by
+a **stable key only**; no URL is ever stored, typed or accepted. Two layers hold that:
+- the database: `host_key` must be an `approved` row of `training_load.source_host_catalog` for
+  the same source (foreign key plus the `check_host` trigger for retired keys);
+- the backend, the final boundary: `backend/src/sourceHosts.js` maps a key to its **exact HTTPS
+  host** (`https://<host>/`, checked at import) and answers `host_not_allowed` for anything else
+  before any network call. There is no default and no fallback to another host; a request for a
+  connection whose key is unknown or retired fails, it never goes elsewhere.
+
+**Adding a confirmed shard (no structure change, no admin-typed URL):**
+1. Confirm, outside OptiMove, that the dedicated API account and the team's source id work on
+   that server. Nothing assumes an account, a token or a team id is valid on more than one server.
+2. One code entry in `SOURCE_HOSTS` (the exact host) in a reviewed PR.
+3. One data-only migration: `insert into training_load.source_host_catalog (source_system,
+   host_key, label, note) values (…)`; the table's shape does not change.
+4. The platform admin then only **chooses** the approved key in Settings (F3c3); the choice list
+   is the intersection of the approved catalog rows and the keys the backend can resolve.
+5. F3c2's Connect and Test connection run against **exactly the chosen host** and succeed there
+   before any team binding is allowed on that connection.
+
+Retiring a key: `update … set state = 'retired'`; no new connection may name it, existing ones
+stay readable as history and answer `host_not_allowed` until reconnected on an approved key.
+A connection's host is frozen while a credential is stored (the AAD rule) and once it is bound.
+
+### A team cannot leave the club it is bound through
+
+Moving a team to another club (`public.teams.club_id`) takes the team's import lock, try-lock
+style, and is refused while the team has an active binding to a club-owned connection of its
+current club. End the binding first. A team-owned connection does not pin the club. The two
+concurrent orders are serialized and tested: a move that starts while a binding insert is in
+flight waits on the team row (the binding trigger holds it FOR SHARE) and is refused once the
+binding commits; a binding insert that starts while a move is in flight fails at once with
+"try again" (its trigger takes the try-lock first).
 
 ### The credential kinds (owner decision 2026-09-27)
 
@@ -109,12 +147,14 @@ Before it is applied anywhere real:
 
 ## Rolling it back
 
-`docs/runbooks/source-connections-v27-rollback.sql`, one transaction, drops only what v27
-created and removes its `schema_migrations` row. It never copies, exports or decrypts a
-credential and makes no "backup before drop" table: the ciphertext goes with the tables and the
-database backup is the backup. Every older table keeps every row. Rehearsed by test 1 on a
-disposable database: apply → rollback (identical v26 catalog, older rows kept) → apply again
-(identical v27 catalog) → a v27 broken at its last statement leaves nothing.
+`docs/runbooks/source-connections-v27-rollback.sql`, one transaction, **refuses to run once any
+connection, binding or audit row exists** (the audit is append-only; history must not vanish —
+after first use only a forward migration is allowed) and otherwise drops only what v27 created
+and removes its `schema_migrations` row. It never copies, exports or decrypts a credential and
+makes no "backup before drop" table. Every older table keeps every row. Rehearsed by test 1 on
+disposable databases: apply → rollback on empty tables (identical v26 catalog, older rows kept) →
+apply again (identical v27 catalog) → first use → rollback refused, nothing dropped; on a fresh
+database a v27 broken at its last statement leaves nothing.
 
 Prefer a forward migration to fix a problem found after v27 is applied anywhere real; the same
 three rules bind it: never a decrypted credential in any copy, never a deleted or truncated audit

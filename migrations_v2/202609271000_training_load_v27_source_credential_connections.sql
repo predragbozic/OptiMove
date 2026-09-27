@@ -4,11 +4,20 @@
 -- Contract: docs/ai/gpexe-f3c-auth-discovery.md (sections 3, 4, 5, 6 F3c1,
 -- 7a, 8c) and docs/runbooks/source-connections-v27.md. Discovery decisions:
 -- add BESIDE the existing GPEXE tables (D6), club-owned connections with
--- separate team bindings (D4), one host key from the application allowlist
--- (D1, only 'e03' in this phase), an opaque encrypted credential with a
--- mandatory kind, the five-state model of section 5, append-only audit.
+-- separate team bindings (D4), host keys from a controlled catalog (D1; the
+-- source may run on several servers, one per organisation, and a
+-- connection names its server by key, never by URL), an opaque encrypted
+-- credential with a mandatory kind, the five-state model of section 5,
+-- append-only audit.
 --
 -- What it adds (nothing else):
+--   0. training_load.source_host_catalog — the approved host keys per
+--      source, seeded with gpexe/e03 only. A new confirmed server is one
+--      catalog ROW (a data-only migration) plus its exact HTTPS base URL in
+--      backend/src/sourceHosts.js — never a structure change and never a
+--      URL in a row. The backend resolves a key to a URL from its own
+--      catalog and refuses an unknown key before any network call; the
+--      database refuses a connection whose key is not approved.
 --   1. training_load.source_credential_connections — who may read a source,
 --      with what credential. The credential is ciphertext + nonce + auth tag
 --      + key version, all four together or all NULL. There is no plaintext
@@ -45,6 +54,60 @@
 -- backend/tests/source-connections-f3c1.test.mjs on a disposable database).
 
 -- ---------------------------------------------------------------------------
+-- 0. The host catalog: approved server keys per source. No URL is stored;
+--    the backend maps a key to its exact HTTPS host and is the final
+--    boundary (unknown or retired key -> host_not_allowed, before any
+--    request). A platform admin only chooses an approved key.
+-- ---------------------------------------------------------------------------
+create table training_load.source_host_catalog (
+  source_system   text not null
+                    constraint source_host_catalog_source_system_format
+                    check (source_system ~ '^[a-z][a-z0-9_]{1,30}$'),
+  host_key        text not null
+                    constraint source_host_catalog_host_key_format
+                    check (host_key ~ '^[a-z0-9][a-z0-9_-]{0,30}$'),
+  label           text not null
+                    constraint source_host_catalog_label_check
+                    check (length(btrim(label)) between 1 and 80),
+  state           text not null default 'approved'
+                    constraint source_host_catalog_state_check
+                    check (state in ('approved', 'retired')),
+  approved_at     timestamptz not null default now(),
+  note            text
+                    constraint source_host_catalog_note_check
+                    check (note is null or length(btrim(note)) between 1 and 500),
+  primary key (source_system, host_key)
+);
+
+comment on table training_load.source_host_catalog is
+  'F3c1: the approved server keys a source credential connection may name. Keys only, never a URL: backend/src/sourceHosts.js maps each key to its exact HTTPS host and refuses anything else. A new confirmed server is a row added by a data-only migration plus its code entry.';
+
+-- Only e03 is approved: it is the server the owner''s organisation is known
+-- to use. server3 is deliberately NOT here until a dedicated API account and
+-- Team ID 980 are confirmed to work there; nothing assumes that an account,
+-- a token or a team id is valid on more than one server.
+insert into training_load.source_host_catalog (source_system, host_key, label, note)
+values ('gpexe', 'e03', 'GPEXE e03', 'The server of the owner''s organisation (UI at e03-ui.gpexe.com). Approved for F3c1.');
+
+-- A catalog row is never deleted or renamed (connections point at it);
+-- only its label, state and note may change.
+create function training_load.source_host_catalog_immutable() returns trigger as $$
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'source_host_catalog keeps every key: DELETE refused (retire it instead)';
+  end if;
+  if new.source_system is distinct from old.source_system or new.host_key is distinct from old.host_key then
+    raise exception 'source_host_catalog: a host key is immutable (add a new row instead)';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger source_host_catalog_immutable
+  before update or delete on training_load.source_host_catalog
+  for each row execute function training_load.source_host_catalog_immutable();
+
+-- ---------------------------------------------------------------------------
 -- 1. Connections
 -- ---------------------------------------------------------------------------
 create table training_load.source_credential_connections (
@@ -57,12 +120,12 @@ create table training_load.source_credential_connections (
                               check (owner_scope in ('club', 'team')),
   owner_club_id             uuid references public.clubs(id) on delete restrict,
   owner_team_id             uuid references public.teams(id) on delete restrict,
-  -- A key into the application's fixed host allowlist (D1). Never a URL. In
-  -- this phase only 'e03' is allowed; extending it is a new migration, so a
-  -- host can never be added by a row.
+  -- A key from training_load.source_host_catalog (D1). Never a URL. The
+  -- foreign key below refuses a key that is not in the catalog; the
+  -- trigger after the table refuses one that is retired.
   host_key                  text not null
-                              constraint source_credential_connections_host_key_allowlist
-                              check (host_key in ('e03')),
+                              constraint source_credential_connections_host_key_format
+                              check (host_key ~ '^[a-z0-9][a-z0-9_-]{0,30}$'),
   -- A display label the administrator types. Never the account's username.
   account_label             text not null
                               constraint source_credential_connections_account_label_check
@@ -94,6 +157,8 @@ create table training_load.source_credential_connections (
   created_at                timestamptz not null default now(),
   updated_by_user_id        uuid references public.users(id) on delete restrict,
   updated_at                timestamptz not null default now(),
+  constraint source_credential_connections_host_in_catalog
+    foreign key (source_system, host_key) references training_load.source_host_catalog (source_system, host_key) on delete restrict,
   constraint source_credential_connections_owner_check check (
     (owner_scope = 'club' and owner_club_id is not null and owner_team_id is null) or
     (owner_scope = 'team' and owner_team_id is not null and owner_club_id is null)
@@ -125,7 +190,35 @@ create table training_load.source_credential_connections (
 comment on table training_load.source_credential_connections is
   'F3c1: a source account OptiMove may read a source with (club- or team-owned). The credential is AEAD ciphertext under a key that lives only in the server environment; there is no plaintext column. Add-beside: gpexe_team_settings is untouched.';
 comment on column training_load.source_credential_connections.host_key is
-  'Key into the application host allowlist (backend/src/sourceHosts.js). Never a URL. Extending the allowed keys is a migration.';
+  'An approved key of training_load.source_host_catalog, resolved to its exact HTTPS host only by backend/src/sourceHosts.js. Never a URL. A connection never falls back to another host.';
+
+-- A new connection (or a host change while still unbound and without a
+-- credential) may only name an APPROVED key. A key retired later leaves
+-- existing connections in place; the backend then answers host_not_allowed.
+create function training_load.source_credential_connection_check_host() returns trigger as $$
+declare
+  host_state text;
+begin
+  if tg_op = 'UPDATE' and new.host_key is not distinct from old.host_key and new.source_system is not distinct from old.source_system then
+    return new;
+  end if;
+  select state into host_state from training_load.source_host_catalog
+   where source_system = new.source_system and host_key = new.host_key for share;
+  if host_state is null then
+    raise exception 'source_credential_connections: host key % is not in the catalog for %', new.host_key, new.source_system
+      using errcode = 'foreign_key_violation';
+  end if;
+  if host_state <> 'approved' then
+    raise exception 'source_credential_connections: host key % of % is retired', new.host_key, new.source_system
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger source_credential_connections_check_host
+  before insert or update on training_load.source_credential_connections
+  for each row execute function training_load.source_credential_connection_check_host();
 comment on column training_load.source_credential_connections.account_label is
   'A label typed by the administrator for the screen. Never the source username, password, token or any part of them.';
 comment on column training_load.source_credential_connections.credential_ciphertext is
@@ -293,6 +386,39 @@ create trigger source_team_bindings_no_truncate
   for each statement execute function training_load.source_history_no_truncate();
 
 -- ---------------------------------------------------------------------------
+-- 2b. A team cannot leave the club whose connection it is bound through.
+--     Moving a team to another club (public.teams.club_id) takes the same
+--     team lock as a binding insert, try-lock style, so the two never
+--     interleave, and is refused while the team has an ACTIVE binding to a
+--     club-owned connection of its current club. End the binding first.
+-- ---------------------------------------------------------------------------
+create function training_load.source_team_binding_guard_team_move() returns trigger as $$
+declare
+  conn_id uuid;
+begin
+  if new.club_id is not distinct from old.club_id then
+    return new;
+  end if;
+  perform training_load.hold_gpexe_team_lock(old.id, 'moving the team to another club');
+  select b.connection_id into conn_id
+    from training_load.source_team_bindings b
+    join training_load.source_credential_connections c on c.id = b.connection_id
+   where b.team_id = old.id and b.state = 'active'
+     and c.owner_scope = 'club' and c.owner_club_id is distinct from new.club_id
+   limit 1;
+  if conn_id is not null then
+    raise exception 'teams: team % is bound through connection % of its current club; end that binding before moving the team', old.id, conn_id
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger teams_source_binding_guard_move
+  before update of club_id on public.teams
+  for each row execute function training_load.source_team_binding_guard_team_move();
+
+-- ---------------------------------------------------------------------------
 -- 3. Connections: immutable identity once bound
 -- ---------------------------------------------------------------------------
 -- Ownership, source and host are immutable once any binding (active or
@@ -348,18 +474,42 @@ create trigger source_credential_connections_protect_identity
 -- True when a JSON object has a top-level key that could name a secret,
 -- compared case-insensitively, so the guarantee does not depend on every
 -- writer lower-casing its keys. Immutable, so a CHECK may call it.
+-- A key name in its normal form: camelCase, hyphens, dots and spaces become
+-- underscores, everything lower-case (signingKey, private-key and
+-- Auth.Token become signing_key, private_key, auth_token). The secret
+-- detection below works on this form, so the spelling never matters.
+create function training_load.normalize_key_name(k text) returns text
+  language sql immutable strict as $$
+    select lower(regexp_replace(regexp_replace(regexp_replace(k, '([a-z0-9])([A-Z])', '\1_\2', 'g'), '[-.\s]+', '_', 'g'), '_+', '_', 'g'))
+  $$;
+
+-- True when a normalized key name is one that could carry a secret: an
+-- exact secret word, a word that ends in key/keys/token/secret/... or one
+-- that contains passw/credential/authoriz/cookie/jwt/bearer/session. Words
+-- are compared at underscore boundaries, so "monkey" or "keyboard" pass
+-- while "signing_key", "private_key", "auth" and "device_key" do not. The
+-- two literal facts an audit row legitimately names are exempt: host_key
+-- (a catalog key, not a secret) and credential_kind.
+create function training_load.key_name_is_secret(k text) returns boolean
+  language sql immutable strict as $$
+    with n as (select training_load.normalize_key_name(k) as name)
+    select name not in ('host_key', 'credential_kind')
+       and (
+         name = any (array['token', 'access_token', 'refresh_token', 'id_token', 'password', 'passwd', 'pass', 'pwd', 'secret', 'auth',
+                            'authorization', 'cookie', 'set_cookie', 'jwt', 'bearer', 'session', 'credential', 'credentials',
+                            'ciphertext', 'nonce', 'auth_tag', 'key', 'keys', 'api_key', 'apikey', 'private', 'username', 'user', 'login', 'email',
+                            'accesstoken', 'authtoken', 'refreshtoken', 'apitoken', 'idtoken', 'sessionid', 'sessionkey', 'passcode', 'passphrase', 'xauth', 'privatekey', 'secretkey', 'signingkey'])
+         or name ~ '(^|_)(key|keys|token|tokens|secret|secrets|auth|password|passwd|pwd|nonce|jwt|bearer|session|cookie|cookies|credential|credentials|apikey|api_key|private_key|private)(_|$)'
+         or name ~ '(passw|passcode|passphrase|credential|authoriz|cookie|jwt|bearer|session|ciphertext|api_key|apikey|token)'
+       )
+      from n
+  $$;
+
 create function training_load.jsonb_names_a_secret(doc jsonb) returns boolean
   language sql immutable strict as $$
     select exists (
       select 1 from jsonb_each(case when jsonb_typeof(doc) = 'object' then doc else '{}'::jsonb end) as e(k, v)
-       where lower(k) = any (array['token', 'access_token', 'refresh_token', 'password', 'passwd', 'secret', 'authorization',
-                                    'cookie', 'set-cookie', 'jwt', 'bearer', 'session', 'credential', 'credentials', 'ciphertext',
-                                    'nonce', 'auth_tag', 'key', 'keys', 'api_key', 'apikey', 'username', 'user', 'login', 'email'])
-          -- any *_key / key / keys name, and every secret-shaped word; the two
-          -- literal facts the audit legitimately names are host_key (an
-          -- allowlist key, not a secret) and credential_kind
-          or (k ~* '(^|_)keys?$' and lower(k) <> 'host_key')
-          or (k ~* '(token|passw|secret|cookie|authoriz|jwt|credential|api[_-]?key|bearer|session)' and lower(k) <> 'credential_kind')
+       where training_load.key_name_is_secret(k)
           -- a flat object only: nothing may hide a secret one level down
           or jsonb_typeof(v) in ('object', 'array')
     )

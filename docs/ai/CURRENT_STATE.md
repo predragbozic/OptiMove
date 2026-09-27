@@ -127,15 +127,23 @@ the GO) are merged and deployed (`/api/health` served `4949b79`).
 `feature/source-connections-f3c1`, in review; external review required: migration and
 credential storage). It adds migration v27
 (`migrations_v2/202609271000_training_load_v27_source_credential_connections.sql`): three
-tables in `training_load` **beside** `gpexe_team_settings` — `source_credential_connections`
-(club- or team-owned, `host_key` from the code allowlist with `e03` the only key, a display
-label, a mandatory open `credential_kind`, the four credential parts null-together or complete,
+tables in `training_load` **beside** `gpexe_team_settings` — `source_host_catalog` (the approved
+server keys per source, `gpexe`/`e03` seeded; GPEXE may run a different server per organisation,
+so a new confirmed shard is one catalog row plus one exact-host entry in `sourceHosts.js`, never a
+structure change and never a typed URL; `server3` is not approved until a dedicated API account
+and Team ID 980 are confirmed there; the backend answers `host_not_allowed` before any request
+for an unknown or retired key and never falls back), `source_credential_connections` (club- or
+team-owned, `host_key` an approved catalog key, a display label, a mandatory open `credential_kind`, the four credential parts null-together or complete,
 the five states bound to their facts, identity immutable once bound),
 `source_team_bindings` (one active binding per team and source, one active OptiMove team per
-source team across every connection, team inside the connection's owner, rows end but never disappear, an optional
+source team across every connection, team inside the connection's owner — and a team cannot be
+moved to another club while bound through its club's connection, serialized with binding inserts
+by the team lock —, rows end but never disappear, an optional
 provenance pointer to the legacy GPEXE settings row that is never changed) and
 `source_connection_audit` (append-only; who, when, action, outcome, reason, error code and a
-flat sanitized object whose keys may never name a secret); `source_connection_bound_team_ids()`
+flat sanitized object whose keys may never name a secret in any spelling — camelCase, hyphens
+and case are normalised first); the rollback refuses once any connection, binding or audit row
+exists (forward-only after first use); `source_connection_bound_team_ids()`
 gives the ascending lock order F3c2 will use, and creating or ending a binding takes that team's
 import lock inside the trigger (try-lock style, v24 `hold_gpexe_team_lock`). **Narrowed by the
 owner's order of 2026-09-27 against the discovery document's F3c1 row:** the sweep over all bound
@@ -880,6 +888,10 @@ pre-existing; pass/fail counts don't belong in this file
 - **Leaving the app with unsaved Dashboards changes** (found during H4, not scheduled):
   signing out, reloading the page or closing the tab still leaves without asking about an
   unsaved layout or Advanced settings change (no `beforeunload` guard).
+- **A team move can wait without a limit on a stalled binding transaction** (F3c1 review, 2026-09-27,
+  recorded, not fixed): moving a team to another club waits on the team row while a binding
+  insert holds it `FOR SHARE`; the advisory try-lock cannot bound that tuple wait. No route moves a
+  team today; the route that one day does must set `lock_timeout` (same class as the next entry).
 - **An approval can wait without a limit before its COMMIT** (PR #107 reviews, not fixed).
   It waits on the role and grant rows, the candidate row, and the team import lock. It
   also waits when a transaction abandoned on a network stall keeps those locks until TCP

@@ -152,11 +152,34 @@ export function describeCredentialRecord(record) {
 }
 
 // Removes every field that could carry a secret from an object before it is
-// logged or answered. Keys are matched by NAME only (case-insensitive), not
-// by content: a secret stored under an innocent key is not detected. F3c2
-// therefore never passes raw HTTP header or cookie objects through here; it
-// builds its own sanitized objects.
-const SECRET_KEY = /(token|password|passwd|secret|authorization|bearer|cookie|jwt|session|credential|ciphertext|nonce|auth_?tag|api[_-]?key|(^|_)keys?$|username|login|^email$|^user$)/i;
+// logged or answered. Keys are matched by NAME only, after normalisation
+// (camelCase, hyphens, dots and spaces become underscores, lower-case), so
+// signingKey, private-key, deviceKey and Auth-Token are all caught while
+// "monkey" or "keyboard" pass. Not by content: a secret stored under an
+// innocent key is not detected. F3c2 therefore never passes raw HTTP header
+// or cookie objects through here; it builds its own sanitized objects. The
+// rule mirrors training_load.key_name_is_secret in migration v27.
+const SECRET_EXACT = new Set(["token", "access_token", "refresh_token", "id_token", "password", "passwd", "pass", "pwd", "secret", "auth",
+  "authorization", "cookie", "set_cookie", "jwt", "bearer", "session", "credential", "credentials", "ciphertext", "nonce", "auth_tag",
+  "key", "keys", "api_key", "apikey", "private", "username", "user", "login", "email",
+  "accesstoken", "authtoken", "refreshtoken", "apitoken", "idtoken", "sessionid", "sessionkey", "passcode", "passphrase", "xauth", "privatekey", "secretkey", "signingkey"]);
+const SECRET_WORD = /(^|_)(key|keys|token|tokens|secret|secrets|auth|password|passwd|pwd|nonce|jwt|bearer|session|cookie|cookies|credential|credentials|apikey|api_key|private_key|private)(_|$)/;
+const SECRET_PART = /(passw|passcode|passphrase|credential|authoriz|cookie|jwt|bearer|session|ciphertext|api_key|apikey|token)/;
+const NOT_SECRET = new Set(["host_key", "credential_kind"]);
+
+export function normalizeKeyName(key) {
+  return String(key)
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-.\s]+/g, "_")
+    .replace(/_+/g, "_")
+    .toLowerCase();
+}
+
+export function keyNameIsSecret(key) {
+  const name = normalizeKeyName(key);
+  if (NOT_SECRET.has(name)) return false;
+  return SECRET_EXACT.has(name) || SECRET_WORD.test(name) || SECRET_PART.test(name);
+}
 
 export function redactSecrets(value, seen = new WeakSet()) {
   if (Buffer.isBuffer(value)) return "[bytes]";
@@ -167,7 +190,7 @@ export function redactSecrets(value, seen = new WeakSet()) {
     if (Array.isArray(value)) return value.map((v) => redactSecrets(v, seen));
     if (value instanceof Map) return redactSecrets(Object.fromEntries(value), seen);
     if (value instanceof Set) return redactSecrets([...value], seen);
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, SECRET_KEY.test(k) ? "[redacted]" : redactSecrets(v, seen)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, keyNameIsSecret(k) ? "[redacted]" : redactSecrets(v, seen)]));
   }
   return value;
 }

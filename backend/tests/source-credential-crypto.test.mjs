@@ -146,8 +146,26 @@ test("redaction and description never expose plaintext, key or ciphertext", () =
   assert.deepEqual(m.redactSecrets(cyclic), { token: "[redacted]", when: "1970-01-01T00:00:00.000Z", set: [1], self: "[circular]" });
 });
 
-test("host allowlist and credential kinds: only e03 for gpexe, both kinds known, nothing chosen", () => {
+test("secret key names are detected after normalisation (camelCase, hyphens, dots), innocent words pass", () => {
+  for (const k of ["signingKey", "private-key", "deviceKey", "auth", "Auth-Token", "Auth.Token", "X-Api-Key", "refreshToken", "SOURCE_CREDENTIAL_KEYS", "keys", "pwd", "set-cookie", "sessionId", "Authorization", "encryption key", "accesstoken", "authtoken", "sessionid", "passcode", "Xauth", "apitoken", "secretkey"]) {
+    assert.equal(m.keyNameIsSecret(k), true, `${k} must count as a secret name`);
+  }
+  for (const k of ["monkey", "keyboard", "donkey", "turkey", "host_key", "hostKey", "credential_kind", "credentialKind", "authorName", "status", "sourceTeamId", "attempt"]) {
+    assert.equal(m.keyNameIsSecret(k), false, `${k} must pass`);
+  }
+  assert.equal(m.normalizeKeyName("Auth.Token-ID  value"), "auth_token_id_value");
+  const red = m.redactSecrets({ signingKey: "s", "private-key": "p", deviceKey: "d", auth: "a", monkey: "m", hostKey: "e03" });
+  assert.deepEqual(red, { signingKey: "[redacted]", "private-key": "[redacted]", deviceKey: "[redacted]", auth: "[redacted]", monkey: "m", hostKey: "e03" });
+});
+
+test("host catalog: only approved keys resolve, to exact https hosts; URLs, other servers, prototype names and other sources are host_not_allowed; no fallback", () => {
   assert.equal(hosts.sourceHost("gpexe", "e03").baseUrl, "https://e03.gpexe.com/");
+  assert.deepEqual(hosts.resolvableHostKeys("gpexe"), ["e03"]);
+  assert.deepEqual(hosts.resolvableHostKeys("catapult"), []);
+  for (const bad of ["server3", "https://e03.gpexe.com/", "e03/", "E03", "", null, undefined, "__proto__", "constructor", "toString", 7]) {
+    assert.throws(() => hosts.sourceHost("gpexe", bad), (e) => e.code === "host_not_allowed", `${String(bad)} must not resolve`);
+  }
+  assert.throws(() => hosts.sourceHost("__proto__", "e03"), (e) => e.code === "host_not_allowed");
   assert.throws(() => hosts.sourceHost("gpexe", "server3"), (e) => e.code === "host_not_allowed");
   assert.throws(() => hosts.sourceHost("gpexe", "https://e03.gpexe.com/"), (e) => e.code === "host_not_allowed");
   assert.throws(() => hosts.sourceHost("catapult", "e03"), (e) => e.code === "host_not_allowed");
