@@ -836,6 +836,18 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
     // activity's detail while loading).
     activityDetail: { activityId: null, data: null, loading: false, error: "" },
     activityDetailTab: "overview",
+    // Phase 5a3a: the team roster of the open session (GET
+    // /api/training-activity/:id/roster), read-only. `applicable` is null
+    // until the first answer, true for a team session the viewer may see,
+    // false otherwise (no Roster tab). `filter` null = the default chip.
+    // `openDisclosures` keeps which folded parts the coach opened
+    // ("outside", "tech", "row:<athleteId>") across repaints.
+    // `userPickedTab` stops the automatic switch to the Roster tab once the
+    // coach chose a tab for this session.
+    roster: {
+      activityId: null, data: null, loading: false, error: null, applicable: null,
+      filter: null, openDisclosures: [], closedDisclosures: [], autoTabFor: null, userPickedTab: false,
+    },
     // Metric picker (item 8) — pure frontend view-state for THIS visit,
     // never persisted server-side (no dashboard-preferences table in this
     // phase, by explicit instruction). `selectedIds` is null until the

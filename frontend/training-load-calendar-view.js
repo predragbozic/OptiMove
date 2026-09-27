@@ -2,6 +2,7 @@ import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, formatWeekday, monthLabel } from "./utils.js";
 import { buildWeeklyCalendarMonth } from "./weekly-plan.js";
 import { formatSrpe } from "./training-load-view.js";
+import { renderActivityRosterHtml, rosterTabLabel } from "./activity-roster-view.js";
 
 // Training Load Frontend 3A — Activities → activity detail → results table. Deliberately
 // its own module, imported by training-load-view.js's own coach root
@@ -358,10 +359,16 @@ const ACTIVITY_DETAIL_TABS = [
 ];
 
 function renderActivityDetailTabsHtml(nav) {
+  const roster = nav.roster;
+  const rosterVisible = roster?.activityId === nav.selectedActivityId
+    && (roster.applicable === true || roster.error);
+  const tabs = rosterVisible
+    ? [ACTIVITY_DETAIL_TABS[0], { id: "roster", label: rosterTabLabel(roster) }, ...ACTIVITY_DETAIL_TABS.slice(1)]
+    : ACTIVITY_DETAIL_TABS;
   return `
     <div class="tl-activity-detail-tabs" role="tablist" aria-label="Activity detail view">
-      ${ACTIVITY_DETAIL_TABS.map((t) => `
-        <button type="button" class="tl-activity-detail-tab ${nav.activityDetailTab === t.id ? "is-active" : ""}" role="tab" aria-selected="${nav.activityDetailTab === t.id ? "true" : "false"}" data-action="training-load-calendar-select-detail-tab" data-tl-calendar-detail-tab="${t.id}">${t.label}</button>
+      ${tabs.map((t) => `
+        <button type="button" class="tl-activity-detail-tab ${nav.activityDetailTab === t.id ? "is-active" : ""}" role="tab" aria-selected="${nav.activityDetailTab === t.id ? "true" : "false"}" ${t.id === "roster" ? `aria-label="${escapeAttr(rosterTabLabel(roster, { accessible: true }))}"` : ""} data-action="training-load-calendar-select-detail-tab" data-tl-calendar-detail-tab="${t.id}">${escapeHtml(t.label)}</button>
       `).join("")}
     </div>
   `;
@@ -783,17 +790,18 @@ function renderActivitySectionHtml(nav, detail, athleteNamesById) {
       ${renderActivityDetailTabsHtml(nav)}
       <div class="tl-activity-detail-panel">
         ${nav.activityDetailTab === "overview" ? renderOverviewTabHtml(nav, activitySummary, detail) : ""}
+        ${nav.activityDetailTab === "roster" ? renderActivityRosterHtml(nav.roster, activitySummary) : ""}
         ${nav.activityDetailTab === "athletes" ? renderAthletesTabHtml(detail, athleteNamesById) : ""}
         ${nav.activityDetailTab === "components" ? renderComponentsTabHtml(nav, detail) : ""}
         ${nav.activityDetailTab === "sources" ? renderSourcesTabHtml(detail) : ""}
       </div>
-      <div class="tl-results-section">
+      ${nav.activityDetailTab === "roster" ? "" : `<div class="tl-results-section">
         <div class="tl-results-header">
           <h4>Recorded metrics <span class="muted">&middot; ${escapeHtml(recordedMetricsScopeLabel(nav, detail))}</span></h4>
           <button type="button" class="plain-button compact-button" data-action="training-load-calendar-metric-picker-open">Choose metrics</button>
         </div>
         ${renderResultsTableHtml(nav, detail, athleteNamesById)}
-      </div>
+      </div>`}
     </div>
   `;
 }
