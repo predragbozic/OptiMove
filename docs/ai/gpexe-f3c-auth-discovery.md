@@ -1,8 +1,9 @@
 # F3c — GPEXE source authentication and connection: discovery
 
 Status: **discovery accepted as the basis for F3c** (owner, 2026-09-27; security and database
-review folded in, see section 10; the owner's guidelines are in section 7a). F3c1 has not
-started. **The owner-run read-only checks of section 8 are a precondition for F3c1.** No
+review folded in, see section 10; the owner's guidelines are in section 7a). The owner-run
+read-only capture is done (section 8a): U7 resolved, U8 partly, U1–U6 open for F3c2 discovery
+(section 8b). **F3c1: GO within the boundaries of section 8c**; it has not started. No
 token, cookie, password or authorization value may ever be copied into this document, a log,
 a chat or a screenshot. No implementation, migration, branch or PR. Nothing
 here was run against production GPEXE, and no credential, token, cookie or Authorization
@@ -40,14 +41,14 @@ statements of 2026-09-27.
 | F11 | The legacy Apps Script is **not** a valid reference for import semantics (owner, 2026-09-17). | Confirmed | Pilot memory. Used here only as an inventory of hosts/paths. |
 | F12 | `metric_source_connections` (v11) already carries `source_system`, `owner_scope` (`system`/`club`/`team`/`user`), `state`; one active GPEXE connection per team (v20 partial unique index); the writer creates a `team`-owned row on first import. | Confirmed (code) | v11, v20; `gpexeImportWriter.js:139-147`. |
 | F13 | `gpexe_team_settings` is one row per OptiMove team (unique `gpexe_team_id`), append-only history with an admin reason (v24), changeable only while nothing depends on it. | Confirmed (code) | v22, v24. |
-| U1 | Do `server3` and `e03` see the same account and Team ID 980? | **Unknown** | Needs a read-only probe by the owner (section 8, step 0). |
-| U2 | Is `server3` legacy, an alias, or a separate environment (separate database)? | **Unknown** | Both hosts answer `api-token-auth` (F7/F8); nothing proves shared data. |
-| U3 | Does the token expire, and is it revoked by a new login (one token per user, "rotate on login")? | **Unknown** | DRF `authtoken` default is one non-expiring token per user, re-issued (same value) on each `api-token-auth` call; GPEXE may differ. |
-| U4 | Does one GPEXE account see several clubs/teams? | **Unknown** | The API has a `team` filter on `team_session`; the account's team list was never read. |
-| U5 | Is there an endpoint listing the account's permitted teams (`team/`)? | **Unknown** (likely: `team/{id}/thresholds/` exists, so `team/` probably does) | `gpexeClient.js` reads `team/{id}/thresholds/`; the list route was never called. |
-| U6 | Does a token from one host work on the other? | **Unknown** | Never tested; must not be tested against production without the owner. |
-| U7 | Which routes the logged-in `e03-ui` uses (hosts, paths, methods, auth type). | **Unknown in this session** | Claude in Chrome was not connected; see section 8 for a read-only capture the owner can run. |
-| U8 | Rate limits, token scope (read-only vs write), and whether a "service"/API-only account exists. | **Unknown** | Not documented anywhere in the repo. |
+| U1 | Do `server3` and `e03` see the same account and Team ID 980? | **Open** | Not determined by the 2026-09-27 capture (no `server3` request seen; no cross-host test). Section 8, step 0. |
+| U2 | Is `server3` legacy, an alias, or a separate environment (separate database)? | **Open** | The UI never called `server3` (2026-09-27 capture); whether it is legacy, alias or separate stays unknown. |
+| U3 | Does the token expire, and is it revoked by a new login (one token per user, "rotate on login")? | **Open** | Capture: token lifetime/rotation not determinable without a secret. Unknown. |
+| U4 | Does one GPEXE account see several clubs/teams? | **Open** | Capture: the number of teams the account sees was not determined. |
+| U5 | Is there an endpoint listing the account's permitted teams (`team/`)? | **Open** | Not seen in the capture; the UI's data goes through one `POST /ui/v2/` endpoint, so a REST team-list route was not exercised. |
+| U6 | Does a token from one host work on the other? | **Open, intentionally not tested** | Never tested; must not be tested with a browser credential. |
+| U7 | Which routes the logged-in `e03-ui` uses (hosts, paths, methods, auth type). | **Resolved (sanitized)** | See section 8a: `e03.gpexe.com`, `POST /ui/v2/`, `GET /ping/`, JWT scheme plus a cookie/session mechanism, credentialed CORS limited to the `e03-ui` origin, GPEXE version header 9.11.7, Team ID 980, no `server3` request. |
+| U8 | Rate limits, token scope (read-only vs write), and whether a "service"/API-only account exists. | **Partly resolved** | No rate-limit headers were observed (2026-09-27); token scope and the existence of an API-only account remain unknown. |
 
 ---
 
@@ -298,7 +299,9 @@ Taken as decisions for F3c; the table above keeps the alternatives for the recor
 | D11 | Reconnect requires an explicit confirmation naming the source, the owning club and every affected (bound) team before the exchange runs. |
 | D12 | Existing team settings are linked to the new connection with provenance kept: `gpexe_team_settings` and its history are never rewritten; the link is a new row that points at them. |
 
-Still open: U1–U8 (section 1), to be answered by the owner-run checks in section 8 before F3c1.
+Status after the owner-run capture (2026-09-27, section 8a): U7 resolved, U8 partly, U1–U6 open;
+U6 is intentionally not tested. What remains is F3c2 discovery (section 8b), not a blocker for
+F3c1 (section 8c).
 
 ---
 
@@ -321,6 +324,67 @@ Nothing below is to be done by Claude against production. Each step reads, never
 
 Until these are answered, F3c1 can proceed on assumptions (a) of D1 and the state machine of
 section 5; F3c2 needs at least step 0.
+
+---
+
+## 8a. Result of the owner-run read-only capture (2026-09-27, sanitized)
+
+Only the facts below were transferred; no screenshot, header value, cookie, token or request
+body was kept, and the original capture material is not part of this repository.
+
+| Fact | Value |
+|---|---|
+| UI | `https://e03-ui.gpexe.com/` |
+| API host the UI calls | `e03.gpexe.com` |
+| Main UI endpoint | `POST /ui/v2/` |
+| Health endpoint | `GET /ping/` |
+| Authorization scheme (name only) | `JWT` |
+| Session mechanism | the UI also uses a cookie/session mechanism; no value was kept |
+| CORS | credentialed CORS is limited to the `e03-ui` origin |
+| Version header | a GPEXE version header exists; observed version 9.11.7 |
+| Team | the open session uses GPEXE Team ID 980 |
+| `server3.gpexe.com` | no request observed during the check |
+| Rate-limit headers | none observed |
+| Token lifetime / rotation | unknown |
+| Number of teams the account sees | not determined |
+| Same account and Team ID 980 on `server3` and `e03` | unknown |
+| Cross-host token validity | unknown, intentionally not tested |
+
+**Security interpretation (binding for F3c):**
+1. The JWT and the session cookie of `e03-ui` are the web application's own authentication.
+   OptiMove must never copy, store or replay them.
+2. The UI's JWT is not assumed to be the server-to-server API token the existing importer uses.
+3. The existing importer still uses the REST API with `Authorization: Token`, while the old
+   Sheets flow obtained its token from `server3` `/api-token-auth/`. Their compatibility is not
+   proven.
+4. A dedicated GPEXE API account and an official server-to-server token remain the goal of F3c;
+   a personal browser session is not a credential source.
+
+## 8b. What stays for F3c2 discovery (auth questions)
+
+Before the Connect route is designed in detail (F3c2), and without any browser credential:
+- U1/U2/U6 — which host issues the server-to-server token for the account OptiMove will use,
+  and whether `e03` exposes `api-token-auth` for that account (the pilot's one observation is
+  not enough); done by the owner in their own shell against the dedicated API account, ids only.
+- U3 — token lifetime and rotation for that token type (documentation or GPEXE support).
+- U4/U5 — whether the account sees more than team 980 and whether a REST team-list route
+  exists (`team/`), read with the API token, ids only.
+- U8 — the token's scope (read-only or not) and confirmation that a dedicated API account can
+  be created.
+Until answered, F3c2 assumes a token that may stop at any time, one host (`e03`), one team.
+
+## 8c. GO / NO-GO for F3c1 (schema, encryption, audit)
+
+**GO, with the boundaries below.** F3c1 is source-neutral and does not depend on the open auth
+questions: it adds the tables beside `gpexe_team_settings` (D6), the encryption helper with key
+id and rotation, the audit table, the lock helper and the integrity rules of section 3, and no
+route that talks to GPEXE. What F3c1 must **not** assume: the token type (it stores an opaque
+ciphertext and a `credential_kind` column, e.g. `api_token`, so a different scheme later needs
+no schema change), the host (only `host_key` against the allowlist, `e03` alone for now), a
+team list (bindings are created one at a time by an admin), or a lifetime (the state machine
+covers expiry). No row of the new tables is created for team 980 in F3c1 beyond what the
+cut-over design later decides. F3c1 ships with the disposable-database tests listed in section
+6 and stays unreachable from the UI until F3c2.
 
 ---
 
